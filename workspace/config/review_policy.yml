@@ -1,0 +1,5 @@
+policy_id: review_policy_v1
+version: 1
+benchmark_resolution: sector
+default_broad_index: HS300
+updated_at: "2026-06-26T00:00:00Z"

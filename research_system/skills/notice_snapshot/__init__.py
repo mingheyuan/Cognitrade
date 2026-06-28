@@ -1,0 +1,1 @@
+"""Notice snapshot skill."""

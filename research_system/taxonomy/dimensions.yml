@@ -1,0 +1,10 @@
+version: 1
+dimensions:
+  - name: capital_inflow
+    category: capital
+    aliases:
+      - net_inflow
+  - name: sector_heat
+    category: sentiment
+    aliases:
+      - board_heat
