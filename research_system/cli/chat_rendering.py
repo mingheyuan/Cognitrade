@@ -71,11 +71,16 @@ def refresh_tui(session: TuiSession) -> None:
             if hasattr(session.output_area, "buffer")
             else 0
         )
-        rendered_output = render_tui_output(session.output_lines)
-        text_changed = rendered_output != session.ui_state.last_rendered_output_text
-        if text_changed:
-            session.output_area.text = rendered_output
-            session.ui_state.last_rendered_output_text = rendered_output
+        blocks = tuple(build_tui_blocks(session.output_lines))
+        if hasattr(session.output_area, "set_blocks"):
+            text_changed = bool(session.output_area.set_blocks(blocks))
+            session.ui_state.last_rendered_output_text = getattr(session.output_area, "text", "")
+        else:
+            rendered_output = render_tui_output(session.output_lines)
+            text_changed = rendered_output != session.ui_state.last_rendered_output_text
+            if text_changed:
+                session.output_area.text = rendered_output
+                session.ui_state.last_rendered_output_text = rendered_output
         if hasattr(session.output_area, "buffer"):
             if session.follow_output:
                 session.output_area.buffer.cursor_position = len(session.output_area.text)
