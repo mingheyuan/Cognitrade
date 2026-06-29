@@ -4,6 +4,16 @@ from datetime import date
 from typing import Any
 
 from research_system.schemas.review import ClaimVerdictBreakdown, PosteriorReviewSummary, ReviewFinding
+from research_system.schemas.subagents import SubagentInvocation
+from research_system.subagents.registry import SubagentRegistry
+from research_system.subagents.review import (
+    BenchmarkResolverSubagent,
+    CatalystReviewerSubagent,
+    DirectionReviewerSubagent,
+    ReviewClaimExtractorSubagent,
+    ReviewSummaryBuilderSubagent,
+    TimeWindowReviewerSubagent,
+)
 
 
 class ReviewerService:
@@ -11,6 +21,40 @@ class ReviewerService:
 
     def __init__(self, review_policy: dict | None = None) -> None:
         self.review_policy = review_policy or {}
+        self.registry = SubagentRegistry(
+            [
+                ReviewClaimExtractorSubagent(extract_candidates=self._extract_candidates),
+                BenchmarkResolverSubagent(
+                    resolve_scope=self._resolve_benchmark_scope,
+                    resolve_name=self._resolve_benchmark_name,
+                    resolve_symbol=self._resolve_benchmark_symbol,
+                    benchmark_pct_change=self._benchmark_pct_change,
+                ),
+                DirectionReviewerSubagent(
+                    observed_metric_for_candidate=self._observed_metric_for_candidate,
+                    candidate_verdict=self._candidate_verdict,
+                    candidate_notes=self._candidate_notes,
+                ),
+                CatalystReviewerSubagent(
+                    observed_metric_for_candidate=self._observed_metric_for_candidate,
+                    candidate_verdict=self._candidate_verdict,
+                    candidate_notes=self._candidate_notes,
+                ),
+                TimeWindowReviewerSubagent(
+                    observed_metric_for_candidate=self._observed_metric_for_candidate,
+                    candidate_verdict=self._candidate_verdict,
+                    candidate_notes=self._candidate_notes,
+                ),
+                ReviewSummaryBuilderSubagent(
+                    verdict_by_claim_type=self._verdict_by_claim_type,
+                    verdict_totals=self._verdict_totals,
+                    overall_verdict=self._overall_verdict,
+                    summary_text=self._summary_text,
+                    benchmark_scope_counts=self._benchmark_scope_counts,
+                    benchmark_scope_explanations=self._benchmark_scope_explanations,
+                ),
+            ]
+        )
 
     def run(
         self,
@@ -23,7 +67,15 @@ class ReviewerService:
         latest_fundamental_snapshot: dict | None = None,
         latest_notice_snapshot: dict | None = None,
     ) -> dict:
-        candidates = self._extract_candidates(source_entries=source_entries)
+        claim_outputs, _ = self.registry.invoke(
+            SubagentInvocation(
+                subagent_type="review_claim_extractor",
+                objective="Extract reviewable claims from source entries.",
+                inputs={"source_entries": source_entries},
+            )
+        )
+        candidates = claim_outputs["candidates"]
+        claim_type_counts = claim_outputs["claim_type_counts"]
         findings: list[ReviewFinding] = []
         notes: list[str] = []
 
@@ -32,30 +84,21 @@ class ReviewerService:
 
         if latest_sector_snapshot is None:
             notes.append("missing_sector_snapshot")
-            summary = PosteriorReviewSummary(
-                review_required=True,
-                finding_count=0,
-                reviewable_claim_count=len(candidates),
-                claim_type_counts=self._claim_type_counts(candidates),
-                benchmark_scope_counts={},
-                benchmark_scope_explanations={},
-                verdict_by_claim_type=self._verdict_by_claim_type([]),
-                overall_verdict="needs_review",
-                summary_text=self._summary_text(
-                    overall_verdict="needs_review",
-                    finding_count=0,
-                    confirmed=0,
-                    rejected=0,
-                    inconclusive=0,
-                    benchmark_scope_counts={},
-                ),
-                confirmed=0,
-                rejected=0,
-                inconclusive=0,
-                notes=notes,
+            summary_outputs, _ = self.registry.invoke(
+                SubagentInvocation(
+                    subagent_type="review_summary_builder",
+                    objective="Build review summary for missing-snapshot case.",
+                    inputs={
+                        "review_required": True,
+                        "findings": [],
+                        "candidates": candidates,
+                        "notes": notes,
+                        "claim_type_counts": claim_type_counts,
+                    },
+                )
             )
             return {
-                "summary": summary.model_dump(mode="json"),
+                "summary": summary_outputs["summary"],
                 "findings": [],
             }
 
@@ -70,22 +113,22 @@ class ReviewerService:
         theme_news = facts.get("theme_news") or []
 
         excess_metric = self._to_float(relative_strength.get("latest_excess_pct_change"))
-        benchmark_name = str(benchmark.get("benchmark_name") or self.review_policy.get("default_broad_index") or "HS300")
-        benchmark_symbol = str(benchmark.get("benchmark_code") or "000300")
-        benchmark_scope = self._resolve_benchmark_scope(
-            latest_sector_snapshot=latest_sector_snapshot,
-            latest_market_snapshot=latest_market_snapshot,
+        benchmark_outputs, _ = self.registry.invoke(
+            SubagentInvocation(
+                subagent_type="benchmark_resolver",
+                objective="Resolve benchmark scope/name/symbol for posterior review.",
+                inputs={
+                    "latest_sector_snapshot": latest_sector_snapshot,
+                    "latest_market_snapshot": latest_market_snapshot,
+                    "default_benchmark_name": str(benchmark.get("benchmark_name") or self.review_policy.get("default_broad_index") or "HS300"),
+                    "default_benchmark_symbol": str(benchmark.get("benchmark_code") or "000300"),
+                },
+            )
         )
-        benchmark_name = self._resolve_benchmark_name(
-            benchmark_scope=benchmark_scope,
-            sector_name=str(latest_sector_snapshot.get("sector") or "") if latest_sector_snapshot else "",
-            default_benchmark_name=benchmark_name,
-        )
-        benchmark_symbol = self._resolve_benchmark_symbol(
-            benchmark_scope=benchmark_scope,
-            latest_market_snapshot=latest_market_snapshot,
-            default_benchmark_symbol=benchmark_symbol,
-        )
+        benchmark_scope = benchmark_outputs["benchmark_scope"]
+        benchmark_name = benchmark_outputs["benchmark_name"]
+        benchmark_symbol = benchmark_outputs["benchmark_symbol"]
+        observed_benchmark_metric = benchmark_outputs["observed_benchmark_metric"]
         anchor_date = self._parse_anchor_date(
             candidates=candidates,
             snapshot_date=str(latest_sector_snapshot.get("snapshot_date") or ""),
@@ -95,90 +138,54 @@ class ReviewerService:
 
         for candidate in candidates:
             claim_type = str(candidate.get("claim_type") or "direction")
-            finding = ReviewFinding(
-                claim_id=candidate["claim_id"],
-                claim_type=claim_type,
-                source_run_id=source_run_id,
-                target_entry_id=candidate["entry_id"],
-                window_type=str(candidate.get("window_type") or "trading_days"),
-                window_size=int(candidate.get("window_size") or 5),
-                anchor_date=anchor_date,
-                evaluation_start_rule=str(candidate.get("evaluation_start_rule") or "next_trading_day_open"),
-                early_invalidation_rule=candidate.get("early_invalidation_rule"),
-                benchmark_scope=benchmark_scope,
-                benchmark_symbol=benchmark_symbol,
-                benchmark_name=benchmark_name,
-                expected_direction=candidate.get("expected_direction"),
-                observed_metric=self._observed_metric_for_candidate(
-                    candidate=candidate,
-                    latest_hist=latest_hist,
-                    latest_market_snapshot=latest_market_snapshot,
-                    latest_notice_snapshot=latest_notice_snapshot,
-                    excess_metric=excess_metric,
-                    policy_signals=policy_signals,
-                    regulatory_signals=regulatory_signals,
-                    theme_news=theme_news,
-                ),
-                observed_benchmark_metric=self._benchmark_pct_change(benchmark=benchmark),
-                excess_metric=excess_metric,
-                verdict=self._candidate_verdict(
-                    candidate=candidate,
-                    latest_market_snapshot=latest_market_snapshot,
-                    latest_notice_snapshot=latest_notice_snapshot,
-                    excess_metric=excess_metric,
-                    policy_signals=policy_signals,
-                    regulatory_signals=regulatory_signals,
-                    theme_news=theme_news,
-                ),
-                notes=self._candidate_notes(
-                    candidate=candidate,
-                    sector_name=sector_name,
-                    latest_market_snapshot=latest_market_snapshot,
-                    latest_fundamental_snapshot=latest_fundamental_snapshot,
-                    latest_notice_snapshot=latest_notice_snapshot,
-                    setup_label=setup_label,
-                    catalyst_digest=catalyst_digest,
-                    policy_signals=policy_signals,
-                    regulatory_signals=regulatory_signals,
-                    theme_news=theme_news,
-                ),
+            reviewer_type = {
+                "direction": "direction_reviewer",
+                "catalyst": "catalyst_reviewer",
+                "time_window": "time_window_reviewer",
+            }.get(claim_type, "time_window_reviewer")
+            finding_outputs, _ = self.registry.invoke(
+                SubagentInvocation(
+                    subagent_type=reviewer_type,
+                    objective=f"Review {claim_type} claim.",
+                    inputs={
+                        "candidate": candidate,
+                        "source_run_id": source_run_id,
+                        "anchor_date": anchor_date,
+                        "benchmark_scope": benchmark_scope,
+                        "benchmark_symbol": benchmark_symbol,
+                        "benchmark_name": benchmark_name,
+                        "observed_benchmark_metric": observed_benchmark_metric,
+                        "latest_hist": latest_hist,
+                        "latest_market_snapshot": latest_market_snapshot,
+                        "latest_fundamental_snapshot": latest_fundamental_snapshot,
+                        "latest_notice_snapshot": latest_notice_snapshot,
+                        "excess_metric": excess_metric,
+                        "policy_signals": policy_signals,
+                        "regulatory_signals": regulatory_signals,
+                        "theme_news": theme_news,
+                        "setup_label": setup_label,
+                        "sector_name": sector_name,
+                        "catalyst_digest": catalyst_digest,
+                    },
+                )
             )
-            findings.append(finding)
+            findings.append(ReviewFinding.model_validate(finding_outputs["finding"]))
 
-        verdict_by_claim_type = self._verdict_by_claim_type(findings)
-        benchmark_scope_counts = self._benchmark_scope_counts(findings)
-        confirmed, rejected, inconclusive = self._verdict_totals(verdict_by_claim_type)
-        overall_verdict = self._overall_verdict(
-            review_required=False,
-            finding_count=len(findings),
-            confirmed=confirmed,
-            rejected=rejected,
-            inconclusive=inconclusive,
-        )
-        summary = PosteriorReviewSummary(
-            review_required=False,
-            finding_count=len(findings),
-            reviewable_claim_count=len(candidates),
-            claim_type_counts=self._claim_type_counts(candidates),
-            benchmark_scope_counts=benchmark_scope_counts,
-            benchmark_scope_explanations=self._benchmark_scope_explanations(benchmark_scope_counts),
-            verdict_by_claim_type=verdict_by_claim_type,
-            overall_verdict=overall_verdict,
-            summary_text=self._summary_text(
-                overall_verdict=overall_verdict,
-                finding_count=len(findings),
-                confirmed=confirmed,
-                rejected=rejected,
-                inconclusive=inconclusive,
-                benchmark_scope_counts=benchmark_scope_counts,
-            ),
-            confirmed=confirmed,
-            rejected=rejected,
-            inconclusive=inconclusive,
-            notes=notes,
+        summary_outputs, _ = self.registry.invoke(
+            SubagentInvocation(
+                subagent_type="review_summary_builder",
+                objective="Build posterior review summary from claim findings.",
+                inputs={
+                    "review_required": False,
+                    "findings": findings,
+                    "candidates": candidates,
+                    "notes": notes,
+                    "claim_type_counts": claim_type_counts,
+                },
+            )
         )
         return {
-            "summary": summary.model_dump(mode="json"),
+            "summary": summary_outputs["summary"],
             "findings": [finding.model_dump(mode="json") for finding in findings],
         }
 

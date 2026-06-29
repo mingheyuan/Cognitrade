@@ -4,6 +4,15 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from research_system.runtime.provider_registry import LLMProviderError, OpenAIProvider
 from research_system.schemas.review import ClaimVerdictBreakdown, PosteriorReviewSummary
+from research_system.schemas.subagents import SubagentInvocation
+from research_system.subagents.registry import SubagentRegistry
+from research_system.subagents.reporting import (
+    DistillationScorecardComposerSubagent,
+    FallbackReportComposerSubagent,
+    LLMErrorReportComposerSubagent,
+    LLMReportComposerSubagent,
+    ReviewSummaryComposerSubagent,
+)
 
 
 class ReportPayload(BaseModel):
@@ -24,150 +33,129 @@ class ReporterService:
 
     def __init__(self, llm_provider: OpenAIProvider) -> None:
         self.llm_provider = llm_provider
+        self.registry = SubagentRegistry(
+            [
+                ReviewSummaryComposerSubagent(build_review_summary=self._review_summary_payload),
+                DistillationScorecardComposerSubagent(
+                    build_scorecard_digest=self._distillation_scorecard_digest,
+                    build_scorecard_payload=self._distillation_scorecard_payload,
+                ),
+                FallbackReportComposerSubagent(
+                    review_verdict_by_claim_type_payload=self._review_verdict_by_claim_type_payload,
+                    screening_digest=self._screening_digest,
+                ),
+                LLMReportComposerSubagent(
+                    llm_provider=self.llm_provider,
+                    schema=ReportPayload,
+                    normalize_review_conclusion=self._normalize_review_conclusion,
+                ),
+                LLMErrorReportComposerSubagent(),
+            ]
+        )
 
     def run(self, *, intent: str, query: str, evidences: list[dict], retrieval_summary: str | None = None) -> dict:
-        review_summary_payload = self._review_summary_payload(evidences) if intent == "review_thesis" else None
+        review_summary_payload = None
+        screening_scorecard_payload = self._screening_scorecard_payload(evidences) if intent == "stock_screen" else None
+        screening_candidates_payload = self._screening_candidates_payload(evidences) if intent == "stock_screen" else []
+        if intent in {"review_thesis", "stock_screen"}:
+            review_outputs, _ = self.registry.invoke(
+                SubagentInvocation(
+                    subagent_type="review_summary_composer",
+                    objective="Build structured review summary for reporter.",
+                    inputs={"evidences": evidences},
+                )
+            )
+            review_summary_payload = review_outputs["review_summary"]
         if not self.llm_provider.available:
+            scorecard_digest = None
+            scorecard_payload = None
             if intent == "distill_kol_logic":
-                review_count = len([
-                    item for item in evidences
-                    if str((item.get("metadata") or {}).get("source_type") or "") == "review_finding"
-                ])
-                scorecard_digest = self._distillation_scorecard_digest(evidences)
-                scorecard_payload = self._distillation_scorecard_payload(evidences)
-                return {
-                    "conclusion": (
-                        f"LLM unavailable. Returning degraded distillation report with {len(evidences)} evidence item(s) "
-                        f"for query: {query}. {scorecard_digest}"
-                    ),
-                    "evidence": evidences[:8],
-                    "scorecard": scorecard_payload,
-                    "risk": (
-                        "Distillation output is running in degraded mode; "
-                        f"{review_count} critic review finding(s) indicate manual review is still required."
-                    ),
-                    "follow_up": (
-                        "Review the critic findings and confirm which claims are author-original versus "
-                        "reply/repost/reported content before reusing this distillation."
-                    ),
-                    "degraded_note": "llm_unavailable",
-                }
-            if intent == "review_thesis":
-                review_findings = [
-                    item for item in evidences
-                    if str((item.get("metadata") or {}).get("source_type") or "") == "review_finding"
-                ]
-                confirmed = sum(1 for item in review_findings if "verdict=confirmed" in str(item.get("summary") or ""))
-                rejected = sum(1 for item in review_findings if "verdict=rejected" in str(item.get("summary") or ""))
-                inconclusive = sum(1 for item in review_findings if "verdict=inconclusive" in str(item.get("summary") or ""))
-                verdict_by_claim_type = self._review_verdict_by_claim_type_payload(review_findings)
-                overall_verdict = (review_summary_payload or {}).get("overall_verdict") or "inconclusive"
-                return {
-                    "conclusion": (
-                        f"LLM unavailable. Returning degraded review report with {len(review_findings)} review finding(s) "
-                        f"for query: {query}. overall_verdict={overall_verdict}. "
-                        f"confirmed={confirmed}, rejected={rejected}, inconclusive={inconclusive}. "
-                        f"claim_type_distribution={verdict_by_claim_type}."
-                    ),
-                    "evidence": evidences[:8],
-                    "review_summary": review_summary_payload,
-                    "risk": "Posterior review is running in degraded mode; use the structured review findings as the primary verdict source.",
-                    "follow_up": "Inspect confirmed versus rejected review findings and keep benchmark-relative interpretation explicit.",
-                    "degraded_note": "llm_unavailable",
-                }
-            return {
-                "conclusion": (
-                    f"LLM unavailable. Returning degraded Phase 1 report for {intent}. "
-                    f"The system collected {len(evidences)} evidence item(s) for query: {query}"
-                ),
-                "evidence": evidences[:5],
-                "risk": "LLM unavailable; report quality is degraded. Exact claims remain constrained by verified snapshots.",
-                "follow_up": "Configure OPENAI_API_KEY to enable LLM-powered reporting.",
-                "degraded_note": "llm_unavailable",
-            }
-
-        evidence_block = [
-            {
-                "evidence_id": item["evidence_id"],
-                "title": item["title"],
-                "summary": item["summary"],
-                "metadata": item["metadata"],
-                "source_refs": item["source_refs"],
-            }
-            for item in evidences
-        ]
+                scorecard_outputs, _ = self.registry.invoke(
+                    SubagentInvocation(
+                        subagent_type="distillation_scorecard_composer",
+                        objective="Build distillation scorecard digest and payload for fallback report.",
+                        inputs={"evidences": evidences},
+                    )
+                )
+                scorecard_digest = scorecard_outputs["scorecard_digest"]
+                scorecard_payload = scorecard_outputs["scorecard_payload"]
+            fallback_outputs, _ = self.registry.invoke(
+                SubagentInvocation(
+                    subagent_type="fallback_report_composer",
+                    objective="Compose degraded fallback report.",
+                    inputs={
+                        "intent": intent,
+                        "query": query,
+                        "evidences": evidences,
+                        "review_summary_payload": review_summary_payload,
+                        "scorecard_digest": scorecard_digest,
+                        "scorecard_payload": scorecard_payload,
+                        "screening_scorecard_payload": screening_scorecard_payload,
+                        "screening_candidates_payload": screening_candidates_payload,
+                        "degraded_note": "llm_unavailable",
+                    },
+                )
+            )
+            return fallback_outputs
 
         try:
-            report = self.llm_provider.parse(
-                system_prompt=(
-                    "You are the reporter agent in an A-share research system.\n"
-                    "Produce a concise research output using only the provided evidence.\n"
-                    "Do not invent exact prices, dates, financial metrics, or notices.\n"
-                    "If evidence is insufficient for exact claims, explicitly say the data is unavailable or constrained.\n"
-                    "For distill_kol_logic, summarize the distilled logic, dimensions, major risks, and review need. "
-                    "Call out whether key claims are author-original, replies, reposts, or explicit quotes when evidence supports it. "
-                    "Do not pretend the distilled output has been verified by market data.\n"
-                    "For review_thesis, summarize the posterior review verdicts, benchmark-relative direction validation, and any inconclusive cases. "
-                    "If a structured review summary is provided, anchor the conclusion to its `overall_verdict` first. "
-                    "Treat review findings as the primary source of truth.\n"
-                    "For sector research, prefer stating the sector's recent direction, turnover, constituent breadth, relative strength versus any provided benchmark, "
-                    "recent theme news, any policy signals or regulatory disclosure signals, any provided signal scorecard, "
-                    "and any concrete catalyst samples or catalyst digest from representative constituents."
-                ),
-                user_prompt=(
-                    f"Intent: {intent}\n"
-                    f"User query: {query}\n"
-                    f"Retriever summary: {retrieval_summary or 'N/A'}\n"
-                    f"Structured review summary: {review_summary_payload or 'N/A'}\n"
-                    f"Evidence candidates: {evidence_block}\n\n"
-                    "Return a JSON object with keys "
-                    "`conclusion`, `evidence_ids`, `risk`, `follow_up`, and optional `degraded_note`.\n"
-                    "Use `risk` for the risk statement and `follow_up` for the optional next step."
-                ),
-                schema=ReportPayload,
-                temperature=0.2,
-                reasoning_effort="medium",
+            llm_outputs, _ = self.registry.invoke(
+                SubagentInvocation(
+                    subagent_type="llm_report_composer",
+                    objective="Compose final report via LLM.",
+                    inputs={
+                        "intent": intent,
+                        "query": query,
+                        "evidences": evidences,
+                        "retrieval_summary": retrieval_summary,
+                        "review_summary_payload": review_summary_payload,
+                    },
+                )
             )
         except LLMProviderError as exc:
-            scorecard_digest = self._distillation_scorecard_digest(evidences) if intent == "distill_kol_logic" else None
-            scorecard_payload = self._distillation_scorecard_payload(evidences) if intent == "distill_kol_logic" else None
-            review_conclusion = (
-                f"LLM request failed during reporting for {intent}. "
-                f"Returning degraded Phase 1 report with {len(evidences)} evidence item(s) for query: {query}"
-                + (f". {scorecard_digest}" if scorecard_digest else "")
-            )
-            if intent == "review_thesis":
-                overall_verdict = (review_summary_payload or {}).get("overall_verdict") or "inconclusive"
-                review_conclusion = (
-                    f"LLM request failed during reporting for {intent}. "
-                    f"Returning degraded review report for query: {query}. "
-                    f"overall_verdict={overall_verdict}."
+            scorecard_digest = None
+            scorecard_payload = None
+            if intent == "distill_kol_logic":
+                scorecard_outputs, _ = self.registry.invoke(
+                    SubagentInvocation(
+                        subagent_type="distillation_scorecard_composer",
+                        objective="Build distillation scorecard digest and payload for LLM error fallback.",
+                        inputs={"evidences": evidences},
+                    )
                 )
-            return {
-                "conclusion": review_conclusion,
-                "evidence": evidences[:5],
-                "scorecard": scorecard_payload,
-                "review_summary": review_summary_payload,
-                "risk": "LLM reporting failed; report quality is degraded. Exact claims remain constrained by verified snapshots.",
-                "follow_up": "Check LLM gateway availability or provider compatibility.",
-                "degraded_note": f"llm_error:{exc.__class__.__name__}",
-            }
-        selected_ids = set(report.evidence_ids)
-        selected_evidence = [item for item in evidences if item["evidence_id"] in selected_ids] or evidences[:5]
-        conclusion = report.conclusion
-        if intent == "review_thesis":
-            conclusion = self._normalize_review_conclusion(
-                conclusion=conclusion,
-                review_summary_payload=review_summary_payload,
+                scorecard_digest = scorecard_outputs["scorecard_digest"]
+                scorecard_payload = scorecard_outputs["scorecard_payload"]
+            error_outputs, _ = self.registry.invoke(
+                SubagentInvocation(
+                    subagent_type="llm_error_report_composer",
+                    objective="Compose degraded report after LLM error.",
+                    inputs={
+                        "intent": intent,
+                        "query": query,
+                        "evidences": evidences,
+                        "review_summary_payload": review_summary_payload,
+                        "scorecard_digest": scorecard_digest,
+                        "scorecard_payload": scorecard_payload,
+                        "screening_scorecard_payload": screening_scorecard_payload,
+                        "screening_candidates_payload": screening_candidates_payload,
+                        "screening_digest": self._screening_digest(screening_scorecard_payload, screening_candidates_payload) if intent == "stock_screen" else None,
+                        "error_name": exc.__class__.__name__,
+                    },
+                )
             )
+            return error_outputs
+        screening_scorecard = self._screening_scorecard_payload(llm_outputs["selected_evidence"]) if intent == "stock_screen" else None
+        screening_candidates = self._screening_candidates_payload(llm_outputs["selected_evidence"]) if intent == "stock_screen" else None
         return {
-            "conclusion": conclusion,
-            "evidence": selected_evidence[:5],
-            "scorecard": self._distillation_scorecard_payload(selected_evidence) if intent == "distill_kol_logic" else None,
+            "conclusion": llm_outputs["conclusion"],
+            "evidence": llm_outputs["selected_evidence"][:5],
+            "scorecard": self._distillation_scorecard_payload(llm_outputs["selected_evidence"]) if intent == "distill_kol_logic" else None,
+            "screening_scorecard": screening_scorecard,
+            "candidates": screening_candidates,
             "review_summary": review_summary_payload,
-            "risk": report.risk,
-            "follow_up": report.follow_up,
-            "degraded_note": report.degraded_note,
+            "risk": llm_outputs["risk"],
+            "follow_up": llm_outputs["follow_up"],
+            "degraded_note": llm_outputs["degraded_note"],
         }
 
     def _distillation_attribution_digest(self, evidences: list[dict]) -> str:
@@ -324,6 +312,34 @@ class ReporterService:
         return f"overall_verdict={overall_verdict}. {conclusion}"
 
     def _review_summary_payload(self, evidences: list[dict]) -> dict | None:
+        for item in evidences:
+            metadata = item.get("metadata") or {}
+            if str(metadata.get("source_type") or "") != "review_summary":
+                continue
+            summary = str(item.get("summary") or "")
+            if "\n" not in summary:
+                continue
+            _, tail = summary.split("\n", 1)
+            import ast
+            import json
+
+            try:
+                parsed = ast.literal_eval(tail)
+            except Exception:
+                try:
+                    parsed = json.loads(tail)
+                except Exception:
+                    normalized_tail = (
+                        tail.replace(": true", ": True")
+                        .replace(": false", ": False")
+                        .replace(": null", ": None")
+                    )
+                    try:
+                        parsed = ast.literal_eval(normalized_tail)
+                    except Exception:
+                        parsed = None
+            if isinstance(parsed, dict):
+                return parsed
         review_findings = [
             item for item in evidences
             if str((item.get("metadata") or {}).get("source_type") or "") == "review_finding"
@@ -367,3 +383,122 @@ class ReporterService:
             notes=[],
         )
         return summary.model_dump(mode="json")
+
+    def _screening_scorecard_payload(self, evidences: list[dict]) -> dict | None:
+        for item in evidences:
+            metadata = item.get("metadata") or {}
+            if str(metadata.get("source_type") or "") != "screening_scorecard":
+                continue
+            summary = str(item.get("summary") or "")
+            if "\n" not in summary:
+                return None
+            _, tail = summary.split("\n", 1)
+            import ast
+
+            try:
+                parsed = ast.literal_eval(tail)
+            except Exception:
+                return None
+            return parsed if isinstance(parsed, dict) else None
+        return None
+
+    def _screening_candidates_payload(self, evidences: list[dict]) -> list[dict]:
+        candidates: list[dict] = []
+        for item in evidences:
+            metadata = item.get("metadata") or {}
+            source_type = str(metadata.get("source_type") or "")
+            if source_type not in {"screen_candidate", "watchlist_candidate"}:
+                continue
+            summary = str(item.get("summary") or "")
+            title = str(item.get("title") or "")
+            symbol = title.split(":", 1)[1].strip() if ":" in title else title
+            parsed_candidate = self._parse_screen_candidate_summary(summary)
+            name = str(parsed_candidate.get("name") or symbol)
+            rationale = str(parsed_candidate.get("why_it_made_the_list") or "")
+            risk = str(parsed_candidate.get("main_risk") or "")
+            score = parsed_candidate.get("score")
+            missing_evidence = parsed_candidate.get("missing_evidence") or ""
+            deep_checked = bool(parsed_candidate.get("deep_checked"))
+            candidate = {
+                "symbol": symbol,
+                "name": name,
+                "title": title,
+                "summary": summary,
+                "score": score,
+                "why_it_made_the_list": rationale,
+                "main_risk": risk,
+                "missing_evidence": missing_evidence,
+                "deep_checked": deep_checked,
+                "candidate_tier": "watchlist" if source_type == "watchlist_candidate" else "core",
+            }
+            candidates.append(candidate)
+        return candidates
+
+    def _parse_screen_candidate_summary(self, summary: str) -> dict:
+        import ast
+
+        lines = summary.splitlines()
+        if len(lines) >= 2:
+            tail = lines[-1].strip()
+            if tail.startswith("{") and tail.endswith("}"):
+                try:
+                    parsed = ast.literal_eval(tail)
+                except Exception:
+                    parsed = None
+                if isinstance(parsed, dict):
+                    return parsed
+
+        parsed: dict = {}
+        for line in lines:
+            if line.startswith("screen_candidate symbol=") or line.startswith("watchlist_candidate symbol="):
+                parts = line.split()
+                for part in parts:
+                    if "=" not in part:
+                        continue
+                    key, value = part.split("=", 1)
+                    if key == "symbol":
+                        parsed["symbol"] = value.strip()
+                    elif key == "name":
+                        parsed["name"] = value.strip()
+            elif line.startswith("why="):
+                parsed["why_it_made_the_list"] = line.split("=", 1)[1].strip()
+            elif line.startswith("risk="):
+                parsed["main_risk"] = line.split("=", 1)[1].strip()
+            elif line.startswith("score="):
+                parsed["score"] = line.split("=", 1)[1].split()[0].strip()
+            elif line.startswith("deep_checked="):
+                parsed["deep_checked"] = line.split("=", 1)[1].strip().lower() == "true"
+            elif line.startswith("missing_evidence="):
+                parsed["missing_evidence"] = line.split("=", 1)[1].strip()
+        return parsed
+
+    def _screening_digest(self, screening_scorecard_payload: dict | None, screening_candidates_payload: list[dict]) -> str:
+        if not screening_candidates_payload:
+            return "未筛出满足最小条件的候选，当前更适合继续观察而不是直接给出标的。"
+        core_candidates = [item for item in screening_candidates_payload if str(item.get("candidate_tier") or "core") == "core"]
+        watchlist_candidates = [item for item in screening_candidates_payload if str(item.get("candidate_tier") or "") == "watchlist"]
+        top_names = [str(item.get("name") or item.get("symbol") or "") for item in core_candidates[:3] if str(item.get("name") or item.get("symbol") or "").strip()]
+        watch_names = [str(item.get("name") or item.get("symbol") or "") for item in watchlist_candidates[:3] if str(item.get("name") or item.get("symbol") or "").strip()]
+        cycle = str((screening_scorecard_payload or {}).get("investment_cycle") or "mid_term")
+        summary = str((screening_scorecard_payload or {}).get("summary") or "").strip()
+        deep_checked_count = int((screening_scorecard_payload or {}).get("deep_checked_count") or 0)
+        first = (core_candidates or watchlist_candidates or screening_candidates_payload)[0]
+        leader = str(first.get("name") or first.get("symbol") or "").strip()
+        leader_reason = str(first.get("why_it_made_the_list") or "").strip()
+        leader_risk = str(first.get("main_risk") or "").strip()
+        lines = [f"当前更适合作为 {cycle} 观察名单，而不是直接交易指令。"]
+        if top_names:
+            lines.append(f"优先关注：{', '.join(top_names)}。")
+        if watch_names:
+            lines.append(f"次级观察：{', '.join(watch_names)}。")
+        if summary:
+            lines.append(summary)
+        if deep_checked_count > 0:
+            lines.append(f"其中有 {deep_checked_count} 只候选已经完成市场、财务和公告的深度核查。")
+        else:
+            lines.append("当前候选仍以轻量筛选为主，尚未完成系统性的深度核查。")
+        if leader and leader_reason:
+            lines.append(f"其中 {leader} 的入选理由是：{leader_reason}。")
+        if leader_risk:
+            lines.append(f"主要风险是：{leader_risk}。")
+        return " ".join(lines)
