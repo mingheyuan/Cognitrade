@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +9,8 @@ from research_system.agents.distiller.service import DistillerService
 from research_system.agents.reporter.service import ReporterService
 from research_system.agents.reviewer.service import ReviewerService
 from research_system.agents.retriever.service import RetrieverService
+from research_system.agents.screener.service import ScreenerService
+from research_system.agents.screen_reviewer.service import ScreenReviewerService
 from research_system.runtime.blackboard import Blackboard
 from research_system.runtime.checkpoint_store import CheckpointStore
 from research_system.runtime.control_plane import RunControlPlane
@@ -22,10 +24,11 @@ from research_system.runtime.run_store import RunPaths, RunStore
 from research_system.runtime.session_history import SessionHistory
 from research_system.runtime.settings import Settings
 from research_system.runtime.skill_runtime import SkillRuntime
-from research_system.runtime.task_graph import TaskGraph, build_task_graph
-from research_system.runtime.team_templates import get_team_template
+from research_system.runtime.planner import RuntimePlanner
+from research_system.runtime.supervisor import RuntimeSupervisor
 from research_system.runtime.jsonl import read_jsonl
 from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
+from research_system.schemas.planning import ActionPlan, ActionSpec
 from research_system.schemas.runtime import BlackboardEntry, RunEvent, RunStateSnapshot
 from research_system.services.progress_service import ProgressService
 from research_system.services.task_router import TaskRouter
@@ -54,6 +57,8 @@ class RuntimeContext:
     session_history: SessionHistory
     logger: RunLogger
     state: RunStateSnapshot
+    subagent_trace: list[dict]
+    dynamic_trace: list[dict]
 
 
 class ResearchOrchestrator:
@@ -73,8 +78,23 @@ class ResearchOrchestrator:
         self.reviewer = ReviewerService(yaml_configs.get("review_policy"))
         self.retriever = RetrieverService(self.llm_provider, settings, yaml_configs.get("retrieval_policy"))
         self.reporter = ReporterService(self.llm_provider)
+        self.screener = ScreenerService()
+        self.screen_reviewer = ScreenReviewerService()
         self.gates = GateEvaluator()
         self.retention = RunRetentionService(settings)
+        self.planner = RuntimePlanner(self.llm_provider)
+        self.supervisor = RuntimeSupervisor()
+
+    def close(self) -> None:
+        close = getattr(self.retriever, "close", None)
+        if callable(close):
+            close()
+
+    def __enter__(self) -> "ResearchOrchestrator":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
 
     def run(self, request: RequestEnvelope) -> ResponseEnvelope:
         decision = self.task_router.identify(request)
@@ -107,6 +127,8 @@ class ResearchOrchestrator:
             session_history=SessionHistory(paths.root),
             logger=RunLogger(paths.logs),
             state=state,
+            subagent_trace=[],
+            dynamic_trace=[],
         )
         context.control_plane.initialize(run_id=run_id, run_timeout_seconds=self.settings.run_timeout_seconds)
 
@@ -114,16 +136,43 @@ class ResearchOrchestrator:
             self._emit_event(context, request_id=request.request_id, intent=intent, event_type="request_received", message="Request received")
             self._transition(context, "identifying_intent", request_id=request.request_id, intent=intent, message="Identifying intent")
             self._emit_event(context, request_id=request.request_id, intent=intent, event_type="intent_identified", message=f"Intent identified: {intent}")
-            get_team_template(intent)
-            graph = build_task_graph(intent)
-            write_json(paths.task_plan, {"intent": graph.intent, "nodes": [node.__dict__ for node in graph.nodes]})
-            self._transition(context, "ready", request_id=request.request_id, intent=intent, message="Task graph created")
+            plan = self.planner.build_initial_plan(intent=intent, request=request)
+            write_json(
+                paths.task_plan,
+                {
+                    "intent": plan.intent,
+                    "strategy": plan.strategy,
+                    "entry_strategy": plan.entry_strategy,
+                    "entry_reason": plan.entry_reason,
+                    "subagent_required": plan.subagent_required,
+                    "dispatch_trace": plan.dispatch_trace,
+                    "notes": plan.notes,
+                    "actions": [action.model_dump(mode="json") for action in plan.actions],
+                },
+            )
+            self._emit_event(
+                context,
+                request_id=request.request_id,
+                intent=intent,
+                event_type="plan_created",
+                message="Execution plan created",
+                payload={
+                    "strategy": plan.strategy,
+                    "entry_strategy": plan.entry_strategy,
+                    "entry_reason": plan.entry_reason,
+                    "subagent_required": plan.subagent_required,
+                    "dispatch_trace": plan.dispatch_trace,
+                    "actions": [
+                        {"node_id": action.node_id, "phase": action.phase, "agent": action.agent}
+                        for action in plan.actions
+                    ],
+                    "notes": plan.notes,
+                },
+            )
+            self._transition(context, "ready", request_id=request.request_id, intent=intent, message="Execution plan created")
             self._transition(context, "running", request_id=request.request_id, intent=intent, message="Run accepted")
             self._emit_event(context, request_id=request.request_id, intent=intent, event_type="run_accepted", message="Run accepted")
-
-            for index, node in enumerate(graph.nodes, start=1):
-                self._enforce_runtime_controls(context, request_id=request.request_id, intent=intent)
-                self._run_node(context, request, graph, node.node_id, node.phase, node.agent, index, len(graph.nodes))
+            self._execute_plan(context=context, request=request, plan=plan)
 
             self._enforce_runtime_controls(context, request_id=request.request_id, intent=intent)
             self._transition(context, "gated", request_id=request.request_id, intent=intent, message="Evaluating run gates")
@@ -366,32 +415,109 @@ class ResearchOrchestrator:
             "skipped_runs": skipped_runs,
         }
 
-    def _run_node(
+    def _execute_plan(self, *, context: RuntimeContext, request: RequestEnvelope, plan: ActionPlan) -> None:
+        pending_actions: list[ActionSpec] = [action.model_copy(deep=True) for action in plan.actions]
+        executed_node_ids: list[str] = []
+
+        while True:
+            self._enforce_runtime_controls(context, request_id=request.request_id, intent=plan.intent)
+            decision = self.supervisor.decide(
+                plan=plan,
+                completed_actions=executed_node_ids[:],
+                pending_actions=pending_actions[:],
+                blackboard_entries=context.blackboard.list_entries(),
+            )
+            self._emit_event(
+                context,
+                request_id=request.request_id,
+                intent=plan.intent,
+                event_type="supervisor_decision",
+                message="Supervisor evaluated next actions",
+                payload={
+                    "decision_type": decision.decision_type,
+                    "completed_actions": executed_node_ids[:],
+                    "next_actions": [
+                        {"node_id": action.node_id, "phase": action.phase, "agent": action.agent}
+                        for action in decision.next_actions
+                    ],
+                    "notes": decision.notes,
+                },
+            )
+            if decision.decision_type == "stop" or not decision.next_actions:
+                self._update_state(
+                    context,
+                    pending_nodes=[],
+                    completed_nodes=executed_node_ids[:],
+                )
+                context.checkpoint_store.save(context.state)
+                return
+
+            for action in decision.next_actions:
+                if action.node_id not in [existing.node_id for existing in pending_actions]:
+                    pending_actions.append(action)
+                    context.dynamic_trace.append(
+                        {
+                            "event": "dynamic_action_inserted",
+                            "node_id": action.node_id,
+                            "phase": action.phase,
+                            "agent": action.agent,
+                            "tags": action.tags,
+                        }
+                    )
+                    self._emit_event(
+                        context,
+                        request_id=request.request_id,
+                        intent=plan.intent,
+                        event_type="dynamic_action_inserted",
+                        phase=action.phase,
+                        agent=action.agent,
+                        message=f"Dynamically inserted action: {action.node_id}",
+                        payload=action.model_dump(mode="json"),
+                    )
+                action_index = next(
+                    index for index, candidate in enumerate(pending_actions)
+                    if candidate.node_id == action.node_id
+                )
+                current_action = pending_actions.pop(action_index)
+                self._run_action(
+                    context=context,
+                    request=request,
+                    plan=plan,
+                    intent=plan.intent,
+                    action=current_action,
+                    completed_node_ids=executed_node_ids[:],
+                    pending_actions_after_current=pending_actions[:],
+                )
+                executed_node_ids.append(current_action.node_id)
+
+    def _run_action(
         self,
+        *,
         context: RuntimeContext,
         request: RequestEnvelope,
-        graph: TaskGraph,
-        node_id: str,
-        phase: str,
-        agent: str,
-        index: int,
-        total_nodes: int,
+        plan: ActionPlan,
+        intent: str,
+        action: ActionSpec,
+        completed_node_ids: list[str],
+        pending_actions_after_current: list[ActionSpec],
     ) -> None:
+        phase = action.phase
+        agent = action.agent
         self._update_state(context, current_phase=phase, active_agent=agent)
         self._emit_event(
             context,
             request_id=request.request_id,
-            intent=graph.intent,
+            intent=intent,
             event_type="phase_started",
             phase=phase,
             agent=agent,
             message=f"Phase started: {phase}",
         )
-        self._enforce_runtime_controls(context, request_id=request.request_id, intent=graph.intent)
+        self._enforce_runtime_controls(context, request_id=request.request_id, intent=intent)
         self._emit_event(
             context,
             request_id=request.request_id,
-            intent=graph.intent,
+            intent=intent,
             event_type="agent_started",
             phase=phase,
             agent=agent,
@@ -399,33 +525,37 @@ class ResearchOrchestrator:
         )
 
         if agent == "collector":
-            payload = self.collector.run(intent=graph.intent, query=request.user_query, constraints=request.constraints)
+            collector_query = str(action.inputs.get("query") or request.user_query)
+            collector_constraints = dict(request.constraints)
+            collector_constraints.update(action.inputs or {})
+            payload = self.collector.run(intent=intent, query=collector_query, constraints=collector_constraints)
+            self._extend_subagent_trace(context, agent=agent, phase=phase, payload=payload)
             if payload.get("requires_wait"):
                 self._transition(
                     context,
                     "waiting_external",
                     request_id=request.request_id,
-                    intent=graph.intent,
+                    intent=intent,
                     message="Waiting for external dependency",
                 )
                 context.control_plane.set_wait_deadline(wait_timeout_seconds=self.settings.external_wait_timeout_seconds)
                 self._emit_event(
                     context,
                     request_id=request.request_id,
-                    intent=graph.intent,
+                    intent=intent,
                     event_type="phase_started",
                     phase=phase,
                     agent=agent,
                     message="Entered waiting_external state",
                     payload={"wait_timeout_seconds": self.settings.external_wait_timeout_seconds},
                 )
-                self._wait_for_external_dependency(context, request_id=request.request_id, intent=graph.intent)
+                self._wait_for_external_dependency(context, request_id=request.request_id, intent=intent)
                 context.control_plane.clear_wait_deadline()
                 self._transition(
                     context,
                     "running",
                     request_id=request.request_id,
-                    intent=graph.intent,
+                    intent=intent,
                     message="External dependency resolved",
                 )
             for source in payload["sources"]:
@@ -438,7 +568,7 @@ class ResearchOrchestrator:
                     payload=source,
                     source_refs=[{"type": "request", "request_id": request.request_id, "run_id": context.run_id}],
                 )
-                self._add_entry(context, request, graph.intent, entry)
+                self._add_entry(context, request, intent, entry)
             for snapshot in payload["snapshots"]:
                 entry = BlackboardEntry(
                     run_id=context.run_id,
@@ -450,10 +580,34 @@ class ResearchOrchestrator:
                     source_refs=[{"type": "skill", "skill": snapshot["source"]["skill"], "run_id": context.run_id}],
                     confidence=1.0,
                 )
-                self._add_entry(context, request, graph.intent, entry)
+                self._add_entry(context, request, intent, entry)
         elif agent == "retriever":
             blackboard_entries = [entry.model_dump(mode="json") for entry in context.blackboard.list_entries()]
-            payload = self.retriever.run(intent=graph.intent, query=request.user_query, blackboard_entries=blackboard_entries)
+            payload = self.retriever.run(intent=intent, query=request.user_query, blackboard_entries=blackboard_entries)
+            self._extend_subagent_trace(
+                context,
+                agent=agent,
+                phase=phase,
+                payload={
+                    "subagent_trace": [
+                        {
+                            "subagent_type": "blackboard_evidence_indexer",
+                            "status": "completed",
+                            "objective": "Index blackboard entries and expose evidence candidates.",
+                            "notes": [f"blackboard_entries={len(blackboard_entries)}"],
+                        },
+                        {
+                            "subagent_type": "retrieval_decider",
+                            "status": "completed",
+                            "objective": "Select final evidence set and summarize retrieval.",
+                            "notes": [
+                                f"evidence_count={len(payload.get('evidences') or [])}",
+                                f"degraded={str(bool(payload.get('degraded'))).lower()}",
+                            ],
+                        },
+                    ]
+                },
+            )
             entry = BlackboardEntry(
                 run_id=context.run_id,
                 request_id=request.request_id,
@@ -464,7 +618,162 @@ class ResearchOrchestrator:
                 source_refs=[{"type": "blackboard", "count": len(blackboard_entries), "run_id": context.run_id}],
                 confidence=1.0,
             )
-            self._add_entry(context, request, graph.intent, entry)
+            self._add_entry(context, request, intent, entry)
+        elif agent == "screener":
+            source_payloads = [
+                entry.payload
+                for entry in context.blackboard.list_entries()
+                if entry.kind == "source_record"
+            ]
+            snapshot_payloads = [
+                entry.payload
+                for entry in context.blackboard.list_entries()
+                if entry.kind == "verified_snapshot"
+            ]
+            payload = self.screener.run(
+                query=request.user_query,
+                source_payloads=source_payloads,
+                snapshot_payloads=snapshot_payloads,
+                constraints=request.constraints,
+            )
+            self._extend_subagent_trace(
+                context,
+                agent=agent,
+                phase=phase,
+                payload={
+                    "subagent_trace": [
+                        {
+                            "subagent_type": "screening_decider",
+                            "status": "completed",
+                            "objective": "Rank candidates and decide enrichment targets.",
+                            "notes": list(payload.get("screening_notes") or []),
+                        }
+                    ]
+                },
+            )
+            if intent == "stock_screen":
+                enrichment_targets = payload.get("enrichment_targets") or []
+                if enrichment_targets:
+                    enrichment_payload = self.collector.enrich_stock_screen_candidates(
+                        candidates=enrichment_targets,
+                        snapshot_types=["market", "fundamental", "notice"],
+                    )
+                    self._extend_subagent_trace(context, agent="collector", phase=phase, payload=enrichment_payload)
+                    self._emit_event(
+                        context,
+                        request_id=request.request_id,
+                        intent=intent,
+                        event_type="agent_progress",
+                        phase=phase,
+                        agent=agent,
+                        message=f"Enriching top {len(enrichment_targets)} stock_screen candidates",
+                        payload={"candidate_symbols": [item.get("symbol") for item in enrichment_targets]},
+                    )
+                    for snapshot in enrichment_payload.get("snapshots", []):
+                        snapshot_type = snapshot.get("snapshot_type", "snapshot")
+                        entry = BlackboardEntry(
+                            run_id=context.run_id,
+                            request_id=request.request_id,
+                            kind="verified_snapshot",
+                            agent=agent,
+                            phase=phase,
+                            payload=snapshot,
+                            source_refs=[{"type": "stock_screen_enrichment", "run_id": context.run_id}],
+                            confidence=1.0,
+                            risk_flags=[snapshot.get("degrade_reason")] if snapshot.get("degraded") else [],
+                        )
+                        self._add_entry(context, request, intent, entry)
+                        self._emit_event(
+                            context,
+                            request_id=request.request_id,
+                            intent=intent,
+                            event_type="subagent_completed",
+                            phase=phase,
+                            agent=agent,
+                            message=f"Enriched {snapshot_type} snapshot for {snapshot.get('symbol') or 'unknown'}",
+                        )
+                    refreshed_snapshot_payloads = [
+                        entry.payload
+                        for entry in context.blackboard.list_entries()
+                        if entry.kind == "verified_snapshot"
+                    ]
+                    enriched_constraints = dict(request.constraints)
+                    enriched_constraints["skip_enrichment"] = True
+                    payload = self.screener.run(
+                        query=request.user_query,
+                        source_payloads=source_payloads,
+                        snapshot_payloads=refreshed_snapshot_payloads,
+                        constraints=enriched_constraints,
+                    )
+                    self._extend_subagent_trace(
+                        context,
+                        agent=agent,
+                        phase=phase,
+                        payload={
+                            "subagent_trace": [
+                                {
+                                    "subagent_type": "screening_decider",
+                                    "status": "completed",
+                                    "objective": "Re-rank candidates after enrichment.",
+                                    "notes": list(payload.get("screening_notes") or []) + ["post_enrichment=true"],
+                                }
+                            ]
+                        },
+                    )
+            for candidate in payload.get("screened_candidates", []):
+                entry = BlackboardEntry(
+                    run_id=context.run_id,
+                    request_id=request.request_id,
+                    kind="source_record",
+                    agent=agent,
+                    phase=phase,
+                    payload={
+                        "title": f"screen_candidate:{candidate.get('symbol')}",
+                        "content": str(candidate),
+                        "source_type": "screen_candidate",
+                        "candidate": candidate,
+                    },
+                    source_refs=[{"type": "screening", "run_id": context.run_id}],
+                    confidence=1.0,
+                    risk_flags=candidate.get("missing_evidence") or [],
+                )
+                self._add_entry(context, request, intent, entry)
+            for candidate in payload.get("watchlist_candidates", []):
+                entry = BlackboardEntry(
+                    run_id=context.run_id,
+                    request_id=request.request_id,
+                    kind="source_record",
+                    agent=agent,
+                    phase=phase,
+                    payload={
+                        "title": f"watchlist_candidate:{candidate.get('symbol')}",
+                        "content": str(candidate),
+                        "source_type": "watchlist_candidate",
+                        "candidate": candidate,
+                    },
+                    source_refs=[{"type": "screening_watchlist", "run_id": context.run_id}],
+                    confidence=1.0,
+                    risk_flags=candidate.get("missing_evidence") or [],
+                )
+                self._add_entry(context, request, intent, entry)
+            scorecard = payload.get("scorecard") or {}
+            scorecard_entry = BlackboardEntry(
+                run_id=context.run_id,
+                request_id=request.request_id,
+                kind="source_record",
+                agent=agent,
+                phase=phase,
+                payload={
+                    "title": "screening_scorecard",
+                    "content": str(scorecard),
+                    "source_type": "screening_scorecard",
+                    "scorecard": scorecard,
+                },
+                source_refs=[{"type": "screening", "run_id": context.run_id}],
+                confidence=1.0,
+                risk_flags=[],
+            )
+            self._add_entry(context, request, intent, scorecard_entry)
         elif agent == "distiller":
             source_records = [
                 entry.payload
@@ -472,6 +781,21 @@ class ResearchOrchestrator:
                 if entry.kind == "source_record"
             ]
             payload = self.distiller.run(query=request.user_query, source_records=source_records)
+            self._extend_subagent_trace(
+                context,
+                agent=agent,
+                phase=phase,
+                payload={
+                    "subagent_trace": [
+                        {
+                            "subagent_type": "distillation_pipeline",
+                            "status": "completed",
+                            "objective": "Distill source records into logic blocks and dimensions.",
+                            "notes": list(((payload.get("summary") or {}).get("processing_notes") or [])),
+                        }
+                    ]
+                },
+            )
             for logic_block in payload.get("logic_blocks", []):
                 entry = BlackboardEntry(
                     run_id=context.run_id,
@@ -490,7 +814,7 @@ class ResearchOrchestrator:
                     confidence=logic_block.get("confidence"),
                     risk_flags=logic_block.get("risk_flags") or [],
                 )
-                self._add_entry(context, request, graph.intent, entry)
+                self._add_entry(context, request, intent, entry)
             for dimension in payload.get("distilled_dimensions", []):
                 entry = BlackboardEntry(
                     run_id=context.run_id,
@@ -509,7 +833,7 @@ class ResearchOrchestrator:
                     confidence=dimension.get("confidence"),
                     risk_flags=[],
                 )
-                self._add_entry(context, request, graph.intent, entry)
+                self._add_entry(context, request, intent, entry)
             summary_entry = BlackboardEntry(
                 run_id=context.run_id,
                 request_id=request.request_id,
@@ -526,7 +850,7 @@ class ResearchOrchestrator:
                 confidence=payload.get("summary", {}).get("overall_confidence"),
                 risk_flags=payload.get("summary", {}).get("major_risks") or [],
             )
-            self._add_entry(context, request, graph.intent, summary_entry)
+            self._add_entry(context, request, intent, summary_entry)
         elif agent == "critic":
             logic_blocks = []
             distilled_dimensions = []
@@ -554,12 +878,27 @@ class ResearchOrchestrator:
                 logic_blocks=logic_blocks,
                 distilled_dimensions=distilled_dimensions,
             )
+            self._extend_subagent_trace(
+                context,
+                agent=agent,
+                phase=phase,
+                payload={
+                    "subagent_trace": [
+                        {
+                            "subagent_type": "critic_review_pipeline",
+                            "status": "completed",
+                            "objective": "Review distillation risks and build scorecard.",
+                            "notes": list((critic_payload.get("summary") or {}).get("notes") or []),
+                        }
+                    ]
+                },
+            )
             summary = critic_payload.get("summary") or {}
             scorecard = critic_payload.get("scorecard") or {}
             self._emit_event(
                 context,
                 request_id=request.request_id,
-                intent=graph.intent,
+                intent=intent,
                 event_type="review_requested",
                 phase=phase,
                 agent=agent,
@@ -586,7 +925,7 @@ class ResearchOrchestrator:
                     confidence=1.0,
                     risk_flags=[],
                 )
-                self._add_entry(context, request, graph.intent, scorecard_entry)
+                self._add_entry(context, request, intent, scorecard_entry)
             for finding in critic_payload.get("findings", []):
                 entry = BlackboardEntry(
                     run_id=context.run_id,
@@ -600,11 +939,11 @@ class ResearchOrchestrator:
                     confidence=1.0,
                     risk_flags=[finding.get("finding_type")] if finding.get("finding_type") else [],
                 )
-                self._add_entry(context, request, graph.intent, entry)
+                self._add_entry(context, request, intent, entry)
             self._emit_event(
                 context,
                 request_id=request.request_id,
-                intent=graph.intent,
+                intent=intent,
                 event_type="review_completed",
                 phase=phase,
                 agent=agent,
@@ -642,10 +981,31 @@ class ResearchOrchestrator:
                 latest_fundamental_snapshot=latest_fundamental_snapshot,
                 latest_notice_snapshot=latest_notice_snapshot,
             )
+            self._extend_subagent_trace(
+                context,
+                agent=agent,
+                phase=phase,
+                payload={
+                    "subagent_trace": [
+                        {
+                            "subagent_type": "review_claim_extractor",
+                            "status": "completed",
+                            "objective": "Extract reviewable claims from review target.",
+                            "notes": [f"source_entry_count={len(source_entries)}"],
+                        },
+                        {
+                            "subagent_type": "review_summary_builder",
+                            "status": "completed",
+                            "objective": "Aggregate posterior review findings into review summary.",
+                            "notes": list((reviewer_payload.get("summary") or {}).get("notes") or []),
+                        },
+                    ]
+                },
+            )
             self._emit_event(
                 context,
                 request_id=request.request_id,
-                intent=graph.intent,
+                intent=intent,
                 event_type="review_requested",
                 phase=phase,
                 agent=agent,
@@ -671,7 +1031,7 @@ class ResearchOrchestrator:
                     confidence=1.0,
                     risk_flags=[str(finding.get("verdict") or "inconclusive")],
                 )
-                self._add_entry(context, request, graph.intent, entry)
+                self._add_entry(context, request, intent, entry)
             summary_entry = BlackboardEntry(
                 run_id=context.run_id,
                 request_id=request.request_id,
@@ -694,15 +1054,99 @@ class ResearchOrchestrator:
                 confidence=1.0,
                 risk_flags=[],
             )
-            self._add_entry(context, request, graph.intent, summary_entry)
+            self._add_entry(context, request, intent, summary_entry)
             self._emit_event(
                 context,
                 request_id=request.request_id,
-                intent=graph.intent,
+                intent=intent,
                 event_type="review_completed",
                 phase=phase,
                 agent=agent,
                 message="Reviewer posterior review completed",
+                payload=reviewer_payload.get("summary") or {},
+            )
+        elif agent == "screen_reviewer":
+            screen_candidates: list[dict] = []
+            screening_scorecard = None
+            for entry in context.blackboard.list_entries():
+                if entry.kind != "source_record":
+                    continue
+                source_type = str(entry.payload.get("source_type") or "")
+                if source_type in {"screen_candidate", "watchlist_candidate"}:
+                    candidate = entry.payload.get("candidate")
+                    if isinstance(candidate, dict):
+                        screen_candidates.append(candidate)
+                elif source_type == "screening_scorecard":
+                    screening_scorecard = entry.payload.get("scorecard")
+            self._emit_event(
+                context,
+                request_id=request.request_id,
+                intent=intent,
+                event_type="review_requested",
+                phase=phase,
+                agent=agent,
+                message="Screen reviewer requested",
+                payload={"candidate_count": len(screen_candidates)},
+            )
+            reviewer_payload = self.screen_reviewer.run(
+                source_run_id=context.run_id,
+                candidates=screen_candidates,
+                scorecard=screening_scorecard,
+            )
+            self._extend_subagent_trace(
+                context,
+                agent=agent,
+                phase=phase,
+                payload={
+                    "subagent_trace": [
+                        {
+                            "subagent_type": "screen_candidate_reviewer",
+                            "status": "completed",
+                            "objective": "Perform lightweight evidence review for screened candidates.",
+                            "notes": list((reviewer_payload.get("summary") or {}).get("notes") or []),
+                        }
+                    ]
+                },
+            )
+            for finding in reviewer_payload.get("findings", []):
+                entry = BlackboardEntry(
+                    run_id=context.run_id,
+                    request_id=request.request_id,
+                    kind="review_finding",
+                    agent=agent,
+                    phase=phase,
+                    status="active" if finding.get("verdict") == "confirmed" else "needs_review",
+                    payload=finding,
+                    source_refs=[{"type": "screen_review", "run_id": context.run_id}],
+                    confidence=1.0,
+                    risk_flags=[str(finding.get("verdict") or "inconclusive")],
+                )
+                self._add_entry(context, request, intent, entry)
+            summary_entry = BlackboardEntry(
+                run_id=context.run_id,
+                request_id=request.request_id,
+                kind="source_record",
+                agent=agent,
+                phase=phase,
+                payload={
+                    "title": "review_summary",
+                    "content": str(reviewer_payload.get("summary") or {}),
+                    "source_type": "review_summary",
+                    "summary": reviewer_payload.get("summary") or {},
+                },
+                source_refs=[{"type": "screen_review", "run_id": context.run_id}],
+                confidence=1.0,
+                risk_flags=[],
+            )
+            self._add_entry(context, request, intent, summary_entry)
+            self._emit_event(
+                context,
+                request_id=request.request_id,
+                intent=intent,
+                event_type="review_completed",
+                phase=phase,
+                agent=agent,
+                message="Screen reviewer completed",
                 payload=reviewer_payload.get("summary") or {},
             )
         elif agent == "reporter":
@@ -713,10 +1157,32 @@ class ResearchOrchestrator:
                     evidences.extend(entry.payload.get("evidences", []))
                     retrieval_summary = entry.payload.get("retrieval_summary")
             payload = self.reporter.run(
-                intent=graph.intent,
+                intent=intent,
                 query=request.user_query,
                 evidences=evidences,
                 retrieval_summary=retrieval_summary,
+            )
+            payload["debug"] = self._build_debug_payload(
+                context=context,
+                request=request,
+                plan=plan,
+                plan_intent=intent,
+                retrieval_summary=retrieval_summary,
+            )
+            self._extend_subagent_trace(
+                context,
+                agent=agent,
+                phase=phase,
+                payload={
+                    "subagent_trace": [
+                        {
+                            "subagent_type": "report_composer",
+                            "status": "completed",
+                            "objective": "Compose final response payload from evidences.",
+                            "notes": [f"evidence_count={len(evidences)}", f"has_review_summary={str(bool(payload.get('review_summary'))).lower()}"],
+                        }
+                    ]
+                },
             )
             entry = BlackboardEntry(
                 run_id=context.run_id,
@@ -729,16 +1195,16 @@ class ResearchOrchestrator:
                 confidence=0.7,
                 risk_flags=[],
             )
-            self._add_entry(context, request, graph.intent, entry)
+            self._add_entry(context, request, intent, entry)
             write_json(context.paths.result, payload)
         else:
             raise OrchestratorError(f"unsupported agent: {agent}")
 
-        self._enforce_runtime_controls(context, request_id=request.request_id, intent=graph.intent)
+        self._enforce_runtime_controls(context, request_id=request.request_id, intent=intent)
         self._emit_event(
             context,
             request_id=request.request_id,
-            intent=graph.intent,
+            intent=intent,
             event_type="agent_completed",
             phase=phase,
             agent=agent,
@@ -747,7 +1213,7 @@ class ResearchOrchestrator:
         self._emit_event(
             context,
             request_id=request.request_id,
-            intent=graph.intent,
+            intent=intent,
             event_type="phase_completed",
             phase=phase,
             agent=agent,
@@ -755,8 +1221,8 @@ class ResearchOrchestrator:
         )
         self._update_state(
             context,
-            pending_nodes=graph.node_ids[index:],
-            completed_nodes=graph.node_ids[:index],
+            pending_nodes=[item.node_id for item in pending_actions_after_current],
+            completed_nodes=completed_node_ids + [action.node_id],
         )
         context.checkpoint_store.save(context.state)
 
@@ -892,6 +1358,57 @@ class ResearchOrchestrator:
                 return None
             return json.loads(content)
 
+    def _extend_subagent_trace(self, context: RuntimeContext, *, agent: str, phase: str, payload: dict | None) -> None:
+        trace_items = list((payload or {}).get("subagent_trace") or [])
+        for item in trace_items:
+            if not isinstance(item, dict):
+                continue
+            record = dict(item)
+            record.setdefault("agent", agent)
+            record.setdefault("phase", phase)
+            context.subagent_trace.append(record)
+            subagent_type = str(record.get("subagent_type") or agent).strip()
+            status = str(record.get("status") or "completed").strip()
+            objective = str(record.get("objective") or "").strip()
+            message = f"{subagent_type} [{status}]"
+            if objective:
+                message = f"{message}: {objective}"
+            self._emit_event(
+                context,
+                request_id=context.state.request_id,
+                intent=context.state.intent,
+                event_type="subagent_trace",
+                phase=phase,
+                agent=agent,
+                message=message,
+                payload=record,
+            )
+
+    def _build_debug_payload(
+        self,
+        *,
+        context: RuntimeContext,
+        request: RequestEnvelope,
+        plan: ActionPlan,
+        plan_intent: str,
+        retrieval_summary: str | None,
+    ) -> dict:
+        request_dispatch_trace = None
+        if isinstance(request.constraints, dict):
+            candidate = request.constraints.get("chat_dispatch")
+            if isinstance(candidate, dict):
+                request_dispatch_trace = dict(candidate)
+        return {
+            "intent": plan_intent,
+            "dispatch_trace": request_dispatch_trace or dict(plan.dispatch_trace or {}),
+            "entry_strategy": plan.entry_strategy,
+            "entry_reason": plan.entry_reason,
+            "subagent_required": plan.subagent_required,
+            "subagent_trace": context.subagent_trace[:],
+            "dynamic_trace": context.dynamic_trace[:],
+            "retrieval_summary": retrieval_summary,
+        }
+
     def _enforce_runtime_controls(self, context: RuntimeContext, *, request_id: str, intent: str) -> None:
         if context.control_plane.cancellation_requested():
             self._transition(context, "cancelled", request_id=request_id, intent=intent, message="Run cancelled by user")
@@ -915,3 +1432,4 @@ class ResearchOrchestrator:
                 self._emit_event(context, request_id=request_id, intent=intent, event_type="run_timed_out", message="External wait timed out")
                 raise RunTimedOutError("run_timed_out")
             time.sleep(0.2)
+

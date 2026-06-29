@@ -32,6 +32,140 @@ class ReporterLLMErrorStub:
 
 
 class ReporterServiceTests(unittest.TestCase):
+    def test_stock_screen_fallback_report_returns_candidate_digest(self) -> None:
+        service = ReporterService(ReporterProviderStub())
+
+        payload = service.run(
+            intent="stock_screen",
+            query="最近有什么股票值得投入",
+            retrieval_summary="Stock screening: candidates=5",
+            evidences=[
+                {
+                    "evidence_id": "screening-scorecard",
+                    "title": "screening_scorecard",
+                    "summary": "screening_scorecard\n{'investment_cycle': 'mid_term', 'candidate_count': 8, 'top_candidate_count': 5, 'deep_checked_count': 1, 'average_score': 0.8, 'sector_context_present': False, 'summary': 'mid_term 候选已生成，优先关注: 京东方Ａ, 兆易创新, 长电科技'}",
+                    "metadata": {"source_type": "screening_scorecard"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "screen-candidate-1",
+                    "title": "screen_candidate:000725",
+                    "summary": "screen_candidate symbol=000725 name=京东方Ａ\nscore=1.947 latest_pct_change=3.59\nlatest_amount=35676682214.0 notice_count=0\ndeep_checked=True\nwhy=京东方Ａ: 最新涨跌幅为 3.59%，成交额约 356.77 亿元\nrisk=关键证据缺失: market_snapshot, fundamental_snapshot, notice_snapshot\nmissing_evidence=['market_snapshot', 'fundamental_snapshot', 'notice_snapshot']",
+                    "metadata": {"source_type": "screen_candidate"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "screen-candidate-2",
+                    "title": "screen_candidate:603986",
+                    "summary": "screen_candidate symbol=603986 name=兆易创新\nscore=0.526 latest_pct_change=-0.672\nlatest_amount=37418302893.0 notice_count=0\nwhy=兆易创新: 最新涨跌幅为 -0.672%，但仍保留在观察池中，成交额约 374.18 亿元\nrisk=关键证据缺失: market_snapshot, fundamental_snapshot, notice_snapshot\nmissing_evidence=['market_snapshot', 'fundamental_snapshot', 'notice_snapshot']",
+                    "metadata": {"source_type": "screen_candidate"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "watch-candidate-1",
+                    "title": "watchlist_candidate:300308",
+                    "summary": "watchlist_candidate symbol=300308 name=中际旭创\nscore=0.31 latest_pct_change=-5.252\nlatest_amount=44480805076.0 notice_count=0\ndeep_checked=False\nwhy=中际旭创: 最新涨跌幅为 -5.252%，但仍保留在观察池中，成交额约 444.81 亿元\nrisk=关键证据缺失: market_snapshot, fundamental_snapshot, notice_snapshot\nmissing_evidence=['market_snapshot', 'fundamental_snapshot', 'notice_snapshot']",
+                    "metadata": {"source_type": "watchlist_candidate"},
+                    "source_refs": [],
+                },
+            ],
+        )
+
+        self.assertIn("当前更适合作为", payload["conclusion"])
+        self.assertIn("优先关注：京东方Ａ, 兆易创新", payload["conclusion"])
+        self.assertIn("次级观察：中际旭创", payload["conclusion"])
+        self.assertIn("1 只候选已经完成市场、财务和公告的深度核查", payload["conclusion"])
+        self.assertEqual(payload["screening_scorecard"]["investment_cycle"], "mid_term")
+        self.assertEqual(payload["candidates"][0]["name"], "京东方Ａ")
+        self.assertTrue(payload["candidates"][0]["deep_checked"])
+        self.assertEqual(payload["candidates"][-1]["candidate_tier"], "watchlist")
+
+    def test_stock_screen_llm_error_report_still_returns_candidate_digest(self) -> None:
+        service = ReporterService(ReporterLLMErrorStub())
+
+        payload = service.run(
+            intent="stock_screen",
+            query="最近有什么股票值得投入",
+            retrieval_summary="Stock screening: candidates=5",
+            evidences=[
+                {
+                    "evidence_id": "screening-scorecard",
+                    "title": "screening_scorecard",
+                    "summary": "screening_scorecard\n{'investment_cycle': 'mid_term', 'candidate_count': 8, 'top_candidate_count': 5, 'average_score': 0.8, 'sector_context_present': False, 'summary': 'mid_term 候选已生成，优先关注: 京东方Ａ, 兆易创新, 长电科技'}",
+                    "metadata": {"source_type": "screening_scorecard"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "screen-candidate-1",
+                    "title": "screen_candidate:000725",
+                    "summary": "screen_candidate symbol=000725 name=京东方Ａ\nscore=1.947 latest_pct_change=3.59\nlatest_amount=35676682214.0 notice_count=0\nwhy=京东方Ａ: 最新涨跌幅为 3.59%，成交额约 356.77 亿元\nrisk=关键证据缺失: market_snapshot, fundamental_snapshot, notice_snapshot\nmissing_evidence=['market_snapshot', 'fundamental_snapshot', 'notice_snapshot']",
+                    "metadata": {"source_type": "screen_candidate"},
+                    "source_refs": [],
+                },
+            ],
+        )
+
+        self.assertIn("优先关注：京东方Ａ", payload["conclusion"])
+        self.assertTrue(str(payload["degraded_note"]).startswith("llm_error:"))
+        self.assertEqual(payload["candidates"][0]["symbol"], "000725")
+
+    def test_stock_screen_candidate_payload_parses_real_dict_summary(self) -> None:
+        service = ReporterService(ReporterProviderStub())
+
+        candidates = service._screening_candidates_payload(
+            [
+                {
+                    "evidence_id": "screen-candidate-1",
+                    "title": "screen_candidate:000725",
+                    "summary": "screen_candidate:000725\n{'symbol': '000725', 'name': '京东方Ａ', 'score': 1.947, 'deep_checked': True, 'why_it_made_the_list': '京东方Ａ: 最新涨跌幅为 3.59%，成交额约 356.77 亿元', 'main_risk': '关键证据缺失: market_snapshot, fundamental_snapshot, notice_snapshot', 'missing_evidence': ['market_snapshot', 'fundamental_snapshot', 'notice_snapshot']}",
+                    "metadata": {"source_type": "screen_candidate"},
+                    "source_refs": [],
+                }
+            ]
+        )
+
+        self.assertEqual(candidates[0]["name"], "京东方Ａ")
+        self.assertEqual(candidates[0]["score"], 1.947)
+        self.assertTrue(candidates[0]["deep_checked"])
+        self.assertIn("356.77", candidates[0]["why_it_made_the_list"])
+        self.assertIn("market_snapshot", str(candidates[0]["missing_evidence"]))
+
+    def test_stock_screen_fallback_report_includes_review_summary_when_present(self) -> None:
+        service = ReporterService(ReporterProviderStub())
+
+        payload = service.run(
+            intent="stock_screen",
+            query="最近有什么股票值得投入 中线",
+            retrieval_summary="Stock screening: candidates=1; overall_verdict=confirmed_with_caveats",
+            evidences=[
+                {
+                    "evidence_id": "screening-scorecard",
+                    "title": "screening_scorecard",
+                    "summary": "screening_scorecard\n{'investment_cycle': 'mid_term', 'candidate_count': 1, 'top_candidate_count': 1, 'watchlist_candidate_count': 0, 'deep_checked_count': 1, 'summary': 'mid_term 候选已生成，优先关注: 京东方Ａ'}",
+                    "metadata": {"source_type": "screening_scorecard"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "screen-candidate-1",
+                    "title": "screen_candidate:000725",
+                    "summary": "screen_candidate symbol=000725 name=京东方Ａ\nscore=1.947 latest_pct_change=3.59\nlatest_amount=35676682214.0 notice_count=0\ndeep_checked=True\nwhy=京东方Ａ: 最新涨跌幅为 3.59%，成交额约 356.77 亿元\nrisk=关键证据缺失: notice_snapshot\nmissing_evidence=['notice_snapshot']",
+                    "metadata": {"source_type": "screen_candidate"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "screen-review-summary",
+                    "title": "review_summary",
+                    "summary": "review_summary\n{'review_required': true, 'finding_count': 1, 'reviewable_claim_count': 1, 'claim_type_counts': {'catalyst': 1}, 'benchmark_scope_counts': {'screen_candidate': 1}, 'benchmark_scope_explanations': {'screen_candidate': '按筛选候选的证据完整度、降级状态和主风险做轻量复核。'}, 'verdict_by_claim_type': {'catalyst': {'confirmed': 0, 'rejected': 0, 'inconclusive': 1}}, 'overall_verdict': 'confirmed_with_caveats', 'summary_text': 'overall_verdict=confirmed_with_caveats; findings=1; confirmed=0; rejected=0; inconclusive=1; benchmark_scopes=screen_candidate', 'confirmed': 0, 'rejected': 0, 'inconclusive': 1, 'notes': ['core_candidates=1; watchlist_candidates=0']}",
+                    "metadata": {"source_type": "review_summary"},
+                    "source_refs": [],
+                },
+            ],
+        )
+
+        self.assertIsInstance(payload["review_summary"], dict)
+        self.assertEqual(payload["review_summary"]["overall_verdict"], "confirmed_with_caveats")
+        self.assertTrue(payload["review_summary"]["review_required"])
+
     def test_distillation_fallback_report_includes_attribution_digest(self) -> None:
         service = ReporterService(ReporterProviderStub())
 

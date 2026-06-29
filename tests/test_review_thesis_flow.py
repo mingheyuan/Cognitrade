@@ -8,8 +8,10 @@ from research_system.agents.collector.service import CollectorService
 from research_system.agents.reporter.service import ReporterService
 from research_system.agents.retriever.service import RetrieverService
 from research_system.agents.reviewer.service import ReviewerService
+from research_system.runtime.orchestrator import ResearchOrchestrator
 from research_system.runtime.jsonl import append_jsonl, write_json
 from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.schemas.protocol import RequestEnvelope
 from research_system.schemas.runtime import BlackboardEntry
 
 
@@ -80,11 +82,184 @@ class ReviewSkillRuntimeStub:
         raise AssertionError(f"unexpected skill: {skill_name}")
 
 
+class SectorDynamicSkillRuntimeStub:
+    def __init__(self) -> None:
+        self.sector_calls = 0
+
+    def run(self, skill_name: str, **kwargs) -> dict:
+        if skill_name != "sector_snapshot_skill":
+            raise AssertionError(f"unexpected skill: {skill_name}")
+        self.sector_calls += 1
+        if self.sector_calls == 1:
+            return {
+                "snapshot_type": "sector",
+                "query": kwargs.get("query"),
+                "sector": "innovation_drug",
+                "theme": "concept",
+                "snapshot_date": "2026-06-29",
+                "facts": {
+                    "latest_hist": {"pct_change": -1.2},
+                    "signal_scorecard": {"setup_label": "incomplete_sector_evidence"},
+                },
+                "source": {"skill": "sector_snapshot_skill"},
+                "degraded": False,
+            }
+        return {
+            "snapshot_type": "sector",
+            "query": kwargs.get("query"),
+            "sector": "innovation_drug",
+            "theme": "concept",
+            "snapshot_date": "2026-06-29",
+            "facts": {
+                "latest_hist": {"pct_change": -1.2},
+                "benchmark": {
+                    "benchmark_code": "000300",
+                    "benchmark_name": "HS300",
+                    "latest_hist": {"pct_change": -0.8},
+                },
+                "relative_strength": {"latest_excess_pct_change": -0.4},
+                "policy_signals": [{"title": "innovation drug policy window", "policy_priority": 4}],
+                "regulatory_signals": [{"title": "approval milestone update", "signal_priority": 4}],
+                "signal_scorecard": {
+                    "setup_label": "sector_evidence_replenished",
+                    "benchmark_view": "underperform",
+                },
+            },
+            "source": {"skill": "sector_snapshot_skill"},
+            "degraded": False,
+        }
+
+
 class ReporterUnavailableStub:
     available = False
 
 
 class ReviewThesisFlowTests(unittest.TestCase):
+    def test_orchestrator_sector_research_result_contains_dynamic_replenish_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            settings = Settings.from_env(repo_root)
+            ensure_workspace_layout(settings)
+
+            orchestrator = ResearchOrchestrator(settings)
+            try:
+                stub_runtime = SectorDynamicSkillRuntimeStub()
+                orchestrator.collector.skill_runtime = stub_runtime
+                orchestrator.collector.registry._subagents["sector_snapshot_collector"].skill_runtime = stub_runtime
+                orchestrator.retriever.qdrant_available = False
+                orchestrator.retriever.qdrant_error = "disabled_for_test"
+                orchestrator.retriever.registry._subagents["blackboard_evidence_indexer"].qdrant = None
+                orchestrator.retriever.registry._subagents["qdrant_evidence_searcher"].qdrant = None
+
+                response = orchestrator.run(
+                    RequestEnvelope(
+                        user_query="innovation drug sector",
+                        intent="sector_research",
+                    )
+                )
+            finally:
+                orchestrator.close()
+
+            self.assertEqual(response.intent, "sector_research")
+            self.assertEqual(response.status, "completed")
+            result = response.result or {}
+            report = result.get("report") or {}
+            debug = report.get("debug") or {}
+            self.assertGreaterEqual(stub_runtime.sector_calls, 2)
+            self.assertTrue(
+                any(
+                    item.get("event") == "dynamic_action_inserted"
+                    and str(item.get("node_id") or "").startswith("collect_replenish_sector_")
+                    for item in debug.get("dynamic_trace") or []
+                )
+            )
+            self.assertTrue(
+                any(
+                    item.get("subagent_type") == "sector_snapshot_collector"
+                    for item in debug.get("subagent_trace") or []
+                )
+            )
+
+    def test_orchestrator_review_thesis_result_contains_debug_subagent_trace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            settings = Settings.from_env(repo_root)
+            ensure_workspace_layout(settings)
+
+            target_run_root = settings.runs_root / "01REVIEWTARGET"
+            target_run_root.mkdir(parents=True, exist_ok=True)
+            write_json(
+                target_run_root / "result.json",
+                {
+                    "conclusion": "posterior review target",
+                    "risk": "risk placeholder",
+                    "follow_up": "follow up placeholder",
+                },
+            )
+            blackboard_path = target_run_root / "blackboard.jsonl"
+            append_jsonl(
+                blackboard_path,
+                BlackboardEntry(
+                    run_id="01REVIEWTARGET",
+                    request_id="req-target",
+                    kind="report_fragment",
+                    agent="reporter",
+                    phase="report",
+                    payload={
+                        "conclusion": "sector may underperform benchmark but catalysts remain active",
+                        "risk": "if catalyst fades, thesis weakens",
+                        "follow_up": "watch short term window",
+                    },
+                    source_refs=[{"type": "retrieval", "run_id": "01REVIEWTARGET"}],
+                ).model_dump(mode="json"),
+            )
+            append_jsonl(
+                blackboard_path,
+                BlackboardEntry(
+                    run_id="01REVIEWTARGET",
+                    request_id="req-target",
+                    kind="source_record",
+                    agent="collector",
+                    phase="collect",
+                    payload={
+                        "title": "sector_research input query",
+                        "content": "innovation drug sector",
+                        "source_type": "user_query",
+                        "sector": "innovation_drug",
+                    },
+                    source_refs=[{"type": "request", "run_id": "01REVIEWTARGET"}],
+                ).model_dump(mode="json"),
+            )
+
+            orchestrator = ResearchOrchestrator(settings)
+            try:
+                orchestrator.collector.skill_runtime = ReviewSkillRuntimeStub()
+                orchestrator.retriever.qdrant_available = False
+                orchestrator.retriever.qdrant_error = "disabled_for_test"
+                orchestrator.retriever.registry._subagents["blackboard_evidence_indexer"].qdrant = None
+                orchestrator.retriever.registry._subagents["qdrant_evidence_searcher"].qdrant = None
+
+                response = orchestrator.run(
+                    RequestEnvelope(
+                        user_query="review thesis for innovation drug",
+                        intent="review_thesis",
+                        constraints={"review_target_run_id": "01REVIEWTARGET"},
+                    )
+                )
+            finally:
+                orchestrator.close()
+
+            self.assertEqual(response.intent, "review_thesis")
+            self.assertEqual(response.status, "completed")
+            result = response.result or {}
+            report = result.get("report") or {}
+            debug = report.get("debug") or {}
+            self.assertIn("subagent_trace", debug)
+            self.assertIn("dynamic_trace", debug)
+            self.assertTrue(any(item.get("subagent_type") == "review_target_loader" for item in debug["subagent_trace"]))
+            self.assertTrue(any(item.get("subagent_type") == "review_summary_builder" for item in debug["subagent_trace"]))
+            self.assertTrue(any(item.get("event") == "dynamic_action_inserted" and item.get("node_id") == "review" for item in debug["dynamic_trace"]))
+
     def test_review_thesis_flow_uses_prior_run_and_sector_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_root = Path(temp_dir)

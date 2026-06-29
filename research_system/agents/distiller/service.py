@@ -17,6 +17,16 @@ from research_system.schemas.distillation import (
     LogicBlock,
     SourceSpan,
 )
+from research_system.schemas.subagents import SubagentInvocation
+from research_system.subagents.distillation import (
+    ChunkResultMergerSubagent,
+    DistillChunkBuilderSubagent,
+    DistillRecordTrimmerSubagent,
+    DistillSourceNormalizerSubagent,
+    FallbackChunkDistillerSubagent,
+    LLMChunkDistillerSubagent,
+)
+from research_system.subagents.registry import SubagentRegistry
 
 
 class DistillationResultPayload(BaseModel):
@@ -33,9 +43,49 @@ class DistillerService:
 
     def __init__(self, llm_provider: OpenAIProvider) -> None:
         self.llm_provider = llm_provider
+        self.registry = SubagentRegistry(
+            [
+                DistillSourceNormalizerSubagent(extract_source_path=self._extract_source_path),
+                DistillRecordTrimmerSubagent(record_rank=self._record_rank),
+                DistillChunkBuilderSubagent(),
+                LLMChunkDistillerSubagent(
+                    llm_provider=self.llm_provider,
+                    schema=DistillationResultPayload,
+                    distillation_model=DistillationResult,
+                ),
+                FallbackChunkDistillerSubagent(
+                    infer_block_type=self._infer_block_type,
+                    infer_speaker_type=self._infer_speaker_type,
+                    infer_attribution_label=self._infer_attribution_label,
+                    extract_symbols=self._extract_symbols,
+                    extract_sectors=self._extract_sectors,
+                    infer_time_horizon=self._infer_time_horizon,
+                    infer_direction=self._infer_direction,
+                    infer_risk_flags=self._infer_risk_flags,
+                    extract_dimensions=self._extract_dimensions,
+                    dedupe_logic_blocks=self._dedupe_logic_blocks,
+                    merge_dimensions=self._merge_dimensions,
+                ),
+                ChunkResultMergerSubagent(
+                    dedupe_logic_blocks=self._dedupe_logic_blocks,
+                    merge_dimensions=self._merge_dimensions,
+                    fallback_runner=self._run_fallback,
+                    logic_block_model=LogicBlock,
+                    distilled_dimension_model=DistilledDimension,
+                    distillation_result_model=DistillationResult,
+                ),
+            ]
+        )
 
     def run(self, *, query: str, source_records: list[dict]) -> dict:
-        records = self._normalize_source_records(query=query, source_records=source_records)
+        normalized_outputs, _ = self.registry.invoke(
+            SubagentInvocation(
+                subagent_type="distill_source_normalizer",
+                objective="Normalize raw distillation source records.",
+                inputs={"query": query, "source_records": source_records},
+            )
+        )
+        records = normalized_outputs["records"]
         if not records:
             return {
                 "summary": {
@@ -51,7 +101,15 @@ class DistillerService:
                 "degrade_reason": "missing_source_records",
             }
 
-        trimmed_records, trim_notes = self._trim_records(records)
+        trim_outputs, _ = self.registry.invoke(
+            SubagentInvocation(
+                subagent_type="distill_record_trimmer",
+                objective="Trim source records into bounded distillation input.",
+                inputs={"records": records},
+            )
+        )
+        trimmed_records = trim_outputs["records"]
+        trim_notes = trim_outputs["notes"]
         if self.llm_provider.available:
             result = self._run_chunked(query=query, records=trimmed_records)
         else:
@@ -156,7 +214,14 @@ class DistillerService:
         return DistillationResult.model_validate(payload.model_dump(mode="json")).model_dump(mode="json")
 
     def _run_chunked(self, *, query: str, records: list[DistillSourceRecord]) -> dict:
-        chunks = self._build_llm_chunks(records)
+        chunk_outputs, _ = self.registry.invoke(
+            SubagentInvocation(
+                subagent_type="distill_chunk_builder",
+                objective="Split trimmed records into distillation chunks.",
+                inputs={"records": records},
+            )
+        )
+        chunks = chunk_outputs["chunks"]
         if not chunks:
             return self._run_fallback(records=records)
 
@@ -171,15 +236,26 @@ class DistillerService:
             try:
                 if llm_budget_exhausted or not self._should_use_llm(chunk):
                     raise LLMProviderError("chunk_exceeds_llm_budget")
-                chunk_result = self._run_with_llm(
-                    query=f"{query}\nChunk: {chunk_label}",
-                    records=chunk,
+                llm_outputs, _ = self.registry.invoke(
+                    SubagentInvocation(
+                        subagent_type="llm_chunk_distiller",
+                        objective=f"Distill {chunk_label} with LLM.",
+                        inputs={"query": f"{query}\nChunk: {chunk_label}", "records": chunk},
+                    )
                 )
+                chunk_result = llm_outputs
                 chunk_result["summary"]["processing_notes"].append(f"{chunk_label}:llm")
                 llm_successes += 1
                 llm_budget_exhausted = True
             except LLMProviderError as exc:
-                chunk_result = self._run_fallback(records=chunk)
+                fallback_outputs, _ = self.registry.invoke(
+                    SubagentInvocation(
+                        subagent_type="fallback_chunk_distiller",
+                        objective=f"Fallback-distill {chunk_label}.",
+                        inputs={"records": chunk, "distillation_result_model": DistillationResult},
+                    )
+                )
+                chunk_result = fallback_outputs
                 chunk_result["summary"]["processing_notes"].append(f"{chunk_label}:fallback")
                 if "llm_request_timeout" in str(exc):
                     chunk_result["summary"]["processing_notes"].append(f"{chunk_label}:llm_timeout")
@@ -187,7 +263,14 @@ class DistillerService:
                 fallback_chunks += 1
             chunk_results.append(chunk_result)
 
-        merged = self._merge_chunk_results(records=records, chunk_results=chunk_results)
+        merged_outputs, _ = self.registry.invoke(
+            SubagentInvocation(
+                subagent_type="chunk_result_merger",
+                objective="Merge chunk-level distillation outputs.",
+                inputs={"records": records, "chunk_results": chunk_results},
+            )
+        )
+        merged = merged_outputs
         merged["summary"]["processing_notes"].extend(
             [
                 f"chunk_count={len(chunks)}",

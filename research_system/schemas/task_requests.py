@@ -26,6 +26,12 @@ class StockCheckRequest(BaseTaskRequest):
     symbol: str | None = None
 
 
+class StockScreenRequest(BaseTaskRequest):
+    intent: Literal["stock_screen"] = "stock_screen"
+    sector: str | None = None
+    investment_cycle: str | None = None
+
+
 class SectorResearchRequest(BaseTaskRequest):
     intent: Literal["sector_research"] = "sector_research"
     sector: str | None = None

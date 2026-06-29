@@ -100,6 +100,26 @@ class QdrantAdapter:
             for item in response.points
         ]
 
+    def close(self) -> None:
+        if self.client is None:
+            return
+        inner_client = getattr(self.client, "_client", None)
+        collections = getattr(inner_client, "collections", {}) if inner_client is not None else {}
+        for collection in list(collections.values()):
+            persistence = getattr(collection, "storage", None)
+            sqlite_conn = getattr(persistence, "storage", None) if persistence is not None else None
+            sqlite_close = getattr(sqlite_conn, "close", None)
+            if callable(sqlite_close):
+                sqlite_close()
+        close = getattr(self.client, "close", None)
+        if callable(close):
+            close()
+        inner_close = getattr(inner_client, "close", None)
+        if callable(inner_close):
+            inner_close()
+        self.client = None
+        self.available = False
+
     def to_payload(self, entry: BlackboardEntry) -> dict[str, Any]:
         return {
             "entry_id": entry.entry_id,

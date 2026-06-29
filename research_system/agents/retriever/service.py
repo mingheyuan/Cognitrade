@@ -7,6 +7,14 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from research_system.adapters.storage.qdrant_adapter import QdrantAdapter, QdrantUnavailableError
 from research_system.runtime.provider_registry import LLMProviderError, OpenAIProvider
 from research_system.runtime.settings import Settings
+from research_system.schemas.subagents import SubagentInvocation
+from research_system.subagents.registry import SubagentRegistry
+from research_system.subagents.retrieval import (
+    BlackboardEvidenceIndexerSubagent,
+    EvidenceDeduperSubagent,
+    QdrantEvidenceSearcherSubagent,
+    RetrievalDecisionSubagent,
+)
 
 
 class RetrievalDecision(BaseModel):
@@ -35,191 +43,111 @@ class RetrieverService:
             self.qdrant_available = False
             self.qdrant_error = str(exc)
         self.retrieval_policy = retrieval_policy or {}
+        self.registry = SubagentRegistry(
+            [
+                BlackboardEvidenceIndexerSubagent(
+                    qdrant=self.qdrant,
+                    to_blackboard_entry=self._to_blackboard_entry,
+                    evidence_from_blackboard_entry=self._evidence_from_blackboard_entry,
+                ),
+                QdrantEvidenceSearcherSubagent(
+                    qdrant=self.qdrant,
+                    retrieval_hint_from_qdrant_payload=self._retrieval_hint_from_qdrant_payload,
+                ),
+                EvidenceDeduperSubagent(dedupe_evidences=self._dedupe_evidences),
+                RetrievalDecisionSubagent(
+                    llm_provider=self.llm_provider,
+                    structured_retrieval_summary=self._structured_retrieval_summary,
+                    merge_retrieval_summary=self._merge_retrieval_summary,
+                    combine_degrade_reason=self._combine_degrade_reason,
+                    fallback_summary=self._fallback_summary,
+                    select_screening_evidences=self._select_screening_evidences,
+                    select_distillation_evidences=self._select_distillation_evidences,
+                    select_review_evidences=self._select_review_evidences,
+                    retrieval_decision_schema=RetrievalDecision,
+                ),
+            ]
+        )
+
+    def close(self) -> None:
+        seen_ids: set[int] = set()
+        candidates = [self.qdrant]
+        for subagent in self.registry._subagents.values():
+            qdrant = getattr(subagent, "qdrant", None)
+            candidates.append(qdrant)
+        for adapter in candidates:
+            if adapter is None:
+                continue
+            adapter_id = id(adapter)
+            if adapter_id in seen_ids:
+                continue
+            seen_ids.add(adapter_id)
+            close = getattr(adapter, "close", None)
+            if callable(close):
+                close()
 
     def run(self, *, intent: str, query: str, blackboard_entries: list[dict]) -> dict:
-        evidence_map: dict[str, dict] = {}
-        for entry in blackboard_entries:
-            if entry["kind"] in {"source_record", "verified_snapshot", "logic_block", "distilled_dimension", "review_finding"}:
-                if self.qdrant is not None:
-                    self.qdrant.upsert_entry(self._to_blackboard_entry(entry))
-                evidence = self._evidence_from_blackboard_entry(entry)
-                evidence_map[evidence["evidence_id"]] = evidence
-
-        symbol = None
-        sector = None
-        current_run_id = blackboard_entries[0]["run_id"] if blackboard_entries else None
-        for entry in blackboard_entries:
-            symbol = entry.get("payload", {}).get("symbol") or symbol
-            sector = entry.get("payload", {}).get("sector") or sector
-
-        top_k = int(self.retrieval_policy.get("final_top_k", 5))
-        metadata_filters: dict[str, str] = {"record_type": "verified_snapshot"}
-        if symbol:
-            metadata_filters["symbol"] = symbol
-        elif sector:
-            metadata_filters["sector"] = sector
-        elif current_run_id:
-            metadata_filters["run_id"] = current_run_id
-        qdrant_degraded_reason = None
-        if self.qdrant is not None:
-            qdrant_hits = self.qdrant.search(
-                query_text=query,
-                top_k=top_k,
-                metadata_filters=metadata_filters,
+        indexer_qdrant = getattr(self.registry._subagents.get("blackboard_evidence_indexer"), "qdrant", None)
+        searcher_qdrant = getattr(self.registry._subagents.get("qdrant_evidence_searcher"), "qdrant", None)
+        effective_qdrant_available = bool(self.qdrant_available and self.qdrant is not None and indexer_qdrant is not None and searcher_qdrant is not None)
+        index_outputs, _ = self.registry.invoke(
+            SubagentInvocation(
+                subagent_type="blackboard_evidence_indexer",
+                objective="Index blackboard entries and expose evidence candidates.",
+                inputs={"blackboard_entries": blackboard_entries},
             )
-            for hit in qdrant_hits:
-                payload = hit["payload"]
-                evidence_id = payload["entry_id"]
-                candidate = {
-                    "evidence_id": evidence_id,
-                    "title": payload["document_title"],
-                    "summary": payload["content"],
-                    "retrieval_hint": self._retrieval_hint_from_qdrant_payload(payload),
-                    "source_refs": payload.get("source_refs", []),
-                    "metadata": {
-                        "phase": payload.get("phase"),
-                        "agent": payload.get("agent"),
-                        "record_type": payload.get("record_type"),
-                        "source_type": payload.get("source_type"),
+        )
+        evidence_map = dict(index_outputs["evidence_map"])
+        symbol = index_outputs.get("symbol")
+        sector = index_outputs.get("sector")
+        current_run_id = index_outputs.get("current_run_id")
+        top_k = int(self.retrieval_policy.get("final_top_k", 5))
+        qdrant_degraded_reason = None
+        should_skip_qdrant = intent == "stock_screen"
+        if effective_qdrant_available and not should_skip_qdrant:
+            search_outputs, _ = self.registry.invoke(
+                SubagentInvocation(
+                    subagent_type="qdrant_evidence_searcher",
+                    objective="Search indexed evidence candidates from Qdrant.",
+                    inputs={
+                        "query": query,
+                        "top_k": top_k,
+                        "symbol": symbol,
+                        "sector": sector,
+                        "current_run_id": current_run_id,
+                        "evidence_map": evidence_map,
                     },
-                    "score": hit["score"],
-                }
-                existing = evidence_map.get(evidence_id)
-                if existing is None:
-                    evidence_map[evidence_id] = candidate
-                elif (existing.get("score") or 0.0) < (candidate.get("score") or 0.0):
-                    merged = dict(existing)
-                    merged.update(candidate)
-                    evidence_map[evidence_id] = merged
-        else:
+                )
+            )
+            evidence_map = dict(search_outputs["evidence_map"])
+        elif not effective_qdrant_available:
             qdrant_degraded_reason = self.qdrant_error or "qdrant_unavailable"
 
-        evidences = list(evidence_map.values())
-        evidences = self._dedupe_evidences(
-            evidences=evidences,
-            current_run_id=current_run_id,
-        )
-        evidences.sort(key=lambda item: item.get("score") or 0.0, reverse=True)
-
-        if intent == "distill_kol_logic":
-            selected = self._select_distillation_evidences(evidences=evidences, top_k=top_k)
-            return {
-                "intent": intent,
-                "query": query,
-                "evidences": selected,
-                "degraded": bool(qdrant_degraded_reason),
-                "degrade_reason": qdrant_degraded_reason,
-                "retrieval_summary": self._merge_retrieval_summary(
-                    self._structured_retrieval_summary(intent=intent, evidences=selected),
-                    "Deterministic distillation retrieval completed.",
-                ),
-            }
-        if intent == "review_thesis":
-            selected = self._select_review_evidences(evidences=evidences, top_k=top_k)
-            return {
-                "intent": intent,
-                "query": query,
-                "evidences": selected,
-                "degraded": bool(qdrant_degraded_reason),
-                "degrade_reason": qdrant_degraded_reason,
-                "retrieval_summary": self._merge_retrieval_summary(
-                    self._structured_retrieval_summary(intent=intent, evidences=selected),
-                    "Deterministic review retrieval completed.",
-                ),
-            }
-
-        if not evidences:
-            return {
-                "intent": intent,
-                "query": query,
-                "evidences": [],
-                "degraded": True,
-                "retrieval_summary": "No evidence candidates available.",
-                "degrade_reason": "missing_candidates",
-            }
-
-        evidence_block = [
-            {
-                "evidence_id": item["evidence_id"],
-                "title": item["title"],
-                "summary": item["summary"],
-                "metadata": item["metadata"],
-                "source_refs": item["source_refs"],
-            }
-            for item in evidences
-        ]
-
-        if not self.llm_provider.available:
-            fallback_evidences = evidences[:top_k]
-            return {
-                "intent": intent,
-                "query": query,
-                "evidences": fallback_evidences,
-                "degraded": True,
-                "degrade_reason": self._combine_degrade_reason("llm_unavailable", qdrant_degraded_reason),
-                "retrieval_summary": self._fallback_summary(
-                    intent=intent,
-                    evidences=fallback_evidences,
-                    qdrant_degraded_reason=qdrant_degraded_reason,
-                ),
-            }
-
-        try:
-            decision = self.llm_provider.parse(
-                system_prompt=(
-                    "You are a retrieval agent for an A-share research system.\n"
-                    "Select the most relevant evidence candidates for the user's research intent.\n"
-                    "Do not invent evidence. Prefer verified snapshots when exact claims may matter."
-                ),
-                user_prompt=(
-                    f"Intent: {intent}\n"
-                    f"User query: {query}\n"
-                    f"Top K limit: {top_k}\n"
-                    f"Evidence candidates: {evidence_block}\n\n"
-                    "Return a JSON object with keys "
-                    "`selected_evidence_ids`, `retrieval_summary`, `degraded`, and `degrade_reason`.\n"
-                    "Use `selected_evidence_ids` for the chosen evidence ids."
-                ),
-                schema=RetrievalDecision,
-                temperature=0.0,
-                reasoning_effort="low",
+        dedupe_outputs, _ = self.registry.invoke(
+            SubagentInvocation(
+                subagent_type="evidence_deduper",
+                objective="Deduplicate evidence candidates with current-run preference.",
+                inputs={
+                    "evidences": list(evidence_map.values()),
+                    "current_run_id": current_run_id,
+                },
             )
-        except LLMProviderError as exc:
-            fallback_evidences = evidences[:top_k]
-            return {
-                "intent": intent,
-                "query": query,
-                "evidences": fallback_evidences,
-                "degraded": True,
-                "degrade_reason": self._combine_degrade_reason(f"llm_error:{exc.__class__.__name__}", qdrant_degraded_reason),
-                "retrieval_summary": self._fallback_summary(
-                    intent=intent,
-                    evidences=fallback_evidences,
-                    qdrant_degraded_reason=qdrant_degraded_reason,
-                ),
-            }
-        selected_ids = decision.selected_evidence_ids[:top_k]
-        if not selected_ids:
-            selected_ids = [item["evidence_id"] for item in evidences[:top_k]]
-            decision.degraded = True
-            decision.degrade_reason = "empty_selection"
-
-        selected_lookup = {item["evidence_id"]: item for item in evidences}
-        selected = [selected_lookup[evidence_id] for evidence_id in selected_ids if evidence_id in selected_lookup]
-        if not selected:
-            selected = evidences[:top_k]
-            decision.degraded = True
-            decision.degrade_reason = "selection_mismatch"
-
-        structured_summary = self._structured_retrieval_summary(intent=intent, evidences=selected)
-        return {
-            "intent": intent,
-            "query": query,
-            "evidences": selected,
-            "degraded": decision.degraded or bool(qdrant_degraded_reason),
-            "degrade_reason": self._combine_degrade_reason(decision.degrade_reason, qdrant_degraded_reason),
-            "retrieval_summary": self._merge_retrieval_summary(structured_summary, decision.retrieval_summary),
-        }
+        )
+        evidences = dedupe_outputs["evidences"]
+        decision_outputs, _ = self.registry.invoke(
+            SubagentInvocation(
+                subagent_type="retrieval_decider",
+                objective="Select final evidence set and summarize retrieval.",
+                inputs={
+                    "intent": intent,
+                    "query": query,
+                    "evidences": evidences,
+                    "top_k": top_k,
+                    "qdrant_degraded_reason": qdrant_degraded_reason,
+                },
+            )
+        )
+        return decision_outputs
 
     def _to_blackboard_entry(self, payload: dict):
         from research_system.schemas.runtime import BlackboardEntry
@@ -254,6 +182,14 @@ class RetrieverService:
         if entry["kind"] == "review_finding":
             finding_type = str(payload.get("finding_type") or "review_finding")
             return f"review_finding:{finding_type}"
+        if entry["kind"] == "source_record" and payload.get("source_type") == "screen_candidate":
+            candidate = payload.get("candidate") or {}
+            return f"screen_candidate:{candidate.get('symbol') or 'unknown'}"
+        if entry["kind"] == "source_record" and payload.get("source_type") == "watchlist_candidate":
+            candidate = payload.get("candidate") or {}
+            return f"watchlist_candidate:{candidate.get('symbol') or 'unknown'}"
+        if entry["kind"] == "source_record" and payload.get("source_type") == "screening_scorecard":
+            return "screening_scorecard"
         return payload.get("title") or payload.get("snapshot_type") or entry["kind"]
 
     def _entry_summary(self, entry: dict) -> str:
@@ -315,6 +251,35 @@ class RetrieverService:
             if payload.get("notes"):
                 parts.append(f"notes: {payload.get('notes')}")
             return "\n".join(parts)
+        if entry["kind"] == "source_record" and payload.get("source_type") == "screen_candidate":
+            candidate = payload.get("candidate") or {}
+            parts = [
+                f"screen_candidate symbol={candidate.get('symbol')} name={candidate.get('name')}",
+                f"score={candidate.get('score')} latest_pct_change={candidate.get('latest_pct_change')}",
+                f"latest_amount={candidate.get('latest_amount')} notice_count={candidate.get('notice_count')}",
+                f"deep_checked={candidate.get('deep_checked')}",
+                f"why={candidate.get('why_it_made_the_list')}",
+                f"risk={candidate.get('main_risk')}",
+            ]
+            if candidate.get("missing_evidence"):
+                parts.append(f"missing_evidence={candidate.get('missing_evidence')}")
+            return "\n".join(parts)
+        if entry["kind"] == "source_record" and payload.get("source_type") == "watchlist_candidate":
+            candidate = payload.get("candidate") or {}
+            parts = [
+                f"watchlist_candidate symbol={candidate.get('symbol')} name={candidate.get('name')}",
+                f"score={candidate.get('score')} latest_pct_change={candidate.get('latest_pct_change')}",
+                f"latest_amount={candidate.get('latest_amount')} notice_count={candidate.get('notice_count')}",
+                f"deep_checked={candidate.get('deep_checked')}",
+                f"why={candidate.get('why_it_made_the_list')}",
+                f"risk={candidate.get('main_risk')}",
+            ]
+            if candidate.get("missing_evidence"):
+                parts.append(f"missing_evidence={candidate.get('missing_evidence')}")
+            return "\n".join(parts)
+        if entry["kind"] == "source_record" and payload.get("source_type") == "screening_scorecard":
+            scorecard = payload.get("scorecard") or {}
+            return f"screening_scorecard\n{scorecard}"
         return str(payload)
 
     def _entry_retrieval_hint(self, entry: dict) -> dict | None:
@@ -397,6 +362,64 @@ class RetrieverService:
         return "\n".join(parts)
 
     def _structured_retrieval_summary(self, *, intent: str, evidences: list[dict]) -> str | None:
+        if intent == "stock_screen":
+            candidates = [
+                item for item in evidences
+                if str((item.get("metadata") or {}).get("source_type") or "") == "screen_candidate"
+            ]
+            watchlist_candidates = [
+                item for item in evidences
+                if str((item.get("metadata") or {}).get("source_type") or "") == "watchlist_candidate"
+            ]
+            scorecards = [
+                item for item in evidences
+                if str((item.get("metadata") or {}).get("source_type") or "") == "screening_scorecard"
+            ]
+            review_summaries = [
+                item for item in evidences
+                if str((item.get("metadata") or {}).get("source_type") or "") == "review_summary"
+            ]
+            if not candidates and not watchlist_candidates and not scorecards:
+                return None
+            parts = [f"Stock screening: candidates={len(candidates)}"]
+            if watchlist_candidates:
+                parts.append(f"watchlist_candidates={len(watchlist_candidates)}")
+            top_symbols: list[str] = []
+            top_names: list[str] = []
+            best_score = None
+            for item in candidates[:3]:
+                summary = str(item.get("summary") or "")
+                if "symbol=" in summary:
+                    top_symbols.append(summary.split("symbol=", 1)[1].split()[0].strip())
+                if "name=" in summary:
+                    top_names.append(summary.split("name=", 1)[1].split()[0].strip())
+                if "score=" in summary and best_score is None:
+                    best_score = summary.split("score=", 1)[1].split()[0].strip()
+            if top_names:
+                parts.append(f"top_names={top_names}")
+            elif top_symbols:
+                parts.append(f"top_symbols={top_symbols}")
+            if best_score is not None:
+                parts.append(f"best_score={best_score}")
+            if scorecards:
+                scorecard_payload = self._screening_scorecard_payload_from_evidence(scorecards[0])
+                if isinstance(scorecard_payload, dict):
+                    if scorecard_payload.get("investment_cycle"):
+                        parts.append(f"investment_cycle={scorecard_payload.get('investment_cycle')}")
+                    if scorecard_payload.get("candidate_count") is not None:
+                        parts.append(f"candidate_count={scorecard_payload.get('candidate_count')}")
+                    if scorecard_payload.get("summary"):
+                        parts.append(f"summary={scorecard_payload.get('summary')}")
+            if review_summaries:
+                review_summary_payload = self._review_summary_payload_from_evidence(review_summaries[0])
+                if isinstance(review_summary_payload, dict):
+                    overall_verdict = review_summary_payload.get("overall_verdict")
+                    if overall_verdict:
+                        parts.append(f"overall_verdict={overall_verdict}")
+                    summary_text = review_summary_payload.get("summary_text")
+                    if summary_text:
+                        parts.append(f"review_summary={summary_text}")
+            return "; ".join(parts)
         if intent == "distill_kol_logic":
             logic_blocks = [
                 item for item in evidences
@@ -563,6 +586,22 @@ class RetrieverService:
         return base_summary or "Retrieval completed."
 
     def _review_summary_payload_from_evidence(self, item: dict) -> dict | None:
+        summary = item.get("summary")
+        if isinstance(summary, dict):
+            return summary
+        if not isinstance(summary, str):
+            return None
+        lines = summary.splitlines()
+        tail = lines[-1].strip() if lines else summary.strip()
+        if not tail.startswith("{") or not tail.endswith("}"):
+            return None
+        try:
+            parsed = ast.literal_eval(tail)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _screening_scorecard_payload_from_evidence(self, item: dict) -> dict | None:
         summary = item.get("summary")
         if isinstance(summary, dict):
             return summary
@@ -755,6 +794,40 @@ class RetrieverService:
                 break
             if item not in selected:
                 selected.append(item)
+        return selected[:top_k]
+
+    def _select_screening_evidences(self, *, evidences: list[dict], top_k: int) -> list[dict]:
+        screen_candidates = [
+            item for item in evidences
+            if str((item.get("metadata") or {}).get("source_type") or "") == "screen_candidate"
+        ]
+        watchlist_candidates = [
+            item for item in evidences
+            if str((item.get("metadata") or {}).get("source_type") or "") == "watchlist_candidate"
+        ]
+        screening_scorecards = [
+            item for item in evidences
+            if str((item.get("metadata") or {}).get("source_type") or "") == "screening_scorecard"
+        ]
+        review_summaries = [
+            item for item in evidences
+            if str((item.get("metadata") or {}).get("source_type") or "") == "review_summary"
+        ]
+        sector_snapshots = [
+            item for item in evidences
+            if str((item.get("metadata") or {}).get("source_type") or "") == "sector_snapshot"
+        ]
+        selected: list[dict] = []
+        if screening_scorecards:
+            selected.append(screening_scorecards[0])
+        if review_summaries and len(selected) < top_k:
+            selected.append(review_summaries[0])
+        selected.extend(screen_candidates[: max(top_k - len(selected) - (1 if sector_snapshots else 0), 0)])
+        remaining = max(top_k - len(selected) - (1 if sector_snapshots else 0), 0)
+        if remaining > 0:
+            selected.extend(watchlist_candidates[:remaining])
+        if sector_snapshots and len(selected) < top_k:
+            selected.append(sector_snapshots[0])
         return selected[:top_k]
 
     def _select_review_evidences(self, *, evidences: list[dict], top_k: int) -> list[dict]:
