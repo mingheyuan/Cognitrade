@@ -11,6 +11,7 @@ class SubagentInvocation(BaseModel):
     subagent_type: str
     inputs: dict[str, Any] = Field(default_factory=dict)
     objective: str | None = None
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 class SubagentExecutionRecord(BaseModel):

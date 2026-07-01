@@ -6,24 +6,13 @@ from research_system.cli.chat_event_adapter import display_chunk_to_update
 from research_system.cli.chat_updates import (
     SessionStatePatch,
     ShellStatePatch,
-    TranscriptUpdate,
     answer_update,
-    append_update,
     default_update_for_text,
     dispatch_transcript_update,
     meta_update,
     thinking_update,
 )
 from research_system.runtime.provider_registry import LLMProviderError, OpenAIProvider
-
-
-def dispatch_chat_update(output_writer, update: TranscriptUpdate) -> None:
-    dispatch_transcript_update(output_writer, update)
-
-
-def print_display_chunk(chunk, *, output_writer=None) -> None:
-    dispatch_chat_update(output_writer, display_chunk_to_update(chunk))
-
 
 def stream_chat_rendered_result(
     *,
@@ -45,10 +34,10 @@ def stream_chat_rendered_result(
         def _on_text_delta(delta: str) -> None:
             nonlocal text_started
             text_started = True
-            dispatch_chat_update(output_writer, default_update_for_text("answer_delta", delta))
+            dispatch_transcript_update(output_writer, default_update_for_text("answer_delta", delta))
 
         def _on_reasoning_summary(summary: str) -> None:
-            dispatch_chat_update(output_writer, thinking_update(summary))
+            dispatch_transcript_update(output_writer, thinking_update(summary))
 
         llm_provider.stream_complete(
             system_prompt=(
@@ -73,7 +62,7 @@ def stream_chat_rendered_result(
             reasoning_effort="low",
         )
         if text_started:
-            dispatch_chat_update(output_writer, default_update_for_text("answer_done", ""))
+            dispatch_transcript_update(output_writer, default_update_for_text("answer_done", ""))
             return True
     except LLMProviderError:
         return False
@@ -96,11 +85,11 @@ def print_chat_result_payload(
     if status == "needs_clarification":
         clarification = payload.get("clarification")
         if isinstance(clarification, dict) and clarification.get("question"):
-            dispatch_chat_update(output_writer, answer_update(str(clarification["question"])))
+            dispatch_transcript_update(output_writer, answer_update(str(clarification["question"])))
         else:
-            dispatch_chat_update(output_writer, answer_update(str(payload.get("message") or "Clarification required.")))
+            dispatch_transcript_update(output_writer, answer_update(str(payload.get("message") or "Clarification required.")))
         if payload.get("run_id"):
-            dispatch_chat_update(
+            dispatch_transcript_update(
                 output_writer,
                 meta_update(
                     f"run_id: {payload['run_id']}",
@@ -108,11 +97,11 @@ def print_chat_result_payload(
                     session_patch=SessionStatePatch(last_run_id=str(payload["run_id"])),
                 ),
             )
-        dispatch_chat_update(
+        dispatch_transcript_update(
             output_writer,
             meta_update(f"status: {status}", state_patch=ShellStatePatch(run_status_label=status)),
         )
-        dispatch_chat_update(output_writer, meta_update(f"intent: {payload.get('intent') or requested_intent or 'auto'}"))
+        dispatch_transcript_update(output_writer, meta_update(f"intent: {payload.get('intent') or requested_intent or 'auto'}"))
         return
     display_summary = payload.get("display_summary")
     result = payload.get("result")
@@ -131,7 +120,7 @@ def print_chat_result_payload(
             output_writer=output_writer,
         ):
             if payload.get("run_id"):
-                dispatch_chat_update(
+                dispatch_transcript_update(
                     output_writer,
                     meta_update(
                         f"run_id: {payload['run_id']}",
@@ -140,7 +129,7 @@ def print_chat_result_payload(
                     ),
                 )
             if payload.get("status"):
-                dispatch_chat_update(
+                dispatch_transcript_update(
                     output_writer,
                     meta_update(
                         f"status: {payload['status']}",
@@ -148,19 +137,19 @@ def print_chat_result_payload(
                     ),
                 )
             if payload.get("intent"):
-                dispatch_chat_update(output_writer, meta_update(f"intent: {payload['intent']}"))
+                dispatch_transcript_update(output_writer, meta_update(f"intent: {payload['intent']}"))
             return
     if summary_text and conclusion and conclusion != summary_text:
-        dispatch_chat_update(output_writer, answer_update(_merge_answer_sections(summary_text, conclusion)))
+        dispatch_transcript_update(output_writer, answer_update(_merge_answer_sections(summary_text, conclusion)))
     elif conclusion:
-        dispatch_chat_update(output_writer, answer_update(conclusion))
+        dispatch_transcript_update(output_writer, answer_update(conclusion))
     elif summary_text:
-        dispatch_chat_update(output_writer, answer_update(summary_text))
+        dispatch_transcript_update(output_writer, answer_update(summary_text))
     else:
         payload_printer(payload, as_json=False, output_writer=output_writer)
         return
     if payload.get("run_id"):
-        dispatch_chat_update(
+        dispatch_transcript_update(
             output_writer,
             meta_update(
                 f"run_id: {payload['run_id']}",
@@ -169,7 +158,7 @@ def print_chat_result_payload(
             ),
         )
     if payload.get("status"):
-        dispatch_chat_update(
+        dispatch_transcript_update(
             output_writer,
             meta_update(
                 f"status: {payload['status']}",
@@ -177,7 +166,7 @@ def print_chat_result_payload(
             ),
         )
     if payload.get("intent"):
-        dispatch_chat_update(output_writer, meta_update(f"intent: {payload['intent']}"))
+        dispatch_transcript_update(output_writer, meta_update(f"intent: {payload['intent']}"))
 
 
 def _merge_answer_sections(summary_text: str, conclusion: str) -> str:

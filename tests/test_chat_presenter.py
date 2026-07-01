@@ -107,6 +107,70 @@ class ChatPresenterTests(unittest.TestCase):
         self.assertEqual(chunks[0].kind, "event")
         self.assertIn("blackboard_evidence_indexer", chunks[0].text)
 
+    def test_subagent_started_event_updates_status_with_live_progress_summary(self) -> None:
+        presenter = ChatStreamPresenter()
+
+        chunks = presenter.on_event(
+            _event(
+                event_type="subagent_started",
+                phase="collect",
+                agent="collector",
+                payload={
+                    "subagent_type": "stock_snapshot_collector",
+                    "objective": "Collect stock-level verified snapshots.",
+                    "status": "running",
+                },
+                message="stock_snapshot_collector started",
+            )
+        )
+
+        self.assertEqual(chunks[0].kind, "status")
+        self.assertIn("stock_snapshot_collector", chunks[0].text)
+        self.assertIn("Collect stock-level verified snapshots.", chunks[0].text)
+        self.assertEqual(chunks[0].state_patch, {"current_phase": "collect"})
+
+    def test_subagent_completed_event_emits_progress_event_summary(self) -> None:
+        presenter = ChatStreamPresenter()
+
+        chunks = presenter.on_event(
+            _event(
+                event_type="subagent_completed",
+                phase="retrieve",
+                agent="retriever",
+                payload={
+                    "subagent_type": "retrieval_decider",
+                    "objective": "Select final evidence set and summarize retrieval.",
+                    "status": "completed",
+                },
+                message="retrieval_decider completed",
+            )
+        )
+
+        self.assertEqual(chunks[0].kind, "event")
+        self.assertEqual(chunks[0].text, "retrieval_decider: completed")
+
+    def test_subagent_failed_event_emits_failure_summary(self) -> None:
+        presenter = ChatStreamPresenter()
+
+        chunks = presenter.on_event(
+            _event(
+                event_type="subagent_failed",
+                phase="report",
+                agent="reporter",
+                payload={
+                    "subagent_type": "llm_report_composer",
+                    "objective": "Compose final report via LLM.",
+                    "status": "failed",
+                    "notes": ["LLMProviderError: timeout"],
+                },
+                message="llm_report_composer failed",
+            )
+        )
+
+        self.assertEqual(chunks[0].kind, "event")
+        self.assertIn("llm_report_composer: failed", chunks[0].text)
+        self.assertIn("timeout", chunks[0].text)
+
 
 if __name__ == "__main__":
     unittest.main()

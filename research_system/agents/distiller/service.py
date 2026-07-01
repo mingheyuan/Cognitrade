@@ -6,17 +6,16 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from research_system.adapters.sources.xueqiu_statuses import load_statuses
-from research_system.runtime.id_utils import generate_ulid
 from research_system.runtime.provider_registry import LLMProviderError, OpenAIProvider
+from research_system.runtime.settings import Settings
 from research_system.schemas.distillation import (
-    DistillSourceRecord,
     DistillationResult,
     DistillationSummary,
     DistilledDimension,
     LogicBlock,
     SourceSpan,
 )
+from research_system.services.dimension_normalizer import DimensionNormalizer
 from research_system.schemas.subagents import SubagentInvocation
 from research_system.subagents.distillation import (
     ChunkResultMergerSubagent,
@@ -41,8 +40,17 @@ class DistillationResultPayload(BaseModel):
 class DistillerService:
     agent_name = "distiller"
 
-    def __init__(self, llm_provider: OpenAIProvider) -> None:
+    def __init__(self, llm_provider: OpenAIProvider, settings: Settings | None = None) -> None:
         self.llm_provider = llm_provider
+        taxonomy_config = {}
+        if settings is not None:
+            yaml_configs = settings.load_yaml_configs()
+            taxonomy_config = {
+                "dimensions": list((yaml_configs.get("taxonomy_dimensions") or {}).get("dimensions") or []),
+                "aliases": list((yaml_configs.get("taxonomy_dimension_aliases") or {}).get("aliases") or []),
+                "patterns": list((yaml_configs.get("taxonomy_dimension_patterns") or {}).get("patterns") or []),
+            }
+        self.dimension_normalizer = DimensionNormalizer(taxonomy_config)
         self.registry = SubagentRegistry(
             [
                 DistillSourceNormalizerSubagent(extract_source_path=self._extract_source_path),
@@ -116,102 +124,6 @@ class DistillerService:
             result = self._run_fallback(records=trimmed_records)
         result["summary"]["processing_notes"].extend(trim_notes)
         return result
-
-    def _normalize_source_records(self, *, query: str, source_records: list[dict]) -> list[DistillSourceRecord]:
-        normalized: list[DistillSourceRecord] = []
-        loaded_paths: set[str] = set()
-        explicit_path = self._extract_source_path(query)
-        if explicit_path:
-            normalized.extend(self._load_statuses_from_path(explicit_path))
-            loaded_paths.add(str(explicit_path.resolve()))
-
-        for source in source_records:
-            content = str(source.get("content") or "").strip()
-            title = str(source.get("title") or "").strip() or None
-            source_type = str(source.get("source_type") or "user_query")
-            source_id = str(source.get("source_id") or generate_ulid())
-            if source_type in {"xueqiu_statuses_jsonl", "distill_request"}:
-                path = source.get("path") or self._extract_source_path(content)
-                if path:
-                    resolved = str(Path(path).resolve())
-                    if resolved not in loaded_paths:
-                        normalized.extend(self._load_statuses_from_path(Path(path)))
-                        loaded_paths.add(resolved)
-                    if source_type == "distill_request":
-                        continue
-                if source_type == "xueqiu_statuses_jsonl":
-                    continue
-            if not content:
-                continue
-            normalized.append(
-                DistillSourceRecord(
-                    source_id=source_id,
-                    title=title,
-                    content=content,
-                    source_type=source_type,
-                    source_url=source.get("source_url"),
-                    author=source.get("author"),
-                    platform=source.get("platform"),
-                    published_at=source.get("published_at"),
-                    metadata=source.get("metadata") or {},
-                )
-            )
-
-        deduped: dict[str, DistillSourceRecord] = {}
-        for record in normalized:
-            deduped.setdefault(record.source_id, record)
-        return list(deduped.values())
-
-    def _load_statuses_from_path(self, path: Path) -> list[DistillSourceRecord]:
-        records: list[DistillSourceRecord] = []
-        for row in load_statuses(path):
-            content = str(row.get("text") or row.get("description") or "").strip()
-            if not content:
-                continue
-            records.append(
-                DistillSourceRecord(
-                    source_id=str(row.get("id") or generate_ulid()),
-                    title=str(row.get("title") or "").strip() or None,
-                    content=content,
-                    source_type="xueqiu_status",
-                    source_url=row.get("url"),
-                    author=row.get("user_name"),
-                    platform=row.get("source"),
-                    published_at=row.get("created_at"),
-                    metadata={
-                        "user_id": row.get("user_id"),
-                        "reply_count": row.get("reply_count"),
-                        "like_count": row.get("like_count"),
-                        "fav_count": row.get("fav_count"),
-                        "is_column": row.get("is_column"),
-                    },
-                )
-            )
-        return records
-
-    def _run_with_llm(self, *, query: str, records: list[DistillSourceRecord]) -> dict:
-        record_block = [record.model_dump(mode="json") for record in records[:5]]
-        payload = self.llm_provider.parse(
-            system_prompt=(
-                "You are a structured distiller for A-share or market-adjacent KOL text.\n"
-                "Extract reviewable logic blocks and dimensions.\n"
-                "Do not invent symbols, sectors, time horizons, or causality.\n"
-                "Separate author viewpoint from quoted content.\n"
-                "When uncertain, lower confidence and mark needs_review or risk flags."
-            ),
-            user_prompt=(
-                f"User query: {query}\n"
-                f"Source records: {record_block}\n\n"
-                "Return a JSON object aligned to DistillationResultPayload.\n"
-                "Logic blocks must use block_type in claim/evidence/risk/catalyst.\n"
-                "Set speaker_type to author, quoted, or uncertain.\n"
-                "Distilled dimensions must include dimension_name, dimension_category, related block ids, and confidence."
-            ),
-            schema=DistillationResultPayload,
-            temperature=0.1,
-            reasoning_effort="medium",
-        )
-        return DistillationResult.model_validate(payload.model_dump(mode="json")).model_dump(mode="json")
 
     def _run_chunked(self, *, query: str, records: list[DistillSourceRecord]) -> dict:
         chunk_outputs, _ = self.registry.invoke(
@@ -535,26 +447,7 @@ class DistillerService:
         return "author_original"
 
     def _extract_dimensions(self, text: str) -> list[tuple[str, str]]:
-        dimensions: list[tuple[str, str]] = []
-        mapping = {
-            "\u4ea7\u54c1\u4f53\u9a8c": "product",
-            "\u6548\u7387": "product",
-            "\u6210\u672c": "economics",
-            "\u7528\u6237\u4e60\u60ef": "distribution",
-            "\u51fa\u6d77": "strategy",
-            "global expansion": "strategy",
-            "overseas expansion": "strategy",
-            "\u4e34\u5e8a": "pipeline",
-            "innovation drug": "pipeline",
-            "AI": "technology",
-            "artificial intelligence": "technology",
-            "\u4e92\u8054\u7f51": "industry",
-            "internet": "industry",
-        }
-        for keyword, category in mapping.items():
-            if keyword.lower() in text.lower():
-                dimensions.append((keyword, category))
-        return dimensions
+        return self.dimension_normalizer.extract_dimensions(text)
 
     def _dedupe_logic_blocks(self, logic_blocks: list[LogicBlock]) -> list[LogicBlock]:
         deduped: list[LogicBlock] = []
@@ -585,10 +478,28 @@ class DistillerService:
     def _merge_dimensions(self, dimensions: list[DistilledDimension]) -> list[DistilledDimension]:
         merged: dict[str, DistilledDimension] = {}
         for dimension in dimensions:
-            key = self._dimension_key(dimension.dimension_name)
+            normalized_dimension = self.dimension_normalizer.normalize_dimension(
+                name=dimension.dimension_name,
+                category=dimension.dimension_category,
+                alias_hits=dimension.alias_hits,
+                normalization_notes=dimension.normalization_notes,
+            )
+            canonical_name = str(normalized_dimension["canonical_dimension_name"])
+            key = str(normalized_dimension["dimension_key"] or self._dimension_key(canonical_name))
             existing = merged.get(key)
-            canonical_name = self._canonical_dimension_name(dimension.dimension_name)
             dimension.dimension_name = canonical_name
+            dimension.canonical_dimension_name = canonical_name
+            dimension.dimension_family = str(normalized_dimension["dimension_family"] or "")
+            dimension.dimension_category = str(normalized_dimension["dimension_category"] or dimension.dimension_category)
+            dimension.scenario_tags = list(normalized_dimension["scenario_tags"] or [])
+            dimension.methodology_tags = list(normalized_dimension["methodology_tags"] or [])
+            dimension.dimension_tags = list(normalized_dimension["dimension_tags"] or [])
+            dimension.dimension_key = key
+            dimension.normalization_notes = list(normalized_dimension["normalization_notes"] or [])
+            for alias in normalized_dimension.get("canonical_aliases") or []:
+                alias_value = str(alias).strip()
+                if alias_value and alias_value not in dimension.alias_hits:
+                    dimension.alias_hits.append(alias_value)
             if dimension.dimension_id is None:
                 dimension.dimension_id = key
 
@@ -600,7 +511,7 @@ class DistillerService:
 
             for alias in dimension.alias_hits + [dimension.dimension_name]:
                 raw_alias = alias.strip()
-                canonical_alias = self._canonical_dimension_name(alias)
+                canonical_alias = self.dimension_normalizer.canonical_dimension_name(alias)
                 if raw_alias and raw_alias not in existing.alias_hits:
                     existing.alias_hits.append(raw_alias)
                 if canonical_alias and canonical_alias not in existing.alias_hits:
@@ -614,6 +525,15 @@ class DistillerService:
             for note in dimension.normalization_notes:
                 if note not in existing.normalization_notes:
                     existing.normalization_notes.append(note)
+            for tag in dimension.scenario_tags:
+                if tag not in existing.scenario_tags:
+                    existing.scenario_tags.append(tag)
+            for tag in dimension.methodology_tags:
+                if tag not in existing.methodology_tags:
+                    existing.methodology_tags.append(tag)
+            for tag in dimension.dimension_tags:
+                if tag not in existing.dimension_tags:
+                    existing.dimension_tags.append(tag)
             existing.confidence = max(existing.confidence, dimension.confidence)
             existing.is_new_candidate = existing.is_new_candidate or dimension.is_new_candidate
 
@@ -662,28 +582,10 @@ class DistillerService:
         return primary
 
     def _dimension_key(self, name: str) -> str:
-        alias_key = self._canonical_dimension_name(name)
-        return self._normalize_free_text(alias_key) or alias_key.lower()
+        return self.dimension_normalizer.dimension_key(name)
 
     def _canonical_dimension_name(self, name: str) -> str:
-        normalized = self._normalize_free_text(name)
-        alias_map = {
-            "ai": "AI",
-            "a i": "AI",
-            "artificial intelligence": "AI",
-            "internet": "\u4e92\u8054\u7f51",
-            "\u4e92\u806f\u7db2": "\u4e92\u8054\u7f51",
-            "\u4e92\u8054\u7f51": "\u4e92\u8054\u7f51",
-            "\u521b\u65b0\u836f": "\u521b\u65b0\u836f",
-            "\u65b0\u836f": "\u521b\u65b0\u836f",
-            "innovation drug": "\u521b\u65b0\u836f",
-            "\u51fa\u6d77": "\u51fa\u6d77",
-            "global expansion": "\u51fa\u6d77",
-            "overseas expansion": "\u51fa\u6d77",
-        }
-        if normalized in alias_map:
-            return alias_map[normalized]
-        return name.strip()
+        return self.dimension_normalizer.canonical_dimension_name(name)
 
     def _normalize_free_text(self, text: str) -> str:
         lowered = unicodedata.normalize("NFKC", text).strip().lower()

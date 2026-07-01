@@ -11,51 +11,53 @@ from research_system.runtime.jsonl import read_json, read_jsonl
 from research_system.runtime.skill_runtime import SkillRuntime
 
 
-class QueryNormalizerSubagent:
-    subagent_type = "query_normalizer"
+def _normalize_query(query: str) -> dict[str, str | None]:
+    return {
+        "symbol": _extract_symbol(query),
+        "jsonl_path": _extract_jsonl_path(query),
+        "sector_query": _extract_sector_query(query),
+        "investment_cycle": _extract_investment_cycle(query),
+    }
 
-    def run(self, *, query: str) -> dict:
-        return {
-            "symbol": self._extract_symbol(query),
-            "jsonl_path": self._extract_jsonl_path(query),
-            "sector_query": self._extract_sector_query(query),
-            "investment_cycle": self._extract_investment_cycle(query),
-        }
 
-    def _extract_symbol(self, query: str) -> str | None:
-        match = re.search(r"\b(\d{6})\b", query)
-        if match:
-            return match.group(1)
+def _extract_symbol(query: str) -> str | None:
+    match = re.search(r"\b(\d{6})\b", query)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _extract_jsonl_path(query: str) -> str | None:
+    match = re.search(r'([A-Za-z]:[\\/][^\\/:*?"<>|\r\n]+(?:[\\/][^\\/:*?"<>|\r\n]+)*\.jsonl)', query)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _extract_sector_query(query: str) -> str | None:
+    stripped = query.strip()
+    if not stripped:
         return None
-
-    def _extract_jsonl_path(self, query: str) -> str | None:
-        match = re.search(r"([A-Za-z]:[\\/][^\\/:*?\"<>|\r\n]+(?:[\\/][^\\/:*?\"<>|\r\n]+)*\.jsonl)", query)
-        if match:
-            return match.group(1)
+    markers = ("板块", "行业", "主题", "赛道", "概念", "sector", "theme", "industry")
+    lowered = stripped.lower()
+    if any(marker in lowered for marker in ("sector", "theme", "industry")):
+        return stripped
+    if any(marker in stripped for marker in markers[:5]):
+        return stripped
+    if _extract_symbol(stripped):
         return None
+    return None
 
-    def _extract_sector_query(self, query: str) -> str | None:
-        stripped = query.strip()
-        if not stripped:
-            return None
-        markers = ("板块", "行业", "主题", "赛道", "概念", "sector", "theme", "industry")
-        if any(marker in stripped.lower() for marker in ("sector", "theme", "industry")):
-            return stripped
-        if any(marker in stripped for marker in markers[:5]):
-            return stripped
-        if self._extract_symbol(stripped):
-            return None
-        return None
 
-    def _extract_investment_cycle(self, query: str) -> str | None:
-        lowered = query.lower()
-        if "短线" in query or "short" in lowered:
-            return "short_term"
-        if "长期" in query or "long" in lowered:
-            return "long_term"
-        if "中线" in query or "中期" in query or "mid" in lowered:
-            return "mid_term"
-        return None
+def _extract_investment_cycle(query: str) -> str | None:
+    lowered = query.lower()
+    if "短线" in query or "short" in lowered:
+        return "short_term"
+    if "长期" in query or "long" in lowered:
+        return "long_term"
+    if "中线" in query or "中期" in query or "mid" in lowered:
+        return "mid_term"
+    return None
 
 
 class StockSnapshotCollectorSubagent:
@@ -63,20 +65,44 @@ class StockSnapshotCollectorSubagent:
 
     def __init__(self, skill_runtime: SkillRuntime) -> None:
         self.skill_runtime = skill_runtime
+        self.optional_snapshot_types = {"lhb", "capital_flow", "sentiment", "events"}
         self.skill_map = {
             "market": "market_snapshot_skill",
             "fundamental": "fundamental_snapshot_skill",
             "notice": "notice_snapshot_skill",
+            "lhb": "lhb_snapshot_skill",
+            "capital_flow": "capital_flow_snapshot_skill",
+            "sentiment": "sentiment_snapshot_skill",
+            "events": "events_snapshot_skill",
         }
 
-    def run(self, *, query: str, symbol: str | None, snapshot_types: list[str] | None = None) -> dict:
+    def run(
+        self,
+        *,
+        query: str,
+        symbol: str | None,
+        snapshot_types: list[str] | None = None,
+        allow_partial: bool = False,
+    ) -> dict:
         snapshots = []
+        notes = [f"stock_snapshot_types={','.join(snapshot_types or ['market', 'fundamental', 'notice'])}"]
         for snapshot_type in snapshot_types or ["market", "fundamental", "notice"]:
-            skill_name = self.skill_map[snapshot_type]
-            snapshots.append(self.skill_runtime.run(skill_name, query=query, symbol=symbol))
+            skill_name = self.skill_map.get(snapshot_type)
+            if not skill_name:
+                if allow_partial and snapshot_type in self.optional_snapshot_types:
+                    notes.append(f"snapshot_skipped={snapshot_type}:unsupported_mapping")
+                    continue
+                raise ValueError(f"unsupported snapshot_type: {snapshot_type}")
+            try:
+                snapshots.append(self.skill_runtime.run(skill_name, query=query, symbol=symbol))
+            except Exception as exc:
+                if allow_partial and snapshot_type in self.optional_snapshot_types:
+                    notes.append(f"snapshot_skipped={snapshot_type}:{type(exc).__name__}")
+                    continue
+                raise
         return {
             "snapshots": snapshots,
-            "notes": [f"stock_snapshot_types={','.join(snapshot_types or ['market', 'fundamental', 'notice'])}"],
+            "notes": notes,
         }
 
 
@@ -86,23 +112,21 @@ class SectorSnapshotCollectorSubagent:
     def __init__(self, skill_runtime: SkillRuntime) -> None:
         self.skill_runtime = skill_runtime
 
-    def run(self, *, query: str) -> dict:
+    def run(self, *, query: str, include_policy_snapshot: bool = False) -> dict:
         sector_snapshot = self.skill_runtime.run("sector_snapshot_skill", query=query)
+        related_snapshots = []
+        if include_policy_snapshot:
+            policy_snapshot = self.skill_runtime.run(
+                "policy_snapshot_skill",
+                query=query,
+                sector=sector_snapshot.get("sector"),
+                constituents=(sector_snapshot.get("facts") or {}).get("top_constituents") or [],
+            )
+            related_snapshots.append(policy_snapshot)
         return {
             "snapshot": sector_snapshot,
+            "related_snapshots": related_snapshots,
             "notes": [f"sector={sector_snapshot.get('sector') or query}"],
-        }
-
-
-class DistillRequestLoaderSubagent:
-    subagent_type = "distill_request_loader"
-
-    def run(self, *, query: str, jsonl_path: str | None) -> dict:
-        return {
-            "source_type": "distill_request",
-            "path": jsonl_path,
-            "content": query,
-            "title": "distill_kol_logic input request" if jsonl_path else "distill request",
         }
 
 
@@ -151,15 +175,15 @@ class CandidateUniverseBuilderSubagent:
             spot_df = call_with_retry(ak.stock_zh_a_spot)
             filtered_rows: list[dict] = []
             for row in spot_df.to_dict("records"):
-                code = str(row.get("代码") or "").strip()
-                name = str(row.get("名称") or "").strip()
+                code = str(row.get("代码") or row.get("浠ｇ爜") or "").strip()
+                name = str(row.get("名称") or row.get("鍚嶇О") or "").strip()
                 if not code or not name:
                     continue
                 if "ST" in name.upper():
                     continue
-                amount = self._to_float(row.get("成交额"))
-                price = self._to_float(row.get("最新价"))
-                pct_change = self._to_float(row.get("涨跌幅"))
+                amount = self._to_float(row.get("成交额") or row.get("鎴愪氦棰?"))
+                price = self._to_float(row.get("最新价") or row.get("鏈€鏂颁环"))
+                pct_change = self._to_float(row.get("涨跌幅") or row.get("娑ㄨ穼骞?"))
                 if amount is None or price is None:
                     continue
                 filtered_rows.append(
@@ -204,7 +228,6 @@ class ReviewTargetLoaderSubagent:
 
     def __init__(self, runs_root: Path | None = None) -> None:
         self.runs_root = runs_root
-        self.query_normalizer = QueryNormalizerSubagent()
 
     def run(self, *, constraints: dict, query: str) -> dict:
         if self.runs_root is None:
@@ -245,7 +268,7 @@ class ReviewTargetLoaderSubagent:
             marker = "sector snapshot for "
             if marker in summary:
                 return summary.split(marker, 1)[1].splitlines()[0].strip()
-        if self.query_normalizer.run(query=query).get("symbol"):
+        if _normalize_query(query).get("symbol"):
             return None
         return query.strip() or None
 
@@ -261,4 +284,4 @@ class ReviewTargetLoaderSubagent:
             marker = "market snapshot for "
             if marker in summary:
                 return summary.split(marker, 1)[1].splitlines()[0].strip()
-        return self.query_normalizer.run(query=query).get("symbol")
+        return _normalize_query(query).get("symbol")

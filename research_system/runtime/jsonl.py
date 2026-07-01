@@ -17,13 +17,7 @@ def append_jsonl(path: Path, item: dict) -> None:
 def read_jsonl(path: Path) -> list[dict]:
     if not path.exists():
         return []
-    rows: list[dict] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
-    return rows
+    return _read_jsonl_with_retry(path)
 
 
 def write_json(path: Path, item: dict) -> None:
@@ -39,11 +33,10 @@ def read_json(path: Path) -> dict | None:
     if not path.exists():
         return None
     try:
-        with path.open("r", encoding="utf-8") as handle:
-            content = handle.read().strip()
-            if not content:
-                return None
-            return json.loads(content)
+        content = _read_text_with_retry(path).strip()
+        if not content:
+            return None
+        return json.loads(content)
     except json.JSONDecodeError:
         return None
 
@@ -78,3 +71,36 @@ def _replace_with_retry(temp_path: Path, target_path: Path, retries: int = 5, de
 
     if last_error is not None:
         raise last_error
+
+
+def _read_text_with_retry(path: Path, retries: int = 5, delay_seconds: float = 0.05) -> str:
+    last_error: Exception | None = None
+    for attempt in range(retries):
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                return handle.read()
+        except PermissionError as exc:
+            last_error = exc
+            time.sleep(delay_seconds * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+    return ""
+
+
+def _read_jsonl_with_retry(path: Path, retries: int = 5, delay_seconds: float = 0.05) -> list[dict]:
+    last_error: Exception | None = None
+    for attempt in range(retries):
+        try:
+            rows: list[dict] = []
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if line:
+                        rows.append(json.loads(line))
+            return rows
+        except PermissionError as exc:
+            last_error = exc
+            time.sleep(delay_seconds * (attempt + 1))
+    if last_error is not None:
+        raise last_error
+    return []

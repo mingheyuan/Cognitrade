@@ -3,15 +3,23 @@ from __future__ import annotations
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from research_system.runtime.provider_registry import LLMProviderError, OpenAIProvider
+from research_system.services.planning_context import (
+    build_planning_context_view,
+    combine_focus_text,
+    derive_methodology_focus,
+    has_cashflow_focus,
+    has_momentum_focus,
+    has_policy_focus,
+    normalize_planning_context_hints,
+)
+from research_system.services.reporting_utils import strategy_follow_up
 from research_system.schemas.review import ClaimVerdictBreakdown, PosteriorReviewSummary
 from research_system.schemas.subagents import SubagentInvocation
 from research_system.subagents.registry import SubagentRegistry
 from research_system.subagents.reporting import (
-    DistillationScorecardComposerSubagent,
     FallbackReportComposerSubagent,
     LLMErrorReportComposerSubagent,
     LLMReportComposerSubagent,
-    ReviewSummaryComposerSubagent,
 )
 
 
@@ -35,14 +43,11 @@ class ReporterService:
         self.llm_provider = llm_provider
         self.registry = SubagentRegistry(
             [
-                ReviewSummaryComposerSubagent(build_review_summary=self._review_summary_payload),
-                DistillationScorecardComposerSubagent(
-                    build_scorecard_digest=self._distillation_scorecard_digest,
-                    build_scorecard_payload=self._distillation_scorecard_payload,
-                ),
                 FallbackReportComposerSubagent(
                     review_verdict_by_claim_type_payload=self._review_verdict_by_claim_type_payload,
                     screening_digest=self._screening_digest,
+                    compare_targets_payload=self._compare_targets_payload,
+                    compare_digest=self._compare_digest,
                 ),
                 LLMReportComposerSubagent(
                     llm_provider=self.llm_provider,
@@ -53,32 +58,33 @@ class ReporterService:
             ]
         )
 
-    def run(self, *, intent: str, query: str, evidences: list[dict], retrieval_summary: str | None = None) -> dict:
+    def run(
+        self,
+        *,
+        intent: str,
+        query: str,
+        evidences: list[dict],
+        retrieval_summary: str | None = None,
+        planning_context_hints: dict[str, str] | None = None,
+    ) -> dict:
+        normalized_planning_hints = self._normalize_planning_context_hints(planning_context_hints)
+        report_strategy = self._derive_report_strategy(
+            query=query,
+            retrieval_summary=retrieval_summary,
+            planning_context_hints=normalized_planning_hints,
+        )
         review_summary_payload = None
         screening_scorecard_payload = self._screening_scorecard_payload(evidences) if intent == "stock_screen" else None
         screening_candidates_payload = self._screening_candidates_payload(evidences) if intent == "stock_screen" else []
+        methodology_payloads = self._methodology_payloads(evidences) if intent in {"stock_screen", "stock_check", "stock_compare", "review_thesis"} else []
         if intent in {"review_thesis", "stock_screen"}:
-            review_outputs, _ = self.registry.invoke(
-                SubagentInvocation(
-                    subagent_type="review_summary_composer",
-                    objective="Build structured review summary for reporter.",
-                    inputs={"evidences": evidences},
-                )
-            )
-            review_summary_payload = review_outputs["review_summary"]
+            review_summary_payload = self._review_summary_payload(evidences)
         if not self.llm_provider.available:
             scorecard_digest = None
             scorecard_payload = None
             if intent == "distill_kol_logic":
-                scorecard_outputs, _ = self.registry.invoke(
-                    SubagentInvocation(
-                        subagent_type="distillation_scorecard_composer",
-                        objective="Build distillation scorecard digest and payload for fallback report.",
-                        inputs={"evidences": evidences},
-                    )
-                )
-                scorecard_digest = scorecard_outputs["scorecard_digest"]
-                scorecard_payload = scorecard_outputs["scorecard_payload"]
+                scorecard_digest = self._distillation_scorecard_digest(evidences)
+                scorecard_payload = self._distillation_scorecard_payload(evidences)
             fallback_outputs, _ = self.registry.invoke(
                 SubagentInvocation(
                     subagent_type="fallback_report_composer",
@@ -92,6 +98,8 @@ class ReporterService:
                         "scorecard_payload": scorecard_payload,
                         "screening_scorecard_payload": screening_scorecard_payload,
                         "screening_candidates_payload": screening_candidates_payload,
+                        "methodology_payloads": methodology_payloads,
+                        "report_strategy": report_strategy,
                         "degraded_note": "llm_unavailable",
                     },
                 )
@@ -109,6 +117,7 @@ class ReporterService:
                         "evidences": evidences,
                         "retrieval_summary": retrieval_summary,
                         "review_summary_payload": review_summary_payload,
+                        "report_strategy": report_strategy,
                     },
                 )
             )
@@ -116,15 +125,8 @@ class ReporterService:
             scorecard_digest = None
             scorecard_payload = None
             if intent == "distill_kol_logic":
-                scorecard_outputs, _ = self.registry.invoke(
-                    SubagentInvocation(
-                        subagent_type="distillation_scorecard_composer",
-                        objective="Build distillation scorecard digest and payload for LLM error fallback.",
-                        inputs={"evidences": evidences},
-                    )
-                )
-                scorecard_digest = scorecard_outputs["scorecard_digest"]
-                scorecard_payload = scorecard_outputs["scorecard_payload"]
+                scorecard_digest = self._distillation_scorecard_digest(evidences)
+                scorecard_payload = self._distillation_scorecard_payload(evidences)
             error_outputs, _ = self.registry.invoke(
                 SubagentInvocation(
                     subagent_type="llm_error_report_composer",
@@ -139,6 +141,8 @@ class ReporterService:
                         "screening_scorecard_payload": screening_scorecard_payload,
                         "screening_candidates_payload": screening_candidates_payload,
                         "screening_digest": self._screening_digest(screening_scorecard_payload, screening_candidates_payload) if intent == "stock_screen" else None,
+                        "methodology_payloads": methodology_payloads,
+                        "report_strategy": report_strategy,
                         "error_name": exc.__class__.__name__,
                     },
                 )
@@ -152,11 +156,240 @@ class ReporterService:
             "scorecard": self._distillation_scorecard_payload(llm_outputs["selected_evidence"]) if intent == "distill_kol_logic" else None,
             "screening_scorecard": screening_scorecard,
             "candidates": screening_candidates,
+            "methodologies": methodology_payloads or None,
             "review_summary": review_summary_payload,
             "risk": llm_outputs["risk"],
-            "follow_up": llm_outputs["follow_up"],
+            "follow_up": self._merge_follow_up(llm_outputs["follow_up"], report_strategy),
             "degraded_note": llm_outputs["degraded_note"],
         }
+
+    def _normalize_planning_context_hints(self, raw_hints) -> dict[str, str]:
+        return normalize_planning_context_hints(raw_hints)
+
+    def _derive_report_strategy(
+        self,
+        *,
+        query: str,
+        retrieval_summary: str | None,
+        planning_context_hints: dict[str, str],
+    ) -> dict[str, str | list[str] | None]:
+        strategy: dict[str, str | list[str] | None] = {
+            "focus_area": None,
+            "preferred_methodology": None,
+            "notes": [],
+        }
+        if not planning_context_hints:
+            return strategy
+        context = build_planning_context_view(
+            query=query,
+            planning_context_hints=planning_context_hints,
+            extra_texts=[str(retrieval_summary or "")],
+        )
+        lowered = combine_focus_text(
+            context.query_text,
+            str(retrieval_summary or "").strip().lower(),
+            context.recommended_next_step,
+            context.open_question,
+            context.previous_summary,
+            context.thread_topic,
+        )
+        preferred_methodology, focus_source = derive_methodology_focus(
+            cashflow_text=lowered,
+            comparison_text=lowered,
+            planning_context_hints=planning_context_hints,
+        )
+        if preferred_methodology == "cashflow_resilience":
+            strategy["focus_area"] = "cashflow_resilience"
+            strategy["preferred_methodology"] = preferred_methodology
+        elif preferred_methodology == "comps":
+            strategy["focus_area"] = "same_basis_compare"
+            strategy["preferred_methodology"] = preferred_methodology
+        elif preferred_methodology == "dcf":
+            strategy["focus_area"] = "valuation"
+            strategy["preferred_methodology"] = preferred_methodology
+        elif has_policy_focus(lowered):
+            strategy["focus_area"] = "catalyst_validation"
+        elif has_momentum_focus(lowered):
+            strategy["focus_area"] = "momentum_validation"
+        if strategy["focus_area"]:
+            strategy["notes"] = [f"report_focus={strategy['focus_area']}"]
+            if focus_source:
+                strategy["notes"].append(f"report_focus_source={focus_source}")
+        return strategy
+
+    def _strategy_follow_up(self, report_strategy: dict[str, str | list[str] | None]) -> str | None:
+        return strategy_follow_up(report_strategy)
+
+    def _merge_follow_up(
+        self,
+        base_follow_up: str | None,
+        report_strategy: dict[str, str | list[str] | None],
+    ) -> str | None:
+        strategy_follow_up = self._strategy_follow_up(report_strategy)
+        if not strategy_follow_up:
+            return base_follow_up
+        base_text = str(base_follow_up or "").strip()
+        if not base_text:
+            return strategy_follow_up
+        if strategy_follow_up.lower() in base_text.lower():
+            return base_text
+        return f"{base_text} {strategy_follow_up}"
+
+    def _compare_targets_payload(self, evidences: list[dict]) -> list[dict]:
+        for item in evidences:
+            hint = item.get("retrieval_hint") or {}
+            if hint.get("hint_type") == "compare_request":
+                targets = hint.get("compare_targets") or []
+                if isinstance(targets, list):
+                    return [
+                        {
+                            "symbol": str(target.get("symbol") or "").strip(),
+                            "name": str(target.get("name") or target.get("symbol") or "").strip(),
+                        }
+                        for target in targets
+                        if isinstance(target, dict) and str(target.get("symbol") or "").strip()
+                    ]
+            metadata = item.get("metadata") or {}
+            if str(metadata.get("source_type") or "") != "compare_request":
+                continue
+            summary = str(item.get("summary") or "")
+            lines = summary.splitlines()
+            if len(lines) < 2:
+                continue
+            tail = lines[-1].strip()
+            import ast
+            try:
+                parsed = ast.literal_eval(tail)
+            except Exception:
+                parsed = None
+            if not isinstance(parsed, dict):
+                continue
+            targets = parsed.get("compare_targets") or []
+            if isinstance(targets, list):
+                return [
+                    {
+                        "symbol": str(target.get("symbol") or "").strip(),
+                        "name": str(target.get("name") or target.get("symbol") or "").strip(),
+                    }
+                    for target in targets
+                    if isinstance(target, dict) and str(target.get("symbol") or "").strip()
+                ]
+        return []
+
+    def _compare_digest(self, *, compare_targets: list[dict], methodology_payloads: list[dict]) -> str:
+        if not compare_targets:
+            return "当前比较请求缺少可识别的目标股票，无法形成横向结论。"
+        methodology_by_symbol: dict[str, dict[str, dict]] = {}
+        for item in methodology_payloads:
+            title = str(item.get("title") or "")
+            symbol = title.split(":", 1)[1].strip() if ":" in title else ""
+            if not symbol:
+                continue
+            methodology_by_symbol.setdefault(symbol, {})[str(item.get("methodology_type") or "")] = item
+
+        lines = [f"已按同一研究口径对 {len(compare_targets)} 只股票做对比。"]
+        scored_targets: list[tuple[float, str, str]] = []
+        for target in compare_targets:
+            symbol = str(target.get("symbol") or "").strip()
+            name = str(target.get("name") or symbol).strip() or symbol
+            methods = methodology_by_symbol.get(symbol, {})
+            comps = methods.get("comps")
+            dcf = methods.get("dcf")
+            resilience = methods.get("cashflow_resilience")
+            notes: list[str] = []
+            score = 0.0
+            if comps:
+                view = self._methodology_output_value(comps, "relative_view")
+                if view:
+                    notes.append(f"comps={view}")
+                    if view == "relative_discount_like":
+                        score += 2.0
+                    elif view == "growth_supported_neutral":
+                        score += 1.0
+                    elif view == "relative_fair_like":
+                        score += 0.5
+                    elif view == "relative_premium_like":
+                        score -= 1.0
+            if dcf:
+                gap = self._methodology_output_float(dcf, "market_to_intrinsic_gap")
+                if gap is not None:
+                    notes.append(f"dcf_gap={gap:.2%}")
+                    if gap <= -0.1:
+                        score += 1.5
+                    elif gap >= 0.1:
+                        score -= 1.0
+            if resilience:
+                debt_state = self._methodology_output_value(resilience, "debt_capacity_state")
+                cashflow_state = self._methodology_output_value(resilience, "cashflow_state")
+                if debt_state:
+                    notes.append(f"debt={debt_state}")
+                    if debt_state == "comfortable":
+                        score += 0.8
+                    elif debt_state == "stressed":
+                        score -= 1.2
+                if cashflow_state:
+                    notes.append(f"cashflow={cashflow_state}")
+                    if cashflow_state == "resilient":
+                        score += 0.8
+                    elif cashflow_state == "fragile":
+                        score -= 1.0
+            if not notes:
+                notes.append("methodology_signal=limited")
+            lines.append(f"{name}（{symbol}）：{'；'.join(notes)}。")
+            scored_targets.append((score, symbol, name))
+
+        available_signal_count = sum(1 for item in scored_targets if item[0] != 0.0)
+        if len(scored_targets) >= 2 and available_signal_count > 0:
+            winner = max(scored_targets, key=lambda item: item[0])
+            if winner[0] > 0:
+                lines.append(f"基于当前相对估值、轻量 DCF 和现金流韧性信号，暂时更占优的是 {winner[2]}（{winner[1]}）。")
+            else:
+                lines.append("当前方法论信号没有形成明显领先者，更适合作为并列观察名单。")
+        else:
+            lines.append("当前证据更多是单票快照，仍需补充更完整估值和行业景气数据后再排序。")
+        return " ".join(lines)
+
+    def _methodology_output_value(self, methodology_payload: dict, key: str) -> str | None:
+        result = self._parse_methodology_result(methodology_payload)
+        outputs = result.get("outputs") or {}
+        value = outputs.get(key)
+        if value in (None, ""):
+            return None
+        return str(value)
+
+    def _methodology_output_float(self, methodology_payload: dict, key: str) -> float | None:
+        value = self._methodology_output_value(methodology_payload, key)
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except Exception:
+            return None
+
+    def _parse_methodology_result(self, methodology_payload: dict) -> dict:
+        import ast
+
+        summary = str(methodology_payload.get("summary") or "")
+        lines = summary.splitlines()
+        payload: dict = {}
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("outputs="):
+                try:
+                    payload["outputs"] = ast.literal_eval(stripped.split("=", 1)[1].strip())
+                except Exception:
+                    payload["outputs"] = {}
+            elif stripped.startswith("assumptions="):
+                try:
+                    payload["assumptions"] = ast.literal_eval(stripped.split("=", 1)[1].strip())
+                except Exception:
+                    payload["assumptions"] = {}
+            elif stripped.startswith("warnings="):
+                try:
+                    payload["warnings"] = ast.literal_eval(stripped.split("=", 1)[1].strip())
+                except Exception:
+                    payload["warnings"] = []
+        return payload
 
     def _distillation_attribution_digest(self, evidences: list[dict]) -> str:
         counts = {
@@ -433,6 +666,24 @@ class ReporterService:
             }
             candidates.append(candidate)
         return candidates
+
+    def _methodology_payloads(self, evidences: list[dict]) -> list[dict]:
+        payloads: list[dict] = []
+        for item in evidences:
+            metadata = item.get("metadata") or {}
+            source_type = str(metadata.get("source_type") or "")
+            if not source_type.startswith("methodology_"):
+                continue
+            payloads.append(
+                {
+                    "title": str(item.get("title") or ""),
+                    "source_type": source_type,
+                    "methodology_type": metadata.get("methodology_type"),
+                    "valuation_band_label": metadata.get("valuation_band_label"),
+                    "summary": str(item.get("summary") or ""),
+                }
+            )
+        return payloads
 
     def _parse_screen_candidate_summary(self, summary: str) -> dict:
         import ast

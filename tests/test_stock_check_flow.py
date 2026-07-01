@@ -20,7 +20,7 @@ class FakeSkillRuntime:
             "query": kwargs.get("query"),
             "snapshot_date": "2026-06-28",
             "facts": {},
-            "source": {"skill": skill_name},
+            "source": {"skill": skill_name, "vendor": "stub", "from_cache": False},
         }
 
 
@@ -81,6 +81,38 @@ class StockCheckFlowTests(unittest.TestCase):
         self.assertIn("snapshot_date: 2026-06-28", payload["content"])
         self.assertIn("latest_bar:", payload["content"])
         self.assertIn("market_overview:", payload["content"])
+
+    def test_skill_payload_shape_accepts_phase1_source_metadata(self) -> None:
+        runtime = FakeSkillRuntime()
+        collector = CollectorService(runtime)
+
+        payload = collector.run(intent="stock_check", query="看看 000001")
+
+        snapshot = payload["snapshots"][0]
+        self.assertIn("source", snapshot)
+        self.assertEqual(snapshot["source"]["vendor"], "stub")
+
+    def test_collector_stock_check_uses_planning_hints_to_add_capital_flow_and_sentiment(self) -> None:
+        runtime = FakeSkillRuntime()
+        collector = CollectorService(runtime)
+
+        payload = collector.run(
+            intent="stock_check",
+            query="continue the previous conclusion",
+            constraints={
+                "symbol": "000001",
+                "planning_context_hints": {
+                    "recommended_next_step": "compare cashflow resilience and short-term sentiment",
+                    "thread_topic": "analyze 000001 cashflow resilience",
+                },
+            },
+        )
+
+        skill_names = [name for name, _ in runtime.calls]
+        self.assertIn("capital_flow_snapshot_skill", skill_names)
+        self.assertIn("sentiment_snapshot_skill", skill_names)
+        self.assertEqual(payload["sources"][0]["collection_strategy"]["preferred_methodology"], "cashflow_resilience")
+        self.assertIn("capital_flow", payload["sources"][0]["collection_strategy"]["hint_augmented_snapshot_types"])
 
 
 if __name__ == "__main__":

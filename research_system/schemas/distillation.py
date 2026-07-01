@@ -65,12 +65,18 @@ class DistilledDimension(BaseModel):
 
     dimension_id: str | None = None
     dimension_name: str
+    canonical_dimension_name: str | None = None
+    dimension_family: str | None = None
     dimension_category: str
     alias_hits: list[str] = Field(default_factory=list)
     supported_claim_block_ids: list[str] = Field(default_factory=list)
     evidence_block_ids: list[str] = Field(default_factory=list)
     is_new_candidate: bool = True
     confidence: float = Field(ge=0.0, le=1.0)
+    scenario_tags: list[str] = Field(default_factory=list)
+    methodology_tags: list[str] = Field(default_factory=list)
+    dimension_tags: list[str] = Field(default_factory=list)
+    dimension_key: str | None = None
     normalization_notes: list[str] = Field(default_factory=list)
 
 

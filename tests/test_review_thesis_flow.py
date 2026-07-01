@@ -13,6 +13,8 @@ from research_system.runtime.jsonl import append_jsonl, write_json
 from research_system.runtime.settings import Settings, ensure_workspace_layout
 from research_system.schemas.protocol import RequestEnvelope
 from research_system.schemas.runtime import BlackboardEntry
+from research_system.services.memory_service import MemoryService
+from research_system.adapters.storage.mem0_adapter import Mem0Adapter
 
 
 class ReviewSkillRuntimeStub:
@@ -145,11 +147,7 @@ class ReviewThesisFlowTests(unittest.TestCase):
             try:
                 stub_runtime = SectorDynamicSkillRuntimeStub()
                 orchestrator.collector.skill_runtime = stub_runtime
-                orchestrator.collector.registry._subagents["sector_snapshot_collector"].skill_runtime = stub_runtime
-                orchestrator.retriever.qdrant_available = False
-                orchestrator.retriever.qdrant_error = "disabled_for_test"
-                orchestrator.retriever.registry._subagents["blackboard_evidence_indexer"].qdrant = None
-                orchestrator.retriever.registry._subagents["qdrant_evidence_searcher"].qdrant = None
+                orchestrator.retriever.disable_qdrant_for_test()
 
                 response = orchestrator.run(
                     RequestEnvelope(
@@ -234,10 +232,7 @@ class ReviewThesisFlowTests(unittest.TestCase):
             orchestrator = ResearchOrchestrator(settings)
             try:
                 orchestrator.collector.skill_runtime = ReviewSkillRuntimeStub()
-                orchestrator.retriever.qdrant_available = False
-                orchestrator.retriever.qdrant_error = "disabled_for_test"
-                orchestrator.retriever.registry._subagents["blackboard_evidence_indexer"].qdrant = None
-                orchestrator.retriever.registry._subagents["qdrant_evidence_searcher"].qdrant = None
+                orchestrator.retriever.disable_qdrant_for_test()
 
                 response = orchestrator.run(
                     RequestEnvelope(
@@ -386,6 +381,27 @@ class ReviewThesisFlowTests(unittest.TestCase):
                     source_refs=[{"type": "posterior_review", "review_target_run_id": "01REVIEWTARGET", "run_id": "01REVIEWRUN"}],
                     confidence=1.0,
                 ).model_dump(mode="json"),
+                BlackboardEntry(
+                    run_id="01REVIEWRUN",
+                    request_id="req-review",
+                    kind="source_record",
+                    agent="reviewer",
+                    phase="review",
+                    payload={
+                        "title": "methodology_dcf:300363",
+                        "content": "{'valuation_band': {'low': 8.0, 'base': 9.0, 'high': 10.0}}",
+                        "source_type": "methodology_dcf",
+                        "methodology_type": "dcf",
+                        "symbol": "300363",
+                        "valuation_band_label": "8.0|9.0|10.0",
+                        "methodology_result": {
+                            "outputs": {"intrinsic_value_proxy": 9.0},
+                            "warnings": [],
+                        },
+                    },
+                    source_refs=[{"type": "posterior_review_methodology", "run_id": "01REVIEWRUN"}],
+                    confidence=0.6,
+                ).model_dump(mode="json"),
             ]
 
             evidences = [retriever._evidence_from_blackboard_entry(entry) for entry in blackboard_entries]
@@ -412,7 +428,9 @@ class ReviewThesisFlowTests(unittest.TestCase):
             self.assertIn("overall_verdict=confirmed", retrieval_summary)
             self.assertIn("summary_text=overall_verdict=confirmed; findings=3; confirmed=3; rejected=0; inconclusive=0; benchmark_scopes=sector_vs_hs300", retrieval_summary)
             self.assertIn("'direction': {'confirmed': 1, 'rejected': 0, 'inconclusive': 0}", retrieval_summary)
+            self.assertIn("methodology_types=['dcf']", retrieval_summary)
             self.assertIn("confirmed=3", report["conclusion"])
+            self.assertTrue(report["methodologies"])
             self.assertEqual(
                 report["review_summary"]["verdict_by_claim_type"],
                 {
@@ -506,6 +524,95 @@ class ReviewThesisFlowTests(unittest.TestCase):
 
             self.assertTrue(reviewer_payload["summary"]["review_required"])
             self.assertIn("missing_sector_snapshot", reviewer_payload["summary"]["notes"])
+
+    def test_orchestrator_review_thesis_consumes_methodology_memory_context_end_to_end(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            settings = Settings.from_env(repo_root)
+            ensure_workspace_layout(settings)
+            memory_service = MemoryService(Mem0Adapter(settings))
+            memory_service.write_methodology_memory(
+                memory_type="dimension_experience",
+                content={
+                    "title": "Cashflow resilience heuristic",
+                    "summary": "Prefer stable free cash flow and lower leverage.",
+                    "benchmark_scope": "defensive_compounder",
+                },
+            )
+
+            target_run_root = settings.runs_root / "01REVIEWTARGET"
+            target_run_root.mkdir(parents=True, exist_ok=True)
+            write_json(
+                target_run_root / "result.json",
+                {
+                    "conclusion": "000001 短期可能承压，但催化仍可跟踪。",
+                    "risk": "若公告催化不足，短期仍偏弱。",
+                },
+            )
+            blackboard_path = target_run_root / "blackboard.jsonl"
+            append_jsonl(
+                blackboard_path,
+                BlackboardEntry(
+                    run_id="01REVIEWTARGET",
+                    request_id="req-stock",
+                    kind="report_fragment",
+                    agent="reporter",
+                    phase="report",
+                    payload={
+                        "conclusion": "000001 短期可能承压，但催化仍可跟踪。",
+                        "risk": "若公告催化不足，短期仍偏弱。",
+                    },
+                    source_refs=[{"type": "retrieval", "run_id": "01REVIEWTARGET"}],
+                ).model_dump(mode="json"),
+            )
+            append_jsonl(
+                blackboard_path,
+                BlackboardEntry(
+                    run_id="01REVIEWTARGET",
+                    request_id="req-stock",
+                    kind="source_record",
+                    agent="collector",
+                    phase="collect",
+                    payload={
+                        "title": "stock_check input query",
+                        "content": "帮我看下 000001 这个股票",
+                        "source_type": "user_query",
+                        "symbol": "000001",
+                    },
+                    source_refs=[{"type": "request", "run_id": "01REVIEWTARGET"}],
+                ).model_dump(mode="json"),
+            )
+
+            orchestrator = ResearchOrchestrator(settings)
+            try:
+                orchestrator.collector.skill_runtime = ReviewSkillRuntimeStub()
+                orchestrator.retriever.disable_qdrant_for_test()
+                response = orchestrator.run(
+                    RequestEnvelope(
+                        user_query="continue the previous review",
+                        intent="review_thesis",
+                        constraints={"review_target_run_id": "01REVIEWTARGET"},
+                        conversation_context=[
+                            {
+                                "type": "relevant_methodology_memory",
+                                "memory_type": "dimension_experience",
+                                "benchmark_scope": "defensive_compounder",
+                                "match_score": 3.5,
+                            }
+                        ],
+                    )
+                )
+            finally:
+                orchestrator.close()
+
+            self.assertEqual(response.status, "completed")
+            report = (response.result or {}).get("report") or {}
+            debug = report.get("debug") or {}
+            retrieval_summary = debug.get("retrieval_summary") or ""
+            self.assertIn("methodology_memory=", retrieval_summary)
+            self.assertIn("Cashflow resilience heuristic", retrieval_summary)
+            self.assertIn("review_focus=cashflow_resilience", (report.get("review_summary") or {}).get("notes") or [])
+            self.assertIn("cashflow resilience", str(report.get("follow_up") or "").lower())
 
 
 if __name__ == "__main__":

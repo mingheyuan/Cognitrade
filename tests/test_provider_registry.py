@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import tempfile
 import unittest
 
 from research_system.runtime.provider_registry import OpenAIProvider
@@ -56,6 +57,16 @@ class ProviderRegistryTests(unittest.TestCase):
     def _settings(self) -> Settings:
         settings = Settings.from_env(Path("."))
         return settings.model_copy(update={"openai_api_key": "test-key"})
+
+    def test_from_env_does_not_leak_dotenv_values_into_later_workspaces(self) -> None:
+        root_settings = Settings.from_env(Path("."))
+        self.assertTrue(bool(root_settings.openai_api_key))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            isolated_settings = Settings.from_env(Path(temp_dir))
+
+        self.assertIsNone(isolated_settings.openai_api_key)
+        self.assertIsNone(isolated_settings.openai_base_url)
 
     def test_complete_continues_after_max_output_tokens(self) -> None:
         first = SimpleNamespace(

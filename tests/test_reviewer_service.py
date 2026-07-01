@@ -249,6 +249,61 @@ class ReviewerServiceTests(unittest.TestCase):
         self.assertEqual(result["summary"]["finding_count"], 0)
         self.assertIn("missing_sector_snapshot", result["summary"]["notes"])
 
+    def test_reviewer_requires_fundamental_snapshot_when_cashflow_focus_is_requested(self) -> None:
+        result = self.service.run(
+            source_run_id="01SOURCE",
+            query="review resilience thesis",
+            source_entries=[
+                {
+                    "entry_id": "logic-5",
+                    "kind": "logic_block",
+                    "payload": {
+                        "block_type": "claim",
+                        "text": "短期相对基准可能继续偏弱，但现金流韧性仍待确认。",
+                        "direction": "bearish",
+                    },
+                }
+            ],
+            latest_sector_snapshot=self.snapshot,
+            latest_fundamental_snapshot=None,
+            planning_context_hints={
+                "recommended_next_step": "validate cashflow resilience and leverage tolerance",
+                "thread_topic": "cashflow resilience follow-up",
+            },
+        )
+
+        self.assertTrue(result["summary"]["review_required"])
+        self.assertEqual(result["summary"]["overall_verdict"], "needs_review")
+        self.assertIn("review_focus=cashflow_resilience", result["summary"]["notes"])
+        self.assertIn("missing_fundamental_snapshot_for_review_focus", result["summary"]["notes"])
+
+    def test_reviewer_can_fall_back_to_methodology_memory_hint_for_cashflow_focus(self) -> None:
+        result = self.service.run(
+            source_run_id="01SOURCE",
+            query="continue the previous work",
+            source_entries=[
+                {
+                    "entry_id": "logic-6",
+                    "kind": "logic_block",
+                    "payload": {
+                        "block_type": "claim",
+                        "text": "鐭湡鐩稿鍩哄噯鍙兘缁х画鍋忓急锛屼絾鐜伴噾娴侀煣鎬т粛寰呯‘璁ゃ€?",
+                        "direction": "bearish",
+                    },
+                }
+            ],
+            latest_sector_snapshot=self.snapshot,
+            latest_fundamental_snapshot=None,
+            planning_context_hints={
+                "methodology_benchmark_scope": "defensive_compounder",
+            },
+        )
+
+        self.assertTrue(result["summary"]["review_required"])
+        self.assertIn("review_focus=cashflow_resilience", result["summary"]["notes"])
+        self.assertIn("review_focus_source=methodology_memory", result["summary"]["notes"])
+        self.assertIn("missing_fundamental_snapshot_for_review_focus", result["summary"]["notes"])
+
 
 if __name__ == "__main__":
     unittest.main()

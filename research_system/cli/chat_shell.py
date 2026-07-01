@@ -8,11 +8,10 @@ from research_system.cli.chat_interactions import (
     toggle_commands_popup,
 )
 from research_system.cli.chat_keybindings import build_chat_keybindings
-from research_system.cli.chat_types import ChatSessionState, TuiSession
+from research_system.cli.chat_session_bootstrap import build_chat_startup_context
+from research_system.cli.chat_types import TuiSession
 from research_system.cli.chat_view import build_chat_application, build_chat_view
-from research_system.runtime.provider_registry import ProviderRegistry
 from research_system.runtime.settings import Settings
-from research_system.services.task_router import TaskRouter
 
 
 def run_chat_tui(
@@ -25,23 +24,23 @@ def run_chat_tui(
     handle_chat_line,
     execute_cli_command,
 ) -> int:
-    llm_provider = ProviderRegistry(settings).default()
-    task_router = TaskRouter(llm_provider)
+    runtime, banner_lines = build_chat_startup_context(
+        settings,
+        initial_intent=initial_intent,
+        initial_run_id=initial_run_id,
+        thinking=thinking,
+        events=events,
+        line_mode=False,
+    )
     session = TuiSession(
         settings=settings,
-        state=ChatSessionState(
-            current_intent=initial_intent,
-            review_target_run_id=initial_run_id,
-            thinking_enabled=thinking == "on",
-            events_mode=events,
-        ),
-        llm_provider=llm_provider,
-        task_router=task_router,
+        state=runtime.state,
+        llm_provider=runtime.llm_provider,
+        task_router=runtime.task_router,
         output_lines=[],
     )
-    emit_meta_update(session, "Cognitrade terminal shell")
-    emit_meta_update(session, "Enter to submit, Esc to clear, Ctrl+C to stop current run, Ctrl+D or /exit to quit.")
-    emit_meta_update(session, "Up/Down recalls input history. Tab completes slash commands. Use /commands or F1 for popup help.")
+    for line in banner_lines:
+        emit_meta_update(session, line)
     view = build_chat_view(session)
     session.output_area = view.output_area
     session.main_stack = view.main_stack

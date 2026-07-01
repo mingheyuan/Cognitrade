@@ -166,6 +166,158 @@ class ReporterServiceTests(unittest.TestCase):
         self.assertEqual(payload["review_summary"]["overall_verdict"], "confirmed_with_caveats")
         self.assertTrue(payload["review_summary"]["review_required"])
 
+    def test_stock_screen_fallback_report_includes_methodology_payloads(self) -> None:
+        service = ReporterService(ReporterProviderStub())
+
+        payload = service.run(
+            intent="stock_screen",
+            query="screen stocks",
+            retrieval_summary="Stock screening: candidates=1; methodology_count=1",
+            evidences=[
+                {
+                    "evidence_id": "screening-scorecard",
+                    "title": "screening_scorecard",
+                    "summary": "screening_scorecard\n{'investment_cycle': 'mid_term', 'candidate_count': 1, 'top_candidate_count': 1, 'deep_checked_count': 1, 'summary': 'mid_term candidates ready'}",
+                    "metadata": {"source_type": "screening_scorecard"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "screen-candidate-1",
+                    "title": "screen_candidate:000001",
+                    "summary": "screen_candidate symbol=000001 name=PingAn\nscore=2.0 latest_pct_change=1.2\nlatest_amount=1000000000 notice_count=1\ndeep_checked=True\nwhy=leader\nrisk=none",
+                    "metadata": {"source_type": "screen_candidate"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "method-1",
+                    "title": "comps:000001",
+                    "summary": "methodology_result type=comps symbol=000001\nvaluation_band={'low': 10.0, 'base': 11.0, 'high': 12.0}\noutputs={'relative_view': 'relative_discount_like'}",
+                    "metadata": {
+                        "source_type": "methodology_comps",
+                        "methodology_type": "comps",
+                        "valuation_band_label": "10.0|11.0|12.0",
+                    },
+                    "source_refs": [],
+                },
+            ],
+        )
+
+        self.assertTrue(payload["methodologies"])
+        self.assertIn("Relative valuation views:", payload["conclusion"])
+
+    def test_stock_check_fallback_report_includes_methodology_payloads(self) -> None:
+        service = ReporterService(ReporterProviderStub())
+
+        payload = service.run(
+            intent="stock_check",
+            query="check 000001",
+            retrieval_summary="Stock check: snapshots=3; methodology_types=['dcf']",
+            evidences=[
+                {
+                    "evidence_id": "method-dcf",
+                    "title": "dcf:000001",
+                    "summary": "methodology_result type=dcf symbol=000001\nvaluation_band={'low': 8.0, 'base': 9.0, 'high': 10.0}",
+                    "metadata": {
+                        "source_type": "methodology_dcf",
+                        "methodology_type": "dcf",
+                        "valuation_band_label": "8.0|9.0|10.0",
+                    },
+                    "source_refs": [],
+                }
+            ],
+        )
+
+        self.assertIn("methodology_views=", payload["conclusion"])
+        self.assertEqual(payload["methodologies"][0]["methodology_type"], "dcf")
+
+    def test_stock_compare_fallback_report_returns_comparison_digest(self) -> None:
+        service = ReporterService(ReporterProviderStub())
+
+        payload = service.run(
+            intent="stock_compare",
+            query="分析茅台，宁德时代，比亚迪，谁更值得投资",
+            retrieval_summary="Stock compare: snapshots=9; methodology_types=['cashflow_resilience', 'comps', 'dcf']",
+            evidences=[
+                {
+                    "evidence_id": "compare-request",
+                    "title": "stock_compare input request",
+                    "summary": "stock_compare input request\n{'symbols': ['600519', '300750', '002594'], 'compare_targets': [{'symbol': '600519', 'name': '贵州茅台'}, {'symbol': '300750', 'name': '宁德时代'}, {'symbol': '002594', 'name': '比亚迪'}]}",
+                    "metadata": {"source_type": "compare_request"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "comps-1",
+                    "title": "comps:600519",
+                    "summary": "methodology_result type=comps symbol=600519\nvaluation_band={'low': 1400.0, 'base': 1500.0, 'high': 1600.0}\noutputs={'relative_view': 'relative_fair_like'}",
+                    "metadata": {"source_type": "methodology_comps", "methodology_type": "comps", "valuation_band_label": "1400.0|1500.0|1600.0"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "dcf-1",
+                    "title": "dcf:600519",
+                    "summary": "methodology_result type=dcf symbol=600519\nvaluation_band={'low': 1450.0, 'base': 1520.0, 'high': 1650.0}\noutputs={'market_to_intrinsic_gap': 0.03}",
+                    "metadata": {"source_type": "methodology_dcf", "methodology_type": "dcf", "valuation_band_label": "1450.0|1520.0|1650.0"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "resilience-1",
+                    "title": "cashflow_resilience:600519",
+                    "summary": "methodology_result type=cashflow_resilience symbol=600519\nvaluation_band={'base': 1500.0}\noutputs={'debt_capacity_state': 'comfortable', 'cashflow_state': 'resilient'}",
+                    "metadata": {"source_type": "methodology_cashflow_resilience", "methodology_type": "cashflow_resilience", "valuation_band_label": "None|1500.0|None"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "comps-2",
+                    "title": "comps:300750",
+                    "summary": "methodology_result type=comps symbol=300750\nvaluation_band={'low': 180.0, 'base': 195.0, 'high': 210.0}\noutputs={'relative_view': 'growth_supported_neutral'}",
+                    "metadata": {"source_type": "methodology_comps", "methodology_type": "comps", "valuation_band_label": "180.0|195.0|210.0"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "dcf-2",
+                    "title": "dcf:300750",
+                    "summary": "methodology_result type=dcf symbol=300750\nvaluation_band={'low': 170.0, 'base': 190.0, 'high': 220.0}\noutputs={'market_to_intrinsic_gap': -0.18}",
+                    "metadata": {"source_type": "methodology_dcf", "methodology_type": "dcf", "valuation_band_label": "170.0|190.0|220.0"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "resilience-2",
+                    "title": "cashflow_resilience:300750",
+                    "summary": "methodology_result type=cashflow_resilience symbol=300750\nvaluation_band={'base': 195.0}\noutputs={'debt_capacity_state': 'comfortable', 'cashflow_state': 'resilient'}",
+                    "metadata": {"source_type": "methodology_cashflow_resilience", "methodology_type": "cashflow_resilience", "valuation_band_label": "None|195.0|None"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "comps-3",
+                    "title": "comps:002594",
+                    "summary": "methodology_result type=comps symbol=002594\nvaluation_band={'low': 210.0, 'base': 225.0, 'high': 240.0}\noutputs={'relative_view': 'relative_premium_like'}",
+                    "metadata": {"source_type": "methodology_comps", "methodology_type": "comps", "valuation_band_label": "210.0|225.0|240.0"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "dcf-3",
+                    "title": "dcf:002594",
+                    "summary": "methodology_result type=dcf symbol=002594\nvaluation_band={'low': 205.0, 'base': 215.0, 'high': 230.0}\noutputs={'market_to_intrinsic_gap': 0.12}",
+                    "metadata": {"source_type": "methodology_dcf", "methodology_type": "dcf", "valuation_band_label": "205.0|215.0|230.0"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "resilience-3",
+                    "title": "cashflow_resilience:002594",
+                    "summary": "methodology_result type=cashflow_resilience symbol=002594\nvaluation_band={'base': 215.0}\noutputs={'debt_capacity_state': 'watch', 'cashflow_state': 'mixed'}",
+                    "metadata": {"source_type": "methodology_cashflow_resilience", "methodology_type": "cashflow_resilience", "valuation_band_label": "None|215.0|None"},
+                    "source_refs": [],
+                },
+            ],
+        )
+
+        self.assertIn("已按同一研究口径对 3 只股票做对比", payload["conclusion"])
+        self.assertIn("贵州茅台（600519）", payload["conclusion"])
+        self.assertIn("宁德时代（300750）", payload["conclusion"])
+        self.assertIn("比亚迪（002594）", payload["conclusion"])
+        self.assertIn("暂时更占优的是 宁德时代（300750）", payload["conclusion"])
+        self.assertTrue(payload["methodologies"])
+
     def test_distillation_fallback_report_includes_attribution_digest(self) -> None:
         service = ReporterService(ReporterProviderStub())
 
@@ -369,6 +521,81 @@ class ReporterServiceTests(unittest.TestCase):
         self.assertEqual(payload["review_summary"]["confirmed"], 1)
         self.assertEqual(payload["review_summary"]["overall_verdict"], "confirmed")
         self.assertTrue(str(payload["degraded_note"]).startswith("llm_error:"))
+
+    def test_review_thesis_report_appends_thread_aware_follow_up_for_cashflow_focus(self) -> None:
+        service = ReporterService(ReporterProviderStub())
+
+        payload = service.run(
+            intent="review_thesis",
+            query="review thesis",
+            retrieval_summary="Posterior review summary",
+            planning_context_hints={
+                "recommended_next_step": "validate cashflow resilience and leverage tolerance",
+                "thread_topic": "cashflow resilience follow-up",
+            },
+            evidences=[
+                {
+                    "evidence_id": "review-direction",
+                    "title": "review_finding",
+                    "summary": "review_finding claim_type=direction verdict=confirmed\nbenchmark=HS300 scope=sector",
+                    "metadata": {"source_type": "review_finding"},
+                    "source_refs": [],
+                }
+            ],
+        )
+
+        self.assertIn("cashflow resilience", payload["follow_up"].lower())
+
+    def test_review_thesis_report_can_fall_back_to_methodology_memory_hint_for_cashflow_focus(self) -> None:
+        service = ReporterService(ReporterProviderStub())
+
+        payload = service.run(
+            intent="review_thesis",
+            query="continue the previous work",
+            retrieval_summary="Posterior review summary",
+            planning_context_hints={
+                "methodology_benchmark_scope": "defensive_compounder",
+            },
+            evidences=[
+                {
+                    "evidence_id": "review-direction",
+                    "title": "review_finding",
+                    "summary": "review_finding claim_type=direction verdict=confirmed\nbenchmark=HS300 scope=sector",
+                    "metadata": {"source_type": "review_finding"},
+                    "source_refs": [],
+                }
+            ],
+        )
+
+        self.assertIn("cashflow resilience", payload["follow_up"].lower())
+
+    def test_methodology_evolution_fallback_report_includes_pending_reason_digest(self) -> None:
+        service = ReporterService(ReporterProviderStub())
+
+        payload = service.run(
+            intent="methodology_evolution",
+            query="promote methodology learnings",
+            retrieval_summary="Methodology evolution: proposals=2; statuses=['approved', 'pending']; status_counts={'pending': 1, 'approved': 1}; pending_reasons=['pending_manual_review_dimension_sample_size<2']",
+            evidences=[
+                {
+                    "evidence_id": "proposal-1",
+                    "title": "proposal_draft",
+                    "summary": "proposal_draft type=MethodologyTemplatePatch status=pending\ntitle=Promote dimension: policy catalyst\nsummary=Promote candidate\nreview_reason=pending_manual_review_dimension_sample_size<2",
+                    "metadata": {"source_type": "proposal_draft"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "proposal-2",
+                    "title": "proposal_draft",
+                    "summary": "proposal_draft type=MemoryLearningUpdate status=approved\ntitle=Capture review failure pattern\nsummary=Persist pattern\nreview_reason=auto_approve_review_pattern_threshold_met",
+                    "metadata": {"source_type": "proposal_draft"},
+                    "source_refs": [],
+                },
+            ],
+        )
+
+        self.assertIn("approved=1; pending=1", payload["conclusion"])
+        self.assertIn("pending_manual_review_dimension_sample_size<2", payload["conclusion"])
 
 
 if __name__ == "__main__":

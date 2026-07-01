@@ -16,11 +16,17 @@ from research_system.services.task_router import TaskRouter
 
 @dataclass
 class ChatSessionState:
+    thread_id: str | None = None
     current_intent: str | None = None
     review_target_run_id: str | None = None
     last_run_id: str | None = None
     thinking_enabled: bool = True
     events_mode: str = "compact"
+    last_user_query: str | None = None
+    last_result_intent: str | None = None
+    last_result_summary: str | None = None
+    last_result_conclusion: str | None = None
+    last_result_follow_up: str | None = None
     pending_clarification_query: str | None = None
     pending_clarification_intent: str | None = None
     pending_clarification_run_id: str | None = None
@@ -39,6 +45,7 @@ class ShellViewState:
     focus_target: str = "input"
     help_mode: str = "hidden"
     input_mode: str = "insert"
+    output_mode: str = "live"
     answer_stream_open: bool = False
     follow_output: bool = True
     active_message_ids: dict[str, str] = field(default_factory=dict)
@@ -151,6 +158,14 @@ class TuiSession:
     @input_mode.setter
     def input_mode(self, value: str) -> None:
         self.view_state.input_mode = value
+
+    @property
+    def output_mode(self) -> str:
+        return self.view_state.output_mode
+
+    @output_mode.setter
+    def output_mode(self, value: str) -> None:
+        self.view_state.output_mode = value
 
     @property
     def answer_stream_open(self) -> bool:

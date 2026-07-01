@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 from research_system.schemas.review import PosteriorReviewSummary, ReviewFinding
+from research_system.services.planning_context import (
+    build_planning_context_view,
+    combine_focus_text,
+    derive_methodology_focus,
+    has_momentum_focus,
+    normalize_planning_context_hints,
+)
 
 
 class ScreenReviewerService:
@@ -12,9 +19,17 @@ class ScreenReviewerService:
         source_run_id: str,
         candidates: list[dict],
         scorecard: dict | None = None,
+        planning_context_hints: dict[str, str] | None = None,
     ) -> dict:
         findings: list[dict] = []
         notes: list[str] = []
+        normalized_planning_hints = self._normalize_planning_context_hints(planning_context_hints)
+        review_strategy = self._derive_review_strategy(
+            candidates=candidates,
+            scorecard=scorecard,
+            planning_context_hints=normalized_planning_hints,
+        )
+        notes.extend(list(review_strategy.get("notes") or []))
 
         for candidate in candidates:
             symbol = str(candidate.get("symbol") or "")
@@ -112,6 +127,68 @@ class ScreenReviewerService:
             "summary": summary.model_dump(mode="json"),
             "findings": findings,
         }
+
+    def _normalize_planning_context_hints(self, raw_hints) -> dict[str, str]:
+        return normalize_planning_context_hints(raw_hints)
+
+    def _derive_review_strategy(
+        self,
+        *,
+        candidates: list[dict],
+        scorecard: dict | None,
+        planning_context_hints: dict[str, str],
+    ) -> dict[str, object]:
+        strategy: dict[str, object] = {
+            "focus_area": None,
+            "preferred_methodology": None,
+            "notes": [],
+        }
+        if not planning_context_hints:
+            return strategy
+        candidate_text = " ".join(
+            str(candidate.get("main_risk") or "").strip()
+            for candidate in candidates
+            if str(candidate.get("main_risk") or "").strip()
+        )
+        scorecard_summary = str((scorecard or {}).get("summary") or "").strip()
+        context = build_planning_context_view(
+            query=scorecard_summary,
+            planning_context_hints=planning_context_hints,
+            extra_texts=[candidate_text],
+        )
+        lowered = combine_focus_text(
+            context.query_text,
+            candidate_text,
+            context.recommended_next_step,
+            context.open_question,
+            context.previous_summary,
+            context.thread_topic,
+        )
+        preferred_methodology, focus_source = derive_methodology_focus(
+            cashflow_text=lowered,
+            comparison_text=lowered,
+            planning_context_hints=planning_context_hints,
+        )
+        if preferred_methodology == "cashflow_resilience":
+            strategy["focus_area"] = "cashflow_resilience"
+            strategy["preferred_methodology"] = preferred_methodology
+        elif preferred_methodology == "comps":
+            strategy["focus_area"] = "same_basis_compare"
+            strategy["preferred_methodology"] = preferred_methodology
+        elif preferred_methodology == "dcf":
+            strategy["focus_area"] = "valuation"
+            strategy["preferred_methodology"] = preferred_methodology
+        elif has_momentum_focus(lowered):
+            strategy["focus_area"] = "momentum_validation"
+        focus_area = str(strategy.get("focus_area") or "").strip()
+        preferred_methodology = str(strategy.get("preferred_methodology") or "").strip()
+        if focus_area:
+            strategy["notes"] = [f"screen_review_focus={focus_area}"]
+            if preferred_methodology:
+                strategy["notes"].append(f"screen_review_preferred_methodology={preferred_methodology}")
+            if focus_source:
+                strategy["notes"].append(f"screen_review_focus_source={focus_source}")
+        return strategy
 
     def _finding_notes(
         self,

@@ -5,7 +5,6 @@ from collections import Counter, defaultdict
 from research_system.schemas.review import CriticReviewFinding, CriticReviewSummary
 from research_system.schemas.subagents import SubagentInvocation
 from research_system.subagents.critic_review import (
-    CriticScorecardBuilderSubagent,
     CriticSummaryBuilderSubagent,
     DimensionCriticSubagent,
     LogicBlockCriticSubagent,
@@ -24,7 +23,6 @@ class CriticService:
                 LogicBlockCriticSubagent(attribution_review_payload=self._attribution_review_payload),
                 DimensionCriticSubagent(),
                 CriticSummaryBuilderSubagent(),
-                CriticScorecardBuilderSubagent(),
             ]
         )
 
@@ -73,16 +71,14 @@ class CriticService:
                 inputs={"findings": findings, "notes": notes},
             )
         )
-        scorecard_outputs, _ = self.registry.invoke(
-            SubagentInvocation(
-                subagent_type="critic_scorecard_builder",
-                objective="Build critic scorecard.",
-                inputs={"logic_blocks": logic_blocks, "summary": summary_outputs["summary"]},
-            )
+        scorecard = self._build_scorecard(
+            logic_blocks=logic_blocks,
+            findings=[CriticReviewFinding.model_validate(item) for item in summary_outputs["findings"]],
+            summary=summary_outputs["summary"],
         )
         return {
             "summary": summary_outputs["summary"],
-            "scorecard": scorecard_outputs["scorecard"],
+            "scorecard": scorecard,
             "findings": summary_outputs["findings"],
         }
 

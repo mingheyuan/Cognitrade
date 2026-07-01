@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.chat_controller import chat_event_listener
-from research_system.cli.chat_event_adapter import build_chat_presenter, display_chunk_to_update, event_to_display_chunks
+from research_system.cli.chat_event_adapter import (
+    build_chat_presenter,
+    chat_event_listener,
+    display_chunk_to_update,
+    event_to_display_chunks,
+)
 from research_system.cli.chat_updates import TranscriptUpdate, default_update_for_text
 from research_system.schemas.runtime import RunEvent
 
@@ -74,6 +78,29 @@ class ChatEventAdapterTests(unittest.TestCase):
         chunks = event_to_display_chunks(event, presenter=presenter)
         status_chunk = next(chunk for chunk in chunks if chunk.kind == "status")
         self.assertEqual(status_chunk.state_patch, {"current_phase": "collect"})
+
+    def test_subagent_started_event_maps_to_status_update(self) -> None:
+        presenter = build_chat_presenter(thinking_enabled=True, events_mode="compact")
+        event = RunEvent(
+            request_id="01REQ",
+            run_id="01RUN",
+            intent="stock_check",
+            event_type="subagent_started",
+            phase="collect",
+            agent="collector",
+            message="stock_snapshot_collector started",
+            payload={
+                "subagent_type": "stock_snapshot_collector",
+                "objective": "Collect stock-level verified snapshots.",
+                "status": "running",
+            },
+        )
+
+        chunks = event_to_display_chunks(event, presenter=presenter)
+        self.assertEqual(chunks[0].kind, "status")
+        update = display_chunk_to_update(chunks[0])
+        self.assertEqual(update.action, "replace")
+        self.assertEqual(update.state_patch.current_phase, "collect")
 
     def test_default_update_for_text_uses_message_metadata(self) -> None:
         thinking = default_update_for_text("thinking", "route request")

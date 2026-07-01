@@ -13,6 +13,10 @@ CHAT_COMMANDS = [
     "/commands",
     "/help",
     "/exit",
+    "/new",
+    "/thread",
+    "/threads",
+    "/compact",
     "/intent",
     "/run-id",
     "/thinking",
@@ -20,6 +24,9 @@ CHAT_COMMANDS = [
     "/run",
     "/review",
     "/history",
+    "/proposals",
+    "/proposal",
+    "/review-proposal",
     "/status",
     "/doctor",
     "/check",
@@ -67,6 +74,25 @@ def parse_chat_input(line: str) -> dict[str, object]:
         return {"action": "commands"}
     if command == "/help":
         return {"action": "help"}
+    if command == "/new":
+        return {"action": "new_thread"}
+    if command == "/thread":
+        if len(parts) == 1:
+            return {"action": "show_thread"}
+        if len(parts) == 2:
+            return {"action": "set_thread", "thread_id": parts[1].strip()}
+        return {"action": "error", "message": "usage: /thread [thread_id]"}
+    if command == "/threads":
+        limit = 10
+        if len(parts) == 2:
+            if not parts[1].isdigit():
+                return {"action": "error", "message": "usage: /threads [limit]"}
+            limit = int(parts[1])
+        elif len(parts) > 2:
+            return {"action": "error", "message": "usage: /threads [limit]"}
+        return {"action": "threads", "limit": limit}
+    if command == "/compact":
+        return {"action": "compact_thread"}
     if command == "/last":
         return {"action": "show_last"}
     if command == "/clear":
@@ -103,6 +129,34 @@ def parse_chat_input(line: str) -> dict[str, object]:
                 continue
             return {"action": "error", "message": "usage: /history [limit] [status]"}
         return {"action": "history", "limit": limit, "status": status}
+    if command == "/proposals":
+        limit = 50
+        status = None
+        for token in parts[1:]:
+            if token.isdigit() and limit == 50:
+                limit = int(token)
+                continue
+            if status is None and token in {"pending", "approved", "rejected"}:
+                status = token
+                continue
+            return {"action": "error", "message": "usage: /proposals [limit] [pending|approved|rejected]"}
+        return {"action": "proposals", "limit": limit, "status": status}
+    if command == "/proposal":
+        if len(parts) != 2:
+            return {"action": "error", "message": "usage: /proposal <proposal_id>"}
+        return {"action": "proposal", "proposal_id": parts[1].strip()}
+    if command == "/review-proposal":
+        if len(parts) < 3:
+            return {"action": "error", "message": "usage: /review-proposal <proposal_id> <approve|reject> [reason]"}
+        decision = parts[2].strip().lower()
+        if decision not in {"approve", "reject"}:
+            return {"action": "error", "message": "usage: /review-proposal <proposal_id> <approve|reject> [reason]"}
+        return {
+            "action": "review-proposal",
+            "proposal_id": parts[1].strip(),
+            "decision": decision,
+            "reason": " ".join(parts[3:]).strip() or None,
+        }
     if command in {"/status", "/doctor", "/check", "/cleanup"}:
         return {"action": command.removeprefix("/")}
     if command in {"/reindex", "/reindex-qdrant"}:
@@ -115,7 +169,7 @@ def parse_chat_input(line: str) -> dict[str, object]:
         query = stripped[len("/run") :].strip()
         if not query:
             return {"action": "error", "message": "usage: /run <query>"}
-        return {"action": "run", "query": query}
+        return {"action": "run", "query": query, "explicit_command": True}
     if command == "/review":
         if len(parts) < 3:
             return {"action": "error", "message": "usage: /review <run_id> <query>"}
@@ -215,7 +269,7 @@ def chat_completion_candidates(text_before_cursor: str, state: ChatSessionState)
             unique_run_ids.append(value)
 
     if command == "/intent":
-        return ["auto", "stock_check", "stock_screen", "sector_research", "distill_kol_logic", "review_thesis"]
+        return ["auto", "stock_check", "stock_compare", "stock_screen", "sector_research", "distill_kol_logic", "review_thesis"]
     if command == "/thinking":
         return ["on", "off"]
     if command == "/events":
@@ -226,6 +280,24 @@ def chat_completion_candidates(text_before_cursor: str, state: ChatSessionState)
         return unique_run_ids
     if command == "/history":
         return ["10", "20", "50", "completed", "failed", "cancelled", "timed_out", "needs_clarification"]
+    if command == "/proposals":
+        return ["10", "20", "50", "pending", "approved", "rejected"]
+    if command == "/proposal":
+        return []
+    if command == "/review-proposal":
+        if len(parts) == 2 and text_before_cursor.endswith(" "):
+            return ["approve", "reject"]
+        if len(parts) <= 2:
+            return []
+        if len(parts) == 3:
+            return ["approve", "reject"]
+        return []
+    if command == "/thread":
+        return []
+    if command == "/threads":
+        return ["5", "10", "20"]
+    if command == "/compact":
+        return []
     if command == "/review":
         if len(parts) <= 2:
             return unique_run_ids

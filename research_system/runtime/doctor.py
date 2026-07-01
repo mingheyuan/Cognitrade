@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from research_system.runtime.provider_health import ProviderHealthService
 from research_system.runtime.run_store import RunStore
 from research_system.runtime.settings import Settings
+from research_system.services.route_table import build_intent_route_table_store
 
 
 def build_status(settings: Settings) -> dict:
@@ -32,6 +34,10 @@ def build_status(settings: Settings) -> dict:
 
 def run_doctor(settings: Settings) -> dict:
     checks: list[dict] = []
+    route_store = build_intent_route_table_store(settings)
+    route_table = route_store.load_table()
+    route_runtime = route_store.describe_runtime_state()
+    provider_health = ProviderHealthService(settings).build_report()
 
     root = settings.workspace_root.parent
     env_path = root / ".env"
@@ -73,11 +79,85 @@ def run_doctor(settings: Settings) -> dict:
             ),
         }
     )
+    checks.append(
+        {
+            "name": "router_defaults",
+            "status": "passed" if settings.router_defaults_path.exists() else "failed",
+            "path": str(settings.router_defaults_path),
+        }
+    )
+    checks.append(
+        {
+            "name": "router_cache_ttl_seconds",
+            "status": "passed" if settings.router_rules_cache_ttl_seconds >= 0 else "failed",
+            "detail": str(settings.router_rules_cache_ttl_seconds),
+        }
+    )
+    checks.append(
+        {
+            "name": "router_runtime",
+            "status": "passed",
+            "detail": (
+                f"version={route_table.version}, "
+                f"refresh_source={route_runtime.get('refresh_source')}, "
+                f"cached_version={route_runtime.get('cached_version')}, "
+                f"last_refresh={route_runtime.get('last_refresh_timestamp')}"
+            ),
+        }
+    )
+    redis_health = route_store.probe_backend_health()
+    checks.append(
+        {
+            "name": "router_redis",
+            "status": (
+                "passed"
+                if settings.router_redis_url and redis_health.get("reachable")
+                else "failed"
+                if settings.router_redis_url
+                else "skipped"
+            ),
+            "detail": (
+                f"{settings.router_redis_url}; health={redis_health.get('detail')}"
+                if settings.router_redis_url
+                else "not_configured"
+            ),
+        }
+    )
+    for row in provider_health.get("provider_rows", []):
+        checks.append(
+            {
+                "name": f"provider_chain_{row.get('dim')}",
+                "status": "passed" if row.get("provider_count", 0) >= 1 else "failed",
+                "detail": (
+                    f"providers={','.join(row.get('provider_ids') or [])}; "
+                    f"fallback={'yes' if row.get('has_fallback') else 'no'}"
+                ),
+            }
+        )
+    network_profile = provider_health.get("network_profile") or {}
+    checks.append(
+        {
+            "name": "network_domestic",
+            "status": "passed" if network_profile.get("domestic_reachable") else "failed",
+            "detail": str(network_profile.get("domestic") or []),
+        }
+    )
+    checks.append(
+        {
+            "name": "network_overseas",
+            "status": "passed" if network_profile.get("overseas_reachable") else "skipped",
+            "detail": str(network_profile.get("overseas") or []),
+        }
+    )
 
     for name, path in {
         "retrieval_policy": settings.retrieval_policy_path,
         "methodology_manifest": settings.methodology_manifest_path,
+        "provider_policy": settings.provider_policy_path,
+        "data_sources": settings.data_sources_path,
         "taxonomy_dimensions": settings.taxonomy_dimensions_path,
+        "taxonomy_dimension_aliases": settings.taxonomy_dimension_aliases_path,
+        "taxonomy_dimension_patterns": settings.taxonomy_dimension_patterns_path,
         "review_policy": settings.review_policy_path,
     }.items():
         checks.append(

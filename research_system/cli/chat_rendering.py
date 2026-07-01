@@ -7,6 +7,7 @@ from research_system.cli.chat_scene import (
     build_status_bar_items,
     build_tui_blocks,
 )
+from research_system.cli.chat_state import apply_session_patch_and_checkpoint, has_session_state_patch
 from research_system.cli.chat_transcript import TranscriptMessage
 from research_system.cli.chat_transcript_store import clear_stream_slot, record_transcript_event
 from research_system.cli.chat_types import TuiSession
@@ -18,6 +19,8 @@ from research_system.cli.chat_updates import (
     TranscriptUpdate,
     default_update_for_text,
 )
+
+MAX_TRANSCRIPT_MESSAGES = 2000
 
 
 def commands_popup_text() -> str:
@@ -114,7 +117,7 @@ def apply_tui_update(session: TuiSession, update: TranscriptUpdate) -> None:
         session.answer_stream_open = True
         apply_shell_state_patch(session, update.state_patch)
         apply_session_state_patch(session, update.session_patch)
-        session.output_lines = session.output_lines[-400:]
+        session.output_lines = session.output_lines[-MAX_TRANSCRIPT_MESSAGES:]
         refresh_tui(session)
         return
     if update.kind is None:
@@ -128,7 +131,7 @@ def apply_tui_update(session: TuiSession, update: TranscriptUpdate) -> None:
     if has_session_state_patch(update.session_patch):
         apply_session_state_patch(session, update.session_patch)
     record_transcript_event(session, kind=update.kind, text=update.text)
-    session.output_lines = session.output_lines[-400:]
+    session.output_lines = session.output_lines[-MAX_TRANSCRIPT_MESSAGES:]
     refresh_tui(session)
 
 
@@ -155,29 +158,15 @@ def apply_shell_state_patch(session: TuiSession, patch: ShellStatePatch) -> None
         session.commands_popup_visible = patch.help_mode == "commands"
     if patch.input_mode is not None:
         session.input_mode = patch.input_mode
+    if patch.output_mode is not None:
+        session.output_mode = patch.output_mode
+        session.follow_output = patch.output_mode == "live"
     if patch.answer_stream_open is not None:
         session.answer_stream_open = patch.answer_stream_open
 
 
 def apply_session_state_patch(session: TuiSession, patch: SessionStatePatch) -> None:
-    if patch.current_intent is not SESSION_PATCH_UNSET:
-        session.state.current_intent = patch.current_intent
-    if patch.review_target_run_id is not SESSION_PATCH_UNSET:
-        session.state.review_target_run_id = patch.review_target_run_id
-    if patch.last_run_id is not SESSION_PATCH_UNSET:
-        session.state.last_run_id = patch.last_run_id
-    if patch.thinking_enabled is not SESSION_PATCH_UNSET:
-        session.state.thinking_enabled = bool(patch.thinking_enabled)
-    if patch.events_mode is not SESSION_PATCH_UNSET:
-        session.state.events_mode = str(patch.events_mode)
-    if patch.pending_clarification_query is not SESSION_PATCH_UNSET:
-        session.state.pending_clarification_query = patch.pending_clarification_query
-    if patch.pending_clarification_intent is not SESSION_PATCH_UNSET:
-        session.state.pending_clarification_intent = patch.pending_clarification_intent
-    if patch.pending_clarification_run_id is not SESSION_PATCH_UNSET:
-        session.state.pending_clarification_run_id = patch.pending_clarification_run_id
-    if patch.pending_clarification_question is not SESSION_PATCH_UNSET:
-        session.state.pending_clarification_question = patch.pending_clarification_question
+    apply_session_patch_and_checkpoint(settings=session.settings, state=session.state, patch=patch)
 
 
 def has_shell_state_patch(patch: ShellStatePatch) -> bool:
@@ -194,23 +183,7 @@ def has_shell_state_patch(patch: ShellStatePatch) -> bool:
             patch.focus_target,
             patch.help_mode,
             patch.input_mode,
+            patch.output_mode,
             patch.answer_stream_open,
-        )
-    )
-
-
-def has_session_state_patch(patch: SessionStatePatch) -> bool:
-    return any(
-        value is not SESSION_PATCH_UNSET
-        for value in (
-            patch.current_intent,
-            patch.review_target_run_id,
-            patch.last_run_id,
-            patch.thinking_enabled,
-            patch.events_mode,
-            patch.pending_clarification_query,
-            patch.pending_clarification_intent,
-            patch.pending_clarification_run_id,
-            patch.pending_clarification_question,
         )
     )

@@ -17,8 +17,21 @@ ProposalType = Literal[
     "RetrievalWeightPatch",
     "MemoryLearningUpdate",
     "PromptPatchProposal",
+    "MethodologyTemplatePatch",
+    "ValuationHeuristicPatch",
 ]
 ProposalStatus = Literal["pending", "approved", "rejected"]
+
+
+class ProposalReviewEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: ProposalStatus
+    reviewer: str
+    reason: str
+    reviewed_at: datetime = Field(default_factory=utc_now)
+    previous_status: ProposalStatus | None = None
+    source: str = "manual"
 
 
 class ProposalDraft(BaseModel):
@@ -41,6 +54,7 @@ class ProposalDraft(BaseModel):
     reviewer: str | None = None
     reviewed_at: datetime | None = None
     review_reason: str | None = None
+    review_history: list[ProposalReviewEvent] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

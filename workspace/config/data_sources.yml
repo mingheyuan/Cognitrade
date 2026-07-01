@@ -1,0 +1,26 @@
+sources:
+  - id: akshare
+    name_cn: AkShare
+    tier: tier1
+    markets: [cn, cn_equity, cn_sector, cn_index]
+    dims: [market, fundamental, sector]
+  - id: cninfo
+    name_cn: 巨潮资讯
+    tier: tier3
+    markets: [cn, cn_equity]
+    dims: [notice, policy, events, fundamental]
+  - id: eastmoney
+    name_cn: 东方财富
+    tier: tier2
+    markets: [cn, cn_equity, cn_sector]
+    dims: [market, fundamental, notice, sector, capital_flow, lhb]
+  - id: baostock
+    name_cn: BaoStock
+    tier: tier1
+    markets: [cn, cn_equity, cn_index]
+    dims: [market]
+  - id: cninfo_events
+    name_cn: 巨潮资讯事件
+    tier: tier3
+    markets: [cn, cn_equity]
+    dims: [events]

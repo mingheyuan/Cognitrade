@@ -4,6 +4,8 @@ from datetime import date
 from typing import Any
 
 from research_system.adapters.vendors.akshare_catalyst_adapter import AkShareCatalystAdapter
+from research_system.adapters.vendors.fallback_merge import merge_provider_facts
+from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
 from research_system.adapters.vendors.akshare_sector_adapter import AkShareSectorAdapter
 from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
 
@@ -11,15 +13,18 @@ from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
 class SectorSnapshotSkill:
     skill_name = "sector_snapshot_skill"
 
-    def __init__(self) -> None:
+    def __init__(self, provider_registry: VendorProviderRegistry | None = None) -> None:
+        self.provider_registry = provider_registry
         self.adapter = AkShareSectorAdapter()
         self.catalyst_adapter = AkShareCatalystAdapter()
 
     def run(self, *, query: str) -> dict[str, Any]:
         snapshot_date = date.today().isoformat()
+        provider_chain = self.provider_registry.get_provider_chain("sector", "cn_sector") if self.provider_registry else []
+        provider_trace = [self._provider_trace_entry(item.provider_id, "configured") for item in provider_chain]
         try:
             resolved = self.adapter.resolve_sector(query=query)
-            facts = self.adapter.get_sector_snapshot(
+            primary_facts = self.adapter.get_sector_snapshot(
                 query=query,
                 sector_name=resolved["sector_name"],
                 sector_type=resolved["sector_type"],
@@ -27,42 +32,52 @@ class SectorSnapshotSkill:
             benchmark = self.adapter.get_benchmark_snapshot(
                 benchmark_code="000300",
                 benchmark_name="HS300",
-                start_date=facts["start_date"],
-                end_date=facts["end_date"],
+                start_date=primary_facts["start_date"],
+                end_date=primary_facts["end_date"],
             )
-            facts["benchmark"] = benchmark
-            facts["relative_strength"] = self.adapter.build_relative_strength(
-                sector_recent_hist=facts.get("recent_hist", []),
+            primary_facts["benchmark"] = benchmark
+            primary_facts["relative_strength"] = self.adapter.build_relative_strength(
+                sector_recent_hist=primary_facts.get("recent_hist", []),
                 benchmark_recent_hist=benchmark.get("recent_hist", []),
             )
-            facts["catalyst_samples"] = self._build_catalyst_samples(facts.get("top_constituents", []))
-            facts["theme_news"] = self.catalyst_adapter.get_theme_news(
+            primary_facts["catalyst_samples"] = self._build_catalyst_samples(primary_facts.get("top_constituents", []))
+            primary_facts["theme_news"] = self.catalyst_adapter.get_theme_news(
                 theme=resolved["sector_name"],
-                constituents=facts.get("top_constituents", []),
+                constituents=primary_facts.get("top_constituents", []),
                 limit=6,
             )
-            facts["policy_signals"] = self.catalyst_adapter.get_policy_signals(
+            primary_facts["policy_signals"] = self.catalyst_adapter.get_policy_signals(
                 theme=resolved["sector_name"],
-                constituents=facts.get("top_constituents", []),
+                constituents=primary_facts.get("top_constituents", []),
                 limit=5,
             )
-            facts["regulatory_signals"] = self.catalyst_adapter.get_regulatory_signals(
+            primary_facts["regulatory_signals"] = self.catalyst_adapter.get_regulatory_signals(
                 theme=resolved["sector_name"],
-                constituents=facts.get("top_constituents", []),
+                constituents=primary_facts.get("top_constituents", []),
                 limit=6,
             )
-            facts["breadth"] = self._build_breadth_metrics(facts=facts)
-            facts["signal_scorecard"] = self._build_signal_scorecard(
-                facts=facts,
+            primary_facts["breadth"] = self._build_breadth_metrics(facts=primary_facts)
+            primary_facts["signal_scorecard"] = self._build_signal_scorecard(
+                facts=primary_facts,
                 theme=resolved["sector_name"],
             )
-            facts["catalyst_digest"] = self.catalyst_adapter.build_catalyst_digest(
+            primary_facts["catalyst_digest"] = self.catalyst_adapter.build_catalyst_digest(
                 theme=resolved["sector_name"],
-                constituents=facts.get("top_constituents", []),
-                catalyst_samples=facts.get("catalyst_samples", []),
-                theme_news=facts.get("theme_news", []),
-                policy_signals=facts.get("policy_signals", []),
-                regulatory_signals=facts.get("regulatory_signals", []),
+                constituents=primary_facts.get("top_constituents", []),
+                catalyst_samples=primary_facts.get("catalyst_samples", []),
+                theme_news=primary_facts.get("theme_news", []),
+                policy_signals=primary_facts.get("policy_signals", []),
+                regulatory_signals=primary_facts.get("regulatory_signals", []),
+            )
+            facts = merge_provider_facts(primary_facts=primary_facts, fallback_fact_sets=[])
+            primary_source = SnapshotSource(
+                skill=self.skill_name,
+                vendor=self.adapter.vendor_name,
+                from_cache=False,
+                provider_id="akshare_sector",
+                source_id="akshare",
+                chain_position=0,
+                dim="sector",
             )
             return VerifiedSnapshot(
                 snapshot_type="sector",
@@ -71,7 +86,13 @@ class SectorSnapshotSkill:
                 sector=resolved["sector_name"],
                 theme=resolved["sector_type"],
                 facts=facts,
-                source=SnapshotSource(skill=self.skill_name, vendor=self.adapter.vendor_name, from_cache=False),
+                source=primary_source,
+                primary_source=primary_source,
+                fallback_applied=bool(facts.get("_fallback_applied")),
+                field_sources={str(key): str(value) for key, value in (facts.get("_field_sources") or {}).items()},
+                missing_fields=[str(item) for item in (facts.get("_missing_fields") or [])],
+                source_confidence="medium",
+                source_trace=provider_trace,
             ).model_dump(mode="json")
         except Exception as exc:
             return VerifiedSnapshot(
@@ -79,10 +100,31 @@ class SectorSnapshotSkill:
                 query=query,
                 snapshot_date=snapshot_date,
                 facts={"availability": "degraded", "note": str(exc)},
-                source=SnapshotSource(skill=self.skill_name, vendor=self.adapter.vendor_name, from_cache=False),
+                source=SnapshotSource(
+                    skill=self.skill_name,
+                    vendor=self.adapter.vendor_name,
+                    from_cache=False,
+                    provider_id="akshare_sector",
+                    source_id="akshare",
+                    chain_position=0,
+                    dim="sector",
+                ),
+                primary_source=SnapshotSource(
+                    skill=self.skill_name,
+                    vendor=self.adapter.vendor_name,
+                    from_cache=False,
+                    provider_id="akshare_sector",
+                    source_id="akshare",
+                    chain_position=0,
+                    dim="sector",
+                ),
+                source_trace=provider_trace + [self._provider_trace_entry("akshare_sector", f"error:{exc.__class__.__name__}")],
                 degraded=True,
                 degrade_reason="vendor_failure",
             ).model_dump(mode="json")
+
+    def _provider_trace_entry(self, provider_id: str, status: str) -> dict[str, str]:
+        return {"provider_id": provider_id, "status": status}
 
     def _build_catalyst_samples(self, constituents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         samples: list[dict[str, Any]] = []

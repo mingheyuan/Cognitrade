@@ -1,21 +1,27 @@
-﻿# Cognitrade
+# Cognitrade
 
 当前目录是项目运行根目录。
 
-这是一个面向 A 股研究场景的研究增强系统，当前已实现到 `Phase 3` 的最小闭环，支持四条主链：
+`Cognitrade` 是一个面向 A 股研究场景的 CLI-first 多 Agent 研究系统。当前代码主线已经从早期最小闭环推进到：
+
+- 顶层研究路由：显式 intent、动态路由表、规则/语义匹配、LLM fallback
+- 研究运行时：`planner -> orchestrator -> collector/retriever/reporter`
+- 数据层：provider chain、fallback merge、Qdrant 检索、长期 memory
+- 对话层：默认 line mode、持久化 chat thread、auto compact、checkpoint、query-aware memory recall
+
+## 当前支持的研究意图
+
+当前代码中的顶层 research intent 有：
 
 - `stock_check`
+- `stock_compare`
+- `stock_screen`
 - `sector_research`
 - `distill_kol_logic`
 - `review_thesis`
+- `methodology_evolution`
 
-当前代码重点是：
-
-- 多 Agent 运行时骨架
-- `CLI` 执行与 run 归档
-- `LLM + Verified Snapshot + 检索 + Gate` 最小闭环
-- `Qdrant` 本地检索与重建
-- 最小本地回归测试
+其中 `methodology_evolution` 目前更偏内部演进链路，不是主要的手工输入入口。
 
 ## 目录结构
 
@@ -23,26 +29,46 @@
 Cognitrade/
 ├─ research_system/    # 主代码
 ├─ tests/              # 本地回归测试
-├─ workspace/          # 运行数据、Qdrant 本地库、runs 归档
+├─ workspace/          # 运行数据、配置、taxonomy、runs、memory、Qdrant 本地库
 ├─ .env
 └─ .env.example
 ```
 
+`workspace/config/` 和 `workspace/taxonomy/` 是当前运行时真正读取的配置目录，不是包内静态配置目录。
+
 ## 环境变量
 
-先准备根目录 `.env`。
-
-最小示例见 [`.env.example`](</D:/work_26_6_24/Cognitrade/.env.example>)。
+先准备根目录 `.env`。最小示例见 [`.env.example`](./.env.example)。
 
 当前常用项：
 
 ```env
 OPENAI_API_KEY=
 OPENAI_BASE_URL=
-OPENAI_MODEL=gpt-5.5
+OPENAI_MODEL=GPT-5.5
 QDRANT_URL=
 QDRANT_API_KEY=
 QDRANT_COLLECTION_NAME=research_evidence
+
+MEM0_API_KEY=
+MEM0_BASE_URL=
+
+ROUTER_REDIS_URL=
+ROUTER_REDIS_ACTIVE_KEY=cognitrade:router:intent_rules:active
+ROUTER_REDIS_KEY_PREFIX=cognitrade:router:intent_rules:
+ROUTER_REDIS_LAST_GOOD_KEY=cognitrade:router:intent_rules:last_good
+ROUTER_REDIS_TIMEOUT_SECONDS=0.2
+ROUTER_RULES_CACHE_TTL_SECONDS=2.0
+ROUTER_SEED_DEFAULTS=true
+
+PROVIDER_PROBE_TIMEOUT_SECONDS=1.0
+COGNITRADE_PROVIDERS_MARKET=
+COGNITRADE_PROVIDERS_FUNDAMENTAL=
+COGNITRADE_PROVIDERS_NOTICE=
+COGNITRADE_PROVIDERS_SECTOR=
+COGNITRADE_PROVIDERS_CAPITAL_FLOW=
+COGNITRADE_PROVIDERS_SENTIMENT=
+
 DEFAULT_TIMEZONE=Asia/Shanghai
 LOG_LEVEL=INFO
 LLM_REQUEST_TIMEOUT_SECONDS=25
@@ -52,176 +78,142 @@ EXTERNAL_WAIT_TIMEOUT_SECONDS=30
 
 说明：
 
-- 若使用本地 `Qdrant`，可不填 `QDRANT_URL`
-- 若使用兼容 OpenAI 网关，`OPENAI_BASE_URL` 填网关地址；代码会自动归一化到 `/v1`
-- `OPENAI_MODEL` 建议与网关真实支持的模型名保持一致
-- `LLM_REQUEST_TIMEOUT_SECONDS` 控制单次 LLM 请求超时；建议明显小于 `RUN_TIMEOUT_SECONDS`
+- `OPENAI_BASE_URL` 若填写兼容 OpenAI 的网关地址，代码会归一化到 `/v1`
+- 不配置 `QDRANT_URL` 时，会优先使用本地文件模式
+- `MEM0_*` 用于长期 memory 远端同步；未配置时仍会保留本地导出与本地读取 fallback
+- `ROUTER_*` 用于 Redis 动态路由控制面；未配置时会退回本地 `router_defaults.yml`
+- `COGNITRADE_PROVIDERS_*` 用于 provider chain 覆盖，优先级高于默认 `provider_policy.yml`
+
+## 配置文件
+
+当前运行时会自动 seed 并读取这些配置：
+
+```text
+workspace/config/
+├─ retrieval_policy.yml
+├─ methodology_manifest.yml
+├─ review_policy.yml
+├─ router_defaults.yml
+├─ provider_policy.yml
+└─ data_sources.yml
+
+workspace/taxonomy/
+├─ dimensions.yml
+├─ dimension_aliases.yml
+└─ dimension_patterns.yml
+```
 
 ## 常用命令
 
 在项目根目录执行。
 
-### 运行研究
+### 运行一次研究
 
 ```bash
 python -m research_system.cli.app run "帮我看下 000001 这个股票" --json
+python -m research_system.cli.app run "分析茅台、宁德时代、比亚迪，谁更值得投资" --json
 python -m research_system.cli.app run "最近创新药板块怎么样" --json
-python -m research_system.cli.app run "请蒸馏这个雪球 statuses 文件 D:\\work_26_6_24\\scraper\\output\\xueqiu_webbridge_20260624_145246\\statuses.jsonl" --intent distill_kol_logic --json
+python -m research_system.cli.app run "请蒸馏这个雪球 statuses 文件 D:\\path\\to\\statuses.jsonl" --intent distill_kol_logic --json
 python -m research_system.cli.app run "复核上次创新药判断" --intent review_thesis --run-id <target_run_id> --json
 ```
 
 ### 交互模式
 
-当前 `chat` 是一个常驻输入框的终端对话壳，接近 `codex` 的命令行交互方式：
+默认 `chat` 是 line mode，交互体验更接近 `codex`，依赖终端原生滚动：
 
 ```bash
 python -m research_system.cli.app chat
 ```
 
-界面特点：
+如果你明确要进入全屏 TUI：
 
-- 底部输入框始终可见
-- 上方持续滚动输出
-- 默认主视图是 `thinking / status / answer`，并按区块分隔
-- 状态栏会持续显示 `intent / run / phase / gate / clarify / state`
-- 输入框上方有一条动态提示栏，会根据 `idle / running / clarification pending / popup open` 切换提示
-- 支持运行中停止和退出
+```bash
+python -m research_system.cli.app chat --ui tui
+```
 
-基本键位：
+如果 `--ui tui` 在当前终端不可用，会自动回退到 line mode。
 
-- `Enter`：提交输入
-- `Up/Down`：回看输入历史
-- `Tab`：补全 slash 命令和常见参数
-- `Esc`：清空当前输入框；若命令浮层打开则先关闭浮层
-- `F1`：打开/关闭命令浮层
-- `Ctrl+C`：停止当前 run；空闲时清空输入
-- `Ctrl+D`：退出交互壳
+### chat 的线程和记忆模型
 
-输入方式：
+当前 `chat` 不是一次性输入壳，而是持久化 thread：
 
-- 直接输入自然语言，会默认当成一次 `run`
-- 斜杠命令会被识别成控制指令
-- 如果上一轮停在 `needs_clarification`，下一句普通输入会自动作为补充信息续接，而不是重新起一轮
+- 每个 chat 会话都有稳定 `thread_id`
+- thread 会持久化 recent turns、summary history、archive 和 checkpoint
+- thread 超过阈值会 auto compact，生成可复用摘要链
+- 后续 query 会自动带入：
+  - 当前 thread profile
+  - recent turns
+  - compact summary
+  - recent chat research memory
+  - query-aware relevant memory
 
-常用示例：
+当前大致分三层记忆：
+
+1. `thread short-term memory`
+   - 当前 chat thread 的 recent turns、summary、checkpoint
+2. `chat long-term memory`
+   - 跨会话的 chat research summary，优先走 mem0，失败时回本地导出
+3. `methodology long-term memory`
+   - 经审核沉淀的方法论记忆，用于 retrieval/evolution 辅助
+
+### chat 常用指令
 
 ```text
-最近创新药板块怎么样
-/history
-/resume <run_id>
-/replay <run_id>
-/intent review_thesis
-/run-id <target_run_id>
-复核上次创新药判断
-/review <target_run_id> 复核上次创新药判断
+/help
+/exit
+/new
+/thread [thread_id]
+/threads [limit]
+/compact
+/intent <intent|auto>
+/run-id <run_id|clear>
+/thinking <on|off>
+/events <off|compact|full>
+/stop
+/run <query>
+/review <run_id> <query>
+/history [limit] [status]
 /status
 /doctor
 /check
-/exit
+/replay <run_id|last>
+/resume <run_id|last>
+/cancel <run_id|last>
+/cleanup
+/reindex
+/last
+/clear
 ```
 
-当前支持的交互指令：
+行为说明：
 
-- `/commands`
-- `/help`
-- `/exit`
-- `/intent <intent|auto>`
-- `/run-id <run_id|clear>`
-- `/thinking <on|off>`
-- `/events <off|compact|full>`
-- `/stop`
-- `/run <query>`
-- `/review <run_id> <query>`
-- `/history [limit] [status]`
-- `/status`
-- `/doctor`
-- `/check`
-- `/replay <run_id|last>`
-- `/resume <run_id|last>`
-- `/cancel <run_id|last>`
-- `/cleanup`
-- `/reindex`
-- `/last`
-- `/clear`
+- 直接输入自然语言，默认会被当成 research query 或 basic chat
+- 多轮 follow-up 会优先沿当前 thread 和最近研究上下文续接
+- 如果上一轮停在 `needs_clarification`，下一句普通输入会自动作为补充信息继续
+- `/new` 新建 thread
+- `/thread <thread_id>` 切换到已有 thread，并恢复 checkpoint / memory
+- `/threads` 查看最近 thread 列表、topic、intent 和 active marker
+- `/compact` 手动压缩当前 thread
+- `/last` 查看当前 session 默认值和最近 run
+- `/clear` 清空当前 intent 和 review target 等默认值
 
-显示模式说明：
-
-- `thinking`
-  - 面向用户的“思路流”
-  - 不直接暴露底层原始 agent 日志
-- `status`
-  - 当前阶段推进和 gate 摘要
-- `answer`
-  - 最终回答流式输出
-
-调试开关：
-
-- `/thinking off`
-  - 关闭思路流
-- `/events compact`
-  - 仅显示压缩状态
-- `/events full`
-  - 显示原始事件行
-
-### 查看历史与回放
+### 其他 CLI 命令
 
 ```bash
-python -m research_system.cli.app status --json
-python -m research_system.cli.app doctor --json
 python -m research_system.cli.app history --json
 python -m research_system.cli.app replay <run_id> --json
 python -m research_system.cli.app resume <run_id> --json
 python -m research_system.cli.app cancel <run_id> --json
-```
-
-### 清理与重建
-
-```bash
+python -m research_system.cli.app status --json
+python -m research_system.cli.app doctor --json
+python -m research_system.cli.app check --json
 python -m research_system.cli.app cleanup --json
 python -m research_system.cli.app reindex-qdrant --json
 ```
 
-`reindex-qdrant` 会：
-
-- 清空当前 `Qdrant` collection
-- 从 `workspace/runs/*/blackboard.jsonl` 重新回灌 `source_record` 和 `verified_snapshot`
-
-### 本地检查
-
-```bash
-python -m research_system.cli.app check --json
-```
-
-`status` 用于查看当前项目状态摘要，包括：
-
-- 最近 run
-- 各状态 run 数量
-- 当前模型与 `Qdrant` 模式
-
-`doctor` 用于查看当前环境诊断，包括：
-
-- `.env` 与关键配置是否存在
-- LLM 单次请求超时是否合理
-- workspace 目录是否齐全
-- 本地 `Qdrant` 目录是否存在
-- 当前 run 归档是否可见
-
-当前会统一执行：
-
-- `research_system` 编译检查
-- `tests` 编译检查
-- `unittest` 回归测试
-
-也可以单独执行：
-
-```bash
-python -m unittest discover -s tests -p "test_*.py" -v
-python -m compileall research_system tests
-```
-
 ## 运行产物
 
-每次 `run` 都会生成：
+每次 `run` 会生成：
 
 ```text
 workspace/runs/<run_id>/
@@ -237,174 +229,85 @@ workspace/runs/<run_id>/
 └─ summary.json
 ```
 
-`workspace/qdrant_local/` 是本地 `Qdrant` 存储目录。
+和 chat / memory 相关的持久化产物主要在：
 
-### result.json 稳定字段口径
-
-当前 `result.json` 的稳定主字段是：
-
-- `conclusion`
-- `evidence`
-- `risk`
-- `follow_up`
-- `degraded_note`
-
-按 intent 还会有这些显式稳定字段：
-
-`distill_kol_logic`
-
-- `scorecard`
-  - 蒸馏态势卡
-  - 当前包含 attribution/review 强度等结构化摘要
-
-`review_thesis`
-
-- `review_summary`
-  - 后验复核汇总
-  - 在 LLM 成功、LLM 失败、LLM 不可用三条路径下都稳定返回
-  - 当前稳定包含：
-    - `finding_count`
-    - `confirmed`
-    - `rejected`
-    - `inconclusive`
-    - `benchmark_scope_counts`
-    - `benchmark_scope_explanations`
-    - `overall_verdict`
-    - `summary_text`
-    - `verdict_by_claim_type`
-
-`review_summary.verdict_by_claim_type` 的口径是：
-
-- key 为 `claim_type`
-  - 当前支持 `direction`、`catalyst`、`time_window`
-- value 为该类 claim 的 verdict 分布
-  - `confirmed`
-  - `rejected`
-  - `inconclusive`
-
-最小示例：
-
-```json
-{
-  "review_summary": {
-    "review_required": false,
-    "finding_count": 3,
-    "reviewable_claim_count": 3,
-    "claim_type_counts": {
-      "direction": 1,
-      "catalyst": 1,
-      "time_window": 1
-    },
-    "benchmark_scope_counts": {
-      "sector_vs_hs300": 3
-    },
-    "benchmark_scope_explanations": {
-      "sector_vs_hs300": "板块方向主张按板块相对 HS300 表现复核。"
-    },
-    "overall_verdict": "mixed",
-    "summary_text": "overall_verdict=mixed; findings=3; confirmed=1; rejected=1; inconclusive=1; benchmark_scopes=sector_vs_hs300",
-    "verdict_by_claim_type": {
-      "direction": {
-        "confirmed": 1,
-        "rejected": 0,
-        "inconclusive": 0
-      },
-      "catalyst": {
-        "confirmed": 0,
-        "rejected": 1,
-        "inconclusive": 0
-      },
-      "time_window": {
-        "confirmed": 0,
-        "rejected": 0,
-        "inconclusive": 1
-      }
-    },
-    "confirmed": 1,
-    "rejected": 1,
-    "inconclusive": 1,
-    "notes": []
-  }
-}
+```text
+workspace/memory/
+├─ exports/
+└─ cache/
 ```
 
 ## 当前已实现能力
 
 ### stock_check
 
-- 个股行情快照
-- 个股基本面快照
-- 公告快照
-- `Retriever` 去重与结构化摘要
-- `Reporter` 输出研究结论
+- 个股 market/fundamental/notice/sector 快照
+- methodology 证据：`comps`、`dcf`、`cashflow_resilience`
+- `Retriever` 去重、摘要和方法论 memory 注入
+- `Reporter` 生成最终研究结论
+
+### stock_compare
+
+- 多标的对比入口
+- 支持代码和常见股票名场景
+- 对每只标的补方法论证据后做横向比较
+
+### stock_screen
+
+- 候选池构建与筛选
+- top candidate 补采快照与轻量 review
+- 新 snapshot 维度增强：
+  - `lhb`
+  - `capital_flow`
+  - `sentiment`
+  - `events`
 
 ### sector_research
 
 - 板块识别与真实板块快照
 - `HS300` 基准对照
-- 相对强弱
-- 板块内部广度
-- 代表成分股催化样本
-- 主题新闻
-- 政策信号
-- 监管信号
-- `signal_scorecard`
+- 相对强弱、广度、催化、政策与信号摘要
 
 ### distill_kol_logic
 
-- `collector -> distiller -> critic -> retriever -> reporter` 主链
+- `collector -> distiller -> critic -> retriever -> reporter`
 - `logic_block / distilled_dimension / review_finding` 落 blackboard
 - chunked distillation
-- quoted content attribution
-- critic review entry
-- Qdrant 回灌与检索
-- timeout-aware fallback
+- dimension normalization
+- Qdrant 入库与回灌
 
 ### review_thesis
 
-- `collector -> reviewer -> retriever -> reporter` 主链
+- `collector -> reviewer -> retriever -> reporter`
 - 支持 `--run-id <target_run_id>` 复核旧 run
-- 当前支持三类最小可复核 claim：
+- 当前最小可复核 claim：
   - `direction`
   - `catalyst`
   - `time_window`
-- `ReviewGate` 已接入 runtime
-- 最终 `result.json` 显式返回 `review_summary`
 
-## 当前测试覆盖
+## 本地检查
 
-当前本地回归测试覆盖：
+```bash
+python -m research_system.cli.app check --json
+python -m unittest discover -s tests -p "test_*.py" -v
+python -m compileall research_system tests
+```
 
-- `sector_snapshot` 去重优先保留当前 `run_id`
-- `market_snapshot` 去重优先保留当前 `run_id`
-- `signal_scorecard` 摘要输出
-- `reindex-qdrant` 回灌逻辑
-- `stock_check` 采集链调用顺序
-- `market_snapshot` 文本落库格式
-- `critic` 抽检规则
-- chunked distillation 合并
-- `llm_timeout` 风险落盘
+截至 `2026-07-01`，当前工作树已本地通过：
 
-## 已知限制
+- `python -m unittest discover -s tests -p "test_*.py"` `398 tests OK`
+- `python -m compileall research_system tests`
 
-- `AkShare` 部分接口仍可能偶发不稳定
-- 本地 `Qdrant` 文件模式不支持多进程并发访问
-- `resume` 当前是恢复判定，不是完整自动续跑
-- `cancel` 对已进入执行中的任务是控制面终止，不是任意步骤的强杀
-- `Mailbox` 仍未进入主链深度协作
-- `Phase 2` 仍是最小闭环，蒸馏质量仍受网关时延和 fallback 比例影响
-- `Phase 3` 仍是最小闭环，claim 抽取和复核规则还比较保守
-- `proposal / mem0` 还未开始
+`doctor` 现在会额外报告：
 
-## 当前状态
+- 路由配置与当前版本
+- provider chain / network profile
+- workspace/config/taxonomy 布局
+- local Qdrant / memory 根目录可见性
 
-如果只看可运行性，当前已经具备：
+## 当前边界
 
-- `Phase 0` 运行时主骨架
-- `Phase 1` 的两条主要研究闭环
-- `Phase 2` 的最小蒸馏与 critic 抽检闭环
-- `Phase 3` 的最小后验复核闭环
-- 最小测试与本地检查入口
-
-如果按完整文档验收，`Phase 1` 仍有增强项未收尾，`Phase 2` 和 `Phase 3` 也都还不是完整高质量版，但四条主链都已经可运行。
-
+- `methodology_evolution` 仍是最小闭环，不是完整的自动演进系统
+- `mem0` 已接远端优先 + 本地 fallback，但长期记忆策略还在继续收口
+- 数据源链已支持 provider/fallback，但还不是最终的全量浏览器/搜索 fallback 方案
+- `chat` 已有 thread、checkpoint、compact、query-aware recall，但还没完全等同于 OpenHands/LangGraph 的完整状态机

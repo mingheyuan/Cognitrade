@@ -1,5 +1,11 @@
 # A股研究系统 Phase Plan
 
+> 状态说明（2026-07-01）
+>
+> 这份文档主要保留“当时的阶段拆解思路”，不是当前实现状态的唯一真源。
+> 目前代码已经明显超过这里的早期首期边界：`review_thesis`、`methodology_evolution`、thread memory、methodology memory、CLI 的 `thread/run/proposal/review` 控制面都已经落地。
+> 如果要判断“现在还差什么才能收尾”，优先看 `completion_matrix.md`、`runtime_schema_contract.md`、`agent_system_implementation_plan.md`。
+
 ## 1. 文档目标
 
 这份文档用于把当前主方案拆成可执行的分阶段路线，优先解决以下问题：

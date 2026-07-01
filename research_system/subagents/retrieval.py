@@ -5,113 +5,6 @@ from typing import Any, Callable
 from research_system.runtime.provider_registry import LLMProviderError, OpenAIProvider
 
 
-class BlackboardEvidenceIndexerSubagent:
-    subagent_type = "blackboard_evidence_indexer"
-
-    def __init__(
-        self,
-        *,
-        qdrant: Any,
-        to_blackboard_entry: Callable[[dict], Any],
-        evidence_from_blackboard_entry: Callable[[dict], dict],
-    ) -> None:
-        self.qdrant = qdrant
-        self.to_blackboard_entry = to_blackboard_entry
-        self.evidence_from_blackboard_entry = evidence_from_blackboard_entry
-
-    def run(self, *, blackboard_entries: list[dict]) -> dict:
-        evidence_map: dict[str, dict] = {}
-        symbol = None
-        sector = None
-        current_run_id = blackboard_entries[0]["run_id"] if blackboard_entries else None
-        for entry in blackboard_entries:
-            if entry["kind"] in {"source_record", "verified_snapshot", "logic_block", "distilled_dimension", "review_finding"}:
-                if self.qdrant is not None:
-                    self.qdrant.upsert_entry(self.to_blackboard_entry(entry))
-                evidence = self.evidence_from_blackboard_entry(entry)
-                evidence_map[evidence["evidence_id"]] = evidence
-            symbol = entry.get("payload", {}).get("symbol") or symbol
-            sector = entry.get("payload", {}).get("sector") or sector
-        return {
-            "evidence_map": evidence_map,
-            "symbol": symbol,
-            "sector": sector,
-            "current_run_id": current_run_id,
-        }
-
-
-class QdrantEvidenceSearcherSubagent:
-    subagent_type = "qdrant_evidence_searcher"
-
-    def __init__(self, *, qdrant: Any, retrieval_hint_from_qdrant_payload: Callable[[dict], dict | None]) -> None:
-        self.qdrant = qdrant
-        self.retrieval_hint_from_qdrant_payload = retrieval_hint_from_qdrant_payload
-
-    def run(
-        self,
-        *,
-        query: str,
-        top_k: int,
-        symbol: str | None,
-        sector: str | None,
-        current_run_id: str | None,
-        evidence_map: dict[str, dict],
-    ) -> dict:
-        metadata_filters: dict[str, str] = {"record_type": "verified_snapshot"}
-        if symbol:
-            metadata_filters["symbol"] = symbol
-        elif sector:
-            metadata_filters["sector"] = sector
-        elif current_run_id:
-            metadata_filters["run_id"] = current_run_id
-
-        qdrant_hits = self.qdrant.search(
-            query_text=query,
-            top_k=top_k,
-            metadata_filters=metadata_filters,
-        )
-        for hit in qdrant_hits:
-            payload = hit["payload"]
-            evidence_id = payload["entry_id"]
-            candidate = {
-                "evidence_id": evidence_id,
-                "title": payload["document_title"],
-                "summary": payload["content"],
-                "retrieval_hint": self.retrieval_hint_from_qdrant_payload(payload),
-                "source_refs": payload.get("source_refs", []),
-                "metadata": {
-                    "phase": payload.get("phase"),
-                    "agent": payload.get("agent"),
-                    "record_type": payload.get("record_type"),
-                    "source_type": payload.get("source_type"),
-                },
-                "score": hit["score"],
-            }
-            existing = evidence_map.get(evidence_id)
-            if existing is None or (existing.get("score") or 0.0) < (candidate.get("score") or 0.0):
-                merged = dict(existing or {})
-                merged.update(candidate)
-                evidence_map[evidence_id] = merged
-        return {
-            "evidence_map": evidence_map,
-            "metadata_filters": metadata_filters,
-        }
-
-
-class EvidenceDeduperSubagent:
-    subagent_type = "evidence_deduper"
-
-    def __init__(self, *, dedupe_evidences: Callable[..., list[dict]]) -> None:
-        self.dedupe_evidences = dedupe_evidences
-
-    def run(self, *, evidences: list[dict], current_run_id: str | None) -> dict:
-        deduped = self.dedupe_evidences(evidences=evidences, current_run_id=current_run_id)
-        deduped.sort(key=lambda item: item.get("score") or 0.0, reverse=True)
-        return {
-            "evidences": deduped,
-        }
-
-
 class RetrievalDecisionSubagent:
     subagent_type = "retrieval_decider"
 
@@ -123,7 +16,10 @@ class RetrievalDecisionSubagent:
         merge_retrieval_summary: Callable[[str | None, str | None], str],
         combine_degrade_reason: Callable[[str | None, str | None], str | None],
         fallback_summary: Callable[..., str],
+        select_compare_evidences: Callable[..., list[dict]],
         select_screening_evidences: Callable[..., list[dict]],
+        select_stock_check_evidences: Callable[..., list[dict]],
+        select_methodology_evolution_evidences: Callable[..., list[dict]],
         select_distillation_evidences: Callable[..., list[dict]],
         select_review_evidences: Callable[..., list[dict]],
         retrieval_decision_schema: Any,
@@ -133,7 +29,10 @@ class RetrievalDecisionSubagent:
         self.merge_retrieval_summary = merge_retrieval_summary
         self.combine_degrade_reason = combine_degrade_reason
         self.fallback_summary = fallback_summary
+        self.select_compare_evidences = select_compare_evidences
         self.select_screening_evidences = select_screening_evidences
+        self.select_stock_check_evidences = select_stock_check_evidences
+        self.select_methodology_evolution_evidences = select_methodology_evolution_evidences
         self.select_distillation_evidences = select_distillation_evidences
         self.select_review_evidences = select_review_evidences
         self.retrieval_decision_schema = retrieval_decision_schema
@@ -146,6 +45,7 @@ class RetrievalDecisionSubagent:
         evidences: list[dict],
         top_k: int,
         qdrant_degraded_reason: str | None,
+        planning_context_hints: dict[str, str] | None = None,
     ) -> dict:
         if intent == "distill_kol_logic":
             selected = self.select_distillation_evidences(evidences=evidences, top_k=top_k)
@@ -161,7 +61,12 @@ class RetrievalDecisionSubagent:
                 ),
             }
         if intent == "stock_screen":
-            selected = self.select_screening_evidences(evidences=evidences, top_k=top_k)
+            selected = self.select_screening_evidences(
+                evidences=evidences,
+                top_k=top_k,
+                query=query,
+                planning_context_hints=planning_context_hints or {},
+            )
             return {
                 "intent": intent,
                 "query": query,
@@ -173,8 +78,49 @@ class RetrievalDecisionSubagent:
                     "Deterministic stock screening retrieval completed.",
                 ),
             }
+        if intent == "stock_compare":
+            selected = self.select_compare_evidences(
+                evidences=evidences,
+                top_k=top_k,
+                query=query,
+                planning_context_hints=planning_context_hints or {},
+            )
+            return {
+                "intent": intent,
+                "query": query,
+                "evidences": selected,
+                "degraded": bool(qdrant_degraded_reason),
+                "degrade_reason": qdrant_degraded_reason,
+                "retrieval_summary": self.merge_retrieval_summary(
+                    self.structured_retrieval_summary(intent=intent, evidences=selected),
+                    "Deterministic stock comparison retrieval completed.",
+                ),
+            }
+        if intent == "stock_check":
+            selected = self.select_stock_check_evidences(
+                evidences=evidences,
+                top_k=top_k,
+                query=query,
+                planning_context_hints=planning_context_hints or {},
+            )
+            return {
+                "intent": intent,
+                "query": query,
+                "evidences": selected,
+                "degraded": bool(qdrant_degraded_reason),
+                "degrade_reason": qdrant_degraded_reason,
+                "retrieval_summary": self.merge_retrieval_summary(
+                    self.structured_retrieval_summary(intent=intent, evidences=selected),
+                    "Deterministic stock check retrieval completed.",
+                ),
+            }
         if intent == "review_thesis":
-            selected = self.select_review_evidences(evidences=evidences, top_k=top_k)
+            selected = self.select_review_evidences(
+                evidences=evidences,
+                top_k=top_k,
+                query=query,
+                planning_context_hints=planning_context_hints or {},
+            )
             return {
                 "intent": intent,
                 "query": query,
@@ -184,6 +130,19 @@ class RetrievalDecisionSubagent:
                 "retrieval_summary": self.merge_retrieval_summary(
                     self.structured_retrieval_summary(intent=intent, evidences=selected),
                     "Deterministic review retrieval completed.",
+                ),
+            }
+        if intent == "methodology_evolution":
+            selected = self.select_methodology_evolution_evidences(evidences=evidences, top_k=top_k)
+            return {
+                "intent": intent,
+                "query": query,
+                "evidences": selected,
+                "degraded": bool(qdrant_degraded_reason),
+                "degrade_reason": qdrant_degraded_reason,
+                "retrieval_summary": self.merge_retrieval_summary(
+                    self.structured_retrieval_summary(intent=intent, evidences=selected),
+                    "Deterministic methodology evolution retrieval completed.",
                 ),
             }
 

@@ -157,53 +157,6 @@ class DimensionCriticSubagent:
         }
 
 
-class CriticScorecardBuilderSubagent:
-    subagent_type = "critic_scorecard_builder"
-
-    def run(self, *, logic_blocks: list[dict], summary: dict) -> dict:
-        speaker_counts: dict[str, int] = {
-            "author": 0,
-            "reply": 0,
-            "repost": 0,
-            "reported": 0,
-            "quoted": 0,
-            "uncertain": 0,
-        }
-        for block in logic_blocks:
-            speaker_type = str(block.get("speaker_type") or "")
-            if speaker_type in speaker_counts:
-                speaker_counts[speaker_type] += 1
-        total_logic_blocks = max(len(logic_blocks), 1)
-        quoted_like = (
-            speaker_counts["reply"]
-            + speaker_counts["repost"]
-            + speaker_counts["reported"]
-            + speaker_counts["quoted"]
-            + speaker_counts["uncertain"]
-        )
-        review_strength = "high" if summary["high_severity_count"] > 0 else "medium" if summary["medium_severity_count"] > 0 else "low"
-        attribution_risk = "high" if speaker_counts["repost"] > 0 else "medium" if quoted_like > 0 else "low"
-        author_ratio = round(speaker_counts["author"] / total_logic_blocks, 4)
-        quoted_ratio = round(quoted_like / total_logic_blocks, 4)
-        setup_label = "author_led" if author_ratio >= 0.7 else "mixed_attribution" if author_ratio >= 0.4 else "quote_dominated"
-        return {
-            "scorecard": {
-                "total_logic_blocks": len(logic_blocks),
-                "speaker_type_counts": speaker_counts,
-                "author_ratio": author_ratio,
-                "quoted_like_ratio": quoted_ratio,
-                "review_strength": review_strength,
-                "attribution_risk": attribution_risk,
-                "setup_label": setup_label,
-                "summary": (
-                    f"attribution={setup_label}; author_ratio={author_ratio}; "
-                    f"quoted_like_ratio={quoted_ratio}; review_strength={review_strength}"
-                ),
-                "finding_types": summary.get("finding_types", []),
-            }
-        }
-
-
 class CriticSummaryBuilderSubagent:
     subagent_type = "critic_summary_builder"
 

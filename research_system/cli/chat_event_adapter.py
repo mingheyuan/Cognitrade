@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from research_system.runtime.chat_presenter import ChatStreamPresenter, DisplayChunk
 from research_system.schemas.runtime import RunEvent
-from research_system.cli.chat_updates import ShellStatePatch, TranscriptUpdate, default_update_for_text
+from research_system.cli.chat_updates import (
+    ShellStatePatch,
+    TranscriptUpdate,
+    default_update_for_text,
+    dispatch_transcript_update,
+)
 
 
 def build_chat_presenter(*, thinking_enabled: bool, events_mode: str) -> ChatStreamPresenter:
@@ -32,3 +37,8 @@ def display_chunk_to_update(chunk: DisplayChunk) -> TranscriptUpdate:
             current_gate=state_patch.get("current_gate"),
         ),
     )
+
+
+def chat_event_listener(event: RunEvent, *, presenter: ChatStreamPresenter, output_writer=None) -> None:
+    for chunk in event_to_display_chunks(event, presenter=presenter):
+        dispatch_transcript_update(output_writer, display_chunk_to_update(chunk))

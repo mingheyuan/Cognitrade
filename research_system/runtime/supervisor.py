@@ -80,6 +80,11 @@ class RuntimeSupervisor:
             and ("screen_review" not in completed_actions)
             and (top_candidate_count > 0 or watchlist_candidate_count > 0)
         ):
+            planning_context_hints = {
+                str(key): str(value)
+                for key, value in dict((plan.dispatch_trace or {}).get("context_hints") or {}).items()
+                if str(key).strip() and str(value).strip()
+            }
             review_action = pending_by_id.get("screen_review")
             if review_action is None:
                 review_action = ActionSpec(
@@ -87,6 +92,7 @@ class RuntimeSupervisor:
                     phase="review",
                     agent="screen_reviewer",
                     objective="Review screened candidates before retrieval/reporting.",
+                    inputs={"planning_context_hints": planning_context_hints} if planning_context_hints else {},
                     tags=["dynamic_inserted"],
                 )
             return SupervisorDecision(
@@ -136,14 +142,19 @@ class RuntimeSupervisor:
             None,
         )
         symbol = str(((request_entry.payload if request_entry else {}) or {}).get("symbol") or "")
+        request_source_type = str(((request_entry.payload if request_entry else {}) or {}).get("source_type") or "")
         snapshot_types = {
             str((entry.payload or {}).get("snapshot_type") or "")
             for entry in blackboard_entries
             if entry.kind == "verified_snapshot"
         }
+        required_snapshot_types = ["market", "fundamental", "notice"]
+        if request_source_type == "stock_check_replenish":
+            requested_snapshot_types = ((request_entry.payload if request_entry else {}) or {}).get("snapshot_types") or []
+            required_snapshot_types = [str(item) for item in requested_snapshot_types if str(item)]
         missing_snapshot_types = [
             snapshot_type
-            for snapshot_type in ("market", "fundamental", "notice")
+            for snapshot_type in required_snapshot_types
             if snapshot_type not in snapshot_types
         ]
         request_query = str(((request_entry.payload if request_entry else {}) or {}).get("content") or symbol or "")
@@ -226,9 +237,13 @@ class RuntimeSupervisor:
         )
         sector_snapshot = (sector_snapshot_entry.payload if sector_snapshot_entry else None) or {}
         facts = sector_snapshot.get("facts") or {}
+        include_policy_snapshot = bool(((request_entry.payload if request_entry else {}) or {}).get("include_policy_snapshot"))
+        required_sector_evidence = ["policy_signals", "regulatory_signals", "benchmark", "relative_strength"]
+        if include_policy_snapshot:
+            required_sector_evidence.append("policy_digest")
         missing_sector_evidence = [
             evidence_name
-            for evidence_name in ("policy_signals", "regulatory_signals", "benchmark", "relative_strength")
+            for evidence_name in required_sector_evidence
             if not facts.get(evidence_name)
         ]
         request_query = str(((request_entry.payload if request_entry else {}) or {}).get("content") or sector_snapshot.get("query") or "")
@@ -333,6 +348,11 @@ class RuntimeSupervisor:
             and ("review" not in completed_actions)
             and needs_review
         ):
+            planning_context_hints = {
+                str(key): str(value)
+                for key, value in dict((plan.dispatch_trace or {}).get("context_hints") or {}).items()
+                if str(key).strip() and str(value).strip()
+            }
             review_action = pending_by_id.get("review")
             if review_action is None:
                 review_action = ActionSpec(
@@ -340,6 +360,7 @@ class RuntimeSupervisor:
                     phase="review",
                     agent="reviewer",
                     objective="Run posterior review after verifying source context and snapshots.",
+                    inputs={"planning_context_hints": planning_context_hints} if planning_context_hints else {},
                     tags=["dynamic_inserted"],
                 )
             return SupervisorDecision(

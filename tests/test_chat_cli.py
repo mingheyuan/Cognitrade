@@ -12,6 +12,13 @@ from research_system.cli.chat_commands import (
     should_resume_pending_clarification,
     store_pending_clarification,
 )
+from research_system.cli.chat_dispatch import answer_basic_chat
+from research_system.cli.chat_follow_up import (
+    is_short_term_memory_query,
+    looks_like_follow_up_research_query,
+    resolve_follow_up_research_request,
+    short_term_memory_reply,
+)
 from research_system.cli.chat_types import ChatSessionState
 
 
@@ -19,6 +26,10 @@ class ChatCliTests(unittest.TestCase):
     def test_plain_text_maps_to_run(self) -> None:
         parsed = parse_chat_input("最近创新药板块怎么样")
         self.assertEqual(parsed, {"action": "run", "query": "最近创新药板块怎么样"})
+
+    def test_run_command_marks_explicit_research_request(self) -> None:
+        parsed = parse_chat_input("/run 分析贵州茅台")
+        self.assertEqual(parsed, {"action": "run", "query": "分析贵州茅台", "explicit_command": True})
 
     def test_resume_command_is_parsed(self) -> None:
         parsed = parse_chat_input("/resume 01ABC")
@@ -61,6 +72,30 @@ class ChatCliTests(unittest.TestCase):
         parsed = parse_chat_input("/commands")
         self.assertEqual(parsed, {"action": "commands"})
 
+    def test_new_thread_command_is_parsed(self) -> None:
+        parsed = parse_chat_input("/new")
+        self.assertEqual(parsed, {"action": "new_thread"})
+
+    def test_thread_command_is_parsed(self) -> None:
+        self.assertEqual(parse_chat_input("/thread"), {"action": "show_thread"})
+        self.assertEqual(parse_chat_input("/thread abc123"), {"action": "set_thread", "thread_id": "abc123"})
+
+    def test_threads_command_is_parsed(self) -> None:
+        self.assertEqual(parse_chat_input("/threads"), {"action": "threads", "limit": 10})
+        self.assertEqual(parse_chat_input("/threads 5"), {"action": "threads", "limit": 5})
+
+    def test_compact_command_is_parsed(self) -> None:
+        self.assertEqual(parse_chat_input("/compact"), {"action": "compact_thread"})
+
+    def test_proposals_commands_are_parsed(self) -> None:
+        self.assertEqual(parse_chat_input("/proposals"), {"action": "proposals", "limit": 50, "status": None})
+        self.assertEqual(parse_chat_input("/proposals 10 pending"), {"action": "proposals", "limit": 10, "status": "pending"})
+        self.assertEqual(parse_chat_input("/proposal 01PROP"), {"action": "proposal", "proposal_id": "01PROP"})
+        self.assertEqual(
+            parse_chat_input("/review-proposal 01PROP approve looks good"),
+            {"action": "review-proposal", "proposal_id": "01PROP", "decision": "approve", "reason": "looks good"},
+        )
+
     def test_pending_clarification_can_resume_plain_follow_up(self) -> None:
         state = ChatSessionState(
             pending_clarification_query="最近有什么股票值得投入",
@@ -100,12 +135,17 @@ class ChatCliTests(unittest.TestCase):
         candidates = chat_completion_candidates("/intent ", ChatSessionState())
         self.assertIn("stock_screen", candidates)
         self.assertIn("stock_check", candidates)
+        self.assertIn("stock_compare", candidates)
         self.assertIn("review_thesis", candidates)
 
     def test_completion_candidates_include_recent_run_ids(self) -> None:
         state = ChatSessionState(last_run_id="01LAST", review_target_run_id="01TARGET")
         candidates = chat_completion_candidates("/resume ", state)
         self.assertEqual(candidates, ["last", "01LAST", "01TARGET"])
+
+    def test_completion_candidates_for_proposal_commands(self) -> None:
+        self.assertEqual(chat_completion_candidates("/proposals ", ChatSessionState()), ["10", "20", "50", "pending", "approved", "rejected"])
+        self.assertEqual(chat_completion_candidates("/review-proposal 01PROP ", ChatSessionState()), ["approve", "reject"])
 
     def test_store_pending_clarification_returns_session_patch(self) -> None:
         patch = store_pending_clarification(
@@ -125,6 +165,101 @@ class ChatCliTests(unittest.TestCase):
         self.assertIsNone(patch.pending_clarification_intent)
         self.assertIsNone(patch.pending_clarification_run_id)
         self.assertIsNone(patch.pending_clarification_question)
+
+    def test_short_term_memory_query_detector_matches_recent_topic_question(self) -> None:
+        self.assertTrue(is_short_term_memory_query("刚刚我们在聊什么"))
+        self.assertTrue(is_short_term_memory_query("what were we just talking about?"))
+
+    def test_short_term_memory_reply_uses_last_session_result(self) -> None:
+        state = ChatSessionState(
+            last_user_query="分析茅台，宁德时代，比亚迪，谁更值得投资",
+            last_result_intent="stock_compare",
+            last_result_summary="三只股票对比，结论降级。",
+            last_run_id="01LAST",
+        )
+
+        reply = short_term_memory_reply(state)
+
+        self.assertIn("刚刚我们在聊：", reply)
+        self.assertIn("分析茅台，宁德时代，比亚迪，谁更值得投资", reply)
+        self.assertIn("stock_compare", reply)
+        self.assertIn("三只股票对比，结论降级。", reply)
+
+    def test_answer_basic_chat_passes_recent_context_into_prompt(self) -> None:
+        class ProviderStub:
+            available = True
+
+            def __init__(self) -> None:
+                self.user_prompt = None
+
+            def complete(self, **kwargs):
+                self.user_prompt = kwargs["user_prompt"]
+                return "ok"
+
+        provider = ProviderStub()
+
+        reply = answer_basic_chat(
+            query="那刚才的结论是什么意思",
+            llm_provider=provider,  # type: ignore[arg-type]
+            conversation_context=[
+                {
+                    "type": "recent_research_memory",
+                    "query": "分析茅台和宁德时代",
+                    "intent": "stock_compare",
+                    "summary": "两只股票对比，结论偏谨慎。",
+                    "run_id": "01CHAT",
+                }
+            ],
+        )
+
+        self.assertEqual(reply, "ok")
+        self.assertIsNotNone(provider.user_prompt)
+        self.assertIn("Recent conversation context", provider.user_prompt)
+        self.assertIn("分析茅台和宁德时代", provider.user_prompt)
+
+    def test_follow_up_detector_matches_context_dependent_research_query(self) -> None:
+        self.assertTrue(looks_like_follow_up_research_query("谁更稳健一点"))
+        self.assertTrue(looks_like_follow_up_research_query("复核上一轮结论"))
+        self.assertFalse(looks_like_follow_up_research_query("帮我继续分析 000001"))
+
+    def test_follow_up_resolution_reuses_previous_compare_context(self) -> None:
+        state = ChatSessionState(
+            last_user_query="分析茅台，宁德时代，比亚迪，谁更值得投资",
+            last_result_intent="stock_compare",
+            last_run_id="01COMPARE",
+        )
+
+        resolution = resolve_follow_up_research_request(
+            query="谁更稳健一点",
+            parsed_intent=None,
+            parsed_run_id=None,
+            state=state,
+            conversation_context=[],
+        )
+
+        self.assertTrue(resolution.resolved)
+        self.assertEqual(resolution.intent, "stock_compare")
+        self.assertIsNone(resolution.run_id)
+        self.assertIn("分析茅台，宁德时代，比亚迪，谁更值得投资", resolution.query)
+
+    def test_follow_up_resolution_maps_review_request_to_last_run(self) -> None:
+        state = ChatSessionState(
+            last_user_query="分析贵州茅台",
+            last_result_intent="stock_check",
+            last_run_id="01PREVIOUS",
+        )
+
+        resolution = resolve_follow_up_research_request(
+            query="复核上一轮结论",
+            parsed_intent=None,
+            parsed_run_id=None,
+            state=state,
+            conversation_context=[],
+        )
+
+        self.assertTrue(resolution.resolved)
+        self.assertEqual(resolution.intent, "review_thesis")
+        self.assertEqual(resolution.run_id, "01PREVIOUS")
 
 
 if __name__ == "__main__":

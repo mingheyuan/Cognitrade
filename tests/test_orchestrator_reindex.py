@@ -4,8 +4,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_system.runtime.jsonl import append_jsonl
+from research_system.runtime.jsonl import append_jsonl, read_json, write_json
 from research_system.runtime.orchestrator import ResearchOrchestrator
+from research_system.runtime.run_store import RunStore
+from research_system.runtime.settings import Settings, ensure_workspace_layout
 from research_system.schemas.runtime import BlackboardEntry
 
 
@@ -158,6 +160,43 @@ class OrchestratorReindexTests(unittest.TestCase):
             self.assertIn("run-c", result["skipped_runs"])
             self.assertEqual(len(fake_qdrant.entries), 6)
             self.assertTrue(all(isinstance(entry, BlackboardEntry) for entry in fake_qdrant.entries))
+
+    def test_cancel_does_not_override_completed_run_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = Settings.from_env(root)
+            ensure_workspace_layout(settings)
+            run_id = "01DONE"
+            run_root = settings.runs_root / run_id
+            run_root.mkdir(parents=True, exist_ok=True)
+            write_json(run_root / "run_state.json", {"run_id": run_id, "status": "completed", "intent": "stock_check"})
+            write_json(run_root / "summary.json", {"run_id": run_id, "status": "completed", "message": "Run completed successfully"})
+            write_json(run_root / "request.json", {"request_id": "req-1"})
+
+            with ResearchOrchestrator(settings) as orchestrator:
+                payload = orchestrator.cancel(run_id)
+
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["message"], "Run is already terminal; no cancellation was applied.")
+            self.assertFalse(payload["cancellation_requested"])
+            summary = read_json(run_root / "summary.json")
+            self.assertEqual(summary, {"run_id": run_id, "status": "completed", "message": "Run completed successfully"})
+
+    def test_history_prefers_run_state_when_summary_is_only_cancel_request_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runs_root = Path(temp_dir) / "runs"
+            run_root = runs_root / "01HISTORY"
+            run_root.mkdir(parents=True, exist_ok=True)
+            write_json(run_root / "run_state.json", {"run_id": "01HISTORY", "status": "completed", "intent": "stock_check"})
+            write_json(run_root / "summary.json", {"run_id": "01HISTORY", "status": "cancelled", "message": "Cancellation requested."})
+            write_json(run_root / "result.json", {"intent": "stock_check", "report": {"conclusion": "done"}})
+
+            rows = RunStore(runs_root).list_runs()
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["run_id"], "01HISTORY")
+            self.assertEqual(rows[0]["status"], "completed")
+            self.assertEqual(rows[0]["display_summary"], "done")
 
     def _write_run(self, run_dir: Path, entries: list[BlackboardEntry]) -> None:
         run_dir.mkdir(parents=True, exist_ok=True)

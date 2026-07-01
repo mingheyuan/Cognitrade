@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from research_system.agents.collector.service import CollectorService
+from research_system.agents.screen_reviewer.service import ScreenReviewerService
 from research_system.agents.screener.service import ScreenerService
 from research_system.runtime.orchestrator import ResearchOrchestrator
 from research_system.runtime.settings import Settings, ensure_workspace_layout
@@ -80,9 +81,21 @@ class TaskRouterStockScreenTests(unittest.TestCase):
         router = TaskRouter()
         decision = router.identify(RequestEnvelope(user_query="最近有什么股票值得投入 中线"))
         self.assertEqual(decision.intent, "stock_screen")
+        self.assertEqual((decision.trace or {}).get("source"), "route_table")
 
 
 class StockScreenFlowTests(unittest.TestCase):
+    def test_collector_skill_runtime_setter_updates_collector_subagents(self) -> None:
+        collector = CollectorService(_SkillRuntimeStub())
+        replacement_runtime = _SkillRuntimeStub()
+
+        collector.skill_runtime = replacement_runtime
+
+        self.assertIs(collector.skill_runtime, replacement_runtime)
+        self.assertIs(collector.registry._subagents["stock_snapshot_collector"].skill_runtime, replacement_runtime)
+        self.assertIs(collector.registry._subagents["sector_snapshot_collector"].skill_runtime, replacement_runtime)
+        self.assertIs(collector.registry._subagents["candidate_universe_builder"].skill_runtime, replacement_runtime)
+
     def test_collector_builds_candidates_and_sets_default_cycle_assumption(self) -> None:
         collector = CollectorService(_SkillRuntimeStub())
         with patch(
@@ -149,6 +162,8 @@ class StockScreenFlowTests(unittest.TestCase):
         self.assertIn("优先关注", payload["scorecard"]["summary"])
         self.assertEqual(payload["enrichment_targets"], [])
         self.assertEqual(payload["scorecard"]["deep_checked_count"], 2)
+        self.assertIn("comps", payload["screened_candidates"][0]["methodology"])
+        self.assertEqual(payload["scorecard"]["preferred_methodology"], "comps")
 
     def test_screener_marks_deep_checked_candidates_after_enrichment(self) -> None:
         screener = ScreenerService()
@@ -207,6 +222,96 @@ class StockScreenFlowTests(unittest.TestCase):
         self.assertEqual([item["symbol"] for item in payload["watchlist_candidates"]], ["000725", "603986"])
         self.assertEqual(payload["scorecard"]["watchlist_candidate_count"], 2)
         self.assertEqual(payload["scorecard"]["top_candidate_count"], 0)
+
+    def test_screener_uses_planning_hints_to_shift_cycle_and_preferred_methodology(self) -> None:
+        screener = ScreenerService()
+        payload = screener.run(
+            query="continue the previous watchlist discussion",
+            source_payloads=[
+                {
+                    "candidate_universe": [
+                        {"symbol": "300363", "name": "博腾股份"},
+                        {"symbol": "300347", "name": "泰格医药"},
+                    ],
+                    "planning_context_hints": {
+                        "recommended_next_step": "compare same-basis cashflow and short-term sentiment",
+                        "thread_topic": "screen short-term candidates with cashflow resilience",
+                    },
+                }
+            ],
+            snapshot_payloads=[
+                {
+                    "snapshot_type": "market",
+                    "symbol": "300363",
+                    "facts": {"market_overview": {"spot": {"latest_price": 12.3, "pct_change": 2.1, "amount": 1800000000}}},
+                },
+                {
+                    "snapshot_type": "market",
+                    "symbol": "300347",
+                    "facts": {"market_overview": {"spot": {"latest_price": 45.6, "pct_change": 0.8, "amount": 1100000000}}},
+                },
+            ],
+        )
+
+        self.assertEqual(payload["scorecard"]["investment_cycle"], "short_term")
+        self.assertEqual(payload["scorecard"]["investment_cycle_assumption"], "planning_context")
+        self.assertEqual(payload["scorecard"]["preferred_methodology"], "comps")
+        self.assertEqual(payload["scorecard"]["screening_strategy"]["methodology_source"], "planning_context")
+
+    def test_screener_can_fall_back_to_methodology_memory_hint_for_preferred_methodology(self) -> None:
+        screener = ScreenerService()
+        payload = screener.run(
+            query="continue the previous watchlist discussion",
+            source_payloads=[
+                {
+                    "candidate_universe": [
+                        {"symbol": "300363", "name": "鍗氳吘鑲′唤"},
+                        {"symbol": "300347", "name": "娉版牸鍖昏嵂"},
+                    ],
+                    "planning_context_hints": {
+                        "methodology_benchmark_scope": "defensive_compounder",
+                    },
+                }
+            ],
+            snapshot_payloads=[
+                {
+                    "snapshot_type": "market",
+                    "symbol": "300363",
+                    "facts": {"market_overview": {"spot": {"latest_price": 12.3, "pct_change": 2.1, "amount": 1800000000}}},
+                },
+                {
+                    "snapshot_type": "market",
+                    "symbol": "300347",
+                    "facts": {"market_overview": {"spot": {"latest_price": 45.6, "pct_change": 0.8, "amount": 1100000000}}},
+                },
+            ],
+        )
+
+        self.assertEqual(payload["scorecard"]["preferred_methodology"], "cashflow_resilience")
+        self.assertEqual(payload["scorecard"]["screening_strategy"]["methodology_source"], "methodology_memory")
+
+    def test_screen_reviewer_can_fall_back_to_methodology_memory_hint_for_focus(self) -> None:
+        reviewer = ScreenReviewerService()
+
+        payload = reviewer.run(
+            source_run_id="01SCREEN",
+            candidates=[
+                {
+                    "symbol": "300363",
+                    "name": "博腾股份",
+                    "candidate_tier": "core",
+                    "score": 2.1,
+                    "deep_checked": False,
+                    "missing_evidence": ["fundamental_snapshot"],
+                    "main_risk": "need fresher fundamental evidence",
+                }
+            ],
+            scorecard={"summary": "continue the previous watchlist discussion"},
+            planning_context_hints={"methodology_benchmark_scope": "defensive_compounder"},
+        )
+
+        self.assertIn("screen_review_focus=cashflow_resilience", payload["summary"]["notes"])
+        self.assertIn("screen_review_focus_source=methodology_memory", payload["summary"]["notes"])
 
     def test_screener_filters_candidates_below_min_score(self) -> None:
         screener = ScreenerService()
@@ -281,16 +386,10 @@ class StockScreenFlowTests(unittest.TestCase):
             ensure_workspace_layout(settings)
             orchestrator = ResearchOrchestrator(settings)
             try:
-                orchestrator.retriever.qdrant_available = False
-                orchestrator.retriever.qdrant_error = "disabled_for_test"
-                orchestrator.retriever.registry._subagents["blackboard_evidence_indexer"].qdrant = None
-                orchestrator.retriever.registry._subagents["qdrant_evidence_searcher"].qdrant = None
+                orchestrator.retriever.disable_qdrant_for_test()
                 stub_runtime = _SkillRuntimeStub()
                 orchestrator.collector.skill_runtime = stub_runtime
-                with patch.object(orchestrator.collector.registry._subagents["stock_snapshot_collector"], "skill_runtime", stub_runtime), \
-                    patch.object(orchestrator.collector.registry._subagents["sector_snapshot_collector"], "skill_runtime", stub_runtime), \
-                    patch.object(orchestrator.collector.registry._subagents["candidate_universe_builder"], "skill_runtime", stub_runtime), \
-                    patch("research_system.subagents.collector.call_with_retry", return_value=self._spot_table()):
+                with patch("research_system.subagents.collector.call_with_retry", return_value=self._spot_table()):
                     response = orchestrator.run(RequestEnvelope(user_query="最近有什么股票值得投入 中线"))
                 self.assertEqual(response.intent, "stock_screen")
                 self.assertEqual(response.status, "completed")
@@ -299,6 +398,7 @@ class StockScreenFlowTests(unittest.TestCase):
                 self.assertIn("conclusion", report)
                 self.assertIsInstance(report.get("review_summary"), dict)
                 self.assertIn("overall_verdict", report["review_summary"])
+                self.assertTrue(report.get("methodologies"))
             finally:
                 orchestrator.close()
 
@@ -309,16 +409,10 @@ class StockScreenFlowTests(unittest.TestCase):
             ensure_workspace_layout(settings)
             orchestrator = ResearchOrchestrator(settings)
             try:
-                orchestrator.retriever.qdrant_available = False
-                orchestrator.retriever.qdrant_error = "disabled_for_test"
-                orchestrator.retriever.registry._subagents["blackboard_evidence_indexer"].qdrant = None
-                orchestrator.retriever.registry._subagents["qdrant_evidence_searcher"].qdrant = None
+                orchestrator.retriever.disable_qdrant_for_test()
                 stub_runtime = _SkillRuntimeStub()
                 orchestrator.collector.skill_runtime = stub_runtime
-                with patch.object(orchestrator.collector.registry._subagents["stock_snapshot_collector"], "skill_runtime", stub_runtime), \
-                    patch.object(orchestrator.collector.registry._subagents["sector_snapshot_collector"], "skill_runtime", stub_runtime), \
-                    patch.object(orchestrator.collector.registry._subagents["candidate_universe_builder"], "skill_runtime", stub_runtime), \
-                    patch("research_system.subagents.collector.call_with_retry", return_value=self._spot_table()):
+                with patch("research_system.subagents.collector.call_with_retry", return_value=self._spot_table()):
                     response = orchestrator.run(RequestEnvelope(user_query="最近有什么股票值得投入"))
                 self.assertEqual(response.intent, "stock_screen")
                 self.assertEqual(response.status, "completed")
@@ -326,6 +420,48 @@ class StockScreenFlowTests(unittest.TestCase):
                 scorecard = report.get("screening_scorecard") or {}
                 self.assertEqual(scorecard.get("investment_cycle"), "mid_term")
                 self.assertEqual(scorecard.get("investment_cycle_assumption"), "default_mid_term")
+                debug = report.get("debug") or {}
+                dispatch_trace = debug.get("dispatch_trace") or {}
+                self.assertEqual(dispatch_trace.get("source"), "route_table")
+                self.assertEqual(dispatch_trace.get("intent"), "stock_screen")
+            finally:
+                orchestrator.close()
+
+    def test_orchestrator_stock_screen_carries_thread_hints_into_scorecard_strategy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            settings = Settings.from_env(repo_root)
+            ensure_workspace_layout(settings)
+            orchestrator = ResearchOrchestrator(settings)
+            try:
+                orchestrator.retriever.disable_qdrant_for_test()
+                orchestrator.collector.skill_runtime = _SkillRuntimeStub()
+                with patch("research_system.subagents.collector.call_with_retry", return_value=self._spot_table()):
+                    response = orchestrator.run(
+                        RequestEnvelope(
+                            user_query="continue the previous watchlist discussion",
+                            intent="stock_screen",
+                            conversation_context=[
+                                {
+                                    "type": "chat_thread_profile",
+                                    "topic_title": "screen short-term candidates with cashflow resilience",
+                                    "topic_intent": "stock_screen",
+                                    "recommended_next_step": "compare same-basis cashflow and short-term sentiment",
+                                    "thread_status": "active",
+                                }
+                            ],
+                        )
+                    )
+                self.assertEqual(response.status, "completed")
+                report = (response.result or {}).get("report") or {}
+                scorecard = report.get("screening_scorecard") or {}
+                strategy = scorecard.get("screening_strategy") or {}
+                self.assertEqual(scorecard.get("investment_cycle"), "short_term")
+                self.assertEqual(scorecard.get("investment_cycle_assumption"), "planning_context")
+                self.assertEqual(strategy.get("preferred_methodology"), "comps")
+                self.assertIsInstance(report.get("review_summary"), dict)
+                self.assertIn("screen_review_focus=cashflow_resilience", report["review_summary"]["notes"])
+                self.assertIn("screen_review_focus_source=planning_context", report["review_summary"]["notes"])
             finally:
                 orchestrator.close()
 

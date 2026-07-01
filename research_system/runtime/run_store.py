@@ -55,7 +55,8 @@ class RunStore:
                 continue
             summary_payload = read_json(run_dir / "summary.json")
             result_payload = read_json(run_dir / "result.json")
-            payload = summary_payload or read_json(run_dir / "run_state.json")
+            run_state_payload = read_json(run_dir / "run_state.json")
+            payload = self._select_history_payload(summary_payload=summary_payload, run_state_payload=run_state_payload)
             if payload is None:
                 payload = {
                     "status": "unknown",
@@ -70,6 +71,20 @@ class RunStore:
                 payload["display_summary"] = display_summary
             rows.append(payload)
         return rows
+
+    def _select_history_payload(self, *, summary_payload: dict | None, run_state_payload: dict | None) -> dict | None:
+        if self._is_transient_cancel_summary(summary_payload, run_state_payload):
+            return run_state_payload
+        return summary_payload or run_state_payload
+
+    def _is_transient_cancel_summary(self, summary_payload: dict | None, run_state_payload: dict | None) -> bool:
+        if not isinstance(summary_payload, dict) or not isinstance(run_state_payload, dict):
+            return False
+        if summary_payload.get("message") != "Cancellation requested.":
+            return False
+        if summary_payload.get("status") != "cancelled":
+            return False
+        return str(run_state_payload.get("status") or "") != "cancelled"
 
     def load_run_paths(self, run_id: str) -> RunPaths:
         root = self.runs_root / run_id

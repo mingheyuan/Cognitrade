@@ -1,0 +1,147 @@
+version: default-v1
+rules:
+  - rule_id: stock_code_regex
+    intent: stock_check
+    match_type: regex
+    priority: 10
+    target: query
+    pattern: "\\b\\d{6}\\b"
+    enabled: true
+
+  - rule_id: stock_compare_cn
+    intent: stock_compare
+    match_type: regex
+    priority: 15
+    target: query
+    pattern: "((对比|比较|哪个好|谁更值得|谁更强|哪个更好).*(\\d{6}|[一-龥A-Za-z]+).*(\\d{6}|[一-龥A-Za-z]+))|((\\d{6}|[一-龥A-Za-z]+).*(\\d{6}|[一-龥A-Za-z]+).*(对比|比较|哪个好|谁更值得|谁更强|哪个更好))"
+    enabled: true
+
+  - rule_id: stock_compare_en
+    intent: stock_compare
+    match_type: contains_any
+    priority: 16
+    target: lowered
+    keywords:
+      - compare
+      - comparison
+      - which is better
+      - which is best
+      - better investment
+    enabled: true
+
+  - rule_id: stock_screen_cn
+    intent: stock_screen
+    match_type: contains_any
+    priority: 20
+    target: query
+    keywords:
+      - 推荐
+      - 值得
+      - 关注
+      - 选股
+      - 什么股票
+      - 哪些股票
+    enabled: true
+
+  - rule_id: stock_screen_en
+    intent: stock_screen
+    match_type: contains_any
+    priority: 21
+    target: lowered
+    keywords:
+      - watchlist
+      - screen
+      - candidate
+      - idea
+    enabled: true
+
+  - rule_id: stock_check_cn
+    intent: stock_check
+    match_type: contains_any
+    priority: 30
+    target: query
+    keywords:
+      - 股票
+      - 个股
+    enabled: true
+
+  - rule_id: stock_check_en
+    intent: stock_check
+    match_type: contains_any
+    priority: 31
+    target: lowered
+    keywords:
+      - stock
+      - ticker
+    enabled: true
+
+  - rule_id: sector_research_cn
+    intent: sector_research
+    match_type: contains_any
+    priority: 40
+    target: query
+    keywords:
+      - 行业
+      - 板块
+      - 主题
+      - 指数
+      - 大盘
+    enabled: true
+
+  - rule_id: sector_research_en
+    intent: sector_research
+    match_type: contains_any
+    priority: 41
+    target: lowered
+    keywords:
+      - sector
+      - theme
+      - industry
+      - index
+      - market
+    enabled: true
+
+  - rule_id: distill_kol_logic_cn
+    intent: distill_kol_logic
+    match_type: contains_any
+    priority: 50
+    target: query
+    keywords:
+      - 蒸馏
+      - 雪球
+    enabled: true
+
+  - rule_id: distill_kol_logic_en
+    intent: distill_kol_logic
+    match_type: contains_any
+    priority: 51
+    target: lowered
+    keywords:
+      - kol
+      - xueqiu
+      - logic
+      - status
+      - jsonl
+    enabled: true
+
+  - rule_id: review_thesis_cn
+    intent: review_thesis
+    match_type: contains_any
+    priority: 60
+    target: query
+    keywords:
+      - 复核
+      - 后验
+    enabled: true
+
+  - rule_id: review_thesis_en
+    intent: review_thesis
+    match_type: contains_any
+    priority: 61
+    target: lowered
+    keywords:
+      - review
+      - review_thesis
+      - posterior
+      - validate
+    enabled: true

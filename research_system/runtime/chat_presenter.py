@@ -20,6 +20,7 @@ class DisplayChunk:
 class PresenterState:
     phase_path: list[str] = field(default_factory=list)
     gates: dict[str, str] = field(default_factory=dict)
+    active_subagent: str | None = None
 
 
 class ChatStreamPresenter:
@@ -49,12 +50,34 @@ class ChatStreamPresenter:
                 )
             return chunks
 
-        if event.event_type == "agent_progress":
-            if event.message.strip():
-                chunks.append(DisplayChunk(kind="event", text=event.message.strip()))
+        if event.event_type == "subagent_started":
+            summary = self._subagent_progress_summary(event, status="running")
+            if summary:
+                self.state.active_subagent = str((event.payload or {}).get("subagent_type") or "")
+                chunks.append(
+                    DisplayChunk(
+                        kind="status",
+                        text=summary,
+                        state_patch={"current_phase": event.phase or (self.state.phase_path[-1] if self.state.phase_path else "subagent")},
+                    )
+                )
             return chunks
 
         if event.event_type == "subagent_completed":
+            summary = self._subagent_progress_summary(event, status="completed")
+            if summary:
+                self.state.active_subagent = None
+                chunks.append(DisplayChunk(kind="event", text=summary))
+            return chunks
+
+        if event.event_type == "subagent_failed":
+            summary = self._subagent_progress_summary(event, status="failed")
+            if summary:
+                self.state.active_subagent = None
+                chunks.append(DisplayChunk(kind="event", text=summary))
+            return chunks
+
+        if event.event_type == "agent_progress":
             if event.message.strip():
                 chunks.append(DisplayChunk(kind="event", text=event.message.strip()))
             return chunks
@@ -134,3 +157,21 @@ class ChatStreamPresenter:
                 if parts:
                     return "next: " + " / ".join(parts)
         return None
+
+    def _subagent_progress_summary(self, event: RunEvent, *, status: str) -> str | None:
+        payload = event.payload or {}
+        subagent_type = str(payload.get("subagent_type") or "").strip()
+        if not subagent_type:
+            return event.message.strip() or None
+        objective = str(payload.get("objective") or "").strip()
+        notes = [str(item).strip() for item in payload.get("notes") or [] if str(item).strip()]
+        if status == "running":
+            if objective:
+                return f"{subagent_type}: {objective}"
+            return f"{subagent_type}: running"
+        if status == "failed":
+            detail = notes[0] if notes else "failed"
+            return f"{subagent_type}: failed ({detail})"
+        if objective:
+            return f"{subagent_type}: completed"
+        return f"{subagent_type}: completed"

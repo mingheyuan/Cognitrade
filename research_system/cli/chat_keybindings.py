@@ -19,6 +19,10 @@ def build_chat_keybindings(
 ) -> KeyBindings:
     kb = KeyBindings()
 
+    def _set_output_mode(mode: str) -> None:
+        session.output_mode = mode
+        session.follow_output = mode == "live"
+
     def _move_output_cursor(session: TuiSession, *, lines: int | None = None, absolute: str | None = None) -> None:
         output_area = session.output_area
         if output_area is None:
@@ -66,68 +70,46 @@ def build_chat_keybindings(
     def _toggle_commands(event) -> None:
         toggle_commands_popup(session)
 
+    @kb.add("f2")
+    def _toggle_output_mode(event) -> None:
+        if session.output_mode == "live":
+            _set_output_mode("browse")
+        else:
+            _set_output_mode("live")
+            _move_output_cursor(session, absolute="end")
+
     @kb.add(Keys.ScrollUp)
     def _scroll_up(event) -> None:
-        session.follow_output = False
+        _set_output_mode("browse")
         _move_output_cursor(session, lines=-3)
-        try:
-            if session.input_area is not None:
-                event.app.layout.focus(session.input_area)
-        except Exception:
-            pass
 
     @kb.add(Keys.ScrollDown)
     def _scroll_down(event) -> None:
-        session.follow_output = False
+        _set_output_mode("browse")
         _move_output_cursor(session, lines=3)
-        try:
-            if session.input_area is not None:
-                event.app.layout.focus(session.input_area)
-        except Exception:
-            pass
 
     @kb.add("pageup")
     def _page_up(event) -> None:
-        session.follow_output = False
+        _set_output_mode("browse")
         _move_output_cursor(session, lines=-12)
-        try:
-            if session.input_area is not None:
-                event.app.layout.focus(session.input_area)
-        except Exception:
-            pass
 
     @kb.add("pagedown")
     def _page_down(event) -> None:
-        session.follow_output = False
+        _set_output_mode("browse")
         _move_output_cursor(session, lines=12)
-        try:
-            if session.input_area is not None:
-                event.app.layout.focus(session.input_area)
-        except Exception:
-            pass
 
     @kb.add("home")
     def _home(event) -> None:
-        session.follow_output = False
+        _set_output_mode("browse")
         _move_output_cursor(session, absolute="start")
-        try:
-            if session.input_area is not None:
-                event.app.layout.focus(session.input_area)
-        except Exception:
-            pass
 
     @kb.add("end")
     def _end(event) -> None:
         output_area = session.output_area
         if output_area is None:
             return
-        session.follow_output = True
+        _set_output_mode("live")
         _move_output_cursor(session, absolute="end")
-        try:
-            if session.input_area is not None:
-                event.app.layout.focus(session.input_area)
-        except Exception:
-            pass
 
     @kb.add("enter", eager=True)
     @kb.add("c-j", eager=True)
@@ -139,7 +121,7 @@ def build_chat_keybindings(
             return
         if input_area.buffer.complete_state:
             input_area.buffer.complete_state = None
-        session.follow_output = True
+        _set_output_mode("live")
         event.app.create_background_task(
             submit_tui_input(
                 session,

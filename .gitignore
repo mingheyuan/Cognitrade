@@ -18,6 +18,7 @@ workspace/qdrant_local/
 workspace/runs/
 workspace/proposals/
 workspace/mem0/
+workspace/memory/
 
 *.sqlite
 *.lock

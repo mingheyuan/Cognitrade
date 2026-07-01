@@ -9,6 +9,25 @@ from research_system.cli.chat_updates import (
     session_patch_update,
     state_patch_update,
 )
+from research_system.services.proposal_payloads import (
+    proposal_detail_fields,
+    proposal_result_sections,
+    render_proposal_review_history_line,
+    render_proposal_row_text,
+)
+from research_system.services.status_payloads import (
+    group_doctor_checks,
+    render_doctor_check_line,
+    status_header_fields,
+)
+from research_system.services.run_payloads import (
+    latest_run_context,
+    render_labeled_field_line,
+    render_run_row_text,
+    replay_payload_fields,
+    render_status_counts_text,
+    run_payload_fields,
+)
 
 
 def emit_run_context_feed(
@@ -39,14 +58,54 @@ def emit_run_context_feed(
         )
 
 
+def emit_run_detail_fields(
+    fields: list[tuple[str, str]],
+    *,
+    emit_text,
+    output_writer=None,
+) -> None:
+    run_id = None
+    status = None
+    for label, value in fields:
+        line = render_labeled_field_line(label, value)
+        if label == "run_id":
+            run_id = value
+            emit_text(
+                output_writer,
+                meta_update(
+                    line,
+                    state_patch=ShellStatePatch(current_run_id=value),
+                    session_patch=SessionStatePatch(last_run_id=value),
+                ),
+            )
+            continue
+        if label == "status":
+            status = value
+            emit_text(
+                output_writer,
+                meta_update(
+                    line,
+                    state_patch=ShellStatePatch(run_status_label=value),
+                ),
+            )
+            continue
+        emit_text(output_writer, meta_update(line))
+    if run_id is None or status is None:
+        emit_run_context_feed(run_id, status, emit_text=emit_text, output_writer=output_writer)
+
+
 def print_payload(payload: object, *, as_json: bool, emit_text, output_writer=None) -> int:
     if as_json:
         emit_text(output_writer, meta_update(json.dumps(payload, ensure_ascii=True, indent=2)))
         return 0
     if isinstance(payload, list):
+        if print_proposal_rows(payload, emit_text=emit_text, output_writer=output_writer):
+            return 0
         print_rows(payload, emit_text=emit_text, output_writer=output_writer)
         return 0
     if isinstance(payload, dict):
+        if print_proposal_payload(payload, emit_text=emit_text, output_writer=output_writer):
+            return 0
         if print_status_payload(payload, emit_text=emit_text, output_writer=output_writer):
             return 0
         if print_doctor_payload(payload, emit_text=emit_text, output_writer=output_writer):
@@ -58,25 +117,11 @@ def print_payload(payload: object, *, as_json: bool, emit_text, output_writer=No
             emit_text(output_writer, meta_update(str(display_summary)))
         else:
             emit_text(output_writer, meta_update(str(payload.get("message", json.dumps(payload, ensure_ascii=True)))))
-        if "run_id" in payload:
-            emit_text(
-                output_writer,
-                meta_update(
-                    f"run_id: {payload['run_id']}",
-                    state_patch=ShellStatePatch(current_run_id=str(payload["run_id"])),
-                    session_patch=SessionStatePatch(last_run_id=str(payload["run_id"])),
-                ),
-            )
-        if payload.get("status"):
-            emit_text(
-                output_writer,
-                meta_update(
-                    f"status: {payload['status']}",
-                    state_patch=ShellStatePatch(run_status_label=str(payload["status"])),
-                ),
-            )
-        if payload.get("intent"):
-            emit_text(output_writer, meta_update(f"intent: {payload['intent']}"))
+        emit_run_detail_fields(
+            run_payload_fields(payload),
+            emit_text=emit_text,
+            output_writer=output_writer,
+        )
         if payload.get("result"):
             emit_text(output_writer, meta_update(json.dumps(payload["result"], ensure_ascii=True, indent=2)))
         return 0
@@ -88,24 +133,12 @@ def print_rows(rows: list[object], *, emit_text, output_writer=None) -> None:
     if not rows:
         emit_text(output_writer, meta_update("No runs."))
         return
-    latest_run_id = None
-    latest_status = None
     for row in rows:
         if not isinstance(row, dict):
             emit_text(output_writer, meta_update(json.dumps(row, ensure_ascii=True)))
             continue
-        run_id = str(row.get("run_id") or "unknown")
-        status = str(row.get("status") or "unknown")
-        if latest_run_id is None and row.get("run_id"):
-            latest_run_id = run_id
-        if latest_status is None and row.get("status"):
-            latest_status = status
-        intent = str(row.get("intent") or "unknown")
-        display_summary = str(row.get("display_summary") or row.get("message") or "").strip()
-        line = f"{run_id}  [{status}]  {intent}"
-        if display_summary:
-            line += f"  {display_summary}"
-        emit_text(output_writer, meta_update(line))
+        emit_text(output_writer, meta_update(render_run_row_text(row)))
+    latest_run_id, latest_status = latest_run_context(rows)
     if latest_run_id is not None or latest_status is not None:
         emit_run_context_feed(
             latest_run_id,
@@ -115,37 +148,53 @@ def print_rows(rows: list[object], *, emit_text, output_writer=None) -> None:
         )
 
 
+def print_proposal_rows(rows: list[object], *, emit_text, output_writer=None) -> bool:
+    if not rows:
+        return False
+    normalized_rows = [row for row in rows if isinstance(row, dict)]
+    if len(normalized_rows) != len(rows):
+        return False
+    if not all("proposal_id" in row and "proposal_type" in row for row in normalized_rows):
+        return False
+    for row in normalized_rows:
+        emit_text(output_writer, meta_update(render_proposal_row_text(row)))
+    return True
+
+
+def print_proposal_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
+    if "proposal_id" not in payload or "proposal_type" not in payload:
+        return False
+    for label, value in proposal_detail_fields(payload):
+        emit_text(output_writer, meta_update(render_labeled_field_line(label, value)))
+    review_history = payload.get("review_history")
+    if isinstance(review_history, list) and review_history:
+        emit_text(output_writer, meta_update("review_history:"))
+        for row in review_history:
+            if not isinstance(row, dict):
+                continue
+            emit_text(output_writer, meta_update(render_proposal_review_history_line(row)))
+    for section in proposal_result_sections(payload):
+        emit_text(output_writer, meta_update(json.dumps(section, ensure_ascii=True, indent=2)))
+    return True
+
+
 def print_status_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
     if "recent_runs" not in payload or "status_counts" not in payload:
         return False
-    emit_text(output_writer, meta_update(f"project_root: {payload.get('project_root')}"))
-    emit_text(output_writer, meta_update(f"provider: {payload.get('provider_name')} / model: {payload.get('default_model')}"))
-    emit_text(output_writer, meta_update(f"qdrant_mode: {payload.get('qdrant_mode')} / collection: {payload.get('qdrant_collection_name')}"))
-    emit_text(output_writer, meta_update(f"total_runs: {payload.get('total_runs')}"))
+    for label, value in status_header_fields(payload):
+        emit_text(output_writer, meta_update(render_labeled_field_line(label, value)))
     status_counts = payload.get("status_counts") or {}
     if status_counts:
-        counts_line = ", ".join(f"{key}={value}" for key, value in sorted(status_counts.items()))
+        counts_line = render_status_counts_text(status_counts)
         emit_text(output_writer, meta_update(f"status_counts: {counts_line}"))
     recent_runs = payload.get("recent_runs") or []
     if recent_runs:
         emit_text(output_writer, meta_update("recent_runs:"))
         for row in recent_runs:
-            run_id = str(row.get("run_id") or "unknown")
-            status = str(row.get("status") or "unknown")
-            intent = str(row.get("intent") or "unknown")
-            display_summary = str(row.get("display_summary") or row.get("message") or "").strip()
-            line = f"  {run_id}  [{status}]  {intent}"
-            if display_summary:
-                line += f"  {display_summary}"
-            emit_text(output_writer, meta_update(line))
-    latest_run = recent_runs[0] if recent_runs else None
-    latest_status = None
-    latest_run_id = None
-    if isinstance(latest_run, dict):
-        if latest_run.get("run_id"):
-            latest_run_id = str(latest_run["run_id"])
-        if latest_run.get("status"):
-            latest_status = str(latest_run["status"])
+            if not isinstance(row, dict):
+                continue
+            emit_text(output_writer, meta_update(render_run_row_text(row, indent="  ")))
+    latest_run_id, latest_status = latest_run_context(recent_runs)
     emit_run_context_feed(
         latest_run_id,
         latest_status,
@@ -158,33 +207,11 @@ def print_status_payload(payload: dict, *, emit_text, output_writer=None) -> boo
 def print_replay_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
     if "request" not in payload or "events" not in payload or "blackboard" not in payload:
         return False
-    request = payload.get("request") or {}
-    summary = payload.get("summary") or {}
-    replay_run_id = str(payload.get("run_id") or "unknown_run")
-    emit_text(
-        output_writer,
-        meta_update(
-            f"run_id: {replay_run_id}",
-            state_patch=ShellStatePatch(current_run_id=replay_run_id),
-            session_patch=SessionStatePatch(
-                last_run_id=replay_run_id,
-            ),
-        ),
+    emit_run_detail_fields(
+        replay_payload_fields(payload),
+        emit_text=emit_text,
+        output_writer=output_writer,
     )
-    emit_text(output_writer, meta_update(f"intent: {request.get('intent') or 'unknown'}"))
-    emit_text(output_writer, meta_update(f"query: {request.get('user_query') or ''}"))
-    if payload.get("display_summary"):
-        emit_text(output_writer, meta_update(f"summary: {payload['display_summary']}"))
-    if summary.get("status"):
-        emit_text(
-            output_writer,
-            meta_update(
-                f"status: {summary.get('status')}",
-                state_patch=ShellStatePatch(run_status_label=str(summary.get("status"))),
-            ),
-        )
-    emit_text(output_writer, meta_update(f"events: {len(payload.get('events') or [])}"))
-    emit_text(output_writer, meta_update(f"blackboard_entries: {len(payload.get('blackboard') or [])}"))
     result = payload.get("result")
     if result:
         emit_text(output_writer, meta_update(json.dumps(result, ensure_ascii=True, indent=2)))
@@ -203,20 +230,12 @@ def print_doctor_payload(payload: dict, *, emit_text, output_writer=None) -> boo
             state_patch=ShellStatePatch(run_status_label=f"doctor:{status}"),
         ),
     )
-    grouped: dict[str, list[dict]] = {"failed": [], "passed": [], "skipped": []}
-    for item in checks:
-        if not isinstance(item, dict):
-            continue
-        key = str(item.get("status") or "skipped")
-        grouped.setdefault(key, []).append(item)
+    grouped = group_doctor_checks(checks)
     for group_name in ("failed", "passed", "skipped"):
         rows = grouped.get(group_name) or []
         if not rows:
             continue
         emit_text(output_writer, meta_update(f"{group_name}:"))
         for row in rows:
-            name = str(row.get("name") or "unknown_check")
-            detail = row.get("detail") or row.get("path") or ""
-            suffix = f"  {detail}" if detail else ""
-            emit_text(output_writer, meta_update(f"  {name}{suffix}"))
+            emit_text(output_writer, meta_update(render_doctor_check_line(row)))
     return True

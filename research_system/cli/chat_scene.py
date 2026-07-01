@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from research_system.cli.chat_command_catalog import CHAT_COMMAND_SUMMARY_LINES
 from research_system.cli.chat_transcript import (
     TranscriptMessage,
     display_block_title_for_message,
@@ -83,27 +84,14 @@ def build_commands_popup_view() -> CommandsPopupView:
         lines=(
             "Commands",
             "",
-            "/commands                 open or close this popup",
-            "/help                     print command help into the transcript",
-            "/stop                     stop the current run",
-            "/intent <intent|auto>     set default intent",
-            "/run-id <run_id|clear>    set review target run",
-            "/thinking <on|off>        toggle thinking stream",
-            "/events <off|compact|full> set event visibility",
-            "/run <query>              run a query explicitly",
-            "/review <run_id> <query>  run review_thesis",
-            "/history [limit] [status] show run history",
-            "/replay <run_id|last>     replay a run",
-            "/resume <run_id|last>     inspect resumability",
-            "/cancel <run_id|last>     cancel a run",
-            "/status | /doctor | /check",
-            "/cleanup | /reindex | /last | /clear | /exit",
+            *CHAT_COMMAND_SUMMARY_LINES,
             "",
             "Keys",
             "",
             "Enter   submit",
             "Esc     clear input / close popup",
             "F1      toggle popup help",
+            "F2      toggle transcript live/browse mode",
             "Ctrl+C  stop current run or clear input",
             "Ctrl+D  exit shell",
             "Up/Down history",
@@ -145,14 +133,17 @@ def is_message_closed_for_render(message: TranscriptMessage, lines: list[Transcr
 def build_status_bar_items(session: TuiSession) -> list[StatusBarItem]:
     intent = session.state.current_intent or "auto"
     run_id = session.current_run_id or session.state.last_run_id or "-"
+    thread_short = (session.state.thread_id or "-")[-8:]
     mode = "running" if session.running else session.run_status_label
     clarify = "pending" if session.state.pending_clarification_question else "clear"
     return [
         StatusBarItem("mode", "codex"),
+        StatusBarItem("thread", thread_short),
         StatusBarItem("intent", intent),
         StatusBarItem("run", run_id),
         StatusBarItem("phase", session.current_phase),
         StatusBarItem("gate", session.current_gate),
+        StatusBarItem("output", session.output_mode),
         StatusBarItem("clarify", clarify),
         StatusBarItem("thinking", "on" if session.state.thinking_enabled else "off"),
         StatusBarItem("events", session.state.events_mode),
@@ -181,11 +172,11 @@ def build_hint_bar_view(session: TuiSession) -> HintBarView:
     if session.help_mode == "commands":
         message = "popup | Esc close | Tab complete | Enter submit"
     elif session.running:
-        message = "running | Ctrl+C or /stop | F1 commands"
+        message = f"running | output {session.output_mode} | Ctrl+C or /stop | F1 commands | F2 transcript mode"
     elif session.state.pending_clarification_question:
-        message = "clarification pending | next plain message continues the current request | F1 commands"
+        message = f"clarification pending | output {session.output_mode} | next plain message continues the current request | F1 commands | F2 transcript mode"
     else:
-        message = "ready | Enter submit | Tab complete | Up/Down history | F1 commands"
+        message = f"ready | output {session.output_mode} | PageUp/PageDown scroll transcript | End jump live | F1 commands | F2 transcript mode"
     return HintBarView(text=message, visible=bool(message))
 
 

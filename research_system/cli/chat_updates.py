@@ -23,16 +23,23 @@ class ShellStatePatch:
     focus_target: str | None = None
     help_mode: str | None = None
     input_mode: str | None = None
+    output_mode: str | None = None
     answer_stream_open: bool | None = None
 
 
 @dataclass(frozen=True)
 class SessionStatePatch:
+    thread_id: object = SESSION_PATCH_UNSET
     current_intent: object = SESSION_PATCH_UNSET
     review_target_run_id: object = SESSION_PATCH_UNSET
     last_run_id: object = SESSION_PATCH_UNSET
     thinking_enabled: object = SESSION_PATCH_UNSET
     events_mode: object = SESSION_PATCH_UNSET
+    last_user_query: object = SESSION_PATCH_UNSET
+    last_result_intent: object = SESSION_PATCH_UNSET
+    last_result_summary: object = SESSION_PATCH_UNSET
+    last_result_conclusion: object = SESSION_PATCH_UNSET
+    last_result_follow_up: object = SESSION_PATCH_UNSET
     pending_clarification_query: object = SESSION_PATCH_UNSET
     pending_clarification_intent: object = SESSION_PATCH_UNSET
     pending_clarification_run_id: object = SESSION_PATCH_UNSET

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from research_system.cli.chat_interactions import emit_meta_update
-from research_system.cli.chat_types import ChatSessionState
-from research_system.runtime.provider_registry import ProviderRegistry
+from research_system.cli.chat_session_bootstrap import build_chat_startup_context
+from research_system.cli.chat_state import apply_session_patch_and_checkpoint
 from research_system.runtime.settings import Settings
-from research_system.services.task_router import TaskRouter
 
 
 def run_chat_fallback(
@@ -17,21 +16,22 @@ def run_chat_fallback(
     handle_chat_line,
     fallback_reason: str,
 ) -> int:
-    llm_provider = ProviderRegistry(settings).default()
-    task_router = TaskRouter(llm_provider)
-    state = ChatSessionState(
-        current_intent=initial_intent,
-        review_target_run_id=initial_run_id,
-        thinking_enabled=thinking == "on",
-        events_mode=events,
+    runtime, banner_lines = build_chat_startup_context(
+        settings,
+        initial_intent=initial_intent,
+        initial_run_id=initial_run_id,
+        thinking=thinking,
+        events=events,
+        line_mode=True,
+        fallback_reason=fallback_reason,
     )
+    state = runtime.state
 
-    print("Cognitrade chat fallback")
-    print(f"reason: {fallback_reason}")
-    print("TUI is unavailable in this terminal, switched to line mode.")
-    print("type /exit to quit")
+    for line in banner_lines:
+        print(line)
 
     def _emit_line(update) -> None:
+        apply_session_patch_and_checkpoint(settings=settings, state=state, patch=update.session_patch)
         if update.action == "stream_append":
             print(update.text, end="", flush=True)
             return
@@ -56,8 +56,8 @@ def run_chat_fallback(
             settings,
             state,
             line,
-            llm_provider=llm_provider,
-            task_router=task_router,
+            llm_provider=runtime.llm_provider,
+            task_router=runtime.task_router,
             output_writer=_emit_line,
         )
         if outcome == "exit":

@@ -5,14 +5,6 @@ from pathlib import Path
 
 from prompt_toolkit.output.win32 import NoConsoleScreenBufferError
 
-from research_system.cli.chat_commands import (
-    clear_pending_clarification,
-    merge_pending_clarification,
-    parse_chat_input,
-    resolve_chat_run_id,
-    should_resume_pending_clarification,
-    store_pending_clarification,
-)
 from research_system.cli.chat_controller import (
     handle_chat_line as controller_handle_chat_line,
     run_chat_research as controller_run_chat_research,
@@ -22,21 +14,20 @@ from research_system.cli.chat_rendering import build_tui_hint_text, build_tui_st
 from research_system.cli.chat_shell import run_chat_tui
 from research_system.cli.chat_types import ChatSessionState, TuiSession
 from research_system.cli.chat_dispatch import decide_chat_dispatch, print_streamed_basic_chat_answer
-from research_system.cli.chat_result import dispatch_chat_update, print_chat_result_payload
+from research_system.cli.chat_result import print_chat_result_payload
+from research_system.cli.research_request_payloads import build_research_request
+from research_system.cli.chat_updates import dispatch_transcript_update
 from research_system.cli.chat_updates import TranscriptUpdate
+from research_system.cli.cli_command_dispatch import execute_cli_payload_command
 from research_system.cli.payload_rendering import (
     print_doctor_payload,
     print_payload,
-    print_replay_payload,
-    print_rows,
-    print_status_payload,
 )
 from research_system.runtime.checks import run_checks
 from research_system.runtime.doctor import build_status, run_doctor
 from research_system.runtime.orchestrator import ResearchOrchestrator
 from research_system.runtime.provider_registry import OpenAIProvider
 from research_system.runtime.settings import Settings, ensure_workspace_layout
-from research_system.schemas.protocol import RequestEnvelope
 from research_system.services.task_router import ChatDispatchDecision, TaskRouter
 
 
@@ -54,6 +45,22 @@ def build_parser() -> argparse.ArgumentParser:
     history_parser.add_argument("--limit", type=int, default=20)
     history_parser.add_argument("--status")
     history_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    proposals_parser = subparsers.add_parser("proposals")
+    proposals_parser.add_argument("--status", choices=("pending", "approved", "rejected"))
+    proposals_parser.add_argument("--limit", type=int, default=50)
+    proposals_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    proposal_parser = subparsers.add_parser("proposal")
+    proposal_parser.add_argument("proposal_id")
+    proposal_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    review_proposal_parser = subparsers.add_parser("review-proposal")
+    review_proposal_parser.add_argument("proposal_id")
+    review_proposal_parser.add_argument("decision", choices=("approve", "reject"))
+    review_proposal_parser.add_argument("--reason")
+    review_proposal_parser.add_argument("--reviewer", default="manual_cli_review")
+    review_proposal_parser.add_argument("--json", action="store_true", dest="as_json")
 
     replay_parser = subparsers.add_parser("replay")
     replay_parser.add_argument("run_id")
@@ -87,6 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     chat_parser.add_argument("--run-id")
     chat_parser.add_argument("--thinking", choices=("on", "off"), default="on")
     chat_parser.add_argument("--events", choices=("off", "compact", "full"), default="compact")
+    chat_parser.add_argument("--ui", choices=("line", "tui"), default="line")
     return parser
 
 
@@ -99,35 +107,45 @@ def main(argv: list[str] | None = None) -> int:
     ensure_workspace_layout(settings)
 
     if args.command == "chat":
-        try:
-            return run_chat_tui(
-                settings,
-                initial_intent=args.intent,
-                initial_run_id=args.run_id,
-                thinking=args.thinking,
-                events=args.events,
-                handle_chat_line=_handle_chat_line,
-                execute_cli_command=_execute_cli_command,
-            )
-        except NoConsoleScreenBufferError as exc:
-            return run_chat_fallback(
-                settings,
-                initial_intent=args.intent,
-                initial_run_id=args.run_id,
-                thinking=args.thinking,
-                events=args.events,
-                handle_chat_line=_handle_chat_line,
-                fallback_reason=str(exc),
-            )
+        if args.ui == "tui":
+            try:
+                return run_chat_tui(
+                    settings,
+                    initial_intent=args.intent,
+                    initial_run_id=args.run_id,
+                    thinking=args.thinking,
+                    events=args.events,
+                    handle_chat_line=_handle_chat_line,
+                    execute_cli_command=_execute_cli_command,
+                )
+            except NoConsoleScreenBufferError as exc:
+                return run_chat_fallback(
+                    settings,
+                    initial_intent=args.intent,
+                    initial_run_id=args.run_id,
+                    thinking=args.thinking,
+                    events=args.events,
+                    handle_chat_line=_handle_chat_line,
+                    fallback_reason=str(exc),
+                )
+        return run_chat_fallback(
+            settings,
+            initial_intent=args.intent,
+            initial_run_id=args.run_id,
+            thinking=args.thinking,
+            events=args.events,
+            handle_chat_line=_handle_chat_line,
+            fallback_reason="line_mode_selected",
+        )
 
     payload = _execute_cli_command(
         settings,
         command=args.command,
         query=getattr(args, "query", None),
-        intent=getattr(args, "intent", None),
-        run_id=getattr(args, "run_id", None),
+        intent=getattr(args, "intent", getattr(args, "reviewer", None)),
+        run_id=getattr(args, "run_id", getattr(args, "proposal_id", None)),
         limit=getattr(args, "limit", 20),
-        status_filter=getattr(args, "status", None),
+        status_filter=getattr(args, "status", getattr(args, "reason", None)),
     )
     return _print_payload(payload, as_json=getattr(args, "as_json", False))
 
@@ -143,79 +161,27 @@ def _execute_cli_command(
     status_filter: str | None = None,
 ) -> object:
     if command == "run":
-        orchestrator = ResearchOrchestrator(settings)
-        request = RequestEnvelope(
-            intent=intent,
-            user_query=query or "",
-            constraints={"review_target_run_id": run_id} if run_id else {},
-        )
-        response = orchestrator.run(request)
-        return response.model_dump(mode="json")
-
-    if command == "history":
-        orchestrator = ResearchOrchestrator(settings)
-        rows = orchestrator.history()
-        if status_filter:
-            rows = [row for row in rows if row.get("status") == status_filter]
-        return rows[:limit]
-
-    if command == "replay":
-        orchestrator = ResearchOrchestrator(settings)
-        return orchestrator.replay(run_id or "")
-
-    if command == "resume":
-        orchestrator = ResearchOrchestrator(settings)
-        return orchestrator.resume(run_id or "")
-
-    if command == "cancel":
-        orchestrator = ResearchOrchestrator(settings)
-        return orchestrator.cancel(run_id or "")
-
-    if command == "cleanup":
-        orchestrator = ResearchOrchestrator(settings)
-        return orchestrator.cleanup()
-
-    if command == "reindex-qdrant":
-        orchestrator = ResearchOrchestrator(settings)
-        return orchestrator.rebuild_qdrant()
-
-    if command == "check":
-        return run_checks(Path.cwd())
-
-    if command == "status":
-        return build_status(settings)
-
-    if command == "doctor":
-        return run_doctor(settings)
-
-    raise ValueError(f"unsupported command: {command}")
-
-
-def _run_chat_research(
-    settings: Settings,
-    *,
-    query: str,
-    intent: str | None,
-    run_id: str | None,
-    thinking_enabled: bool,
-    events_mode: str,
-    dispatch: ChatDispatchDecision | None = None,
-    output_writer=None,
-) -> object:
-    return controller_run_chat_research(
+        with ResearchOrchestrator(settings) as orchestrator:
+            request = build_research_request(
+                query=query or "",
+                intent=intent,
+                review_target_run_id=run_id,
+            )
+            response = orchestrator.run(request)
+            return response.model_dump(mode="json")
+    return execute_cli_payload_command(
         settings,
+        command=command,
         query=query,
         intent=intent,
         run_id=run_id,
-        thinking_enabled=thinking_enabled,
-        events_mode=events_mode,
-        dispatch=dispatch,
-        output_writer=output_writer,
+        limit=limit,
+        status_filter=status_filter,
+        orchestrator_cls=ResearchOrchestrator,
+        run_checks_fn=run_checks,
+        build_status_fn=build_status,
+        run_doctor_fn=run_doctor,
     )
-
-
-def _dispatch_cli_update(output_writer, update: TranscriptUpdate) -> None:
-    dispatch_chat_update(output_writer, update)
 
 
 def _handle_chat_line(
@@ -239,8 +205,8 @@ def _handle_chat_line(
         output_writer=output_writer,
         stop_callback=stop_callback,
         chat_dispatch_fn=decide_chat_dispatch,
-        basic_answer_stream_fn=lambda **kwargs: print_streamed_basic_chat_answer(emit_text=_dispatch_cli_update, **kwargs),
-        run_chat_research_fn=_run_chat_research,
+        basic_answer_stream_fn=lambda **kwargs: print_streamed_basic_chat_answer(emit_text=dispatch_transcript_update, **kwargs),
+        run_chat_research_fn=controller_run_chat_research,
         print_chat_result_payload_fn=lambda payload, *, llm_provider, query, requested_intent, output_writer=None: print_chat_result_payload(
             payload,
             llm_provider=llm_provider,
@@ -253,23 +219,7 @@ def _handle_chat_line(
 
 
 def _print_payload(payload: object, *, as_json: bool, output_writer=None) -> int:
-    return print_payload(payload, as_json=as_json, emit_text=_dispatch_cli_update, output_writer=output_writer)
-
-
-def _print_rows(rows: list[object], *, output_writer=None) -> None:
-    print_rows(rows, emit_text=_dispatch_cli_update, output_writer=output_writer)
-
-
-def _print_status_payload(payload: dict, *, output_writer=None) -> bool:
-    return print_status_payload(payload, emit_text=_dispatch_cli_update, output_writer=output_writer)
-
-
-def _print_replay_payload(payload: dict, *, output_writer=None) -> bool:
-    return print_replay_payload(payload, emit_text=_dispatch_cli_update, output_writer=output_writer)
-
-
-def _print_doctor_payload(payload: dict, *, output_writer=None) -> bool:
-    return print_doctor_payload(payload, emit_text=_dispatch_cli_update, output_writer=output_writer)
+    return print_payload(payload, as_json=as_json, emit_text=dispatch_transcript_update, output_writer=output_writer)
 
 
 if __name__ == "__main__":

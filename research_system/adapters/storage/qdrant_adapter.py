@@ -5,6 +5,7 @@ from typing import Any
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
+from qdrant_client.local.persistence import CollectionPersistence
 
 from research_system.runtime.settings import Settings
 from research_system.schemas.runtime import BlackboardEntry
@@ -30,6 +31,9 @@ class QdrantAdapter:
         local_path = self.settings.workspace_root / "qdrant_local"
         local_path.mkdir(parents=True, exist_ok=True)
         try:
+            # Avoid qdrant-client's transient :memory: SQLite probe, which can leak a connection warning on Windows/Python 3.13.
+            if CollectionPersistence.CHECK_SAME_THREAD is None:
+                CollectionPersistence.CHECK_SAME_THREAD = True
             return QdrantClient(path=str(local_path))
         except Exception as exc:
             raise QdrantUnavailableError(str(exc)) from exc
@@ -129,6 +133,17 @@ class QdrantAdapter:
             "sector": entry.payload.get("sector"),
             "theme": entry.payload.get("theme"),
             "dimension_tags": entry.payload.get("dimension_tags", []),
+            "dimension_family": entry.payload.get("dimension_family"),
+            "scenario_tags": entry.payload.get("scenario_tags", []),
+            "methodology_tags": entry.payload.get("methodology_tags", []),
+            "dimension_key": entry.payload.get("dimension_key"),
+            "methodology_type": entry.payload.get("methodology_type"),
+            "proposal_type": (entry.payload.get("proposal") or {}).get("proposal_type"),
+            "proposal_status": (entry.payload.get("proposal") or {}).get("status"),
+            "peer_group_tags": entry.payload.get("peer_group_tags", []),
+            "assumption_tags": entry.payload.get("assumption_tags", []),
+            "sensitivity_tags": entry.payload.get("sensitivity_tags", []),
+            "valuation_band_label": entry.payload.get("valuation_band_label"),
             "publish_time": self._publish_time(entry),
             "document_title": self._document_title(entry),
             "document_id": entry.entry_id,
@@ -157,6 +172,10 @@ class QdrantAdapter:
                 parts.append(f"latest_bar: {latest_bar}")
             if overview:
                 parts.append(f"market_overview: {overview}")
+            if payload.get("field_sources"):
+                parts.append(f"field_sources: {payload.get('field_sources')}")
+            if payload.get("source_trace"):
+                parts.append(f"source_trace: {payload.get('source_trace')}")
             if payload.get("degraded"):
                 parts.append(f"degraded: {payload.get('degrade_reason')}")
             return "\n".join(parts)
@@ -172,6 +191,10 @@ class QdrantAdapter:
                 parts.append(f"company_info: {facts['info']}")
             if facts.get("financial_abstract"):
                 parts.append(f"financial_abstract: {facts['financial_abstract']}")
+            if payload.get("field_sources"):
+                parts.append(f"field_sources: {payload.get('field_sources')}")
+            if payload.get("source_trace"):
+                parts.append(f"source_trace: {payload.get('source_trace')}")
             if payload.get("degraded"):
                 parts.append(f"degraded: {payload.get('degrade_reason')}")
             return "\n".join(parts)
@@ -187,6 +210,27 @@ class QdrantAdapter:
                 parts.append(f"latest_notice: {facts['latest_notice']}")
             if facts.get("recent_notices"):
                 parts.append(f"recent_notices: {facts['recent_notices']}")
+            if payload.get("field_sources"):
+                parts.append(f"field_sources: {payload.get('field_sources')}")
+            if payload.get("source_trace"):
+                parts.append(f"source_trace: {payload.get('source_trace')}")
+            if payload.get("degraded"):
+                parts.append(f"degraded: {payload.get('degrade_reason')}")
+            return "\n".join(parts)
+
+        if snapshot_type in {"lhb", "capital_flow", "sentiment", "events", "policy"}:
+            facts = payload.get("facts", {})
+            parts = [
+                f"{snapshot_type} snapshot for {payload.get('symbol') or payload.get('sector') or payload.get('theme') or 'unknown target'}",
+                f"query: {payload.get('query', '')}",
+                f"snapshot_date: {payload.get('snapshot_date', '')}",
+            ]
+            if facts:
+                parts.append(str(facts))
+            if payload.get("field_sources"):
+                parts.append(f"field_sources: {payload.get('field_sources')}")
+            if payload.get("source_trace"):
+                parts.append(f"source_trace: {payload.get('source_trace')}")
             if payload.get("degraded"):
                 parts.append(f"degraded: {payload.get('degrade_reason')}")
             return "\n".join(parts)
@@ -224,6 +268,10 @@ class QdrantAdapter:
                 parts.append(f"signal_scorecard: {facts['signal_scorecard']}")
             if facts.get("catalyst_digest"):
                 parts.append(f"catalyst_digest: {facts['catalyst_digest']}")
+            if payload.get("field_sources"):
+                parts.append(f"field_sources: {payload.get('field_sources')}")
+            if payload.get("source_trace"):
+                parts.append(f"source_trace: {payload.get('source_trace')}")
             if payload.get("degraded"):
                 parts.append(f"degraded: {payload.get('degrade_reason')}")
             return "\n".join(parts)
@@ -247,10 +295,18 @@ class QdrantAdapter:
         if payload.get("dimension_name"):
             parts = [
                 f"distilled dimension: {payload.get('dimension_name')}",
+                f"canonical_dimension_name: {payload.get('canonical_dimension_name') or payload.get('dimension_name')}",
+                f"dimension_family: {payload.get('dimension_family') or ''}",
                 f"dimension_category: {payload.get('dimension_category')}",
             ]
             if payload.get("alias_hits"):
                 parts.append(f"alias_hits: {payload['alias_hits']}")
+            if payload.get("scenario_tags"):
+                parts.append(f"scenario_tags: {payload['scenario_tags']}")
+            if payload.get("methodology_tags"):
+                parts.append(f"methodology_tags: {payload['methodology_tags']}")
+            if payload.get("dimension_tags"):
+                parts.append(f"dimension_tags: {payload['dimension_tags']}")
             if payload.get("supported_claim_block_ids"):
                 parts.append(f"supported_claim_block_ids: {payload['supported_claim_block_ids']}")
             if payload.get("evidence_block_ids"):
@@ -269,6 +325,37 @@ class QdrantAdapter:
                 parts.append(f"suggested_action: {payload['suggested_action']}")
             return "\n".join(parts)
 
+        if payload.get("methodology_type"):
+            parts = [
+                f"methodology result for {payload.get('symbol') or 'unknown_symbol'}",
+                f"methodology_type: {payload.get('methodology_type')}",
+            ]
+            if payload.get("peer_group_tags"):
+                parts.append(f"peer_group_tags: {payload.get('peer_group_tags')}")
+            if payload.get("assumption_tags"):
+                parts.append(f"assumption_tags: {payload.get('assumption_tags')}")
+            if payload.get("sensitivity_tags"):
+                parts.append(f"sensitivity_tags: {payload.get('sensitivity_tags')}")
+            if payload.get("valuation_band"):
+                parts.append(f"valuation_band: {payload.get('valuation_band')}")
+            if payload.get("methodology_result"):
+                parts.append(f"methodology_result: {payload.get('methodology_result')}")
+            return "\n".join(parts)
+
+        if payload.get("proposal"):
+            proposal = payload.get("proposal") or {}
+            parts = [
+                f"proposal draft: {proposal.get('proposal_type')}",
+                f"status: {proposal.get('status')}",
+                f"title: {proposal.get('title')}",
+                f"summary: {proposal.get('summary')}",
+            ]
+            if payload.get("manifest"):
+                parts.append(f"manifest: {payload.get('manifest')}")
+            if payload.get("memory_record"):
+                parts.append(f"memory_record: {payload.get('memory_record')}")
+            return "\n".join(parts)
+
         text_parts = []
         for key in ("title", "content", "summary", "conclusion", "risk"):
             value = payload.get(key)
@@ -279,12 +366,33 @@ class QdrantAdapter:
         return "\n".join(text_parts)
 
     def _build_filter(self, filters: dict[str, Any]) -> models.Filter | None:
-        allowed_keys = {"record_type", "source_type", "symbol", "sector", "theme", "run_id"}
+        allowed_keys = {
+            "record_type",
+            "source_type",
+            "symbol",
+            "sector",
+            "theme",
+            "run_id",
+            "dimension_family",
+            "dimension_key",
+            "scenario_tags",
+            "methodology_tags",
+            "dimension_tags",
+            "methodology_type",
+            "valuation_band_label",
+        }
         conditions = []
         for key, value in filters.items():
             if key not in allowed_keys or value in (None, "", []):
                 continue
-            conditions.append(models.FieldCondition(key=key, match=models.MatchValue(value=value)))
+            if isinstance(value, list):
+                values = [item for item in value if item not in (None, "")]
+                if not values:
+                    continue
+                match = models.MatchAny(any=values)
+            else:
+                match = models.MatchValue(value=value)
+            conditions.append(models.FieldCondition(key=key, match=match))
         if not conditions:
             return None
         return models.Filter(must=conditions)

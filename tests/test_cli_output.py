@@ -3,11 +3,14 @@ from __future__ import annotations
 import io
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
+from unittest.mock import patch
 
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
-from research_system.cli.chat_controller import print_chat_help
+from research_system.cli.app import _execute_cli_command
+from research_system.cli.chat_command_catalog import print_chat_help
 from research_system.cli.chat_rendering import apply_tui_update, build_tui_hint_text, refresh_tui, render_tui_output
 from research_system.cli.chat_scene import (
     build_commands_popup_view,
@@ -21,6 +24,70 @@ from research_system.cli.chat_types import ChatSessionState, TuiSession
 from research_system.cli.chat_updates import SessionStatePatch, ShellStatePatch, append_update, default_update_for_text, replace_update, thinking_update
 from research_system.cli.chat_view import build_chat_application, build_chat_view, build_layout_children, sync_chat_view_from_scene
 from research_system.cli.payload_rendering import print_payload
+from research_system.runtime.settings import Settings
+
+
+class _AppOrchestratorStub:
+    instances: list["_AppOrchestratorStub"] = []
+
+    def __init__(self, settings) -> None:
+        self.settings = settings
+        self.closed = False
+        self.__class__.instances.append(self)
+
+    def __enter__(self) -> "_AppOrchestratorStub":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self.closed = True
+
+    def history(self) -> list[dict]:
+        return [{"run_id": "01RUN", "status": "completed", "intent": "stock_check"}]
+
+    def list_proposals(self, *, status=None, limit=50) -> list[dict]:
+        return [
+            {
+                "proposal_id": "01PROP",
+                "status": status or "pending",
+                "proposal_type": "MethodologyTemplatePatch",
+                "title": "Promote policy catalyst",
+                "sample_size": 1,
+                "review_reason": "pending_manual_review_dimension_sample_size<2",
+            }
+        ]
+
+    def show_proposal(self, proposal_id: str) -> dict:
+        return {
+            "proposal_id": proposal_id,
+            "status": "pending",
+            "proposal_type": "MethodologyTemplatePatch",
+            "title": "Promote policy catalyst",
+            "summary": "Promote candidate dimension",
+            "sample_size": 1,
+            "benchmark_scope": "event_driven",
+            "review_reason": "pending_manual_review_dimension_sample_size<2",
+        }
+
+    def review_proposal(self, proposal_id: str, *, decision: str, reviewer: str, reason: str | None = None) -> dict:
+        return {
+            "proposal_id": proposal_id,
+            "status": "approved" if decision == "approve" else "rejected",
+            "proposal_type": "MethodologyTemplatePatch",
+            "title": "Promote policy catalyst",
+            "message": f"proposal {'approved' if decision == 'approve' else 'rejected'}",
+            "result": {
+                "proposal_id": proposal_id,
+                "status": "approved" if decision == "approve" else "rejected",
+                "proposal_type": "MethodologyTemplatePatch",
+                "title": "Promote policy catalyst",
+                "reviewer": reviewer,
+                "review_reason": reason or "",
+                "retrieval_policy": {"approved_proposal_ids": [proposal_id]},
+            },
+        }
 
 
 class CliOutputTests(unittest.TestCase):
@@ -31,6 +98,47 @@ class CliOutputTests(unittest.TestCase):
 
         output = buffer.getvalue()
         self.assertIn("/stop", output)
+        self.assertIn("show checkpoint resumability", output)
+
+    def test_execute_cli_command_closes_orchestrator(self) -> None:
+        _AppOrchestratorStub.instances.clear()
+        with patch("research_system.cli.app.ResearchOrchestrator", _AppOrchestratorStub):
+            rows = _execute_cli_command(
+                Settings.from_env(Path(".")),
+                command="history",
+                limit=20,
+            )
+
+        self.assertEqual(rows, [{"run_id": "01RUN", "status": "completed", "intent": "stock_check"}])
+        self.assertEqual(len(_AppOrchestratorStub.instances), 1)
+        self.assertTrue(_AppOrchestratorStub.instances[0].closed)
+
+    def test_execute_cli_command_supports_proposal_commands(self) -> None:
+        _AppOrchestratorStub.instances.clear()
+        with patch("research_system.cli.app.ResearchOrchestrator", _AppOrchestratorStub):
+            rows = _execute_cli_command(
+                Settings.from_env(Path(".")),
+                command="proposals",
+                limit=10,
+                status_filter="pending",
+            )
+            detail = _execute_cli_command(
+                Settings.from_env(Path(".")),
+                command="proposal",
+                run_id="01PROP",
+            )
+            reviewed = _execute_cli_command(
+                Settings.from_env(Path(".")),
+                command="review-proposal",
+                run_id="01PROP",
+                query="approve",
+                intent="human_reviewer",
+                status_filter="looks good",
+            )
+
+        self.assertEqual(rows[0]["proposal_id"], "01PROP")
+        self.assertEqual(detail["proposal_id"], "01PROP")
+        self.assertEqual(reviewed["status"], "approved")
 
     def test_render_tui_output_uses_ascii_sections(self) -> None:
         output = render_tui_output(
@@ -71,14 +179,19 @@ class CliOutputTests(unittest.TestCase):
         session.current_phase = "collect"
         items = build_status_bar_items(session)
         self.assertEqual(items[0].label, "mode")
-        self.assertEqual(items[1].value, "stock_screen")
-        self.assertEqual(items[2].value, "01RUN")
-        self.assertEqual(items[3].value, "collect")
+        self.assertEqual(items[1].label, "thread")
+        self.assertEqual(items[2].value, "stock_screen")
+        self.assertEqual(items[3].value, "01RUN")
+        self.assertEqual(items[4].value, "collect")
+        self.assertEqual(items[6].label, "output")
+        self.assertEqual(items[6].value, "live")
 
     def test_build_commands_popup_view_exposes_view_model(self) -> None:
         popup = build_commands_popup_view()
         self.assertEqual(popup.lines[0], "Commands")
         self.assertIn("/stop                     stop the current run", popup.lines)
+        self.assertIn("/proposals [limit] [status] list methodology proposals", popup.lines)
+        self.assertIn("/proposal <proposal_id>   show proposal detail", popup.lines)
         self.assertIn("F1      toggle popup help", popup.lines)
 
     def test_build_shell_scene_view_exposes_unified_scene_model(self) -> None:
@@ -103,7 +216,8 @@ class CliOutputTests(unittest.TestCase):
         self.assertEqual(scene.transcript_blocks[0].title, "thinking")
         self.assertEqual(scene.header.brand, "COGNITRADE")
         self.assertEqual(scene.header.mode_tag, "HELP")
-        self.assertEqual(scene.status_items[1].value, "stock_screen")
+        self.assertEqual(scene.status_items[2].value, "stock_screen")
+        self.assertIn("output", {item.label for item in scene.status_items})
         self.assertIn("popup |", scene.hint.text)
         self.assertEqual(scene.commands_popup.lines[0], "Commands")
         self.assertTrue(scene.commands_popup_visible)
@@ -139,6 +253,21 @@ class CliOutputTests(unittest.TestCase):
 
         session.help_mode = "commands"
         self.assertEqual(build_shell_scene_view(session).layout_mode, "help")
+
+    def test_hint_bar_mentions_output_mode_and_transcript_navigation(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        hint = build_hint_bar_view(session)
+        self.assertIn("output live", hint.text)
+        self.assertIn("PageUp/PageDown", hint.text)
+        session.output_mode = "browse"
+        hint = build_hint_bar_view(session)
+        self.assertIn("output browse", hint.text)
 
     def test_build_chat_view_composes_prompt_toolkit_components(self) -> None:
         session = TuiSession(
@@ -587,28 +716,6 @@ class CliOutputTests(unittest.TestCase):
         hint = build_tui_hint_text(session)
         self.assertIn("clarification pending", hint[0][1])
 
-    def test_print_rows_uses_single_line_summary_format(self) -> None:
-        buffer = io.StringIO()
-        with redirect_stdout(buffer):
-            print_payload(
-                [
-                    {
-                        "run_id": "01TEST",
-                        "status": "completed",
-                        "intent": "review_thesis",
-                        "display_summary": "overall_verdict=confirmed; findings=3",
-                    }
-                ],
-                as_json=False,
-                emit_text=lambda output_writer, update: print(update.text if getattr(update, "text", "") else "", end="\n"),
-            )
-
-        output = buffer.getvalue().strip()
-        self.assertEqual(
-            output,
-            "01TEST  [completed]  review_thesis  overall_verdict=confirmed; findings=3",
-        )
-
     def test_print_rows_emits_run_context_feed_for_latest_row(self) -> None:
         session = TuiSession(
             settings=None,  # type: ignore[arg-type]
@@ -639,37 +746,6 @@ class CliOutputTests(unittest.TestCase):
         self.assertEqual(session.current_run_id, "01ROWLATEST")
         self.assertEqual(session.run_status_label, "completed")
         self.assertEqual(session.state.last_run_id, "01ROWLATEST")
-
-    def test_print_status_payload_shows_recent_runs(self) -> None:
-        buffer = io.StringIO()
-        with redirect_stdout(buffer):
-            print_payload(
-                {
-                    "project_root": "D:/work_26_6_24/Cognitrade",
-                    "provider_name": "openai",
-                    "default_model": "gpt-5.5",
-                    "qdrant_mode": "local",
-                    "qdrant_collection_name": "research_evidence",
-                    "total_runs": 2,
-                    "status_counts": {"completed": 2},
-                    "recent_runs": [
-                        {
-                            "run_id": "01TEST",
-                            "status": "completed",
-                            "intent": "review_thesis",
-                            "display_summary": "overall_verdict=confirmed; findings=3",
-                        }
-                    ],
-                },
-                as_json=False,
-                emit_text=lambda output_writer, update: print(update.text if getattr(update, "text", "") else "", end="\n"),
-            )
-
-        output = buffer.getvalue()
-        self.assertIn("project_root: D:/work_26_6_24/Cognitrade", output)
-        self.assertIn("status_counts: completed=2", output)
-        self.assertIn("recent_runs:", output)
-        self.assertIn("01TEST  [completed]  review_thesis  overall_verdict=confirmed; findings=3", output)
 
     def test_print_status_payload_emits_state_patch_for_latest_run(self) -> None:
         session = TuiSession(
@@ -728,6 +804,31 @@ class CliOutputTests(unittest.TestCase):
         self.assertEqual(session.current_run_id, "01REPLAY")
         self.assertEqual(session.state.last_run_id, "01REPLAY")
 
+    def test_print_replay_payload_renders_shared_run_detail_lines(self) -> None:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            print_payload(
+                {
+                    "run_id": "01REPLAY",
+                    "request": {"intent": "stock_check", "user_query": "look at 000001"},
+                    "summary": {"status": "completed"},
+                    "display_summary": "done",
+                    "events": [{}, {}],
+                    "blackboard": [{}],
+                },
+                as_json=False,
+                emit_text=lambda output_writer, update: print(update.text if getattr(update, "text", "") else "", end="\n"),
+            )
+
+        output = buffer.getvalue()
+        self.assertIn("run_id: 01REPLAY", output)
+        self.assertIn("intent: stock_check", output)
+        self.assertIn("query: look at 000001", output)
+        self.assertIn("summary: done", output)
+        self.assertIn("status: completed", output)
+        self.assertIn("events: 2", output)
+        self.assertIn("blackboard_entries: 1", output)
+
     def test_print_doctor_payload_groups_checks(self) -> None:
         buffer = io.StringIO()
         with redirect_stdout(buffer):
@@ -738,6 +839,9 @@ class CliOutputTests(unittest.TestCase):
                         {"name": "env_file", "status": "passed", "path": "D:/work_26_6_24/Cognitrade/.env"},
                         {"name": "openai_api_key", "status": "failed", "detail": "missing"},
                         {"name": "qdrant_local_dir", "status": "skipped", "path": "D:/work_26_6_24/Cognitrade/workspace/qdrant_local"},
+                        {"name": "router_runtime", "status": "passed", "detail": "version=file-v1, refresh_source=default, cached_version=file-v1"},
+                        {"name": "provider_chain_market", "status": "passed", "detail": "providers=akshare_market,baostock_market; fallback=yes"},
+                        {"name": "network_domestic", "status": "passed", "detail": "[{'name': 'cninfo', 'reachable': True}]"},
                     ],
                 },
                 as_json=False,
@@ -750,6 +854,9 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("  openai_api_key  missing", output)
         self.assertIn("passed:", output)
         self.assertIn("  env_file  D:/work_26_6_24/Cognitrade/.env", output)
+        self.assertIn("  router_runtime  version=file-v1, refresh_source=default, cached_version=file-v1", output)
+        self.assertIn("  provider_chain_market  providers=akshare_market,baostock_market; fallback=yes", output)
+        self.assertIn("  network_domestic  [{'name': 'cninfo', 'reachable': True}]", output)
         self.assertIn("skipped:", output)
 
     def test_print_doctor_payload_emits_status_patch(self) -> None:
@@ -772,6 +879,74 @@ class CliOutputTests(unittest.TestCase):
             output_writer=lambda update: apply_tui_update(session, update),
         )
         self.assertEqual(session.run_status_label, "doctor:failed")
+
+    def test_print_payload_renders_proposal_rows_and_detail(self) -> None:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            print_payload(
+                [
+                    {
+                        "proposal_id": "01PROP",
+                        "status": "pending",
+                        "proposal_type": "MethodologyTemplatePatch",
+                        "title": "Promote policy catalyst",
+                        "sample_size": 1,
+                        "review_reason": "pending_manual_review_dimension_sample_size<2",
+                    }
+                ],
+                as_json=False,
+                emit_text=lambda output_writer, update: print(update.text if getattr(update, "text", "") else "", end="\n"),
+            )
+            print_payload(
+                {
+                    "proposal_id": "01PROP",
+                    "status": "pending",
+                    "proposal_type": "MethodologyTemplatePatch",
+                    "title": "Promote policy catalyst",
+                    "summary": "Promote candidate dimension",
+                    "sample_size": 1,
+                    "benchmark_scope": "event_driven",
+                    "review_reason": "pending_manual_review_dimension_sample_size<2",
+                    "review_history": [
+                        {
+                            "decision": "pending",
+                            "reviewer": "system_threshold_gate",
+                            "source": "auto_gate",
+                            "reason": "pending_manual_review_dimension_sample_size<2",
+                        }
+                    ],
+                },
+                as_json=False,
+                emit_text=lambda output_writer, update: print(update.text if getattr(update, "text", "") else "", end="\n"),
+            )
+
+        output = buffer.getvalue()
+        self.assertIn("01PROP  [pending]  MethodologyTemplatePatch  Promote policy catalyst  sample_size=1", output)
+        self.assertIn("proposal_id: 01PROP", output)
+        self.assertIn("benchmark_scope: event_driven", output)
+        self.assertIn("review_history:", output)
+        self.assertIn("[pending] reviewer=system_threshold_gate source=auto_gate", output)
+
+    def test_print_payload_renders_review_proposal_retrieval_policy_result(self) -> None:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            print_payload(
+                {
+                    "proposal_id": "01PROP",
+                    "status": "approved",
+                    "proposal_type": "MethodologyTemplatePatch",
+                    "title": "Promote policy catalyst",
+                    "result": {
+                        "retrieval_policy": {"approved_proposal_ids": ["01PROP"]},
+                    },
+                },
+                as_json=False,
+                emit_text=lambda output_writer, update: print(update.text if getattr(update, "text", "") else "", end="\n"),
+            )
+
+        output = buffer.getvalue()
+        self.assertIn("\"retrieval_policy\": {", output)
+        self.assertIn("\"approved_proposal_ids\": [", output)
 
     def test_append_tui_line_updates_stream_message_in_place(self) -> None:
         session = TuiSession(
@@ -966,21 +1141,6 @@ class CliOutputTests(unittest.TestCase):
         apply_tui_update(session, default_update_for_text("status", "gate: EvidenceGate pass"))
         self.assertEqual(session.current_run_id, "01INFERRED")
         self.assertEqual(session.current_gate, "EvidenceGate pass")
-
-    def test_legacy_append_tui_line_text_fallback_still_works(self) -> None:
-        session = TuiSession(
-            settings=None,  # type: ignore[arg-type]
-            state=ChatSessionState(),
-            llm_provider=None,  # type: ignore[arg-type]
-            task_router=None,  # type: ignore[arg-type]
-            output_lines=[],
-        )
-        apply_tui_update(session, default_update_for_text("status", "collect"))
-        apply_tui_update(session, default_update_for_text("meta", "run_id: 01LEGACY"))
-        apply_tui_update(session, default_update_for_text("warning", "legacy warning"))
-        self.assertEqual(session.current_phase, "collect")
-        self.assertEqual(session.current_run_id, "01LEGACY")
-        self.assertEqual(session.run_status_label, "warning")
 
     def test_print_payload_emits_state_patch_for_run_and_status(self) -> None:
         session = TuiSession(

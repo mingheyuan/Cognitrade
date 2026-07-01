@@ -4,15 +4,14 @@ from datetime import date
 from typing import Any
 
 from research_system.schemas.review import ClaimVerdictBreakdown, PosteriorReviewSummary, ReviewFinding
-from research_system.schemas.subagents import SubagentInvocation
-from research_system.subagents.registry import SubagentRegistry
-from research_system.subagents.review import (
-    BenchmarkResolverSubagent,
-    CatalystReviewerSubagent,
-    DirectionReviewerSubagent,
-    ReviewClaimExtractorSubagent,
-    ReviewSummaryBuilderSubagent,
-    TimeWindowReviewerSubagent,
+from research_system.services.planning_context import (
+    build_planning_context_view,
+    combine_focus_text,
+    derive_methodology_focus,
+    has_cashflow_focus,
+    has_momentum_focus,
+    has_policy_focus,
+    normalize_planning_context_hints,
 )
 
 
@@ -21,40 +20,6 @@ class ReviewerService:
 
     def __init__(self, review_policy: dict | None = None) -> None:
         self.review_policy = review_policy or {}
-        self.registry = SubagentRegistry(
-            [
-                ReviewClaimExtractorSubagent(extract_candidates=self._extract_candidates),
-                BenchmarkResolverSubagent(
-                    resolve_scope=self._resolve_benchmark_scope,
-                    resolve_name=self._resolve_benchmark_name,
-                    resolve_symbol=self._resolve_benchmark_symbol,
-                    benchmark_pct_change=self._benchmark_pct_change,
-                ),
-                DirectionReviewerSubagent(
-                    observed_metric_for_candidate=self._observed_metric_for_candidate,
-                    candidate_verdict=self._candidate_verdict,
-                    candidate_notes=self._candidate_notes,
-                ),
-                CatalystReviewerSubagent(
-                    observed_metric_for_candidate=self._observed_metric_for_candidate,
-                    candidate_verdict=self._candidate_verdict,
-                    candidate_notes=self._candidate_notes,
-                ),
-                TimeWindowReviewerSubagent(
-                    observed_metric_for_candidate=self._observed_metric_for_candidate,
-                    candidate_verdict=self._candidate_verdict,
-                    candidate_notes=self._candidate_notes,
-                ),
-                ReviewSummaryBuilderSubagent(
-                    verdict_by_claim_type=self._verdict_by_claim_type,
-                    verdict_totals=self._verdict_totals,
-                    overall_verdict=self._overall_verdict,
-                    summary_text=self._summary_text,
-                    benchmark_scope_counts=self._benchmark_scope_counts,
-                    benchmark_scope_explanations=self._benchmark_scope_explanations,
-                ),
-            ]
-        )
 
     def run(
         self,
@@ -66,36 +31,30 @@ class ReviewerService:
         latest_market_snapshot: dict | None = None,
         latest_fundamental_snapshot: dict | None = None,
         latest_notice_snapshot: dict | None = None,
+        planning_context_hints: dict[str, str] | None = None,
     ) -> dict:
-        claim_outputs, _ = self.registry.invoke(
-            SubagentInvocation(
-                subagent_type="review_claim_extractor",
-                objective="Extract reviewable claims from source entries.",
-                inputs={"source_entries": source_entries},
-            )
+        normalized_planning_hints = self._normalize_planning_context_hints(planning_context_hints)
+        review_strategy = self._derive_review_strategy(
+            query=query,
+            planning_context_hints=normalized_planning_hints,
         )
+        claim_outputs = self._extract_review_claims(source_entries=source_entries)
         candidates = claim_outputs["candidates"]
         claim_type_counts = claim_outputs["claim_type_counts"]
         findings: list[ReviewFinding] = []
-        notes: list[str] = []
+        notes: list[str] = list(review_strategy.get("notes") or [])
 
         if not candidates:
             notes.append("no_reviewable_claims_detected")
 
         if latest_sector_snapshot is None:
             notes.append("missing_sector_snapshot")
-            summary_outputs, _ = self.registry.invoke(
-                SubagentInvocation(
-                    subagent_type="review_summary_builder",
-                    objective="Build review summary for missing-snapshot case.",
-                    inputs={
-                        "review_required": True,
-                        "findings": [],
-                        "candidates": candidates,
-                        "notes": notes,
-                        "claim_type_counts": claim_type_counts,
-                    },
-                )
+            summary_outputs = self._build_review_summary(
+                review_required=True,
+                findings=[],
+                candidates=candidates,
+                notes=notes,
+                claim_type_counts=claim_type_counts,
             )
             return {
                 "summary": summary_outputs["summary"],
@@ -113,17 +72,11 @@ class ReviewerService:
         theme_news = facts.get("theme_news") or []
 
         excess_metric = self._to_float(relative_strength.get("latest_excess_pct_change"))
-        benchmark_outputs, _ = self.registry.invoke(
-            SubagentInvocation(
-                subagent_type="benchmark_resolver",
-                objective="Resolve benchmark scope/name/symbol for posterior review.",
-                inputs={
-                    "latest_sector_snapshot": latest_sector_snapshot,
-                    "latest_market_snapshot": latest_market_snapshot,
-                    "default_benchmark_name": str(benchmark.get("benchmark_name") or self.review_policy.get("default_broad_index") or "HS300"),
-                    "default_benchmark_symbol": str(benchmark.get("benchmark_code") or "000300"),
-                },
-            )
+        benchmark_outputs = self._resolve_benchmark(
+            latest_sector_snapshot=latest_sector_snapshot,
+            latest_market_snapshot=latest_market_snapshot,
+            default_benchmark_name=str(benchmark.get("benchmark_name") or self.review_policy.get("default_broad_index") or "HS300"),
+            default_benchmark_symbol=str(benchmark.get("benchmark_code") or "000300"),
         )
         benchmark_scope = benchmark_outputs["benchmark_scope"]
         benchmark_name = benchmark_outputs["benchmark_name"]
@@ -137,57 +90,272 @@ class ReviewerService:
         sector_name = str(latest_sector_snapshot.get("sector") or "")
 
         for candidate in candidates:
-            claim_type = str(candidate.get("claim_type") or "direction")
-            reviewer_type = {
-                "direction": "direction_reviewer",
-                "catalyst": "catalyst_reviewer",
-                "time_window": "time_window_reviewer",
-            }.get(claim_type, "time_window_reviewer")
-            finding_outputs, _ = self.registry.invoke(
-                SubagentInvocation(
-                    subagent_type=reviewer_type,
-                    objective=f"Review {claim_type} claim.",
-                    inputs={
-                        "candidate": candidate,
-                        "source_run_id": source_run_id,
-                        "anchor_date": anchor_date,
-                        "benchmark_scope": benchmark_scope,
-                        "benchmark_symbol": benchmark_symbol,
-                        "benchmark_name": benchmark_name,
-                        "observed_benchmark_metric": observed_benchmark_metric,
-                        "latest_hist": latest_hist,
-                        "latest_market_snapshot": latest_market_snapshot,
-                        "latest_fundamental_snapshot": latest_fundamental_snapshot,
-                        "latest_notice_snapshot": latest_notice_snapshot,
-                        "excess_metric": excess_metric,
-                        "policy_signals": policy_signals,
-                        "regulatory_signals": regulatory_signals,
-                        "theme_news": theme_news,
-                        "setup_label": setup_label,
-                        "sector_name": sector_name,
-                        "catalyst_digest": catalyst_digest,
-                    },
-                )
+            finding_outputs = self._review_candidate(
+                candidate=candidate,
+                source_run_id=source_run_id,
+                anchor_date=anchor_date,
+                benchmark_scope=benchmark_scope,
+                benchmark_symbol=benchmark_symbol,
+                benchmark_name=benchmark_name,
+                observed_benchmark_metric=observed_benchmark_metric,
+                latest_hist=latest_hist,
+                latest_market_snapshot=latest_market_snapshot,
+                latest_fundamental_snapshot=latest_fundamental_snapshot,
+                latest_notice_snapshot=latest_notice_snapshot,
+                excess_metric=excess_metric,
+                policy_signals=policy_signals,
+                regulatory_signals=regulatory_signals,
+                theme_news=theme_news,
+                setup_label=setup_label,
+                sector_name=sector_name,
+                catalyst_digest=catalyst_digest,
             )
             findings.append(ReviewFinding.model_validate(finding_outputs["finding"]))
 
-        summary_outputs, _ = self.registry.invoke(
-            SubagentInvocation(
-                subagent_type="review_summary_builder",
-                objective="Build posterior review summary from claim findings.",
-                inputs={
-                    "review_required": False,
-                    "findings": findings,
-                    "candidates": candidates,
-                    "notes": notes,
-                    "claim_type_counts": claim_type_counts,
-                },
-            )
+        focus_validation = self._validate_review_strategy_requirements(
+            review_strategy=review_strategy,
+            latest_market_snapshot=latest_market_snapshot,
+            latest_fundamental_snapshot=latest_fundamental_snapshot,
+            latest_notice_snapshot=latest_notice_snapshot,
+            policy_signals=policy_signals,
+            regulatory_signals=regulatory_signals,
+        )
+        notes.extend(focus_validation["notes"])
+        summary_outputs = self._build_review_summary(
+            review_required=bool(focus_validation["review_required"]),
+            findings=findings,
+            candidates=candidates,
+            notes=notes,
+            claim_type_counts=claim_type_counts,
         )
         return {
             "summary": summary_outputs["summary"],
             "findings": [finding.model_dump(mode="json") for finding in findings],
         }
+
+    def _normalize_planning_context_hints(self, raw_hints) -> dict[str, str]:
+        return normalize_planning_context_hints(raw_hints)
+
+    def _derive_review_strategy(
+        self,
+        *,
+        query: str,
+        planning_context_hints: dict[str, str],
+    ) -> dict[str, Any]:
+        strategy: dict[str, Any] = {
+            "preferred_methodology": None,
+            "focus_area": None,
+            "requires_market_snapshot": False,
+            "requires_fundamental_snapshot": False,
+            "requires_notice_or_policy_signal": False,
+            "notes": [],
+        }
+        if not planning_context_hints:
+            return strategy
+        context = build_planning_context_view(
+            query=query,
+            planning_context_hints=planning_context_hints,
+        )
+        lowered = combine_focus_text(
+            context.query_text,
+            context.recommended_next_step,
+            context.open_question,
+            context.previous_summary,
+            context.thread_topic,
+        )
+        preferred_methodology, focus_source = derive_methodology_focus(
+            cashflow_text=lowered,
+            comparison_text=lowered,
+            planning_context_hints=planning_context_hints,
+        )
+        if preferred_methodology == "cashflow_resilience":
+            strategy["preferred_methodology"] = preferred_methodology
+            strategy["focus_area"] = "cashflow_resilience"
+            strategy["requires_fundamental_snapshot"] = True
+        elif preferred_methodology == "dcf":
+            strategy["preferred_methodology"] = preferred_methodology
+            strategy["focus_area"] = "valuation"
+            strategy["requires_fundamental_snapshot"] = True
+        elif preferred_methodology == "comps":
+            strategy["preferred_methodology"] = preferred_methodology
+            strategy["focus_area"] = "same_basis_compare"
+        if has_policy_focus(lowered):
+            strategy["requires_notice_or_policy_signal"] = True
+            if strategy["focus_area"] is None:
+                strategy["focus_area"] = "catalyst_validation"
+        if has_momentum_focus(lowered):
+            strategy["requires_market_snapshot"] = True
+            if strategy["focus_area"] is None:
+                strategy["focus_area"] = "momentum_validation"
+        focus_area = str(strategy.get("focus_area") or "").strip()
+        preferred_methodology = str(strategy.get("preferred_methodology") or "").strip()
+        if focus_area:
+            strategy["notes"].append(f"review_focus={focus_area}")
+        if preferred_methodology:
+            strategy["notes"].append(f"review_preferred_methodology={preferred_methodology}")
+        if focus_source:
+            strategy["notes"].append(f"review_focus_source={focus_source}")
+        return strategy
+
+    def _validate_review_strategy_requirements(
+        self,
+        *,
+        review_strategy: dict[str, Any],
+        latest_market_snapshot: dict | None,
+        latest_fundamental_snapshot: dict | None,
+        latest_notice_snapshot: dict | None,
+        policy_signals: list[dict],
+        regulatory_signals: list[dict],
+    ) -> dict[str, Any]:
+        notes: list[str] = []
+        review_required = False
+        if review_strategy.get("requires_fundamental_snapshot") and latest_fundamental_snapshot is None:
+            review_required = True
+            notes.append("missing_fundamental_snapshot_for_review_focus")
+        if review_strategy.get("requires_market_snapshot") and latest_market_snapshot is None:
+            review_required = True
+            notes.append("missing_market_snapshot_for_review_focus")
+        if review_strategy.get("requires_notice_or_policy_signal"):
+            has_notice = latest_notice_snapshot is not None
+            has_policy_signal = bool(policy_signals or regulatory_signals)
+            if not has_notice and not has_policy_signal:
+                review_required = True
+                notes.append("missing_notice_or_policy_signal_for_review_focus")
+        return {"review_required": review_required, "notes": notes}
+
+    def _extract_review_claims(self, *, source_entries: list[dict]) -> dict:
+        candidates = self._extract_candidates(source_entries=source_entries)
+        return {
+            "candidates": candidates,
+            "claim_type_counts": self._claim_type_counts(candidates),
+        }
+
+    def _resolve_benchmark(
+        self,
+        *,
+        latest_sector_snapshot: dict | None,
+        latest_market_snapshot: dict | None,
+        default_benchmark_name: str,
+        default_benchmark_symbol: str,
+    ) -> dict:
+        facts = (latest_sector_snapshot or {}).get("facts") or {}
+        benchmark = facts.get("benchmark") or {}
+        scope = self._resolve_benchmark_scope(
+            latest_sector_snapshot=latest_sector_snapshot,
+            latest_market_snapshot=latest_market_snapshot,
+        )
+        sector_name = str((latest_sector_snapshot or {}).get("sector") or "")
+        benchmark_name = self._resolve_benchmark_name(
+            benchmark_scope=scope,
+            sector_name=sector_name,
+            default_benchmark_name=default_benchmark_name,
+        )
+        benchmark_symbol = self._resolve_benchmark_symbol(
+            benchmark_scope=scope,
+            latest_market_snapshot=latest_market_snapshot,
+            default_benchmark_symbol=default_benchmark_symbol,
+        )
+        return {
+            "benchmark_scope": scope,
+            "benchmark_name": benchmark_name,
+            "benchmark_symbol": benchmark_symbol,
+            "observed_benchmark_metric": self._benchmark_pct_change(benchmark=benchmark),
+        }
+
+    def _review_candidate(self, **kwargs) -> dict:
+        candidate = kwargs["candidate"]
+        finding = ReviewFinding(
+            claim_id=candidate["claim_id"],
+            claim_type=str(candidate.get("claim_type") or "direction"),
+            source_run_id=kwargs["source_run_id"],
+            target_entry_id=candidate["entry_id"],
+            window_type=str(candidate.get("window_type") or "trading_days"),
+            window_size=int(candidate.get("window_size") or 5),
+            anchor_date=kwargs["anchor_date"],
+            evaluation_start_rule=str(candidate.get("evaluation_start_rule") or "next_trading_day_open"),
+            early_invalidation_rule=candidate.get("early_invalidation_rule"),
+            benchmark_scope=kwargs["benchmark_scope"],
+            benchmark_symbol=kwargs["benchmark_symbol"],
+            benchmark_name=kwargs["benchmark_name"],
+            expected_direction=candidate.get("expected_direction"),
+            observed_metric=self._observed_metric_for_candidate(
+                candidate=candidate,
+                latest_hist=kwargs["latest_hist"],
+                latest_market_snapshot=kwargs["latest_market_snapshot"],
+                latest_notice_snapshot=kwargs["latest_notice_snapshot"],
+                excess_metric=kwargs["excess_metric"],
+                policy_signals=kwargs["policy_signals"],
+                regulatory_signals=kwargs["regulatory_signals"],
+                theme_news=kwargs["theme_news"],
+            ),
+            observed_benchmark_metric=kwargs["observed_benchmark_metric"],
+            excess_metric=kwargs["excess_metric"],
+            verdict=self._candidate_verdict(
+                candidate=candidate,
+                latest_market_snapshot=kwargs["latest_market_snapshot"],
+                latest_notice_snapshot=kwargs["latest_notice_snapshot"],
+                excess_metric=kwargs["excess_metric"],
+                policy_signals=kwargs["policy_signals"],
+                regulatory_signals=kwargs["regulatory_signals"],
+                theme_news=kwargs["theme_news"],
+            ),
+            notes=self._candidate_notes(
+                candidate=candidate,
+                sector_name=kwargs["sector_name"],
+                latest_market_snapshot=kwargs["latest_market_snapshot"],
+                latest_fundamental_snapshot=kwargs["latest_fundamental_snapshot"],
+                latest_notice_snapshot=kwargs["latest_notice_snapshot"],
+                setup_label=kwargs["setup_label"],
+                catalyst_digest=kwargs["catalyst_digest"],
+                policy_signals=kwargs["policy_signals"],
+                regulatory_signals=kwargs["regulatory_signals"],
+                theme_news=kwargs["theme_news"],
+            ),
+        )
+        return {"finding": finding.model_dump(mode="json")}
+
+    def _build_review_summary(
+        self,
+        *,
+        review_required: bool,
+        findings: list[ReviewFinding],
+        candidates: list[dict],
+        notes: list[str],
+        claim_type_counts: dict[str, int],
+    ) -> dict:
+        verdict_by_claim_type = self._verdict_by_claim_type(findings)
+        benchmark_scope_counts = self._benchmark_scope_counts(findings)
+        confirmed, rejected, inconclusive = self._verdict_totals(verdict_by_claim_type)
+        overall_verdict = self._overall_verdict(
+            review_required=review_required,
+            finding_count=len(findings),
+            confirmed=confirmed,
+            rejected=rejected,
+            inconclusive=inconclusive,
+        )
+        summary = PosteriorReviewSummary(
+            review_required=review_required,
+            finding_count=len(findings),
+            reviewable_claim_count=len(candidates),
+            claim_type_counts=claim_type_counts,
+            benchmark_scope_counts=benchmark_scope_counts,
+            benchmark_scope_explanations=self._benchmark_scope_explanations(benchmark_scope_counts),
+            verdict_by_claim_type=verdict_by_claim_type,
+            overall_verdict=overall_verdict,
+            summary_text=self._summary_text(
+                overall_verdict=overall_verdict,
+                finding_count=len(findings),
+                confirmed=confirmed,
+                rejected=rejected,
+                inconclusive=inconclusive,
+                benchmark_scope_counts=benchmark_scope_counts,
+            ),
+            confirmed=confirmed,
+            rejected=rejected,
+            inconclusive=inconclusive,
+            notes=notes,
+        )
+        return {"summary": summary.model_dump(mode="json")}
 
     def _extract_candidates(self, *, source_entries: list[dict]) -> list[dict]:
         candidates: list[dict] = []

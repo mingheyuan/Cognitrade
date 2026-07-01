@@ -1,0 +1,45 @@
+provider_chains:
+  market:
+    default_market: cn_equity
+    providers:
+      - akshare_market
+      - baostock_market
+      - efinance_market
+  fundamental:
+    default_market: cn_equity
+    providers:
+      - akshare_fundamental
+      - tushare_fundamental
+      - cninfo_fundamental
+  notice:
+    default_market: cn_equity
+    providers:
+      - cninfo_notice
+      - sse_notice
+      - szse_notice
+      - eastmoney_notice
+  sector:
+    default_market: cn_sector
+    providers:
+      - akshare_sector
+      - eastmoney_sector
+  lhb:
+    default_market: cn_equity
+    providers:
+      - akshare_lhb
+  capital_flow:
+    default_market: cn_equity
+    providers:
+      - akshare_capital_flow
+  sentiment:
+    default_market: cn_equity
+    providers:
+      - akshare_sentiment
+  events:
+    default_market: cn_equity
+    providers:
+      - akshare_events
+  policy:
+    default_market: cn_sector
+    providers:
+      - akshare_policy
