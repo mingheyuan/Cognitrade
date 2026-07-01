@@ -90,6 +90,9 @@ class ChatEventAdapterTests(unittest.TestCase):
             agent="collector",
             message="stock_snapshot_collector started",
             payload={
+                "action_id": "act_collect",
+                "node_id": "collect",
+                "action_objective": "Load source records.",
                 "subagent_type": "stock_snapshot_collector",
                 "objective": "Collect stock-level verified snapshots.",
                 "status": "running",
@@ -118,6 +121,38 @@ class ChatEventAdapterTests(unittest.TestCase):
         self.assertEqual(phase.state_patch.current_phase, "collect")
         self.assertEqual(gate.state_patch.current_gate, "EvidenceGate pass")
         self.assertEqual(warning.state_patch.run_status_label, "warning")
+
+    def test_chat_event_listener_updates_trace_payload_cache_during_live_run(self) -> None:
+        presenter = build_chat_presenter(thinking_enabled=True, events_mode="compact")
+        captured: list[TranscriptUpdate] = []
+        event = RunEvent(
+            request_id="01REQ",
+            run_id="01RUN",
+            intent="stock_check",
+            event_type="subagent_started",
+            phase="collect",
+            agent="collector",
+            message="stock_snapshot_collector started",
+            payload={
+                "action_id": "act_collect",
+                "node_id": "collect",
+                "action_objective": "Load source records.",
+                "subagent_type": "stock_snapshot_collector",
+                "objective": "Collect stock-level verified snapshots.",
+                "status": "running",
+            },
+        )
+
+        chat_event_listener(event, presenter=presenter, output_writer=captured.append)
+
+        trace_update = next(update for update in captured if update.state_patch.trace_payload is not None)
+        self.assertEqual(trace_update.state_patch.current_run_id, "01RUN")
+        self.assertEqual(trace_update.state_patch.trace_payload["run_id"], "01RUN")
+        self.assertEqual(
+            trace_update.state_patch.trace_payload["subagent_trace"][0]["subagent_type"],
+            "stock_snapshot_collector",
+        )
+        self.assertEqual(trace_update.state_patch.trace_payload["subagent_trace"][0]["node_id"], "collect")
 
 
 if __name__ == "__main__":

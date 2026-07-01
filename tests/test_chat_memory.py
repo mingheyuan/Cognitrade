@@ -5,12 +5,15 @@ import unittest
 from pathlib import Path
 
 from research_system.cli.chat_memory import (
+    archive_session_thread,
     build_chat_conversation_context,
     build_relevant_memory_context,
     compact_session_thread,
     current_thread_summary,
+    fork_session_thread,
     list_chat_threads,
     remember_basic_chat_turn,
+    unarchive_session_thread,
 )
 from research_system.cli.chat_thread_store import ChatThreadStore
 from research_system.cli.chat_types import ChatSessionState
@@ -289,6 +292,107 @@ class ChatMemoryTests(unittest.TestCase):
             self.assertEqual(cross_thread[0]["thread_id"], "archived-thread")
             self.assertEqual(cross_thread[0]["memory_scope"], "chat_research")
             self.assertTrue(str(cross_thread[0]["snapshot_id"]).startswith("chat_snapshot:"))
+
+    def test_fork_session_thread_copies_turns_and_exposes_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            state = ChatSessionState(
+                last_user_query="compare guizhou maotai and byd",
+                last_result_intent="stock_compare",
+                last_result_summary="ranking is still inconclusive",
+                last_result_follow_up="supplement same-basis valuation assumptions",
+                last_run_id="01COMPARE",
+            )
+            remember_basic_chat_turn(settings=settings, state=state, query="question 1", answer="answer 1")
+            remember_basic_chat_turn(settings=settings, state=state, query="question 2", answer="answer 2")
+            parent_thread_id = state.thread_id
+            self.assertIsNotNone(parent_thread_id)
+            compact_session_thread(settings=settings, state=state)
+
+            child_thread_id = fork_session_thread(settings=settings, state=state)
+            self.assertNotEqual(child_thread_id, parent_thread_id)
+
+            store = ChatThreadStore(settings)
+            child_turns = store.read_all_turns(thread_id=child_thread_id)
+            child_metadata = store.load_thread_metadata(thread_id=child_thread_id) or {}
+            summary = current_thread_summary(settings=settings, state=state)
+            context = build_chat_conversation_context(settings=settings, state=state, query="continue compare")
+            profile = next(item for item in context if item.get("type") == "chat_thread_profile")
+            rows = list_chat_threads(settings=settings, limit=10)
+            child_row = next(row for row in rows if row.get("thread_id") == child_thread_id)
+
+            self.assertEqual(len(child_turns), 4)
+            self.assertEqual(child_turns[0]["thread_id"], child_thread_id)
+            self.assertEqual(child_metadata["parent_thread_id"], parent_thread_id)
+            self.assertEqual(child_metadata["thread_source"], "fork")
+            self.assertEqual(summary["thread_source"], "fork")
+            self.assertEqual(summary["parent_thread_id"], parent_thread_id)
+            self.assertEqual(profile["thread_source"], "fork")
+            self.assertEqual(profile["parent_thread_id"], parent_thread_id)
+            self.assertEqual(child_row["thread_source"], "fork")
+            self.assertEqual(child_row["parent_thread_id"], parent_thread_id)
+
+    def test_archive_session_thread_hides_thread_from_active_list_and_exposes_archived_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            state = ChatSessionState(
+                last_user_query="compare banks",
+                last_result_intent="stock_compare",
+                last_result_summary="ranking is still inconclusive",
+                last_run_id="01COMPARE",
+            )
+            remember_basic_chat_turn(settings=settings, state=state, query="question", answer="answer")
+            archived_thread_id = state.thread_id
+            self.assertIsNotNone(archived_thread_id)
+
+            payload = archive_session_thread(settings=settings, state=state)
+
+            self.assertEqual(payload["thread_id"], archived_thread_id)
+            self.assertNotEqual(state.thread_id, archived_thread_id)
+            active_rows = list_chat_threads(settings=settings, limit=10)
+            archived_rows = list_chat_threads(settings=settings, limit=10, scope="archived")
+            all_rows = list_chat_threads(settings=settings, limit=10, scope="all")
+            archived_summary = current_thread_summary(
+                settings=settings,
+                state=ChatSessionState(thread_id=archived_thread_id),
+            )
+
+            self.assertTrue(all(row.get("thread_id") != archived_thread_id for row in active_rows))
+            self.assertTrue(any(row.get("thread_id") == archived_thread_id for row in archived_rows))
+            self.assertTrue(any(row.get("thread_id") == archived_thread_id for row in all_rows))
+            self.assertTrue(archived_summary["archived"])
+            self.assertIsNotNone(archived_summary["archived_at"])
+
+    def test_unarchive_session_thread_restores_thread_to_active_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            state = ChatSessionState(
+                last_user_query="compare banks",
+                last_result_intent="stock_compare",
+                last_result_summary="ranking is still inconclusive",
+                last_run_id="01COMPARE",
+            )
+            remember_basic_chat_turn(settings=settings, state=state, query="question", answer="answer")
+            archived_thread_id = state.thread_id
+            self.assertIsNotNone(archived_thread_id)
+            archive_session_thread(settings=settings, state=state)
+
+            payload = unarchive_session_thread(settings=settings, thread_id=str(archived_thread_id))
+
+            self.assertEqual(payload["thread_id"], archived_thread_id)
+            active_rows = list_chat_threads(settings=settings, limit=10)
+            archived_rows = list_chat_threads(settings=settings, limit=10, scope="archived")
+            summary = current_thread_summary(
+                settings=settings,
+                state=ChatSessionState(thread_id=str(archived_thread_id)),
+            )
+
+            self.assertTrue(any(row.get("thread_id") == archived_thread_id for row in active_rows))
+            self.assertTrue(all(row.get("thread_id") != archived_thread_id for row in archived_rows))
+            self.assertFalse(summary["archived"])
 
 
 if __name__ == "__main__":

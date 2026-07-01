@@ -43,6 +43,9 @@ class _DispatchOrchestratorStub:
     def replay(self, run_id: str) -> dict:
         return {"run_id": run_id, "status": "completed"}
 
+    def trace(self, run_id: str) -> dict:
+        return {"run_id": run_id, "status": "completed", "subagent_trace": [], "dynamic_trace": [], "wait_trace": []}
+
     def resume(self, run_id: str) -> dict:
         return {"run_id": run_id, "status": "resumed"}
 
@@ -104,6 +107,12 @@ class CliCommandDispatchTests(unittest.TestCase):
             run_id="01RUN",
             orchestrator_cls=_DispatchOrchestratorStub,
         )
+        traced = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="trace",
+            run_id="01RUN",
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
         resumed = execute_cli_payload_command(
             Settings.from_env(Path(".")),
             command="resume",
@@ -118,6 +127,7 @@ class CliCommandDispatchTests(unittest.TestCase):
         )
 
         self.assertEqual(replayed["status"], "completed")
+        self.assertIn("subagent_trace", traced)
         self.assertEqual(resumed["status"], "resumed")
         self.assertEqual(cancelled["status"], "cancelled")
 

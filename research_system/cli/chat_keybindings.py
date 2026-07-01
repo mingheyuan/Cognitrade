@@ -19,9 +19,91 @@ def build_chat_keybindings(
 ) -> KeyBindings:
     kb = KeyBindings()
 
+    def _trace_task_count() -> int:
+        payload = session.trace_payload
+        if not isinstance(payload, dict):
+            return 0
+        keys: set[tuple[str, str, str]] = set()
+        for section_name in ("subagent_trace", "dynamic_trace", "wait_trace"):
+            rows = payload.get(section_name) or []
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                node_id = str(row.get("node_id") or "").strip() or "-"
+                phase = str(row.get("phase") or "-")
+                agent = str(row.get("agent") or "-")
+                action_id = str(row.get("action_id") or node_id or "-")
+                keys.add((action_id, phase, agent))
+        return len(keys)
+
     def _set_output_mode(mode: str) -> None:
         session.output_mode = mode
         session.follow_output = mode == "live"
+
+    def _toggle_output_panel() -> None:
+        if session.output_panel == "trace":
+            session.output_panel = "transcript"
+            session.trace_focus_index = None
+            session.follow_output = session.output_mode == "live"
+            if session.output_mode == "live":
+                _move_output_cursor(session, absolute="end")
+            elif session.app is not None:
+                session.app.invalidate()
+            return
+        run_id = session.current_run_id or session.state.last_run_id
+        if isinstance(session.trace_payload, dict):
+            cached_run_id = str(session.trace_payload.get("run_id") or "").strip()
+            if cached_run_id and cached_run_id == str(run_id or cached_run_id):
+                session.output_panel = "trace"
+                session.follow_output = False
+                if session.app is not None:
+                    session.app.invalidate()
+                return
+        if run_id:
+            try:
+                payload = execute_cli_command(session.settings, command="trace", run_id=run_id)
+            except Exception as exc:  # pragma: no cover - defensive UI fallback
+                emit_warning_update(session, f"trace load failed: {exc}")
+            else:
+                if (
+                    isinstance(payload, dict)
+                    and "subagent_trace" in payload
+                    and "dynamic_trace" in payload
+                    and "wait_trace" in payload
+                ):
+                    session.trace_payload = payload
+        session.output_panel = "trace"
+        if _trace_task_count() <= 0:
+            session.trace_focus_index = None
+        session.follow_output = False
+        if session.app is not None:
+            session.app.invalidate()
+
+    def _focus_next_trace_task() -> None:
+        if session.output_panel != "trace":
+            return
+        task_count = _trace_task_count()
+        if task_count <= 0:
+            session.trace_focus_index = None
+            if session.app is not None:
+                session.app.invalidate()
+            return
+        current_index = session.trace_focus_index
+        if current_index is None or current_index >= task_count - 1:
+            session.trace_focus_index = 0
+        else:
+            session.trace_focus_index = current_index + 1
+        session.follow_output = False
+        _move_output_cursor(session, absolute="start")
+
+    def _clear_trace_focus() -> None:
+        if session.output_panel != "trace":
+            return
+        session.trace_focus_index = None
+        session.follow_output = False
+        _move_output_cursor(session, absolute="start")
 
     def _move_output_cursor(session: TuiSession, *, lines: int | None = None, absolute: str | None = None) -> None:
         output_area = session.output_area
@@ -72,35 +154,44 @@ def build_chat_keybindings(
 
     @kb.add("f2")
     def _toggle_output_mode(event) -> None:
-        if session.output_mode == "live":
-            _set_output_mode("browse")
-        else:
-            _set_output_mode("live")
-            _move_output_cursor(session, absolute="end")
+        _toggle_output_panel()
+
+    @kb.add("f3")
+    def _trace_focus_next(event) -> None:
+        _focus_next_trace_task()
+
+    @kb.add("f4")
+    def _trace_focus_clear(event) -> None:
+        _clear_trace_focus()
 
     @kb.add(Keys.ScrollUp)
     def _scroll_up(event) -> None:
-        _set_output_mode("browse")
+        if session.output_panel == "transcript":
+            _set_output_mode("browse")
         _move_output_cursor(session, lines=-3)
 
     @kb.add(Keys.ScrollDown)
     def _scroll_down(event) -> None:
-        _set_output_mode("browse")
+        if session.output_panel == "transcript":
+            _set_output_mode("browse")
         _move_output_cursor(session, lines=3)
 
     @kb.add("pageup")
     def _page_up(event) -> None:
-        _set_output_mode("browse")
+        if session.output_panel == "transcript":
+            _set_output_mode("browse")
         _move_output_cursor(session, lines=-12)
 
     @kb.add("pagedown")
     def _page_down(event) -> None:
-        _set_output_mode("browse")
+        if session.output_panel == "transcript":
+            _set_output_mode("browse")
         _move_output_cursor(session, lines=12)
 
     @kb.add("home")
     def _home(event) -> None:
-        _set_output_mode("browse")
+        if session.output_panel == "transcript":
+            _set_output_mode("browse")
         _move_output_cursor(session, absolute="start")
 
     @kb.add("end")
@@ -108,7 +199,8 @@ def build_chat_keybindings(
         output_area = session.output_area
         if output_area is None:
             return
-        _set_output_mode("live")
+        if session.output_panel == "transcript":
+            _set_output_mode("live")
         _move_output_cursor(session, absolute="end")
 
     @kb.add("enter", eager=True)
@@ -121,6 +213,7 @@ def build_chat_keybindings(
             return
         if input_area.buffer.complete_state:
             input_area.buffer.complete_state = None
+        session.output_panel = "transcript"
         _set_output_mode("live")
         event.app.create_background_task(
             submit_tui_input(

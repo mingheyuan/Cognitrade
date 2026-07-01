@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_system.cli.chat_memory import hydrate_session_from_persistent_memory, start_new_session_thread, switch_session_thread
+from research_system.cli.chat_memory import fork_session_thread, hydrate_session_from_persistent_memory, start_new_session_thread, switch_session_thread
 from research_system.cli.chat_state import persist_thread_checkpoint
 from research_system.cli.chat_thread_store import ChatThreadStore
 from research_system.cli.chat_types import ChatSessionState
@@ -110,6 +110,29 @@ class ChatThreadCheckpointTests(unittest.TestCase):
             self.assertIsNone(state.last_result_follow_up)
             self.assertIsNone(state.current_intent)
             self.assertIsNone(state.review_target_run_id)
+
+    def test_forked_thread_checkpoint_restores_lineage_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            parent = ChatSessionState(
+                thread_id="thread_parent",
+                current_intent="stock_compare",
+                last_user_query="compare banks",
+                last_result_intent="stock_compare",
+                last_result_summary="parent summary",
+            )
+            persist_thread_checkpoint(settings=settings, state=parent)
+
+            child = ChatSessionState(thread_id="thread_parent")
+            forked_thread_id = fork_session_thread(settings=settings, state=child, source_thread_id="thread_parent")
+            restored = ChatSessionState(thread_id=forked_thread_id)
+            hydrated = hydrate_session_from_persistent_memory(settings=settings, state=restored)
+
+            self.assertTrue(hydrated)
+            self.assertEqual(restored.thread_id, forked_thread_id)
+            self.assertEqual(restored.thread_source, "fork")
+            self.assertEqual(restored.parent_thread_id, "thread_parent")
 
 
 if __name__ == "__main__":

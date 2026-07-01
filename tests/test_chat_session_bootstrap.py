@@ -55,6 +55,17 @@ class ChatSessionBootstrapTests(unittest.TestCase):
         self.assertIn("thread: thread_123", lines)
         self.assertFalse(any("fallback" in line.lower() for line in lines))
 
+    def test_build_chat_banner_lines_for_tui_mentions_trace_controls(self) -> None:
+        lines = build_chat_banner_lines(
+            thread_id="thread_123",
+            resumed_query=None,
+            line_mode=False,
+        )
+
+        self.assertTrue(any("F2 toggles transcript/trace" in line for line in lines))
+        self.assertTrue(any("F3 cycles trace task focus" in line for line in lines))
+        self.assertTrue(any("F4 restores all tasks" in line for line in lines))
+
 
 if __name__ == "__main__":
     unittest.main()

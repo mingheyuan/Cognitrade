@@ -224,6 +224,115 @@ class ChatActionsTests(unittest.TestCase):
             meta_lines = [message.text for message in session.output_lines if message.kind == "meta"]
             self.assertIn("thread: thread_saved", meta_lines)
 
+    def test_handle_chat_meta_action_fork_thread_creates_child_thread_and_reports_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            session = TuiSession(
+                settings=settings,
+                state=ChatSessionState(
+                    last_user_query="compare guizhou maotai and byd",
+                    last_result_intent="stock_compare",
+                    last_result_summary="ranking is still inconclusive",
+                    last_run_id="01COMPARE",
+                ),
+                llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+                task_router=TaskRouter(),
+                output_lines=[],
+            )
+
+            from research_system.cli.chat_memory import remember_basic_chat_turn
+
+            remember_basic_chat_turn(settings=settings, state=session.state, query="question", answer="answer")
+            parent_thread_id = session.state.thread_id
+
+            handle_chat_meta_action(
+                action="fork_thread",
+                parsed={"action": "fork_thread"},
+                state=session.state,
+                settings=session.settings,
+                emit_text=lambda output_writer, update: apply_tui_update(session, update),
+                output_writer=None,
+            )
+
+            self.assertNotEqual(session.state.thread_id, parent_thread_id)
+            self.assertEqual(session.state.thread_source, "fork")
+            self.assertEqual(session.state.parent_thread_id, parent_thread_id)
+            meta_lines = [message.text for message in session.output_lines if message.kind == "meta"]
+            self.assertTrue(any(line.startswith("forked thread: ") for line in meta_lines))
+            self.assertIn(f"forked_from: {parent_thread_id}", meta_lines)
+
+    def test_handle_chat_meta_action_archive_thread_switches_active_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            session = TuiSession(
+                settings=settings,
+                state=ChatSessionState(
+                    last_user_query="compare banks",
+                    last_result_intent="stock_compare",
+                    last_result_summary="ranking is still inconclusive",
+                    last_run_id="01COMPARE",
+                ),
+                llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+                task_router=TaskRouter(),
+                output_lines=[],
+            )
+
+            from research_system.cli.chat_memory import remember_basic_chat_turn
+
+            remember_basic_chat_turn(settings=settings, state=session.state, query="question", answer="answer")
+            archived_thread_id = session.state.thread_id
+
+            handle_chat_meta_action(
+                action="archive_thread",
+                parsed={"action": "archive_thread"},
+                state=session.state,
+                settings=session.settings,
+                emit_text=lambda output_writer, update: apply_tui_update(session, update),
+                output_writer=None,
+            )
+
+            self.assertNotEqual(session.state.thread_id, archived_thread_id)
+            meta_lines = [message.text for message in session.output_lines if message.kind == "meta"]
+            self.assertIn(f"thread_archived: {archived_thread_id}", meta_lines)
+            self.assertTrue(any(line.startswith("thread_switched_to: ") for line in meta_lines))
+
+    def test_handle_chat_meta_action_unarchive_thread_reports_success(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            session = TuiSession(
+                settings=settings,
+                state=ChatSessionState(
+                    last_user_query="compare banks",
+                    last_result_intent="stock_compare",
+                    last_result_summary="ranking is still inconclusive",
+                    last_run_id="01COMPARE",
+                ),
+                llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+                task_router=TaskRouter(),
+                output_lines=[],
+            )
+
+            from research_system.cli.chat_memory import archive_session_thread, remember_basic_chat_turn
+
+            remember_basic_chat_turn(settings=settings, state=session.state, query="question", answer="answer")
+            archived_thread_id = session.state.thread_id
+            archive_session_thread(settings=settings, state=session.state)
+
+            handle_chat_meta_action(
+                action="unarchive_thread",
+                parsed={"action": "unarchive_thread", "thread_id": archived_thread_id},
+                state=session.state,
+                settings=session.settings,
+                emit_text=lambda output_writer, update: apply_tui_update(session, update),
+                output_writer=None,
+            )
+
+            meta_lines = [message.text for message in session.output_lines if message.kind == "meta"]
+            self.assertIn(f"thread_unarchived: {archived_thread_id}", meta_lines)
+
     def test_handle_chat_meta_action_stop_uses_stop_callback(self) -> None:
         session = TuiSession(
             settings=Settings.from_env(Path(".")),
@@ -311,6 +420,82 @@ class ChatActionsTests(unittest.TestCase):
         )
         self.assertTrue(handled)
         self.assertEqual(session.state.last_run_id, "01NEW")
+
+    def test_handle_chat_cli_action_supports_trace_command(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(last_run_id="01OLD"),
+            llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+            task_router=TaskRouter(),
+            output_lines=[],
+        )
+
+        def fake_cli_command_runner(settings, *, command, run_id, **kwargs):
+            self.assertEqual(command, "trace")
+            self.assertEqual(run_id, "01TRACE")
+            return {
+                "run_id": "01TRACE",
+                "status": "completed",
+                "request": {"intent": "stock_compare", "user_query": "compare banks"},
+                "summary": {"status": "completed"},
+                "subagent_trace": [],
+                "dynamic_trace": [],
+                "wait_trace": [],
+            }
+
+        rendered: list[object] = []
+        handled = handle_chat_cli_action(
+            action="trace",
+            parsed={"action": "trace", "run_id": "01TRACE"},
+            state=session.state,
+            settings=session.settings,
+            emit_text=lambda output_writer, update: apply_tui_update(session, update),
+            cli_command_runner=fake_cli_command_runner,
+            payload_printer=lambda payload, as_json=False, output_writer=None: rendered.append(payload),
+            output_writer=None,
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(session.state.last_run_id, "01TRACE")
+        self.assertEqual(rendered[0]["run_id"], "01TRACE")
+
+    def test_handle_chat_cli_action_threads_supports_archived_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            session = TuiSession(
+                settings=settings,
+                state=ChatSessionState(
+                    last_user_query="compare banks",
+                    last_result_intent="stock_compare",
+                    last_result_summary="ranking is still inconclusive",
+                    last_run_id="01COMPARE",
+                ),
+                llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+                task_router=TaskRouter(),
+                output_lines=[],
+            )
+
+            from research_system.cli.chat_memory import archive_session_thread, remember_basic_chat_turn
+
+            remember_basic_chat_turn(settings=settings, state=session.state, query="question", answer="answer")
+            archived_thread_id = session.state.thread_id
+            archive_session_thread(settings=settings, state=session.state)
+
+            handled = handle_chat_cli_action(
+                action="threads",
+                parsed={"action": "threads", "limit": 10, "scope": "archived"},
+                state=session.state,
+                settings=session.settings,
+                emit_text=lambda output_writer, update: apply_tui_update(session, update),
+                cli_command_runner=lambda *args, **kwargs: {},
+                payload_printer=lambda payload, as_json=False, output_writer=None: None,
+                output_writer=None,
+            )
+
+            self.assertTrue(handled)
+            meta_lines = [message.text for message in session.output_lines if message.kind == "meta"]
+            self.assertTrue(any(archived_thread_id in line and "status=archived" in line for line in meta_lines))
 
     def test_handle_chat_cli_action_supports_proposals_and_review_proposal(self) -> None:
         session = TuiSession(

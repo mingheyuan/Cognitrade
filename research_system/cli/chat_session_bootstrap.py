@@ -39,7 +39,7 @@ def build_chat_banner_lines(
         lines.append("type /exit to quit")
     else:
         lines.append("Enter to submit, Esc to clear, Ctrl+C to stop current run, Ctrl+D or /exit to quit.")
-        lines.append("Up/Down recalls input history. PageUp/PageDown scroll transcript. F2 toggles transcript live/browse mode. Use /commands or F1 for popup help.")
+        lines.append("Up/Down recalls input history. PageUp/PageDown scroll output. F2 toggles transcript/trace. F3 cycles trace task focus, F4 restores all tasks. Use /commands or F1 for popup help.")
     return lines
 
 

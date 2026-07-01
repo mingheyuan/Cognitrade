@@ -18,6 +18,7 @@ class ChatThreadStore:
         self.settings = settings
         self.root = settings.memory_root / "chat_threads"
         self.index_path = self.root / "index.json"
+        self.metadata_root = self.root / "metadata"
         self.turns_root = self.root / "turns"
         self.checkpoints_root = self.root / "checkpoints"
         self.summaries_root = self.root / "summaries"
@@ -33,6 +34,15 @@ class ChatThreadStore:
             lifetime_turn_count_delta=0,
         )
         return resolved
+
+    def has_thread(self, *, thread_id: str) -> bool:
+        resolved = str(thread_id or "").strip()
+        if not resolved:
+            return False
+        for row in self._read_index_rows():
+            if str(row.get("thread_id") or "") == resolved:
+                return True
+        return False
 
     def append_turn(
         self,
@@ -106,16 +116,28 @@ class ChatThreadStore:
             replace_turn_count=len(rows),
         )
 
-    def list_threads(self, *, limit: int = 20) -> list[dict[str, Any]]:
-        payload = read_json(self.index_path) or {}
-        rows = payload.get("threads") or []
-        if not isinstance(rows, list):
-            return []
-        rows = [row for row in rows if isinstance(row, dict)]
-        rows.sort(key=lambda item: str(item.get("last_turn_at") or ""), reverse=True)
+    def list_threads(
+        self,
+        *,
+        limit: int = 20,
+        include_archived: bool = False,
+        archived_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        rows = self._read_index_rows()
+        filtered: list[dict[str, Any]] = []
+        for row in rows:
+            thread_id = str(row.get("thread_id") or "").strip()
+            metadata = self.load_thread_metadata(thread_id=thread_id) or {}
+            archived = bool(metadata.get("archived"))
+            if archived_only and not archived:
+                continue
+            if not include_archived and not archived_only and archived:
+                continue
+            filtered.append(row)
+        filtered.sort(key=lambda item: str(item.get("last_turn_at") or ""), reverse=True)
         if limit <= 0:
             return []
-        return rows[:limit]
+        return filtered[:limit]
 
     def load_thread_summary(self, *, thread_id: str) -> dict[str, Any] | None:
         history = self.read_recent_summaries(thread_id=thread_id, limit=1)
@@ -129,6 +151,70 @@ class ChatThreadStore:
         path = self.checkpoints_root / f"{thread_id}.json"
         payload = read_json(path)
         return payload if isinstance(payload, dict) else None
+
+    def load_thread_metadata(self, *, thread_id: str) -> dict[str, Any] | None:
+        path = self.metadata_root / f"{thread_id}.json"
+        payload = read_json(path)
+        return payload if isinstance(payload, dict) else None
+
+    def ensure_thread_metadata(self, *, thread_id: str, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
+        existing = self.load_thread_metadata(thread_id=thread_id) or {"thread_id": thread_id}
+        changed = False
+        for key, value in dict(defaults or {}).items():
+            if existing.get(key) in (None, "") and value not in (None, ""):
+                existing[key] = value
+                changed = True
+        if changed or existing.get("thread_id") != thread_id:
+            existing["thread_id"] = thread_id
+            self.write_thread_metadata(thread_id=thread_id, metadata=existing)
+        return existing
+
+    def write_thread_metadata(self, *, thread_id: str, metadata: dict[str, Any]) -> dict[str, Any]:
+        path = self.metadata_root / f"{thread_id}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"thread_id": thread_id, **dict(metadata)}
+        write_json(path, payload)
+        return payload
+
+    def archive_thread(
+        self,
+        *,
+        thread_id: str,
+        archived_at: str,
+        archived_reason: str | None = None,
+    ) -> dict[str, Any]:
+        metadata = self.ensure_thread_metadata(
+            thread_id=thread_id,
+            defaults={
+                "archived": False,
+                "archived_at": None,
+                "unarchived_at": None,
+            },
+        )
+        metadata["archived"] = True
+        metadata["archived_at"] = archived_at
+        metadata["unarchived_at"] = None
+        if archived_reason not in (None, ""):
+            metadata["archived_reason"] = archived_reason
+        return self.write_thread_metadata(thread_id=thread_id, metadata=metadata)
+
+    def unarchive_thread(
+        self,
+        *,
+        thread_id: str,
+        unarchived_at: str,
+    ) -> dict[str, Any]:
+        metadata = self.ensure_thread_metadata(
+            thread_id=thread_id,
+            defaults={
+                "archived": False,
+                "archived_at": None,
+                "unarchived_at": None,
+            },
+        )
+        metadata["archived"] = False
+        metadata["unarchived_at"] = unarchived_at
+        return self.write_thread_metadata(thread_id=thread_id, metadata=metadata)
 
     def write_thread_checkpoint(
         self,
@@ -232,6 +318,13 @@ class ChatThreadStore:
             }
         )
         write_json(self.index_path, {"threads": retained})
+
+    def _read_index_rows(self) -> list[dict[str, Any]]:
+        payload = read_json(self.index_path) or {}
+        rows = payload.get("threads") or []
+        if not isinstance(rows, list):
+            return []
+        return [dict(row) for row in rows if isinstance(row, dict)]
 
     def _next_turn_seq(self, *, thread_id: str) -> int:
         payload = read_json(self.index_path) or {}

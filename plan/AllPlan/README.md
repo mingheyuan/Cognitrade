@@ -1,5 +1,9 @@
 # AllPlan README
 
+Codex-style Python mapping entry:
+
+- If the target is to learn `openai/codex` CLI UI and multi-agent/subagent patterns while keeping Python and the current architecture, start with `codex_cli_python_mapping.md`.
+
 这组文档用于让另一个 AI 直接进入实现，不再重新做方案收敛。
 
 当前代码已经落地了大部分底座升级，尤其是：

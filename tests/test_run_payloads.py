@@ -8,6 +8,8 @@ from research_system.services.run_payloads import (
     replay_payload_fields,
     render_run_row_text,
     render_status_counts_text,
+    render_trace_row_text,
+    trace_payload_fields,
     run_payload_fields,
 )
 
@@ -89,6 +91,45 @@ class RunPayloadsTests(unittest.TestCase):
                 ("blackboard_entries", "1"),
             ],
         )
+
+    def test_trace_payload_fields_use_trace_field_order(self) -> None:
+        self.assertEqual(
+            trace_payload_fields(
+                {
+                    "run_id": "01TRACE",
+                    "request": {"intent": "stock_compare", "user_query": "compare banks"},
+                    "summary": {"status": "completed"},
+                    "display_summary": "done",
+                    "event_counts": {"subagent_trace": 3, "dynamic_trace": 1, "wait_trace": 0},
+                }
+            ),
+            [
+                ("run_id", "01TRACE"),
+                ("intent", "stock_compare"),
+                ("query", "compare banks"),
+                ("summary", "done"),
+                ("status", "completed"),
+                ("subagent_trace", "3"),
+                ("dynamic_trace", "1"),
+                ("wait_trace", "0"),
+            ],
+        )
+
+    def test_render_trace_row_text_renders_subagent_shape(self) -> None:
+        text = render_trace_row_text(
+            {
+                "subagent_type": "retrieval_decider",
+                "status": "completed",
+                "phase": "retrieve",
+                "agent": "retriever",
+                "objective": "Select final evidence set and summarize retrieval.",
+                "notes": ["evidence_count=6"],
+            }
+        )
+        self.assertIn("retrieval_decider", text)
+        self.assertIn("[completed]", text)
+        self.assertIn("phase=retrieve agent=retriever", text)
+        self.assertIn("notes=evidence_count=6", text)
 
     def test_latest_run_context_uses_first_row_with_run_and_status(self) -> None:
         run_id, status = latest_run_context(

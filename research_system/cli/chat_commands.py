@@ -14,6 +14,9 @@ CHAT_COMMANDS = [
     "/help",
     "/exit",
     "/new",
+    "/fork",
+    "/thread-archive",
+    "/thread-unarchive",
     "/thread",
     "/threads",
     "/compact",
@@ -31,6 +34,7 @@ CHAT_COMMANDS = [
     "/doctor",
     "/check",
     "/replay",
+    "/trace",
     "/resume",
     "/cancel",
     "/stop",
@@ -76,6 +80,18 @@ def parse_chat_input(line: str) -> dict[str, object]:
         return {"action": "help"}
     if command == "/new":
         return {"action": "new_thread"}
+    if command == "/fork":
+        return {"action": "fork_thread"}
+    if command == "/thread-archive":
+        if len(parts) == 1:
+            return {"action": "archive_thread"}
+        if len(parts) == 2:
+            return {"action": "archive_thread", "thread_id": parts[1].strip()}
+        return {"action": "error", "message": "usage: /thread-archive [thread_id]"}
+    if command == "/thread-unarchive":
+        if len(parts) != 2:
+            return {"action": "error", "message": "usage: /thread-unarchive <thread_id>"}
+        return {"action": "unarchive_thread", "thread_id": parts[1].strip()}
     if command == "/thread":
         if len(parts) == 1:
             return {"action": "show_thread"}
@@ -84,13 +100,16 @@ def parse_chat_input(line: str) -> dict[str, object]:
         return {"action": "error", "message": "usage: /thread [thread_id]"}
     if command == "/threads":
         limit = 10
-        if len(parts) == 2:
-            if not parts[1].isdigit():
-                return {"action": "error", "message": "usage: /threads [limit]"}
-            limit = int(parts[1])
-        elif len(parts) > 2:
-            return {"action": "error", "message": "usage: /threads [limit]"}
-        return {"action": "threads", "limit": limit}
+        scope = "active"
+        for token in parts[1:]:
+            if token.isdigit() and limit == 10:
+                limit = int(token)
+                continue
+            if scope == "active" and token in {"active", "all", "archived"}:
+                scope = token
+                continue
+            return {"action": "error", "message": "usage: /threads [limit] [active|all|archived]"}
+        return {"action": "threads", "limit": limit, "scope": scope}
     if command == "/compact":
         return {"action": "compact_thread"}
     if command == "/last":
@@ -161,7 +180,7 @@ def parse_chat_input(line: str) -> dict[str, object]:
         return {"action": command.removeprefix("/")}
     if command in {"/reindex", "/reindex-qdrant"}:
         return {"action": "reindex-qdrant"}
-    if command in {"/replay", "/resume", "/cancel"}:
+    if command in {"/replay", "/resume", "/cancel", "/trace"}:
         if len(parts) != 2:
             return {"action": "error", "message": f"usage: {command} <run_id|last>"}
         return {"action": command.removeprefix("/"), "run_id": parts[1]}
@@ -276,7 +295,7 @@ def chat_completion_candidates(text_before_cursor: str, state: ChatSessionState)
         return ["off", "compact", "full"]
     if command == "/run-id":
         return ["clear", *recent_run_ids]
-    if command in {"/replay", "/resume", "/cancel"}:
+    if command in {"/replay", "/resume", "/cancel", "/trace"}:
         return unique_run_ids
     if command == "/history":
         return ["10", "20", "50", "completed", "failed", "cancelled", "timed_out", "needs_clarification"]
@@ -295,7 +314,7 @@ def chat_completion_candidates(text_before_cursor: str, state: ChatSessionState)
     if command == "/thread":
         return []
     if command == "/threads":
-        return ["5", "10", "20"]
+        return ["5", "10", "20", "active", "all", "archived"]
     if command == "/compact":
         return []
     if command == "/review":

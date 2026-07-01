@@ -7,6 +7,7 @@ from research_system.cli.chat_updates import (
     TranscriptUpdate,
     default_update_for_text,
     dispatch_transcript_update,
+    state_patch_update,
 )
 
 
@@ -42,3 +43,14 @@ def display_chunk_to_update(chunk: DisplayChunk) -> TranscriptUpdate:
 def chat_event_listener(event: RunEvent, *, presenter: ChatStreamPresenter, output_writer=None) -> None:
     for chunk in event_to_display_chunks(event, presenter=presenter):
         dispatch_transcript_update(output_writer, display_chunk_to_update(chunk))
+    trace_payload = presenter.current_trace_payload()
+    if trace_payload is not None:
+        dispatch_transcript_update(
+            output_writer,
+            state_patch_update(
+                ShellStatePatch(
+                    current_run_id=event.run_id,
+                    trace_payload=trace_payload,
+                )
+            ),
+        )

@@ -13,6 +13,8 @@ from research_system.cli.app import _execute_cli_command
 from research_system.cli.chat_command_catalog import print_chat_help
 from research_system.cli.chat_rendering import apply_tui_update, build_tui_hint_text, refresh_tui, render_tui_output
 from research_system.cli.chat_scene import (
+    build_output_blocks,
+    build_trace_task_blocks,
     build_commands_popup_view,
     build_hint_bar_view,
     build_shell_scene_view,
@@ -184,7 +186,7 @@ class CliOutputTests(unittest.TestCase):
         self.assertEqual(items[3].value, "01RUN")
         self.assertEqual(items[4].value, "collect")
         self.assertEqual(items[6].label, "output")
-        self.assertEqual(items[6].value, "live")
+        self.assertEqual(items[6].value, "transcript:live")
 
     def test_build_commands_popup_view_exposes_view_model(self) -> None:
         popup = build_commands_popup_view()
@@ -193,6 +195,8 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("/proposals [limit] [status] list methodology proposals", popup.lines)
         self.assertIn("/proposal <proposal_id>   show proposal detail", popup.lines)
         self.assertIn("F1      toggle popup help", popup.lines)
+        self.assertIn("F3      next trace task focus", popup.lines)
+        self.assertIn("F4      clear trace task focus", popup.lines)
 
     def test_build_shell_scene_view_exposes_unified_scene_model(self) -> None:
         session = TuiSession(
@@ -263,11 +267,170 @@ class CliOutputTests(unittest.TestCase):
             output_lines=[],
         )
         hint = build_hint_bar_view(session)
-        self.assertIn("output live", hint.text)
+        self.assertIn("output transcript:live", hint.text)
         self.assertIn("PageUp/PageDown", hint.text)
         session.output_mode = "browse"
         hint = build_hint_bar_view(session)
-        self.assertIn("output browse", hint.text)
+        self.assertIn("output transcript:browse", hint.text)
+
+    def test_hint_bar_mentions_trace_panel_when_trace_is_active(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        hint = build_hint_bar_view(session)
+        self.assertIn("trace panel", hint.text)
+        self.assertIn("01TRACE", hint.text)
+
+    def test_hint_bar_mentions_trace_focus_when_trace_task_is_selected(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_focus_index = 1
+        hint = build_hint_bar_view(session)
+        self.assertIn("focus task 2", hint.text)
+        self.assertIn("F4 all tasks", hint.text)
+
+    def test_build_output_blocks_renders_trace_panel_sections(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[make_transcript_message(kind="meta", text="should not render in trace panel")],
+        )
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "completed"},
+            "display_summary": "done",
+            "event_counts": {"subagent_trace": 1, "dynamic_trace": 0, "wait_trace": 0},
+            "subagent_trace": [
+                {
+                    "action_id": "act_retrieve",
+                    "node_id": "retrieve",
+                    "action_objective": "Retrieve evidence.",
+                    "subagent_type": "retrieval_decider",
+                    "status": "completed",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                }
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        blocks = build_output_blocks(session)
+        self.assertEqual(blocks[0].title, "trace")
+        self.assertTrue(any("run_id: 01TRACE" in line for line in blocks[0].lines))
+        self.assertEqual(blocks[1].title, "retrieve | retrieve / retriever")
+        self.assertTrue(any("task: retrieve" in line for line in blocks[1].lines))
+        self.assertTrue(any("objective: Retrieve evidence." in line for line in blocks[1].lines))
+        self.assertTrue(any("status_counts: completed=1" in line for line in blocks[1].lines))
+        self.assertTrue(any("retrieval_decider" in line for line in blocks[1].lines))
+
+    def test_build_trace_task_blocks_groups_subagent_dynamic_and_wait_by_phase_agent(self) -> None:
+        payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_retrieve",
+                    "node_id": "retrieve",
+                    "action_objective": "Retrieve evidence.",
+                    "subagent_type": "retrieval_decider",
+                    "status": "completed",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                    "objective": "Select final evidence set and summarize retrieval.",
+                }
+            ],
+            "dynamic_trace": [
+                {
+                    "event": "dynamic_action_inserted",
+                    "action_id": "act_screen_review",
+                    "node_id": "screen_review",
+                    "phase": "review",
+                    "agent": "screen_reviewer",
+                    "objective": "Review screened candidates.",
+                }
+            ],
+            "wait_trace": [
+                {
+                    "event": "waiting_external_started",
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Load source records.",
+                    "wait_timeout_seconds": 30,
+                }
+            ],
+        }
+        blocks = build_trace_task_blocks(payload)
+        self.assertEqual(blocks[0].title, "retrieve | retrieve / retriever")
+        self.assertTrue(any("task: retrieve" in line for line in blocks[0].lines))
+        self.assertTrue(any("objective: Retrieve evidence." in line for line in blocks[0].lines))
+        self.assertTrue(any("status_counts: completed=1" in line for line in blocks[0].lines))
+        self.assertTrue(any("spawned_subagents:" in line for line in blocks[0].lines))
+        self.assertTrue(any("retrieval_decider" in line for line in blocks[0].lines))
+        self.assertEqual(blocks[1].title, "screen_review | review / screen_reviewer")
+        self.assertTrue(any("dynamic_inserts:" in line for line in blocks[1].lines))
+        self.assertEqual(blocks[2].title, "collect | collect / collector")
+        self.assertTrue(any("waits:" in line for line in blocks[2].lines))
+
+    def test_build_output_blocks_filters_trace_task_cards_when_focus_is_set(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "action_objective": "Load source records.",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                },
+                {
+                    "action_id": "act_retrieve",
+                    "node_id": "retrieve",
+                    "action_objective": "Retrieve evidence.",
+                    "subagent_type": "retrieval_decider",
+                    "status": "completed",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.trace_focus_index = 1
+        blocks = build_output_blocks(session)
+        self.assertEqual(blocks[0].title, "trace")
+        self.assertEqual(blocks[1].title, "retrieve | retrieve / retriever")
+        self.assertFalse(any(block.title == "collect | collect / collector" for block in blocks[1:]))
+        self.assertTrue(any(block.title == "subagent_trace" for block in blocks[1:]))
 
     def test_build_chat_view_composes_prompt_toolkit_components(self) -> None:
         session = TuiSession(
@@ -493,6 +656,82 @@ class CliOutputTests(unittest.TestCase):
 
         self.assertIn("[thinking]", session.output_area.text)
         self.assertFalse(session.input_area.buffer.multiline())
+
+    def test_refresh_tui_renders_trace_panel_blocks(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[make_transcript_message(kind="thinking", text="plan first")],
+        )
+        view = build_chat_view(session)
+        session.output_area = view.output_area
+        session.main_stack = view.main_stack
+        session.commands_popup = view.commands_popup
+        session.commands_popup_float = view.commands_popup_float
+        session.input_area = view.input_area
+        session.status_bar = view.status_bar
+        session.input_hint_bar = view.hint_bar
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "completed"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_retrieve",
+                    "node_id": "retrieve",
+                    "action_objective": "Retrieve evidence.",
+                    "subagent_type": "retrieval_decider",
+                    "status": "completed",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                }
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+
+        refresh_tui(session)
+
+        self.assertIn("[trace]", session.output_area.text)
+        self.assertIn("run_id: 01TRACE", session.output_area.text)
+        self.assertIn("[retrieve | retrieve / retriever]", session.output_area.text)
+        self.assertIn("task: retrieve", session.output_area.text)
+        self.assertIn("objective: Retrieve evidence.", session.output_area.text)
+        self.assertIn("spawned_subagents:", session.output_area.text)
+        self.assertIn("status_counts: completed=1", session.output_area.text)
+
+    def test_apply_tui_update_live_trace_patch_populates_trace_panel_cache(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        apply_tui_update(
+            session,
+            append_update(
+                "meta",
+                "",
+                state_patch=ShellStatePatch(
+                    current_run_id="01TRACE",
+                    trace_payload={
+                        "run_id": "01TRACE",
+                        "request": {"intent": "stock_compare", "user_query": "compare banks"},
+                        "summary": {"status": "running"},
+                        "subagent_trace": [{"subagent_type": "retrieval_decider"}],
+                        "dynamic_trace": [],
+                        "wait_trace": [],
+                    },
+                ),
+            ),
+        )
+        self.assertEqual(session.current_run_id, "01TRACE")
+        self.assertEqual(session.trace_payload["run_id"], "01TRACE")
+        self.assertEqual(session.trace_payload["subagent_trace"][0]["subagent_type"], "retrieval_decider")
 
     def test_refresh_tui_skips_rewriting_output_when_text_is_unchanged(self) -> None:
         class _Buffer:
@@ -828,6 +1067,79 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("status: completed", output)
         self.assertIn("events: 2", output)
         self.assertIn("blackboard_entries: 1", output)
+
+    def test_print_trace_payload_renders_trace_sections(self) -> None:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            print_payload(
+                {
+                    "run_id": "01TRACE",
+                    "request": {"intent": "stock_compare", "user_query": "compare banks"},
+                    "summary": {"status": "completed"},
+                    "display_summary": "done",
+                    "event_counts": {"subagent_trace": 1, "dynamic_trace": 1, "wait_trace": 1},
+                    "subagent_trace": [
+                        {
+                            "subagent_type": "retrieval_decider",
+                            "status": "completed",
+                            "phase": "retrieve",
+                            "agent": "retriever",
+                            "objective": "Select final evidence set and summarize retrieval.",
+                        }
+                    ],
+                    "dynamic_trace": [
+                        {
+                            "event": "dynamic_action_inserted",
+                            "node_id": "screen_review",
+                            "phase": "review",
+                            "agent": "screen_reviewer",
+                        }
+                    ],
+                    "wait_trace": [
+                        {
+                            "event": "waiting_external_started",
+                            "phase": "collect",
+                            "agent": "collector",
+                            "wait_timeout_seconds": 30,
+                        }
+                    ],
+                },
+                as_json=False,
+                emit_text=lambda output_writer, update: print(update.text if getattr(update, "text", "") else "", end="\n"),
+            )
+
+        output = buffer.getvalue()
+        self.assertIn("run_id: 01TRACE", output)
+        self.assertIn("subagent_trace:", output)
+        self.assertIn("retrieval_decider", output)
+        self.assertIn("dynamic_trace:", output)
+        self.assertIn("screen_review", output)
+        self.assertIn("wait_trace:", output)
+        self.assertIn("waiting_external_started", output)
+
+    def test_print_trace_payload_updates_tui_trace_payload_cache(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "completed"},
+            "subagent_trace": [],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        print_payload(
+            payload,
+            as_json=False,
+            emit_text=lambda output_writer, update: apply_tui_update(session, update),
+            output_writer=lambda update: apply_tui_update(session, update),
+        )
+        self.assertEqual(session.trace_payload, payload)
 
     def test_print_doctor_payload_groups_checks(self) -> None:
         buffer = io.StringIO()

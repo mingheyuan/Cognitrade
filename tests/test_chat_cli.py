@@ -35,6 +35,10 @@ class ChatCliTests(unittest.TestCase):
         parsed = parse_chat_input("/resume 01ABC")
         self.assertEqual(parsed, {"action": "resume", "run_id": "01ABC"})
 
+    def test_trace_command_is_parsed(self) -> None:
+        parsed = parse_chat_input("/trace 01ABC")
+        self.assertEqual(parsed, {"action": "trace", "run_id": "01ABC"})
+
     def test_review_command_sets_intent_and_run_id(self) -> None:
         parsed = parse_chat_input('/review 01TARGET "复核上次创新药判断"')
         self.assertEqual(
@@ -76,13 +80,30 @@ class ChatCliTests(unittest.TestCase):
         parsed = parse_chat_input("/new")
         self.assertEqual(parsed, {"action": "new_thread"})
 
+    def test_fork_thread_command_is_parsed(self) -> None:
+        parsed = parse_chat_input("/fork")
+        self.assertEqual(parsed, {"action": "fork_thread"})
+
+    def test_thread_archive_commands_are_parsed(self) -> None:
+        self.assertEqual(parse_chat_input("/thread-archive"), {"action": "archive_thread"})
+        self.assertEqual(
+            parse_chat_input("/thread-archive abc123"),
+            {"action": "archive_thread", "thread_id": "abc123"},
+        )
+        self.assertEqual(
+            parse_chat_input("/thread-unarchive abc123"),
+            {"action": "unarchive_thread", "thread_id": "abc123"},
+        )
+
     def test_thread_command_is_parsed(self) -> None:
         self.assertEqual(parse_chat_input("/thread"), {"action": "show_thread"})
         self.assertEqual(parse_chat_input("/thread abc123"), {"action": "set_thread", "thread_id": "abc123"})
 
     def test_threads_command_is_parsed(self) -> None:
-        self.assertEqual(parse_chat_input("/threads"), {"action": "threads", "limit": 10})
-        self.assertEqual(parse_chat_input("/threads 5"), {"action": "threads", "limit": 5})
+        self.assertEqual(parse_chat_input("/threads"), {"action": "threads", "limit": 10, "scope": "active"})
+        self.assertEqual(parse_chat_input("/threads 5"), {"action": "threads", "limit": 5, "scope": "active"})
+        self.assertEqual(parse_chat_input("/threads archived"), {"action": "threads", "limit": 10, "scope": "archived"})
+        self.assertEqual(parse_chat_input("/threads 5 all"), {"action": "threads", "limit": 5, "scope": "all"})
 
     def test_compact_command_is_parsed(self) -> None:
         self.assertEqual(parse_chat_input("/compact"), {"action": "compact_thread"})
@@ -142,10 +163,12 @@ class ChatCliTests(unittest.TestCase):
         state = ChatSessionState(last_run_id="01LAST", review_target_run_id="01TARGET")
         candidates = chat_completion_candidates("/resume ", state)
         self.assertEqual(candidates, ["last", "01LAST", "01TARGET"])
+        self.assertEqual(chat_completion_candidates("/trace ", state), ["last", "01LAST", "01TARGET"])
 
     def test_completion_candidates_for_proposal_commands(self) -> None:
         self.assertEqual(chat_completion_candidates("/proposals ", ChatSessionState()), ["10", "20", "50", "pending", "approved", "rejected"])
         self.assertEqual(chat_completion_candidates("/review-proposal 01PROP ", ChatSessionState()), ["approve", "reject"])
+        self.assertEqual(chat_completion_candidates("/threads ", ChatSessionState()), ["5", "10", "20", "active", "all", "archived"])
 
     def test_store_pending_clarification_returns_session_patch(self) -> None:
         patch = store_pending_clarification(

@@ -24,12 +24,16 @@ class ShellStatePatch:
     help_mode: str | None = None
     input_mode: str | None = None
     output_mode: str | None = None
+    output_panel: str | None = None
+    trace_payload: dict | None = None
     answer_stream_open: bool | None = None
 
 
 @dataclass(frozen=True)
 class SessionStatePatch:
     thread_id: object = SESSION_PATCH_UNSET
+    thread_source: object = SESSION_PATCH_UNSET
+    parent_thread_id: object = SESSION_PATCH_UNSET
     current_intent: object = SESSION_PATCH_UNSET
     review_target_run_id: object = SESSION_PATCH_UNSET
     last_run_id: object = SESSION_PATCH_UNSET

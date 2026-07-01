@@ -8,7 +8,7 @@ from research_system.cli.cli_command_payloads import PROPOSAL_COMMANDS, RUN_ID_C
 class CliCommandPayloadsTests(unittest.TestCase):
     def test_command_groups_cover_expected_protocol_sets(self) -> None:
         self.assertEqual(STATUS_FILTER_COMMANDS, frozenset({"history", "status", "doctor", "check", "cleanup", "reindex-qdrant"}))
-        self.assertEqual(RUN_ID_COMMANDS, frozenset({"replay", "resume", "cancel"}))
+        self.assertEqual(RUN_ID_COMMANDS, frozenset({"replay", "resume", "cancel", "trace"}))
         self.assertEqual(PROPOSAL_COMMANDS, frozenset({"proposals", "proposal", "review-proposal"}))
 
     def test_build_history_command_payload(self) -> None:
@@ -28,6 +28,16 @@ class CliCommandPayloadsTests(unittest.TestCase):
             payload,
             {
                 "command": "replay",
+                "run_id": "01RUN",
+            },
+        )
+
+    def test_build_trace_command_payload(self) -> None:
+        payload = build_cli_command_payload(command="trace", run_id="01RUN")
+        self.assertEqual(
+            payload,
+            {
+                "command": "trace",
                 "run_id": "01RUN",
             },
         )

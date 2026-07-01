@@ -66,6 +66,10 @@ def build_parser() -> argparse.ArgumentParser:
     replay_parser.add_argument("run_id")
     replay_parser.add_argument("--json", action="store_true", dest="as_json")
 
+    trace_parser = subparsers.add_parser("trace")
+    trace_parser.add_argument("run_id")
+    trace_parser.add_argument("--json", action="store_true", dest="as_json")
+
     resume_parser = subparsers.add_parser("resume")
     resume_parser.add_argument("run_id")
     resume_parser.add_argument("--json", action="store_true", dest="as_json")

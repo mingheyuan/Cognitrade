@@ -10,6 +10,10 @@ from research_system.runtime.settings import Settings
 def apply_session_state_patch_to_state(state, patch: SessionStatePatch) -> None:
     if patch.thread_id is not SESSION_PATCH_UNSET:
         state.thread_id = patch.thread_id
+    if getattr(patch, "thread_source", SESSION_PATCH_UNSET) is not SESSION_PATCH_UNSET:
+        state.thread_source = patch.thread_source
+    if getattr(patch, "parent_thread_id", SESSION_PATCH_UNSET) is not SESSION_PATCH_UNSET:
+        state.parent_thread_id = patch.parent_thread_id
     if patch.current_intent is not SESSION_PATCH_UNSET:
         state.current_intent = patch.current_intent
     if patch.review_target_run_id is not SESSION_PATCH_UNSET:
@@ -94,6 +98,8 @@ def clear_recent_session_patch(*, include_defaults: bool = False) -> SessionStat
 def build_new_thread_session_patch(*, thread_id: str) -> SessionStatePatch:
     return SessionStatePatch(
         thread_id=thread_id,
+        thread_source="new",
+        parent_thread_id=None,
         current_intent=None,
         review_target_run_id=None,
         last_run_id=None,
@@ -121,6 +127,8 @@ def mirror_session_state_patch(state, *, thread_id: str | None = None) -> Sessio
         "pending_clarification_intent": state.pending_clarification_intent,
         "pending_clarification_run_id": state.pending_clarification_run_id,
         "pending_clarification_question": state.pending_clarification_question,
+        "thread_source": getattr(state, "thread_source", None),
+        "parent_thread_id": getattr(state, "parent_thread_id", None),
     }
     if thread_id is not None:
         patch_kwargs["thread_id"] = thread_id
@@ -130,6 +138,8 @@ def mirror_session_state_patch(state, *, thread_id: str | None = None) -> Sessio
 def build_show_last_session_patch(state) -> SessionStatePatch:
     return SessionStatePatch(
         last_run_id=state.last_run_id,
+        thread_source=getattr(state, "thread_source", None),
+        parent_thread_id=getattr(state, "parent_thread_id", None),
         current_intent=state.current_intent,
         review_target_run_id=state.review_target_run_id,
         thinking_enabled=state.thinking_enabled,
@@ -145,6 +155,8 @@ def build_show_last_session_patch(state) -> SessionStatePatch:
 def session_state_snapshot(state) -> dict[str, Any]:
     return {
         "thread_id": state.thread_id,
+        "thread_source": getattr(state, "thread_source", None),
+        "parent_thread_id": getattr(state, "parent_thread_id", None),
         "current_intent": state.current_intent,
         "review_target_run_id": state.review_target_run_id,
         "last_run_id": state.last_run_id,
@@ -170,6 +182,8 @@ def apply_session_checkpoint_to_state(*, state, checkpoint: dict[str, Any]) -> N
         state,
         SessionStatePatch(
             thread_id=session_state.get("thread_id"),
+            thread_source=session_state.get("thread_source"),
+            parent_thread_id=session_state.get("parent_thread_id"),
             current_intent=session_state.get("current_intent"),
             review_target_run_id=session_state.get("review_target_run_id"),
             last_run_id=session_state.get("last_run_id"),
@@ -217,6 +231,8 @@ def has_session_state_patch(patch: SessionStatePatch) -> bool:
         value is not SESSION_PATCH_UNSET
         for value in (
             patch.thread_id,
+            getattr(patch, "thread_source", SESSION_PATCH_UNSET),
+            getattr(patch, "parent_thread_id", SESSION_PATCH_UNSET),
             patch.current_intent,
             patch.review_target_run_id,
             patch.last_run_id,

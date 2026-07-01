@@ -90,6 +90,8 @@ def _execute_run_id_command(
             return orchestrator.replay(payload["run_id"])
         if command == "resume":
             return orchestrator.resume(payload["run_id"])
+        if command == "trace":
+            return orchestrator.trace(payload["run_id"])
         return orchestrator.cancel(payload["run_id"])
 
 
@@ -141,6 +143,7 @@ _COMMAND_EXECUTORS = {
     "proposal": _execute_proposal_detail_command,
     "review-proposal": _execute_review_proposal_command,
     "replay": _execute_run_id_command,
+    "trace": _execute_run_id_command,
     "resume": _execute_run_id_command,
     "cancel": _execute_run_id_command,
     "cleanup": _execute_cleanup_command,

@@ -17,6 +17,8 @@ from research_system.services.task_router import TaskRouter
 @dataclass
 class ChatSessionState:
     thread_id: str | None = None
+    thread_source: str | None = None
+    parent_thread_id: str | None = None
     current_intent: str | None = None
     review_target_run_id: str | None = None
     last_run_id: str | None = None
@@ -46,8 +48,11 @@ class ShellViewState:
     help_mode: str = "hidden"
     input_mode: str = "insert"
     output_mode: str = "live"
+    output_panel: str = "transcript"
     answer_stream_open: bool = False
     follow_output: bool = True
+    trace_payload: dict | None = None
+    trace_focus_index: int | None = None
     active_message_ids: dict[str, str] = field(default_factory=dict)
     closed_message_ids: set[str] = field(default_factory=set)
 
@@ -166,6 +171,38 @@ class TuiSession:
     @output_mode.setter
     def output_mode(self, value: str) -> None:
         self.view_state.output_mode = value
+
+    @property
+    def output_panel(self) -> str:
+        return self.view_state.output_panel
+
+    @output_panel.setter
+    def output_panel(self, value: str) -> None:
+        self.view_state.output_panel = value
+
+    @property
+    def trace_payload(self) -> dict | None:
+        return self.view_state.trace_payload
+
+    @trace_payload.setter
+    def trace_payload(self, value: dict | None) -> None:
+        prior_run_id = ""
+        if isinstance(self.view_state.trace_payload, dict):
+            prior_run_id = str(self.view_state.trace_payload.get("run_id") or "").strip()
+        next_run_id = ""
+        if isinstance(value, dict):
+            next_run_id = str(value.get("run_id") or "").strip()
+        self.view_state.trace_payload = value
+        if value is None or prior_run_id != next_run_id:
+            self.view_state.trace_focus_index = None
+
+    @property
+    def trace_focus_index(self) -> int | None:
+        return self.view_state.trace_focus_index
+
+    @trace_focus_index.setter
+    def trace_focus_index(self, value: int | None) -> None:
+        self.view_state.trace_focus_index = value
 
     @property
     def answer_stream_open(self) -> bool:

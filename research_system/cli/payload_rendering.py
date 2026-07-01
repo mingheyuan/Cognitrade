@@ -24,8 +24,10 @@ from research_system.services.run_payloads import (
     latest_run_context,
     render_labeled_field_line,
     render_run_row_text,
+    render_trace_row_text,
     replay_payload_fields,
     render_status_counts_text,
+    trace_payload_fields,
     run_payload_fields,
 )
 
@@ -111,6 +113,8 @@ def print_payload(payload: object, *, as_json: bool, emit_text, output_writer=No
         if print_doctor_payload(payload, emit_text=emit_text, output_writer=output_writer):
             return 0
         if print_replay_payload(payload, emit_text=emit_text, output_writer=output_writer):
+            return 0
+        if print_trace_payload(payload, emit_text=emit_text, output_writer=output_writer):
             return 0
         display_summary = payload.get("display_summary")
         if display_summary:
@@ -215,6 +219,37 @@ def print_replay_payload(payload: dict, *, emit_text, output_writer=None) -> boo
     result = payload.get("result")
     if result:
         emit_text(output_writer, meta_update(json.dumps(result, ensure_ascii=True, indent=2)))
+    return True
+
+
+def print_trace_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
+    if "subagent_trace" not in payload or "dynamic_trace" not in payload or "wait_trace" not in payload:
+        return False
+    emit_text(
+        output_writer,
+        state_patch_update(
+            ShellStatePatch(
+                trace_payload=payload,
+            )
+        ),
+    )
+    emit_run_detail_fields(
+        trace_payload_fields(payload),
+        emit_text=emit_text,
+        output_writer=output_writer,
+    )
+    for section_name in ("subagent_trace", "dynamic_trace", "wait_trace"):
+        rows = payload.get(section_name) or []
+        if not isinstance(rows, list):
+            continue
+        emit_text(output_writer, meta_update(f"{section_name}:"))
+        if not rows:
+            emit_text(output_writer, meta_update("  -"))
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            emit_text(output_writer, meta_update(render_trace_row_text(row, indent="  ")))
     return True
 
 

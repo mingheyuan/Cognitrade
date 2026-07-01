@@ -86,6 +86,8 @@ class ChatKeybindingsTests(unittest.TestCase):
                 "Keys.Escape",
                 "Keys.F1",
                 "Keys.F2",
+                "Keys.F3",
+                "Keys.F4",
                 "Keys.Home",
                 "Keys.PageDown",
                 "Keys.PageUp",
@@ -243,10 +245,10 @@ class ChatKeybindingsTests(unittest.TestCase):
         self.assertEqual(session.output_mode, "live")
         self.assertEqual(focus_targets, [])
 
-    def test_chat_keybindings_f2_toggles_output_mode(self) -> None:
+    def test_chat_keybindings_f2_toggles_trace_panel_and_loads_trace_payload(self) -> None:
         session = TuiSession(
             settings=Settings.from_env(Path(".")),
-            state=ChatSessionState(),
+            state=ChatSessionState(last_run_id="01TRACE"),
             llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
             task_router=TaskRouter(),
             output_lines=[],
@@ -261,6 +263,136 @@ class ChatKeybindingsTests(unittest.TestCase):
         session.input_area = _FakeInputArea("")  # type: ignore[assignment]
         app = _FakeApp()
         session.app = app
+        trace_calls: list[tuple[str, str]] = []
+        kb = build_chat_keybindings(
+            session,
+            handle_chat_line=lambda *args, **kwargs: None,
+            execute_cli_command=lambda _settings, *, command, run_id, **kwargs: (
+                trace_calls.append((command, run_id))
+                or {
+                    "run_id": run_id,
+                    "request": {"intent": "stock_compare", "user_query": "compare banks"},
+                    "summary": {"status": "completed"},
+                    "subagent_trace": [],
+                    "dynamic_trace": [],
+                    "wait_trace": [],
+                }
+            ),
+            submit_tui_input=lambda *args, **kwargs: None,
+            request_stop=lambda *args, **kwargs: None,
+            toggle_commands_popup=lambda *args, **kwargs: None,
+            emit_warning_update=lambda *args, **kwargs: None,
+        )
+
+        binding = _find_binding(kb, str(Keys.F2))
+        event = _FakeEvent(app)
+        self.assertEqual(session.output_panel, "transcript")
+        binding.handler(event)
+        self.assertEqual(trace_calls, [("trace", "01TRACE")])
+        self.assertEqual(session.output_panel, "trace")
+        self.assertFalse(session.follow_output)
+        self.assertEqual(session.trace_payload["run_id"], "01TRACE")
+        binding.handler(event)
+        self.assertEqual(session.output_panel, "transcript")
+        self.assertEqual(session.output_mode, "live")
+        self.assertTrue(session.follow_output)
+        session.output_mode = "browse"
+        session.follow_output = False
+        binding.handler(event)
+        self.assertEqual(session.output_panel, "trace")
+        binding.handler(event)
+        self.assertEqual(session.output_panel, "transcript")
+        self.assertFalse(session.follow_output)
+        self.assertEqual(session.output_mode, "browse")
+
+    def test_chat_keybindings_f2_uses_live_trace_cache_without_cli_fetch(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+            task_router=TaskRouter(),
+            output_lines=[],
+        )
+
+        class _FakeOutputArea:
+            def __init__(self) -> None:
+                self.text = "line1\nline2\nline3"
+                self.buffer = type("Buffer", (), {"cursor_position": len(self.text)})()
+
+        session.output_area = _FakeOutputArea()  # type: ignore[assignment]
+        session.input_area = _FakeInputArea("")  # type: ignore[assignment]
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [],
+            "dynamic_trace": [],
+            "wait_trace": [],
+            "event_counts": {"events": 1, "subagent_trace": 0, "dynamic_trace": 0, "wait_trace": 0},
+        }
+        app = _FakeApp()
+        session.app = app
+        trace_calls: list[tuple[str, str]] = []
+        kb = build_chat_keybindings(
+            session,
+            handle_chat_line=lambda *args, **kwargs: None,
+            execute_cli_command=lambda _settings, *, command, run_id, **kwargs: trace_calls.append((command, run_id)) or {},
+            submit_tui_input=lambda *args, **kwargs: None,
+            request_stop=lambda *args, **kwargs: None,
+            toggle_commands_popup=lambda *args, **kwargs: None,
+            emit_warning_update=lambda *args, **kwargs: None,
+        )
+
+        binding = _find_binding(kb, str(Keys.F2))
+        binding.handler(_FakeEvent(app))
+
+        self.assertEqual(session.output_panel, "trace")
+        self.assertEqual(trace_calls, [])
+
+    def test_chat_keybindings_f3_cycles_trace_task_focus_and_f4_clears_it(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+            task_router=TaskRouter(),
+            output_lines=[],
+        )
+
+        class _FakeOutputArea:
+            def __init__(self) -> None:
+                self.text = "line1\nline2\nline3"
+                self.buffer = type("Buffer", (), {"cursor_position": len(self.text)})()
+
+        session.output_area = _FakeOutputArea()  # type: ignore[assignment]
+        session.input_area = _FakeInputArea("")  # type: ignore[assignment]
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "status": "completed",
+                    "subagent_type": "stock_snapshot_collector",
+                },
+                {
+                    "action_id": "act_retrieve",
+                    "node_id": "retrieve",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                    "status": "completed",
+                    "subagent_type": "retrieval_decider",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        app = _FakeApp()
+        session.app = app
         kb = build_chat_keybindings(
             session,
             handle_chat_line=lambda *args, **kwargs: None,
@@ -271,15 +403,17 @@ class ChatKeybindingsTests(unittest.TestCase):
             emit_warning_update=lambda *args, **kwargs: None,
         )
 
-        binding = _find_binding(kb, str(Keys.F2))
-        event = _FakeEvent(app)
-        self.assertEqual(session.output_mode, "live")
-        binding.handler(event)
-        self.assertEqual(session.output_mode, "browse")
-        self.assertFalse(session.follow_output)
-        binding.handler(event)
-        self.assertEqual(session.output_mode, "live")
-        self.assertTrue(session.follow_output)
+        next_binding = _find_binding(kb, str(Keys.F3))
+        clear_binding = _find_binding(kb, str(Keys.F4))
+        next_binding.handler(_FakeEvent(app))
+        self.assertEqual(session.trace_focus_index, 0)
+        self.assertEqual(session.output_area.buffer.cursor_position, 0)
+        next_binding.handler(_FakeEvent(app))
+        self.assertEqual(session.trace_focus_index, 1)
+        next_binding.handler(_FakeEvent(app))
+        self.assertEqual(session.trace_focus_index, 0)
+        clear_binding.handler(_FakeEvent(app))
+        self.assertIsNone(session.trace_focus_index)
 
 
 if __name__ == "__main__":

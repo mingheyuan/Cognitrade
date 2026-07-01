@@ -9,6 +9,7 @@ from research_system.cli.chat_state import (
     apply_session_state_patch_to_state,
     build_new_thread_session_patch,
     clear_recent_session_patch,
+    persist_thread_checkpoint,
 )
 from research_system.cli.chat_thread_store import ChatThreadStore
 from research_system.runtime.display import build_display_summary
@@ -66,8 +67,91 @@ def ensure_session_thread(*, settings: Settings, state) -> str:
 def start_new_session_thread(*, settings: Settings, state) -> str:
     store = ChatThreadStore(settings)
     resolved = store.ensure_thread(None)
+    store.ensure_thread_metadata(
+        thread_id=resolved,
+        defaults={
+            "thread_source": "new",
+            "parent_thread_id": None,
+            "forked_from_thread_id": None,
+            "fork_turn_count": 0,
+            "archived": False,
+            "archived_at": None,
+            "unarchived_at": None,
+        },
+    )
     apply_session_state_patch_to_state(state, build_new_thread_session_patch(thread_id=resolved))
     return resolved
+
+
+def fork_session_thread(*, settings: Settings, state, source_thread_id: str | None = None) -> str:
+    store = ChatThreadStore(settings)
+    parent_thread_id = str(source_thread_id or getattr(state, "thread_id", None) or "").strip()
+    if not parent_thread_id:
+        parent_thread_id = ensure_session_thread(settings=settings, state=state)
+    parent_thread_id = store.ensure_thread(parent_thread_id)
+    child_thread_id = store.ensure_thread(None)
+
+    turns = store.read_all_turns(thread_id=parent_thread_id)
+    copied_turns: list[dict[str, Any]] = []
+    for index, row in enumerate(turns, start=1):
+        copied = dict(row)
+        copied["thread_id"] = child_thread_id
+        copied["turn_seq"] = index
+        copied_turns.append(copied)
+    if copied_turns:
+        store.replace_turns(thread_id=child_thread_id, rows=copied_turns)
+
+    parent_summary = store.load_thread_summary(thread_id=parent_thread_id)
+    if isinstance(parent_summary, dict):
+        summary_metadata = dict(parent_summary.get("metadata") or {})
+        summary_metadata.setdefault("forked_from_thread_id", parent_thread_id)
+        store.write_thread_summary(
+            thread_id=child_thread_id,
+            summary_text=str(parent_summary.get("summary_text") or ""),
+            last_turn_at=parent_summary.get("last_turn_at"),
+            source_turn_count=parent_summary.get("source_turn_count"),
+            covered_turn_count=parent_summary.get("covered_turn_count"),
+            delta_turn_count=parent_summary.get("delta_turn_count"),
+            metadata=summary_metadata,
+        )
+
+    parent_checkpoint = store.load_thread_checkpoint(thread_id=parent_thread_id)
+    if isinstance(parent_checkpoint, dict) and isinstance(parent_checkpoint.get("session_state"), dict):
+        session_state = dict(parent_checkpoint["session_state"])
+        session_state["thread_id"] = child_thread_id
+        store.write_thread_checkpoint(thread_id=child_thread_id, session_state=session_state)
+
+    parent_metadata = store.load_thread_metadata(thread_id=parent_thread_id) or {"thread_id": parent_thread_id}
+    topic_title = _thread_topic_title(
+        last_user_query=getattr(state, "last_user_query", None),
+        last_result_summary=getattr(state, "last_result_summary", None),
+        topic_title=parent_metadata.get("topic_title"),
+    )
+    store.write_thread_metadata(
+        thread_id=child_thread_id,
+        metadata={
+            **dict(parent_metadata),
+            "thread_id": child_thread_id,
+            "thread_source": "fork",
+            "parent_thread_id": parent_thread_id,
+            "forked_from_thread_id": parent_thread_id,
+            "fork_turn_count": len(copied_turns),
+            "topic_title": topic_title,
+            "archived": False,
+            "archived_at": None,
+            "unarchived_at": None,
+        },
+    )
+
+    state.thread_id = child_thread_id
+    state.thread_source = "fork"
+    state.parent_thread_id = parent_thread_id
+    _clear_recent_session_memory(state)
+    state.thread_id = child_thread_id
+    state.thread_source = "fork"
+    state.parent_thread_id = parent_thread_id
+    hydrate_session_from_persistent_memory(settings=settings, state=state)
+    return child_thread_id
 
 
 def switch_session_thread(*, settings: Settings, state, thread_id: str) -> bool:
@@ -81,11 +165,56 @@ def switch_session_thread(*, settings: Settings, state, thread_id: str) -> bool:
     return True
 
 
-def list_chat_threads(*, settings: Settings, limit: int = 10) -> list[dict[str, Any]]:
-    rows = ChatThreadStore(settings).list_threads(limit=limit)
+def archive_session_thread(*, settings: Settings, state, thread_id: str | None = None) -> dict[str, Any] | None:
+    store = ChatThreadStore(settings)
+    target_thread_id = str(thread_id or getattr(state, "thread_id", None) or "").strip()
+    if not target_thread_id:
+        return None
+    if not store.has_thread(thread_id=target_thread_id):
+        return None
+    if target_thread_id == str(getattr(state, "thread_id", None) or "").strip():
+        persist_thread_checkpoint(settings=settings, state=state)
+    archived_at = build_memory_recorded_at()
+    metadata = store.archive_thread(thread_id=target_thread_id, archived_at=archived_at)
+    next_thread_id = None
+    if target_thread_id == str(getattr(state, "thread_id", None) or "").strip():
+        next_thread_id = start_new_session_thread(settings=settings, state=state)
+    return {
+        "thread_id": target_thread_id,
+        "archived_at": archived_at,
+        "next_thread_id": next_thread_id,
+        "metadata": metadata,
+    }
+
+
+def unarchive_session_thread(*, settings: Settings, thread_id: str) -> dict[str, Any] | None:
+    store = ChatThreadStore(settings)
+    target_thread_id = str(thread_id or "").strip()
+    if not target_thread_id or not store.has_thread(thread_id=target_thread_id):
+        return None
+    unarchived_at = build_memory_recorded_at()
+    metadata = store.unarchive_thread(thread_id=target_thread_id, unarchived_at=unarchived_at)
+    return {
+        "thread_id": target_thread_id,
+        "unarchived_at": unarchived_at,
+        "metadata": metadata,
+    }
+
+
+def list_chat_threads(*, settings: Settings, limit: int = 10, scope: str = "active") -> list[dict[str, Any]]:
+    include_archived = scope == "all"
+    archived_only = scope == "archived"
+    rows = ChatThreadStore(settings).list_threads(
+        limit=limit,
+        include_archived=include_archived,
+        archived_only=archived_only,
+    )
     enriched: list[dict[str, Any]] = []
+    store = ChatThreadStore(settings)
     for row in rows:
-        summary = ChatThreadStore(settings).load_thread_summary(thread_id=str(row.get("thread_id") or ""))
+        thread_id = str(row.get("thread_id") or "")
+        summary = store.load_thread_summary(thread_id=thread_id)
+        metadata_record = store.load_thread_metadata(thread_id=thread_id) or {}
         metadata = summary.get("metadata") if isinstance(summary, dict) and isinstance(summary.get("metadata"), dict) else {}
         enriched.append(
             {
@@ -93,9 +222,14 @@ def list_chat_threads(*, settings: Settings, limit: int = 10) -> list[dict[str, 
                 "topic_title": _thread_topic_title(
                     last_user_query=metadata.get("last_user_query"),
                     last_result_summary=metadata.get("last_result_summary"),
-                    topic_title=metadata.get("topic_title"),
+                    topic_title=metadata.get("topic_title") or metadata_record.get("topic_title"),
                 ),
                 "topic_intent": str(metadata.get("last_result_intent") or "").strip() or None,
+                "thread_source": str(metadata_record.get("thread_source") or "").strip() or "new",
+                "parent_thread_id": str(metadata_record.get("parent_thread_id") or "").strip() or None,
+                "fork_turn_count": int(metadata_record.get("fork_turn_count") or 0),
+                "archived": bool(metadata_record.get("archived")),
+                "archived_at": str(metadata_record.get("archived_at") or "").strip() or None,
             }
         )
     return enriched
@@ -169,10 +303,18 @@ def hydrate_session_from_persistent_memory(*, settings: Settings, state) -> bool
     checkpoint = store.load_thread_checkpoint(thread_id=thread_id)
     if checkpoint is not None:
         apply_session_checkpoint_to_state(state=state, checkpoint=checkpoint)
+        metadata = store.load_thread_metadata(thread_id=thread_id) or {}
+        if metadata:
+            state.thread_source = str(metadata.get("thread_source") or "").strip() or getattr(state, "thread_source", None)
+            state.parent_thread_id = str(metadata.get("parent_thread_id") or "").strip() or getattr(state, "parent_thread_id", None)
         return True
     turns = store.read_recent_turns(thread_id=thread_id, limit=_THREAD_CONTEXT_LIMIT)
     if turns:
         _apply_turns_to_state(state=state, turns=turns)
+        metadata = store.load_thread_metadata(thread_id=thread_id) or {}
+        if metadata:
+            state.thread_source = str(metadata.get("thread_source") or "").strip() or getattr(state, "thread_source", None)
+            state.parent_thread_id = str(metadata.get("parent_thread_id") or "").strip() or getattr(state, "parent_thread_id", None)
         return True
     record = MemoryService(Mem0Adapter(settings)).load_latest_chat_research_memory(thread_id=thread_id)
     if record is None:
@@ -180,6 +322,10 @@ def hydrate_session_from_persistent_memory(*, settings: Settings, state) -> bool
     if record is None:
         return False
     _apply_record_to_state(state=state, record=record)
+    metadata = store.load_thread_metadata(thread_id=thread_id) or {}
+    if metadata:
+        state.thread_source = str(metadata.get("thread_source") or "").strip() or getattr(state, "thread_source", None)
+        state.parent_thread_id = str(metadata.get("parent_thread_id") or "").strip() or getattr(state, "parent_thread_id", None)
     return True
 
 
@@ -315,11 +461,21 @@ def current_thread_summary(*, settings: Settings, state) -> dict[str, Any]:
     turns = store.read_recent_turns(thread_id=thread_id, limit=_THREAD_CONTEXT_LIMIT)
     persisted_summary = store.load_thread_summary(thread_id=thread_id)
     persisted_checkpoint = store.load_thread_checkpoint(thread_id=thread_id)
+    metadata_record = store.load_thread_metadata(thread_id=thread_id) or {}
     summary_metadata = (persisted_summary or {}).get("metadata") if isinstance((persisted_summary or {}).get("metadata"), dict) else {}
     return {
         "thread_id": thread_id,
         "turn_count": len(turns),
-        "lifetime_turn_count": int(next((row.get("lifetime_turn_count") or 0 for row in store.list_threads(limit=1000) if str(row.get("thread_id") or "") == thread_id), 0)),
+        "lifetime_turn_count": int(
+            next(
+                (
+                    row.get("lifetime_turn_count") or 0
+                    for row in store.list_threads(limit=1000, include_archived=True)
+                    if str(row.get("thread_id") or "") == thread_id
+                ),
+                0,
+            )
+        ),
         "last_user_query": getattr(state, "last_user_query", None),
         "last_run_id": getattr(state, "last_run_id", None),
         "last_result_summary": summary_metadata.get("last_result_summary") or getattr(state, "last_result_summary", None),
@@ -329,12 +485,17 @@ def current_thread_summary(*, settings: Settings, state) -> dict[str, Any]:
         "topic_title": _thread_topic_title(
             last_user_query=summary_metadata.get("last_user_query") or getattr(state, "last_user_query", None),
             last_result_summary=summary_metadata.get("last_result_summary") or getattr(state, "last_result_summary", None),
-            topic_title=summary_metadata.get("topic_title"),
+            topic_title=summary_metadata.get("topic_title") or metadata_record.get("topic_title"),
         ),
         "topic_intent": str(summary_metadata.get("last_result_intent") or getattr(state, "last_result_intent", None) or "").strip() or None,
         "open_question": str(getattr(state, "pending_clarification_question", None) or "").strip() or None,
         "recommended_next_step": summary_metadata.get("last_result_follow_up") or getattr(state, "last_result_follow_up", None),
         "thread_status": "clarification_pending" if str(getattr(state, "pending_clarification_question", None) or "").strip() else "active",
+        "thread_source": str(metadata_record.get("thread_source") or "").strip() or "new",
+        "parent_thread_id": str(metadata_record.get("parent_thread_id") or "").strip() or None,
+        "fork_turn_count": int(metadata_record.get("fork_turn_count") or 0),
+        "archived": bool(metadata_record.get("archived")),
+        "archived_at": str(metadata_record.get("archived_at") or "").strip() or None,
     }
 
 
@@ -366,6 +527,11 @@ def build_thread_profile_context(*, settings: Settings, state) -> list[dict[str,
             "open_question": summary.get("open_question"),
             "recommended_next_step": summary.get("recommended_next_step"),
             "thread_status": summary.get("thread_status"),
+            "thread_source": summary.get("thread_source"),
+            "parent_thread_id": summary.get("parent_thread_id"),
+            "fork_turn_count": summary.get("fork_turn_count"),
+            "archived": summary.get("archived"),
+            "archived_at": summary.get("archived_at"),
             "turn_count": summary.get("turn_count"),
             "lifetime_turn_count": summary.get("lifetime_turn_count"),
             "has_compact_summary": summary.get("has_compact_summary"),

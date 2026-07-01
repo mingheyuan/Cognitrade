@@ -75,6 +75,9 @@ class RuntimeContext:
     state: RunStateSnapshot
     subagent_trace: list[dict]
     dynamic_trace: list[dict]
+    current_action_id: str | None = None
+    current_node_id: str | None = None
+    current_action_objective: str | None = None
 
 
 class ResearchOrchestrator:
@@ -355,6 +358,10 @@ class ResearchOrchestrator:
         paths = self.run_store.load_run_paths(run_id)
         return SessionHistory(paths.root).replay()
 
+    def trace(self, run_id: str) -> dict:
+        paths = self.run_store.load_run_paths(run_id)
+        return SessionHistory(paths.root).trace()
+
     def history(self) -> list[dict]:
         return self.run_store.list_runs()
 
@@ -594,9 +601,11 @@ class ResearchOrchestrator:
                     context.dynamic_trace.append(
                         {
                             "event": "dynamic_action_inserted",
+                            "action_id": action.action_id,
                             "node_id": action.node_id,
                             "phase": action.phase,
                             "agent": action.agent,
+                            "objective": action.objective,
                             "tags": action.tags,
                         }
                     )
@@ -639,6 +648,9 @@ class ResearchOrchestrator:
     ) -> None:
         phase = action.phase
         agent = action.agent
+        context.current_action_id = action.action_id
+        context.current_node_id = action.node_id
+        context.current_action_objective = action.objective
         self._update_state(context, current_phase=phase, active_agent=agent)
         self._emit_event(
             context,
@@ -648,6 +660,11 @@ class ResearchOrchestrator:
             phase=phase,
             agent=agent,
             message=f"Phase started: {phase}",
+            payload={
+                "action_id": action.action_id,
+                "node_id": action.node_id,
+                "objective": action.objective,
+            },
         )
         self._enforce_runtime_controls(context, request_id=request.request_id, intent=intent)
         self._emit_event(
@@ -658,6 +675,11 @@ class ResearchOrchestrator:
             phase=phase,
             agent=agent,
             message=f"Agent started: {agent}",
+            payload={
+                "action_id": action.action_id,
+                "node_id": action.node_id,
+                "objective": action.objective,
+            },
         )
 
         if agent == "collector":
@@ -693,7 +715,12 @@ class ResearchOrchestrator:
                         phase=phase,
                         agent=agent,
                         message="Entered waiting_external state",
-                        payload={"wait_timeout_seconds": self.settings.external_wait_timeout_seconds},
+                        payload={
+                            "wait_timeout_seconds": self.settings.external_wait_timeout_seconds,
+                            "action_id": action.action_id,
+                            "node_id": action.node_id,
+                            "objective": action.objective,
+                        },
                     )
                     self._wait_for_external_dependency(context, request_id=request.request_id, intent=intent)
                     context.control_plane.clear_wait_deadline()
@@ -1419,6 +1446,9 @@ class ResearchOrchestrator:
             pending_nodes=[item.node_id for item in pending_actions_after_current],
             completed_nodes=completed_node_ids + [action.node_id],
         )
+        context.current_action_id = None
+        context.current_node_id = None
+        context.current_action_objective = None
         context.checkpoint_store.save(context.state)
 
     def _add_entry(self, context: RuntimeContext, request: RequestEnvelope, intent: str, entry: BlackboardEntry) -> None:
@@ -1561,6 +1591,9 @@ class ResearchOrchestrator:
             record = dict(item)
             record.setdefault("agent", agent)
             record.setdefault("phase", phase)
+            record.setdefault("action_id", context.current_action_id)
+            record.setdefault("node_id", context.current_node_id)
+            record.setdefault("action_objective", context.current_action_objective)
             context.subagent_trace.append(record)
             subagent_type = str(record.get("subagent_type") or agent).strip()
             status = str(record.get("status") or "completed").strip()
@@ -1600,6 +1633,9 @@ class ResearchOrchestrator:
             "status": record.status if record is not None else ("failed" if stage == "failed" else "running"),
             "notes": list((record.notes if record is not None else []) or []),
             "output_keys": list((record.output_keys if record is not None else []) or []),
+            "action_id": context.current_action_id,
+            "node_id": context.current_node_id,
+            "action_objective": context.current_action_objective,
         }
         if error is not None and not payload["notes"]:
             payload["notes"] = [f"{error.__class__.__name__}: {error}"]

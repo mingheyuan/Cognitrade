@@ -171,6 +171,60 @@ class ChatPresenterTests(unittest.TestCase):
         self.assertIn("llm_report_composer: failed", chunks[0].text)
         self.assertIn("timeout", chunks[0].text)
 
+    def test_presenter_accumulates_live_trace_payload_from_runtime_events(self) -> None:
+        presenter = ChatStreamPresenter()
+
+        presenter.on_event(
+            _event(
+                event_type="subagent_started",
+                phase="collect",
+                agent="collector",
+                payload={
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "action_objective": "Load source records.",
+                    "subagent_type": "stock_snapshot_collector",
+                    "objective": "Collect stock-level verified snapshots.",
+                    "status": "running",
+                },
+            )
+        )
+        presenter.on_event(
+            _event(
+                event_type="dynamic_action_inserted",
+                phase="review",
+                agent="supervisor",
+                payload={"action_id": "act_screen_review", "node_id": "screen_review", "objective": "Review screened candidates."},
+            )
+        )
+        presenter.on_event(
+            _event(
+                event_type="phase_started",
+                phase="collect",
+                agent="collector",
+                message="Entered waiting_external state",
+                payload={
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "objective": "Load source records.",
+                    "wait_timeout_seconds": 30,
+                },
+            )
+        )
+
+        trace_payload = presenter.current_trace_payload()
+        self.assertIsNotNone(trace_payload)
+        self.assertEqual(trace_payload["run_id"], "run")
+        self.assertEqual(trace_payload["summary"]["status"], "running")
+        self.assertEqual(len(trace_payload["subagent_trace"]), 1)
+        self.assertEqual(trace_payload["subagent_trace"][0]["subagent_type"], "stock_snapshot_collector")
+        self.assertEqual(trace_payload["subagent_trace"][0]["node_id"], "collect")
+        self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
+        self.assertEqual(trace_payload["dynamic_trace"][0]["node_id"], "screen_review")
+        self.assertEqual(len(trace_payload["wait_trace"]), 1)
+        self.assertEqual(trace_payload["wait_trace"][0]["event"], "waiting_external_started")
+        self.assertEqual(trace_payload["wait_trace"][0]["node_id"], "collect")
+
 
 if __name__ == "__main__":
     unittest.main()

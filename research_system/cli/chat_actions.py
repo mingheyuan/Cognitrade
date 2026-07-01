@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from research_system.cli.chat_memory import (
+    archive_session_thread,
     compact_session_thread,
     current_thread_summary,
+    fork_session_thread,
     has_recent_chat_memory,
     hydrate_session_from_persistent_memory,
     list_chat_threads,
     start_new_session_thread,
     switch_session_thread,
+    unarchive_session_thread,
 )
 from research_system.cli.chat_commands import resolve_chat_run_id
 from research_system.cli.cli_command_payloads import PROPOSAL_COMMANDS, RUN_ID_COMMANDS, STATUS_FILTER_COMMANDS, build_cli_command_payload
@@ -61,6 +64,14 @@ def _handle_show_thread_action(*, state, settings, emit_text, output_writer=None
     emit_text(output_writer, meta_update(f"thread_id: {summary.get('thread_id') or 'unset'}"))
     emit_text(output_writer, meta_update(f"thread_turns: {summary.get('turn_count') or 0}"))
     emit_text(output_writer, meta_update(f"thread_lifetime_turns: {summary.get('lifetime_turn_count') or 0}"))
+    emit_text(output_writer, meta_update(f"thread_source: {summary.get('thread_source') or 'new'}"))
+    emit_text(output_writer, meta_update(f"thread_archived: {'yes' if summary.get('archived') else 'no'}"))
+    if summary.get("archived_at"):
+        emit_text(output_writer, meta_update(f"thread_archived_at: {summary.get('archived_at')}"))
+    if summary.get("parent_thread_id"):
+        emit_text(output_writer, meta_update(f"thread_parent: {summary.get('parent_thread_id')}"))
+    if summary.get("fork_turn_count"):
+        emit_text(output_writer, meta_update(f"thread_fork_turns: {summary.get('fork_turn_count')}"))
     if summary.get("topic_title"):
         emit_text(output_writer, meta_update(f"thread_topic: {summary.get('topic_title')}"))
     if summary.get("topic_intent"):
@@ -81,6 +92,54 @@ def _handle_compact_thread_action(*, state, settings, emit_text, output_writer=N
     source_turn_count = int(payload.get("source_turn_count") or 0)
     emit_text(output_writer, meta_update(f"thread compacted: {state.thread_id or 'unset'}"))
     emit_text(output_writer, meta_update(f"summary_turns: {source_turn_count}"))
+    return None
+
+
+def _handle_fork_thread_action(*, state, settings, emit_text, output_writer=None, **_: object) -> None:
+    source_thread_id = str(getattr(state, "thread_id", None) or "").strip() or None
+    thread_id = fork_session_thread(settings=settings, state=state, source_thread_id=source_thread_id)
+    emit_text(
+        output_writer,
+        meta_update(
+            f"forked thread: {thread_id}",
+            session_patch=mirror_session_state_patch(state, thread_id=thread_id),
+        ),
+    )
+    if source_thread_id:
+        emit_text(output_writer, meta_update(f"forked_from: {source_thread_id}"))
+    return None
+
+
+def _handle_archive_thread_action(*, state, settings, parsed: dict, emit_text, output_writer=None, **_: object) -> None:
+    payload = archive_session_thread(
+        settings=settings,
+        state=state,
+        thread_id=str(parsed.get("thread_id") or "").strip() or None,
+    )
+    if payload is None:
+        emit_text(output_writer, warning_update("thread_id is required and must exist"))
+        return None
+    emit_text(output_writer, meta_update(f"thread_archived: {payload['thread_id']}"))
+    emit_text(output_writer, meta_update(f"thread_archived_at: {payload['archived_at']}"))
+    if payload.get("next_thread_id"):
+        emit_text(
+            output_writer,
+            meta_update(
+                f"thread_switched_to: {payload['next_thread_id']}",
+                session_patch=build_new_thread_session_patch(thread_id=str(payload["next_thread_id"])),
+            ),
+        )
+    return None
+
+
+def _handle_unarchive_thread_action(*, parsed: dict, settings, emit_text, output_writer=None, **_: object) -> None:
+    thread_id = str(parsed.get("thread_id") or "").strip()
+    payload = unarchive_session_thread(settings=settings, thread_id=thread_id)
+    if payload is None:
+        emit_text(output_writer, warning_update("thread_id is required and must exist"))
+        return None
+    emit_text(output_writer, meta_update(f"thread_unarchived: {payload['thread_id']}"))
+    emit_text(output_writer, meta_update(f"thread_unarchived_at: {payload['unarchived_at']}"))
     return None
 
 
@@ -217,6 +276,9 @@ _META_ACTION_HANDLERS = {
     "commands": _handle_commands_action,
     "help": _handle_help_action,
     "new_thread": _handle_new_thread_action,
+    "fork_thread": _handle_fork_thread_action,
+    "archive_thread": _handle_archive_thread_action,
+    "unarchive_thread": _handle_unarchive_thread_action,
     "show_thread": _handle_show_thread_action,
     "compact_thread": _handle_compact_thread_action,
     "exit": _handle_exit_action,
@@ -270,7 +332,11 @@ def _handle_threads_cli_action(
     output_writer=None,
     **_: object,
 ) -> bool:
-    rows = list_chat_threads(settings=settings, limit=int(parsed.get("limit") or 10))
+    rows = list_chat_threads(
+        settings=settings,
+        limit=int(parsed.get("limit") or 10),
+        scope=str(parsed.get("scope") or "active"),
+    )
     if not rows:
         emit_text(output_writer, meta_update("No chat threads."))
         return True
@@ -280,10 +346,21 @@ def _handle_threads_cli_action(
         last_turn_at = str(row.get("last_turn_at") or "").strip() or "-"
         topic_title = str(row.get("topic_title") or "").strip()
         topic_intent = str(row.get("topic_intent") or "").strip()
+        thread_source = str(row.get("thread_source") or "").strip()
+        parent_thread_id = str(row.get("parent_thread_id") or "").strip()
         active_marker = "*" if thread_id == str(getattr(state, "thread_id", None) or "") else "-"
         topic_part = f"  topic={topic_title}" if topic_title else ""
         intent_part = f"  intent={topic_intent}" if topic_intent else ""
-        emit_text(output_writer, meta_update(f"{active_marker} {thread_id}  turns={turn_count}  last={last_turn_at}{intent_part}{topic_part}"))
+        source_part = ""
+        if thread_source == "fork":
+            source_part = f"  source=fork:{parent_thread_id or '?'}"
+        archived_part = "  status=archived" if bool(row.get("archived")) else ""
+        emit_text(
+            output_writer,
+            meta_update(
+                f"{active_marker} {thread_id}  turns={turn_count}  last={last_turn_at}{intent_part}{topic_part}{source_part}{archived_part}"
+            ),
+        )
     return True
 
 

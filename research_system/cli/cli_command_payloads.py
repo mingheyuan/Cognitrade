@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 STATUS_FILTER_COMMANDS = frozenset({"history", "status", "doctor", "check", "cleanup", "reindex-qdrant"})
-RUN_ID_COMMANDS = frozenset({"replay", "resume", "cancel"})
+RUN_ID_COMMANDS = frozenset({"replay", "resume", "cancel", "trace"})
 PROPOSAL_COMMANDS = frozenset({"proposals", "proposal", "review-proposal"})
 
 

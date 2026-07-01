@@ -3,6 +3,7 @@ from __future__ import annotations
 from research_system.cli.chat_scene import (
     build_commands_popup_view,
     build_hint_bar_view,
+    build_output_blocks,
     build_shell_scene_view,
     build_status_bar_items,
     build_tui_blocks,
@@ -74,7 +75,7 @@ def refresh_tui(session: TuiSession) -> None:
             if hasattr(session.output_area, "buffer")
             else 0
         )
-        blocks = tuple(build_tui_blocks(session.output_lines))
+        blocks = tuple(build_output_blocks(session))
         if hasattr(session.output_area, "set_blocks"):
             text_changed = bool(session.output_area.set_blocks(blocks))
             session.ui_state.last_rendered_output_text = getattr(session.output_area, "text", "")
@@ -161,6 +162,10 @@ def apply_shell_state_patch(session: TuiSession, patch: ShellStatePatch) -> None
     if patch.output_mode is not None:
         session.output_mode = patch.output_mode
         session.follow_output = patch.output_mode == "live"
+    if patch.output_panel is not None:
+        session.output_panel = patch.output_panel
+    if patch.trace_payload is not None:
+        session.trace_payload = patch.trace_payload
     if patch.answer_stream_open is not None:
         session.answer_stream_open = patch.answer_stream_open
 
@@ -184,6 +189,8 @@ def has_shell_state_patch(patch: ShellStatePatch) -> bool:
             patch.help_mode,
             patch.input_mode,
             patch.output_mode,
+            patch.output_panel,
+            patch.trace_payload,
             patch.answer_stream_open,
         )
     )
