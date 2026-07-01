@@ -63,13 +63,17 @@ class MarketSnapshotSkill:
                 degrade_reason="symbol_missing",
             ).model_dump(mode="json")
         try:
+            market_hist = self.adapter.get_market_snapshot(
+                symbol=symbol,
+                start_date=(today - timedelta(days=30)).strftime("%Y%m%d"),
+                end_date=today.strftime("%Y%m%d"),
+            )
             primary_facts = {
-                "market_hist": self.adapter.get_market_snapshot(
+                "market_hist": market_hist,
+                "market_overview": self.adapter.get_market_overview(
                     symbol=symbol,
-                    start_date=(today - timedelta(days=30)).strftime("%Y%m%d"),
-                    end_date=today.strftime("%Y%m%d"),
+                    latest_bar=(market_hist or {}).get("latest_bar"),
                 ),
-                "market_overview": self.adapter.get_market_overview(symbol=symbol),
             }
             facts = merge_provider_facts(primary_facts=primary_facts, fallback_fact_sets=[])
             primary_source = SnapshotSource(

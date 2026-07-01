@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from research_system.runtime.provider_registry import LLMProviderError, OpenAIProvider
@@ -79,6 +81,12 @@ class ReporterService:
         methodology_payloads = self._methodology_payloads(evidences) if intent in {"stock_screen", "stock_check", "stock_compare", "review_thesis"} else []
         if intent in {"review_thesis", "stock_screen"}:
             review_summary_payload = self._review_summary_payload(evidences)
+        if intent == "stock_compare" and self._bank_compare_scorecard_payload(methodology_payloads):
+            return self._deterministic_stock_compare_report(
+                evidences=evidences,
+                methodology_payloads=methodology_payloads,
+                report_strategy=report_strategy,
+            )
         if not self.llm_provider.available:
             scorecard_digest = None
             scorecard_payload = None
@@ -161,6 +169,36 @@ class ReporterService:
             "risk": llm_outputs["risk"],
             "follow_up": self._merge_follow_up(llm_outputs["follow_up"], report_strategy),
             "degraded_note": llm_outputs["degraded_note"],
+        }
+
+    def _deterministic_stock_compare_report(
+        self,
+        *,
+        evidences: list[dict],
+        methodology_payloads: list[dict],
+        report_strategy: dict[str, str | list[str] | None],
+    ) -> dict:
+        scorecard = self._bank_compare_scorecard_payload(methodology_payloads) or {}
+        compare_digest = self._compare_digest(
+            compare_targets=self._compare_targets_payload(evidences),
+            methodology_payloads=methodology_payloads,
+        )
+        missing_metrics = [str(item) for item in list(scorecard.get("missing_metrics") or []) if str(item).strip()]
+        risk = (
+            "当前排序基于同口径银行股估值与经营质量快照，适合作为优先跟踪顺序，"
+            "但仍不替代完整财报建模、资产质量穿透和行业景气判断。"
+        )
+        if missing_metrics:
+            risk += f" 当前仍缺少部分关键字段：{', '.join(missing_metrics[:5])}。"
+        follow_up = "继续补齐银行股同口径核心字段，尤其是净息差、不良率、拨备覆盖率、资本充足率和股息率，再做最终定序。"
+        return {
+            "conclusion": compare_digest,
+            "evidence": evidences[:8],
+            "methodologies": methodology_payloads or None,
+            "review_summary": None,
+            "risk": risk,
+            "follow_up": self._merge_follow_up(follow_up, report_strategy),
+            "degraded_note": None,
         }
 
     def _normalize_planning_context_hints(self, raw_hints) -> dict[str, str]:
@@ -277,6 +315,11 @@ class ReporterService:
         return []
 
     def _compare_digest(self, *, compare_targets: list[dict], methodology_payloads: list[dict]) -> str:
+        scorecard = self._bank_compare_scorecard_payload(methodology_payloads)
+        if isinstance(scorecard, dict):
+            digest = self._bank_compare_digest(scorecard)
+            if digest:
+                return digest
         if not compare_targets:
             return "当前比较请求缺少可识别的目标股票，无法形成横向结论。"
         methodology_by_symbol: dict[str, dict[str, dict]] = {}
@@ -349,6 +392,72 @@ class ReporterService:
             lines.append("当前证据更多是单票快照，仍需补充更完整估值和行业景气数据后再排序。")
         return " ".join(lines)
 
+    def _bank_compare_scorecard_payload(self, items: list[dict]) -> dict | None:
+        for item in items:
+            source_type = str(item.get("source_type") or item.get("metadata", {}).get("source_type") or "")
+            if source_type != "bank_compare_scorecard":
+                continue
+            summary = str(item.get("summary") or "")
+            tail = summary.split("\n", 1)[1] if "\n" in summary else summary
+            try:
+                parsed = ast.literal_eval(tail.strip())
+            except Exception:
+                parsed = None
+            if isinstance(parsed, dict):
+                return parsed
+        return None
+
+    def _bank_compare_digest(self, scorecard: dict) -> str | None:
+        ranked_candidates = list(scorecard.get("ranked_candidates") or [])
+        if not ranked_candidates:
+            return None
+        top_tier = ranked_candidates[:3]
+        metric_weights = dict(scorecard.get("metric_weights") or {})
+        valuation_weight = float(metric_weights.get("pb") or 0.0)
+        lines = [
+            f"基于同口径银行股指标与估值锚点，本次共比较 {int(scorecard.get('candidate_count') or len(ranked_candidates))} 只银行股。",
+            f"当前更值得优先跟踪的第一梯队是：{', '.join(str(item.get('name') or item.get('symbol') or '').strip() for item in top_tier if str(item.get('name') or item.get('symbol') or '').strip())}。",
+        ]
+        if valuation_weight > 0:
+            lines.append(f"本轮排序已把 PB 纳入核心权重，权重约为 {valuation_weight:.0%}，不再只依赖经营质量代理指标。")
+        for item in top_tier:
+            name = str(item.get("name") or item.get("symbol") or "").strip()
+            symbol = str(item.get("symbol") or "").strip()
+            if not name:
+                continue
+            detail = f"{name}（{symbol}）"
+            if item.get("score") is not None:
+                detail += f" score={float(item.get('score')):.2f}"
+            if item.get("pb") is not None:
+                detail += f"，PB={float(item.get('pb')):.2f}"
+            highlights = [str(x) for x in list(item.get("highlights") or []) if str(x).strip()]
+            if highlights:
+                detail += f"，核心指标：{'；'.join(highlights[:3])}"
+            lines.append(detail + "。")
+        leader = top_tier[0]
+        leader_name = str(leader.get("name") or leader.get("symbol") or "").strip()
+        if leader_name:
+            lines.append(f"当前综合得分领先的是 {leader_name}，但这仍然是基于同口径估值与经营质量的快速排序，不替代完整财报建模。")
+        missing_metrics = [str(item) for item in list(scorecard.get("missing_metrics") or []) if str(item).strip()]
+        if missing_metrics:
+            lines.append(f"仍有缺口指标：{', '.join(missing_metrics[:5])}，补齐后再做最终定序。")
+        candidate_gap_digest = self._bank_compare_candidate_gap_digest(top_tier)
+        if candidate_gap_digest:
+            lines.append(candidate_gap_digest)
+        return " ".join(lines)
+
+    def _bank_compare_candidate_gap_digest(self, ranked_candidates: list[dict]) -> str | None:
+        gap_parts: list[str] = []
+        for item in ranked_candidates:
+            name = str(item.get("name") or item.get("symbol") or "").strip()
+            missing = [str(metric) for metric in list(item.get("missing_metrics") or []) if str(metric).strip()]
+            if not name or not missing:
+                continue
+            gap_parts.append(f"{name} 缺少 {', '.join(missing[:3])}")
+        if not gap_parts:
+            return None
+        return "个别银行仍有字段缺口：" + "；".join(gap_parts) + "。"
+
     def _methodology_output_value(self, methodology_payload: dict, key: str) -> str | None:
         result = self._parse_methodology_result(methodology_payload)
         outputs = result.get("outputs") or {}
@@ -367,8 +476,6 @@ class ReporterService:
             return None
 
     def _parse_methodology_result(self, methodology_payload: dict) -> dict:
-        import ast
-
         summary = str(methodology_payload.get("summary") or "")
         lines = summary.splitlines()
         payload: dict = {}
@@ -672,7 +779,7 @@ class ReporterService:
         for item in evidences:
             metadata = item.get("metadata") or {}
             source_type = str(metadata.get("source_type") or "")
-            if not source_type.startswith("methodology_"):
+            if not source_type.startswith("methodology_") and source_type != "bank_compare_scorecard":
                 continue
             payloads.append(
                 {

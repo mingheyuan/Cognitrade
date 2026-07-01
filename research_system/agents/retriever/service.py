@@ -151,6 +151,14 @@ class RetrieverService:
                 },
             )
         )
+        if intent == "stock_compare":
+            decision_outputs = self._ensure_compare_scorecard_selected(
+                payload=dict(decision_outputs),
+                evidences=evidences,
+                top_k=top_k,
+                query=query,
+                planning_context_hints=planning_context_hints,
+            )
         return decision_outputs
 
     def _index_blackboard_evidences(self, *, blackboard_entries: list[dict], qdrant) -> dict:
@@ -246,9 +254,52 @@ class RetrieverService:
             return {
                 "evidences": deduped,
             }
+        if intent == "stock_compare":
+            return {
+                "evidences": deduped,
+            }
         return {
             "evidences": deduped[: self._final_top_k()],
         }
+
+    def _ensure_compare_scorecard_selected(
+        self,
+        *,
+        payload: dict,
+        evidences: list[dict],
+        top_k: int,
+        query: str | None,
+        planning_context_hints: dict[str, str] | None,
+    ) -> dict:
+        selected = list(payload.get("evidences") or [])
+        compare_scorecards = [
+            item for item in evidences
+            if str((item.get("metadata") or {}).get("source_type") or "") == "bank_compare_scorecard"
+        ]
+        compare_requests = [
+            item for item in evidences
+            if str((item.get("metadata") or {}).get("source_type") or "") == "compare_request"
+        ]
+        if not compare_scorecards:
+            return payload
+        normalized: list[dict] = []
+        if compare_requests:
+            normalized.append(compare_requests[0])
+        normalized.append(compare_scorecards[0])
+        for item in selected:
+            if item not in normalized:
+                normalized.append(item)
+        payload["evidences"] = normalized[:top_k]
+        payload["retrieval_summary"] = self._merge_retrieval_summary(
+            self._structured_retrieval_summary(
+                intent="stock_compare",
+                evidences=payload["evidences"],
+                query=query,
+                planning_context_hints=planning_context_hints,
+            ),
+            "Deterministic stock comparison retrieval completed.",
+        )
+        return payload
 
     def _to_blackboard_entry(self, payload: dict):
         from research_system.schemas.runtime import BlackboardEntry
@@ -302,6 +353,8 @@ class RetrieverService:
             return f"watchlist_candidate:{candidate.get('symbol') or 'unknown'}"
         if entry["kind"] == "source_record" and payload.get("source_type") == "screening_scorecard":
             return "screening_scorecard"
+        if entry["kind"] == "source_record" and payload.get("source_type") == "bank_compare_scorecard":
+            return "bank_compare_scorecard"
         if entry["kind"] == "source_record" and str(payload.get("source_type") or "").startswith("methodology_"):
             methodology_type = str(payload.get("methodology_type") or payload.get("source_type") or "methodology")
             return f"{methodology_type}:{payload.get('symbol') or 'unknown'}"
@@ -412,6 +465,9 @@ class RetrieverService:
         if entry["kind"] == "source_record" and payload.get("source_type") == "screening_scorecard":
             scorecard = payload.get("scorecard") or {}
             return f"screening_scorecard\n{scorecard}"
+        if entry["kind"] == "source_record" and payload.get("source_type") == "bank_compare_scorecard":
+            scorecard = payload.get("scorecard") or {}
+            return f"bank_compare_scorecard\n{scorecard}"
         if entry["kind"] == "source_record" and str(payload.get("source_type") or "").startswith("methodology_"):
             methodology_result = payload.get("methodology_result") or {}
             parts = [
@@ -444,6 +500,15 @@ class RetrieverService:
                 "hint_type": "compare_request",
                 "symbols": list(payload.get("symbols") or []),
                 "compare_targets": list(payload.get("compare_targets") or []),
+            }
+        if entry["kind"] == "source_record" and str((entry.get("payload") or {}).get("source_type") or "") == "bank_compare_scorecard":
+            payload = entry["payload"]
+            scorecard = payload.get("scorecard") or {}
+            return {
+                "hint_type": "bank_compare_scorecard",
+                "candidate_count": scorecard.get("candidate_count"),
+                "ranked_candidates": list(scorecard.get("ranked_candidates") or []),
+                "summary": scorecard.get("summary"),
             }
         if entry["kind"] == "source_record" and str((entry.get("payload") or {}).get("source_type") or "").startswith("methodology_"):
             payload = entry["payload"]
@@ -641,6 +706,10 @@ class RetrieverService:
                 item for item in evidences
                 if str((item.get("metadata") or {}).get("source_type") or "") == "compare_request"
             ]
+            compare_scorecards = [
+                item for item in evidences
+                if str((item.get("metadata") or {}).get("source_type") or "") == "bank_compare_scorecard"
+            ]
             methodology_items = [
                 item for item in evidences
                 if str((item.get("metadata") or {}).get("source_type") or "").startswith("methodology_")
@@ -649,13 +718,24 @@ class RetrieverService:
                 item for item in evidences
                 if str((item.get("metadata") or {}).get("source_type") or "").endswith("_snapshot")
             ]
-            if not compare_requests and not methodology_items and not snapshots:
+            if not compare_requests and not compare_scorecards and not methodology_items and not snapshots:
                 return None
             parts = [f"Stock compare: snapshots={len(snapshots)}"]
             if compare_requests:
                 summary = str(compare_requests[0].get("summary") or "")
                 if "symbols" in summary:
                     parts.append(summary.splitlines()[-1].strip())
+            if compare_scorecards:
+                scorecard_payload = self._bank_compare_scorecard_payload_from_evidence(compare_scorecards[0])
+                if isinstance(scorecard_payload, dict):
+                    if scorecard_payload.get("candidate_count") is not None:
+                        parts.append(f"bank_candidate_count={scorecard_payload.get('candidate_count')}")
+                    ranked_candidates = list(scorecard_payload.get("ranked_candidates") or [])
+                    top_names = [str(item.get("name") or item.get("symbol") or "") for item in ranked_candidates[:3] if str(item.get("name") or item.get("symbol") or "").strip()]
+                    if top_names:
+                        parts.append(f"bank_top_tier={top_names}")
+                    if scorecard_payload.get("summary"):
+                        parts.append(f"bank_summary={scorecard_payload.get('summary')}")
             if methodology_items:
                 methodology_types = sorted(
                     {
@@ -1014,6 +1094,22 @@ class RetrieverService:
             return None
         return parsed if isinstance(parsed, dict) else None
 
+    def _bank_compare_scorecard_payload_from_evidence(self, item: dict) -> dict | None:
+        summary = item.get("summary")
+        if isinstance(summary, dict):
+            return summary
+        if not isinstance(summary, str):
+            return None
+        lines = summary.splitlines()
+        tail = lines[-1].strip() if lines else summary.strip()
+        if not tail.startswith("{") or not tail.endswith("}"):
+            return None
+        try:
+            parsed = ast.literal_eval(tail)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
     def _screening_scorecard_payload_from_evidence(self, item: dict) -> dict | None:
         summary = item.get("summary")
         if isinstance(summary, dict):
@@ -1303,6 +1399,10 @@ class RetrieverService:
             item for item in evidences
             if str((item.get("metadata") or {}).get("source_type") or "") == "compare_request"
         ]
+        compare_scorecards = [
+            item for item in evidences
+            if str((item.get("metadata") or {}).get("source_type") or "") == "bank_compare_scorecard"
+        ]
         methodology_items = [
             item for item in evidences
             if str((item.get("metadata") or {}).get("source_type") or "").startswith("methodology_")
@@ -1313,6 +1413,8 @@ class RetrieverService:
         ]
         selected: list[dict] = []
         selected.extend(compare_requests[:1])
+        if compare_scorecards and compare_scorecards[0] not in selected and len(selected) < top_k:
+            selected.append(compare_scorecards[0])
         for item in self._prioritize_methodology_evidences(
             methodology_items,
             query=query,
@@ -1327,6 +1429,13 @@ class RetrieverService:
                 break
             if item not in selected:
                 selected.append(item)
+        if compare_scorecards:
+            for item in compare_scorecards:
+                if len(selected) >= top_k:
+                    break
+                if item not in selected:
+                    selected.insert(1 if selected else 0, item)
+                    selected = selected[:top_k]
         return selected[:top_k]
 
     def _select_stock_check_evidences(

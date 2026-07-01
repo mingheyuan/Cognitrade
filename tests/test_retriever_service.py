@@ -740,6 +740,51 @@ class RetrieverServiceTests(unittest.TestCase):
         self.assertIn("status_counts={'pending': 1, 'approved': 1}", summary)
         self.assertIn("pending_reasons=['pending_manual_review_dimension_sample_size<2'", summary)
 
+    def test_stock_compare_summary_and_selection_include_bank_scorecard(self) -> None:
+        evidences = [
+            {
+                "evidence_id": "compare-request",
+                "title": "stock_compare input request",
+                "summary": "stock_compare input request\n{'symbols': ['000001', '600036'], 'compare_targets': [{'symbol': '000001', 'name': '平安银行'}, {'symbol': '600036', 'name': '招商银行'}]}",
+                "source_refs": [],
+                "metadata": {"source_type": "compare_request"},
+                "score": 1.0,
+            },
+            {
+                "evidence_id": "bank-scorecard",
+                "title": "bank_compare_scorecard",
+                "summary": "bank_compare_scorecard\n{'candidate_count': 2, 'metric_weights': {'pb': 0.24, 'roe': 0.24}, 'ranked_candidates': [{'symbol': '600036', 'name': '招商银行', 'score': 0.91, 'pb': 0.78}, {'symbol': '000001', 'name': '平安银行', 'score': 0.62, 'pb': 0.42}], 'summary': 'bank peer comparison ranked 2 banks using same-basis banking metrics and valuation anchors'}",
+                "retrieval_hint": {
+                    "hint_type": "bank_compare_scorecard",
+                    "candidate_count": 2,
+                    "ranked_candidates": [{"symbol": "600036", "name": "招商银行", "score": 0.91, "pb": 0.78}],
+                    "summary": "bank peer comparison ranked 2 banks using same-basis banking metrics and valuation anchors",
+                },
+                "source_refs": [],
+                "metadata": {"source_type": "bank_compare_scorecard"},
+                "score": 0.95,
+            },
+            {
+                "evidence_id": "method-comps",
+                "title": "comps:600036",
+                "summary": "methodology_result type=comps symbol=600036",
+                "source_refs": [],
+                "metadata": {"source_type": "methodology_comps", "methodology_type": "comps"},
+                "score": 0.8,
+            },
+        ]
+
+        summary = self.service._structured_retrieval_summary(intent="stock_compare", evidences=evidences)
+        selected = self.service._select_compare_evidences(evidences=evidences, top_k=3)
+
+        self.assertIsNotNone(summary)
+        assert summary is not None
+        self.assertIn("bank_candidate_count=2", summary)
+        self.assertIn("bank_top_tier=['招商银行', '平安银行']", summary)
+        self.assertIn("valuation anchors", summary)
+        self.assertEqual(selected[0]["metadata"]["source_type"], "compare_request")
+        self.assertEqual(selected[1]["metadata"]["source_type"], "bank_compare_scorecard")
+
 
 if __name__ == "__main__":
     unittest.main()

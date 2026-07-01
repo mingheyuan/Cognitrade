@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from research_system.adapters.vendors.akshare_utils import coerce_numeric
 from research_system.schemas.valuation import CompsModelResult, ValuationBand, ValuationPeer
 
 
@@ -228,9 +229,4 @@ class CompsService:
         return round(below / len(normalized), 4)
 
     def _to_float(self, value: Any) -> float | None:
-        if value in (None, "", False):
-            return None
-        try:
-            return float(value)
-        except Exception:
-            return None
+        return coerce_numeric(value)

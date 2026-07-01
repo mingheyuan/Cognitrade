@@ -45,6 +45,7 @@ from research_system.services.methodologies.comps_service import CompsService
 from research_system.services.methodologies.dcf_service import DCFService
 from research_system.services.proposal_generator import ProposalGenerator
 from research_system.services.task_router import TaskRouter
+from research_system.adapters.vendors.akshare_utils import coerce_numeric
 from research_system.adapters.storage.mem0_adapter import Mem0Adapter
 from research_system.schemas.subagents import SubagentExecutionRecord, SubagentInvocation
 
@@ -1754,6 +1755,16 @@ class ResearchOrchestrator:
                         peers=peers,
                     )
                 )
+            scorecard_entry = self._build_bank_compare_scorecard_entry(
+                context=context,
+                request=request,
+                phase=phase,
+                agent=agent,
+                compare_targets=compare_targets,
+                peer_candidates=peer_candidates,
+            )
+            if scorecard_entry is not None:
+                entries.append(scorecard_entry)
             return entries
 
         request_entry = next(
@@ -1810,6 +1821,7 @@ class ResearchOrchestrator:
     ) -> dict:
         market_snapshot = snapshots.get("market")
         fundamental_snapshot = snapshots.get("fundamental")
+        banking_metrics = self._banking_metrics(fundamental_snapshot)
         return {
             "symbol": symbol,
             "name": name or symbol,
@@ -1817,7 +1829,15 @@ class ResearchOrchestrator:
             "latest_price": self._methodology_market_price(market_snapshot),
             "latest_pct_change": self._methodology_market_pct_change(market_snapshot),
             "latest_amount": self._methodology_market_amount(market_snapshot),
+            "pb": self._methodology_market_pb(market_snapshot),
+            "pe_ttm": self._methodology_market_pe_ttm(market_snapshot),
+            "market_cap": self._methodology_market_cap(market_snapshot),
+            "float_market_cap": self._methodology_market_float_market_cap(market_snapshot),
+            "market_total_shares": self._methodology_market_total_shares(market_snapshot),
+            "market_float_shares": self._methodology_market_float_shares(market_snapshot),
             "revenue_proxy": self._methodology_revenue_proxy(fundamental_snapshot),
+            "banking_metrics": banking_metrics,
+            "bank_like": bool(banking_metrics.get("is_bank_like")),
             "score": 0.0,
         }
 
@@ -1845,6 +1865,10 @@ class ResearchOrchestrator:
                 "latest_price": self._methodology_market_price(market_snapshot),
                 "latest_pct_change": self._methodology_market_pct_change(market_snapshot),
                 "latest_amount": self._methodology_market_amount(market_snapshot),
+                "pb": self._methodology_market_pb(market_snapshot),
+                "pe_ttm": self._methodology_market_pe_ttm(market_snapshot),
+                "market_cap": self._methodology_market_cap(market_snapshot),
+                "float_market_cap": self._methodology_market_float_market_cap(market_snapshot),
                 "revenue_proxy": self._methodology_revenue_proxy(fundamental_snapshot),
                 "score": 0.0,
             },
@@ -2372,20 +2396,14 @@ class ResearchOrchestrator:
         overview = facts.get("market_overview") or {}
         spot = overview.get("spot") or overview
         for key in ("latest_price", "最新价", "close"):
-            value = spot.get(key)
-            try:
-                if value not in (None, ""):
-                    return float(value)
-            except Exception:
-                continue
+            value = coerce_numeric(spot.get(key))
+            if value is not None:
+                return value
         latest_bar = (facts.get("market_hist") or {}).get("latest_bar") or facts.get("latest_bar") or {}
         for key in ("close", "收盘"):
-            value = latest_bar.get(key)
-            try:
-                if value not in (None, ""):
-                    return float(value)
-            except Exception:
-                continue
+            value = coerce_numeric(latest_bar.get(key))
+            if value is not None:
+                return value
         return None
 
     def _methodology_market_pct_change(self, market_snapshot: dict | None) -> float | None:
@@ -2393,20 +2411,14 @@ class ResearchOrchestrator:
         overview = facts.get("market_overview") or {}
         spot = overview.get("spot") or overview
         for key in ("pct_change", "涨跌幅"):
-            value = spot.get(key)
-            try:
-                if value not in (None, ""):
-                    return float(value)
-            except Exception:
-                continue
+            value = coerce_numeric(spot.get(key))
+            if value is not None:
+                return value
         latest_bar = (facts.get("market_hist") or {}).get("latest_bar") or facts.get("latest_bar") or {}
         for key in ("pct_change", "涨跌幅"):
-            value = latest_bar.get(key)
-            try:
-                if value not in (None, ""):
-                    return float(value)
-            except Exception:
-                continue
+            value = coerce_numeric(latest_bar.get(key))
+            if value is not None:
+                return value
         return None
 
     def _methodology_market_amount(self, market_snapshot: dict | None) -> float | None:
@@ -2414,33 +2426,379 @@ class ResearchOrchestrator:
         overview = facts.get("market_overview") or {}
         spot = overview.get("spot") or overview
         for key in ("amount", "成交额"):
-            value = spot.get(key)
-            try:
-                if value not in (None, ""):
-                    return float(value)
-            except Exception:
-                continue
+            value = coerce_numeric(spot.get(key))
+            if value is not None:
+                return value
+        return None
+
+    def _methodology_market_pb(self, market_snapshot: dict | None) -> float | None:
+        facts = (market_snapshot or {}).get("facts") or {}
+        overview = facts.get("market_overview") or {}
+        for key in ("pb", "市净率"):
+            value = coerce_numeric(overview.get(key))
+            if value is not None:
+                return value
+        valuation = overview.get("valuation") or {}
+        for key in ("市净率", "pb"):
+            value = coerce_numeric(valuation.get(key))
+            if value is not None:
+                return value
+        return None
+
+    def _methodology_market_pe_ttm(self, market_snapshot: dict | None) -> float | None:
+        facts = (market_snapshot or {}).get("facts") or {}
+        overview = facts.get("market_overview") or {}
+        for key in ("pe_ttm", "PE(TTM)"):
+            value = coerce_numeric(overview.get(key))
+            if value is not None:
+                return value
+        valuation = overview.get("valuation") or {}
+        for key in ("PE(TTM)", "pe_ttm"):
+            value = coerce_numeric(valuation.get(key))
+            if value is not None:
+                return value
+        return None
+
+    def _methodology_market_cap(self, market_snapshot: dict | None) -> float | None:
+        facts = (market_snapshot or {}).get("facts") or {}
+        overview = facts.get("market_overview") or {}
+        for key in ("market_cap", "总市值"):
+            value = coerce_numeric(overview.get(key))
+            if value is not None:
+                return value
+        valuation = overview.get("valuation") or {}
+        for key in ("总市值", "market_cap"):
+            value = coerce_numeric(valuation.get(key))
+            if value is not None:
+                return value
+        return None
+
+    def _methodology_market_float_market_cap(self, market_snapshot: dict | None) -> float | None:
+        facts = (market_snapshot or {}).get("facts") or {}
+        overview = facts.get("market_overview") or {}
+        for key in ("float_market_cap", "流通市值"):
+            value = coerce_numeric(overview.get(key))
+            if value is not None:
+                return value
+        valuation = overview.get("valuation") or {}
+        for key in ("流通市值", "float_market_cap"):
+            value = coerce_numeric(valuation.get(key))
+            if value is not None:
+                return value
+        return None
+
+    def _methodology_market_total_shares(self, market_snapshot: dict | None) -> float | None:
+        facts = (market_snapshot or {}).get("facts") or {}
+        overview = facts.get("market_overview") or {}
+        for key in ("total_shares", "总股本"):
+            value = coerce_numeric(overview.get(key))
+            if value is not None:
+                return value
+        valuation = overview.get("valuation") or {}
+        for key in ("总股本", "total_shares"):
+            value = coerce_numeric(valuation.get(key))
+            if value is not None:
+                return value
+        return None
+
+    def _methodology_market_float_shares(self, market_snapshot: dict | None) -> float | None:
+        facts = (market_snapshot or {}).get("facts") or {}
+        overview = facts.get("market_overview") or {}
+        for key in ("float_shares", "流通股本"):
+            value = coerce_numeric(overview.get(key))
+            if value is not None:
+                return value
+        valuation = overview.get("valuation") or {}
+        for key in ("流通股本", "float_shares"):
+            value = coerce_numeric(valuation.get(key))
+            if value is not None:
+                return value
         return None
 
     def _methodology_revenue_proxy(self, fundamental_snapshot: dict | None) -> float | None:
         facts = (fundamental_snapshot or {}).get("facts") or {}
+        banking_metrics = facts.get("banking_metrics") or {}
+        for key in ("interest_income", "deposits_and_deposits", "customer_loan_advance_net_addition"):
+            value = coerce_numeric(banking_metrics.get(key))
+            if value is not None:
+                return value
         abstract = facts.get("financial_abstract") or {}
         for key in ("营业总收入", "营业收入", "营收", "总营收"):
-            value = abstract.get(key)
-            try:
-                if value not in (None, ""):
-                    return float(value)
-            except Exception:
-                continue
+            value = coerce_numeric(abstract.get(key))
+            if value is not None:
+                return value
         for item_key, item_value in abstract.items():
             key_text = str(item_key)
             if any(token in key_text for token in ("营业", "营收", "收入")):
-                try:
-                    if item_value not in (None, ""):
-                        return float(item_value)
-                except Exception:
-                    continue
+                value = coerce_numeric(item_value)
+                if value is not None:
+                    return value
         return None
+
+    def _banking_metrics(self, fundamental_snapshot: dict | None) -> dict:
+        facts = (fundamental_snapshot or {}).get("facts") or {}
+        metrics = facts.get("banking_metrics") or {}
+        return dict(metrics) if isinstance(metrics, dict) else {}
+
+    def _build_bank_compare_scorecard_entry(
+        self,
+        *,
+        context: RuntimeContext,
+        request: RequestEnvelope,
+        phase: str,
+        agent: str,
+        compare_targets: list[dict],
+        peer_candidates: list[dict],
+    ) -> BlackboardEntry | None:
+        if len(peer_candidates) < 2:
+            return None
+        bank_candidates = [item for item in peer_candidates if bool((item.get("banking_metrics") or {}).get("is_bank_like"))]
+        if len(bank_candidates) < 2:
+            return None
+        scorecard = self._bank_compare_scorecard(compare_targets=compare_targets, peer_candidates=bank_candidates)
+        return BlackboardEntry(
+            run_id=context.run_id,
+            request_id=request.request_id,
+            kind="source_record",
+            agent=agent,
+            phase=phase,
+            payload={
+                "title": "bank_compare_scorecard",
+                "content": str(scorecard),
+                "source_type": "bank_compare_scorecard",
+                "scorecard": scorecard,
+            },
+            source_refs=[{"type": "stock_compare_scorecard", "run_id": context.run_id}],
+            confidence=1.0,
+            risk_flags=list(scorecard.get("missing_metrics") or []),
+        )
+
+    def _bank_compare_scorecard(self, *, compare_targets: list[dict], peer_candidates: list[dict]) -> dict:
+        target_names = {
+            str(item.get("symbol") or "").strip(): str(item.get("name") or item.get("symbol") or "").strip()
+            for item in compare_targets
+            if str(item.get("symbol") or "").strip()
+        }
+        metric_weights = {
+            "pb": 0.20,
+            "peer_pb_mrq": 0.08,
+            "peer_pb_rank": 0.05,
+            "roe": 0.16,
+            "peer_roe_3y_avg": 0.14,
+            "peer_roe_rank": 0.05,
+            "asset_liability_ratio": 0.08,
+            "capital_adequacy_ratio": 0.05,
+            "core_tier1_capital_adequacy_ratio": 0.05,
+            "net_interest_spread": 0.05,
+            "nonperforming_loan_ratio": 0.07,
+            "provision_coverage_ratio": 0.06,
+            "dividend_yield_proxy": 0.08,
+            "dividend_payout_ratio": 0.03,
+            "revenue_yoy": 0.04,
+            "peer_revenue_growth_ttm": 0.06,
+            "peer_revenue_growth_ttm_vs_industry_avg": 0.03,
+            "net_profit_yoy": 0.06,
+            "peer_net_profit_growth_ttm": 0.08,
+            "peer_net_profit_growth_ttm_vs_industry_avg": 0.05,
+            "interest_margin_proxy": 0.04,
+            "peer_net_margin_3y_avg": 0.03,
+            "net_interest_spread_proxy": 0.03,
+            "deposit_growth_proxy": 0.02,
+            "loan_to_deposit_proxy": 0.02,
+            "provision_coverage_proxy": 0.03,
+        }
+        direction = {
+            "pb": "lower",
+            "peer_pb_mrq": "lower",
+            "peer_pb_rank": "lower",
+            "roe": "higher",
+            "peer_roe_3y_avg": "higher",
+            "peer_roe_rank": "lower",
+            "asset_liability_ratio": "lower",
+            "capital_adequacy_ratio": "higher",
+            "core_tier1_capital_adequacy_ratio": "higher",
+            "net_interest_spread": "higher",
+            "nonperforming_loan_ratio": "lower",
+            "provision_coverage_ratio": "higher",
+            "dividend_yield_proxy": "higher",
+            "dividend_payout_ratio": "higher",
+            "revenue_yoy": "higher",
+            "peer_revenue_growth_ttm": "higher",
+            "peer_revenue_growth_ttm_vs_industry_avg": "higher",
+            "net_profit_yoy": "higher",
+            "peer_net_profit_growth_ttm": "higher",
+            "peer_net_profit_growth_ttm_vs_industry_avg": "higher",
+            "interest_margin_proxy": "higher",
+            "peer_net_margin_3y_avg": "higher",
+            "net_interest_spread_proxy": "higher",
+            "deposit_growth_proxy": "higher",
+            "loan_to_deposit_proxy": "neutral",
+            "provision_coverage_proxy": "higher",
+        }
+        metric_series: dict[str, list[float]] = {key: [] for key in metric_weights}
+        for candidate in peer_candidates:
+            metrics = self._bank_compare_metrics(candidate)
+            for key in metric_weights:
+                value = coerce_numeric(metrics.get(key))
+                if value is not None:
+                    metric_series[key].append(value)
+
+        ranking_rows: list[dict] = []
+        metric_presence_counts: dict[str, int] = {key: 0 for key in metric_weights}
+        for candidate in peer_candidates:
+            symbol = str(candidate.get("symbol") or "").strip()
+            metrics = self._bank_compare_metrics(candidate)
+            score = 0.0
+            weight_used = 0.0
+            metric_breakdown: dict[str, float | None] = {}
+            highlights: list[str] = []
+            for key, weight in metric_weights.items():
+                value = coerce_numeric(metrics.get(key))
+                metric_breakdown[key] = value
+                if value is not None:
+                    metric_presence_counts[key] += 1
+                if value is None or len(metric_series[key]) < 2:
+                    continue
+                percentile = self._bank_metric_percentile(value=value, series=metric_series[key], preference=direction[key])
+                if percentile is None:
+                    continue
+                score += percentile * weight
+                weight_used += weight
+            normalized_score = round((score / weight_used), 4) if weight_used > 0 else 0.0
+            if metric_breakdown.get("peer_roe_3y_avg") is not None:
+                highlights.append(f"同业ROE={metric_breakdown['peer_roe_3y_avg']:.2%}")
+            asset_quality_highlight = self._bank_asset_quality_highlight(metric_breakdown)
+            if asset_quality_highlight:
+                highlights.append(asset_quality_highlight)
+            net_interest_spread_highlight = self._bank_net_interest_spread_highlight(metric_breakdown)
+            if net_interest_spread_highlight:
+                highlights.append(net_interest_spread_highlight)
+            capital_buffer_highlight = self._bank_capital_buffer_highlight(metric_breakdown)
+            if capital_buffer_highlight:
+                highlights.append(capital_buffer_highlight)
+            if metric_breakdown.get("peer_pb_mrq") is not None:
+                highlights.append(f"同业PB={metric_breakdown['peer_pb_mrq']:.2f}")
+            if metric_breakdown.get("roe") is not None:
+                highlights.append(f"ROE={metric_breakdown['roe']:.2%}")
+            if metric_breakdown.get("dividend_yield_proxy") is not None:
+                highlights.append(f"股息率代理={metric_breakdown['dividend_yield_proxy']:.2%}")
+            if metric_breakdown.get("peer_net_profit_growth_ttm") is not None:
+                highlights.append(f"同业利润增速={metric_breakdown['peer_net_profit_growth_ttm']:.2%}")
+            if metric_breakdown.get("net_profit_yoy") is not None:
+                highlights.append(f"利润增速={metric_breakdown['net_profit_yoy']:.2%}")
+            if metric_breakdown.get("interest_margin_proxy") is not None:
+                highlights.append(f"净利率代理={metric_breakdown['interest_margin_proxy']:.2f}")
+            if metric_breakdown.get("provision_coverage_proxy") is not None:
+                highlights.append(f"拨备代理={metric_breakdown['provision_coverage_proxy']:.2f}")
+            if metric_breakdown.get("asset_liability_ratio") is not None:
+                highlights.append(f"资产负债率={metric_breakdown['asset_liability_ratio']:.2%}")
+            ranking_rows.append(
+                {
+                    "symbol": symbol,
+                    "name": target_names.get(symbol) or str(candidate.get("name") or symbol),
+                    "score": normalized_score,
+                    "weight_coverage": round(weight_used, 4),
+                    "latest_price": candidate.get("latest_price"),
+                    "latest_pct_change": candidate.get("latest_pct_change"),
+                    "latest_amount": candidate.get("latest_amount"),
+                    "pb": candidate.get("pb"),
+                    "pe_ttm": candidate.get("pe_ttm"),
+                    "market_cap": candidate.get("market_cap"),
+                    "float_market_cap": candidate.get("float_market_cap"),
+                    "market_total_shares": candidate.get("market_total_shares"),
+                    "market_float_shares": candidate.get("market_float_shares"),
+                    "banking_metrics": metric_breakdown,
+                    "highlights": highlights[:4],
+                    "missing_metrics": sorted(key for key, value in metric_breakdown.items() if value is None),
+                }
+            )
+        ranking_rows.sort(key=lambda item: (item.get("score") or 0.0, item.get("weight_coverage") or 0.0), reverse=True)
+        for index, row in enumerate(ranking_rows, start=1):
+            row["rank"] = index
+        top_names = [str(item.get("name") or item.get("symbol") or "") for item in ranking_rows[:3]]
+        candidate_count = len(ranking_rows)
+        coverage_threshold = max(candidate_count - 1, 1)
+        missing_metrics = sorted(
+            key for key, count in metric_presence_counts.items()
+            if count < coverage_threshold
+        )
+        summary = (
+            f"bank peer comparison ranked {len(ranking_rows)} banks using same-basis banking metrics and valuation anchors; "
+            f"top_tier={top_names}"
+        )
+        return {
+            "scorecard_type": "bank_compare_scorecard",
+            "candidate_count": len(ranking_rows),
+            "ranked_candidates": ranking_rows,
+            "metric_weights": metric_weights,
+            "missing_metrics": sorted(missing_metrics),
+            "summary": summary,
+        }
+
+    def _bank_compare_metrics(self, candidate: dict) -> dict[str, Any]:
+        metrics = dict(candidate.get("banking_metrics") or {})
+        metrics["pb"] = coerce_numeric(candidate.get("pb"))
+        metrics["pe_ttm"] = coerce_numeric(candidate.get("pe_ttm"))
+        metrics["market_cap"] = coerce_numeric(candidate.get("market_cap"))
+        metrics["float_market_cap"] = coerce_numeric(candidate.get("float_market_cap"))
+        metrics["dividend_yield_proxy"] = self._bank_dividend_yield_proxy(candidate)
+        return metrics
+
+    def _bank_dividend_yield_proxy(self, candidate: dict) -> float | None:
+        metrics = dict(candidate.get("banking_metrics") or {})
+        dividend_cash = coerce_numeric(metrics.get("pay_dividends_profits_interest_cash"))
+        latest_price = coerce_numeric(candidate.get("latest_price"))
+        total_shares = coerce_numeric(candidate.get("market_total_shares"))
+        if dividend_cash in (None, 0) or latest_price in (None, 0) or total_shares in (None, 0):
+            return None
+        dividend_per_share = dividend_cash / total_shares
+        return dividend_per_share / latest_price
+
+    def _bank_asset_quality_highlight(self, metrics: dict[str, float | None]) -> str | None:
+        npl = coerce_numeric(metrics.get("nonperforming_loan_ratio"))
+        provision = coerce_numeric(metrics.get("provision_coverage_ratio"))
+        parts: list[str] = []
+        if npl is not None:
+            parts.append(f"不良率{npl:.2%}")
+        if provision is not None:
+            parts.append(f"拨备覆盖率{provision:.2%}")
+        if not parts:
+            return None
+        return "资产质量=" + "/".join(parts[:2])
+
+    def _bank_capital_buffer_highlight(self, metrics: dict[str, float | None]) -> str | None:
+        capital = coerce_numeric(metrics.get("capital_adequacy_ratio"))
+        core_tier1 = coerce_numeric(metrics.get("core_tier1_capital_adequacy_ratio"))
+        parts: list[str] = []
+        if capital is not None:
+            parts.append(f"资本充足率{capital:.2%}")
+        if core_tier1 is not None:
+            parts.append(f"核心一级{core_tier1:.2%}")
+        if not parts:
+            return None
+        return "资本缓冲=" + "/".join(parts[:2])
+
+    def _bank_net_interest_spread_highlight(self, metrics: dict[str, float | None]) -> str | None:
+        net_interest_spread = coerce_numeric(metrics.get("net_interest_spread"))
+        if net_interest_spread is None:
+            return None
+        return f"净息差={net_interest_spread:.2%}"
+
+    def _bank_metric_percentile(self, *, value: float, series: list[float], preference: str) -> float | None:
+        if not series:
+            return None
+        ordered = sorted(series)
+        if preference == "neutral":
+            median = ordered[len(ordered) // 2]
+            max_distance = max(abs(item - median) for item in ordered) if ordered else 0.0
+            if max_distance == 0:
+                return 1.0
+            return max(0.0, 1.0 - abs(value - median) / max_distance)
+        below = sum(1 for item in ordered if item <= value)
+        percentile = below / len(ordered)
+        if preference == "lower":
+            percentile = 1.0 - percentile
+        return round(percentile, 4)
 
     def _wait_for_external_dependency(self, context: RuntimeContext, *, request_id: str, intent: str) -> None:
         import time

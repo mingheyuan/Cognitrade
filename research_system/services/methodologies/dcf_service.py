@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from research_system.adapters.vendors.akshare_utils import coerce_numeric
 from research_system.schemas.valuation import DCFModelResult, ValuationBand
 
 
@@ -207,9 +208,4 @@ class DCFService:
         return None
 
     def _to_float(self, value: Any) -> float | None:
-        if value in (None, "", False):
-            return None
-        try:
-            return float(value)
-        except Exception:
-            return None
+        return coerce_numeric(value)

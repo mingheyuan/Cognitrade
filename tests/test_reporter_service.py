@@ -31,6 +31,13 @@ class ReporterLLMErrorStub:
         raise LLMProviderError("simulated llm error")
 
 
+class ReporterLLMUnexpectedCallStub:
+    available = True
+
+    def parse(self, **kwargs):
+        raise AssertionError("LLM should not be called for deterministic bank compare reporting")
+
+
 class ReporterServiceTests(unittest.TestCase):
     def test_stock_screen_fallback_report_returns_candidate_digest(self) -> None:
         service = ReporterService(ReporterProviderStub())
@@ -596,6 +603,96 @@ class ReporterServiceTests(unittest.TestCase):
 
         self.assertIn("approved=1; pending=1", payload["conclusion"])
         self.assertIn("pending_manual_review_dimension_sample_size<2", payload["conclusion"])
+
+    def test_stock_compare_fallback_report_prefers_bank_compare_scorecard(self) -> None:
+        service = ReporterService(ReporterProviderStub())
+
+        payload = service.run(
+            intent="stock_compare",
+            query="以 000001 平安银行为起点，扩到银行股，最近哪几只更值得投资",
+            retrieval_summary="Stock compare: snapshots=18; bank_candidate_count=6",
+            evidences=[
+                {
+                    "evidence_id": "compare-request",
+                    "title": "stock_compare input request",
+                    "summary": "stock_compare input request\n{'symbols': ['000001', '600036'], 'compare_targets': [{'symbol': '000001', 'name': '平安银行'}, {'symbol': '600036', 'name': '招商银行'}]}",
+                    "metadata": {"source_type": "compare_request"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "bank-scorecard",
+                    "title": "bank_compare_scorecard",
+                    "summary": "bank_compare_scorecard\n{'candidate_count': 3, 'metric_weights': {'pb': 0.24, 'roe': 0.24, 'interest_margin_proxy': 0.06}, 'ranked_candidates': [{'symbol': '601838', 'name': '成都银行', 'score': 0.95, 'pb': 0.88, 'highlights': ['PB=0.88', 'ROE=12.90%', '净利率代理=0.44%']}, {'symbol': '600919', 'name': '江苏银行', 'score': 0.90, 'pb': 0.69, 'highlights': ['PB=0.69', 'ROE=12.40%', '净利率代理=0.40%']}, {'symbol': '600036', 'name': '招商银行', 'score': 0.88, 'pb': 0.78, 'highlights': ['PB=0.78', 'ROE=11.76%', '净利率代理=0.42%']}], 'missing_metrics': ['loan_to_deposit_proxy'], 'summary': 'bank peer comparison ranked 3 banks using same-basis banking metrics and valuation anchors'}",
+                    "metadata": {"source_type": "bank_compare_scorecard"},
+                    "source_refs": [],
+                },
+            ],
+        )
+
+        self.assertIn("同口径银行股指标", payload["conclusion"])
+        self.assertIn("PB", payload["conclusion"])
+        self.assertIn("核心权重", payload["conclusion"])
+        self.assertIn("成都银行", payload["conclusion"])
+        self.assertIn("江苏银行", payload["conclusion"])
+        self.assertIn("招商银行", payload["conclusion"])
+        self.assertIn("loan_to_deposit_proxy", payload["conclusion"])
+
+    def test_stock_compare_with_bank_scorecard_skips_llm_and_returns_deterministic_report(self) -> None:
+        service = ReporterService(ReporterLLMUnexpectedCallStub())
+
+        payload = service.run(
+            intent="stock_compare",
+            query="浠?000001 骞冲畨閾惰涓鸿捣鐐癸紝鎵╁埌閾惰鑲★紝鏈€杩戝摢鍑犲彧鏇村€煎緱鎶曡祫",
+            retrieval_summary="Stock compare: snapshots=18; bank_candidate_count=6",
+            evidences=[
+                {
+                    "evidence_id": "compare-request",
+                    "title": "stock_compare input request",
+                    "summary": "stock_compare input request\n{'symbols': ['000001', '600036'], 'compare_targets': [{'symbol': '000001', 'name': '骞冲畨閾惰'}, {'symbol': '600036', 'name': '鎷涘晢閾惰'}]}",
+                    "metadata": {"source_type": "compare_request"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "bank-scorecard",
+                    "title": "bank_compare_scorecard",
+                    "summary": "bank_compare_scorecard\n{'candidate_count': 3, 'metric_weights': {'pb': 0.24, 'roe': 0.24, 'interest_margin_proxy': 0.06}, 'ranked_candidates': [{'symbol': '601838', 'name': '鎴愰兘閾惰', 'score': 0.95, 'pb': 0.88, 'highlights': ['PB=0.88', 'ROE=12.90%', '鍑€鍒╃巼浠ｇ悊=0.44%']}, {'symbol': '600919', 'name': '姹熻嫃閾惰', 'score': 0.90, 'pb': 0.69, 'highlights': ['PB=0.69', 'ROE=12.40%', '鍑€鍒╃巼浠ｇ悊=0.40%']}, {'symbol': '600036', 'name': '鎷涘晢閾惰', 'score': 0.88, 'pb': 0.78, 'highlights': ['PB=0.78', 'ROE=11.76%', '鍑€鍒╃巼浠ｇ悊=0.42%']}], 'missing_metrics': ['loan_to_deposit_proxy'], 'summary': 'bank peer comparison ranked 3 banks using same-basis banking metrics and valuation anchors'}",
+                    "metadata": {"source_type": "bank_compare_scorecard"},
+                    "source_refs": [],
+                },
+            ],
+        )
+
+        self.assertIn("基于同口径银行股指标与估值锚点", payload["conclusion"])
+        self.assertIn("loan_to_deposit_proxy", payload["conclusion"])
+        self.assertIsNone(payload["degraded_note"])
+
+    def test_stock_compare_fallback_report_surfaces_dividend_yield_proxy(self) -> None:
+        service = ReporterService(ReporterProviderStub())
+
+        payload = service.run(
+            intent="stock_compare",
+            query="以 000001 平安银行为起点，扩到银行股，最近哪几只更值得投资",
+            retrieval_summary="Stock compare: snapshots=18; bank_candidate_count=6",
+            evidences=[
+                {
+                    "evidence_id": "compare-request",
+                    "title": "stock_compare input request",
+                    "summary": "stock_compare input request\n{'symbols': ['000001', '600036'], 'compare_targets': [{'symbol': '000001', 'name': '平安银行'}, {'symbol': '600036', 'name': '招商银行'}]}",
+                    "metadata": {"source_type": "compare_request"},
+                    "source_refs": [],
+                },
+                {
+                    "evidence_id": "bank-scorecard",
+                    "title": "bank_compare_scorecard",
+                    "summary": "bank_compare_scorecard\n{'candidate_count': 3, 'metric_weights': {'pb': 0.24, 'roe': 0.24, 'dividend_yield_proxy': 0.08}, 'ranked_candidates': [{'symbol': '601838', 'name': '成都银行', 'score': 0.95, 'pb': 0.88, 'highlights': ['PB=0.88', 'ROE=12.90%', '股息率代理=4.29%']}, {'symbol': '600919', 'name': '江苏银行', 'score': 0.90, 'pb': 0.69, 'highlights': ['PB=0.69', 'ROE=12.40%', '股息率代理=6.72%']}, {'symbol': '600036', 'name': '招商银行', 'score': 0.88, 'pb': 0.78, 'highlights': ['PB=0.78', 'ROE=11.76%', '股息率代理=4.36%']}], 'missing_metrics': ['loan_to_deposit_proxy'], 'summary': 'bank peer comparison ranked 3 banks using same-basis banking metrics and valuation anchors'}",
+                    "metadata": {"source_type": "bank_compare_scorecard"},
+                    "source_refs": [],
+                },
+            ],
+        )
+
+        self.assertIn("股息率代理", payload["conclusion"])
+        self.assertIsNone(payload["degraded_note"])
 
 
 if __name__ == "__main__":
