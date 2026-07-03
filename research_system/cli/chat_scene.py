@@ -1,45 +1,22 @@
 from __future__ import annotations
 
-from typing import Any
-
-from research_system.services.run_payloads import (
-    render_labeled_field_line,
-    render_trace_row_text,
-    trace_payload_fields,
+from research_system.cli.memory.chat_memory import current_thread_summary, list_chat_threads, thread_preview_payload
+from research_system.cli.view.chat_scene import *  # noqa: F401,F403
+from research_system.cli.view.chat_scene import (
+    _active_transcript_message_ids,
+    _build_focused_thread_family_lines,
+    _build_live_tail_block,
+    _build_thread_lineage_tree_entries,
+    _build_thread_lineage_tree_lines,
+    build_hint_bar_view_runtime,
+    build_output_blocks_runtime,
+    build_shell_scene_view_runtime,
+    build_threads_blocks_runtime,
+    idle_transcript_context_text_runtime,
+    is_message_closed_for_render,
+    output_mode_label,
 )
-from research_system.cli.chat_memory import current_thread_summary, list_chat_threads, thread_preview_payload
-from research_system.cli.chat_scene_context_support import idle_transcript_context_text as support_idle_transcript_context_text
-from research_system.cli.chat_scene_models import (
-    CommandsPopupView,
-    HeaderBarView,
-    HintBarView,
-    InputBarView,
-    PopupLayoutView,
-    ShellSceneView,
-    StatusBarItem,
-    TranscriptRenderBlock,
-)
-from research_system.cli.chat_scene_output_support import build_output_blocks as support_build_output_blocks
-from research_system.cli.chat_scene_popup_support import (
-    build_commands_popup_view as support_build_commands_popup_view,
-    commands_popup_text as support_commands_popup_text,
-)
-from research_system.cli.chat_scene_thread_support import (
-    build_focused_thread_family_lines as support_build_focused_thread_family_lines,
-    build_thread_lineage_tree_entries as support_build_thread_lineage_tree_entries,
-    build_thread_lineage_tree_lines as support_build_thread_lineage_tree_lines,
-    build_threads_blocks as support_build_threads_blocks,
-)
-from research_system.cli.chat_shell_scene import (
-    build_header_bar_view as scene_build_header_bar_view,
-    build_hint_bar_view as scene_build_hint_bar_view,
-    build_input_bar_view as scene_build_input_bar_view,
-    build_popup_layout_view as scene_build_popup_layout_view,
-    build_shell_scene_view as scene_build_shell_scene_view,
-    build_status_bar_items as scene_build_status_bar_items,
-    output_mode_label as scene_output_mode_label,
-)
-from research_system.cli.chat_trace_scene import (
+from research_system.cli.view.chat_trace_scene import (
     _branch_has_nested_children,
     _collect_trace_child_branch_paths,
     _group_trace_runtime_cards,
@@ -60,141 +37,41 @@ from research_system.cli.chat_trace_scene import (
     build_trace_task_blocks,
     build_trace_task_blocks_for_session,
 )
-from research_system.cli.chat_transcript import TranscriptMessage
-from research_system.cli.chat_transcript_scene import (
-    active_transcript_message_ids as transcript_active_message_ids,
-    build_transcript_blocks_for_session as scene_build_transcript_blocks_for_session,
-    build_tui_blocks as scene_build_tui_blocks,
-    is_message_closed_for_render as scene_is_message_closed_for_render,
-)
-from research_system.cli.chat_types import TuiSession
 
 
-def commands_popup_text() -> str:
-    return support_commands_popup_text()
-
-
-def build_commands_popup_view() -> CommandsPopupView:
-    return support_build_commands_popup_view()
-
-
-def build_tui_blocks(lines: list[TranscriptMessage]) -> list[TranscriptRenderBlock]:
-    return scene_build_tui_blocks(lines)
-
-
-def _active_transcript_message_ids(session: TuiSession) -> set[str]:
-    return transcript_active_message_ids(session)
-
-
-def _build_live_tail_block(lines: list[TranscriptMessage]) -> TranscriptRenderBlock | None:
-    live_blocks = build_tui_blocks(lines)
-    if not live_blocks:
-        return None
-    rendered_lines: list[str] = []
-    for block in live_blocks:
-        label = block.title or ("inline" if block.inline else "message")
-        prefix = f"[{label}] "
-        continuation = " " * len(prefix)
-        if not block.lines:
-            rendered_lines.append(prefix.rstrip())
-            continue
-        for index, line in enumerate(block.lines):
-            rendered_lines.append(f"{prefix if index == 0 else continuation}{line}")
-    return TranscriptRenderBlock(title="live_tail", lines=tuple(rendered_lines))
-
-
-def build_transcript_blocks_for_session(session: TuiSession) -> list[TranscriptRenderBlock]:
-    return scene_build_transcript_blocks_for_session(session)
-
-
-def build_threads_blocks(session: TuiSession) -> list[TranscriptRenderBlock]:
-    return support_build_threads_blocks(
+def build_threads_blocks(session):
+    return build_threads_blocks_runtime(
         session,
-        current_thread_summary=current_thread_summary,
-        list_chat_threads=list_chat_threads,
-        thread_preview_payload=thread_preview_payload,
+        current_thread_summary_fn=current_thread_summary,
+        list_chat_threads_fn=list_chat_threads,
+        thread_preview_payload_fn=thread_preview_payload,
     )
 
 
-def _build_thread_lineage_tree_entries(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return support_build_thread_lineage_tree_entries(rows)
-
-
-def _build_focused_thread_family_lines(
-    *,
-    rows: list[dict[str, Any]],
-    focused_thread_id: str,
-) -> list[str]:
-    return support_build_focused_thread_family_lines(
-        rows=rows,
-        focused_thread_id=focused_thread_id,
-    )
-
-
-def _build_thread_lineage_tree_lines(
-    rows: list[dict[str, Any]],
-    *,
-    active_thread_id: str,
-    focus_index: int | None = None,
-) -> list[str]:
-    return support_build_thread_lineage_tree_lines(
-        rows,
-        active_thread_id=active_thread_id,
-        focus_index=focus_index,
-    )
-
-
-def build_output_blocks(session: TuiSession) -> list[TranscriptRenderBlock]:
-    return support_build_output_blocks(
+def build_output_blocks(session):
+    return build_output_blocks_runtime(
         session,
-        build_threads_blocks=build_threads_blocks,
-        build_events_blocks_for_session=build_events_blocks_for_session,
-        build_transcript_blocks_for_session=build_transcript_blocks_for_session,
+        build_threads_blocks_fn=build_threads_blocks,
     )
 
 
-def output_mode_label(session: TuiSession) -> str:
-    return scene_output_mode_label(session)
-
-
-def _idle_transcript_context_text(session: TuiSession) -> str:
-    return support_idle_transcript_context_text(
+def _idle_transcript_context_text(session):
+    return idle_transcript_context_text_runtime(
         session,
-        current_thread_summary=current_thread_summary,
+        current_thread_summary_fn=current_thread_summary,
     )
 
 
-def is_message_closed_for_render(message: TranscriptMessage, lines: list[TranscriptMessage]) -> bool:
-    return scene_is_message_closed_for_render(message, lines)
-
-
-def build_status_bar_items(session: TuiSession) -> list[StatusBarItem]:
-    return scene_build_status_bar_items(session)
-
-
-def build_header_bar_view(session: TuiSession, layout_mode: str) -> HeaderBarView:
-    return scene_build_header_bar_view(session, layout_mode)
-
-
-def build_hint_bar_view(session: TuiSession) -> HintBarView:
-    return scene_build_hint_bar_view(
+def build_hint_bar_view(session):
+    return build_hint_bar_view_runtime(
         session,
-        current_thread_summary=current_thread_summary,
+        current_thread_summary_fn=current_thread_summary,
     )
 
 
-def build_input_bar_view(session: TuiSession) -> InputBarView:
-    return scene_build_input_bar_view(session)
-
-
-def build_popup_layout_view(session: TuiSession) -> PopupLayoutView:
-    return scene_build_popup_layout_view(session)
-
-
-def build_shell_scene_view(session: TuiSession) -> ShellSceneView:
-    return scene_build_shell_scene_view(
+def build_shell_scene_view(session):
+    return build_shell_scene_view_runtime(
         session,
-        build_output_blocks=build_output_blocks,
-        build_commands_popup_view=build_commands_popup_view,
-        current_thread_summary=current_thread_summary,
+        build_output_blocks_fn=build_output_blocks,
+        current_thread_summary_fn=current_thread_summary,
     )

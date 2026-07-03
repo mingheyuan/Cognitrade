@@ -1,0 +1,3 @@
+from research_system.services.methodologies.evolver.methodology_evolver_dimension_aggregation import MethodologyEvolverDimensionAggregation
+
+__all__ = ['MethodologyEvolverDimensionAggregation']

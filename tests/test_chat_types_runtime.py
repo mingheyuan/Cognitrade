@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from research_system.cli.state.chat_types import TuiSession as StateTuiSession
 from research_system.cli.chat_types import (
     ChatSessionState,
     ShellUiState,
@@ -11,6 +12,9 @@ from research_system.cli.chat_types import (
 
 
 class ChatTypesRuntimeTests(unittest.TestCase):
+    def test_top_level_chat_types_remains_compatible_with_state_package(self) -> None:
+        self.assertIs(TuiSession, StateTuiSession)
+
     def test_chat_types_facade_exports_runtime_models(self) -> None:
         session = TuiSession(
             settings=None,  # type: ignore[arg-type]

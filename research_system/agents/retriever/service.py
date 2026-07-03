@@ -18,7 +18,7 @@ from research_system.services.planning_context import (
     normalize_planning_context_hints,
 )
 from research_system.services.retrieval_policy_view import normalize_retrieval_policy
-from research_system.services.reporting_utils import summarize_proposal_drafts
+from research_system.services.reporting.reporting_utils import summarize_proposal_drafts
 from research_system.adapters.storage.mem0_adapter import Mem0Adapter
 from research_system.subagents.registry import SubagentRegistry
 from research_system.subagents.retrieval import RetrievalDecisionSubagent

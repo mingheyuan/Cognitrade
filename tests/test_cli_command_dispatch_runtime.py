@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import unittest
 
+from research_system.cli.commands.cli_command_dispatch import (
+    execute_cli_payload_command as commands_execute_cli_payload_command,
+)
 from research_system.cli.cli_command_dispatch import execute_cli_payload_command
 from research_system.cli.cli_command_dispatch_registry import (
     CLI_COMMAND_EXECUTORS,
@@ -24,6 +27,9 @@ from research_system.cli.cli_command_system_support import (
 
 
 class CliCommandDispatchRuntimeTests(unittest.TestCase):
+    def test_top_level_cli_command_dispatch_remains_compatible_with_commands_package(self) -> None:
+        self.assertIs(execute_cli_payload_command, commands_execute_cli_payload_command)
+
     def test_registry_exposes_domain_specific_command_supports(self) -> None:
         self.assertIsNotNone(execute_cli_payload_command)
         self.assertIs(resolve_cli_command_executor("history"), CLI_COMMAND_EXECUTORS["history"])

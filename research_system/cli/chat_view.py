@@ -1,20 +1,16 @@
 from __future__ import annotations
 
 from prompt_toolkit.application import Application
-from research_system.cli.chat_view_build_support import (
-    build_chat_application as support_build_chat_application,
+
+from research_system.cli.state.chat_types import TuiSession
+from research_system.cli.view.chat_view import (
+    build_chat_application_runtime,
     build_chat_view as support_build_chat_view,
-)
-from research_system.cli.chat_view_components import (
-    ChatViewComponents,
-    TranscriptOutputArea,
     build_layout_children as support_build_layout_children,
-)
-from research_system.cli.chat_view_sync_support import (
     sync_chat_view_from_scene as support_sync_chat_view_from_scene,
 )
-from research_system.cli.chat_types import TuiSession
-from research_system.cli.windows_terminal import create_terminal_io
+from research_system.cli.view.chat_view_components import ChatViewComponents, TranscriptOutputArea
+from research_system.cli.shell.windows_terminal import create_terminal_io
 
 
 def build_chat_view(session: TuiSession) -> ChatViewComponents:
@@ -22,7 +18,7 @@ def build_chat_view(session: TuiSession) -> ChatViewComponents:
 
 
 def build_chat_application(*, session: TuiSession, view: ChatViewComponents, key_bindings) -> Application:
-    return support_build_chat_application(
+    return build_chat_application_runtime(
         session=session,
         view=view,
         key_bindings=key_bindings,

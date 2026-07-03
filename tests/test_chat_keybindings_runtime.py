@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import unittest
 
+from research_system.cli.keybindings.chat_keybinding_bindings import (
+    build_chat_keybindings_from_runtime as keybindings_build_chat_keybindings_from_runtime,
+)
+from research_system.cli.keybindings.chat_keybinding_runtime import (
+    ChatKeybindingRuntime as KeybindingsChatKeybindingRuntime,
+)
 from research_system.cli.chat_keybinding_bindings import build_chat_keybindings_from_runtime
 from research_system.cli.chat_keybinding_runtime import (
     ChatKeybindingRuntime,
@@ -13,6 +19,10 @@ from research_system.cli.chat_keybindings import build_chat_keybindings
 
 
 class ChatKeybindingsRuntimeTests(unittest.TestCase):
+    def test_top_level_keybinding_supports_remain_compatible_with_keybindings_package(self) -> None:
+        self.assertIs(build_chat_keybindings_from_runtime, keybindings_build_chat_keybindings_from_runtime)
+        self.assertIs(ChatKeybindingRuntime, KeybindingsChatKeybindingRuntime)
+
     def test_keybindings_facade_exports_runtime_and_binding_support(self) -> None:
         self.assertIsNotNone(build_chat_keybindings)
         self.assertIsNotNone(build_chat_keybindings_from_runtime)

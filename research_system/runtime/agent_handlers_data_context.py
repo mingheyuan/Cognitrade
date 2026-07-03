@@ -1,7 +1,1 @@
-from __future__ import annotations
-
-from research_system.runtime.orchestrator_context import RuntimeContext
-
-
-def collect_blackboard_entries_json(context: RuntimeContext) -> list[dict]:
-    return [entry.model_dump(mode="json") for entry in context.blackboard.list_entries()]
+from research_system.runtime.execution.handlers.data_context import *  # noqa: F401,F403

@@ -22,11 +22,13 @@ from research_system.cli.chat_scene import (
     build_status_bar_items,
     build_tui_blocks,
 )
-from research_system.cli.chat_transcript import make_transcript_message
+from research_system.cli.chat_transcript import TranscriptMessage, make_transcript_message
 from research_system.cli.chat_types import ChatSessionState, TuiSession
 from research_system.cli.chat_updates import SessionStatePatch, ShellStatePatch, append_update, default_update_for_text, replace_update, thinking_update
 from research_system.cli.chat_view import build_chat_application, build_chat_view, build_layout_children, sync_chat_view_from_scene
 from research_system.cli.payload_rendering import print_payload
+from research_system.cli.payloads.payload_rendering import print_payload as PayloadPackagePrintPayload
+from research_system.cli.transcript.chat_transcript import TranscriptMessage as TranscriptPackageMessage
 from research_system.runtime.settings import Settings
 
 
@@ -94,6 +96,12 @@ class _AppOrchestratorStub:
 
 
 class CliOutputTests(unittest.TestCase):
+    def test_top_level_payload_rendering_remains_compatible_with_payloads_package(self) -> None:
+        self.assertIs(print_payload, PayloadPackagePrintPayload)
+
+    def test_top_level_transcript_remains_compatible_with_transcript_package(self) -> None:
+        self.assertIs(TranscriptMessage, TranscriptPackageMessage)
+
     def test_chat_help_includes_stop_command(self) -> None:
         buffer = io.StringIO()
         with redirect_stdout(buffer):

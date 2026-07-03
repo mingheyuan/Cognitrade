@@ -1,8 +1,3 @@
-from research_system.cli.chat_state_models import (
-    ChatSessionState,
-    ShellUiState,
-    ShellViewState,
-)
-from research_system.cli.chat_tui_session import TuiSession
+from __future__ import annotations
 
-__all__ = ["ChatSessionState", "ShellViewState", "ShellUiState", "TuiSession"]
+from research_system.cli.state.chat_types import *  # noqa: F401,F403

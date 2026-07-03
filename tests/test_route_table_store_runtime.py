@@ -7,6 +7,10 @@ from research_system.services.route_table_cache_support import RouteTableCacheSu
 from research_system.services.route_table_health_support import RouteTableHealthSupport
 from research_system.services.route_table_load_support import RouteTableLoadSupport
 from research_system.services.route_table_store import IntentRouteTableStore
+from research_system.services.routing.tables.route_table_cache_support import RouteTableCacheSupport as PackageRouteTableCacheSupport
+from research_system.services.routing.tables.route_table_health_support import RouteTableHealthSupport as PackageRouteTableHealthSupport
+from research_system.services.routing.tables.route_table_load_support import RouteTableLoadSupport as PackageRouteTableLoadSupport
+from research_system.services.routing.tables.route_table_store import IntentRouteTableStore as PackageIntentRouteTableStore
 
 
 class RouteTableStoreRuntimeTests(unittest.TestCase):
@@ -19,6 +23,10 @@ class RouteTableStoreRuntimeTests(unittest.TestCase):
         self.assertIsInstance(store.cache, RouteTableCacheSupport)
         self.assertIsInstance(store.health, RouteTableHealthSupport)
         self.assertIsInstance(store.loader, RouteTableLoadSupport)
+        self.assertIs(IntentRouteTableStore, PackageIntentRouteTableStore)
+        self.assertIs(RouteTableCacheSupport, PackageRouteTableCacheSupport)
+        self.assertIs(RouteTableHealthSupport, PackageRouteTableHealthSupport)
+        self.assertIs(RouteTableLoadSupport, PackageRouteTableLoadSupport)
 
 
 if __name__ == "__main__":

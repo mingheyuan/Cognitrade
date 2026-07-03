@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from research_system.cli.chat_memory import (
+from research_system.cli.memory.chat_memory import (
     archive_session_thread,
     fork_session_thread,
     list_chat_threads,
     resume_session_thread,
     unarchive_session_thread,
 )
-from research_system.cli.chat_inspect_keybindings import load_events_panel
-from research_system.cli.chat_keybinding_bindings import build_chat_keybindings_from_runtime
-from research_system.cli.chat_keybinding_runtime import build_chat_keybinding_runtime
-from research_system.cli.chat_types import TuiSession
+from research_system.cli.inspect.chat_inspect_keybindings import load_events_panel
+from research_system.cli.state.chat_types import TuiSession
+from research_system.cli.keybindings.chat_keybinding_bindings import build_chat_keybindings_from_runtime
+from research_system.cli.keybindings.chat_keybinding_runtime import build_chat_keybinding_runtime
 
 
 def build_chat_keybindings(

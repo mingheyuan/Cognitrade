@@ -14,7 +14,7 @@ from research_system.services.planning_context import (
     has_policy_focus,
     normalize_planning_context_hints,
 )
-from research_system.services.reporting_utils import strategy_follow_up
+from research_system.services.reporting.reporting_utils import strategy_follow_up
 from research_system.schemas.review import ClaimVerdictBreakdown, PosteriorReviewSummary
 from research_system.schemas.subagents import SubagentInvocation
 from research_system.subagents.registry import SubagentRegistry

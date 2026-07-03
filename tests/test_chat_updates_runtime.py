@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from research_system.cli.state.chat_updates import TranscriptUpdate as StateTranscriptUpdate
 from research_system.cli.chat_updates import (
     SESSION_PATCH_UNSET,
     SessionStatePatch,
@@ -14,6 +15,9 @@ from research_system.cli.chat_updates import (
 
 
 class ChatUpdatesRuntimeTests(unittest.TestCase):
+    def test_top_level_chat_updates_remains_compatible_with_state_package(self) -> None:
+        self.assertIs(TranscriptUpdate, StateTranscriptUpdate)
+
     def test_chat_updates_facade_exports_models_and_helpers(self) -> None:
         update = append_update(
             "meta",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from research_system.cli.inspect.chat_inspect_state import InspectPanelRuntime as InspectPackageRuntime
 from research_system.cli.chat_inspect_counts_support import (
     events_rows_for_session,
     trace_branch_paths_for_session,
@@ -37,6 +38,9 @@ from research_system.cli.chat_inspect_state import (
 
 
 class ChatInspectRuntimeTests(unittest.TestCase):
+    def test_top_level_inspect_runtime_remains_compatible_with_inspect_package(self) -> None:
+        self.assertIs(InspectPanelRuntime, InspectPackageRuntime)
+
     def test_build_runtime_exposes_compat_entrypoints(self) -> None:
         runtime = build_inspect_panel_runtime(
             session=object(),

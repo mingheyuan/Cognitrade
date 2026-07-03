@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from research_system.services.methodologies.comps_service import CompsService
+from research_system.services.methodologies.valuation.comps_service import CompsService
 from research_system.services.planning_context import (
     build_planning_context_view,
     derive_methodology_focus,

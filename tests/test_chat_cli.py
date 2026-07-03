@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from research_system.cli.commands.chat_commands import parse_chat_input as commands_parse_chat_input
 from research_system.cli.chat_commands import (
     chat_completion_candidates,
     chat_completion_current_token,
@@ -23,6 +24,9 @@ from research_system.cli.chat_types import ChatSessionState
 
 
 class ChatCliTests(unittest.TestCase):
+    def test_top_level_chat_commands_remains_compatible_with_commands_package(self) -> None:
+        self.assertIs(parse_chat_input, commands_parse_chat_input)
+
     def test_plain_text_maps_to_run(self) -> None:
         parsed = parse_chat_input("最近创新药板块怎么样")
         self.assertEqual(parsed, {"action": "run", "query": "最近创新药板块怎么样"})

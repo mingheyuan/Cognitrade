@@ -1,18 +1,1 @@
-from __future__ import annotations
-
-from research_system.runtime.orchestrator_context import RuntimeContext
-
-
-def collect_screening_inputs(context: RuntimeContext) -> dict[str, list[dict]]:
-    return {
-        "source_payloads": [
-            entry.payload
-            for entry in context.blackboard.list_entries()
-            if entry.kind == "source_record"
-        ],
-        "snapshot_payloads": [
-            entry.payload
-            for entry in context.blackboard.list_entries()
-            if entry.kind == "verified_snapshot"
-        ],
-    }
+from research_system.runtime.execution.handlers.screening_context import *  # noqa: F401,F403

@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from research_system.runtime.platform.settings import Settings
+
+
+@dataclass(frozen=True)
+class CliCommandRuntime:
+    orchestrator_cls: object
+    build_research_request_fn: object
+    execute_cli_payload_command_fn: object
+    run_checks_fn: object
+    build_status_fn: object
+    run_doctor_fn: object
+
+    def execute(
+        self,
+        settings: Settings,
+        *,
+        command: str,
+        query: str | None = None,
+        intent: str | None = None,
+        run_id: str | None = None,
+        limit: int = 20,
+        status_filter: str | None = None,
+    ) -> object:
+        if command == "run":
+            with self.orchestrator_cls(settings) as orchestrator:
+                request = self.build_research_request_fn(
+                    query=query or "",
+                    intent=intent,
+                    review_target_run_id=run_id,
+                )
+                response = orchestrator.run(request)
+                return response.model_dump(mode="json")
+        return self.execute_cli_payload_command_fn(
+            settings,
+            command=command,
+            query=query,
+            intent=intent,
+            run_id=run_id,
+            limit=limit,
+            status_filter=status_filter,
+            orchestrator_cls=self.orchestrator_cls,
+            run_checks_fn=self.run_checks_fn,
+            build_status_fn=self.build_status_fn,
+            run_doctor_fn=self.run_doctor_fn,
+        )
+
+
+def build_cli_command_runtime(
+    *,
+    orchestrator_cls,
+    build_research_request_fn,
+    execute_cli_payload_command_fn,
+    run_checks_fn,
+    build_status_fn,
+    run_doctor_fn,
+) -> CliCommandRuntime:
+    return CliCommandRuntime(
+        orchestrator_cls=orchestrator_cls,
+        build_research_request_fn=build_research_request_fn,
+        execute_cli_payload_command_fn=execute_cli_payload_command_fn,
+        run_checks_fn=run_checks_fn,
+        build_status_fn=build_status_fn,
+        run_doctor_fn=run_doctor_fn,
+    )
+
+
+def execute_cli_command(
+    settings: Settings,
+    *,
+    command: str,
+    query: str | None = None,
+    intent: str | None = None,
+    run_id: str | None = None,
+    limit: int = 20,
+    status_filter: str | None = None,
+    runtime: CliCommandRuntime,
+) -> object:
+    return runtime.execute(
+        settings,
+        command=command,
+        query=query,
+        intent=intent,
+        run_id=run_id,
+        limit=limit,
+        status_filter=status_filter,
+    )

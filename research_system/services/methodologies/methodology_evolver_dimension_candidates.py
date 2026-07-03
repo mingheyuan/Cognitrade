@@ -1,0 +1,3 @@
+from research_system.services.methodologies.evolver.methodology_evolver_dimension_candidates import MethodologyEvolverDimensionCandidates
+
+__all__ = ['MethodologyEvolverDimensionCandidates']

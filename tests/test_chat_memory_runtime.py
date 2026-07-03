@@ -4,11 +4,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from research_system.cli.memory.chat_thread_store import ChatThreadStore as MemoryChatThreadStore
 from research_system.cli.chat_thread_store import ChatThreadStore
 from research_system.runtime.settings import Settings, ensure_workspace_layout
 
 
 class ChatMemoryRuntimeTests(unittest.TestCase):
+    def test_top_level_thread_store_remains_compatible_with_memory_package(self) -> None:
+        self.assertIs(ChatThreadStore, MemoryChatThreadStore)
+
     def test_thread_store_supports_remain_available_for_memory_stack(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings.from_env(Path(temp_dir))

@@ -3,7 +3,10 @@ from __future__ import annotations
 from typing import Callable
 
 from research_system.runtime.provider_registry import LLMProviderError, OpenAIProvider
-from research_system.services.reporting_utils import strategy_follow_up, summarize_proposal_drafts
+from research_system.services.reporting.reporting_utils import (
+    strategy_follow_up,
+    summarize_proposal_drafts,
+)
 
 
 class FallbackReportComposerSubagent:
