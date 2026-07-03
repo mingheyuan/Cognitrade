@@ -1,0 +1,31 @@
+from __future__ import annotations
+
+import unittest
+
+from research_system.runtime.orchestrator_run_failure_support import (
+    OrchestratorRunFailureSupport,
+)
+from research_system.runtime.orchestrator_run_gate_support import OrchestratorRunGateSupport
+from research_system.runtime.orchestrator_run_response_support import (
+    OrchestratorRunResponseSupport,
+)
+from research_system.runtime.orchestrator_run_success_support import (
+    OrchestratorRunSuccessSupport,
+)
+from research_system.runtime.orchestrator_run_terminal_support import (
+    OrchestratorRunTerminalSupport,
+)
+
+
+class OrchestratorRunTerminalRuntimeTests(unittest.TestCase):
+    def test_terminal_support_exposes_gate_and_response_support(self) -> None:
+        terminal = OrchestratorRunTerminalSupport(object())
+
+        self.assertIsInstance(terminal.gate_support, OrchestratorRunGateSupport)
+        self.assertIsInstance(terminal.response_support, OrchestratorRunResponseSupport)
+        self.assertIsInstance(terminal.success_support, OrchestratorRunSuccessSupport)
+        self.assertIsInstance(terminal.failure_support, OrchestratorRunFailureSupport)
+
+
+if __name__ == "__main__":
+    unittest.main()

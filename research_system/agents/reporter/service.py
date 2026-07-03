@@ -69,11 +69,22 @@ class ReporterService:
         retrieval_summary: str | None = None,
         planning_context_hints: dict[str, str] | None = None,
     ) -> dict:
+        trace: list[dict] = []
         normalized_planning_hints = self._normalize_planning_context_hints(planning_context_hints)
         report_strategy = self._derive_report_strategy(
             query=query,
             retrieval_summary=retrieval_summary,
             planning_context_hints=normalized_planning_hints,
+        )
+        trace.append(
+            self._build_trace_record(
+                subagent_type="report_strategy_resolver",
+                objective="Resolve report strategy from retrieval summary and planning context.",
+                status="completed",
+                task_name="report:strategy:report_strategy_resolver",
+                agent_path="reporter/strategy/report_strategy_resolver",
+                notes=self._report_strategy_trace_notes(report_strategy),
+            )
         )
         review_summary_payload = None
         screening_scorecard_payload = self._screening_scorecard_payload(evidences) if intent == "stock_screen" else None
@@ -81,12 +92,28 @@ class ReporterService:
         methodology_payloads = self._methodology_payloads(evidences) if intent in {"stock_screen", "stock_check", "stock_compare", "review_thesis"} else []
         if intent in {"review_thesis", "stock_screen"}:
             review_summary_payload = self._review_summary_payload(evidences)
-        if intent == "stock_compare" and self._bank_compare_scorecard_payload(methodology_payloads):
-            return self._deterministic_stock_compare_report(
+        bank_compare_scorecard = self._bank_compare_scorecard_payload(methodology_payloads) if intent == "stock_compare" else None
+        if intent == "stock_compare" and bank_compare_scorecard:
+            payload = self._deterministic_stock_compare_report(
                 evidences=evidences,
                 methodology_payloads=methodology_payloads,
                 report_strategy=report_strategy,
             )
+            trace.append(
+                self._build_trace_record(
+                    subagent_type="bank_compare_report_composer",
+                    objective="Compose deterministic bank compare report from same-basis scorecard evidence.",
+                    status="completed",
+                    task_name="report:deterministic:bank_compare_report_composer",
+                    agent_path="reporter/deterministic/bank_compare_report_composer",
+                    notes=[
+                        f"candidate_count={int(bank_compare_scorecard.get('candidate_count') or 0)}",
+                        f"ranked_candidates={len(list(bank_compare_scorecard.get('ranked_candidates') or []))}",
+                    ],
+                )
+            )
+            payload["subagent_trace"] = trace
+            return payload
         if not self.llm_provider.available:
             scorecard_digest = None
             scorecard_payload = None
@@ -110,9 +137,28 @@ class ReporterService:
                         "report_strategy": report_strategy,
                         "degraded_note": "llm_unavailable",
                     },
+                    context={
+                        "task_name": "report:fallback:fallback_report_composer",
+                        "agent_path": "reporter/fallback/fallback_report_composer",
+                    },
                 )
             )
-            return fallback_outputs
+            trace.append(
+                self._build_trace_record(
+                    subagent_type="fallback_report_composer",
+                    objective="Compose degraded fallback report.",
+                    status="completed",
+                    task_name="report:fallback:fallback_report_composer",
+                    agent_path="reporter/fallback/fallback_report_composer",
+                    notes=[
+                        f"evidence_count={len(evidences)}",
+                        "degraded_note=llm_unavailable",
+                    ],
+                )
+            )
+            outputs = dict(fallback_outputs)
+            outputs["subagent_trace"] = trace
+            return outputs
 
         try:
             llm_outputs, _ = self.registry.invoke(
@@ -127,9 +173,23 @@ class ReporterService:
                         "review_summary_payload": review_summary_payload,
                         "report_strategy": report_strategy,
                     },
+                    context={
+                        "task_name": "report:llm:llm_report_composer",
+                        "agent_path": "reporter/llm/llm_report_composer",
+                    },
                 )
             )
         except LLMProviderError as exc:
+            trace.append(
+                self._build_trace_record(
+                    subagent_type="llm_report_composer",
+                    objective="Compose final report via LLM.",
+                    status="failed",
+                    task_name="report:llm:llm_report_composer",
+                    agent_path="reporter/llm/llm_report_composer",
+                    notes=[f"error_name={exc.__class__.__name__}"],
+                )
+            )
             scorecard_digest = None
             scorecard_payload = None
             if intent == "distill_kol_logic":
@@ -153,11 +213,40 @@ class ReporterService:
                         "report_strategy": report_strategy,
                         "error_name": exc.__class__.__name__,
                     },
+                    context={
+                        "task_name": "report:llm:error:llm_error_report_composer",
+                        "agent_path": "reporter/llm/error/llm_error_report_composer",
+                    },
                 )
             )
-            return error_outputs
+            trace.append(
+                self._build_trace_record(
+                    subagent_type="llm_error_report_composer",
+                    objective="Compose degraded report after LLM error.",
+                    status="completed",
+                    task_name="report:llm:error:llm_error_report_composer",
+                    agent_path="reporter/llm/error/llm_error_report_composer",
+                    notes=[f"error_name={exc.__class__.__name__}"],
+                )
+            )
+            outputs = dict(error_outputs)
+            outputs["subagent_trace"] = trace
+            return outputs
         screening_scorecard = self._screening_scorecard_payload(llm_outputs["selected_evidence"]) if intent == "stock_screen" else None
         screening_candidates = self._screening_candidates_payload(llm_outputs["selected_evidence"]) if intent == "stock_screen" else None
+        trace.append(
+            self._build_trace_record(
+                subagent_type="llm_report_composer",
+                objective="Compose final report via LLM.",
+                status="completed",
+                task_name="report:llm:llm_report_composer",
+                agent_path="reporter/llm/llm_report_composer",
+                notes=[
+                    f"selected_evidence={len(llm_outputs.get('selected_evidence') or [])}",
+                    f"degraded_note={str(llm_outputs.get('degraded_note') or 'none')}",
+                ],
+            )
+        )
         return {
             "conclusion": llm_outputs["conclusion"],
             "evidence": llm_outputs["selected_evidence"][:5],
@@ -169,6 +258,7 @@ class ReporterService:
             "risk": llm_outputs["risk"],
             "follow_up": self._merge_follow_up(llm_outputs["follow_up"], report_strategy),
             "degraded_note": llm_outputs["degraded_note"],
+            "subagent_trace": trace,
         }
 
     def _deterministic_stock_compare_report(
@@ -203,6 +293,39 @@ class ReporterService:
 
     def _normalize_planning_context_hints(self, raw_hints) -> dict[str, str]:
         return normalize_planning_context_hints(raw_hints)
+
+    def _build_trace_record(
+        self,
+        *,
+        subagent_type: str,
+        objective: str,
+        status: str,
+        task_name: str,
+        agent_path: str,
+        notes: list[str] | None = None,
+    ) -> dict:
+        return {
+            "subagent_type": subagent_type,
+            "objective": objective,
+            "status": status,
+            "task_name": task_name,
+            "agent_path": agent_path,
+            "notes": list(notes or []),
+        }
+
+    def _report_strategy_trace_notes(self, report_strategy: dict[str, str | list[str] | None]) -> list[str]:
+        notes: list[str] = []
+        focus_area = str(report_strategy.get("focus_area") or "").strip()
+        preferred_methodology = str(report_strategy.get("preferred_methodology") or "").strip()
+        if focus_area:
+            notes.append(f"focus_area={focus_area}")
+        if preferred_methodology:
+            notes.append(f"preferred_methodology={preferred_methodology}")
+        strategy_notes = [str(item).strip() for item in list(report_strategy.get("notes") or []) if str(item).strip()]
+        notes.extend(strategy_notes)
+        if not notes:
+            notes.append("report_strategy=default")
+        return notes
 
     def _derive_report_strategy(
         self,

@@ -87,10 +87,13 @@ class ChatResearchRunnerTests(unittest.TestCase):
         )
 
         self.assertGreaterEqual(len(captured), 2)
-        self.assertEqual(captured[0].kind, "status")
-        self.assertIn("stock_snapshot_collector", captured[0].text)
-        self.assertEqual(captured[1].kind, "event")
-        self.assertIn("completed", captured[1].text)
+        status_updates = [update for update in captured if getattr(update, "kind", None) == "status"]
+        event_updates = [update for update in captured if getattr(update, "kind", None) == "event"]
+        patch_updates = [update for update in captured if getattr(update, "state_patch", None) is not None]
+        self.assertTrue(any("stock_snapshot_collector" in update.text for update in status_updates))
+        self.assertTrue(any("completed" in update.text for update in event_updates))
+        self.assertTrue(any(getattr(update.state_patch, "events_payload", None) is not None for update in patch_updates))
+        self.assertTrue(any(getattr(update.state_patch, "trace_payload", None) is not None for update in patch_updates))
 
     def test_run_chat_research_closes_orchestrator(self) -> None:
         _OrchestratorContextStub.instances.clear()

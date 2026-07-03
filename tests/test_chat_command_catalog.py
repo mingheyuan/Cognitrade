@@ -26,11 +26,27 @@ class ChatCommandCatalogTests(unittest.TestCase):
         self.assertTrue(any("/fork" in line for line in CHAT_HELP_LINES))
         self.assertTrue(any("/fork" in line for line in CHAT_COMMAND_SUMMARY_LINES))
 
+    def test_help_and_popup_command_catalog_cover_rename_command(self) -> None:
+        self.assertTrue(any("/rename" in line for line in CHAT_HELP_LINES))
+        self.assertTrue(any("/rename" in line for line in CHAT_COMMAND_SUMMARY_LINES))
+
     def test_help_and_popup_command_catalog_cover_thread_archive_commands(self) -> None:
         self.assertTrue(any("/thread-archive" in line for line in CHAT_HELP_LINES))
         self.assertTrue(any("/thread-unarchive" in line for line in CHAT_HELP_LINES))
         self.assertTrue(any("/thread-archive" in line for line in CHAT_COMMAND_SUMMARY_LINES))
         self.assertTrue(any("/thread-unarchive" in line for line in CHAT_COMMAND_SUMMARY_LINES))
+
+    def test_help_and_popup_command_catalog_cover_thread_read_command(self) -> None:
+        self.assertTrue(any("/thread-read" in line for line in CHAT_HELP_LINES))
+        self.assertTrue(any("/thread-read" in line for line in CHAT_COMMAND_SUMMARY_LINES))
+
+    def test_help_and_popup_command_catalog_cover_subagent_read_command(self) -> None:
+        self.assertTrue(any("/subagent-read" in line for line in CHAT_HELP_LINES))
+        self.assertTrue(any("/subagent-read" in line for line in CHAT_COMMAND_SUMMARY_LINES))
+
+    def test_help_and_popup_command_catalog_cover_run_steps_command(self) -> None:
+        self.assertTrue(any("/run-steps" in line for line in CHAT_HELP_LINES))
+        self.assertTrue(any("/run-steps" in line for line in CHAT_COMMAND_SUMMARY_LINES))
 
 
 if __name__ == "__main__":

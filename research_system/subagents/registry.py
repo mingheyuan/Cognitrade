@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Iterable
 
+from research_system.runtime.id_utils import generate_ulid
 from research_system.schemas.subagents import SubagentExecutionRecord, SubagentInvocation
 from research_system.subagents.base import SupportsSubagent
 
@@ -23,6 +24,8 @@ class SubagentRegistry:
     def invoke(self, invocation: SubagentInvocation) -> tuple[dict[str, Any], SubagentExecutionRecord]:
         if invocation.subagent_type not in self._subagents:
             raise KeyError(f"unknown subagent: {invocation.subagent_type}")
+        if not str(invocation.invocation_id or "").strip():
+            invocation = invocation.model_copy(update={"invocation_id": generate_ulid()})
 
         subagent = self._subagents[invocation.subagent_type]
         self._notify(

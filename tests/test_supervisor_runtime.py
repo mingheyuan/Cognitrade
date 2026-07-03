@@ -1,0 +1,29 @@
+from __future__ import annotations
+
+import unittest
+
+from research_system.runtime.supervisor import RuntimeSupervisor
+from research_system.runtime.supervisor_review_thesis_support import (
+    SupervisorReviewThesisSupport,
+)
+from research_system.runtime.supervisor_sector_research_support import (
+    SupervisorSectorResearchSupport,
+)
+from research_system.runtime.supervisor_stock_check_support import SupervisorStockCheckSupport
+from research_system.runtime.supervisor_stock_screen_support import (
+    SupervisorStockScreenSupport,
+)
+
+
+class SupervisorRuntimeTests(unittest.TestCase):
+    def test_supervisor_wires_intent_specific_supports(self) -> None:
+        supervisor = RuntimeSupervisor()
+
+        self.assertIsInstance(supervisor.stock_screen, SupervisorStockScreenSupport)
+        self.assertIsInstance(supervisor.stock_check, SupervisorStockCheckSupport)
+        self.assertIsInstance(supervisor.sector_research, SupervisorSectorResearchSupport)
+        self.assertIsInstance(supervisor.review_thesis, SupervisorReviewThesisSupport)
+
+
+if __name__ == "__main__":
+    unittest.main()

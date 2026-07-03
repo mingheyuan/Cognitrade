@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from research_system.cli.chat_commands import clear_pending_clarification, store_pending_clarification
+from research_system.cli.chat_flow_runtime import ChatQueryFlowRuntime
 from research_system.cli.chat_memory import (
     remember_chat_research_result,
 )
@@ -30,20 +31,19 @@ def _handle_direct_answer_dispatch(
     query: str,
     llm_provider,
     resolved_context: list[dict],
-    basic_answer_fn,
-    remember_basic_chat_turn_fn,
+    runtime: ChatQueryFlowRuntime,
     output_writer=None,
 ) -> bool:
     if dispatch.mode != "direct_answer":
         return False
-    answer = basic_answer_fn(
+    answer = runtime.basic_answer_fn(
         query=query,
         llm_provider=llm_provider,
         output_writer=output_writer,
         conversation_context=resolved_context,
     )
     if isinstance(answer, str) and answer.strip():
-        remember_basic_chat_turn_fn(query=query, answer=answer)
+        runtime.remember_basic_chat_turn_fn(query=query, answer=answer)
     return True
 
 
@@ -128,10 +128,7 @@ def run_chat_query_flow(
     emit_text,
     dispatch_fn,
     conversation_context,
-    basic_answer_fn,
-    run_research_fn,
-    print_result_fn,
-    remember_basic_chat_turn_fn,
+    runtime: ChatQueryFlowRuntime,
     output_writer=None,
 ) -> bool:
     action = parsed.get("action")
@@ -164,8 +161,7 @@ def run_chat_query_flow(
         query=query,
         llm_provider=llm_provider,
         resolved_context=resolved_context,
-        basic_answer_fn=basic_answer_fn,
-        remember_basic_chat_turn_fn=remember_basic_chat_turn_fn,
+        runtime=runtime,
         output_writer=output_writer,
     ):
         return True
@@ -179,7 +175,7 @@ def run_chat_query_flow(
     if not can_run:
         return True
 
-    payload = run_research_fn(
+    payload = runtime.run_research_fn(
         settings,
         query=query,
         intent=intent,
@@ -190,7 +186,7 @@ def run_chat_query_flow(
         conversation_context=resolved_context,
         output_writer=output_writer,
     )
-    print_result_fn(
+    runtime.print_result_fn(
         payload,
         llm_provider=llm_provider,
         query=query,

@@ -93,6 +93,8 @@ class ChatEventAdapterTests(unittest.TestCase):
                 "action_id": "act_collect",
                 "node_id": "collect",
                 "action_objective": "Load source records.",
+                "task_name": "collect:stock_snapshot_collector",
+                "agent_path": "collector/stock_snapshot_collector",
                 "subagent_type": "stock_snapshot_collector",
                 "objective": "Collect stock-level verified snapshots.",
                 "status": "running",
@@ -153,6 +155,39 @@ class ChatEventAdapterTests(unittest.TestCase):
             "stock_snapshot_collector",
         )
         self.assertEqual(trace_update.state_patch.trace_payload["subagent_trace"][0]["node_id"], "collect")
+        self.assertEqual(trace_update.state_patch.trace_payload["subagent_trace"][0]["task_name"], "collect:stock_snapshot_collector")
+
+    def test_chat_event_listener_updates_events_payload_cache_during_live_run(self) -> None:
+        presenter = build_chat_presenter(thinking_enabled=True, events_mode="compact")
+        captured: list[TranscriptUpdate] = []
+        event = RunEvent(
+            request_id="01REQ",
+            run_id="01RUN",
+            intent="stock_check",
+            event_type="subagent_started",
+            phase="collect",
+            agent="collector",
+            message="stock_snapshot_collector started",
+            payload={
+                "action_id": "act_collect",
+                "node_id": "collect",
+                "task_name": "collect:stock_snapshot_collector",
+                "agent_path": "collector/stock_snapshot_collector",
+                "agent_label": "Stock Snapshot Collector",
+                "subagent_type": "stock_snapshot_collector",
+                "invocation_id": "01INVOCATION",
+                "objective": "Collect stock-level verified snapshots.",
+                "status": "running",
+            },
+        )
+
+        chat_event_listener(event, presenter=presenter, output_writer=captured.append)
+
+        events_update = next(update for update in captured if update.state_patch.events_payload is not None)
+        self.assertEqual(events_update.state_patch.current_run_id, "01RUN")
+        self.assertEqual(events_update.state_patch.events_payload["run_id"], "01RUN")
+        self.assertEqual(events_update.state_patch.events_payload["events"][0]["event_type"], "subagent_started")
+        self.assertEqual(events_update.state_patch.events_payload["events"][0]["task_name"], "collect:stock_snapshot_collector")
 
 
 if __name__ == "__main__":

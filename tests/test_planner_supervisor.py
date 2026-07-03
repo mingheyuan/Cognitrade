@@ -6,8 +6,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from research_system.runtime.orchestrator import ResearchOrchestrator
+from research_system.runtime.planner_action_factory import PlannerActionFactory
+from research_system.runtime.planner_context_hints import PlannerContextHints
 from research_system.runtime.planner import RuntimePlanner
 from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.runtime.supervisor_blackboard_view import SupervisorBlackboardView
+from research_system.runtime.supervisor_decision_factory import SupervisorDecisionFactory
 from research_system.runtime.supervisor import RuntimeSupervisor
 from research_system.schemas.planning import ActionSpec
 from research_system.schemas.protocol import RequestEnvelope
@@ -15,6 +19,16 @@ from research_system.schemas.runtime import BlackboardEntry
 
 
 class PlannerSupervisorTests(unittest.TestCase):
+    def test_planner_wires_context_hints_and_action_factory(self) -> None:
+        planner = RuntimePlanner()
+        self.assertIsInstance(planner.context_hints, PlannerContextHints)
+        self.assertIsInstance(planner.action_factory, PlannerActionFactory)
+
+    def test_supervisor_wires_blackboard_view_and_decision_factory(self) -> None:
+        supervisor = RuntimeSupervisor()
+        self.assertIsInstance(supervisor.blackboard_view, SupervisorBlackboardView)
+        self.assertIsInstance(supervisor.decision_factory, SupervisorDecisionFactory)
+
     def test_stock_check_plan_carries_explicit_intent_dispatch_trace(self) -> None:
         planner = RuntimePlanner()
         plan = planner.build_initial_plan(

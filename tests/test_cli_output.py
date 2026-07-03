@@ -14,6 +14,7 @@ from research_system.cli.chat_command_catalog import print_chat_help
 from research_system.cli.chat_rendering import apply_tui_update, build_tui_hint_text, refresh_tui, render_tui_output
 from research_system.cli.chat_scene import (
     build_output_blocks,
+    build_transcript_blocks_for_session,
     build_trace_task_blocks,
     build_commands_popup_view,
     build_hint_bar_view,
@@ -169,6 +170,44 @@ class CliOutputTests(unittest.TestCase):
         self.assertTrue(blocks[1].inline)
         self.assertEqual(blocks[2].title, "answer")
 
+    def test_build_transcript_blocks_for_session_splits_committed_transcript_and_live_tail(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[
+                make_transcript_message(kind="thinking", text="plan first"),
+                make_transcript_message(kind="meta", text="run_id: 01TEST"),
+                make_transcript_message(kind="answer_stream", text="streaming answer", slot_key="answer_stream", stream_key="answer_stream"),
+            ],
+        )
+        live_message = session.output_lines[-1]
+        session.active_message_ids["answer_stream"] = live_message.message_id
+
+        blocks = build_transcript_blocks_for_session(session)
+
+        self.assertEqual(blocks[0].title, "thinking")
+        self.assertIsNone(blocks[1].title)
+        self.assertEqual(blocks[-1].title, "live_tail")
+        self.assertEqual(blocks[-1].lines, ("[answer] streaming answer",))
+
+    def test_build_transcript_blocks_for_session_falls_back_to_plain_transcript_without_active_tail(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[
+                make_transcript_message(kind="thinking", text="plan first"),
+                make_transcript_message(kind="answer_stream", text="done", stream_key="answer_stream"),
+            ],
+        )
+
+        blocks = build_transcript_blocks_for_session(session)
+
+        self.assertEqual([block.title for block in blocks], ["thinking", "answer"])
+
     def test_build_status_bar_items_exposes_view_model(self) -> None:
         session = TuiSession(
             settings=None,  # type: ignore[arg-type]
@@ -187,6 +226,8 @@ class CliOutputTests(unittest.TestCase):
         self.assertEqual(items[4].value, "collect")
         self.assertEqual(items[6].label, "output")
         self.assertEqual(items[6].value, "transcript:live")
+        self.assertEqual(items[7].label, "inspect")
+        self.assertEqual(items[7].value, "-")
 
     def test_build_commands_popup_view_exposes_view_model(self) -> None:
         popup = build_commands_popup_view()
@@ -197,6 +238,21 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("F1      toggle popup help", popup.lines)
         self.assertIn("F3      next trace task focus", popup.lines)
         self.assertIn("F4      clear trace task focus", popup.lines)
+        self.assertIn("F5      toggle trace raw sections", popup.lines)
+        self.assertIn("F12     toggle child detail expansion", popup.lines)
+        self.assertIn("Ctrl+F12 toggle focused task collapse", popup.lines)
+        self.assertIn("Ctrl+F3  next child focus", popup.lines)
+        self.assertIn("Ctrl+F4  clear child focus", popup.lines)
+        self.assertIn("Ctrl+F9  next trace drill target", popup.lines)
+        self.assertIn("Ctrl+F10 move up trace branch / clear call", popup.lines)
+        self.assertIn("Ctrl+F11 collapse trace branch", popup.lines)
+        self.assertIn("F6      cycle trace/events/threads panel", popup.lines)
+        self.assertIn("F7      cycle threads panel scope", popup.lines)
+        self.assertIn("F8      focus next thread", popup.lines)
+        self.assertIn("Ctrl+F8  focus next thread tree node", popup.lines)
+        self.assertIn("F9      resume focused thread", popup.lines)
+        self.assertIn("F10     fork focused thread", popup.lines)
+        self.assertIn("F11     archive/unarchive focused thread", popup.lines)
 
     def test_build_shell_scene_view_exposes_unified_scene_model(self) -> None:
         session = TuiSession(
@@ -218,6 +274,7 @@ class CliOutputTests(unittest.TestCase):
 
         scene = build_shell_scene_view(session)
         self.assertEqual(scene.transcript_blocks[0].title, "thinking")
+        self.assertEqual(scene.transcript_blocks[-1].title, "answer")
         self.assertEqual(scene.header.brand, "COGNITRADE")
         self.assertEqual(scene.header.mode_tag, "HELP")
         self.assertEqual(scene.status_items[2].value, "stock_screen")
@@ -268,10 +325,67 @@ class CliOutputTests(unittest.TestCase):
         )
         hint = build_hint_bar_view(session)
         self.assertIn("output transcript:live", hint.text)
+        self.assertIn("live-tail:off", hint.text)
         self.assertIn("PageUp/PageDown", hint.text)
         session.output_mode = "browse"
         hint = build_hint_bar_view(session)
         self.assertIn("output transcript:browse", hint.text)
+        self.assertIn("live-tail:off", hint.text)
+
+    @patch("research_system.cli.chat_scene.current_thread_summary")
+    def test_hint_bar_uses_idle_transcript_context_when_shell_is_ready(self, current_summary) -> None:
+        current_summary.return_value = {
+            "thread_label": "Bank compare shortlist",
+            "topic_title": "Bank leaders",
+            "thread_status": "active",
+            "recommended_next_step": "Compare PB and ROE side by side.",
+        }
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.state.current_intent = "stock_compare"
+        session.current_phase = "collect"
+        session.run_status_label = "completed"
+
+        hint = build_hint_bar_view(session)
+
+        self.assertIn("ready | output transcript:live", hint.text)
+        self.assertIn("context stock_compare / collect / completed", hint.text)
+        self.assertIn("thread Bank compare shortlist", hint.text)
+        self.assertIn("topic Bank leaders", hint.text)
+        self.assertIn("next Compare PB and ROE side by side.", hint.text)
+        self.assertIn("live-tail:off", hint.text)
+
+    def test_hint_bar_gracefully_falls_back_when_idle_thread_context_is_unavailable(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+
+        hint = build_hint_bar_view(session)
+
+        self.assertIn("ready | output transcript:live", hint.text)
+        self.assertNotIn("thread ", hint.text)
+        self.assertNotIn("topic ", hint.text)
+
+    def test_hint_bar_mentions_live_tail_when_transcript_has_active_slot(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[make_transcript_message(kind="answer_stream", text="streaming answer", slot_key="answer_stream", stream_key="answer_stream")],
+        )
+        session.active_message_ids["answer_stream"] = session.output_lines[0].message_id
+        hint = build_hint_bar_view(session)
+        self.assertIn("live-tail:on", hint.text)
 
     def test_hint_bar_mentions_trace_panel_when_trace_is_active(self) -> None:
         session = TuiSession(
@@ -285,6 +399,10 @@ class CliOutputTests(unittest.TestCase):
         hint = build_hint_bar_view(session)
         self.assertIn("trace panel", hint.text)
         self.assertIn("01TRACE", hint.text)
+        self.assertIn("raw:on", hint.text)
+        self.assertIn("children:expanded", hint.text)
+        self.assertIn("branches:open", hint.text)
+        self.assertIn("tasks:mixed", hint.text)
 
     def test_hint_bar_mentions_trace_focus_when_trace_task_is_selected(self) -> None:
         session = TuiSession(
@@ -296,9 +414,166 @@ class CliOutputTests(unittest.TestCase):
         )
         session.output_panel = "trace"
         session.trace_focus_index = 1
+        session.trace_child_focus_index = 0
         hint = build_hint_bar_view(session)
         self.assertIn("focus task 2", hint.text)
+        self.assertIn("inspect:focused-call", hint.text)
+        self.assertIn("child:1", hint.text)
+        self.assertIn("branch:all", hint.text)
+        self.assertIn("Ctrl+F11 collapse branch", hint.text)
         self.assertIn("F4 all tasks", hint.text)
+        self.assertIn("Ctrl+F3 child", hint.text)
+        self.assertIn("Ctrl+F12 collapse", hint.text)
+        self.assertIn("Ctrl+F9 drill next", hint.text)
+
+    def test_hint_bar_mentions_raw_off_when_trace_sections_are_collapsed(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_show_raw_sections = False
+        session.trace_expand_child_details = False
+        hint = build_hint_bar_view(session)
+        self.assertIn("raw:off", hint.text)
+        self.assertIn("F5 raw", hint.text)
+        self.assertIn("children:summary", hint.text)
+        self.assertIn("F12 children", hint.text)
+
+    def test_hint_bar_mentions_trace_branch_focus_when_selected(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_focus_index = 0
+        session.trace_branch_focus_path = ("collector",)
+        hint = build_hint_bar_view(session)
+        self.assertIn("inspect:branch", hint.text)
+        self.assertIn("branch:collector", hint.text)
+        self.assertIn("Ctrl+F10 up branch/clear call", hint.text)
+
+    def test_hint_bar_mentions_trace_task_scope_when_only_task_is_focused(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_focus_index = 0
+        hint = build_hint_bar_view(session)
+        self.assertIn("inspect:task", hint.text)
+
+    def test_build_status_bar_items_exposes_trace_inspect_scope(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_focus_index = 0
+        items = build_status_bar_items(session)
+        self.assertEqual(next(item.value for item in items if item.label == "inspect"), "task")
+        session.trace_branch_focus_path = ("collector",)
+        items = build_status_bar_items(session)
+        self.assertEqual(next(item.value for item in items if item.label == "inspect"), "branch")
+        session.trace_child_focus_index = 0
+        items = build_status_bar_items(session)
+        self.assertEqual(next(item.value for item in items if item.label == "inspect"), "call")
+
+    def test_hint_bar_mentions_threads_panel_scope(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(thread_id="thread_active_01"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "threads"
+        session.thread_panel_scope = "active"
+        hint = build_hint_bar_view(session)
+        self.assertIn("threads panel", hint.text)
+        self.assertIn("scope active", hint.text)
+        self.assertIn("F6 trace", hint.text)
+        self.assertIn("F7 next scope", hint.text)
+
+    def test_hint_bar_mentions_events_panel(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01EVENTS"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "events"
+        hint = build_hint_bar_view(session)
+        self.assertIn("events panel", hint.text)
+        self.assertIn("inspect:all", hint.text)
+        self.assertIn("01EVENTS", hint.text)
+        self.assertIn("F6 next panel", hint.text)
+        self.assertIn("/events <run_id|last>", hint.text)
+
+    def test_hint_bar_mentions_events_panel_trace_context_scope(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01EVENTS"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "events"
+        session.trace_focus_index = 0
+        session.trace_branch_focus_path = ("collector",)
+        hint = build_hint_bar_view(session)
+        self.assertIn("inspect:branch", hint.text)
+
+    def test_build_status_bar_items_exposes_events_inspect_scope(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01EVENTS"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "events"
+        items = build_status_bar_items(session)
+        self.assertEqual(next(item.value for item in items if item.label == "inspect"), "all")
+        session.trace_focus_index = 0
+        items = build_status_bar_items(session)
+        self.assertEqual(next(item.value for item in items if item.label == "inspect"), "task")
+        session.trace_branch_focus_path = ("collector",)
+        items = build_status_bar_items(session)
+        self.assertEqual(next(item.value for item in items if item.label == "inspect"), "branch")
+
+    def test_hint_bar_mentions_threads_focus_controls(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(thread_id="thread_active_01"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "threads"
+        session.thread_panel_scope = "active"
+        session.thread_focus_index = 1
+        hint = build_hint_bar_view(session)
+        self.assertIn("focus thread 2", hint.text)
+        self.assertIn("tree:all", hint.text)
+        self.assertIn("F8 next thread", hint.text)
+        self.assertIn("Ctrl+F8 next tree node", hint.text)
+        self.assertIn("F9 resume", hint.text)
+        self.assertIn("F10 fork", hint.text)
+        self.assertIn("F11 archive", hint.text)
 
     def test_build_output_blocks_renders_trace_panel_sections(self) -> None:
         session = TuiSession(
@@ -320,6 +595,8 @@ class CliOutputTests(unittest.TestCase):
                     "action_id": "act_retrieve",
                     "node_id": "retrieve",
                     "action_objective": "Retrieve evidence.",
+                    "task_name": "retrieve:retrieval_decider",
+                    "agent_path": "retriever/retrieval_decider",
                     "subagent_type": "retrieval_decider",
                     "status": "completed",
                     "phase": "retrieve",
@@ -337,6 +614,8 @@ class CliOutputTests(unittest.TestCase):
         self.assertTrue(any("objective: Retrieve evidence." in line for line in blocks[1].lines))
         self.assertTrue(any("status_counts: completed=1" in line for line in blocks[1].lines))
         self.assertTrue(any("retrieval_decider" in line for line in blocks[1].lines))
+        self.assertTrue(any("path=retriever/retrieval_decider" in line for line in blocks[1].lines))
+        self.assertTrue(any("retrieve:retrieval_decider" in line for line in blocks[1].lines))
 
     def test_build_trace_task_blocks_groups_subagent_dynamic_and_wait_by_phase_agent(self) -> None:
         payload = {
@@ -353,6 +632,7 @@ class CliOutputTests(unittest.TestCase):
                     "phase": "retrieve",
                     "agent": "retriever",
                     "objective": "Select final evidence set and summarize retrieval.",
+                    "agent_path": "retriever/retrieval_decider",
                 }
             ],
             "dynamic_trace": [
@@ -383,7 +663,11 @@ class CliOutputTests(unittest.TestCase):
         self.assertTrue(any("objective: Retrieve evidence." in line for line in blocks[0].lines))
         self.assertTrue(any("status_counts: completed=1" in line for line in blocks[0].lines))
         self.assertTrue(any("spawned_subagents:" in line for line in blocks[0].lines))
-        self.assertTrue(any("retrieval_decider" in line for line in blocks[0].lines))
+        self.assertTrue(any(line == "  retriever/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "    retrieve:retrieval_decider" for line in blocks[0].lines))
+        self.assertTrue(any("      path: retriever/retrieval_decider" in line for line in blocks[0].lines))
+        self.assertTrue(any("      status_counts: completed=1" in line for line in blocks[0].lines))
+        self.assertTrue(any("      objective: Select final evidence set and summarize retrieval." in line for line in blocks[0].lines))
         self.assertEqual(blocks[1].title, "screen_review | review / screen_reviewer")
         self.assertTrue(any("dynamic_inserts:" in line for line in blocks[1].lines))
         self.assertEqual(blocks[2].title, "collect | collect / collector")
@@ -431,6 +715,1919 @@ class CliOutputTests(unittest.TestCase):
         self.assertEqual(blocks[1].title, "retrieve | retrieve / retriever")
         self.assertFalse(any(block.title == "collect | collect / collector" for block in blocks[1:]))
         self.assertTrue(any(block.title == "subagent_trace" for block in blocks[1:]))
+
+    def test_build_output_blocks_hides_raw_trace_sections_when_disabled(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_show_raw_sections = False
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_retrieve",
+                    "node_id": "retrieve",
+                    "action_objective": "Retrieve evidence.",
+                    "task_name": "retrieve:retrieval_decider",
+                    "agent_path": "retriever/retrieval_decider",
+                    "subagent_type": "retrieval_decider",
+                    "status": "completed",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                }
+            ],
+            "dynamic_trace": [{"event": "dynamic_action_inserted", "node_id": "screen_review", "phase": "review", "agent": "screen_reviewer"}],
+            "wait_trace": [{"event": "waiting_external_started", "node_id": "collect", "phase": "collect", "agent": "collector"}],
+        }
+        blocks = build_output_blocks(session)
+        self.assertFalse(any(block.title == "subagent_trace" for block in blocks))
+        self.assertFalse(any(block.title == "dynamic_trace" for block in blocks))
+        self.assertFalse(any(block.title == "wait_trace" for block in blocks))
+
+    def test_build_output_blocks_collapses_child_trace_details_when_disabled(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_expand_child_details = False
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_retrieve",
+                    "node_id": "retrieve",
+                    "action_objective": "Retrieve evidence.",
+                    "task_name": "retrieve:retrieval_decider",
+                    "agent_path": "retriever/retrieval_decider",
+                    "subagent_type": "retrieval_decider",
+                    "status": "completed",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                    "objective": "Select final evidence set and summarize retrieval.",
+                }
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        blocks = build_output_blocks(session)
+        task_block = next(block for block in blocks if block.title == "retrieve | retrieve / retriever")
+        self.assertTrue(any(line == "spawned_subagents:" for line in task_block.lines))
+        self.assertTrue(any(line == "  retriever/" for line in task_block.lines))
+        self.assertTrue(any(line == "    retrieve:retrieval_decider" for line in task_block.lines))
+        self.assertFalse(any(line.strip().startswith("path:") for line in task_block.lines))
+        self.assertFalse(any(line.strip().startswith("status_counts:") and line.startswith("      ") for line in task_block.lines))
+        self.assertFalse(any(line.strip().startswith("objective:") and line.startswith("      ") for line in task_block.lines))
+
+    def test_build_output_blocks_collapses_focused_trace_task_when_task_is_marked_collapsed(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_retrieve",
+                    "node_id": "retrieve",
+                    "action_objective": "Retrieve evidence.",
+                    "task_name": "retrieve:retrieval_decider",
+                    "agent_path": "retriever/retrieval_decider",
+                    "subagent_type": "retrieval_decider",
+                    "status": "completed",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                    "objective": "Select final evidence set and summarize retrieval.",
+                }
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.trace_focus_index = 0
+        session.trace_collapsed_tasks = {"act_retrieve|retrieve|retriever"}
+        blocks = build_output_blocks(session)
+        task_block = next(block for block in blocks if block.title == "retrieve | retrieve / retriever [collapsed]")
+        self.assertTrue(any(line == "spawned_subagents: 1 hidden" for line in task_block.lines))
+        self.assertFalse(any(line.strip() == "retriever/" for line in task_block.lines))
+
+    def test_build_output_blocks_collapses_focused_trace_branch_when_marked_collapsed(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "invocation_id": "01INV-STOCK",
+                    "node_id": "collect",
+                    "action_objective": "Collect bank snapshots.",
+                    "task_name": "collect:stock_snapshot_collector",
+                    "agent_path": "collector/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Collect stock-level verified snapshots.",
+                }
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.trace_focus_index = 0
+        session.trace_branch_focus_path = ("collector",)
+        session.trace_collapsed_branches = {("collector",)}
+        blocks = build_output_blocks(session)
+        task_block = next(block for block in blocks if block.title == "collect | collect / collector")
+        self.assertTrue(any(line.startswith("  > collector/ [collapsed]") for line in task_block.lines))
+        self.assertFalse(any("Stock Snapshot Collector" in line or "collect:stock_snapshot_collector" in line for line in task_block.lines))
+
+    def test_build_output_blocks_filters_to_focused_trace_child(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_retrieve",
+                    "node_id": "retrieve",
+                    "action_objective": "Retrieve evidence.",
+                    "task_name": "retrieve:retrieval_decider",
+                    "agent_path": "retriever/retrieval_decider",
+                    "subagent_type": "retrieval_decider",
+                    "status": "completed",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                    "objective": "Select final evidence set and summarize retrieval.",
+                },
+                {
+                    "action_id": "act_retrieve",
+                    "node_id": "retrieve",
+                    "action_objective": "Retrieve evidence.",
+                    "task_name": "retrieve:blackboard_evidence_indexer",
+                    "agent_path": "retriever/blackboard_evidence_indexer",
+                    "subagent_type": "blackboard_evidence_indexer",
+                    "status": "completed",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                    "objective": "Index blackboard entries and expose evidence candidates.",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.trace_focus_index = 0
+        session.trace_child_focus_index = 1
+        blocks = build_output_blocks(session)
+        task_block = next(block for block in blocks if block.title == "retrieve | retrieve / retriever")
+        self.assertTrue(any(line == "    retrieve:blackboard_evidence_indexer" for line in task_block.lines))
+        self.assertFalse(any(line == "    retrieve:retrieval_decider" for line in task_block.lines))
+        focused_child_block = next(block for block in blocks if block.title == "focused_work_unit")
+        self.assertTrue(any(line == "work_unit: retrieve:blackboard_evidence_indexer" for line in focused_child_block.lines))
+        self.assertTrue(any("parent_task: retrieve" in line for line in focused_child_block.lines))
+        self.assertTrue(any("trace_rows:" in line for line in focused_child_block.lines))
+
+    def test_build_output_blocks_filters_raw_trace_sections_to_focused_task(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "action_objective": "Load source records.",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                },
+                {
+                    "action_id": "act_retrieve",
+                    "node_id": "retrieve",
+                    "action_objective": "Retrieve evidence.",
+                    "subagent_type": "retrieval_decider",
+                    "status": "completed",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                },
+            ],
+            "dynamic_trace": [
+                {
+                    "event": "dynamic_action_inserted",
+                    "action_id": "act_screen_review",
+                    "node_id": "screen_review",
+                    "phase": "review",
+                    "agent": "screen_reviewer",
+                    "objective": "Review screened candidates.",
+                }
+            ],
+            "wait_trace": [
+                {
+                    "event": "waiting_external_started",
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Load source records.",
+                    "wait_timeout_seconds": 30,
+                }
+            ],
+        }
+        session.trace_focus_index = 1
+        blocks = build_output_blocks(session)
+        raw_subagent_block = next(block for block in blocks if block.title == "subagent_trace")
+        self.assertTrue(any("retrieval_decider" in line for line in raw_subagent_block.lines))
+        self.assertFalse(any("stock_snapshot_collector" in line for line in raw_subagent_block.lines))
+        raw_dynamic_block = next(block for block in blocks if block.title == "dynamic_trace")
+        self.assertTrue(any("dynamic_action_inserted" in line for line in raw_dynamic_block.lines))
+        raw_wait_block = next(block for block in blocks if block.title == "wait_trace")
+        self.assertTrue(any("waiting_external_started" in line for line in raw_wait_block.lines))
+
+    def test_build_output_blocks_renders_focused_trace_child_call_inspection(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "invocation_id": "01INV-STOCK-A",
+                    "node_id": "collect",
+                    "action_objective": "Collect bank snapshots.",
+                    "task_name": "collect:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600036/stock_snapshot_collector",
+                    "agent_label": "Stock Snapshot Collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Collect stock-level verified snapshots for 600036.",
+                },
+                {
+                    "action_id": "act_collect",
+                    "invocation_id": "01INV-STOCK-B",
+                    "node_id": "collect",
+                    "action_objective": "Collect bank snapshots.",
+                    "task_name": "collect:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600036/stock_snapshot_collector",
+                    "agent_label": "Stock Snapshot Collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Collect stock-level verified snapshots for 600036 retry.",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.trace_focus_index = 0
+        session.trace_child_focus_index = 1
+        blocks = build_output_blocks(session)
+        focused_child_block = next(block for block in blocks if block.title == "focused_work_unit")
+        self.assertTrue(any(line == "work_unit: Stock Snapshot Collector" for line in focused_child_block.lines))
+        self.assertTrue(any(line == "call_id: 01INV-STOCK-B" for line in focused_child_block.lines))
+        self.assertTrue(any("agent_path: collector/compare/600036/stock_snapshot_collector" in line for line in focused_child_block.lines))
+        self.assertTrue(any("objective: Collect stock-level verified snapshots for 600036 retry." in line for line in focused_child_block.lines))
+        self.assertTrue(any("call_id=01INV-STOCK-B" in line for line in focused_child_block.lines))
+        raw_subagent_block = next(block for block in blocks if block.title == "subagent_trace")
+        self.assertTrue(any("call_id=01INV-STOCK-B" in line for line in raw_subagent_block.lines))
+        self.assertFalse(any("call_id=01INV-STOCK-A" in line for line in raw_subagent_block.lines))
+
+    def test_build_output_blocks_renders_focused_trace_child_within_focused_branch(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "invocation_id": "01INV-600519",
+                    "node_id": "collect",
+                    "action_objective": "Collect comparison snapshots.",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600519/stock_snapshot_collector",
+                    "agent_label": "Stock Snapshot Collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Collect stock-level verified snapshots for 600519.",
+                },
+                {
+                    "action_id": "act_collect",
+                    "invocation_id": "01INV-300750",
+                    "node_id": "collect",
+                    "action_objective": "Collect comparison snapshots.",
+                    "task_name": "collect:compare:300750:stock_snapshot_collector",
+                    "agent_path": "collector/compare/300750/stock_snapshot_collector",
+                    "agent_label": "Stock Snapshot Collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Collect stock-level verified snapshots for 300750.",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.trace_focus_index = 0
+        session.trace_branch_focus_path = ("collector", "compare", "600519")
+        session.trace_child_focus_index = 0
+        session.events_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "event_counts": {"events": 2, "distinct_event_types": 2},
+            "events": [
+                {
+                    "event_type": "subagent_started",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "stock_snapshot_collector started",
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "invocation_id": "01INV-600519",
+                    "status": "running",
+                },
+                {
+                    "event_type": "subagent_completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "stock_snapshot_collector completed",
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "task_name": "collect:compare:300750:stock_snapshot_collector",
+                    "invocation_id": "01INV-300750",
+                    "status": "completed",
+                },
+            ],
+        }
+        blocks = build_output_blocks(session)
+        focused_branch_block = next(block for block in blocks if block.title == "focused_branch")
+        self.assertTrue(
+            any(line == "branch: collector/compare/600519  @ linked-event:subagent_started:running" for line in focused_branch_block.lines)
+        )
+        self.assertTrue(any(line == "work_units: 1" for line in focused_branch_block.lines))
+        self.assertTrue(any(line == "direct_work_units: 1" for line in focused_branch_block.lines))
+        focused_child_block = next(block for block in blocks if block.title == "focused_work_unit")
+        self.assertTrue(any(line == "call_id: 01INV-600519" for line in focused_child_block.lines))
+        self.assertFalse(any("01INV-300750" in line for line in focused_child_block.lines))
+        raw_subagent_block = next(block for block in blocks if block.title == "subagent_trace")
+        self.assertTrue(any("call_id=01INV-600519" in line for line in raw_subagent_block.lines))
+        self.assertFalse(any("call_id=01INV-300750" in line for line in raw_subagent_block.lines))
+
+    def test_branch_drilldown_to_leaf_branch_naturally_exposes_first_work_unit(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "distill_kol_logic", "user_query": "distill records"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_distill",
+                    "node_id": "distill",
+                    "action_objective": "Distill source content.",
+                    "task_name": "distill:chunks:chunk_1_of_2:llm_chunk_distiller",
+                    "agent_path": "distiller/chunks/chunk_1_of_2/llm_chunk_distiller",
+                    "subagent_type": "llm_chunk_distiller",
+                    "status": "completed",
+                    "phase": "distill",
+                    "agent": "distiller",
+                    "objective": "Distill chunk_1_of_2 with LLM.",
+                },
+                {
+                    "action_id": "act_distill",
+                    "node_id": "distill",
+                    "action_objective": "Distill source content.",
+                    "task_name": "distill:chunks:chunk_2_of_2:llm_chunk_distiller",
+                    "agent_path": "distiller/chunks/chunk_2_of_2/llm_chunk_distiller",
+                    "subagent_type": "llm_chunk_distiller",
+                    "status": "completed",
+                    "phase": "distill",
+                    "agent": "distiller",
+                    "objective": "Distill chunk_2_of_2 with LLM.",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.trace_focus_index = 0
+        session.trace_branch_focus_path = ("distiller", "chunks", "chunk_1_of_2")
+        session.trace_child_focus_index = 0
+        blocks = build_output_blocks(session)
+        focused_branch_block = next(block for block in blocks if block.title == "focused_branch")
+        self.assertTrue(any(line == "child_branches: -" or line == "child_branches: " for line in focused_branch_block.lines) is False)
+        self.assertTrue(any(line == "direct_work_units: 1" for line in focused_branch_block.lines))
+        self.assertTrue(any(line == "work_units: 1" for line in focused_branch_block.lines))
+        focused_child_block = next(block for block in blocks if block.title == "focused_work_unit")
+        self.assertTrue(any("work_unit: distill:chunks:chunk_1_of_2:llm_chunk_distiller" in line for line in focused_child_block.lines))
+
+    def test_build_output_blocks_does_not_render_focused_work_unit_when_branch_changes_without_child_refocus(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "distill_kol_logic", "user_query": "distill records"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_distill",
+                    "node_id": "distill",
+                    "action_objective": "Distill source content.",
+                    "task_name": "distill:chunks:chunk_1_of_2:llm_chunk_distiller",
+                    "agent_path": "distiller/chunks/chunk_1_of_2/llm_chunk_distiller",
+                    "subagent_type": "llm_chunk_distiller",
+                    "status": "completed",
+                    "phase": "distill",
+                    "agent": "distiller",
+                    "objective": "Distill chunk_1_of_2 with LLM.",
+                },
+                {
+                    "action_id": "act_distill",
+                    "node_id": "distill",
+                    "action_objective": "Distill source content.",
+                    "task_name": "distill:postprocess:chunk_result_merger",
+                    "agent_path": "distiller/postprocess/chunk_result_merger",
+                    "subagent_type": "chunk_result_merger",
+                    "status": "completed",
+                    "phase": "distill",
+                    "agent": "distiller",
+                    "objective": "Merge chunk-level distillation outputs.",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.trace_focus_index = 0
+        session.trace_branch_focus_path = ("distiller", "chunks")
+        session.trace_child_focus_index = None
+        blocks = build_output_blocks(session)
+        self.assertFalse(any(block.title == "focused_work_unit" for block in blocks))
+
+    def test_build_output_blocks_can_return_from_focused_work_unit_to_same_branch_context(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "distill_kol_logic", "user_query": "distill records"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_distill",
+                    "node_id": "distill",
+                    "action_objective": "Distill source content.",
+                    "task_name": "distill:chunks:chunk_1_of_2:llm_chunk_distiller",
+                    "agent_path": "distiller/chunks/chunk_1_of_2/llm_chunk_distiller",
+                    "subagent_type": "llm_chunk_distiller",
+                    "status": "completed",
+                    "phase": "distill",
+                    "agent": "distiller",
+                    "objective": "Distill chunk_1_of_2 with LLM.",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.trace_focus_index = 0
+        session.trace_branch_focus_path = ("distiller", "chunks", "chunk_1_of_2")
+        session.trace_child_focus_index = None
+        blocks = build_output_blocks(session)
+        self.assertFalse(any(block.title == "focused_work_unit" for block in blocks))
+        focused_branch_block = next(block for block in blocks if block.title == "focused_branch")
+        self.assertTrue(any(line == "branch: distiller/chunks/chunk_1_of_2" for line in focused_branch_block.lines))
+
+    def test_build_trace_task_blocks_renders_child_lineage_tree_from_agent_path(self) -> None:
+        payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "invocation_id": "01INV-STOCK",
+                    "node_id": "collect",
+                    "action_objective": "Collect bank snapshots.",
+                    "task_name": "collect:stock_snapshot_collector",
+                    "agent_path": "collector/stock_snapshot_collector",
+                    "agent_label": "Stock Snapshot Collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Collect stock-level verified snapshots.",
+                },
+                {
+                    "action_id": "act_collect",
+                    "invocation_id": "01INV-SECTOR",
+                    "node_id": "collect",
+                    "action_objective": "Collect bank snapshots.",
+                    "task_name": "collect:sector_snapshot_collector",
+                    "agent_path": "collector/sector_snapshot_collector",
+                    "agent_label": "Sector Snapshot Collector",
+                    "subagent_type": "sector_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Collect sector-level verified snapshots.",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        blocks = build_trace_task_blocks(payload)
+        self.assertEqual(blocks[0].title, "collect | collect / collector")
+        self.assertTrue(any(line == "  collector/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "    Stock Snapshot Collector" for line in blocks[0].lines))
+        self.assertTrue(any(line == "    Sector Snapshot Collector" for line in blocks[0].lines))
+        self.assertTrue(any("      path: collector/stock_snapshot_collector" in line for line in blocks[0].lines))
+        self.assertTrue(any("call_id: 01INV-STOCK" in line for line in blocks[0].lines))
+
+    def test_build_trace_task_blocks_splits_same_child_label_by_invocation_id(self) -> None:
+        payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "invocation_id": "01INV-STOCK-A",
+                    "node_id": "collect",
+                    "action_objective": "Collect bank snapshots.",
+                    "task_name": "collect:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600036/stock_snapshot_collector",
+                    "agent_label": "Stock Snapshot Collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Collect stock-level verified snapshots for 600036.",
+                },
+                {
+                    "action_id": "act_collect",
+                    "invocation_id": "01INV-STOCK-B",
+                    "node_id": "collect",
+                    "action_objective": "Collect bank snapshots.",
+                    "task_name": "collect:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600036/stock_snapshot_collector",
+                    "agent_label": "Stock Snapshot Collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Collect stock-level verified snapshots for 600036 retry.",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        blocks = build_trace_task_blocks(payload)
+        self.assertEqual(blocks[0].title, "collect | collect / collector")
+        self.assertEqual(
+            sum(1 for line in blocks[0].lines if line == "        Stock Snapshot Collector"),
+            2,
+        )
+        self.assertTrue(any("call_id: 01INV-STOCK-A" in line for line in blocks[0].lines))
+        self.assertTrue(any("call_id: 01INV-STOCK-B" in line for line in blocks[0].lines))
+        self.assertEqual(
+            sum(
+                1
+                for line in blocks[0].lines
+                if "status_counts: completed=1" in line
+            ),
+            2,
+        )
+
+    def test_build_trace_task_blocks_renders_deeper_child_lineage_tree(self) -> None:
+        payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "distill_kol_logic", "user_query": "distill records"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_distill",
+                    "node_id": "distill",
+                    "action_objective": "Distill source content.",
+                    "task_name": "distill:preprocess:source_normalizer",
+                    "agent_path": "distiller/preprocess/source_normalizer",
+                    "subagent_type": "distill_source_normalizer",
+                    "status": "completed",
+                    "phase": "distill",
+                    "agent": "distiller",
+                    "objective": "Normalize raw distillation source records.",
+                },
+                {
+                    "action_id": "act_distill",
+                    "node_id": "distill",
+                    "action_objective": "Distill source content.",
+                    "task_name": "distill:chunks:chunk_1_of_2:llm_chunk_distiller",
+                    "agent_path": "distiller/chunks/chunk_1_of_2/llm_chunk_distiller",
+                    "subagent_type": "llm_chunk_distiller",
+                    "status": "completed",
+                    "phase": "distill",
+                    "agent": "distiller",
+                    "objective": "Distill chunk_1_of_2 with LLM.",
+                },
+                {
+                    "action_id": "act_distill",
+                    "node_id": "distill",
+                    "action_objective": "Distill source content.",
+                    "task_name": "distill:postprocess:chunk_result_merger",
+                    "agent_path": "distiller/postprocess/chunk_result_merger",
+                    "subagent_type": "chunk_result_merger",
+                    "status": "completed",
+                    "phase": "distill",
+                    "agent": "distiller",
+                    "objective": "Merge chunk-level distillation outputs.",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        blocks = build_trace_task_blocks(payload)
+        self.assertEqual(blocks[0].title, "distill | distill / distiller")
+        self.assertTrue(any(line == "  distiller/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "    subtree: child_branches=3, direct_work_units=0, total_work_units=3" for line in blocks[0].lines))
+        self.assertTrue(any(line == "    preprocess/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      subtree: child_branches=0, direct_work_units=1, total_work_units=1" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      distill:preprocess:source_normalizer" for line in blocks[0].lines))
+        self.assertTrue(any(line == "    chunks/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      subtree: child_branches=1, direct_work_units=0, total_work_units=1" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      chunk_1_of_2/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "        subtree: child_branches=0, direct_work_units=1, total_work_units=1" for line in blocks[0].lines))
+        self.assertTrue(any(line == "        distill:chunks:chunk_1_of_2:llm_chunk_distiller" for line in blocks[0].lines))
+        self.assertTrue(any(line == "    postprocess/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      subtree: child_branches=0, direct_work_units=1, total_work_units=1" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      distill:postprocess:chunk_result_merger" for line in blocks[0].lines))
+
+    def test_build_trace_task_blocks_renders_compare_symbol_subtree(self) -> None:
+        payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare maotai byd catl"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "action_objective": "Collect comparison snapshots.",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600519/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Collect stock-level verified snapshots for comparison targets.",
+                },
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "action_objective": "Collect comparison snapshots.",
+                    "task_name": "collect:compare:300750:stock_snapshot_collector",
+                    "agent_path": "collector/compare/300750/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Collect stock-level verified snapshots for comparison targets.",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        blocks = build_trace_task_blocks(payload)
+        self.assertEqual(blocks[0].title, "collect | collect / collector")
+        self.assertTrue(any(line == "  collector/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "    compare/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      600519/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "        collect:compare:600519:stock_snapshot_collector" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      300750/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "        collect:compare:300750:stock_snapshot_collector" for line in blocks[0].lines))
+
+    def test_build_trace_task_blocks_renders_nested_retriever_subtree(self) -> None:
+        payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_retrieve",
+                    "node_id": "retrieve",
+                    "action_objective": "Retrieve evidence.",
+                    "task_name": "retrieve:indexing:blackboard_evidence_indexer",
+                    "agent_path": "retriever/indexing/blackboard_evidence_indexer",
+                    "subagent_type": "blackboard_evidence_indexer",
+                    "status": "completed",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                    "objective": "Index blackboard entries and expose evidence candidates.",
+                },
+                {
+                    "action_id": "act_retrieve",
+                    "node_id": "retrieve",
+                    "action_objective": "Retrieve evidence.",
+                    "task_name": "retrieve:search:qdrant_evidence_searcher",
+                    "agent_path": "retriever/search/qdrant_evidence_searcher",
+                    "subagent_type": "qdrant_evidence_searcher",
+                    "status": "degraded",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                    "objective": "Search indexed evidence candidates via Qdrant.",
+                },
+                {
+                    "action_id": "act_retrieve",
+                    "node_id": "retrieve",
+                    "action_objective": "Retrieve evidence.",
+                    "task_name": "retrieve:decision:retrieval_decider",
+                    "agent_path": "retriever/decision/retrieval_decider",
+                    "subagent_type": "retrieval_decider",
+                    "status": "completed",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                    "objective": "Select final evidence set and summarize retrieval.",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        blocks = build_trace_task_blocks(payload)
+        self.assertEqual(blocks[0].title, "retrieve | retrieve / retriever")
+        self.assertTrue(any(line == "  retriever/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "    subtree: child_branches=3, direct_work_units=0, total_work_units=3" for line in blocks[0].lines))
+        self.assertTrue(any(line == "    indexing/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      subtree: child_branches=0, direct_work_units=1, total_work_units=1" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      retrieve:indexing:blackboard_evidence_indexer" for line in blocks[0].lines))
+        self.assertTrue(any(line == "    search/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      subtree: child_branches=0, direct_work_units=1, total_work_units=1" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      retrieve:search:qdrant_evidence_searcher" for line in blocks[0].lines))
+        self.assertTrue(any(line == "    decision/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      subtree: child_branches=0, direct_work_units=1, total_work_units=1" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      retrieve:decision:retrieval_decider" for line in blocks[0].lines))
+
+    def test_build_trace_task_blocks_renders_nested_reporter_subtree(self) -> None:
+        payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "review_thesis", "user_query": "review thesis"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_report",
+                    "node_id": "report",
+                    "action_objective": "Compose final report.",
+                    "task_name": "report:strategy:report_strategy_resolver",
+                    "agent_path": "reporter/strategy/report_strategy_resolver",
+                    "subagent_type": "report_strategy_resolver",
+                    "status": "completed",
+                    "phase": "report",
+                    "agent": "reporter",
+                    "objective": "Resolve report strategy from retrieval summary and planning context.",
+                },
+                {
+                    "action_id": "act_report",
+                    "node_id": "report",
+                    "action_objective": "Compose final report.",
+                    "task_name": "report:fallback:fallback_report_composer",
+                    "agent_path": "reporter/fallback/fallback_report_composer",
+                    "subagent_type": "fallback_report_composer",
+                    "status": "completed",
+                    "phase": "report",
+                    "agent": "reporter",
+                    "objective": "Compose degraded fallback report.",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        blocks = build_trace_task_blocks(payload)
+        self.assertEqual(blocks[0].title, "report | report / reporter")
+        self.assertTrue(any(line == "  reporter/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "    strategy/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      report:strategy:report_strategy_resolver" for line in blocks[0].lines))
+        self.assertTrue(any(line == "    fallback/" for line in blocks[0].lines))
+        self.assertTrue(any(line == "      report:fallback:fallback_report_composer" for line in blocks[0].lines))
+
+    def test_build_output_blocks_marks_focused_trace_branch(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "action_objective": "Collect bank snapshots.",
+                    "task_name": "collect:stock_snapshot_collector",
+                    "agent_path": "collector/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Collect stock-level verified snapshots.",
+                },
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "action_objective": "Collect bank snapshots.",
+                    "task_name": "collect:sector_snapshot_collector",
+                    "agent_path": "collector/sector_snapshot_collector",
+                    "subagent_type": "sector_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Collect sector-level verified snapshots.",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.trace_focus_index = 0
+        session.trace_branch_focus_path = ("collector",)
+        blocks = build_output_blocks(session)
+        task_block = next(block for block in blocks if block.title == "collect | collect / collector")
+        self.assertTrue(any(line.startswith("  > collector/") for line in task_block.lines))
+
+    def test_build_output_blocks_focuses_deeper_trace_branch_as_subtree(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "action_objective": "Collect comparison snapshots.",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600519/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Collect stock-level verified snapshots for comparison targets.",
+                },
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "action_objective": "Collect comparison snapshots.",
+                    "task_name": "collect:compare:300750:stock_snapshot_collector",
+                    "agent_path": "collector/compare/300750/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "objective": "Collect stock-level verified snapshots for comparison targets.",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.trace_focus_index = 0
+        session.trace_branch_focus_path = ("collector", "compare", "600519")
+        blocks = build_output_blocks(session)
+        task_block = next(block for block in blocks if block.title == "collect | collect / collector")
+        self.assertTrue(any(line.startswith("  - collector/") for line in task_block.lines))
+        self.assertTrue(any(line.startswith("    - compare/") for line in task_block.lines))
+        self.assertTrue(any(line.startswith("      > 600519/") for line in task_block.lines))
+        self.assertFalse(any(line.strip() == "300750/" or "300750" in line for line in task_block.lines))
+        focused_branch_block = next(block for block in blocks if block.title == "focused_branch")
+        self.assertTrue(any(line == "branch: collector/compare/600519" for line in focused_branch_block.lines))
+        self.assertTrue(any(line == "parent_branch: collector/compare" for line in focused_branch_block.lines))
+        self.assertTrue(any(line == "next_work_unit_focus: collect:compare:600519:stock_snapshot_collector" for line in focused_branch_block.lines))
+        self.assertTrue(any(line == "next_drill_target: collect:compare:600519:stock_snapshot_collector" for line in focused_branch_block.lines))
+        self.assertTrue(any(line == "work_units: 1" for line in focused_branch_block.lines))
+        self.assertTrue(any(line == "direct_work_units: 1" for line in focused_branch_block.lines))
+        self.assertTrue(
+            any(
+                "collect:compare:600519:stock_snapshot_collector" in line
+                and "path=collector/compare/600519/stock_snapshot_collector" in line
+                for line in focused_branch_block.lines
+            )
+        )
+        raw_subagent_block = next(block for block in blocks if block.title == "subagent_trace")
+        self.assertTrue(any("600519" in line for line in raw_subagent_block.lines))
+        self.assertFalse(any("300750" in line for line in raw_subagent_block.lines))
+
+    def test_build_output_blocks_renders_events_panel(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01EVENTS"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "events"
+        session.events_payload = {
+            "run_id": "01EVENTS",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "completed"},
+            "display_summary": "done",
+            "event_counts": {"events": 1, "distinct_event_types": 1},
+            "events": [
+                {
+                    "event_type": "subagent_completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "stock_snapshot_collector completed",
+                    "task_name": "collect:stock_snapshot_collector",
+                    "agent_path": "collector/stock_snapshot_collector",
+                    "status": "completed",
+                }
+            ],
+        }
+        blocks = build_output_blocks(session)
+        self.assertEqual(blocks[0].title, "events")
+        self.assertTrue(any(line == "run_id: 01EVENTS" for line in blocks[0].lines))
+        timeline_block = next(block for block in blocks if block.title == "event_timeline")
+        self.assertTrue(any("[subagent_completed]" in line for line in timeline_block.lines))
+        self.assertTrue(any("collect:stock_snapshot_collector" in line for line in timeline_block.lines))
+
+    def test_build_output_blocks_renders_focused_event_block(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01EVENTS"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "events"
+        session.events_focus_index = 0
+        session.events_payload = {
+            "run_id": "01EVENTS",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "event_counts": {"events": 1, "distinct_event_types": 1},
+            "events": [
+                {
+                    "event_type": "subagent_started",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "stock_snapshot_collector started",
+                    "task_name": "collect:stock_snapshot_collector",
+                    "agent_path": "collector/stock_snapshot_collector",
+                    "node_id": "collect",
+                    "invocation_id": "01INVOCATION",
+                    "status": "running",
+                }
+            ],
+        }
+        blocks = build_output_blocks(session)
+        focused_block = next(block for block in blocks if block.title == "focused_event")
+        self.assertTrue(any(line == "event_type: subagent_started" for line in focused_block.lines))
+        self.assertTrue(any(line == "task_name: collect:stock_snapshot_collector" for line in focused_block.lines))
+        self.assertTrue(any(line == "call_id: 01INVOCATION" for line in focused_block.lines))
+        timeline_block = next(block for block in blocks if block.title == "event_timeline")
+        self.assertTrue(any(line.startswith("> ") for line in timeline_block.lines))
+
+    def test_build_output_blocks_renders_linked_trace_for_focused_event(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "events"
+        session.events_focus_index = 0
+        session.trace_focus_index = 0
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600519/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "running",
+                    "objective": "Collect stock snapshots.",
+                }
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.events_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "event_counts": {"events": 1, "distinct_event_types": 1},
+            "events": [
+                {
+                    "event_type": "subagent_started",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "stock_snapshot_collector started",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600519/stock_snapshot_collector",
+                    "node_id": "collect",
+                    "status": "running",
+                }
+            ],
+        }
+        blocks = build_output_blocks(session)
+        linked_block = next(block for block in blocks if block.title == "linked_trace")
+        self.assertTrue(any(line == "task: collect" for line in linked_block.lines))
+        self.assertTrue(any(line == "phase: collect" for line in linked_block.lines))
+        self.assertTrue(any(line == "agent: collector" for line in linked_block.lines))
+        self.assertTrue(any(line == "objective: Collect stock snapshots." for line in linked_block.lines))
+        timeline_block = next(block for block in blocks if block.title == "event_timeline")
+        self.assertTrue(any(line.startswith(">@ ") for line in timeline_block.lines))
+
+    def test_build_output_blocks_renders_linked_trace_call_context_for_focused_event(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "events"
+        session.events_focus_index = 0
+        session.trace_focus_index = 0
+        session.trace_branch_focus_path = ("collector", "compare", "600519")
+        session.trace_child_focus_index = 0
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600519/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "invocation_id": "01INV-600519",
+                    "status": "running",
+                }
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.events_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "event_counts": {"events": 1, "distinct_event_types": 1},
+            "events": [
+                {
+                    "event_type": "subagent_started",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "stock_snapshot_collector started",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600519/stock_snapshot_collector",
+                    "node_id": "collect",
+                    "invocation_id": "01INV-600519",
+                    "status": "running",
+                }
+            ],
+        }
+        blocks = build_output_blocks(session)
+        linked_block = next(block for block in blocks if block.title == "linked_trace")
+        self.assertTrue(any(line == "branch: collector/compare/600519" for line in linked_block.lines))
+        self.assertTrue(any(line == "work_unit: collect:compare:600519:stock_snapshot_collector" for line in linked_block.lines))
+        self.assertTrue(any(line == "call_id: 01INV-600519" for line in linked_block.lines))
+
+    def test_build_output_blocks_renders_linked_event_for_focused_trace_task(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_focus_index = 0
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600519/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "running",
+                }
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.events_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "event_counts": {"events": 2, "distinct_event_types": 2},
+            "events": [
+                {
+                    "event_type": "phase_started",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "Phase started: collect",
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                },
+                {
+                    "event_type": "subagent_started",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "stock_snapshot_collector started",
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "status": "running",
+                },
+            ],
+        }
+        blocks = build_output_blocks(session)
+        task_block = next(block for block in blocks if block.title.startswith("collect | collect / collector"))
+        self.assertTrue(any("task: collect  @ linked-event:subagent_started:running" == line for line in task_block.lines))
+        linked_block = next(block for block in blocks if block.title == "linked_event")
+        self.assertTrue(any(line == "event_type: subagent_started" for line in linked_block.lines))
+        self.assertTrue(any(line == "message: stock_snapshot_collector started" for line in linked_block.lines))
+        self.assertTrue(any(line == "task_name: collect:compare:600519:stock_snapshot_collector" for line in linked_block.lines))
+
+    def test_build_output_blocks_renders_linked_event_for_focused_trace_call(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_focus_index = 0
+        session.trace_branch_focus_path = ("collector", "compare", "600519")
+        session.trace_child_focus_index = 0
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600519/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "invocation_id": "01INV-600519",
+                    "status": "completed",
+                }
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.events_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "event_counts": {"events": 3, "distinct_event_types": 3},
+            "events": [
+                {
+                    "event_type": "phase_started",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "Phase started: collect",
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                },
+                {
+                    "event_type": "subagent_started",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "stock_snapshot_collector started",
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "invocation_id": "01INV-600519",
+                    "status": "running",
+                },
+                {
+                    "event_type": "subagent_completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "stock_snapshot_collector completed",
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "invocation_id": "01INV-600519",
+                    "status": "completed",
+                },
+            ],
+        }
+        blocks = build_output_blocks(session)
+        task_block = next(block for block in blocks if block.title.startswith("collect | collect / collector"))
+        self.assertTrue(any("task: collect  @ linked-event:subagent_completed:completed" == line for line in task_block.lines))
+        self.assertTrue(any(line.startswith("  collector/") or line.startswith("  - collector/") or line.startswith("  > collector/") for line in task_block.lines))
+        linked_block = next(block for block in blocks if block.title == "linked_event")
+        self.assertTrue(any(line == "event_type: subagent_completed" for line in linked_block.lines))
+        self.assertTrue(any(line == "call_id: 01INV-600519" for line in linked_block.lines))
+        self.assertTrue(any(line == "status: completed" for line in linked_block.lines))
+        focused_child_block = next(block for block in blocks if block.title == "focused_work_unit")
+        self.assertTrue(
+            any(
+                line.startswith("work_unit: ") and line.endswith("@ linked-event:subagent_completed:completed")
+                for line in focused_child_block.lines
+            )
+        )
+
+    def test_build_output_blocks_marks_linked_branch_and_work_unit_inside_trace_tree(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_focus_index = 0
+        session.trace_branch_focus_path = ("collector", "compare", "600519")
+        session.trace_child_focus_index = 0
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600519/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "invocation_id": "01INV-600519",
+                    "status": "completed",
+                },
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "task_name": "collect:compare:300750:stock_snapshot_collector",
+                    "agent_path": "collector/compare/300750/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "invocation_id": "01INV-300750",
+                    "status": "completed",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.events_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "event_counts": {"events": 2, "distinct_event_types": 2},
+            "events": [
+                {
+                    "event_type": "subagent_started",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "stock_snapshot_collector started",
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "invocation_id": "01INV-600519",
+                    "status": "running",
+                },
+                {
+                    "event_type": "subagent_completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "stock_snapshot_collector completed",
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "task_name": "collect:compare:300750:stock_snapshot_collector",
+                    "invocation_id": "01INV-300750",
+                    "status": "completed",
+                },
+            ],
+        }
+        blocks = build_output_blocks(session)
+        task_block = next(block for block in blocks if block.title.startswith("collect | collect / collector"))
+        self.assertTrue(any(line.startswith("      > 600519/") and "@ linked-event" in line for line in task_block.lines))
+        self.assertTrue(
+            any(
+                "collect:compare:600519:stock_snapshot_collector  @ linked-event" in line
+                for line in task_block.lines
+            )
+        )
+
+    def test_build_output_blocks_filters_events_panel_by_focused_trace_task(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "events"
+        session.trace_focus_index = 0
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "event_counts": {"subagent_trace": 1, "dynamic_trace": 0, "wait_trace": 0},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600519/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "running",
+                }
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.events_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "event_counts": {"events": 3, "distinct_event_types": 2},
+            "events": [
+                {
+                    "event_type": "phase_started",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "Phase started: collect",
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                },
+                {
+                    "event_type": "subagent_started",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "stock_snapshot_collector started",
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                },
+                {
+                    "event_type": "phase_started",
+                    "phase": "report",
+                    "agent": "reporter",
+                    "message": "Phase started: report",
+                    "action_id": "act_report",
+                    "node_id": "report",
+                },
+            ],
+        }
+        blocks = build_output_blocks(session)
+        timeline_block = next(block for block in blocks if block.title == "event_timeline")
+        self.assertTrue(any("act_collect" in line or "collect:compare:600519:stock_snapshot_collector" in line for line in timeline_block.lines))
+        self.assertFalse(any("Phase started: report" in line for line in timeline_block.lines))
+
+    def test_build_output_blocks_renders_focused_branch_subtree_metadata(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(last_run_id="01TRACE"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "distill_kol_logic", "user_query": "distill records"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_distill",
+                    "node_id": "distill",
+                    "action_objective": "Distill source content.",
+                    "task_name": "distill:chunks:chunk_1_of_2:llm_chunk_distiller",
+                    "agent_path": "distiller/chunks/chunk_1_of_2/llm_chunk_distiller",
+                    "subagent_type": "llm_chunk_distiller",
+                    "status": "completed",
+                    "phase": "distill",
+                    "agent": "distiller",
+                    "objective": "Distill chunk_1_of_2 with LLM.",
+                },
+                {
+                    "action_id": "act_distill",
+                    "node_id": "distill",
+                    "action_objective": "Distill source content.",
+                    "task_name": "distill:chunks:chunk_2_of_2:llm_chunk_distiller",
+                    "agent_path": "distiller/chunks/chunk_2_of_2/llm_chunk_distiller",
+                    "subagent_type": "llm_chunk_distiller",
+                    "status": "completed",
+                    "phase": "distill",
+                    "agent": "distiller",
+                    "objective": "Distill chunk_2_of_2 with LLM.",
+                },
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        session.trace_focus_index = 0
+        session.trace_branch_focus_path = ("distiller", "chunks")
+        blocks = build_output_blocks(session)
+        focused_branch_block = next(block for block in blocks if block.title == "focused_branch")
+        self.assertTrue(any(line == "branch: distiller/chunks" for line in focused_branch_block.lines))
+        self.assertTrue(any(line == "parent_branch: distiller" for line in focused_branch_block.lines))
+        self.assertTrue(any(line == "up_branch_focus: distiller" for line in focused_branch_block.lines))
+        self.assertTrue(any(line == "next_branch_focus: distiller/chunks/chunk_1_of_2" for line in focused_branch_block.lines))
+        self.assertTrue(any(line == "next_work_unit_focus: -" for line in focused_branch_block.lines))
+        self.assertTrue(any(line == "next_drill_target: distiller/chunks/chunk_1_of_2" for line in focused_branch_block.lines))
+        self.assertTrue(any(line == "child_branches: chunk_1_of_2, chunk_2_of_2" for line in focused_branch_block.lines))
+        self.assertTrue(
+            any(
+                line == "next_branch_targets: distiller/chunks/chunk_1_of_2, distiller/chunks/chunk_2_of_2"
+                for line in focused_branch_block.lines
+            )
+        )
+        self.assertTrue(any(line == "direct_work_units: 0" for line in focused_branch_block.lines))
+
+    def test_build_output_blocks_renders_threads_panel(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(thread_id="thread_active_01"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "threads"
+        session.thread_panel_scope = "active"
+        with patch("research_system.cli.chat_scene.current_thread_summary") as current_summary, patch(
+            "research_system.cli.chat_scene.list_chat_threads"
+        ) as list_threads:
+            current_summary.return_value = {
+                "thread_id": "thread_active_01",
+                "thread_label": "Bank compare shortlist",
+                "thread_source": "fork",
+                "parent_thread_id": "thread_parent_00",
+                "archived": False,
+                "turn_count": 5,
+                "lifetime_turn_count": 12,
+                "fork_turn_count": 5,
+                "topic_title": "Compare bank stocks",
+                "topic_intent": "stock_compare",
+            }
+            list_threads.return_value = [
+                {
+                    "thread_id": "thread_active_01",
+                    "turn_count": 5,
+                    "thread_label": "Bank compare shortlist",
+                    "thread_source": "fork",
+                    "parent_thread_id": "thread_parent_00",
+                    "topic_title": "Compare bank stocks",
+                    "topic_intent": "stock_compare",
+                    "archived": False,
+                },
+                {
+                    "thread_id": "thread_parent_00",
+                    "turn_count": 7,
+                    "thread_source": "new",
+                    "parent_thread_id": None,
+                    "topic_title": "Original bank thread",
+                    "topic_intent": "stock_check",
+                    "archived": False,
+                },
+            ]
+            blocks = build_output_blocks(session)
+        self.assertEqual(blocks[0].title, "thread")
+        self.assertTrue(any("thread_name: Bank compare shortlist" in line for line in blocks[0].lines))
+        self.assertTrue(any("thread_id: thread_active_01" in line for line in blocks[0].lines))
+        self.assertTrue(any("parent_thread_id: thread_parent_00" in line for line in blocks[0].lines))
+        self.assertEqual(blocks[1].title, "thread_lineage")
+        self.assertTrue(any("parent: thread_parent_00" in line for line in blocks[1].lines))
+        self.assertTrue(any("fork_turns: 5" in line for line in blocks[1].lines))
+        self.assertEqual(blocks[2].title, "thread_tree:active")
+        self.assertTrue(any("* thread_active_01 (fork)" in line for line in blocks[2].lines))
+        self.assertEqual(blocks[3].title, "threads:active")
+        self.assertTrue(any("* thread_active_01" in line for line in blocks[3].lines))
+        self.assertTrue(any("source=fork:thread_parent_00" in line for line in blocks[3].lines))
+
+    def test_build_output_blocks_renders_focused_thread_details(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(thread_id="thread_active_01"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "threads"
+        session.thread_panel_scope = "active"
+        session.thread_focus_index = 1
+        with patch("research_system.cli.chat_scene.current_thread_summary") as current_summary, patch(
+            "research_system.cli.chat_scene.list_chat_threads"
+        ) as list_threads, patch("research_system.cli.chat_scene.thread_preview_payload") as thread_preview:
+            current_summary.return_value = {
+                "thread_id": "thread_active_01",
+                "thread_label": "Bank compare shortlist",
+                "thread_source": "fork",
+                "parent_thread_id": "thread_parent_00",
+                "archived": False,
+                "turn_count": 5,
+                "lifetime_turn_count": 12,
+                "fork_turn_count": 5,
+                "topic_title": "Compare bank stocks",
+                "topic_intent": "stock_compare",
+            }
+            list_threads.return_value = [
+                {
+                    "thread_id": "thread_active_01",
+                    "turn_count": 5,
+                    "thread_label": "Bank compare shortlist",
+                    "thread_source": "fork",
+                    "parent_thread_id": "thread_parent_00",
+                    "topic_title": "Compare bank stocks",
+                    "topic_intent": "stock_compare",
+                    "archived": False,
+                },
+                {
+                    "thread_id": "thread_parent_00",
+                    "turn_count": 7,
+                    "thread_label": "Parent bank thread",
+                    "thread_source": "new",
+                    "parent_thread_id": None,
+                    "topic_title": "Original bank thread",
+                    "topic_intent": "stock_check",
+                    "archived": False,
+                },
+            ]
+            thread_preview.return_value = {
+                "thread_id": "thread_parent_00",
+                "thread_label": "Parent bank thread",
+                "summary_text": "recent_query: parent thread\nrecommended_next_step: inspect valuation gap",
+                "summary_turn_count": 7,
+                "recent_turns": [
+                    {"role": "user", "content": "compare bank valuation"},
+                    {"role": "assistant", "content": "ranking still inconclusive"},
+                ],
+                "has_checkpoint": True,
+            }
+            blocks = build_output_blocks(session)
+        focused_block = next(block for block in blocks if block.title == "focused_thread")
+        self.assertTrue(any("thread_id: thread_parent_00" in line for line in focused_block.lines))
+        self.assertTrue(any("thread_name: Parent bank thread" in line for line in focused_block.lines))
+        self.assertTrue(any("intent: stock_check" in line for line in focused_block.lines))
+        self.assertTrue(any("actions: F9 resume | F10 fork | F11 archive/unarchive | Ctrl+F8 tree focus" in line for line in focused_block.lines))
+        family_block = next(block for block in blocks if block.title == "focused_thread_family")
+        self.assertTrue(any("parent: -" in line for line in family_block.lines))
+        self.assertTrue(any("current: thread_parent_00  name=Parent bank thread  intent=stock_check" in line for line in family_block.lines))
+        self.assertTrue(any("ancestry: -" in line for line in family_block.lines))
+        self.assertTrue(any("children:" == line for line in family_block.lines))
+        self.assertTrue(any("  - thread_active_01  name=Bank compare shortlist  intent=stock_compare" in line for line in family_block.lines))
+        self.assertTrue(any("descendants:" == line for line in family_block.lines))
+        self.assertTrue(any("  - thread_active_01  name=Bank compare shortlist  intent=stock_compare" in line for line in family_block.lines))
+        preview_block = next(block for block in blocks if block.title == "focused_thread_preview")
+        self.assertTrue(any("thread_name: Parent bank thread" in line for line in preview_block.lines))
+        self.assertTrue(any("summary_turns: 7" in line for line in preview_block.lines))
+        self.assertTrue(any("recent_query: parent thread" in line for line in preview_block.lines))
+        self.assertTrue(any("user: compare bank valuation" in line for line in preview_block.lines))
+        self.assertTrue(any("checkpoint: available" in line for line in preview_block.lines))
+        tree_block = next(block for block in blocks if block.title == "thread_tree:active")
+        self.assertTrue(any("thread_parent_00 (new)" in line for line in tree_block.lines))
+        threads_block = next(block for block in blocks if block.title == "threads:active")
+        self.assertTrue(any(">* thread_active_01" in line or ">- thread_parent_00" in line for line in threads_block.lines))
+        self.assertTrue(any("name=Parent bank thread" in line for line in threads_block.lines))
+
+    def test_build_output_blocks_renders_focused_thread_family(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(thread_id="thread_child_02"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "threads"
+        session.thread_panel_scope = "all"
+        session.thread_focus_index = 1
+        with patch("research_system.cli.chat_scene.current_thread_summary") as current_summary, patch(
+            "research_system.cli.chat_scene.list_chat_threads"
+        ) as list_threads, patch("research_system.cli.chat_scene.thread_preview_payload") as thread_preview:
+            current_summary.return_value = {
+                "thread_id": "thread_active_01",
+                "thread_label": "Bank compare shortlist",
+                "thread_source": "fork",
+                "parent_thread_id": "thread_parent_00",
+                "archived": False,
+                "turn_count": 5,
+                "lifetime_turn_count": 12,
+                "fork_turn_count": 5,
+                "topic_title": "Compare bank stocks",
+                "topic_intent": "stock_compare",
+            }
+            list_threads.return_value = [
+                {
+                    "thread_id": "thread_parent_00",
+                    "turn_count": 7,
+                    "thread_label": "Parent bank thread",
+                    "thread_source": "new",
+                    "parent_thread_id": None,
+                    "topic_title": "Parent thread",
+                    "topic_intent": "stock_check",
+                    "archived": False,
+                },
+                {
+                    "thread_id": "thread_child_02",
+                    "turn_count": 3,
+                    "thread_label": "Child compare branch",
+                    "thread_source": "fork",
+                    "parent_thread_id": "thread_parent_00",
+                    "topic_title": "Child thread",
+                    "topic_intent": "stock_compare",
+                    "archived": False,
+                },
+                {
+                    "thread_id": "thread_grandchild_03",
+                    "turn_count": 2,
+                    "thread_label": "Grandchild branch",
+                    "thread_source": "fork",
+                    "parent_thread_id": "thread_child_02",
+                    "topic_title": "Grandchild thread",
+                    "topic_intent": "review_thesis",
+                    "archived": False,
+                },
+            ]
+            thread_preview.return_value = {}
+            blocks = build_output_blocks(session)
+        family_block = next(block for block in blocks if block.title == "focused_thread_family")
+        self.assertTrue(any("parent: thread_parent_00  name=Parent bank thread  intent=stock_check" in line for line in family_block.lines))
+        self.assertTrue(any("current: thread_child_02  name=Child compare branch  intent=stock_compare" in line for line in family_block.lines))
+        self.assertTrue(any("ancestry:" == line for line in family_block.lines))
+        self.assertTrue(any("  - thread_parent_00  name=Parent bank thread  intent=stock_check" in line for line in family_block.lines))
+        self.assertTrue(any("children:" == line for line in family_block.lines))
+        self.assertTrue(any("  - thread_grandchild_03  name=Grandchild branch  intent=review_thesis" in line for line in family_block.lines))
+        self.assertTrue(any("descendants:" == line for line in family_block.lines))
+        self.assertTrue(any("  - thread_grandchild_03  name=Grandchild branch  intent=review_thesis" in line for line in family_block.lines))
+
+    def test_build_output_blocks_renders_recursive_thread_descendants(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(thread_id="thread_root_00"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "threads"
+        session.thread_panel_scope = "all"
+        session.thread_focus_index = 0
+        with patch("research_system.cli.chat_scene.current_thread_summary") as current_summary, patch(
+            "research_system.cli.chat_scene.list_chat_threads"
+        ) as list_threads, patch("research_system.cli.chat_scene.thread_preview_payload") as thread_preview:
+            current_summary.return_value = {
+                "thread_id": "thread_root_00",
+                "thread_label": "Root thread",
+                "thread_source": "new",
+                "parent_thread_id": None,
+                "archived": False,
+                "turn_count": 9,
+                "lifetime_turn_count": 9,
+                "fork_turn_count": 0,
+                "topic_title": "Root topic",
+                "topic_intent": "stock_check",
+            }
+            list_threads.return_value = [
+                {
+                    "thread_id": "thread_root_00",
+                    "turn_count": 9,
+                    "thread_label": "Root thread",
+                    "thread_source": "new",
+                    "parent_thread_id": None,
+                    "topic_title": "Root topic",
+                    "topic_intent": "stock_check",
+                    "archived": False,
+                },
+                {
+                    "thread_id": "thread_child_01",
+                    "turn_count": 5,
+                    "thread_label": "Child branch",
+                    "thread_source": "fork",
+                    "parent_thread_id": "thread_root_00",
+                    "topic_title": "Child topic",
+                    "topic_intent": "stock_compare",
+                    "archived": False,
+                },
+                {
+                    "thread_id": "thread_grandchild_02",
+                    "turn_count": 2,
+                    "thread_label": "Grandchild branch",
+                    "thread_source": "fork",
+                    "parent_thread_id": "thread_child_01",
+                    "topic_title": "Grandchild topic",
+                    "topic_intent": "review_thesis",
+                    "archived": False,
+                },
+            ]
+            thread_preview.return_value = {}
+            blocks = build_output_blocks(session)
+        family_block = next(block for block in blocks if block.title == "focused_thread_family")
+        self.assertTrue(any("descendants:" == line for line in family_block.lines))
+        self.assertTrue(any("  - thread_child_01  name=Child branch  intent=stock_compare" == line for line in family_block.lines))
+        self.assertTrue(any("    - thread_grandchild_02  name=Grandchild branch  intent=review_thesis" == line for line in family_block.lines))
+
+    def test_build_output_blocks_renders_thread_lineage_tree_with_nested_child(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(thread_id="thread_child_02"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "threads"
+        session.thread_panel_scope = "all"
+        with patch("research_system.cli.chat_scene.current_thread_summary") as current_summary, patch(
+            "research_system.cli.chat_scene.list_chat_threads"
+        ) as list_threads:
+            current_summary.return_value = {
+                "thread_id": "thread_child_02",
+                "thread_label": "Child compare branch",
+                "thread_source": "fork",
+                "parent_thread_id": "thread_parent_00",
+                "archived": False,
+                "turn_count": 3,
+                "lifetime_turn_count": 3,
+                "fork_turn_count": 3,
+                "topic_title": "Child thread",
+                "topic_intent": "stock_compare",
+            }
+            list_threads.return_value = [
+                {
+                    "thread_id": "thread_child_02",
+                    "turn_count": 3,
+                    "thread_label": "Child compare branch",
+                    "thread_source": "fork",
+                    "parent_thread_id": "thread_parent_00",
+                    "topic_title": "Child thread",
+                    "topic_intent": "stock_compare",
+                    "archived": False,
+                },
+                {
+                    "thread_id": "thread_parent_00",
+                    "turn_count": 7,
+                    "thread_label": "Parent bank thread",
+                    "thread_source": "new",
+                    "parent_thread_id": None,
+                    "topic_title": "Parent thread",
+                    "topic_intent": "stock_check",
+                    "archived": False,
+                },
+            ]
+            blocks = build_output_blocks(session)
+        tree_block = next(block for block in blocks if block.title == "thread_tree:all")
+        self.assertTrue(any(line.startswith(" - thread_parent_00 (new)") and "name=Parent bank thread" in line for line in tree_block.lines))
+        self.assertTrue(any(line.startswith("   * thread_child_02 (fork)") and "name=Child compare branch" in line for line in tree_block.lines))
+
+    def test_build_output_blocks_renders_thread_tree_focus_marker(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(thread_id="thread_child_02"),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "threads"
+        session.thread_panel_scope = "all"
+        session.thread_tree_focus_index = 1
+        with patch("research_system.cli.chat_scene.current_thread_summary") as current_summary, patch(
+            "research_system.cli.chat_scene.list_chat_threads"
+        ) as list_threads:
+            current_summary.return_value = {
+                "thread_id": "thread_child_02",
+                "thread_source": "fork",
+                "parent_thread_id": "thread_parent_00",
+                "archived": False,
+                "turn_count": 3,
+                "lifetime_turn_count": 3,
+                "fork_turn_count": 3,
+                "topic_title": "Child thread",
+                "topic_intent": "stock_compare",
+            }
+            list_threads.return_value = [
+                {
+                    "thread_id": "thread_parent_00",
+                    "turn_count": 7,
+                    "thread_source": "new",
+                    "parent_thread_id": None,
+                    "topic_title": "Parent thread",
+                    "topic_intent": "stock_check",
+                    "archived": False,
+                },
+                {
+                    "thread_id": "thread_child_02",
+                    "turn_count": 3,
+                    "thread_source": "fork",
+                    "parent_thread_id": "thread_parent_00",
+                    "topic_title": "Child thread",
+                    "topic_intent": "stock_compare",
+                    "archived": False,
+                },
+            ]
+            blocks = build_output_blocks(session)
+        tree_block = next(block for block in blocks if block.title == "thread_tree:all")
+        self.assertTrue(any(line.startswith("  >* thread_child_02 (fork)") for line in tree_block.lines))
 
     def test_build_chat_view_composes_prompt_toolkit_components(self) -> None:
         session = TuiSession(
@@ -702,6 +2899,7 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("objective: Retrieve evidence.", session.output_area.text)
         self.assertIn("spawned_subagents:", session.output_area.text)
         self.assertIn("status_counts: completed=1", session.output_area.text)
+        self.assertIn("retrieve:retrieval_decider", session.output_area.text)
 
     def test_apply_tui_update_live_trace_patch_populates_trace_panel_cache(self) -> None:
         session = TuiSession(
@@ -732,6 +2930,194 @@ class CliOutputTests(unittest.TestCase):
         self.assertEqual(session.current_run_id, "01TRACE")
         self.assertEqual(session.trace_payload["run_id"], "01TRACE")
         self.assertEqual(session.trace_payload["subagent_trace"][0]["subagent_type"], "retrieval_decider")
+
+    def test_apply_tui_update_live_events_patch_auto_focuses_latest_contextual_event(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "events"
+        session.trace_focus_index = 0
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600519/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "running",
+                }
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        apply_tui_update(
+            session,
+            append_update(
+                "meta",
+                "",
+                state_patch=ShellStatePatch(
+                    current_run_id="01TRACE",
+                    events_payload={
+                        "run_id": "01TRACE",
+                        "request": {"intent": "stock_compare", "user_query": "compare banks"},
+                        "summary": {"status": "running"},
+                        "event_counts": {"events": 3, "distinct_event_types": 3},
+                        "events": [
+                            {
+                                "event_type": "phase_started",
+                                "phase": "collect",
+                                "agent": "collector",
+                                "message": "Phase started: collect",
+                                "action_id": "act_collect",
+                                "node_id": "collect",
+                            },
+                            {
+                                "event_type": "subagent_started",
+                                "phase": "collect",
+                                "agent": "collector",
+                                "message": "stock_snapshot_collector started",
+                                "action_id": "act_collect",
+                                "node_id": "collect",
+                                "task_name": "collect:compare:600519:stock_snapshot_collector",
+                            },
+                            {
+                                "event_type": "subagent_completed",
+                                "phase": "collect",
+                                "agent": "collector",
+                                "message": "stock_snapshot_collector completed",
+                                "action_id": "act_collect",
+                                "node_id": "collect",
+                                "task_name": "collect:compare:600519:stock_snapshot_collector",
+                            },
+                        ],
+                    },
+                ),
+            ),
+        )
+        self.assertEqual(session.events_focus_index, 2)
+
+    def test_apply_tui_update_live_events_patch_does_not_force_focus_outside_events_panel(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.events_focus_index = 1
+        apply_tui_update(
+            session,
+            append_update(
+                "meta",
+                "",
+                state_patch=ShellStatePatch(
+                    current_run_id="01TRACE",
+                    events_payload={
+                        "run_id": "01TRACE",
+                        "request": {"intent": "stock_compare", "user_query": "compare banks"},
+                        "summary": {"status": "running"},
+                        "event_counts": {"events": 1, "distinct_event_types": 1},
+                        "events": [
+                            {
+                                "event_type": "phase_started",
+                                "phase": "collect",
+                                "agent": "collector",
+                                "message": "Phase started: collect",
+                                "action_id": "act_collect",
+                                "node_id": "collect",
+                            }
+                        ],
+                    },
+                ),
+            ),
+        )
+        self.assertEqual(session.events_focus_index, 1)
+
+    def test_apply_tui_update_live_events_patch_preserves_latest_contextual_focus_outside_events_panel_when_trace_context_exists(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        session.output_panel = "trace"
+        session.trace_focus_index = 0
+        session.trace_payload = {
+            "run_id": "01TRACE",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "running"},
+            "subagent_trace": [
+                {
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "task_name": "collect:compare:600519:stock_snapshot_collector",
+                    "agent_path": "collector/compare/600519/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "running",
+                }
+            ],
+            "dynamic_trace": [],
+            "wait_trace": [],
+        }
+        apply_tui_update(
+            session,
+            append_update(
+                "meta",
+                "",
+                state_patch=ShellStatePatch(
+                    current_run_id="01TRACE",
+                    events_payload={
+                        "run_id": "01TRACE",
+                        "request": {"intent": "stock_compare", "user_query": "compare banks"},
+                        "summary": {"status": "running"},
+                        "event_counts": {"events": 3, "distinct_event_types": 3},
+                        "events": [
+                            {
+                                "event_type": "phase_started",
+                                "phase": "collect",
+                                "agent": "collector",
+                                "message": "Phase started: collect",
+                                "action_id": "act_collect",
+                                "node_id": "collect",
+                            },
+                            {
+                                "event_type": "subagent_started",
+                                "phase": "collect",
+                                "agent": "collector",
+                                "message": "stock_snapshot_collector started",
+                                "action_id": "act_collect",
+                                "node_id": "collect",
+                                "task_name": "collect:compare:600519:stock_snapshot_collector",
+                            },
+                            {
+                                "event_type": "subagent_completed",
+                                "phase": "collect",
+                                "agent": "collector",
+                                "message": "stock_snapshot_collector completed",
+                                "action_id": "act_collect",
+                                "node_id": "collect",
+                                "task_name": "collect:compare:600519:stock_snapshot_collector",
+                            },
+                        ],
+                    },
+                ),
+            ),
+        )
+        self.assertEqual(session.events_focus_index, 2)
 
     def test_refresh_tui_skips_rewriting_output_when_text_is_unchanged(self) -> None:
         class _Buffer:
@@ -1140,6 +3526,191 @@ class CliOutputTests(unittest.TestCase):
             output_writer=lambda update: apply_tui_update(session, update),
         )
         self.assertEqual(session.trace_payload, payload)
+
+    def test_print_events_payload_renders_event_timeline(self) -> None:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            print_payload(
+                {
+                    "run_id": "01EVENTS",
+                    "request": {"intent": "stock_compare", "user_query": "compare banks"},
+                    "summary": {"status": "completed"},
+                    "display_summary": "done",
+                    "event_counts": {"events": 1, "distinct_event_types": 1},
+                    "events": [
+                        {
+                            "event_type": "subagent_completed",
+                            "phase": "collect",
+                            "agent": "collector",
+                            "message": "stock_snapshot_collector completed",
+                            "task_name": "collect:stock_snapshot_collector",
+                            "agent_path": "collector/stock_snapshot_collector",
+                            "status": "completed",
+                        }
+                    ],
+                },
+                as_json=False,
+                emit_text=lambda output_writer, update: print(update.text if getattr(update, "text", "") else "", end="\n"),
+            )
+
+        output = buffer.getvalue()
+        self.assertIn("run_id: 01EVENTS", output)
+        self.assertIn("events:", output)
+        self.assertIn("[subagent_completed]", output)
+        self.assertIn("collect:stock_snapshot_collector", output)
+
+    def test_print_events_payload_updates_tui_events_payload_cache(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        payload = {
+            "run_id": "01EVENTS",
+            "request": {"intent": "stock_compare", "user_query": "compare banks"},
+            "summary": {"status": "completed"},
+            "event_counts": {"events": 0, "distinct_event_types": 0},
+            "events": [],
+        }
+        print_payload(
+            payload,
+            as_json=False,
+            emit_text=lambda output_writer, update: apply_tui_update(session, update),
+            output_writer=lambda update: apply_tui_update(session, update),
+        )
+        self.assertEqual(session.events_payload, payload)
+
+    def test_print_subagent_payload_updates_tui_subagent_payload_cache(self) -> None:
+        session = TuiSession(
+            settings=None,  # type: ignore[arg-type]
+            state=ChatSessionState(),
+            llm_provider=None,  # type: ignore[arg-type]
+            task_router=None,  # type: ignore[arg-type]
+            output_lines=[],
+        )
+        payload = {
+            "run_id": "01SUBAGENT",
+            "invocation_id": "01INVOCATION",
+            "trace_rows": [],
+            "events": [],
+            "event_counts": {"trace_rows": 0, "events": 0},
+        }
+        print_payload(
+            payload,
+            as_json=False,
+            emit_text=lambda output_writer, update: apply_tui_update(session, update),
+            output_writer=lambda update: apply_tui_update(session, update),
+        )
+        self.assertEqual(session.subagent_payload, payload)
+
+    def test_print_subagent_payload_renders_call_scoped_sections(self) -> None:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            print_payload(
+                {
+                    "run_id": "01SUBAGENT",
+                    "request": {"intent": "stock_compare", "user_query": "compare banks"},
+                    "summary": {"status": "completed"},
+                    "display_summary": "done",
+                    "invocation_id": "01INVOCATION",
+                    "task_name": "collect:stock_snapshot_collector",
+                    "agent_path": "collector/stock_snapshot_collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "status": "completed",
+                    "objective": "Collect stock-level verified snapshots.",
+                    "notes": ["symbol=600519"],
+                    "event_counts": {"trace_rows": 1, "events": 1},
+                    "trace_rows": [
+                        {
+                            "task_name": "collect:stock_snapshot_collector",
+                            "agent_path": "collector/stock_snapshot_collector",
+                            "invocation_id": "01INVOCATION",
+                            "status": "completed",
+                            "phase": "collect",
+                            "agent": "collector",
+                        }
+                    ],
+                    "events": [
+                        {
+                            "event_type": "subagent_completed",
+                            "task_name": "collect:stock_snapshot_collector",
+                            "agent_path": "collector/stock_snapshot_collector",
+                            "invocation_id": "01INVOCATION",
+                            "status": "completed",
+                            "phase": "collect",
+                            "agent": "collector",
+                        }
+                    ],
+                },
+                as_json=False,
+                emit_text=lambda output_writer, update: print(update.text if getattr(update, "text", "") else "", end="\n"),
+            )
+
+        output = buffer.getvalue()
+        self.assertIn("call_id: 01INVOCATION", output)
+        self.assertIn("subagent_type: stock_snapshot_collector", output)
+        self.assertIn("trace_rows:", output)
+        self.assertIn("events:", output)
+        self.assertIn("[subagent_completed]", output)
+
+    def test_print_steps_payload_renders_run_step_sections(self) -> None:
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            print_payload(
+                {
+                    "run_id": "01STEPS",
+                    "request": {"intent": "stock_compare", "user_query": "compare banks"},
+                    "summary": {"status": "running"},
+                    "display_summary": "run in progress",
+                    "intent": "stock_compare",
+                    "strategy": "dynamic",
+                    "entry_strategy": "llm",
+                    "dispatch_trace": {"source": "route_table", "intent": "stock_compare"},
+                    "notes": ["compare flow activated"],
+                    "step_counts": {"total": 2, "active": 1, "completed": 1, "pending": 0},
+                    "status_counts": {"active": 1, "completed": 1},
+                    "steps": [
+                        {
+                            "step_index": 1,
+                            "node_id": "collect",
+                            "phase": "collect",
+                            "agent": "collector",
+                            "objective": "Collect comparison snapshots.",
+                            "status": "completed",
+                            "tags": ["compare"],
+                            "inputs": {"symbols": ["600036", "601166"]},
+                            "active_from_supervisor": False,
+                            "supervisor_note": None,
+                        },
+                        {
+                            "step_index": 2,
+                            "node_id": "retrieve",
+                            "phase": "retrieve",
+                            "agent": "retriever",
+                            "objective": "Retrieve final evidence.",
+                            "status": "active",
+                            "tags": [],
+                            "inputs": {},
+                            "active_from_supervisor": True,
+                            "supervisor_note": "advance to retrieval",
+                        },
+                    ],
+                },
+                as_json=False,
+                emit_text=lambda output_writer, update: print(update.text if getattr(update, "text", "") else "", end="\n"),
+            )
+
+        output = buffer.getvalue()
+        self.assertIn("run_id: 01STEPS", output)
+        self.assertIn("strategy: dynamic", output)
+        self.assertIn("dispatch_trace:", output)
+        self.assertIn("status_counts: active=1, completed=1", output)
+        self.assertIn("steps:", output)
+        self.assertIn("1. collect [completed]  phase=collect agent=collector", output)
+        self.assertIn("2. retrieve [active]  phase=retrieve agent=retriever  next=active", output)
+        self.assertIn("supervisor_note: advance to retrieval", output)
 
     def test_print_doctor_payload_groups_checks(self) -> None:
         buffer = io.StringIO()

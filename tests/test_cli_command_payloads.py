@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.cli_command_payloads import PROPOSAL_COMMANDS, RUN_ID_COMMANDS, STATUS_FILTER_COMMANDS, build_cli_command_payload
+from research_system.cli.cli_command_payloads import PROPOSAL_COMMANDS, RUN_ID_COMMANDS, STATUS_FILTER_COMMANDS, SUBAGENT_COMMANDS, build_cli_command_payload
 
 
 class CliCommandPayloadsTests(unittest.TestCase):
     def test_command_groups_cover_expected_protocol_sets(self) -> None:
         self.assertEqual(STATUS_FILTER_COMMANDS, frozenset({"history", "status", "doctor", "check", "cleanup", "reindex-qdrant"}))
-        self.assertEqual(RUN_ID_COMMANDS, frozenset({"replay", "resume", "cancel", "trace"}))
+        self.assertEqual(RUN_ID_COMMANDS, frozenset({"replay", "resume", "cancel", "trace", "events", "run-steps"}))
+        self.assertEqual(SUBAGENT_COMMANDS, frozenset({"subagent-read"}))
         self.assertEqual(PROPOSAL_COMMANDS, frozenset({"proposals", "proposal", "review-proposal"}))
 
     def test_build_history_command_payload(self) -> None:
@@ -39,6 +40,27 @@ class CliCommandPayloadsTests(unittest.TestCase):
             {
                 "command": "trace",
                 "run_id": "01RUN",
+            },
+        )
+
+    def test_build_run_steps_command_payload(self) -> None:
+        payload = build_cli_command_payload(command="run-steps", run_id="01RUN")
+        self.assertEqual(
+            payload,
+            {
+                "command": "run-steps",
+                "run_id": "01RUN",
+            },
+        )
+
+    def test_build_subagent_read_command_payload(self) -> None:
+        payload = build_cli_command_payload(command="subagent-read", run_id="01RUN", decision="01INV")
+        self.assertEqual(
+            payload,
+            {
+                "command": "subagent-read",
+                "run_id": "01RUN",
+                "query": "01INV",
             },
         )
 

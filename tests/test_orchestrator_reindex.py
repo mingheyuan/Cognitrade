@@ -6,6 +6,10 @@ from pathlib import Path
 
 from research_system.runtime.jsonl import append_jsonl, read_json, write_json
 from research_system.runtime.orchestrator import ResearchOrchestrator
+from research_system.runtime.orchestrator_admin import OrchestratorAdminService
+from research_system.runtime.orchestrator_assembly_support import (
+    OrchestratorAssemblySupport,
+)
 from research_system.runtime.run_store import RunStore
 from research_system.runtime.settings import Settings, ensure_workspace_layout
 from research_system.schemas.runtime import BlackboardEntry
@@ -181,6 +185,17 @@ class OrchestratorReindexTests(unittest.TestCase):
             self.assertFalse(payload["cancellation_requested"])
             summary = read_json(run_root / "summary.json")
             self.assertEqual(summary, {"run_id": run_id, "status": "completed", "message": "Run completed successfully"})
+
+    def test_admin_lazy_bootstraps_when_orchestrator_init_is_bypassed(self) -> None:
+        orchestrator = object.__new__(ResearchOrchestrator)
+        orchestrator.settings = type("SettingsStub", (), {"runs_root": Path(tempfile.gettempdir()) / "runs"})()
+        orchestrator.retriever = object()
+
+        admin = ResearchOrchestrator._admin(orchestrator)
+
+        self.assertIsInstance(orchestrator.assembly, OrchestratorAssemblySupport)
+        self.assertIsInstance(admin, OrchestratorAdminService)
+        self.assertIs(orchestrator.admin, admin)
 
     def test_history_prefers_run_state_when_summary_is_only_cancel_request_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

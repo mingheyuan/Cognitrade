@@ -134,6 +134,10 @@ class CollectorService:
                         "snapshot_types": requested_snapshot_types,
                         "allow_partial": bool(constraints.get("allow_partial_snapshot_types")) or bool(collection_strategy.get("hint_augmented_snapshot_types")),
                     },
+                    context={
+                        "task_name": "collect:stock_snapshot_collector",
+                        "agent_path": "collector/stock_snapshot_collector",
+                    },
                 )
             )
             trace.append(record.model_dump(mode="json"))
@@ -169,6 +173,10 @@ class CollectorService:
                             "snapshot_types": requested_snapshot_types,
                             "allow_partial": bool(constraints.get("allow_partial_snapshot_types")) or bool(collection_strategy.get("hint_augmented_snapshot_types")),
                         },
+                        context={
+                            "task_name": f"collect:compare:{compare_symbol}:stock_snapshot_collector",
+                            "agent_path": f"collector/compare/{compare_symbol}/stock_snapshot_collector",
+                        },
                     )
                 )
                 trace.append(record.model_dump(mode="json"))
@@ -180,6 +188,10 @@ class CollectorService:
                     subagent_type="sector_snapshot_collector",
                     objective="Collect sector-level verified snapshot.",
                     inputs={"query": query, "include_policy_snapshot": include_policy_snapshot},
+                    context={
+                        "task_name": "collect:sector_snapshot_collector",
+                        "agent_path": "collector/sector_snapshot_collector",
+                    },
                 )
             )
             trace.append(record.model_dump(mode="json"))
@@ -202,6 +214,10 @@ class CollectorService:
                         "query": query,
                         "sector_query": sector_query,
                         "top_n": candidate_pool_size,
+                    },
+                    context={
+                        "task_name": "collect:candidate_universe_builder",
+                        "agent_path": "collector/candidate_universe_builder",
                     },
                 )
             )
@@ -246,6 +262,10 @@ class CollectorService:
                     subagent_type="review_target_loader",
                     objective="Load prior run as review target.",
                     inputs={"constraints": constraints, "query": query},
+                    context={
+                        "task_name": "collect:review_target_loader",
+                        "agent_path": "collector/review_target_loader",
+                    },
                 )
             )
             trace.append(record.model_dump(mode="json"))

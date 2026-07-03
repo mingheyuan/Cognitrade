@@ -342,6 +342,42 @@ class StockCompareFlowTests(unittest.TestCase):
             ["600519", "300750", "002594"],
         )
         self.assertEqual(len(payload["snapshots"]), 9)
+    def test_collector_compare_invocations_emit_symbol_scoped_trace_context(self) -> None:
+        collector = CollectorService(_CompareSkillRuntimeStub())
+        recorded_contexts: list[dict] = []
+        original_invoke = collector.registry.invoke
+
+        def _recording_invoke(invocation):
+            recorded_contexts.append(dict(invocation.context or {}))
+            return original_invoke(invocation)
+
+        collector.registry.invoke = _recording_invoke  # type: ignore[assignment]
+
+        collector.run(
+            intent="stock_compare",
+            query="compare targets",
+            constraints={"symbols": ["600519", "300750", "002594"]},
+        )
+
+        context_pairs = {
+            (
+                str(context.get("task_name") or ""),
+                str(context.get("agent_path") or ""),
+            )
+            for context in recorded_contexts
+        }
+        self.assertIn(
+            ("collect:compare:600519:stock_snapshot_collector", "collector/compare/600519/stock_snapshot_collector"),
+            context_pairs,
+        )
+        self.assertIn(
+            ("collect:compare:300750:stock_snapshot_collector", "collector/compare/300750/stock_snapshot_collector"),
+            context_pairs,
+        )
+        self.assertIn(
+            ("collect:compare:002594:stock_snapshot_collector", "collector/compare/002594/stock_snapshot_collector"),
+            context_pairs,
+        )
 
     def test_orchestrator_runs_stock_compare_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

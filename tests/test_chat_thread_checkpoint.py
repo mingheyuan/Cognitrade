@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_system.cli.chat_memory import fork_session_thread, hydrate_session_from_persistent_memory, start_new_session_thread, switch_session_thread
+from research_system.cli.chat_memory import fork_session_thread, hydrate_session_from_persistent_memory, resume_session_thread, start_new_session_thread, switch_session_thread
 from research_system.cli.chat_state import persist_thread_checkpoint
 from research_system.cli.chat_thread_store import ChatThreadStore
 from research_system.cli.chat_types import ChatSessionState
@@ -85,6 +85,30 @@ class ChatThreadCheckpointTests(unittest.TestCase):
             self.assertEqual(state.last_result_conclusion, "continue watching valuation digestion")
             self.assertEqual(state.last_result_follow_up, "check whether margins stabilize next quarter")
             self.assertEqual(state.last_run_id, "01LATEST")
+
+    def test_resume_session_thread_returns_restore_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            persisted = ChatSessionState(
+                thread_id="thread_saved",
+                last_user_query="analyze guizhou maotai",
+                last_result_intent="stock_check",
+                last_result_summary="valuation is not cheap but cashflow is resilient",
+                last_result_conclusion="continue watching valuation digestion",
+                last_result_follow_up="check whether margins stabilize next quarter",
+                last_run_id="01LATEST",
+            )
+            persist_thread_checkpoint(settings=settings, state=persisted)
+            state = ChatSessionState(thread_id="thread_old", last_user_query="temporary query")
+
+            payload = resume_session_thread(settings=settings, state=state, thread_id="thread_saved")
+
+            self.assertIsNotNone(payload)
+            assert payload is not None
+            self.assertEqual(payload["thread_id"], "thread_saved")
+            self.assertEqual(payload["previous_thread_id"], "thread_old")
+            self.assertTrue(payload["has_checkpoint"])
 
     def test_start_new_session_thread_resets_recent_state_and_assigns_new_thread(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

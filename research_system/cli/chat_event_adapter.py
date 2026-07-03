@@ -44,6 +44,17 @@ def chat_event_listener(event: RunEvent, *, presenter: ChatStreamPresenter, outp
     for chunk in event_to_display_chunks(event, presenter=presenter):
         dispatch_transcript_update(output_writer, display_chunk_to_update(chunk))
     trace_payload = presenter.current_trace_payload()
+    events_payload = presenter.current_events_payload()
+    if events_payload is not None:
+        dispatch_transcript_update(
+            output_writer,
+            state_patch_update(
+                ShellStatePatch(
+                    current_run_id=event.run_id,
+                    events_payload=events_payload,
+                )
+            ),
+        )
     if trace_payload is not None:
         dispatch_transcript_update(
             output_writer,

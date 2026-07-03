@@ -12,11 +12,15 @@ from research_system.cli.chat_memory import (
     current_thread_summary,
     fork_session_thread,
     list_chat_threads,
+    read_session_thread,
+    rename_session_thread,
     remember_basic_chat_turn,
+    thread_preview_payload,
     unarchive_session_thread,
 )
 from research_system.cli.chat_thread_store import ChatThreadStore
 from research_system.cli.chat_types import ChatSessionState
+from research_system.cli.chat_state import persist_thread_checkpoint
 from research_system.runtime.settings import Settings, ensure_workspace_layout
 
 
@@ -191,6 +195,62 @@ class ChatMemoryTests(unittest.TestCase):
             self.assertEqual(summary["topic_title"], "compare guizhou maotai, ningde shidai, and byd")
             self.assertTrue(rows)
             self.assertEqual(rows[0]["topic_title"], "compare guizhou maotai, ningde shidai, and byd")
+
+    def test_rename_session_thread_persists_explicit_thread_label(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            state = ChatSessionState(
+                last_user_query="compare guizhou maotai, ningde shidai, and byd",
+                last_result_intent="stock_compare",
+                last_result_summary="cashflow resilience still needs deeper comparison",
+                last_run_id="01COMPARE",
+            )
+            remember_basic_chat_turn(settings=settings, state=state, query="question 0", answer="answer 0")
+
+            payload = rename_session_thread(
+                settings=settings,
+                state=state,
+                thread_label="Bank compare shortlist",
+            )
+            summary = current_thread_summary(settings=settings, state=state)
+            rows = list_chat_threads(settings=settings, limit=5)
+            preview = thread_preview_payload(settings=settings, thread_id=state.thread_id or "")
+
+            self.assertIsNotNone(payload)
+            self.assertEqual(payload["thread_label"], "Bank compare shortlist")
+            self.assertEqual(summary["thread_label"], "Bank compare shortlist")
+            self.assertEqual(rows[0]["thread_label"], "Bank compare shortlist")
+            self.assertEqual(preview["thread_label"], "Bank compare shortlist")
+
+    def test_read_session_thread_returns_preview_without_resuming_active_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            saved = ChatSessionState(
+                thread_id="thread_saved",
+                last_user_query="compare banks",
+                last_result_intent="stock_compare",
+                last_result_summary="ranking still inconclusive",
+                last_run_id="01COMPARE",
+            )
+            remember_basic_chat_turn(settings=settings, state=saved, query="which bank is stronger", answer="still inconclusive")
+            rename_session_thread(settings=settings, state=saved, thread_label="Saved bank compare")
+            compact_session_thread(settings=settings, state=saved)
+            persist_thread_checkpoint(settings=settings, state=saved)
+
+            active = ChatSessionState(thread_id="thread_active", last_user_query="temporary query")
+            payload = read_session_thread(settings=settings, state=active, thread_id="thread_saved")
+
+            self.assertIsNotNone(payload)
+            self.assertEqual(payload["thread_id"], "thread_saved")
+            self.assertEqual(payload["thread_label"], "Saved bank compare")
+            self.assertEqual(payload["topic_title"], "compare banks")
+            self.assertTrue(payload["has_checkpoint"])
+            self.assertTrue(payload["has_compact_summary"])
+            self.assertTrue(payload["turns"])
+            self.assertEqual(active.thread_id, "thread_active")
+            self.assertEqual(active.last_user_query, "temporary query")
 
     def test_build_chat_conversation_context_includes_thread_profile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -393,6 +453,34 @@ class ChatMemoryTests(unittest.TestCase):
             self.assertTrue(any(row.get("thread_id") == archived_thread_id for row in active_rows))
             self.assertTrue(all(row.get("thread_id") != archived_thread_id for row in archived_rows))
             self.assertFalse(summary["archived"])
+
+    def test_thread_preview_payload_exposes_summary_recent_turns_and_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            state = ChatSessionState(
+                last_user_query="compare banks",
+                last_result_intent="stock_compare",
+                last_result_summary="ranking still inconclusive",
+                last_result_follow_up="supplement same-basis bank metrics",
+                last_run_id="01COMPARE",
+            )
+            remember_basic_chat_turn(settings=settings, state=state, query="question 1", answer="answer 1")
+            remember_basic_chat_turn(settings=settings, state=state, query="question 2", answer="answer 2")
+            compact_session_thread(settings=settings, state=state)
+            persist_thread_checkpoint(settings=settings, state=state)
+
+            payload = thread_preview_payload(
+                settings=settings,
+                thread_id=str(state.thread_id),
+                turn_limit=3,
+            )
+
+            self.assertEqual(payload["thread_id"], state.thread_id)
+            self.assertTrue(payload["summary_text"])
+            self.assertGreaterEqual(len(payload["recent_turns"]), 1)
+            self.assertTrue(any(str(item.get("role") or "") == "user" for item in payload["recent_turns"]))
+            self.assertTrue(payload["has_checkpoint"])
 
 
 if __name__ == "__main__":

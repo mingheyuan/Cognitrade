@@ -665,6 +665,13 @@ class ReporterServiceTests(unittest.TestCase):
         self.assertIn("基于同口径银行股指标与估值锚点", payload["conclusion"])
         self.assertIn("loan_to_deposit_proxy", payload["conclusion"])
         self.assertIsNone(payload["degraded_note"])
+        self.assertEqual(
+            [item["agent_path"] for item in payload["subagent_trace"]],
+            [
+                "reporter/strategy/report_strategy_resolver",
+                "reporter/deterministic/bank_compare_report_composer",
+            ],
+        )
 
     def test_stock_compare_fallback_report_surfaces_dividend_yield_proxy(self) -> None:
         service = ReporterService(ReporterProviderStub())
@@ -693,6 +700,68 @@ class ReporterServiceTests(unittest.TestCase):
 
         self.assertIn("股息率代理", payload["conclusion"])
         self.assertIsNone(payload["degraded_note"])
+
+    def test_review_thesis_fallback_report_emits_nested_reporter_trace(self) -> None:
+        service = ReporterService(ReporterProviderStub())
+
+        payload = service.run(
+            intent="review_thesis",
+            query="review thesis",
+            retrieval_summary="Posterior review summary",
+            planning_context_hints={
+                "recommended_next_step": "validate cashflow resilience and leverage tolerance",
+                "thread_topic": "cashflow resilience follow-up",
+            },
+            evidences=[
+                {
+                    "evidence_id": "review-direction",
+                    "title": "review_finding",
+                    "summary": "review_finding claim_type=direction verdict=confirmed\nbenchmark=HS300 scope=sector",
+                    "metadata": {"source_type": "review_finding"},
+                    "source_refs": [],
+                }
+            ],
+        )
+
+        self.assertEqual(
+            [item["agent_path"] for item in payload["subagent_trace"]],
+            [
+                "reporter/strategy/report_strategy_resolver",
+                "reporter/fallback/fallback_report_composer",
+            ],
+        )
+        self.assertIn("focus_area=cashflow_resilience", payload["subagent_trace"][0]["notes"])
+        self.assertIn("degraded_note=llm_unavailable", payload["subagent_trace"][1]["notes"])
+
+    def test_review_thesis_llm_error_report_emits_nested_reporter_trace(self) -> None:
+        service = ReporterService(ReporterLLMErrorStub())
+
+        payload = service.run(
+            intent="review_thesis",
+            query="review thesis",
+            retrieval_summary="Posterior review summary",
+            evidences=[
+                {
+                    "evidence_id": "review-direction",
+                    "title": "review_finding",
+                    "summary": "review_finding claim_type=direction verdict=confirmed\nbenchmark=HS300 scope=sector",
+                    "metadata": {"source_type": "review_finding"},
+                    "source_refs": [],
+                }
+            ],
+        )
+
+        self.assertEqual(
+            [item["agent_path"] for item in payload["subagent_trace"]],
+            [
+                "reporter/strategy/report_strategy_resolver",
+                "reporter/llm/llm_report_composer",
+                "reporter/llm/error/llm_error_report_composer",
+            ],
+        )
+        self.assertEqual(payload["subagent_trace"][1]["status"], "failed")
+        self.assertIn("error_name=LLMProviderError", payload["subagent_trace"][1]["notes"])
+        self.assertEqual(payload["subagent_trace"][2]["status"], "completed")
 
 
 if __name__ == "__main__":

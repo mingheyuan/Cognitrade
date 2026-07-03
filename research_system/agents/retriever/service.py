@@ -101,12 +101,23 @@ class RetrieverService:
         blackboard_entries: list[dict],
         planning_context_hints: dict[str, str] | None = None,
     ) -> dict:
+        trace: list[dict] = []
         indexer_qdrant = self.indexer_qdrant
         searcher_qdrant = self.searcher_qdrant
         effective_qdrant_available = bool(self.qdrant_available and self.qdrant is not None and indexer_qdrant is not None and searcher_qdrant is not None)
         index_outputs = self._index_blackboard_evidences(
             blackboard_entries=blackboard_entries,
             qdrant=indexer_qdrant,
+        )
+        trace.append(
+            self._build_trace_record(
+                subagent_type="blackboard_evidence_indexer",
+                objective="Index blackboard entries and expose evidence candidates.",
+                status="completed",
+                task_name="retrieve:indexing:blackboard_evidence_indexer",
+                agent_path="retriever/indexing/blackboard_evidence_indexer",
+                notes=[f"blackboard_entries={len(blackboard_entries)}"],
+            )
         )
         evidence_map = dict(index_outputs["evidence_map"])
         symbol = index_outputs.get("symbol")
@@ -127,8 +138,31 @@ class RetrieverService:
                 evidence_map=evidence_map,
             )
             evidence_map = dict(search_outputs["evidence_map"])
+            trace.append(
+                self._build_trace_record(
+                    subagent_type="qdrant_evidence_searcher",
+                    objective="Search indexed evidence candidates via Qdrant.",
+                    status="completed",
+                    task_name="retrieve:search:qdrant_evidence_searcher",
+                    agent_path="retriever/search/qdrant_evidence_searcher",
+                    notes=[
+                        f"top_k={top_k}",
+                        f"filters={search_outputs.get('metadata_filters') or {}}",
+                    ],
+                )
+            )
         elif not effective_qdrant_available:
             qdrant_degraded_reason = self.qdrant_error or "qdrant_unavailable"
+            trace.append(
+                self._build_trace_record(
+                    subagent_type="qdrant_evidence_searcher",
+                    objective="Search indexed evidence candidates via Qdrant.",
+                    status="degraded",
+                    task_name="retrieve:search:qdrant_evidence_searcher",
+                    agent_path="retriever/search/qdrant_evidence_searcher",
+                    notes=[f"degrade_reason={qdrant_degraded_reason}"],
+                )
+            )
 
         dedupe_outputs = self._dedupe_evidence_candidates(
             evidences=list(evidence_map.values()),
@@ -149,6 +183,10 @@ class RetrieverService:
                     "qdrant_degraded_reason": qdrant_degraded_reason,
                     "planning_context_hints": planning_context_hints,
                 },
+                context={
+                    "task_name": "retrieve:decision:retrieval_decider",
+                    "agent_path": "retriever/decision/retrieval_decider",
+                },
             )
         )
         if intent == "stock_compare":
@@ -159,7 +197,41 @@ class RetrieverService:
                 query=query,
                 planning_context_hints=planning_context_hints,
             )
-        return decision_outputs
+        trace.append(
+            self._build_trace_record(
+                subagent_type="retrieval_decider",
+                objective="Select final evidence set and summarize retrieval.",
+                status="completed",
+                task_name="retrieve:decision:retrieval_decider",
+                agent_path="retriever/decision/retrieval_decider",
+                notes=[
+                    f"evidence_count={len(decision_outputs.get('evidences') or [])}",
+                    f"degraded={str(bool(decision_outputs.get('degraded'))).lower()}",
+                ],
+            )
+        )
+        outputs = dict(decision_outputs)
+        outputs["subagent_trace"] = trace
+        return outputs
+
+    def _build_trace_record(
+        self,
+        *,
+        subagent_type: str,
+        objective: str,
+        status: str,
+        task_name: str,
+        agent_path: str,
+        notes: list[str] | None = None,
+    ) -> dict:
+        return {
+            "subagent_type": subagent_type,
+            "objective": objective,
+            "status": status,
+            "task_name": task_name,
+            "agent_path": agent_path,
+            "notes": list(notes or []),
+        }
 
     def _index_blackboard_evidences(self, *, blackboard_entries: list[dict], qdrant) -> dict:
         evidence_map: dict[str, dict] = {}

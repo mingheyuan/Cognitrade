@@ -39,7 +39,7 @@ def build_chat_banner_lines(
         lines.append("type /exit to quit")
     else:
         lines.append("Enter to submit, Esc to clear, Ctrl+C to stop current run, Ctrl+D or /exit to quit.")
-        lines.append("Up/Down recalls input history. PageUp/PageDown scroll output. F2 toggles transcript/trace. F3 cycles trace task focus, F4 restores all tasks. Use /commands or F1 for popup help.")
+        lines.append("Up/Down recalls input history. PageUp/PageDown scroll output. F2 toggles transcript/trace, F6 cycles trace/events/threads, F7 cycles thread scopes, F8 focuses a thread, Ctrl+F8 focuses the next thread tree node, F9 resumes it, F10 forks it, F11 archives or unarchives it. F3 cycles trace task focus, Ctrl+F3 cycles child focus, Ctrl+F9 drills into the next trace target, F4 restores all tasks, Ctrl+F4 restores all children, Ctrl+F10 moves up one trace branch or clears the focused call, Ctrl+F11 collapses the focused trace branch, F5 toggles raw trace sections, F12 toggles child detail expansion, Ctrl+F12 collapses the focused trace task. Use /commands or F1 for popup help.")
     return lines
 
 

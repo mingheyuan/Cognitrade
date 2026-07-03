@@ -23,11 +23,11 @@ class _FailureSubagent:
 class SubagentRegistryTests(unittest.TestCase):
     def test_registry_notifies_started_and_completed(self) -> None:
         registry = SubagentRegistry([_SuccessSubagent()])
-        seen: list[tuple[str, str, str | None]] = []
+        seen: list[tuple[str, str, str | None, str | None]] = []
 
         registry.add_observer(
             lambda *, stage, invocation, record, outputs, error: seen.append(
-                (stage, invocation.subagent_type, record.status if record is not None else None)
+                (stage, invocation.subagent_type, record.status if record is not None else None, invocation.invocation_id)
             )
         )
 
@@ -42,20 +42,21 @@ class SubagentRegistryTests(unittest.TestCase):
         self.assertEqual(outputs["result"], "ok")
         self.assertEqual(record.status, "completed")
         self.assertEqual(
-            seen,
+            [(stage, subagent_type, status) for stage, subagent_type, status, _ in seen],
             [
                 ("started", "success_subagent", None),
                 ("completed", "success_subagent", "completed"),
             ],
         )
+        self.assertTrue(all(isinstance(item[3], str) and item[3] for item in seen))
 
     def test_registry_notifies_failed_before_reraising(self) -> None:
         registry = SubagentRegistry([_FailureSubagent()])
-        seen: list[tuple[str, str, str | None]] = []
+        seen: list[tuple[str, str, str | None, str | None]] = []
 
         registry.add_observer(
             lambda *, stage, invocation, record, outputs, error: seen.append(
-                (stage, invocation.subagent_type, record.status if record is not None else None)
+                (stage, invocation.subagent_type, record.status if record is not None else None, invocation.invocation_id)
             )
         )
 
@@ -69,12 +70,13 @@ class SubagentRegistryTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            seen,
+            [(stage, subagent_type, status) for stage, subagent_type, status, _ in seen],
             [
                 ("started", "failure_subagent", None),
                 ("failed", "failure_subagent", "failed"),
             ],
         )
+        self.assertTrue(all(isinstance(item[3], str) and item[3] for item in seen))
 
 
 if __name__ == "__main__":

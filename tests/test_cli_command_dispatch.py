@@ -46,6 +46,12 @@ class _DispatchOrchestratorStub:
     def trace(self, run_id: str) -> dict:
         return {"run_id": run_id, "status": "completed", "subagent_trace": [], "dynamic_trace": [], "wait_trace": []}
 
+    def subagent(self, run_id: str, invocation_id: str) -> dict:
+        return {"run_id": run_id, "invocation_id": invocation_id, "trace_rows": [], "events": [], "event_counts": {"trace_rows": 0, "events": 0}}
+
+    def steps(self, run_id: str) -> dict:
+        return {"run_id": run_id, "steps": [], "step_counts": {"total": 0, "active": 0, "completed": 0, "pending": 0}}
+
     def resume(self, run_id: str) -> dict:
         return {"run_id": run_id, "status": "resumed"}
 
@@ -113,6 +119,19 @@ class CliCommandDispatchTests(unittest.TestCase):
             run_id="01RUN",
             orchestrator_cls=_DispatchOrchestratorStub,
         )
+        steps = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="run-steps",
+            run_id="01RUN",
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
+        subagent = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="subagent-read",
+            run_id="01RUN",
+            query="01INV",
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
         resumed = execute_cli_payload_command(
             Settings.from_env(Path(".")),
             command="resume",
@@ -128,6 +147,8 @@ class CliCommandDispatchTests(unittest.TestCase):
 
         self.assertEqual(replayed["status"], "completed")
         self.assertIn("subagent_trace", traced)
+        self.assertIn("step_counts", steps)
+        self.assertEqual(subagent["invocation_id"], "01INV")
         self.assertEqual(resumed["status"], "resumed")
         self.assertEqual(cancelled["status"], "cancelled")
 

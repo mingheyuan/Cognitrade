@@ -5,7 +5,9 @@ from types import SimpleNamespace
 import tempfile
 import unittest
 
-from research_system.runtime.provider_registry import OpenAIProvider
+from research_system.runtime.openai_client_support import OpenAIClientSupport
+from research_system.runtime.openai_response_support import OpenAIResponseSupport
+from research_system.runtime.provider_registry import OpenAIProvider, ProviderRegistry
 from research_system.runtime.settings import Settings
 
 
@@ -100,6 +102,15 @@ class ProviderRegistryTests(unittest.TestCase):
             responses.create_calls[1].get("input"),
             OpenAIProvider._CONTINUATION_PROMPT,
         )
+
+    def test_provider_registry_wires_default_provider(self) -> None:
+        registry = ProviderRegistry(self._settings())
+
+        provider = registry.default()
+
+        self.assertIsInstance(provider, OpenAIProvider)
+        self.assertIsInstance(provider.client_support, OpenAIClientSupport)
+        self.assertIsInstance(provider.response_support, OpenAIResponseSupport)
 
     def test_stream_complete_continues_after_max_output_tokens(self) -> None:
         first_final = SimpleNamespace(

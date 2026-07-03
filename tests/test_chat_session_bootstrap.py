@@ -63,8 +63,23 @@ class ChatSessionBootstrapTests(unittest.TestCase):
         )
 
         self.assertTrue(any("F2 toggles transcript/trace" in line for line in lines))
+        self.assertTrue(any("F6 cycles trace/events/threads" in line for line in lines))
+        self.assertTrue(any("F7 cycles thread scopes" in line for line in lines))
+        self.assertTrue(any("F8 focuses a thread" in line for line in lines))
+        self.assertTrue(any("Ctrl+F8 focuses the next thread tree node" in line for line in lines))
+        self.assertTrue(any("F9 resumes it" in line for line in lines))
+        self.assertTrue(any("F10 forks it" in line for line in lines))
+        self.assertTrue(any("F11 archives or unarchives it" in line for line in lines))
+        self.assertTrue(any("F12 toggles child detail expansion" in line for line in lines))
+        self.assertTrue(any("Ctrl+F12 collapses the focused trace task" in line for line in lines))
+        self.assertTrue(any("Ctrl+F3 cycles child focus" in line for line in lines))
+        self.assertTrue(any("Ctrl+F4 restores all children" in line for line in lines))
+        self.assertTrue(any("Ctrl+F9 drills into the next trace target" in line for line in lines))
+        self.assertTrue(any("Ctrl+F10 moves up one trace branch or clears the focused call" in line for line in lines))
+        self.assertTrue(any("Ctrl+F11 collapses the focused trace branch" in line for line in lines))
         self.assertTrue(any("F3 cycles trace task focus" in line for line in lines))
         self.assertTrue(any("F4 restores all tasks" in line for line in lines))
+        self.assertTrue(any("F5 toggles raw trace sections" in line for line in lines))
 
 
 if __name__ == "__main__":

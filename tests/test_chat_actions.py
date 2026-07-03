@@ -90,6 +90,44 @@ class ChatActionsTests(unittest.TestCase):
             self.assertTrue(any(line.startswith("thread_topic: ") for line in meta_lines))
             self.assertTrue(any(line.startswith("thread_lifetime_turns: ") for line in meta_lines))
 
+    def test_handle_chat_meta_action_rename_thread_emits_explicit_thread_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            session = TuiSession(
+                settings=settings,
+                state=ChatSessionState(
+                    last_user_query="compare guizhou maotai, ningde shidai, and byd",
+                    last_result_intent="stock_compare",
+                    last_result_summary="cashflow resilience still needs deeper comparison",
+                    last_run_id="01COMPARE",
+                ),
+                llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+                task_router=TaskRouter(),
+                output_lines=[],
+            )
+
+            handle_chat_meta_action(
+                action="rename_thread",
+                parsed={"thread_label": "Bank compare shortlist"},
+                state=session.state,
+                settings=session.settings,
+                emit_text=lambda output_writer, update: apply_tui_update(session, update),
+                output_writer=None,
+            )
+            handle_chat_meta_action(
+                action="show_thread",
+                parsed={"action": "show_thread"},
+                state=session.state,
+                settings=session.settings,
+                emit_text=lambda output_writer, update: apply_tui_update(session, update),
+                output_writer=None,
+            )
+
+            meta_lines = [message.text for message in session.output_lines if message.kind == "meta"]
+            self.assertIn(f"thread_renamed: {session.state.thread_id}", meta_lines)
+            self.assertIn("thread_name: Bank compare shortlist", meta_lines)
+
     def test_handle_chat_meta_action_show_thread_displays_status_and_next_step(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings.from_env(Path(temp_dir))
@@ -170,6 +208,102 @@ class ChatActionsTests(unittest.TestCase):
             self.assertTrue(any("intent=stock_compare" in line for line in meta_lines))
             self.assertTrue(any("topic=compare guizhou maotai, ningde shidai, and byd" in line for line in meta_lines))
 
+    def test_handle_chat_cli_action_threads_displays_explicit_thread_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            session = TuiSession(
+                settings=settings,
+                state=ChatSessionState(
+                    last_user_query="compare guizhou maotai, ningde shidai, and byd",
+                    last_result_intent="stock_compare",
+                    last_result_summary="cashflow resilience still needs deeper comparison",
+                    last_run_id="01COMPARE",
+                ),
+                llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+                task_router=TaskRouter(),
+                output_lines=[],
+            )
+
+            handle_chat_meta_action(
+                action="rename_thread",
+                parsed={"thread_label": "Bank compare shortlist"},
+                state=session.state,
+                settings=session.settings,
+                emit_text=lambda output_writer, update: apply_tui_update(session, update),
+                output_writer=None,
+            )
+            handled = handle_chat_cli_action(
+                action="threads",
+                parsed={"action": "threads", "limit": 10},
+                state=session.state,
+                settings=session.settings,
+                emit_text=lambda output_writer, update: apply_tui_update(session, update),
+                cli_command_runner=lambda *args, **kwargs: {},
+                payload_printer=lambda payload, as_json=False, output_writer=None: None,
+                output_writer=None,
+            )
+
+            self.assertTrue(handled)
+            meta_lines = [message.text for message in session.output_lines if message.kind == "meta"]
+            self.assertTrue(any("name=Bank compare shortlist" in line for line in meta_lines))
+
+    def test_handle_chat_cli_action_subagent_read_dispatches_call_scoped_inspect(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(last_run_id="01RUN"),
+            llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+            task_router=TaskRouter(),
+            output_lines=[],
+        )
+        calls: list[tuple[str, str | None, str | None]] = []
+        handled = handle_chat_cli_action(
+            action="subagent-read",
+            parsed={"action": "subagent-read", "run_id": "last", "call_id": "01INV"},
+            state=session.state,
+            settings=session.settings,
+            emit_text=lambda output_writer, update: apply_tui_update(session, update),
+            cli_command_runner=lambda _settings, **kwargs: calls.append((kwargs.get("command"), kwargs.get("run_id"), kwargs.get("query"))) or {
+                "run_id": "01RUN",
+                "invocation_id": "01INV",
+                "trace_rows": [],
+                "events": [],
+                "event_counts": {"trace_rows": 0, "events": 0},
+            },
+            payload_printer=lambda payload, as_json=False, output_writer=None: None,
+            output_writer=None,
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(calls, [("subagent-read", "01RUN", "01INV")])
+
+    def test_handle_chat_cli_action_run_steps_dispatches_run_scoped_plan_inspect(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(last_run_id="01RUN"),
+            llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+            task_router=TaskRouter(),
+            output_lines=[],
+        )
+        calls: list[tuple[str, str | None, str | None]] = []
+        handled = handle_chat_cli_action(
+            action="run-steps",
+            parsed={"action": "run-steps", "run_id": "last"},
+            state=session.state,
+            settings=session.settings,
+            emit_text=lambda output_writer, update: apply_tui_update(session, update),
+            cli_command_runner=lambda _settings, **kwargs: calls.append((kwargs.get("command"), kwargs.get("run_id"), kwargs.get("query"))) or {
+                "run_id": "01RUN",
+                "steps": [],
+                "step_counts": {"total": 0, "active": 0, "completed": 0, "pending": 0},
+            },
+            payload_printer=lambda payload, as_json=False, output_writer=None: None,
+            output_writer=None,
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(calls, [("run-steps", "01RUN", None)])
+
     def test_handle_chat_meta_action_emits_session_patch_for_intent_change(self) -> None:
         session = TuiSession(
             settings=Settings.from_env(Path(".")),
@@ -201,6 +335,9 @@ class ChatActionsTests(unittest.TestCase):
                 last_run_id="01LATEST",
             )
             persist_thread_checkpoint(settings=settings, state=persisted)
+            from research_system.cli.chat_memory import rename_session_thread
+
+            rename_session_thread(settings=settings, state=persisted, thread_label="Saved banking review")
             session = TuiSession(
                 settings=settings,
                 state=ChatSessionState(thread_id="thread_old", last_user_query="temporary query"),
@@ -222,7 +359,55 @@ class ChatActionsTests(unittest.TestCase):
             self.assertEqual(session.state.last_user_query, "analyze guizhou maotai")
             self.assertEqual(session.state.last_result_summary, "valuation is not cheap but cashflow is resilient")
             meta_lines = [message.text for message in session.output_lines if message.kind == "meta"]
-            self.assertIn("thread: thread_saved", meta_lines)
+            self.assertIn("thread_resumed: thread_saved", meta_lines)
+            self.assertIn("thread_resumed_from: thread_old", meta_lines)
+            self.assertIn("thread_name: Saved banking review", meta_lines)
+            self.assertIn("thread_checkpointed: yes", meta_lines)
+
+    def test_handle_chat_meta_action_read_thread_inspects_without_resuming(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            saved = ChatSessionState(
+                thread_id="thread_saved",
+                last_user_query="compare banks",
+                last_result_intent="stock_compare",
+                last_result_summary="ranking still inconclusive",
+                last_run_id="01COMPARE",
+            )
+            from research_system.cli.chat_memory import remember_basic_chat_turn, rename_session_thread, compact_session_thread
+
+            remember_basic_chat_turn(settings=settings, state=saved, query="which bank is stronger", answer="still inconclusive")
+            rename_session_thread(settings=settings, state=saved, thread_label="Saved bank compare")
+            compact_session_thread(settings=settings, state=saved)
+            persist_thread_checkpoint(settings=settings, state=saved)
+
+            session = TuiSession(
+                settings=settings,
+                state=ChatSessionState(thread_id="thread_active", last_user_query="temporary query"),
+                llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+                task_router=TaskRouter(),
+                output_lines=[],
+            )
+
+            handle_chat_meta_action(
+                action="read_thread",
+                parsed={"thread_id": "thread_saved"},
+                state=session.state,
+                settings=session.settings,
+                emit_text=lambda output_writer, update: apply_tui_update(session, update),
+                output_writer=None,
+            )
+
+            self.assertEqual(session.state.thread_id, "thread_active")
+            self.assertEqual(session.state.last_user_query, "temporary query")
+            meta_lines = [message.text for message in session.output_lines if message.kind == "meta"]
+            self.assertIn("thread_read: thread_saved", meta_lines)
+            self.assertIn("thread_name: Saved bank compare", meta_lines)
+            self.assertIn("thread_compacted: yes", meta_lines)
+            self.assertIn("thread_checkpointed: yes", meta_lines)
+            self.assertTrue(any(line.startswith("thread_summary: ") for line in meta_lines))
+            self.assertTrue(any(line.startswith("thread_turn: ") for line in meta_lines))
 
     def test_handle_chat_meta_action_fork_thread_creates_child_thread_and_reports_parent(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -458,6 +643,43 @@ class ChatActionsTests(unittest.TestCase):
         self.assertTrue(handled)
         self.assertEqual(session.state.last_run_id, "01TRACE")
         self.assertEqual(rendered[0]["run_id"], "01TRACE")
+
+    def test_handle_chat_cli_action_supports_events_command(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(last_run_id="01OLD"),
+            llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+            task_router=TaskRouter(),
+            output_lines=[],
+        )
+
+        def fake_cli_command_runner(settings, *, command, run_id, **kwargs):
+            self.assertEqual(command, "events")
+            self.assertEqual(run_id, "01EVENTS")
+            return {
+                "run_id": "01EVENTS",
+                "status": "completed",
+                "request": {"intent": "stock_compare", "user_query": "compare banks"},
+                "summary": {"status": "completed"},
+                "event_counts": {"events": 1, "distinct_event_types": 1},
+                "events": [],
+            }
+
+        rendered: list[object] = []
+        handled = handle_chat_cli_action(
+            action="events",
+            parsed={"action": "events", "run_id": "01EVENTS"},
+            state=session.state,
+            settings=session.settings,
+            emit_text=lambda output_writer, update: apply_tui_update(session, update),
+            cli_command_runner=fake_cli_command_runner,
+            payload_printer=lambda payload, as_json=False, output_writer=None: rendered.append(payload),
+            output_writer=None,
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(session.state.last_run_id, "01EVENTS")
+        self.assertEqual(rendered[0]["run_id"], "01EVENTS")
 
     def test_handle_chat_cli_action_threads_supports_archived_scope(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -1,15 +1,9 @@
 from __future__ import annotations
 
-from research_system.cli.chat_interactions import (
-    emit_meta_update,
-    emit_warning_update,
-    request_stop,
-    submit_tui_input,
-    toggle_commands_popup,
-)
 from research_system.cli.chat_keybindings import build_chat_keybindings
 from research_system.cli.chat_session_bootstrap import build_chat_startup_context
 from research_system.cli.chat_types import TuiSession
+from research_system.cli.chat_ui_runtime import build_chat_shell_runtime
 from research_system.cli.chat_view import build_chat_application, build_chat_view
 from research_system.runtime.settings import Settings
 
@@ -39,8 +33,13 @@ def run_chat_tui(
         task_router=runtime.task_router,
         output_lines=[],
     )
-    for line in banner_lines:
-        emit_meta_update(session, line)
+    shell_runtime = build_chat_shell_runtime(
+        session=session,
+        handle_chat_line=handle_chat_line,
+        execute_cli_command=execute_cli_command,
+        banner_lines=banner_lines,
+    )
+    shell_runtime.emit_banner()
     view = build_chat_view(session)
     session.output_area = view.output_area
     session.main_stack = view.main_stack
@@ -53,10 +52,10 @@ def run_chat_tui(
         session,
         handle_chat_line=handle_chat_line,
         execute_cli_command=execute_cli_command,
-        submit_tui_input=submit_tui_input,
-        request_stop=request_stop,
-        toggle_commands_popup=toggle_commands_popup,
-        emit_warning_update=emit_warning_update,
+        submit_tui_input=shell_runtime.ui_runtime.submit_tui_input,
+        request_stop=shell_runtime.ui_runtime.request_stop,
+        toggle_commands_popup=shell_runtime.ui_runtime.toggle_commands_popup,
+        emit_warning_update=shell_runtime.ui_runtime.emit_warning_update,
     )
     app = build_chat_application(session=session, view=view, key_bindings=key_bindings)
     session.app = app

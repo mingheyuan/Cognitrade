@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import Mock
 
 from research_system.agents.retriever.service import RetrieverService
+from research_system.schemas.subagents import SubagentExecutionRecord
 
 
 class RetrieverServiceTests(unittest.TestCase):
@@ -12,6 +13,27 @@ class RetrieverServiceTests(unittest.TestCase):
         self.service.memory_service = Mock()
         self.service.memory_service.read_recent_methodology_memory.return_value = []
         self.service.retrieval_policy = {}
+        self.service.qdrant = None
+        self.service.qdrant_available = False
+        self.service.qdrant_error = "disabled_for_test"
+        self.service.indexer_qdrant = None
+        self.service.searcher_qdrant = None
+        self.service.registry = Mock()
+        self.service.registry.invoke.side_effect = lambda invocation: (
+            {
+                "evidences": list(invocation.inputs.get("evidences") or []),
+                "retrieval_summary": "mock retrieval summary",
+                "degraded": False,
+            },
+            SubagentExecutionRecord(
+                subagent_type=invocation.subagent_type,
+                objective=invocation.objective,
+                inputs=invocation.inputs,
+                output_keys=["evidences", "retrieval_summary", "degraded"],
+                notes=[],
+                status="completed",
+            ),
+        )
 
     def test_dedupe_prefers_current_run_sector_snapshot(self) -> None:
         current_run_id = "01CURRENTRUN"
@@ -784,6 +806,44 @@ class RetrieverServiceTests(unittest.TestCase):
         self.assertIn("valuation anchors", summary)
         self.assertEqual(selected[0]["metadata"]["source_type"], "compare_request")
         self.assertEqual(selected[1]["metadata"]["source_type"], "bank_compare_scorecard")
+
+    def test_run_emits_nested_retrieval_trace_context(self) -> None:
+        service = self.service
+        service.disable_qdrant_for_test("disabled_for_test")
+        outputs = service.run(
+            intent="stock_compare",
+            query="compare banks",
+            blackboard_entries=[
+                {
+                    "entry_id": "src-1",
+                    "run_id": "01TRACE",
+                    "kind": "source_record",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "payload": {"title": "compare request", "content": "compare", "source_type": "compare_request"},
+                    "source_refs": [],
+                },
+                {
+                    "entry_id": "snap-1",
+                    "run_id": "01TRACE",
+                    "kind": "verified_snapshot",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "payload": {"title": "bank compare scorecard", "content": "scorecard", "source_type": "bank_compare_scorecard"},
+                    "source_refs": [],
+                },
+            ],
+        )
+
+        trace = list(outputs.get("subagent_trace") or [])
+        self.assertEqual(
+            [item.get("agent_path") for item in trace],
+            [
+                "retriever/indexing/blackboard_evidence_indexer",
+                "retriever/search/qdrant_evidence_searcher",
+                "retriever/decision/retrieval_decider",
+            ],
+        )
 
 
 if __name__ == "__main__":

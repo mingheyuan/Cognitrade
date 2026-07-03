@@ -256,6 +256,91 @@ class DistillerServiceTests(unittest.TestCase):
         self.assertIn("fallback_chunks=1", result["summary"]["processing_notes"])
         self.assertIn("fallback_distillation", result["summary"]["major_risks"])
 
+    def test_distiller_invocations_emit_nested_trace_context(self) -> None:
+        provider = DistillerChunkProviderStub()
+        service = DistillerService(provider)
+
+        recorded_contexts: list[dict] = []
+        original_invoke = service.registry.invoke
+
+        def _recording_invoke(invocation):
+            recorded_contexts.append(dict(invocation.context or {}))
+            return original_invoke(invocation)
+
+        service.registry.invoke = _recording_invoke  # type: ignore[assignment]
+
+        service.run(
+            query="distill multi chunk records",
+            source_records=[
+                {
+                    "source_id": "src-1",
+                    "title": "note-1",
+                    "content": "AI " * 150,
+                    "source_type": "inline_text",
+                },
+                {
+                    "source_id": "src-2",
+                    "title": "note-2",
+                    "content": "internet " * 150,
+                    "source_type": "inline_text",
+                },
+                {
+                    "source_id": "src-3",
+                    "title": "note-3",
+                    "content": "biotech " * 150,
+                    "source_type": "inline_text",
+                },
+                {
+                    "source_id": "src-4",
+                    "title": "note-4",
+                    "content": "export " * 150,
+                    "source_type": "inline_text",
+                },
+            ],
+        )
+
+        context_pairs = {
+            (
+                str(context.get("task_name") or ""),
+                str(context.get("agent_path") or ""),
+            )
+            for context in recorded_contexts
+        }
+        self.assertIn(
+            ("distill:preprocess:source_normalizer", "distiller/preprocess/source_normalizer"),
+            context_pairs,
+        )
+        self.assertIn(
+            ("distill:preprocess:record_trimmer", "distiller/preprocess/record_trimmer"),
+            context_pairs,
+        )
+        self.assertIn(
+            ("distill:chunking:chunk_builder", "distiller/chunking/chunk_builder"),
+            context_pairs,
+        )
+        self.assertTrue(
+            any(
+                task_name.startswith("distill:chunks:chunk_")
+                and task_name.endswith(":llm_chunk_distiller")
+                and agent_path.startswith("distiller/chunks/chunk_")
+                and agent_path.endswith("/llm_chunk_distiller")
+                for task_name, agent_path in context_pairs
+            )
+        )
+        self.assertTrue(
+            any(
+                task_name.startswith("distill:chunks:chunk_")
+                and task_name.endswith(":fallback_chunk_distiller")
+                and agent_path.startswith("distiller/chunks/chunk_")
+                and agent_path.endswith("/fallback_chunk_distiller")
+                for task_name, agent_path in context_pairs
+            )
+        )
+        self.assertIn(
+            ("distill:postprocess:chunk_result_merger", "distiller/postprocess/chunk_result_merger"),
+            context_pairs,
+        )
+
     def test_quote_speaker_type_and_risk_flag(self) -> None:
         service = DistillerService(DistillerProviderStub())
 

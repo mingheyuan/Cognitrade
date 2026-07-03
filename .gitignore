@@ -23,6 +23,8 @@ workspace/memory/
 *.sqlite
 *.lock
 tmp*/
+.codex-upstream/
+.codex-upstream-public/
 .idea/
 .vscode/
 Thumbs.db

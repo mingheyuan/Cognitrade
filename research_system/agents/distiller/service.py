@@ -91,6 +91,10 @@ class DistillerService:
                 subagent_type="distill_source_normalizer",
                 objective="Normalize raw distillation source records.",
                 inputs={"query": query, "source_records": source_records},
+                context={
+                    "task_name": "distill:preprocess:source_normalizer",
+                    "agent_path": "distiller/preprocess/source_normalizer",
+                },
             )
         )
         records = normalized_outputs["records"]
@@ -114,6 +118,10 @@ class DistillerService:
                 subagent_type="distill_record_trimmer",
                 objective="Trim source records into bounded distillation input.",
                 inputs={"records": records},
+                context={
+                    "task_name": "distill:preprocess:record_trimmer",
+                    "agent_path": "distiller/preprocess/record_trimmer",
+                },
             )
         )
         trimmed_records = trim_outputs["records"]
@@ -131,6 +139,10 @@ class DistillerService:
                 subagent_type="distill_chunk_builder",
                 objective="Split trimmed records into distillation chunks.",
                 inputs={"records": records},
+                context={
+                    "task_name": "distill:chunking:chunk_builder",
+                    "agent_path": "distiller/chunking/chunk_builder",
+                },
             )
         )
         chunks = chunk_outputs["chunks"]
@@ -153,6 +165,10 @@ class DistillerService:
                         subagent_type="llm_chunk_distiller",
                         objective=f"Distill {chunk_label} with LLM.",
                         inputs={"query": f"{query}\nChunk: {chunk_label}", "records": chunk},
+                        context={
+                            "task_name": f"distill:chunks:{chunk_label}:llm_chunk_distiller",
+                            "agent_path": f"distiller/chunks/{chunk_label}/llm_chunk_distiller",
+                        },
                     )
                 )
                 chunk_result = llm_outputs
@@ -165,6 +181,10 @@ class DistillerService:
                         subagent_type="fallback_chunk_distiller",
                         objective=f"Fallback-distill {chunk_label}.",
                         inputs={"records": chunk, "distillation_result_model": DistillationResult},
+                        context={
+                            "task_name": f"distill:chunks:{chunk_label}:fallback_chunk_distiller",
+                            "agent_path": f"distiller/chunks/{chunk_label}/fallback_chunk_distiller",
+                        },
                     )
                 )
                 chunk_result = fallback_outputs
@@ -180,6 +200,10 @@ class DistillerService:
                 subagent_type="chunk_result_merger",
                 objective="Merge chunk-level distillation outputs.",
                 inputs={"records": records, "chunk_results": chunk_results},
+                context={
+                    "task_name": "distill:postprocess:chunk_result_merger",
+                    "agent_path": "distiller/postprocess/chunk_result_merger",
+                },
             )
         )
         merged = merged_outputs

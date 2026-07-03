@@ -3,6 +3,11 @@ from __future__ import annotations
 import unittest
 
 from research_system.runtime.chat_presenter import ChatStreamPresenter
+from research_system.runtime.chat_presenter_live_accumulator import ChatPresenterLiveAccumulator
+from research_system.runtime.chat_presenter_live_payloads import ChatPresenterLivePayloads
+from research_system.runtime.chat_presenter_payload_state import ChatPresenterPayloadState
+from research_system.runtime.chat_presenter_summaries import ChatPresenterSummaries
+from research_system.runtime.run_trace_row_builder import RunTraceRowBuilder
 from research_system.schemas.runtime import RunEvent
 
 
@@ -20,6 +25,15 @@ def _event(*, event_type: str, intent: str = "sector_research", phase: str | Non
 
 
 class ChatPresenterTests(unittest.TestCase):
+    def test_presenter_wires_summary_and_live_payload_helpers(self) -> None:
+        presenter = ChatStreamPresenter()
+        self.assertIsInstance(presenter.live_payloads, ChatPresenterLivePayloads)
+        self.assertIsInstance(presenter.live_payloads.row_builder, RunTraceRowBuilder)
+        self.assertIsInstance(presenter.live_payloads.payload_state, ChatPresenterPayloadState)
+        self.assertIsInstance(presenter.live_payloads.accumulator, ChatPresenterLiveAccumulator)
+        self.assertIs(presenter.live_payloads.accumulator.row_builder, presenter.live_payloads.row_builder)
+        self.assertIsInstance(presenter.summaries, ChatPresenterSummaries)
+
     def test_intent_event_generates_no_thinking_chunks(self) -> None:
         presenter = ChatStreamPresenter()
         chunks = presenter.on_event(_event(event_type="intent_identified", intent="stock_check", message="Intent identified: stock_check"))
@@ -180,9 +194,12 @@ class ChatPresenterTests(unittest.TestCase):
                 phase="collect",
                 agent="collector",
                 payload={
+                    "invocation_id": "01INVOCATION",
                     "action_id": "act_collect",
                     "node_id": "collect",
                     "action_objective": "Load source records.",
+                    "task_name": "collect:stock_snapshot_collector",
+                    "agent_path": "collector/stock_snapshot_collector",
                     "subagent_type": "stock_snapshot_collector",
                     "objective": "Collect stock-level verified snapshots.",
                     "status": "running",
@@ -219,11 +236,61 @@ class ChatPresenterTests(unittest.TestCase):
         self.assertEqual(len(trace_payload["subagent_trace"]), 1)
         self.assertEqual(trace_payload["subagent_trace"][0]["subagent_type"], "stock_snapshot_collector")
         self.assertEqual(trace_payload["subagent_trace"][0]["node_id"], "collect")
+        self.assertEqual(trace_payload["subagent_trace"][0]["task_name"], "collect:stock_snapshot_collector")
+        self.assertEqual(trace_payload["subagent_trace"][0]["agent_path"], "collector/stock_snapshot_collector")
+        self.assertEqual(trace_payload["subagent_trace"][0]["agent_label"], "Stock Snapshot Collector")
+        self.assertEqual(trace_payload["subagent_trace"][0]["invocation_id"], "01INVOCATION")
         self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
         self.assertEqual(trace_payload["dynamic_trace"][0]["node_id"], "screen_review")
         self.assertEqual(len(trace_payload["wait_trace"]), 1)
         self.assertEqual(trace_payload["wait_trace"][0]["event"], "waiting_external_started")
         self.assertEqual(trace_payload["wait_trace"][0]["node_id"], "collect")
+
+    def test_presenter_accumulates_live_events_payload_from_runtime_events(self) -> None:
+        presenter = ChatStreamPresenter()
+
+        presenter.on_event(
+            _event(
+                event_type="subagent_started",
+                phase="collect",
+                agent="collector",
+                message="stock_snapshot_collector started",
+                payload={
+                    "action_id": "act_collect",
+                    "node_id": "collect",
+                    "task_name": "collect:stock_snapshot_collector",
+                    "agent_path": "collector/stock_snapshot_collector",
+                    "agent_label": "Stock Snapshot Collector",
+                    "subagent_type": "stock_snapshot_collector",
+                    "invocation_id": "01INVOCATION",
+                    "objective": "Collect stock-level verified snapshots.",
+                    "status": "running",
+                },
+            )
+        )
+        presenter.on_event(
+            _event(
+                event_type="dynamic_action_inserted",
+                phase="review",
+                agent="supervisor",
+                message="Dynamically inserted action: screen_review",
+                payload={"action_id": "act_screen_review", "node_id": "screen_review", "objective": "Review screened candidates."},
+            )
+        )
+
+        events_payload = presenter.current_events_payload()
+        self.assertIsNotNone(events_payload)
+        self.assertEqual(events_payload["run_id"], "run")
+        self.assertEqual(events_payload["summary"]["status"], "running")
+        self.assertEqual(len(events_payload["events"]), 2)
+        self.assertEqual(events_payload["events"][0]["event_type"], "subagent_started")
+        self.assertEqual(events_payload["events"][0]["task_name"], "collect:stock_snapshot_collector")
+        self.assertEqual(events_payload["events"][0]["agent_path"], "collector/stock_snapshot_collector")
+        self.assertEqual(events_payload["events"][0]["agent_label"], "Stock Snapshot Collector")
+        self.assertEqual(events_payload["events"][0]["invocation_id"], "01INVOCATION")
+        self.assertEqual(events_payload["events"][1]["event_type"], "dynamic_action_inserted")
+        self.assertEqual(events_payload["event_counts"]["events"], 2)
+        self.assertEqual(events_payload["event_counts"]["distinct_event_types"], 2)
 
 
 if __name__ == "__main__":

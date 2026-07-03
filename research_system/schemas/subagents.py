@@ -9,6 +9,7 @@ class SubagentInvocation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     subagent_type: str
+    invocation_id: str | None = None
     inputs: dict[str, Any] = Field(default_factory=dict)
     objective: str | None = None
     context: dict[str, Any] = Field(default_factory=dict)

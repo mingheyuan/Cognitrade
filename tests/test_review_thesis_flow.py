@@ -253,6 +253,8 @@ class ReviewThesisFlowTests(unittest.TestCase):
             self.assertIn("dynamic_trace", debug)
             self.assertTrue(any(item.get("subagent_type") == "review_target_loader" for item in debug["subagent_trace"]))
             self.assertTrue(any(item.get("subagent_type") == "review_summary_builder" for item in debug["subagent_trace"]))
+            self.assertTrue(any(item.get("agent_path") == "reporter/strategy/report_strategy_resolver" for item in debug["subagent_trace"]))
+            self.assertTrue(any(item.get("agent_path") == "reporter/fallback/fallback_report_composer" for item in debug["subagent_trace"]))
             self.assertTrue(any(item.get("event") == "dynamic_action_inserted" and item.get("node_id") == "review" for item in debug["dynamic_trace"]))
 
     def test_review_thesis_flow_uses_prior_run_and_sector_snapshot(self) -> None:

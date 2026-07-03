@@ -68,6 +68,15 @@ class ChatCliTests(unittest.TestCase):
         parsed = parse_chat_input("/events full")
         self.assertEqual(parsed, {"action": "set_events", "events_mode": "full"})
 
+    def test_events_read_command_is_parsed(self) -> None:
+        self.assertEqual(parse_chat_input("/events last"), {"action": "events", "run_id": "last"})
+        self.assertEqual(parse_chat_input("/events-read 01ABC"), {"action": "events", "run_id": "01ABC"})
+        self.assertEqual(
+            parse_chat_input("/subagent-read last 01INVOCATION"),
+            {"action": "subagent-read", "run_id": "last", "call_id": "01INVOCATION"},
+        )
+        self.assertEqual(parse_chat_input("/run-steps last"), {"action": "run-steps", "run_id": "last"})
+
     def test_stop_command_is_parsed(self) -> None:
         parsed = parse_chat_input("/stop")
         self.assertEqual(parsed, {"action": "stop"})
@@ -84,6 +93,10 @@ class ChatCliTests(unittest.TestCase):
         parsed = parse_chat_input("/fork")
         self.assertEqual(parsed, {"action": "fork_thread"})
 
+    def test_rename_thread_command_is_parsed(self) -> None:
+        parsed = parse_chat_input('/rename "Bank compare shortlist"')
+        self.assertEqual(parsed, {"action": "rename_thread", "thread_label": "Bank compare shortlist"})
+
     def test_thread_archive_commands_are_parsed(self) -> None:
         self.assertEqual(parse_chat_input("/thread-archive"), {"action": "archive_thread"})
         self.assertEqual(
@@ -98,6 +111,7 @@ class ChatCliTests(unittest.TestCase):
     def test_thread_command_is_parsed(self) -> None:
         self.assertEqual(parse_chat_input("/thread"), {"action": "show_thread"})
         self.assertEqual(parse_chat_input("/thread abc123"), {"action": "set_thread", "thread_id": "abc123"})
+        self.assertEqual(parse_chat_input("/thread-read abc123"), {"action": "read_thread", "thread_id": "abc123"})
 
     def test_threads_command_is_parsed(self) -> None:
         self.assertEqual(parse_chat_input("/threads"), {"action": "threads", "limit": 10, "scope": "active"})
@@ -164,6 +178,10 @@ class ChatCliTests(unittest.TestCase):
         candidates = chat_completion_candidates("/resume ", state)
         self.assertEqual(candidates, ["last", "01LAST", "01TARGET"])
         self.assertEqual(chat_completion_candidates("/trace ", state), ["last", "01LAST", "01TARGET"])
+        self.assertEqual(chat_completion_candidates("/events ", state), ["off", "compact", "full", "last", "01LAST", "01TARGET"])
+        self.assertEqual(chat_completion_candidates("/events-read ", state), ["last", "01LAST", "01TARGET"])
+        self.assertEqual(chat_completion_candidates("/subagent-read ", state), ["last", "01LAST", "01TARGET"])
+        self.assertEqual(chat_completion_candidates("/run-steps ", state), ["last", "01LAST", "01TARGET"])
 
     def test_completion_candidates_for_proposal_commands(self) -> None:
         self.assertEqual(chat_completion_candidates("/proposals ", ChatSessionState()), ["10", "20", "50", "pending", "approved", "rejected"])
