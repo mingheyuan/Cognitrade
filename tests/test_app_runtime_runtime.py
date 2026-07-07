@@ -8,7 +8,11 @@ from research_system.cli.runtime.app_runtime import (
     ChatEntryRuntime,
 )
 from research_system.cli.runtime.chat_flow_runtime import build_chat_query_flow_runtime
-from research_system.cli.runtime.chat_runtime_bindings import build_basic_chat_turn_rememberer
+from research_system.cli.runtime.chat_runtime_bindings import (
+    build_basic_answer_stream_binding,
+    build_basic_chat_turn_rememberer,
+    build_result_printer_binding,
+)
 
 
 class AppRuntimeRuntimeTests(unittest.TestCase):
@@ -162,6 +166,75 @@ class AppRuntimeRuntimeTests(unittest.TestCase):
         self.assertEqual(captured["result_payload"], {"status": "completed", "display_summary": "ok"})
         self.assertEqual(captured["result_kwargs"]["settings"], "settings_obj")
         self.assertEqual(captured["result_kwargs"]["state"], "state_obj")
+
+    def test_chat_query_flow_runtime_reuses_prebound_basic_answer_stream(self) -> None:
+        captured: dict[str, object] = {}
+
+        def basic_answer_stream(**kwargs):
+            captured["kwargs"] = kwargs
+            return "streamed answer"
+
+        prebound = build_basic_answer_stream_binding(
+            settings="outer_settings",
+            state="outer_state",
+            emit_text="outer_emit",
+            basic_answer_stream_fn=basic_answer_stream,
+        )
+        runtime = build_chat_query_flow_runtime(
+            settings="inner_settings",
+            state="inner_state",
+            emit_update="inner_emit",
+            payload_printer=lambda *args, **kwargs: None,
+            basic_answer_stream_fn=prebound,
+        )
+
+        answer = runtime.basic_answer_fn(
+            query="who are you",
+            llm_provider="provider",
+            output_writer=None,
+            conversation_context=["ctx"],
+        )
+
+        self.assertEqual(answer, "streamed answer")
+        self.assertEqual(captured["kwargs"]["settings"], "outer_settings")
+        self.assertEqual(captured["kwargs"]["state"], "outer_state")
+        self.assertEqual(captured["kwargs"]["emit_text"], "outer_emit")
+        self.assertEqual(captured["kwargs"]["conversation_context"], ["ctx"])
+
+    def test_chat_query_flow_runtime_reuses_prebound_result_printer(self) -> None:
+        captured: dict[str, object] = {}
+
+        def result_printer(payload, **kwargs):
+            captured["payload"] = payload
+            captured["kwargs"] = kwargs
+            return None
+
+        prebound = build_result_printer_binding(
+            settings="outer_settings",
+            state="outer_state",
+            payload_printer="outer_payload_printer",
+            print_chat_result_payload_fn=result_printer,
+        )
+        runtime = build_chat_query_flow_runtime(
+            settings="inner_settings",
+            state="inner_state",
+            emit_update="inner_emit",
+            payload_printer=lambda *args, **kwargs: None,
+            print_chat_result_payload_fn=prebound,
+        )
+
+        runtime.print_result_fn(
+            {"status": "completed", "display_summary": "ok"},
+            llm_provider="provider",
+            query="q",
+            requested_intent=None,
+            output_writer=None,
+        )
+
+        self.assertEqual(captured["payload"], {"status": "completed", "display_summary": "ok"})
+        self.assertEqual(captured["kwargs"]["settings"], "outer_settings")
+        self.assertEqual(captured["kwargs"]["state"], "outer_state")
+        self.assertEqual(captured["kwargs"]["payload_printer"], "outer_payload_printer")
 
 
 if __name__ == "__main__":
