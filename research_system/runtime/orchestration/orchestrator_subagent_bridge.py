@@ -80,6 +80,8 @@ class OrchestratorSubagentBridge:
             "invocation_id": invocation.invocation_id,
             "objective": invocation.objective,
             "status": record.status if record is not None else ("failed" if stage == "failed" else "running"),
+            "degrade_reason": record.degrade_reason if record is not None else None,
+            "degrade_reasons": list((record.degrade_reasons if record is not None else []) or []),
             "notes": list((record.notes if record is not None else []) or []),
             "output_keys": list((record.output_keys if record is not None else []) or []),
             "action_id": context.current_action_id,

@@ -191,6 +191,240 @@ class MethodologyMemoryTests(unittest.TestCase):
             self.assertEqual(rows[0]["content"]["thread_id"], "thread-2")
             self.assertTrue(rows[0]["match_score"] > 0)
 
+    def test_memory_service_search_chat_memory_can_exclude_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = Settings.from_env(root)
+            ensure_workspace_layout(settings)
+            service = MemoryService(LocalMemoryAdapter(settings))
+
+            service.write_chat_research_memory(
+                query="compare guizhou maotai cashflow resilience",
+                intent="stock_compare",
+                run_id="01COMPARE",
+                summary="compare summary",
+                conclusion="compare conclusion",
+                follow_up="compare next step",
+                status="completed",
+                thread_id="thread-1",
+            )
+            service.write_chat_research_memory(
+                query="analyze guizhou maotai cashflow resilience",
+                intent="stock_check",
+                run_id="01CHECK",
+                summary="check summary",
+                conclusion="check conclusion",
+                follow_up="check next step",
+                status="completed",
+                thread_id="thread-2",
+            )
+
+            rows = service.search_chat_research_memory(
+                query="cashflow resilience",
+                limit=5,
+                exclude_intent="stock_compare",
+            )
+
+            self.assertTrue(rows)
+            self.assertTrue(all(row["content"]["intent"] != "stock_compare" for row in rows))
+            self.assertEqual(rows[0]["content"]["intent"], "stock_check")
+
+    def test_local_memory_adapter_search_prefers_newer_chat_memory_when_match_strength_is_same(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = Settings.from_env(root)
+            ensure_workspace_layout(settings)
+            service = MemoryService(LocalMemoryAdapter(settings))
+
+            service.write_memory(
+                memory_type=CHAT_RESEARCH_MEMORY_TYPE,
+                content={
+                    "thread_id": "thread-1",
+                    "query": "compare maotai cashflow resilience",
+                    "intent": "stock_compare",
+                    "run_id": "01OLD",
+                    "summary": "cashflow resilience stayed stable",
+                    "conclusion": "older conclusion",
+                    "recorded_at": "2025-01-01T00:00:00+00:00",
+                },
+                metadata={
+                    "status": "completed",
+                    "intent": "stock_compare",
+                    "thread_id": "thread-1",
+                    "run_id": "01OLD",
+                },
+                memory_scope="chat_research",
+                snapshot_version=CHAT_RESEARCH_SNAPSHOT_VERSION,
+            )
+            service.write_memory(
+                memory_type=CHAT_RESEARCH_MEMORY_TYPE,
+                content={
+                    "thread_id": "thread-2",
+                    "query": "compare maotai cashflow resilience",
+                    "intent": "stock_compare",
+                    "run_id": "01NEW",
+                    "summary": "cashflow resilience stayed stable",
+                    "conclusion": "newer conclusion",
+                    "recorded_at": "2026-07-01T00:00:00+00:00",
+                },
+                metadata={
+                    "status": "completed",
+                    "intent": "stock_compare",
+                    "thread_id": "thread-2",
+                    "run_id": "01NEW",
+                },
+                memory_scope="chat_research",
+                snapshot_version=CHAT_RESEARCH_SNAPSHOT_VERSION,
+            )
+
+            rows = service.search_chat_research_memory(
+                query="cashflow resilience",
+                limit=5,
+                intent="stock_compare",
+            )
+
+            self.assertGreaterEqual(len(rows), 2)
+            self.assertEqual(rows[0]["content"]["run_id"], "01NEW")
+            self.assertGreater(rows[0]["match_score"], rows[1]["match_score"])
+
+    def test_local_memory_adapter_search_prefers_conclusion_and_summary_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = Settings.from_env(root)
+            ensure_workspace_layout(settings)
+            service = MemoryService(LocalMemoryAdapter(settings))
+
+            service.write_chat_research_memory(
+                query="cashflow resilience",
+                intent="stock_compare",
+                run_id="01QUERY",
+                summary="",
+                conclusion="",
+                follow_up="",
+                status="completed",
+                thread_id="thread-query",
+            )
+            service.write_chat_research_memory(
+                query="generic follow up",
+                intent="stock_compare",
+                run_id="01CONCLUSION",
+                summary="cashflow resilience remains stronger in the current setup",
+                conclusion="cashflow resilience remains stronger in the current setup",
+                follow_up="",
+                status="completed",
+                thread_id="thread-conclusion",
+            )
+
+            rows = service.search_chat_research_memory(
+                query="cashflow resilience",
+                limit=5,
+                intent="stock_compare",
+            )
+
+            self.assertTrue(rows)
+            self.assertEqual(rows[0]["content"]["run_id"], "01CONCLUSION")
+
+    def test_local_memory_adapter_search_can_boost_preferred_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = Settings.from_env(root)
+            ensure_workspace_layout(settings)
+            adapter = LocalMemoryAdapter(settings)
+            service = MemoryService(adapter)
+
+            service.write_chat_research_memory(
+                query="cashflow resilience",
+                intent="stock_check",
+                run_id="01CHECK",
+                summary="same text",
+                conclusion="same text",
+                follow_up="",
+                status="completed",
+                thread_id="thread-check",
+            )
+            service.write_chat_research_memory(
+                query="cashflow resilience",
+                intent="stock_compare",
+                run_id="01COMPARE",
+                summary="same text",
+                conclusion="same text",
+                follow_up="",
+                status="completed",
+                thread_id="thread-compare",
+            )
+
+            rows = adapter.search(
+                query="cashflow resilience",
+                memory_types=[CHAT_RESEARCH_MEMORY_TYPE],
+                limit=5,
+                metadata_filters={
+                    "memory_scope": "chat_research",
+                    "preferred_intent": "stock_compare",
+                },
+            )
+
+            self.assertGreaterEqual(len(rows), 2)
+            self.assertEqual(rows[0]["content"]["intent"], "stock_compare")
+            self.assertGreater(rows[0]["match_score"], rows[1]["match_score"])
+
+    def test_local_memory_adapter_search_dedupes_duplicate_thread_run_records(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = Settings.from_env(root)
+            ensure_workspace_layout(settings)
+            service = MemoryService(LocalMemoryAdapter(settings))
+
+            service.write_memory(
+                memory_type=CHAT_RESEARCH_MEMORY_TYPE,
+                content={
+                    "thread_id": "thread-dup",
+                    "query": "compare maotai cashflow resilience",
+                    "intent": "stock_compare",
+                    "run_id": "01DUP",
+                    "summary": "older duplicate summary",
+                    "conclusion": "older duplicate conclusion",
+                    "recorded_at": "2026-06-01T00:00:00+00:00",
+                },
+                metadata={
+                    "status": "completed",
+                    "intent": "stock_compare",
+                    "thread_id": "thread-dup",
+                    "run_id": "01DUP",
+                },
+                memory_scope="chat_research",
+                snapshot_version=CHAT_RESEARCH_SNAPSHOT_VERSION,
+            )
+            service.write_memory(
+                memory_type=CHAT_RESEARCH_MEMORY_TYPE,
+                content={
+                    "thread_id": "thread-dup",
+                    "query": "compare maotai cashflow resilience",
+                    "intent": "stock_compare",
+                    "run_id": "01DUP",
+                    "summary": "new duplicate summary",
+                    "conclusion": "new duplicate conclusion",
+                    "recorded_at": "2026-07-01T00:00:00+00:00",
+                },
+                metadata={
+                    "status": "completed",
+                    "intent": "stock_compare",
+                    "thread_id": "thread-dup",
+                    "run_id": "01DUP",
+                },
+                memory_scope="chat_research",
+                snapshot_version=CHAT_RESEARCH_SNAPSHOT_VERSION,
+            )
+
+            rows = service.search_chat_research_memory(
+                query="cashflow resilience",
+                limit=5,
+                intent="stock_compare",
+            )
+
+            duplicate_rows = [row for row in rows if row["content"]["run_id"] == "01DUP"]
+            self.assertEqual(len(duplicate_rows), 1)
+            self.assertEqual(duplicate_rows[0]["content"]["summary"], "new duplicate summary")
+
     def test_memory_service_search_methodology_memory_matches_query(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

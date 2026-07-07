@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from research_system.runtime.core.execution_policy import (
+    RuntimeDegradeReason,
+    normalize_degrade_reason,
+)
 from research_system.runtime.orchestration.orchestrator_context import RuntimeContext
 
 
@@ -104,14 +108,14 @@ class OrchestratorExecutionControlSupport:
         reserve: bool = True,
     ) -> RuntimeLLMExecutionDecision:
         if provider is not None and not bool(getattr(provider, "available", True)):
-            reason = "llm_unavailable"
+            reason = RuntimeDegradeReason.LLM_UNAVAILABLE.value
             component = f"{agent}_llm_provider"
         elif reserve and self.reserve_llm_slot(context):
             return RuntimeLLMExecutionDecision(can_use_llm=True)
         elif not reserve and context.execution_policy.can_use_llm(turn_id=context.turn.turn_id):
             return RuntimeLLMExecutionDecision(can_use_llm=True)
         else:
-            reason = "turn_llm_budget_exhausted"
+            reason = RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value
             component = f"{agent}_llm_budget"
         self.record_degradation(
             context,
@@ -166,11 +170,10 @@ class OrchestratorExecutionControlSupport:
         intent: str | None = None,
     ) -> bool:
         payload_dict = dict(payload or {})
-        reason = str(
+        reason = normalize_degrade_reason(
             payload_dict.get("degrade_reason")
             or payload_dict.get("degraded_note")
-            or ""
-        ).strip()
+        )
         if not reason:
             return False
         self.record_degradation(

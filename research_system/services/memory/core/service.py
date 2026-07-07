@@ -112,6 +112,7 @@ class MemoryService:
         thread_id: str | None = None,
         exclude_thread_id: str | None = None,
         intent: str | None = None,
+        exclude_intent: str | None = None,
     ) -> list[dict[str, Any]]:
         return self.query_support.search_chat_research_memory(
             query=query,
@@ -119,6 +120,7 @@ class MemoryService:
             thread_id=thread_id,
             exclude_thread_id=exclude_thread_id,
             intent=intent,
+            exclude_intent=exclude_intent,
         )
 
     def read_recent_methodology_memory(

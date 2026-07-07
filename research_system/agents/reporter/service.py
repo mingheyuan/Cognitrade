@@ -6,6 +6,7 @@ from pathlib import Path
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
+from research_system.runtime.core.execution_policy import RuntimeDegradeReason
 from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.services.methodologies.planning.planning_context import (
     build_planning_context_view,
@@ -153,7 +154,7 @@ class ReporterService(RuntimeBoundSubagentInvoker):
             payload["subagent_trace"] = trace
             return payload
         if force_fallback:
-            degraded_note = runtime_degraded_note or "llm_unavailable"
+            degraded_note = runtime_degraded_note or RuntimeDegradeReason.LLM_UNAVAILABLE.value
             scorecard_digest = None
             scorecard_payload = None
             if intent == "distill_kol_logic":
@@ -295,7 +296,7 @@ class ReporterService(RuntimeBoundSubagentInvoker):
                         agent_path="reporter/fallback/fallback_report_composer",
                         notes=[
                             f"evidence_count={len(evidences)}",
-                            f"degraded_note={degrade_reason or runtime_degraded_note or 'runtime_fallback'}",
+                            f"degraded_note={degrade_reason or runtime_degraded_note or RuntimeDegradeReason.RUNTIME_FALLBACK.value}",
                             "execution_mode=runtime_fallback",
                         ],
                     )

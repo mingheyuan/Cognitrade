@@ -12,7 +12,13 @@ def dedupe_relevant_candidates(
 ) -> list[dict[str, Any]]:
     ordered: list[dict[str, Any]] = []
     seen_signatures: set[tuple[Any, ...]] = set()
-    for _, context in sorted(candidates, key=lambda item: item[0], reverse=True):
+    for _, context in sorted(
+        candidates,
+        key=lambda item: (
+            int(item[1].get("memory_priority_rank") or 99),
+            -float(item[0]),
+        ),
+    ):
         signature = context_signature(context)
         if signature in seen_signatures:
             continue

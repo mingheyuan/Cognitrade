@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from research_system.cli.runtime.chat_runtime_bindings import (
+    build_basic_answer_stream_binding,
+    build_result_printer_binding,
+)
 from research_system.runtime.platform.settings import Settings
 
 
@@ -27,26 +31,6 @@ class ChatAppRuntime:
         output_writer=None,
         stop_callback=None,
     ) -> str | None:
-        def _basic_answer_stream(**kwargs):
-            return self.basic_answer_stream_print_fn(
-                settings=settings,
-                state=state,
-                emit_text=self.dispatch_transcript_update_fn,
-                **kwargs,
-            )
-
-        def _print_chat_result(payload, *, llm_provider, query, requested_intent, output_writer=None):
-            return self.print_chat_result_payload_fn(
-                payload,
-                settings=settings,
-                state=state,
-                llm_provider=llm_provider,
-                query=query,
-                requested_intent=requested_intent,
-                payload_printer=self.payload_printer,
-                output_writer=output_writer,
-            )
-
         return self.controller_handle_chat_line_fn(
             settings,
             state,
@@ -58,9 +42,19 @@ class ChatAppRuntime:
             output_writer=output_writer,
             stop_callback=stop_callback,
             chat_dispatch_fn=self.chat_dispatch_fn,
-            basic_answer_stream_fn=_basic_answer_stream,
+            basic_answer_stream_fn=build_basic_answer_stream_binding(
+                settings=settings,
+                state=state,
+                emit_text=self.dispatch_transcript_update_fn,
+                basic_answer_stream_fn=self.basic_answer_stream_print_fn,
+            ),
             run_chat_research_fn=self.run_chat_research_fn,
-            print_chat_result_payload_fn=_print_chat_result,
+            print_chat_result_payload_fn=build_result_printer_binding(
+                settings=settings,
+                state=state,
+                payload_printer=self.payload_printer,
+                print_chat_result_payload_fn=self.print_chat_result_payload_fn,
+            ),
         )
 
 

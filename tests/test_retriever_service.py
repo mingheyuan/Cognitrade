@@ -97,6 +97,38 @@ class RetrieverServiceTests(unittest.TestCase):
         self.assertEqual(len(deduped), 1)
         self.assertEqual(deduped[0]["evidence_id"], "current-snapshot")
 
+    def test_merge_evidence_candidates_keeps_blackboard_priority_over_qdrant(self) -> None:
+        existing = {
+            "evidence_id": "shared-evidence",
+            "title": "verified_snapshot",
+            "summary": "current blackboard evidence",
+            "source_refs": [],
+            "metadata": {
+                "record_type": "verified_snapshot",
+                "memory_priority_rank": -1,
+            },
+            "score": 1.0,
+        }
+        qdrant_candidate = {
+            "evidence_id": "shared-evidence",
+            "title": "verified_snapshot",
+            "summary": "qdrant copy",
+            "source_refs": [],
+            "metadata": {
+                "record_type": "verified_snapshot",
+                "memory_priority_rank": 4,
+            },
+            "score": 9.0,
+        }
+
+        merged = self.service._merge_evidence_candidates(
+            evidence_map={"shared-evidence": existing},
+            evidences=[qdrant_candidate],
+        )
+
+        self.assertEqual(merged["shared-evidence"]["summary"], "current blackboard evidence")
+        self.assertEqual(merged["shared-evidence"]["score"], 1.0)
+
     def test_structured_retrieval_summary_uses_signal_scorecard_fields(self) -> None:
         evidence = {
             "evidence_id": "sector-snapshot",

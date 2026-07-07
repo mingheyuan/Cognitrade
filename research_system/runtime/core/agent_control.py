@@ -9,6 +9,13 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from research_system.runtime.core.execution_policy import (
+    RuntimeDegradeReason,
+    combine_degrade_reasons,
+    derive_llm_error_reason,
+    normalize_degrade_reason,
+    split_degrade_reasons,
+)
 from research_system.runtime.providers.provider_registry import LLMProviderError
 from research_system.runtime.storage.jsonl import append_jsonl, read_json, write_json
 from research_system.schemas.runtime import RuntimeItemRecord, RuntimeThreadState, RuntimeTurnState
@@ -323,11 +330,17 @@ class AgentControl:
             raise
         degrade_reason = self._combine_degrade_reason(llm_degrade_reason, self._extract_degrade_reason(outputs))
         if budget_exhausted:
-            degrade_reason = self._combine_degrade_reason("turn_subagent_budget_exhausted", degrade_reason)
+            degrade_reason = self._combine_degrade_reason(
+                RuntimeDegradeReason.TURN_SUBAGENT_BUDGET_EXHAUSTED,
+                degrade_reason,
+            )
         if degrade_reason and isinstance(outputs, dict):
             outputs["degraded"] = True
             outputs["degrade_reason"] = degrade_reason
             record.output_keys = sorted(outputs.keys())
+        record.status = "degraded" if degrade_reason else "completed"
+        record.degrade_reason = degrade_reason
+        record.degrade_reasons = split_degrade_reasons(degrade_reason)
         final_status = "degraded" if degrade_reason else "completed"
         self.wait(
             item,
@@ -468,7 +481,7 @@ class AgentControl:
         if not isinstance(outputs, dict):
             return None
         degraded = bool(outputs.get("degraded"))
-        reason = str(outputs.get("degrade_reason") or "").strip()
+        reason = normalize_degrade_reason(outputs.get("degrade_reason"))
         if degraded and reason:
             return reason
         return None
@@ -558,11 +571,14 @@ class AgentControl:
                 fallback_inputs = dict(invocation.fallback_inputs or invocation.inputs)
                 self._inject_runtime_fallback_inputs(
                     fallback_inputs,
-                    degrade_reason="llm_unavailable",
+                    degrade_reason=RuntimeDegradeReason.LLM_UNAVAILABLE.value,
                 )
                 fallback_context = dict(invocation.context or {})
                 fallback_context.update(dict(invocation.fallback_context or {}))
-                fallback_context.setdefault("runtime_fallback_reason", "llm_unavailable")
+                fallback_context.setdefault(
+                    "runtime_fallback_reason",
+                    RuntimeDegradeReason.LLM_UNAVAILABLE.value,
+                )
                 return (
                     invocation.model_copy(
                         update={
@@ -577,9 +593,9 @@ class AgentControl:
                             "fallback_context": {},
                         }
                     ),
-                    "llm_unavailable",
+                    RuntimeDegradeReason.LLM_UNAVAILABLE.value,
                 )
-            return invocation, "llm_unavailable"
+            return invocation, RuntimeDegradeReason.LLM_UNAVAILABLE.value
         if execution_policy is None:
             return invocation, None
         can_use_llm = getattr(execution_policy, "reserve_llm_call", None)
@@ -589,20 +605,23 @@ class AgentControl:
             return invocation, None
         fallback_type = str(invocation.fallback_subagent_type or "").strip()
         if not fallback_type:
-            return invocation, "turn_llm_budget_exhausted"
+            return invocation, RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value
         target_registry = registry
         if target_registry is None and subagent is None:
-            return invocation, "turn_llm_budget_exhausted"
+            return invocation, RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value
         if target_registry is not None:
             target_registry.get(fallback_type)
         fallback_inputs = dict(invocation.fallback_inputs or invocation.inputs)
         self._inject_runtime_fallback_inputs(
             fallback_inputs,
-            degrade_reason="turn_llm_budget_exhausted",
+            degrade_reason=RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value,
         )
         fallback_context = dict(invocation.context or {})
         fallback_context.update(dict(invocation.fallback_context or {}))
-        fallback_context.setdefault("runtime_fallback_reason", "turn_llm_budget_exhausted")
+        fallback_context.setdefault(
+            "runtime_fallback_reason",
+            RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value,
+        )
         return (
             invocation.model_copy(
                 update={
@@ -617,7 +636,7 @@ class AgentControl:
                     "fallback_context": {},
                 }
             ),
-            "turn_llm_budget_exhausted",
+            RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value,
         )
 
     def _inject_runtime_fallback_inputs(
@@ -669,18 +688,10 @@ class AgentControl:
         return fallback_invocation, fallback_subagent, error_reason
 
     def _derive_llm_error_reason(self, error: Exception) -> str:
-        error_text = str(error)
-        if "llm_request_timeout" in error_text:
-            return "llm_request_timeout"
-        return f"llm_error:{error.__class__.__name__}"
+        return derive_llm_error_reason(error)
 
     def _combine_degrade_reason(self, primary: str | None, secondary: str | None) -> str | None:
-        parts: list[str] = []
-        for value in (primary, secondary):
-            token = str(value or "").strip()
-            if token and token not in parts:
-                parts.append(token)
-        return ";".join(parts) or None
+        return combine_degrade_reasons(primary, secondary)
 
     def _record_budget_degradation(
         self,
@@ -711,12 +722,13 @@ class AgentControl:
             payload=payload,
             item_type="degradation",
         )
-        self.send(item, payload={"reason": "turn_subagent_budget_exhausted"})
+        degrade_reason = RuntimeDegradeReason.TURN_SUBAGENT_BUDGET_EXHAUSTED.value
+        self.send(item, payload={"reason": degrade_reason})
         self.wait(
             item,
             status="degraded",
-            payload={"reason": "turn_subagent_budget_exhausted", **payload},
-            degrade_reason="turn_subagent_budget_exhausted",
+            payload={"reason": degrade_reason, **payload},
+            degrade_reason=degrade_reason,
         )
 
     def _record_child_thread_budget_degradation(
@@ -749,12 +761,13 @@ class AgentControl:
             payload=payload,
             item_type="degradation",
         )
-        self.send(item, payload={"reason": "turn_child_thread_budget_exhausted"})
+        degrade_reason = RuntimeDegradeReason.TURN_CHILD_THREAD_BUDGET_EXHAUSTED.value
+        self.send(item, payload={"reason": degrade_reason})
         self.wait(
             item,
             status="degraded",
-            payload={"reason": "turn_child_thread_budget_exhausted", **payload},
-            degrade_reason="turn_child_thread_budget_exhausted",
+            payload={"reason": degrade_reason, **payload},
+            degrade_reason=degrade_reason,
         )
 
     def _write_item(self, item: RuntimeItemRecord) -> None:
@@ -935,6 +948,12 @@ class AgentControl:
             objective=objective,
             inputs=inputs,
             output_keys=[],
+            degrade_reason=self._derive_llm_error_reason(error) if isinstance(error, LLMProviderError) else None,
+            degrade_reasons=(
+                split_degrade_reasons(self._derive_llm_error_reason(error))
+                if isinstance(error, LLMProviderError)
+                else []
+            ),
             notes=[f"{error.__class__.__name__}: {error}"],
         )
         notify_failed(invocation=invocation, record=record, error=error)

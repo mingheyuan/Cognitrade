@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from research_system.runtime.core.agent_control import AgentControl
+from research_system.runtime.core.execution_policy import RuntimeDegradeReason
 from research_system.runtime.orchestration.orchestrator_context import build_runtime_context
 from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.schemas.protocol import RequestEnvelope
@@ -28,6 +29,17 @@ class _FailureSubagent:
 
     def run(self, **kwargs):
         raise RuntimeError("boom")
+
+
+class _DegradedSubagent:
+    subagent_type = "degraded_subagent"
+
+    def run(self, **kwargs):
+        return {
+            "result": "fallback",
+            "degraded": True,
+            "degrade_reason": RuntimeDegradeReason.QDRANT_UNAVAILABLE.value,
+        }
 
 
 class _TypedInputModel(BaseModel):
@@ -193,6 +205,33 @@ class SubagentRegistryTests(unittest.TestCase):
                 ],
             )
             self.assertTrue(all(isinstance(item[3], str) and item[3] for item in seen))
+        finally:
+            temp_dir.cleanup()
+
+    def test_agent_control_propagates_degrade_reason_into_record(self) -> None:
+        temp_dir, context, request = self._build_runtime()
+        try:
+            registry = SubagentRegistry([_DegradedSubagent()])
+
+            outputs, record = context.agent_control.invoke(
+                registry=registry,
+                invocation=SubagentInvocation(
+                    subagent_type="degraded_subagent",
+                    objective="Run degraded case.",
+                    inputs={},
+                ),
+                thread_id=context.thread.thread_id,
+                turn_id=context.turn.turn_id,
+                request_id=request.request_id,
+                agent="tester",
+                phase="test",
+                execution_policy=context.execution_policy,
+            )
+
+            self.assertEqual(outputs["degrade_reason"], RuntimeDegradeReason.QDRANT_UNAVAILABLE.value)
+            self.assertEqual(record.status, "degraded")
+            self.assertEqual(record.degrade_reason, RuntimeDegradeReason.QDRANT_UNAVAILABLE.value)
+            self.assertEqual(record.degrade_reasons, [RuntimeDegradeReason.QDRANT_UNAVAILABLE.value])
         finally:
             temp_dir.cleanup()
 

@@ -1,7 +1,52 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from threading import Lock
+
+
+class RuntimeDegradeReason(str, Enum):
+    LLM_UNAVAILABLE = "llm_unavailable"
+    TURN_LLM_BUDGET_EXHAUSTED = "turn_llm_budget_exhausted"
+    TURN_SUBAGENT_BUDGET_EXHAUSTED = "turn_subagent_budget_exhausted"
+    TURN_CHILD_THREAD_BUDGET_EXHAUSTED = "turn_child_thread_budget_exhausted"
+    LLM_REQUEST_TIMEOUT = "llm_request_timeout"
+    LLM_EMPTY_RESPONSE = "llm_empty_response"
+    MEMORY_SERVICE_UNAVAILABLE = "memory_service_unavailable"
+    QDRANT_UNAVAILABLE = "qdrant_unavailable"
+    RUNTIME_FALLBACK = "runtime_fallback"
+
+
+def normalize_degrade_reason(reason: object) -> str | None:
+    if isinstance(reason, RuntimeDegradeReason):
+        return reason.value
+    token = str(reason or "").strip()
+    return token or None
+
+
+def split_degrade_reasons(*reasons: object) -> list[str]:
+    parts: list[str] = []
+    for reason in reasons:
+        normalized = normalize_degrade_reason(reason)
+        if not normalized:
+            continue
+        for token in normalized.split(";"):
+            value = token.strip()
+            if value and value not in parts:
+                parts.append(value)
+    return parts
+
+
+def combine_degrade_reasons(*reasons: object) -> str | None:
+    parts = split_degrade_reasons(*reasons)
+    return ";".join(parts) or None
+
+
+def derive_llm_error_reason(error: Exception) -> str:
+    error_text = str(error)
+    if RuntimeDegradeReason.LLM_REQUEST_TIMEOUT.value in error_text:
+        return RuntimeDegradeReason.LLM_REQUEST_TIMEOUT.value
+    return f"llm_error:{error.__class__.__name__}"
 
 
 @dataclass
@@ -70,4 +115,12 @@ class RuntimeExecutionPolicy:
             self._child_threads_by_turn.pop(turn_id, None)
 
 
-__all__ = ["RuntimeDegradation", "RuntimeExecutionPolicy"]
+__all__ = [
+    "RuntimeDegradation",
+    "RuntimeDegradeReason",
+    "RuntimeExecutionPolicy",
+    "combine_degrade_reasons",
+    "derive_llm_error_reason",
+    "normalize_degrade_reason",
+    "split_degrade_reasons",
+]

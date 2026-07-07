@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from research_system.runtime.core.execution_policy import derive_llm_error_reason
 from research_system.runtime.planning.models import EntryPlanDecision, EntryPlanPayload
 from research_system.runtime.providers.provider_registry import LLMProviderError
 
@@ -106,7 +107,7 @@ class PlannerEntryDecisionSupport:
                 )
             except LLMProviderError as exc:
                 if runtime_context is not None and runtime_support is not None:
-                    error_reason = "llm_request_timeout" if "llm_request_timeout" in str(exc) else f"llm_error:{exc.__class__.__name__}"
+                    error_reason = derive_llm_error_reason(exc)
                     runtime_support.record_degradation(
                         runtime_context,
                         request_id=request_id,

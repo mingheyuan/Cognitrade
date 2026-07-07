@@ -7,6 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
+from research_system.runtime.core.execution_policy import RuntimeDegradeReason
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.schemas.distillation import (
@@ -155,7 +156,9 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                 result = self._run_fallback(records=trimmed_records)
                 if force_fallback:
                     result["degraded"] = True
-                    result["degrade_reason"] = runtime_degraded_reason or "turn_llm_budget_exhausted"
+                    result["degrade_reason"] = (
+                        runtime_degraded_reason or RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value
+                    )
             result["summary"]["processing_notes"].extend(trim_notes)
             return result
 
@@ -237,7 +240,13 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             degrade_reason = str(chunk_result.get("degrade_reason") or "").strip()
             degrade_tokens = {token.strip() for token in degrade_reason.split(";") if token.strip()}
             used_fallback = bool(chunk_result.get("degraded")) and bool(
-                degrade_tokens & {"turn_llm_budget_exhausted", "fallback_distillation", "llm_request_timeout", "llm_unavailable"}
+                degrade_tokens
+                & {
+                    RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value,
+                    "fallback_distillation",
+                    RuntimeDegradeReason.LLM_REQUEST_TIMEOUT.value,
+                    RuntimeDegradeReason.LLM_UNAVAILABLE.value,
+                }
             )
             chunk_result["summary"]["processing_notes"].append(
                 f"{chunk_label}:{'fallback' if used_fallback else 'llm'}"
@@ -245,7 +254,7 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             if child_thread is not None:
                 chunk_result["summary"]["processing_notes"].append(f"{chunk_label}:child_thread={child_thread.thread_id}")
             if used_fallback:
-                if "llm_request_timeout" in degrade_tokens:
+                if RuntimeDegradeReason.LLM_REQUEST_TIMEOUT.value in degrade_tokens:
                     chunk_result["summary"]["processing_notes"].append(f"{chunk_label}:llm_timeout")
                     llm_timeout_seen = True
                 fallback_chunks += 1

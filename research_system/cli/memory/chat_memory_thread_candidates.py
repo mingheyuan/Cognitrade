@@ -7,6 +7,10 @@ from research_system.cli.memory.chat_memory_match_support import (
     trim_context_text,
 )
 from research_system.cli.memory.chat_thread_store import ChatThreadStore
+from research_system.services.memory.core.retrieval_priority import (
+    CURRENT_THREAD_MEMORY,
+    memory_retrieval_priority_rank,
+)
 
 _RELEVANT_SUMMARY_SCAN_LIMIT = 8
 _RELEVANT_ARCHIVE_SCAN_LIMIT = 40
@@ -49,6 +53,8 @@ def build_thread_profile_candidates(
                 "open_question": trim_context_text(str(thread_profile.get("open_question") or "").strip()) or None,
                 "recommended_next_step": trim_context_text(str(thread_profile.get("recommended_next_step") or "").strip()) or None,
                 "thread_status": thread_profile.get("thread_status"),
+                "memory_priority": CURRENT_THREAD_MEMORY,
+                "memory_priority_rank": memory_retrieval_priority_rank(CURRENT_THREAD_MEMORY),
                 "matched_terms": matched_terms,
                 "match_score": round(score, 3),
             },
@@ -81,6 +87,8 @@ def build_summary_candidates(
                     "summary": summary_text,
                     "last_turn_at": str(payload.get("last_turn_at") or "").strip() or None,
                     "source_turn_count": payload.get("source_turn_count"),
+                    "memory_priority": CURRENT_THREAD_MEMORY,
+                    "memory_priority_rank": memory_retrieval_priority_rank(CURRENT_THREAD_MEMORY),
                     "matched_terms": matched_terms,
                     "match_score": round(score, 3),
                 },
@@ -117,6 +125,8 @@ def build_archive_candidates(
                     "intent": str(turn.get("intent") or "").strip() or None,
                     "run_id": str(turn.get("run_id") or "").strip() or None,
                     "recorded_at": str(turn.get("recorded_at") or "").strip() or None,
+                    "memory_priority": CURRENT_THREAD_MEMORY,
+                    "memory_priority_rank": memory_retrieval_priority_rank(CURRENT_THREAD_MEMORY),
                     "matched_terms": matched_terms,
                     "match_score": round(score, 3),
                 },

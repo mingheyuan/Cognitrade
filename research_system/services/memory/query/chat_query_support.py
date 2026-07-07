@@ -44,6 +44,7 @@ class MemoryServiceChatQuerySupport:
         thread_id: str | None = None,
         exclude_thread_id: str | None = None,
         intent: str | None = None,
+        exclude_intent: str | None = None,
     ) -> list[dict]:
         filters: dict[str, object] = {"memory_scope": "chat_research"}
         if thread_id:
@@ -53,7 +54,7 @@ class MemoryServiceChatQuerySupport:
         rows = self.base_query_support.search_memory(
             query=query,
             memory_types=[CHAT_RESEARCH_MEMORY_TYPE],
-            limit=limit * (3 if exclude_thread_id else 1),
+            limit=limit * (4 if (exclude_thread_id or exclude_intent) else 1),
             metadata_filters=filters,
         )
         if exclude_thread_id:
@@ -62,6 +63,13 @@ class MemoryServiceChatQuerySupport:
                 row
                 for row in rows
                 if str(((row.get("content") or {}) if isinstance(row.get("content"), dict) else {}).get("thread_id") or (row.get("metadata") or {}).get("thread_id") or "").strip() != excluded
+            ]
+        if exclude_intent:
+            excluded_intent = str(exclude_intent or "").strip()
+            rows = [
+                row
+                for row in rows
+                if str(((row.get("content") or {}) if isinstance(row.get("content"), dict) else {}).get("intent") or (row.get("metadata") or {}).get("intent") or "").strip() != excluded_intent
             ]
         rows = latest_rows_by_entity_scope(rows)
         return rows[:limit]

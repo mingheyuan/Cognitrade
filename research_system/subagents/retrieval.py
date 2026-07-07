@@ -4,6 +4,7 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from research_system.runtime.core.execution_policy import RuntimeDegradeReason
 from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.subagents.base import SubagentRuntimePolicy
 
@@ -443,7 +444,9 @@ class FallbackRetrievalDecisionSubagent:
     ) -> dict:
         evidences = _normalize_evidence_rows(evidences)
         fallback_evidences = evidences[:top_k]
-        base_reason = runtime_degraded_reason or (f"llm_error:{error_name}" if error_name else "llm_unavailable")
+        base_reason = runtime_degraded_reason or (
+            f"llm_error:{error_name}" if error_name else RuntimeDegradeReason.LLM_UNAVAILABLE.value
+        )
         return {
             "intent": intent,
             "query": query,

@@ -5,8 +5,12 @@ from importlib import import_module
 __all__ = [
     "CHAT_RESEARCH_MEMORY_TYPE",
     "CHAT_RESEARCH_SNAPSHOT_VERSION",
+    "CURRENT_THREAD_MEMORY",
+    "GLOBAL_MEMORY",
     "MemoryServiceCore",
     "MEMORY_RECORD_SCHEMA_VERSION",
+    "MEMORY_RETRIEVAL_PRIORITY",
+    "METHODOLOGY_MEMORY",
     "METHODOLOGY_MEMORY_TYPES",
     "METHODOLOGY_SNAPSHOT_VERSION",
     "MemoryServiceBaseQuerySupport",
@@ -16,8 +20,11 @@ __all__ = [
     "MemoryService",
     "MemoryServiceWriteSupport",
     "MethodologyMemoryWriter",
+    "QDRANT_BLACKBOARD_MEMORY",
+    "SAME_INTENT_RECENT_MEMORY",
     "build_memory_id",
     "build_memory_recorded_at",
+    "memory_retrieval_priority_rank",
 ]
 
 _EXPORTS = {
@@ -26,10 +33,26 @@ _EXPORTS = {
         "research_system.services.memory.core.protocol",
         "CHAT_RESEARCH_SNAPSHOT_VERSION",
     ),
+    "CURRENT_THREAD_MEMORY": (
+        "research_system.services.memory.core.retrieval_priority",
+        "CURRENT_THREAD_MEMORY",
+    ),
+    "GLOBAL_MEMORY": (
+        "research_system.services.memory.core.retrieval_priority",
+        "GLOBAL_MEMORY",
+    ),
     "MemoryServiceCore": ("research_system.services.memory.core", "MemoryService"),
     "MEMORY_RECORD_SCHEMA_VERSION": (
         "research_system.services.memory.core.protocol",
         "MEMORY_RECORD_SCHEMA_VERSION",
+    ),
+    "MEMORY_RETRIEVAL_PRIORITY": (
+        "research_system.services.memory.core.retrieval_priority",
+        "MEMORY_RETRIEVAL_PRIORITY",
+    ),
+    "METHODOLOGY_MEMORY": (
+        "research_system.services.memory.core.retrieval_priority",
+        "METHODOLOGY_MEMORY",
     ),
     "METHODOLOGY_MEMORY_TYPES": ("research_system.services.memory.core.protocol", "METHODOLOGY_MEMORY_TYPES"),
     "METHODOLOGY_SNAPSHOT_VERSION": (
@@ -61,8 +84,20 @@ _EXPORTS = {
         "research_system.services.memory.write.methodology_writer",
         "MethodologyMemoryWriter",
     ),
+    "QDRANT_BLACKBOARD_MEMORY": (
+        "research_system.services.memory.core.retrieval_priority",
+        "QDRANT_BLACKBOARD_MEMORY",
+    ),
+    "SAME_INTENT_RECENT_MEMORY": (
+        "research_system.services.memory.core.retrieval_priority",
+        "SAME_INTENT_RECENT_MEMORY",
+    ),
     "build_memory_id": ("research_system.services.memory.core.protocol", "build_memory_id"),
     "build_memory_recorded_at": ("research_system.services.memory.core.protocol", "build_memory_recorded_at"),
+    "memory_retrieval_priority_rank": (
+        "research_system.services.memory.core.retrieval_priority",
+        "memory_retrieval_priority_rank",
+    ),
 }
 
 

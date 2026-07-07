@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from research_system.agents.retriever.service import RETRIEVAL_SEARCH_BLACKBOARD_ONLY, RETRIEVAL_SEARCH_QDRANT
+from research_system.runtime.core.execution_policy import RuntimeDegradeReason
 from research_system.runtime.execution.core.support import OrchestratorExecutionSupport
 from research_system.runtime.execution.handlers.dataflow.collector_entries import (
     add_collector_outputs,
@@ -101,7 +102,7 @@ def run_retriever(
         reserve=False,
     )
     search_mode = RETRIEVAL_SEARCH_QDRANT
-    if llm_decision.degrade_reason == "turn_llm_budget_exhausted":
+    if llm_decision.degrade_reason == RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value:
         search_mode = RETRIEVAL_SEARCH_BLACKBOARD_ONLY
     payload = host.retriever.run(
         intent=intent,

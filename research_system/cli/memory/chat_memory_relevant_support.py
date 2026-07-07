@@ -7,6 +7,7 @@ from research_system.cli.memory.chat_memory_candidate_dedupe import dedupe_relev
 from research_system.cli.memory.chat_memory_external_candidates import (
     build_cross_thread_memory_candidates,
     build_methodology_memory_candidates,
+    build_same_intent_memory_candidates,
 )
 from research_system.cli.memory.chat_memory_match_support import (
     extract_query_terms,
@@ -55,6 +56,12 @@ def build_relevant_memory_context(
     store = ChatThreadStore(settings)
     thread_profile = current_thread_summary(settings=settings, state=state)
     memory_service = MemoryService(LocalMemoryAdapter(settings))
+    topic_intent = str(
+        thread_profile.get("topic_intent")
+        or getattr(state, "last_result_intent", None)
+        or getattr(state, "current_intent", None)
+        or ""
+    ).strip() or None
 
     candidates: list[tuple[float, dict[str, Any]]] = []
     candidates.extend(build_thread_profile_candidates(query_terms=query_terms, thread_profile=thread_profile))
@@ -73,16 +80,25 @@ def build_relevant_memory_context(
         )
     )
     candidates.extend(
-        build_cross_thread_memory_candidates(
+        build_same_intent_memory_candidates(
             memory_service=memory_service,
             normalized_query=normalized_query,
             thread_id=thread_id,
+            intent=topic_intent,
         )
     )
     candidates.extend(
         build_methodology_memory_candidates(
             memory_service=memory_service,
             normalized_query=normalized_query,
+        )
+    )
+    candidates.extend(
+        build_cross_thread_memory_candidates(
+            memory_service=memory_service,
+            normalized_query=normalized_query,
+            thread_id=thread_id,
+            intent=topic_intent,
         )
     )
 

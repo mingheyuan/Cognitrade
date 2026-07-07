@@ -6,6 +6,7 @@ from research_system.cli.memory.chat_memory_candidate_dedupe import dedupe_relev
 from research_system.cli.memory.chat_memory_external_candidates import (
     build_cross_thread_memory_candidates,
     build_methodology_memory_candidates,
+    build_same_intent_memory_candidates,
 )
 from research_system.cli.memory.chat_memory_relevant_support import build_relevant_memory_context
 from research_system.cli.memory.chat_memory_thread_candidates import (
@@ -23,6 +24,7 @@ class ChatMemoryRelevantRuntimeTests(unittest.TestCase):
         self.assertIsNotNone(build_archive_candidates)
         self.assertIsNotNone(build_cross_thread_memory_candidates)
         self.assertIsNotNone(build_methodology_memory_candidates)
+        self.assertIsNotNone(build_same_intent_memory_candidates)
         self.assertIsNotNone(dedupe_relevant_candidates)
 
 

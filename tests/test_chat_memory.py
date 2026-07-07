@@ -346,12 +346,72 @@ class ChatMemoryTests(unittest.TestCase):
                 query="who has stronger cashflow resilience?",
             )
 
-            cross_thread = [item for item in relevant if item.get("type") == "relevant_chat_memory"]
+            cross_thread = [item for item in relevant if item.get("type") == "relevant_same_intent_memory"]
             self.assertTrue(cross_thread)
             self.assertTrue(all(item.get("thread_id") != "active-thread" for item in cross_thread))
             self.assertEqual(cross_thread[0]["thread_id"], "archived-thread")
             self.assertEqual(cross_thread[0]["memory_scope"], "chat_research")
+            self.assertEqual(cross_thread[0]["memory_priority"], "same_intent_recent_memory")
             self.assertTrue(str(cross_thread[0]["snapshot_id"]).startswith("chat_snapshot:"))
+
+    def test_relevant_memory_context_orders_same_intent_before_methodology_and_global(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            state = ChatSessionState(
+                thread_id="active-thread",
+                current_intent="stock_compare",
+            )
+
+            from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
+            from research_system.services.memory import MemoryService
+
+            service = MemoryService(LocalMemoryAdapter(settings))
+            service.write_chat_research_memory(
+                query="compare maotai cashflow resilience",
+                intent="stock_compare",
+                run_id="01COMPARE",
+                summary="same-intent summary",
+                conclusion="same-intent conclusion",
+                follow_up="same-intent next step",
+                status="completed",
+                thread_id="other-compare-thread",
+            )
+            service.write_methodology_memory(
+                memory_type="dimension_experience",
+                content={
+                    "title": "Cashflow resilience heuristic",
+                    "summary": "Prefer stable free cash flow and lower leverage.",
+                    "benchmark_scope": "defensive_compounder",
+                },
+            )
+            service.write_chat_research_memory(
+                query="analyze maotai cashflow resilience",
+                intent="stock_check",
+                run_id="01CHECK",
+                summary="global summary",
+                conclusion="global conclusion",
+                follow_up="global next step",
+                status="completed",
+                thread_id="other-check-thread",
+            )
+
+            relevant = build_relevant_memory_context(
+                settings=settings,
+                state=state,
+                query="cashflow resilience",
+                limit=5,
+            )
+
+            relevant_types = [item.get("type") for item in relevant[:3]]
+            self.assertEqual(
+                relevant_types,
+                [
+                    "relevant_same_intent_memory",
+                    "relevant_methodology_memory",
+                    "relevant_chat_memory",
+                ],
+            )
 
     def test_fork_session_thread_copies_turns_and_exposes_lineage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

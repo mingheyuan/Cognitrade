@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any
 
 from research_system.runtime.storage.jsonl import append_jsonl, read_jsonl
@@ -31,6 +31,16 @@ _SEARCH_STOPWORDS = {
     "who",
     "with",
 }
+
+_QUERY_FIELD_WEIGHT = 2.6
+_TITLE_FIELD_WEIGHT = 2.2
+_SUMMARY_FIELD_WEIGHT = 3.1
+_CONCLUSION_FIELD_WEIGHT = 3.4
+_FOLLOW_UP_FIELD_WEIGHT = 1.6
+_SCOPE_FIELD_WEIGHT = 1.5
+_INTENT_FIELD_WEIGHT = 1.1
+_FALLBACK_BLOB_WEIGHT = 0.2
+_INTENT_MATCH_BONUS = 2.25
 
 
 class LocalMemoryAdapter:
@@ -149,7 +159,8 @@ class LocalMemoryAdapter:
         if not query_terms:
             return []
         memory_type_set = {str(item).strip() for item in memory_types or [] if str(item).strip()}
-        scored_rows: list[tuple[float, str, dict[str, Any]]] = []
+        deduped_rows: dict[str, tuple[float, str, dict[str, Any]]] = {}
+        passthrough_rows: list[tuple[float, str, dict[str, Any]]] = []
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -160,25 +171,29 @@ class LocalMemoryAdapter:
                 continue
             content = row.get("content") if isinstance(row.get("content"), dict) else {}
             metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-            blob = "\n".join(
-                [
-                    json.dumps(content, ensure_ascii=False, sort_keys=True),
-                    json.dumps(metadata, ensure_ascii=False, sort_keys=True),
-                ]
+            recorded_at = self._resolve_recorded_at(row=row, content=content, metadata=metadata)
+            matched_terms, base_score = self._score_query_fields(
+                query_terms=query_terms,
+                content=content,
+                metadata=metadata,
             )
-            matched_terms, score = self._score_query_terms(query_terms=query_terms, blob=blob)
-            if score <= 0:
+            if base_score <= 0:
                 continue
+            score = base_score * self._time_decay_multiplier(recorded_at)
+            score += self._intent_match_bonus(metadata_filters=metadata_filters, content=content, metadata=metadata)
             enriched = dict(row)
             enriched["matched_terms"] = matched_terms
             enriched["match_score"] = round(score, 3)
-            recorded_at = str(
-                row.get("recorded_at")
-                or (content.get("recorded_at") if isinstance(content, dict) else "")
-                or ""
-            )
-            scored_rows.append((score, recorded_at, enriched))
-        scored_rows.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            dedupe_key = self._dedupe_key(content=content, metadata=metadata)
+            candidate = (score, recorded_at, enriched)
+            if not dedupe_key:
+                passthrough_rows.append(candidate)
+                continue
+            existing = deduped_rows.get(dedupe_key)
+            if existing is None or self._candidate_sort_key(candidate) > self._candidate_sort_key(existing):
+                deduped_rows[dedupe_key] = candidate
+        scored_rows = [*deduped_rows.values(), *passthrough_rows]
+        scored_rows.sort(key=self._candidate_sort_key, reverse=True)
         return [row for _, _, row in scored_rows[:limit]]
 
     def _metadata_matches(self, metadata: object, filters: dict[str, Any]) -> bool:
@@ -188,6 +203,8 @@ class LocalMemoryAdapter:
         if not isinstance(metadata_dict, dict):
             return False
         for key, expected in filters.items():
+            if key in {"preferred_intent"}:
+                continue
             actual = metadata_dict.get(key)
             if isinstance(expected, (list, tuple, set)):
                 normalized = {str(item).strip() for item in expected if str(item).strip()}
@@ -227,6 +244,130 @@ class LocalMemoryAdapter:
             else:
                 score += 1.0
         return matched_terms, score
+
+    def _score_query_fields(
+        self,
+        *,
+        query_terms: set[str],
+        content: dict[str, Any],
+        metadata: dict[str, Any],
+    ) -> tuple[list[str], float]:
+        field_specs = [
+            (str(content.get("query") or ""), _QUERY_FIELD_WEIGHT),
+            (str(content.get("title") or ""), _TITLE_FIELD_WEIGHT),
+            (str(content.get("summary") or ""), _SUMMARY_FIELD_WEIGHT),
+            (str(content.get("conclusion") or ""), _CONCLUSION_FIELD_WEIGHT),
+            (str(content.get("follow_up") or ""), _FOLLOW_UP_FIELD_WEIGHT),
+            (str(content.get("benchmark_scope") or metadata.get("benchmark_scope") or ""), _SCOPE_FIELD_WEIGHT),
+            (str(content.get("intent") or metadata.get("intent") or ""), _INTENT_FIELD_WEIGHT),
+        ]
+        matched_terms: set[str] = set()
+        score = 0.0
+        for blob, weight in field_specs:
+            field_matches, field_score = self._score_query_terms(query_terms=query_terms, blob=blob)
+            if field_score <= 0:
+                continue
+            matched_terms.update(field_matches)
+            score += field_score * weight
+        fallback_blob = "\n".join(
+            [
+                json.dumps(content, ensure_ascii=False, sort_keys=True),
+                json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+            ]
+        )
+        fallback_matches, fallback_score = self._score_query_terms(query_terms=query_terms, blob=fallback_blob)
+        if fallback_score > 0:
+            matched_terms.update(fallback_matches)
+            score += fallback_score * _FALLBACK_BLOB_WEIGHT
+        return sorted(matched_terms), score
+
+    def _intent_match_bonus(
+        self,
+        *,
+        metadata_filters: dict[str, Any],
+        content: dict[str, Any],
+        metadata: dict[str, Any],
+    ) -> float:
+        expected_intent = str(
+            metadata_filters.get("preferred_intent")
+            or metadata_filters.get("intent")
+            or ""
+        ).strip()
+        if not expected_intent:
+            return 0.0
+        actual_intent = str(content.get("intent") or metadata.get("intent") or "").strip()
+        if actual_intent != expected_intent:
+            return 0.0
+        return _INTENT_MATCH_BONUS
+
+    def _resolve_recorded_at(
+        self,
+        *,
+        row: dict[str, Any],
+        content: dict[str, Any],
+        metadata: dict[str, Any],
+    ) -> str:
+        return str(
+            row.get("recorded_at")
+            or content.get("recorded_at")
+            or metadata.get("recorded_at")
+            or ""
+        ).strip()
+
+    def _time_decay_multiplier(self, recorded_at: str) -> float:
+        parsed = self._parse_recorded_at(recorded_at)
+        if parsed is None:
+            return 1.0
+        age_days = max((datetime.now(timezone.utc) - parsed).total_seconds() / 86400.0, 0.0)
+        if age_days <= 1:
+            return 1.35
+        if age_days <= 7:
+            return 1.25
+        if age_days <= 30:
+            return 1.15
+        if age_days <= 90:
+            return 1.05
+        return max(0.8, 1.0 - min(age_days / 730.0, 0.2))
+
+    def _parse_recorded_at(self, value: str) -> datetime | None:
+        token = str(value or "").strip()
+        if not token:
+            return None
+        normalized = token[:-1] + "+00:00" if token.endswith("Z") else token
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def _dedupe_key(self, *, content: dict[str, Any], metadata: dict[str, Any]) -> str | None:
+        entity_scope = str(metadata.get("entity_scope") or content.get("entity_scope") or "").strip()
+        snapshot_id = str(metadata.get("snapshot_id") or content.get("snapshot_id") or "").strip()
+        thread_id = str(content.get("thread_id") or metadata.get("thread_id") or "").strip()
+        run_id = str(content.get("run_id") or metadata.get("run_id") or "").strip()
+        if thread_id and run_id:
+            return f"thread_run:{thread_id}:{run_id}"
+        if snapshot_id:
+            return f"snapshot:{snapshot_id}"
+        if entity_scope:
+            return f"scope:{entity_scope}"
+        if thread_id:
+            return f"thread:{thread_id}"
+        if run_id:
+            return f"run:{run_id}"
+        return None
+
+    def _candidate_sort_key(self, candidate: tuple[float, str, dict[str, Any]]) -> tuple[float, float, str]:
+        score, recorded_at, _ = candidate
+        return score, self._recorded_at_sort_value(recorded_at), recorded_at
+
+    def _recorded_at_sort_value(self, recorded_at: str) -> float:
+        parsed = self._parse_recorded_at(recorded_at)
+        if parsed is None:
+            return 0.0
+        return parsed.timestamp()
 
 
 __all__ = ["LocalMemoryAdapter"]

@@ -28,8 +28,10 @@ class SubagentExecutionRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     subagent_type: str
-    status: Literal["completed", "skipped", "failed"] = "completed"
+    status: Literal["completed", "skipped", "degraded", "failed"] = "completed"
     objective: str | None = None
     inputs: dict[str, Any] = Field(default_factory=dict)
     output_keys: list[str] = Field(default_factory=list)
+    degrade_reason: str | None = None
+    degrade_reasons: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)

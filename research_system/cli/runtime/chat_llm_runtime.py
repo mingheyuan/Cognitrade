@@ -4,6 +4,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from research_system.runtime.core.execution_policy import (
+    RuntimeDegradeReason,
+    derive_llm_error_reason,
+)
 from research_system.runtime.execution.core.runtime_support import OrchestratorExecutionRuntimeSupport
 from research_system.runtime.orchestration.orchestrator_context import RuntimeContext, build_runtime_context
 from research_system.runtime.platform.settings import Settings
@@ -241,7 +245,11 @@ def complete_text_with_runtime(
         run.complete_run(
             status="completed",
             message=f"{operation} completed with fallback",
-            result={"degraded": True, "degrade_reason": "runtime_fallback", "mode": "fallback"},
+            result={
+                "degraded": True,
+                "degrade_reason": RuntimeDegradeReason.RUNTIME_FALLBACK.value,
+                "mode": "fallback",
+            },
         )
         return None
     item = run.start_item(
@@ -278,7 +286,7 @@ def complete_text_with_runtime(
         run.complete_run(status="failed", message=f"{operation} failed", result={"error": str(exc)})
         raise
     if not text:
-        reason = "llm_empty_response"
+        reason = RuntimeDegradeReason.LLM_EMPTY_RESPONSE.value
         run.support.record_degradation(
             run.context,
             request_id=run.request.request_id,
@@ -350,7 +358,11 @@ def stream_text_with_runtime(
         run.complete_run(
             status="completed",
             message=f"{operation} completed with fallback",
-            result={"degraded": True, "degrade_reason": "runtime_fallback", "mode": "fallback"},
+            result={
+                "degraded": True,
+                "degrade_reason": RuntimeDegradeReason.RUNTIME_FALLBACK.value,
+                "mode": "fallback",
+            },
         )
         return None
     item = run.start_item(
@@ -395,7 +407,7 @@ def stream_text_with_runtime(
         raise
     text = "".join(chunks).strip()
     if not text:
-        reason = "llm_empty_response"
+        reason = RuntimeDegradeReason.LLM_EMPTY_RESPONSE.value
         run.support.record_degradation(
             run.context,
             request_id=run.request.request_id,
@@ -561,10 +573,7 @@ def _chat_runs_root(settings: Settings) -> Path:
 
 
 def _derive_llm_error_reason(error: Exception) -> str:
-    error_text = str(error)
-    if "llm_request_timeout" in error_text:
-        return "llm_request_timeout"
-    return f"llm_error:{error.__class__.__name__}"
+    return derive_llm_error_reason(error)
 
 
 def _display_summary(result: dict[str, Any]) -> str | None:

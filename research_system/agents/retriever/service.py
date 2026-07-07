@@ -14,6 +14,11 @@ from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.schemas.subagents import SubagentInvocation
 from research_system.services.memory import MemoryService
+from research_system.services.memory.core.retrieval_priority import (
+    QDRANT_BLACKBOARD_MEMORY,
+    memory_retrieval_priority_rank,
+)
+from research_system.runtime.core.execution_policy import RuntimeDegradeReason
 from research_system.services.methodologies.planning.planning_context import (
     methodology_from_benchmark_scope,
     methodology_preference_order,
@@ -223,7 +228,7 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 )
             )
         elif not effective_qdrant_available and not should_skip_qdrant and use_qdrant_search:
-            qdrant_degraded_reason = self.qdrant_error or "qdrant_unavailable"
+            qdrant_degraded_reason = self.qdrant_error or RuntimeDegradeReason.QDRANT_UNAVAILABLE.value
             trace.append(
                 self._build_trace_record(
                     subagent_type="qdrant_evidence_searcher",
@@ -242,7 +247,10 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                     status="degraded",
                     task_name="retrieve:search:qdrant_evidence_searcher",
                     agent_path="retriever/search/qdrant_evidence_searcher",
-                    notes=[f"degrade_reason={runtime_degraded_reason or 'runtime_fallback'}", "source=runtime_policy"],
+                    notes=[
+                        f"degrade_reason={runtime_degraded_reason or RuntimeDegradeReason.RUNTIME_FALLBACK.value}",
+                        "source=runtime_policy",
+                    ],
                 )
             )
 
@@ -440,11 +448,24 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             if not evidence_id:
                 continue
             existing = merged.get(evidence_id)
-            if existing is None or float(existing.get("score") or 0.0) < float(candidate.get("score") or 0.0):
+            if existing is None or self._should_replace_evidence(existing=existing, candidate=candidate):
                 payload = dict(existing or {})
                 payload.update(candidate)
                 merged[evidence_id] = payload
         return merged
+
+    def _should_replace_evidence(self, *, existing: dict, candidate: dict) -> bool:
+        existing_rank = self._evidence_priority_rank(existing)
+        candidate_rank = self._evidence_priority_rank(candidate)
+        if candidate_rank != existing_rank:
+            return candidate_rank < existing_rank
+        return float(existing.get("score") or 0.0) < float(candidate.get("score") or 0.0)
+
+    def _evidence_priority_rank(self, evidence: dict) -> int:
+        metadata = evidence.get("metadata") if isinstance(evidence.get("metadata"), dict) else {}
+        if isinstance(metadata, dict) and metadata.get("memory_priority_rank") is not None:
+            return int(metadata.get("memory_priority_rank") or 0)
+        return -1
 
     @contextmanager
     def _prefetched_methodology_memory_scope(
@@ -512,7 +533,7 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 "search_query": None,
                 "benchmark_scope": None,
                 "degraded": True,
-                "degrade_reason": "memory_service_unavailable",
+                "degrade_reason": RuntimeDegradeReason.MEMORY_SERVICE_UNAVAILABLE.value,
             }
         search_query, benchmark_scope = self._resolve_methodology_memory_request(
             query=query,
@@ -572,7 +593,7 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 "evidences": [],
                 "metadata_filters": {},
                 "degraded": True,
-                "degrade_reason": self.qdrant_error or "qdrant_unavailable",
+                "degrade_reason": self.qdrant_error or RuntimeDegradeReason.QDRANT_UNAVAILABLE.value,
             }
         metadata_filters: dict[str, str] = {}
         if intent != "distill_kol_logic":
@@ -613,6 +634,8 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                         "dimension_tags": payload.get("dimension_tags", []),
                         "methodology_type": payload.get("methodology_type"),
                         "valuation_band_label": payload.get("valuation_band_label"),
+                        "memory_priority": QDRANT_BLACKBOARD_MEMORY,
+                        "memory_priority_rank": memory_retrieval_priority_rank(QDRANT_BLACKBOARD_MEMORY),
                     },
                     "score": hit["score"],
                 }
@@ -716,6 +739,7 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 "assumption_tags": entry["payload"].get("assumption_tags") or [],
                 "sensitivity_tags": entry["payload"].get("sensitivity_tags") or [],
                 "valuation_band_label": entry["payload"].get("valuation_band_label"),
+                "memory_priority_rank": -1,
             },
             "score": 1.0,
         }
