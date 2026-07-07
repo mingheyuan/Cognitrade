@@ -17,7 +17,7 @@ from research_system.services.payloads.status_payloads import (
     render_doctor_check_line,
     status_header_fields,
 )
-from research_system.services.payloads.run_payloads import (
+from research_system.services.payloads.runs.run_payloads import (
     latest_run_context,
     render_run_row_text,
     replay_payload_fields,

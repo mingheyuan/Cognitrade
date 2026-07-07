@@ -6,7 +6,7 @@ from research_system.adapters import sources as sources_package
 from research_system.adapters import storage as storage_package
 from research_system.adapters import vendors as vendors_package
 from research_system.adapters.sources.xueqiu_statuses import load_statuses
-from research_system.adapters.storage.mem0_adapter import Mem0Adapter
+from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
 from research_system.adapters.storage.qdrant_adapter import QdrantAdapter, QdrantUnavailableError
 from research_system.adapters.storage.redis_route_store import (
     RedisRouteTableBackend,
@@ -24,7 +24,7 @@ class AdaptersPackageRuntimeTests(unittest.TestCase):
         self.assertIs(sources_package.load_statuses, load_statuses)
 
     def test_storage_package_exports(self) -> None:
-        self.assertIs(storage_package.Mem0Adapter, Mem0Adapter)
+        self.assertIs(storage_package.LocalMemoryAdapter, LocalMemoryAdapter)
         self.assertIs(storage_package.QdrantAdapter, QdrantAdapter)
         self.assertIs(storage_package.QdrantUnavailableError, QdrantUnavailableError)
         self.assertIs(storage_package.RedisRouteTableBackend, RedisRouteTableBackend)

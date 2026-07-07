@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from research_system.runtime.storage.run_store import RunStore
+from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.runtime.platform.settings import Settings
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.services.status_payloads import (
+from research_system.services.payloads.status_payloads import (
     group_doctor_checks,
     render_doctor_check_line,
     status_header_fields,

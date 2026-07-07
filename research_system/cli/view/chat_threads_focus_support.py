@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from research_system.services.payloads.run_payloads import render_labeled_field_line
+from research_system.services.payloads.runs.run_payloads import render_labeled_field_line
 from research_system.cli.view.chat_scene_models import TranscriptRenderBlock
 
 

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_system.runtime.proposal_store import ProposalStore
+from research_system.runtime.proposals.management import ProposalStore
 from research_system.schemas.proposals import ProposalDraft, ProposalReviewEvent
 
 

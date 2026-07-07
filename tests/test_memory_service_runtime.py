@@ -4,16 +4,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_system.adapters.storage.mem0_adapter import Mem0Adapter
-from research_system.runtime.settings import Settings, ensure_workspace_layout
-from research_system.services.memory_service_base_query_support import MemoryServiceBaseQuerySupport
-from research_system.services.memory_service_chat_query_support import MemoryServiceChatQuerySupport
-from research_system.services.memory_service import MemoryService
-from research_system.services.memory_service_methodology_query_support import (
+from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
+from research_system.services.memory import MemoryService
+from research_system.services.memory.query.base_query_support import MemoryServiceBaseQuerySupport
+from research_system.services.memory.query.chat_query_support import MemoryServiceChatQuerySupport
+from research_system.services.memory.query.methodology_query_support import (
     MemoryServiceMethodologyQuerySupport,
 )
-from research_system.services.memory_service_query_support import MemoryServiceQuerySupport
-from research_system.services.memory_service_write_support import MemoryServiceWriteSupport
+from research_system.services.memory.query.query_support import MemoryServiceQuerySupport
+from research_system.services.memory.write.write_support import MemoryServiceWriteSupport
 
 
 class MemoryServiceRuntimeTests(unittest.TestCase):
@@ -23,7 +23,7 @@ class MemoryServiceRuntimeTests(unittest.TestCase):
             settings = Settings.from_env(root)
             ensure_workspace_layout(settings)
 
-            service = MemoryService(Mem0Adapter(settings))
+            service = MemoryService(LocalMemoryAdapter(settings))
 
             self.assertIsInstance(service.write_support, MemoryServiceWriteSupport)
             self.assertIsInstance(service.query_support, MemoryServiceQuerySupport)

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from research_system.adapters.storage.mem0_adapter import Mem0Adapter
+from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.presentation.display import build_display_summary
 from research_system.runtime.storage.jsonl import read_json
-from research_system.runtime.storage.run_store import RunStore
+from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.services.memory import MemoryService
 
 
@@ -15,7 +15,7 @@ def build_recent_research_context(*, settings: Settings, state, limit: int = 1) 
         context = context_from_record(state_memory_record(state))
         return [context] if context is not None else []
 
-    service = MemoryService(Mem0Adapter(settings))
+    service = MemoryService(LocalMemoryAdapter(settings))
     rows = service.read_recent_chat_memory(limit=limit)
     contexts = []
     for row in rows:

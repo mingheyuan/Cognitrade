@@ -60,3 +60,15 @@ class OrchestratorExecutionRuntimeSupport:
 
     def wait_for_external_dependency(self, *args, **kwargs) -> None:
         self.control_support.wait_for_external_dependency(*args, **kwargs)
+
+    def reserve_llm_slot(self, *args, **kwargs) -> bool:
+        return self.control_support.reserve_llm_slot(*args, **kwargs)
+
+    def resolve_llm_execution(self, *args, **kwargs):
+        return self.control_support.resolve_llm_execution(*args, **kwargs)
+
+    def record_degradation(self, *args, **kwargs) -> None:
+        self.control_support.record_degradation(*args, **kwargs)
+
+    def record_payload_degradation(self, *args, **kwargs) -> bool:
+        return self.control_support.record_payload_degradation(*args, **kwargs)

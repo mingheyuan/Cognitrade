@@ -13,6 +13,15 @@ class SubagentInvocation(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     objective: str | None = None
     context: dict[str, Any] = Field(default_factory=dict)
+    requires_llm: bool = False
+    fallback_subagent_type: str | None = None
+    fallback_inputs: dict[str, Any] = Field(default_factory=dict)
+    fallback_objective: str | None = None
+    fallback_context: dict[str, Any] = Field(default_factory=dict)
+    error_fallback_subagent_type: str | None = None
+    error_fallback_inputs: dict[str, Any] = Field(default_factory=dict)
+    error_fallback_objective: str | None = None
+    error_fallback_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class SubagentExecutionRecord(BaseModel):

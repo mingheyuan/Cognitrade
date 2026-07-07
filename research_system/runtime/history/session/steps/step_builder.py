@@ -21,6 +21,8 @@ class SessionHistoryStepBuilder:
         summary_payload: dict[str, Any],
         task_plan_payload: dict[str, Any],
         events: list[dict[str, Any]],
+        threads: list[dict[str, Any]] | None = None,
+        thread_tree: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         action_rows = self.action_rows(task_plan_payload)
         supervisor_state = self.supervisor_state(events)
@@ -42,6 +44,8 @@ class SessionHistoryStepBuilder:
             "subagent_required": task_plan_payload.get("subagent_required"),
             "dispatch_trace": dict(task_plan_payload.get("dispatch_trace") or {}),
             "notes": list(task_plan_payload.get("notes") or []),
+            "threads": list(threads or []),
+            "thread_tree": list(thread_tree or []),
             "steps": step_rows,
             "step_counts": {
                 "total": len(step_rows),

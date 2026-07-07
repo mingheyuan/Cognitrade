@@ -2,18 +2,18 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.chat_meta_display_actions import (
+from research_system.cli.meta.chat_meta_display_actions import (
     handle_show_last_action,
     handle_show_thread_action,
 )
-from research_system.cli.chat_meta_state_actions import (
+from research_system.cli.meta.chat_meta_state_actions import (
     handle_clear_action,
     handle_set_events_action,
     handle_set_intent_action,
     handle_set_run_id_action,
     handle_set_thinking_action,
 )
-from research_system.cli.chat_meta_thread_actions import (
+from research_system.cli.meta.chat_meta_thread_actions import (
     handle_archive_thread_action,
     handle_compact_thread_action,
     handle_fork_thread_action,

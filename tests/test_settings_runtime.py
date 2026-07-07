@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 
 
 class SettingsRuntimeTests(unittest.TestCase):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from research_system.services.memory.protocol import (
+from research_system.services.memory.core.protocol import (
     CHAT_RESEARCH_MEMORY_TYPE,
     latest_rows_by_entity_scope,
 )

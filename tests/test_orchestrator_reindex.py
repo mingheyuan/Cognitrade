@@ -4,15 +4,21 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_system.runtime.jsonl import append_jsonl, read_json, write_json
-from research_system.runtime.orchestrator import ResearchOrchestrator
-from research_system.runtime.orchestrator_admin import OrchestratorAdminService
-from research_system.runtime.orchestrator_assembly_support import (
+from research_system.runtime.orchestration.orchestrator_admin import OrchestratorAdminService
+from research_system.runtime.orchestration.orchestrator_assembly_support import (
     OrchestratorAssemblySupport,
 )
-from research_system.runtime.run_store import RunStore
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.runtime.orchestrator import ResearchOrchestrator
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
+from research_system.runtime.storage.jsonl import append_jsonl, read_json, write_json
+from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.schemas.runtime import BlackboardEntry
+
+
+def _blackboard_entry(**kwargs) -> BlackboardEntry:
+    data = dict(kwargs)
+    data.setdefault("thread_id", str(data.get("run_id") or ""))
+    return BlackboardEntry(**data)
 
 
 class FakeQdrant:
@@ -34,7 +40,7 @@ class OrchestratorReindexTests(unittest.TestCase):
             self._write_run(
                 runs_root / "run-a",
                 entries=[
-                    BlackboardEntry(
+                    _blackboard_entry(
                         run_id="run-a",
                         request_id="req-a",
                         kind="source_record",
@@ -42,12 +48,12 @@ class OrchestratorReindexTests(unittest.TestCase):
                         phase="collect",
                         payload={
                             "title": "sector_research input query",
-                            "content": "最近创新药板块怎么样",
+                            "content": "innovation drug sector",
                             "source_type": "user_query",
                         },
                         source_refs=[{"type": "request", "request_id": "req-a", "run_id": "run-a"}],
                     ),
-                    BlackboardEntry(
+                    _blackboard_entry(
                         run_id="run-a",
                         request_id="req-a",
                         kind="verified_snapshot",
@@ -55,13 +61,13 @@ class OrchestratorReindexTests(unittest.TestCase):
                         phase="collect",
                         payload={
                             "snapshot_type": "sector",
-                            "sector": "创新药",
+                            "sector": "innovation_drug",
                             "snapshot_date": "2026-06-28",
                             "facts": {},
                         },
                         source_refs=[{"type": "skill", "skill": "sector_snapshot_skill", "run_id": "run-a"}],
                     ),
-                    BlackboardEntry(
+                    _blackboard_entry(
                         run_id="run-a",
                         request_id="req-a",
                         kind="logic_block",
@@ -77,7 +83,7 @@ class OrchestratorReindexTests(unittest.TestCase):
                             "confidence": 0.7,
                         },
                     ),
-                    BlackboardEntry(
+                    _blackboard_entry(
                         run_id="run-a",
                         request_id="req-a",
                         kind="distilled_dimension",
@@ -95,7 +101,7 @@ class OrchestratorReindexTests(unittest.TestCase):
                             "normalization_notes": [],
                         },
                     ),
-                    BlackboardEntry(
+                    _blackboard_entry(
                         run_id="run-a",
                         request_id="req-a",
                         kind="review_finding",
@@ -116,7 +122,7 @@ class OrchestratorReindexTests(unittest.TestCase):
             self._write_run(
                 runs_root / "run-b",
                 entries=[
-                    BlackboardEntry(
+                    _blackboard_entry(
                         run_id="run-b",
                         request_id="req-b",
                         kind="verified_snapshot",

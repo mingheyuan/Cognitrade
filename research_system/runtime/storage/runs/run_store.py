@@ -15,6 +15,9 @@ class RunPaths:
         self.request = root / "request.json"
         self.task_plan = root / "task_plan.json"
         self.run_state = root / "run_state.json"
+        self.thread_state = root / "thread_state.json"
+        self.turn_state = root / "turn_state.json"
+        self.items = root / "items.jsonl"
         self.run_control = root / "run_control.json"
         self.checkpoint = root / "checkpoint.json"
         self.events = root / "events.jsonl"
@@ -69,6 +72,7 @@ class RunStore:
             )
             if display_summary:
                 payload["display_summary"] = display_summary
+            payload["child_thread_count"] = self._child_thread_count(run_dir)
             rows.append(payload)
         return rows
 
@@ -91,6 +95,12 @@ class RunStore:
         if not root.exists():
             raise FileNotFoundError(f"run not found: {run_id}")
         return RunPaths(root)
+
+    def _child_thread_count(self, run_dir: Path) -> int:
+        threads_root = run_dir / "threads"
+        if not threads_root.exists():
+            return 0
+        return len(list(threads_root.glob("*.thread.json")))
 
 
 __all__ = ["RunPaths", "RunStore"]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.chat_interactions import (
+from research_system.cli.interactions import (
     emit_input_update,
     emit_meta_update,
     emit_warning_update,

@@ -6,11 +6,13 @@ from research_system.services import memory as memory_package
 from research_system.services.memory import core as memory_core_package
 from research_system.services.memory import query as memory_query_package
 from research_system.services.memory import write as memory_write_package
-from research_system.services.memory.base_query_support import MemoryServiceBaseQuerySupport
-from research_system.services.memory.chat_query_support import MemoryServiceChatQuerySupport
-from research_system.services.memory.methodology_writer import MethodologyMemoryWriter
-from research_system.services.memory.methodology_query_support import MemoryServiceMethodologyQuerySupport
-from research_system.services.memory.protocol import (
+from research_system.services.memory.core import protocol as memory_protocol_package
+from research_system.services.memory.core import service as memory_service_package
+from research_system.services.memory.query.base_query_support import MemoryServiceBaseQuerySupport
+from research_system.services.memory.query.chat_query_support import MemoryServiceChatQuerySupport
+from research_system.services.memory.write.methodology_writer import MethodologyMemoryWriter
+from research_system.services.memory.query.methodology_query_support import MemoryServiceMethodologyQuerySupport
+from research_system.services.memory.core.protocol import (
     CHAT_RESEARCH_MEMORY_TYPE,
     CHAT_RESEARCH_SNAPSHOT_VERSION,
     MEMORY_RECORD_SCHEMA_VERSION,
@@ -19,9 +21,9 @@ from research_system.services.memory.protocol import (
     build_memory_id,
     build_memory_recorded_at,
 )
-from research_system.services.memory.query_support import MemoryServiceQuerySupport
-from research_system.services.memory.service import MemoryService
-from research_system.services.memory.write_support import MemoryServiceWriteSupport
+from research_system.services.memory.query.query_support import MemoryServiceQuerySupport
+from research_system.services.memory.core.service import MemoryService
+from research_system.services.memory.write.write_support import MemoryServiceWriteSupport
 
 
 class MemoryPackageRuntimeTests(unittest.TestCase):
@@ -54,6 +56,8 @@ class MemoryPackageRuntimeTests(unittest.TestCase):
         self.assertIs(memory_core_package.METHODOLOGY_SNAPSHOT_VERSION, METHODOLOGY_SNAPSHOT_VERSION)
         self.assertIs(memory_core_package.build_memory_id, build_memory_id)
         self.assertIs(memory_core_package.build_memory_recorded_at, build_memory_recorded_at)
+        self.assertIs(memory_service_package.MemoryService, MemoryService)
+        self.assertIs(memory_protocol_package.CHAT_RESEARCH_MEMORY_TYPE, CHAT_RESEARCH_MEMORY_TYPE)
 
     def test_memory_query_package_exports(self) -> None:
         self.assertIs(memory_query_package.MemoryServiceBaseQuerySupport, MemoryServiceBaseQuerySupport)

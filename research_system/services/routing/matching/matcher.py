@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from research_system.services.routing.matching.route_matcher_result_support import RouteMatchResult, RouteMatcherResultSupport
-from research_system.services.routing.matching.route_matcher_semantic_support import RouteMatcherSemanticSupport
-from research_system.services.routing.matching.route_matcher_text_support import RouteMatcherTextSupport
-from research_system.services.routing.route_table import IntentRouteRule, IntentRouteTableStore
+from research_system.services.routing.matching.route_matcher_result_support import (
+    RouteMatchResult,
+    RouteMatcherResultSupport,
+)
+from research_system.services.routing.matching.route_matcher_semantic_support import (
+    RouteMatcherSemanticSupport,
+)
+from research_system.services.routing.matching.route_matcher_text_support import (
+    RouteMatcherTextSupport,
+)
+from research_system.services.routing.tables import IntentRouteRule, IntentRouteTableStore
 
 
 class RouteMatcher:

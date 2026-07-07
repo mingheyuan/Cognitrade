@@ -5,7 +5,8 @@ import unittest
 from pathlib import Path
 
 from research_system.agents.distiller.service import DistillerService
-from research_system.runtime.provider_registry import LLMProviderError
+from research_system.runtime.storage.jsonl import read_jsonl
+from research_system.runtime.providers.provider_registry import LLMProviderError
 
 
 class DistillerProviderStub:
@@ -249,25 +250,22 @@ class DistillerServiceTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(provider.calls, 1)
+        self.assertEqual(provider.calls, 2)
         self.assertGreaterEqual(len(result["logic_blocks"]), 2)
         self.assertIn("chunk_count=2", result["summary"]["processing_notes"])
-        self.assertIn("llm_chunk_successes=1", result["summary"]["processing_notes"])
-        self.assertIn("fallback_chunks=1", result["summary"]["processing_notes"])
-        self.assertIn("fallback_distillation", result["summary"]["major_risks"])
+        self.assertIn("llm_chunk_successes=2", result["summary"]["processing_notes"])
+        self.assertIn("fallback_chunks=0", result["summary"]["processing_notes"])
+        self.assertTrue(any(note.startswith("child_threads=") for note in result["summary"]["processing_notes"]))
+        self.assertNotIn("fallback_distillation", result["summary"]["major_risks"])
 
     def test_distiller_invocations_emit_nested_trace_context(self) -> None:
         provider = DistillerChunkProviderStub()
         service = DistillerService(provider)
 
         recorded_contexts: list[dict] = []
-        original_invoke = service.registry.invoke
-
-        def _recording_invoke(invocation):
-            recorded_contexts.append(dict(invocation.context or {}))
-            return original_invoke(invocation)
-
-        service.registry.invoke = _recording_invoke  # type: ignore[assignment]
+        service.registry.add_observer(
+            lambda *, stage, invocation, record, outputs, error: recorded_contexts.append(dict(invocation.context or {}))
+        )
 
         service.run(
             query="distill multi chunk records",
@@ -330,9 +328,15 @@ class DistillerServiceTests(unittest.TestCase):
         self.assertTrue(
             any(
                 task_name.startswith("distill:chunks:chunk_")
-                and task_name.endswith(":fallback_chunk_distiller")
+                and (
+                    task_name.endswith(":fallback_chunk_distiller")
+                    or task_name.endswith(":llm_chunk_distiller")
+                )
                 and agent_path.startswith("distiller/chunks/chunk_")
-                and agent_path.endswith("/fallback_chunk_distiller")
+                and (
+                    agent_path.endswith("/fallback_chunk_distiller")
+                    or agent_path.endswith("/llm_chunk_distiller")
+                )
                 for task_name, agent_path in context_pairs
             )
         )

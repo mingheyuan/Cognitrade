@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from research_system.agents.distiller.service import DISTILL_EXECUTION_AUTO, DISTILL_EXECUTION_FALLBACK
 from research_system.runtime.execution.core.support import OrchestratorExecutionSupport
 from research_system.runtime.execution.handlers.distillation.distillation_context import (
     collect_critic_inputs,
@@ -28,9 +29,32 @@ def run_distiller(
     phase: str,
 ) -> None:
     _ = plan
-    _ = action
     source_records = collect_distiller_source_records(context)
-    payload = host.distiller.run(query=request.user_query, source_records=source_records)
+    llm_decision = support.resolve_llm_execution(
+        context,
+        request_id=request.request_id,
+        agent="distiller",
+        phase=phase,
+        strategy="fallback_chunk_distiller",
+        provider=host.distiller.llm_provider,
+        reserve=False,
+    )
+    execution_mode = DISTILL_EXECUTION_AUTO if llm_decision.can_use_llm else DISTILL_EXECUTION_FALLBACK
+    payload = host.distiller.run(
+        query=request.user_query,
+        source_records=source_records,
+        execution_mode=execution_mode,
+        runtime_degraded_reason=llm_decision.degrade_reason,
+    )
+    support.record_payload_degradation(
+        context,
+        request_id=request.request_id,
+        component="distiller",
+        phase=phase,
+        agent="distiller",
+        payload=payload,
+        intent=intent,
+    )
     support.extend_subagent_trace(
         context,
         agent="distiller",
@@ -42,6 +66,13 @@ def run_distiller(
                     "status": "completed",
                     "objective": "Distill source records into logic blocks and dimensions.",
                     "notes": list(((payload.get("summary") or {}).get("processing_notes") or [])),
+                    "thread_count": len(
+                        [
+                            note
+                            for note in list(((payload.get("summary") or {}).get("processing_notes") or []))
+                            if isinstance(note, str) and note.startswith("child_threads=")
+                        ]
+                    ),
                 }
             ]
         },

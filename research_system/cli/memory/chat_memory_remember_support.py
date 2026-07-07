@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from research_system.adapters.storage.mem0_adapter import Mem0Adapter
+from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
 from research_system.cli.memory.chat_memory_compaction_support import auto_compact_thread_if_needed
 from research_system.cli.memory.chat_thread_queries import ensure_session_thread
 from research_system.cli.memory.chat_thread_store import ChatThreadStore
@@ -56,7 +56,7 @@ def remember_chat_research_result(
         recorded_at=recorded_at,
     )
     auto_compact_thread_if_needed(settings=settings, state=state, store=store, thread_id=thread_id)
-    return MemoryService(Mem0Adapter(settings)).write_chat_research_memory(
+    return MemoryService(LocalMemoryAdapter(settings)).write_chat_research_memory(
         query=query,
         intent=resolved_intent,
         run_id=run_id,

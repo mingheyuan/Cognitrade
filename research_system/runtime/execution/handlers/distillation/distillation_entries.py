@@ -18,6 +18,7 @@ def add_distillation_outputs(
     for logic_block in payload.get("logic_blocks", []):
         entry = BlackboardEntry(
             run_id=context.run_id,
+            thread_id=context.thread.thread_id,
             request_id=request.request_id,
             kind="logic_block",
             agent="distiller",
@@ -37,6 +38,7 @@ def add_distillation_outputs(
     for dimension in payload.get("distilled_dimensions", []):
         entry = BlackboardEntry(
             run_id=context.run_id,
+            thread_id=context.thread.thread_id,
             request_id=request.request_id,
             kind="distilled_dimension",
             agent="distiller",
@@ -55,6 +57,7 @@ def add_distillation_outputs(
         support.add_entry(context, request, intent, entry)
     summary_entry = BlackboardEntry(
         run_id=context.run_id,
+        thread_id=context.thread.thread_id,
         request_id=request.request_id,
         kind="source_record",
         agent="distiller",
@@ -86,6 +89,7 @@ def add_critic_outputs(
     if scorecard:
         scorecard_entry = BlackboardEntry(
             run_id=context.run_id,
+            thread_id=context.thread.thread_id,
             request_id=request.request_id,
             kind="source_record",
             agent="critic",
@@ -104,6 +108,7 @@ def add_critic_outputs(
     for finding in critic_payload.get("findings", []):
         entry = BlackboardEntry(
             run_id=context.run_id,
+            thread_id=context.thread.thread_id,
             request_id=request.request_id,
             kind="review_finding",
             agent="critic",

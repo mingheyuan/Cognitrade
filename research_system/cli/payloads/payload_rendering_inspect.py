@@ -5,7 +5,7 @@ from research_system.cli.state.chat_updates import (
     meta_update,
     state_patch_update,
 )
-from research_system.services.payloads.run_payloads import (
+from research_system.services.payloads.runs.run_payloads import (
     events_payload_fields,
     render_event_row_text,
     render_labeled_field_line,

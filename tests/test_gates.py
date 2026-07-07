@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.runtime.gates import GateEvaluator
+from research_system.runtime.core import GateEvaluator
 from research_system.schemas.runtime import BlackboardEntry
 
 
@@ -12,6 +12,7 @@ class GateEvaluatorTests(unittest.TestCase):
         entries = [
             BlackboardEntry(
                 run_id="01GATEPASS",
+                thread_id="01GATEPASS",
                 request_id="req-pass",
                 kind="source_record",
                 agent="reviewer",
@@ -30,6 +31,7 @@ class GateEvaluatorTests(unittest.TestCase):
             ),
             BlackboardEntry(
                 run_id="01GATEPASS",
+                thread_id="01GATEPASS",
                 request_id="req-pass",
                 kind="review_finding",
                 agent="reviewer",
@@ -43,6 +45,7 @@ class GateEvaluatorTests(unittest.TestCase):
             ),
             BlackboardEntry(
                 run_id="01GATEPASS",
+                thread_id="01GATEPASS",
                 request_id="req-pass",
                 kind="report_fragment",
                 agent="reporter",
@@ -71,6 +74,7 @@ class GateEvaluatorTests(unittest.TestCase):
         entries = [
             BlackboardEntry(
                 run_id="01GATEREVIEW",
+                thread_id="01GATEREVIEW",
                 request_id="req-review",
                 kind="source_record",
                 agent="reviewer",
@@ -89,6 +93,7 @@ class GateEvaluatorTests(unittest.TestCase):
             ),
             BlackboardEntry(
                 run_id="01GATEREVIEW",
+                thread_id="01GATEREVIEW",
                 request_id="req-review",
                 kind="report_fragment",
                 agent="reporter",
@@ -118,6 +123,7 @@ class GateEvaluatorTests(unittest.TestCase):
         entries = [
             BlackboardEntry(
                 run_id="01GATENORMAL",
+                thread_id="01GATENORMAL",
                 request_id="req-normal",
                 kind="source_record",
                 agent="collector",
@@ -131,6 +137,7 @@ class GateEvaluatorTests(unittest.TestCase):
             ),
             BlackboardEntry(
                 run_id="01GATENORMAL",
+                thread_id="01GATENORMAL",
                 request_id="req-normal",
                 kind="report_fragment",
                 agent="reporter",

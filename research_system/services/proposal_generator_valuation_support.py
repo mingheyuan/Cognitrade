@@ -1,3 +1,0 @@
-from research_system.services.proposals.proposal_generator_valuation_support import ProposalGeneratorValuationSupport
-
-__all__ = ["ProposalGeneratorValuationSupport"]

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.runtime.run_trace_row_builder import RunTraceRowBuilder
-from research_system.runtime.session_history_debug_support import SessionHistoryDebugSupport
-from research_system.runtime.session_history_subagent_payload_builder import SessionHistorySubagentPayloadBuilder
-from research_system.runtime.session_history_trace_rebuilder import SessionHistoryTraceRebuilder
-from research_system.runtime.session_history_trace_sections import SessionHistoryTraceSections
+from research_system.runtime.history.session.trace.run_trace_row_builder import RunTraceRowBuilder
+from research_system.runtime.history.session.trace.debug_support import SessionHistoryDebugSupport
+from research_system.runtime.history.session.trace.subagent_payload_builder import SessionHistorySubagentPayloadBuilder
+from research_system.runtime.history.session.trace.trace_rebuilder import SessionHistoryTraceRebuilder
+from research_system.runtime.history.session.trace.trace_sections import SessionHistoryTraceSections
 
 
 class SessionHistoryTraceRuntimeTests(unittest.TestCase):

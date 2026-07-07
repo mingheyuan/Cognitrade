@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_system.cli.chat_memory import (
+from research_system.cli.memory.chat_memory import (
     archive_session_thread,
     build_chat_conversation_context,
     build_relevant_memory_context,
@@ -18,10 +18,10 @@ from research_system.cli.chat_memory import (
     thread_preview_payload,
     unarchive_session_thread,
 )
-from research_system.cli.chat_thread_store import ChatThreadStore
-from research_system.cli.chat_types import ChatSessionState
-from research_system.cli.chat_state import persist_thread_checkpoint
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.cli.memory.chat_thread_store import ChatThreadStore
+from research_system.cli.state.chat_types import ChatSessionState
+from research_system.cli.state import persist_thread_checkpoint
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 
 
 class ChatMemoryTests(unittest.TestCase):
@@ -315,10 +315,10 @@ class ChatMemoryTests(unittest.TestCase):
                 last_run_id="01ACTIVE",
             )
 
-            from research_system.services.memory_service import MemoryService
-            from research_system.adapters.storage.mem0_adapter import Mem0Adapter
+            from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
+            from research_system.services.memory import MemoryService
 
-            service = MemoryService(Mem0Adapter(settings))
+            service = MemoryService(LocalMemoryAdapter(settings))
             service.write_chat_research_memory(
                 query="compare guizhou maotai cashflow resilience",
                 intent="stock_compare",

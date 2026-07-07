@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from pathlib import Path
 
+from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.schemas.review import CriticReviewFinding, CriticReviewSummary
 from research_system.schemas.subagents import SubagentInvocation
 from research_system.subagents.critic_review import (
@@ -13,10 +15,11 @@ from research_system.subagents.critic_review import (
 from research_system.subagents.registry import SubagentRegistry
 
 
-class CriticService:
+class CriticService(RuntimeBoundSubagentInvoker):
     agent_name = "critic"
 
-    def __init__(self) -> None:
+    def __init__(self, runs_root: Path | None = None) -> None:
+        self.runs_root = runs_root
         self.registry = SubagentRegistry(
             [
                 SummaryRiskCriticSubagent(),
@@ -33,54 +36,61 @@ class CriticService:
         logic_blocks: list[dict],
         distilled_dimensions: list[dict],
     ) -> dict:
-        findings: list[dict] = []
-        notes: list[str] = []
+        with self.local_run_scope(
+            intent="critic_review",
+            query=str((distillation_summary or {}).get("content_type") or "critic_review"),
+            phase="review",
+            title="critic",
+            objective="Review distillation quality and produce critic findings.",
+        ):
+            findings: list[dict] = []
+            notes: list[str] = []
 
-        summary_notes = list((distillation_summary or {}).get("processing_notes") or [])
-        if summary_notes:
-            notes.extend(summary_notes[:3])
+            summary_notes = list((distillation_summary or {}).get("processing_notes") or [])
+            if summary_notes:
+                notes.extend(summary_notes[:3])
 
-        risk_outputs, _ = self.registry.invoke(
-            SubagentInvocation(
-                subagent_type="summary_risk_critic",
-                objective="Check summary-level distillation risks.",
-                inputs={"distillation_summary": distillation_summary},
+            risk_outputs, _ = self._invoke_subagent(
+                SubagentInvocation(
+                    subagent_type="summary_risk_critic",
+                    objective="Check summary-level distillation risks.",
+                    inputs={"distillation_summary": distillation_summary},
+                )
             )
-        )
-        findings.extend(risk_outputs["findings"])
-        logic_outputs, _ = self.registry.invoke(
-            SubagentInvocation(
-                subagent_type="logic_block_critic",
-                objective="Check logic-block quality and attribution risks.",
-                inputs={"logic_blocks": logic_blocks},
+            findings.extend(risk_outputs["findings"])
+            logic_outputs, _ = self._invoke_subagent(
+                SubagentInvocation(
+                    subagent_type="logic_block_critic",
+                    objective="Check logic-block quality and attribution risks.",
+                    inputs={"logic_blocks": logic_blocks},
+                )
             )
-        )
-        findings.extend(logic_outputs["findings"])
-        dimension_outputs, _ = self.registry.invoke(
-            SubagentInvocation(
-                subagent_type="dimension_critic",
-                objective="Check dimension coverage and confidence.",
-                inputs={"distilled_dimensions": distilled_dimensions, "logic_blocks": logic_blocks},
+            findings.extend(logic_outputs["findings"])
+            dimension_outputs, _ = self._invoke_subagent(
+                SubagentInvocation(
+                    subagent_type="dimension_critic",
+                    objective="Check dimension coverage and confidence.",
+                    inputs={"distilled_dimensions": distilled_dimensions, "logic_blocks": logic_blocks},
+                )
             )
-        )
-        findings.extend(dimension_outputs["findings"])
-        summary_outputs, _ = self.registry.invoke(
-            SubagentInvocation(
-                subagent_type="critic_summary_builder",
-                objective="Build critic summary from findings.",
-                inputs={"findings": findings, "notes": notes},
+            findings.extend(dimension_outputs["findings"])
+            summary_outputs, _ = self._invoke_subagent(
+                SubagentInvocation(
+                    subagent_type="critic_summary_builder",
+                    objective="Build critic summary from findings.",
+                    inputs={"findings": findings, "notes": notes},
+                )
             )
-        )
-        scorecard = self._build_scorecard(
-            logic_blocks=logic_blocks,
-            findings=[CriticReviewFinding.model_validate(item) for item in summary_outputs["findings"]],
-            summary=summary_outputs["summary"],
-        )
-        return {
-            "summary": summary_outputs["summary"],
-            "scorecard": scorecard,
-            "findings": summary_outputs["findings"],
-        }
+            scorecard = self._build_scorecard(
+                logic_blocks=logic_blocks,
+                findings=[CriticReviewFinding.model_validate(item) for item in summary_outputs["findings"]],
+                summary=summary_outputs["summary"],
+            )
+            return {
+                "summary": summary_outputs["summary"],
+                "scorecard": scorecard,
+                "findings": summary_outputs["findings"],
+            }
 
     def _build_scorecard(self, *, logic_blocks: list[dict], findings: list[CriticReviewFinding], summary: dict) -> dict:
         speaker_counts: dict[str, int] = {

@@ -27,6 +27,33 @@ class OrchestratorExecutionLifecycleSupport:
         context.current_action_id = action.action_id
         context.current_node_id = action.node_id
         context.current_action_objective = action.objective
+        action_item = context.agent_control.spawn(
+            thread_id=context.thread.thread_id,
+            turn_id=context.turn.turn_id,
+            request_id=request.request_id,
+            agent=agent,
+            phase=phase,
+            title=f"{phase}:{agent}",
+            objective=action.objective,
+            payload={
+                "action_id": action.action_id,
+                "node_id": action.node_id,
+            },
+            item_type="action",
+        )
+        context.state.active_item_id = action_item.item_id
+        context.turn.current_item_id = action_item.item_id
+        context.current_action_item = action_item
+        context.turn.status = "running"
+        context.thread.status = "running"
+        context.agent_control.send(
+            action_item,
+            payload={
+                "node_id": action.node_id,
+                "phase": phase,
+                "agent": agent,
+            },
+        )
         self.update_state(context, current_phase=phase, active_agent=agent)
         self.emit_event(
             context,
@@ -94,6 +121,7 @@ class OrchestratorExecutionLifecycleSupport:
             pending_nodes=[item.node_id for item in pending_actions_after_current],
             completed_nodes=completed_node_ids + [context.current_node_id],
         )
+        self._complete_action_item(context)
         context.current_action_id = None
         context.current_node_id = None
         context.current_action_objective = None
@@ -177,4 +205,23 @@ class OrchestratorExecutionLifecycleSupport:
             context.state.completed_nodes = completed_nodes
         if last_event_id is not None:
             context.state.last_event_id = last_event_id
+        context.state.thread_id = context.thread.thread_id
+        context.state.active_turn_id = context.turn.turn_id
         write_json(context.paths.run_state, context.state.model_dump(mode="json"))
+        write_json(context.paths.thread_state, context.thread.model_dump(mode="json"))
+        write_json(context.paths.turn_state, context.turn.model_dump(mode="json"))
+
+    def _complete_action_item(self, context: RuntimeContext) -> None:
+        action_item = getattr(context, "current_action_item", None)
+        if action_item is None:
+            return
+        context.agent_control.wait(
+            action_item,
+            status="completed",
+            payload={"completed_item_id": action_item.item_id},
+        )
+        context.state.active_item_id = None
+        context.turn.current_item_id = None
+        context.turn.status = "completed"
+        context.thread.status = "running"
+        context.current_action_item = None

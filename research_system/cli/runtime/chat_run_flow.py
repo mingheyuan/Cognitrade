@@ -8,11 +8,13 @@ from research_system.cli.memory.chat_memory import (
 from research_system.cli.flow.chat_preprocessor import prepare_chat_run_request
 from research_system.cli.state.chat_state import build_research_result_session_patch
 from research_system.cli.state.chat_updates import SessionStatePatch, answer_update, session_patch_update, warning_update
-from research_system.services.routing.task_router import ChatDispatchDecision
+from research_system.services.routing.router.task_router import ChatDispatchDecision
 
 
 def _resolve_chat_dispatch(
     *,
+    settings,
+    state,
     query: str,
     intent: str | None,
     explicit_run_request: bool,
@@ -20,7 +22,7 @@ def _resolve_chat_dispatch(
     dispatch_fn,
 ) -> tuple[ChatDispatchDecision, str | None]:
     if intent is None and not explicit_run_request:
-        dispatch = dispatch_fn(query=query, task_router=task_router)
+        dispatch = dispatch_fn(settings=settings, state=state, query=query, task_router=task_router)
         return dispatch, dispatch.intent
     return ChatDispatchDecision(mode="research", intent=intent, reason="explicit_or_session_intent"), intent
 
@@ -150,6 +152,8 @@ def run_chat_query_flow(
         emit_text(output_writer, answer_update(prepared.memory_reply))
         return True
     dispatch, intent = _resolve_chat_dispatch(
+        settings=settings,
+        state=state,
         query=query,
         intent=intent,
         explicit_run_request=prepared.explicit_run_request,

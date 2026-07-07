@@ -4,13 +4,15 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+import tempfile
 
-from research_system.cli.chat_rendering import apply_tui_update
-from research_system.cli.chat_result import print_chat_result_payload
-from research_system.cli.chat_types import ChatSessionState, TuiSession
-from research_system.cli.chat_updates import default_update_for_text
-from research_system.services.task_router import TaskRouter
-from research_system.runtime.settings import Settings
+from research_system.cli.rendering.chat_rendering import apply_tui_update
+from research_system.cli.flow.chat_result import print_chat_result_payload
+from research_system.cli.state.chat_types import ChatSessionState, TuiSession
+from research_system.cli.state.chat_updates import default_update_for_text
+from research_system.runtime.platform.settings import Settings
+from research_system.runtime.storage.jsonl import read_json
+from research_system.services.routing.router.task_router import TaskRouter
 
 
 class ProviderUnavailableStub:
@@ -36,6 +38,7 @@ class ProviderResultStreamingStub:
 class ChatResultTests(unittest.TestCase):
     def test_chat_result_payload_includes_summary_and_conclusion_when_both_exist(self) -> None:
         buffer = StringIO()
+        settings = Settings.from_env(Path("."))
         with redirect_stdout(buffer):
             print_chat_result_payload(
                 {
@@ -47,6 +50,8 @@ class ChatResultTests(unittest.TestCase):
                         "conclusion": "This should not be the primary chat output.",
                     },
                 },
+                settings=settings,
+                state=ChatSessionState(),
                 llm_provider=ProviderUnavailableStub(),
                 query="review the previous thesis",
                 requested_intent="review_thesis",
@@ -58,8 +63,9 @@ class ChatResultTests(unittest.TestCase):
         self.assertIn("This should not be the primary chat output.", output)
 
     def test_chat_result_payload_merges_summary_and_conclusion_when_both_exist(self) -> None:
+        settings = Settings.from_env(Path("."))
         session = TuiSession(
-            settings=Settings.from_env(Path(".")),
+            settings=settings,
             state=ChatSessionState(),
             llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
             task_router=TaskRouter(),
@@ -75,6 +81,8 @@ class ChatResultTests(unittest.TestCase):
                     "conclusion": "longer detailed conclusion",
                 },
             },
+            settings=settings,
+            state=session.state,
             llm_provider=ProviderUnavailableStub(),
             query="help me check 000001",
             requested_intent="stock_check",
@@ -85,8 +93,9 @@ class ChatResultTests(unittest.TestCase):
         self.assertEqual(answers, ["summary line\n\nlonger detailed conclusion"])
 
     def test_chat_result_payload_updates_last_run_id_via_session_patch(self) -> None:
+        settings = Settings.from_env(Path("."))
         session = TuiSession(
-            settings=Settings.from_env(Path(".")),
+            settings=settings,
             state=ChatSessionState(),
             llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
             task_router=TaskRouter(),
@@ -102,6 +111,8 @@ class ChatResultTests(unittest.TestCase):
                     "conclusion": "This should not be the primary chat output.",
                 },
             },
+            settings=settings,
+            state=session.state,
             llm_provider=ProviderUnavailableStub(),
             query="review the previous thesis",
             requested_intent="review_thesis",
@@ -112,8 +123,9 @@ class ChatResultTests(unittest.TestCase):
         self.assertEqual(session.state.last_run_id, "01CHATPATCH")
 
     def test_chat_result_payload_clarification_uses_explicit_updates(self) -> None:
+        settings = Settings.from_env(Path("."))
         session = TuiSession(
-            settings=Settings.from_env(Path(".")),
+            settings=settings,
             state=ChatSessionState(),
             llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
             task_router=TaskRouter(),
@@ -126,6 +138,8 @@ class ChatResultTests(unittest.TestCase):
                 "intent": "stock_screen",
                 "clarification": {"question": "Short-term, mid-term, or long-term?"},
             },
+            settings=settings,
+            state=session.state,
             llm_provider=ProviderUnavailableStub(),
             query="recent watchlist ideas",
             requested_intent="stock_screen",
@@ -138,8 +152,9 @@ class ChatResultTests(unittest.TestCase):
         self.assertEqual(session.output_lines[-1].text, "intent: stock_screen")
 
     def test_chat_result_payload_clarification_preserves_existing_thinking_messages(self) -> None:
+        settings = Settings.from_env(Path("."))
         session = TuiSession(
-            settings=Settings.from_env(Path(".")),
+            settings=settings,
             state=ChatSessionState(),
             llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
             task_router=TaskRouter(),
@@ -153,6 +168,8 @@ class ChatResultTests(unittest.TestCase):
                 "intent": "stock_screen",
                 "clarification": {"question": "Short-term, mid-term, or long-term?"},
             },
+            settings=settings,
+            state=session.state,
             llm_provider=ProviderUnavailableStub(),
             query="recent watchlist ideas",
             requested_intent="stock_screen",
@@ -163,8 +180,9 @@ class ChatResultTests(unittest.TestCase):
         self.assertEqual(thinking_messages, ["first presenter thought"])
 
     def test_mixed_presenter_and_result_thinking_messages_all_accumulate(self) -> None:
+        settings = Settings.from_env(Path("."))
         session = TuiSession(
-            settings=Settings.from_env(Path(".")),
+            settings=settings,
             state=ChatSessionState(),
             llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
             task_router=TaskRouter(),
@@ -178,6 +196,8 @@ class ChatResultTests(unittest.TestCase):
                 "intent": "stock_screen",
                 "clarification": {"question": "Short-term, mid-term, or long-term?"},
             },
+            settings=settings,
+            state=session.state,
             llm_provider=ProviderUnavailableStub(),
             query="recent watchlist ideas",
             requested_intent="stock_screen",
@@ -196,23 +216,30 @@ class ChatResultTests(unittest.TestCase):
 
     def test_chat_result_payload_streams_rendered_result_when_llm_available(self) -> None:
         buffer = StringIO()
-        with redirect_stdout(buffer):
-            print_chat_result_payload(
-                {
-                    "run_id": "01CHAT",
-                    "status": "completed",
-                    "intent": "sector_research",
-                    "display_summary": "sector is weak but catalysts remain",
-                    "result": {
-                        "conclusion": "original structured conclusion",
-                        "risk": "risk text",
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            with redirect_stdout(buffer):
+                print_chat_result_payload(
+                    {
+                        "run_id": "01CHAT",
+                        "status": "completed",
+                        "intent": "sector_research",
+                        "display_summary": "sector is weak but catalysts remain",
+                        "result": {
+                            "conclusion": "original structured conclusion",
+                            "risk": "risk text",
+                        },
                     },
-                },
-                llm_provider=ProviderResultStreamingStub(),
-                query="How is the innovative drug sector recently?",
-                requested_intent="sector_research",
-                payload_printer=lambda payload, as_json=False, output_writer=None: print(payload),
-            )
+                    settings=settings,
+                    state=ChatSessionState(),
+                    llm_provider=ProviderResultStreamingStub(),
+                    query="How is the innovative drug sector recently?",
+                    requested_intent="sector_research",
+                    payload_printer=lambda payload, as_json=False, output_writer=None: print(payload),
+                )
+            chat_run_root = next((settings.workspace_root / "chat_runs").iterdir())
+            self.assertEqual((read_json(chat_run_root / "thread_state.json") or {}).get("status"), "completed")
+            self.assertEqual((read_json(chat_run_root / "turn_state.json") or {}).get("status"), "completed")
         output = buffer.getvalue()
         self.assertIn("rendering reasoning summary", output)
         self.assertIn("Rendered result.", output)
@@ -221,6 +248,7 @@ class ChatResultTests(unittest.TestCase):
 
     def test_chat_result_payload_prints_clarification_question(self) -> None:
         buffer = StringIO()
+        settings = Settings.from_env(Path("."))
         with redirect_stdout(buffer):
             print_chat_result_payload(
                 {
@@ -229,6 +257,8 @@ class ChatResultTests(unittest.TestCase):
                     "message": "Clarification required",
                     "clarification": {"question": "Do you want a stock or a sector?"},
                 },
+                settings=settings,
+                state=ChatSessionState(),
                 llm_provider=ProviderUnavailableStub(),
                 query="Look into one",
                 requested_intent=None,

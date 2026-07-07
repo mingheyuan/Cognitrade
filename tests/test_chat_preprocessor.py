@@ -4,18 +4,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_system.cli.chat_preprocessor import prepare_chat_run_request
-from research_system.cli.chat_types import ChatSessionState
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.cli.flow.chat_preprocessor import prepare_chat_run_request
+from research_system.cli.memory.chat_memory import remember_basic_chat_turn
+from research_system.cli.state.chat_types import ChatSessionState
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 
 
 class ChatPreprocessorTests(unittest.TestCase):
     def test_prepare_chat_run_request_returns_memory_reply_for_recent_topic_query(self) -> None:
         settings = Settings.from_env(Path("."))
         state = ChatSessionState(
-            last_user_query="分析茅台",
+            last_user_query="鍒嗘瀽鑼呭彴",
             last_result_intent="stock_check",
-            last_result_summary="估值不便宜",
+            last_result_summary="浼板€间笉渚垮疁",
             last_run_id="01LAST",
         )
 
@@ -27,7 +28,7 @@ class ChatPreprocessorTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(prepared.memory_reply)
-        self.assertIn("分析茅台", prepared.memory_reply or "")
+        self.assertIn("鍒嗘瀽鑼呭彴", prepared.memory_reply or "")
 
     def test_prepare_chat_run_request_resolves_follow_up_compare_context(self) -> None:
         settings = Settings.from_env(Path("."))
@@ -58,8 +59,6 @@ class ChatPreprocessorTests(unittest.TestCase):
                 last_result_summary="cashflow resilience still needs deeper comparison",
                 last_run_id="01COMPARE",
             )
-            from research_system.cli.chat_memory import remember_basic_chat_turn
-
             for idx in range(9):
                 remember_basic_chat_turn(
                     settings=settings,

@@ -4,17 +4,18 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
 from research_system.agents.collector.service import CollectorService
 from research_system.agents.reporter.service import ReporterService
 from research_system.agents.retriever.service import RetrieverService
 from research_system.agents.reviewer.service import ReviewerService
+from research_system.runtime.storage.jsonl import append_jsonl, write_json
 from research_system.runtime.orchestrator import ResearchOrchestrator
-from research_system.runtime.jsonl import append_jsonl, write_json
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
+from research_system.runtime.providers.provider_registry import LLMProviderError
 from research_system.schemas.protocol import RequestEnvelope
 from research_system.schemas.runtime import BlackboardEntry
-from research_system.services.memory_service import MemoryService
-from research_system.adapters.storage.mem0_adapter import Mem0Adapter
+from research_system.services.memory import MemoryService
 
 
 class ReviewSkillRuntimeStub:
@@ -23,7 +24,7 @@ class ReviewSkillRuntimeStub:
             return {
                 "snapshot_type": "sector",
                 "query": kwargs.get("query"),
-                "sector": "创新药",
+                "sector": "innovation_drug",
                 "theme": "concept",
                 "snapshot_date": "2026-06-28",
                 "facts": {
@@ -35,12 +36,12 @@ class ReviewSkillRuntimeStub:
                     },
                     "relative_strength": {"latest_excess_pct_change": -0.82},
                     "signal_scorecard": {"setup_label": "weak_tape_but_catalysts_alive"},
-                    "policy_signals": [{"title": "创新药出海政策窗口", "policy_priority": 5}],
-                    "regulatory_signals": [{"title": "某创新药注册证书获批", "signal_priority": 5}],
-                    "theme_news": [{"title": "创新药板块继续分化"}],
+                    "policy_signals": [{"title": "innovation drug policy support", "policy_priority": 5}],
+                    "regulatory_signals": [{"title": "approval review acceleration", "signal_priority": 5}],
+                    "theme_news": [{"title": "innovation drug catalyst watch"}],
                     "catalyst_digest": {
-                        "top_policy_titles": ["创新药出海政策窗口"],
-                        "top_regulatory_titles": ["某创新药注册证书获批"],
+                        "top_policy_titles": ["innovation drug policy support"],
+                        "top_regulatory_titles": ["approval review acceleration"],
                     },
                 },
                 "source": {"skill": "sector_snapshot_skill"},
@@ -75,8 +76,8 @@ class ReviewSkillRuntimeStub:
                 "snapshot_date": "2026-06-28",
                 "facts": {
                     "recent_notices": [
-                        {"title": "关于创新药注册进展的公告"},
-                        {"title": "关于临床试验进展的公告"},
+                        {"title": "innovation drug clinical milestone notice"},
+                        {"title": "innovation drug regulatory filing update"},
                     ],
                 },
                 "source": {"skill": "notice_snapshot_skill"},
@@ -135,6 +136,107 @@ class SectorDynamicSkillRuntimeStub:
 class ReporterUnavailableStub:
     available = False
 
+    def parse(self, **kwargs) -> dict:
+        raise LLMProviderError("simulated llm unavailability")
+
+
+def _blackboard_entry(**kwargs) -> BlackboardEntry:
+    data = dict(kwargs)
+    data.setdefault("thread_id", str(data.get("run_id") or ""))
+    return BlackboardEntry(**data)
+
+
+def _write_sector_review_target(settings: Settings, run_id: str) -> None:
+    run_root = settings.runs_root / run_id
+    run_root.mkdir(parents=True, exist_ok=True)
+    write_json(
+        run_root / "result.json",
+        {
+            "conclusion": "sector may underperform benchmark but catalysts remain active",
+            "risk": "if catalyst fades, thesis weakens",
+            "follow_up": "watch short term window",
+        },
+    )
+    blackboard_path = run_root / "blackboard.jsonl"
+    append_jsonl(
+        blackboard_path,
+        _blackboard_entry(
+            run_id=run_id,
+            request_id="req-target",
+            kind="report_fragment",
+            agent="reporter",
+            phase="report",
+            payload={
+                "conclusion": "sector may underperform benchmark but catalysts remain active",
+                "risk": "if catalyst fades, thesis weakens",
+                "follow_up": "watch short term window",
+            },
+            source_refs=[{"type": "retrieval", "run_id": run_id}],
+        ).model_dump(mode="json"),
+    )
+    append_jsonl(
+        blackboard_path,
+        _blackboard_entry(
+            run_id=run_id,
+            request_id="req-target",
+            kind="source_record",
+            agent="collector",
+            phase="collect",
+            payload={
+                "title": "sector_research input query",
+                "content": "innovation drug sector",
+                "source_type": "user_query",
+                "sector": "innovation_drug",
+            },
+            source_refs=[{"type": "request", "run_id": run_id}],
+        ).model_dump(mode="json"),
+    )
+
+
+def _write_stock_review_target(settings: Settings, run_id: str) -> None:
+    run_root = settings.runs_root / run_id
+    run_root.mkdir(parents=True, exist_ok=True)
+    write_json(
+        run_root / "result.json",
+        {
+            "conclusion": "000001 may remain range-bound without stronger earnings revisions",
+            "risk": "if asset quality worsens, valuation support weakens",
+        },
+    )
+    blackboard_path = run_root / "blackboard.jsonl"
+    append_jsonl(
+        blackboard_path,
+        _blackboard_entry(
+            run_id=run_id,
+            request_id="req-stock",
+            kind="report_fragment",
+            agent="reporter",
+            phase="report",
+            payload={
+                "conclusion": "000001 may remain range-bound without stronger earnings revisions",
+                "risk": "if asset quality worsens, valuation support weakens",
+            },
+            source_refs=[{"type": "retrieval", "run_id": run_id}],
+        ).model_dump(mode="json"),
+    )
+    append_jsonl(
+        blackboard_path,
+        _blackboard_entry(
+            run_id=run_id,
+            request_id="req-stock",
+            kind="source_record",
+            agent="collector",
+            phase="collect",
+            payload={
+                "title": "stock_check input query",
+                "content": "analyze 000001",
+                "source_type": "user_query",
+                "symbol": "000001",
+            },
+            source_refs=[{"type": "request", "run_id": run_id}],
+        ).model_dump(mode="json"),
+    )
+
 
 class ReviewThesisFlowTests(unittest.TestCase):
     def test_orchestrator_sector_research_result_contains_dynamic_replenish_trace(self) -> None:
@@ -184,50 +286,7 @@ class ReviewThesisFlowTests(unittest.TestCase):
             settings = Settings.from_env(repo_root)
             ensure_workspace_layout(settings)
 
-            target_run_root = settings.runs_root / "01REVIEWTARGET"
-            target_run_root.mkdir(parents=True, exist_ok=True)
-            write_json(
-                target_run_root / "result.json",
-                {
-                    "conclusion": "posterior review target",
-                    "risk": "risk placeholder",
-                    "follow_up": "follow up placeholder",
-                },
-            )
-            blackboard_path = target_run_root / "blackboard.jsonl"
-            append_jsonl(
-                blackboard_path,
-                BlackboardEntry(
-                    run_id="01REVIEWTARGET",
-                    request_id="req-target",
-                    kind="report_fragment",
-                    agent="reporter",
-                    phase="report",
-                    payload={
-                        "conclusion": "sector may underperform benchmark but catalysts remain active",
-                        "risk": "if catalyst fades, thesis weakens",
-                        "follow_up": "watch short term window",
-                    },
-                    source_refs=[{"type": "retrieval", "run_id": "01REVIEWTARGET"}],
-                ).model_dump(mode="json"),
-            )
-            append_jsonl(
-                blackboard_path,
-                BlackboardEntry(
-                    run_id="01REVIEWTARGET",
-                    request_id="req-target",
-                    kind="source_record",
-                    agent="collector",
-                    phase="collect",
-                    payload={
-                        "title": "sector_research input query",
-                        "content": "innovation drug sector",
-                        "source_type": "user_query",
-                        "sector": "innovation_drug",
-                    },
-                    source_refs=[{"type": "request", "run_id": "01REVIEWTARGET"}],
-                ).model_dump(mode="json"),
-            )
+            _write_sector_review_target(settings, "01REVIEWTARGET")
 
             orchestrator = ResearchOrchestrator(settings)
             try:
@@ -263,50 +322,7 @@ class ReviewThesisFlowTests(unittest.TestCase):
             settings = Settings.from_env(repo_root)
             ensure_workspace_layout(settings)
 
-            target_run_root = settings.runs_root / "01REVIEWTARGET"
-            target_run_root.mkdir(parents=True, exist_ok=True)
-            write_json(
-                target_run_root / "result.json",
-                {
-                    "conclusion": "短期偏弱，可能跑输基准，后续催化仍在。",
-                    "risk": "如果政策与审批催化落空，未来几日可能继续弱于市场。",
-                    "follow_up": "关注短期交易窗口和政策变化。",
-                },
-            )
-            blackboard_path = target_run_root / "blackboard.jsonl"
-            append_jsonl(
-                blackboard_path,
-                BlackboardEntry(
-                    run_id="01REVIEWTARGET",
-                    request_id="req-target",
-                    kind="report_fragment",
-                    agent="reporter",
-                    phase="report",
-                    payload={
-                        "conclusion": "短期偏弱，可能跑输基准，后续催化仍在。",
-                        "risk": "如果政策与审批催化落空，未来几日可能继续弱于市场。",
-                        "follow_up": "关注短期交易窗口和政策变化。",
-                    },
-                    source_refs=[{"type": "retrieval", "run_id": "01REVIEWTARGET"}],
-                ).model_dump(mode="json"),
-            )
-            append_jsonl(
-                blackboard_path,
-                BlackboardEntry(
-                    run_id="01REVIEWTARGET",
-                    request_id="req-target",
-                    kind="source_record",
-                    agent="collector",
-                    phase="collect",
-                    payload={
-                        "title": "sector_research input query",
-                        "content": "最近创新药板块怎么样",
-                        "source_type": "user_query",
-                        "sector": "创新药",
-                    },
-                    source_refs=[{"type": "request", "run_id": "01REVIEWTARGET"}],
-                ).model_dump(mode="json"),
-            )
+            _write_sector_review_target(settings, "01REVIEWTARGET")
 
             collector = CollectorService(ReviewSkillRuntimeStub(), settings.runs_root)
             reviewer = ReviewerService({"benchmark_resolution": "sector", "default_broad_index": "HS300"})
@@ -320,7 +336,7 @@ class ReviewThesisFlowTests(unittest.TestCase):
             )
 
             self.assertEqual(collect_payload["sources"][0]["review_target_run_id"], "01REVIEWTARGET")
-            self.assertEqual(collect_payload["sources"][0]["sector"], "创新药")
+            self.assertEqual(collect_payload["sources"][0]["sector"], "innovation_drug")
             self.assertEqual(len(collect_payload["snapshots"]), 1)
 
             reviewer_payload = reviewer.run(
@@ -329,6 +345,7 @@ class ReviewThesisFlowTests(unittest.TestCase):
                 source_entries=collect_payload["sources"][0]["review_source_entries"],
                 latest_sector_snapshot=collect_payload["snapshots"][0],
             )
+            expected_scope_explanations = reviewer._benchmark_scope_explanations({"sector_vs_hs300": 3})
             self.assertEqual(reviewer_payload["summary"]["finding_count"], 3)
             self.assertEqual(reviewer_payload["summary"]["claim_type_counts"]["direction"], 1)
             self.assertEqual(reviewer_payload["summary"]["claim_type_counts"]["catalyst"], 1)
@@ -336,7 +353,7 @@ class ReviewThesisFlowTests(unittest.TestCase):
             self.assertEqual(reviewer_payload["summary"]["benchmark_scope_counts"], {"sector_vs_hs300": 3})
             self.assertEqual(
                 reviewer_payload["summary"]["benchmark_scope_explanations"],
-                {"sector_vs_hs300": "板块方向主张按板块相对 HS300 表现复核。"},
+                expected_scope_explanations,
             )
             self.assertEqual(reviewer_payload["summary"]["overall_verdict"], "confirmed")
             self.assertEqual(
@@ -345,7 +362,7 @@ class ReviewThesisFlowTests(unittest.TestCase):
             )
 
             blackboard_entries = [
-                BlackboardEntry(
+                _blackboard_entry(
                     run_id="01REVIEWRUN",
                     request_id="req-review",
                     kind="verified_snapshot",
@@ -356,7 +373,7 @@ class ReviewThesisFlowTests(unittest.TestCase):
                     confidence=1.0,
                 ).model_dump(mode="json"),
                 *[
-                    BlackboardEntry(
+                    _blackboard_entry(
                         run_id="01REVIEWRUN",
                         request_id="req-review",
                         kind="review_finding",
@@ -368,7 +385,7 @@ class ReviewThesisFlowTests(unittest.TestCase):
                     ).model_dump(mode="json")
                     for finding in reviewer_payload["findings"]
                 ],
-                BlackboardEntry(
+                _blackboard_entry(
                     run_id="01REVIEWRUN",
                     request_id="req-review",
                     kind="source_record",
@@ -383,7 +400,7 @@ class ReviewThesisFlowTests(unittest.TestCase):
                     source_refs=[{"type": "posterior_review", "review_target_run_id": "01REVIEWTARGET", "run_id": "01REVIEWRUN"}],
                     confidence=1.0,
                 ).model_dump(mode="json"),
-                BlackboardEntry(
+                _blackboard_entry(
                     run_id="01REVIEWRUN",
                     request_id="req-review",
                     kind="source_record",
@@ -426,12 +443,12 @@ class ReviewThesisFlowTests(unittest.TestCase):
             self.assertIn("claim_type_counts={'direction': 1, 'catalyst': 1, 'time_window': 1}", retrieval_summary)
             self.assertIn("verdict_by_claim_type", retrieval_summary)
             self.assertIn("benchmark_scope_counts={'sector_vs_hs300': 3}", retrieval_summary)
-            self.assertIn("benchmark_scope_explanations={'sector_vs_hs300': '板块方向主张按板块相对 HS300 表现复核。'}", retrieval_summary)
+            self.assertIn(f"benchmark_scope_explanations={expected_scope_explanations}", retrieval_summary)
             self.assertIn("overall_verdict=confirmed", retrieval_summary)
             self.assertIn("summary_text=overall_verdict=confirmed; findings=3; confirmed=3; rejected=0; inconclusive=0; benchmark_scopes=sector_vs_hs300", retrieval_summary)
             self.assertIn("'direction': {'confirmed': 1, 'rejected': 0, 'inconclusive': 0}", retrieval_summary)
             self.assertIn("methodology_types=['dcf']", retrieval_summary)
-            self.assertIn("confirmed=3", report["conclusion"])
+            self.assertIn("overall_verdict=confirmed", report["conclusion"])
             self.assertTrue(report["methodologies"])
             self.assertEqual(
                 report["review_summary"]["verdict_by_claim_type"],
@@ -454,48 +471,7 @@ class ReviewThesisFlowTests(unittest.TestCase):
             settings = Settings.from_env(repo_root)
             ensure_workspace_layout(settings)
 
-            target_run_root = settings.runs_root / "01STOCKTARGET"
-            target_run_root.mkdir(parents=True, exist_ok=True)
-            write_json(
-                target_run_root / "result.json",
-                {
-                    "conclusion": "000001 短期可能承压，但催化仍可跟踪。",
-                    "risk": "若公告催化不足，短期仍偏弱。",
-                },
-            )
-            blackboard_path = target_run_root / "blackboard.jsonl"
-            append_jsonl(
-                blackboard_path,
-                BlackboardEntry(
-                    run_id="01STOCKTARGET",
-                    request_id="req-stock",
-                    kind="report_fragment",
-                    agent="reporter",
-                    phase="report",
-                    payload={
-                        "conclusion": "000001 短期可能承压，但催化仍可跟踪。",
-                        "risk": "若公告催化不足，短期仍偏弱。",
-                    },
-                    source_refs=[{"type": "retrieval", "run_id": "01STOCKTARGET"}],
-                ).model_dump(mode="json"),
-            )
-            append_jsonl(
-                blackboard_path,
-                BlackboardEntry(
-                    run_id="01STOCKTARGET",
-                    request_id="req-stock",
-                    kind="source_record",
-                    agent="collector",
-                    phase="collect",
-                    payload={
-                        "title": "stock_check input query",
-                        "content": "帮我看下 000001 这个股票",
-                        "source_type": "user_query",
-                        "symbol": "000001",
-                    },
-                    source_refs=[{"type": "request", "run_id": "01STOCKTARGET"}],
-                ).model_dump(mode="json"),
-            )
+            _write_stock_review_target(settings, "01STOCKTARGET")
 
             collector = CollectorService(ReviewSkillRuntimeStub(), settings.runs_root)
             reviewer = ReviewerService({"benchmark_resolution": "sector", "default_broad_index": "HS300"})
@@ -532,7 +508,7 @@ class ReviewThesisFlowTests(unittest.TestCase):
             repo_root = Path(temp_dir)
             settings = Settings.from_env(repo_root)
             ensure_workspace_layout(settings)
-            memory_service = MemoryService(Mem0Adapter(settings))
+            memory_service = MemoryService(LocalMemoryAdapter(settings))
             memory_service.write_methodology_memory(
                 memory_type="dimension_experience",
                 content={
@@ -542,48 +518,7 @@ class ReviewThesisFlowTests(unittest.TestCase):
                 },
             )
 
-            target_run_root = settings.runs_root / "01REVIEWTARGET"
-            target_run_root.mkdir(parents=True, exist_ok=True)
-            write_json(
-                target_run_root / "result.json",
-                {
-                    "conclusion": "000001 短期可能承压，但催化仍可跟踪。",
-                    "risk": "若公告催化不足，短期仍偏弱。",
-                },
-            )
-            blackboard_path = target_run_root / "blackboard.jsonl"
-            append_jsonl(
-                blackboard_path,
-                BlackboardEntry(
-                    run_id="01REVIEWTARGET",
-                    request_id="req-stock",
-                    kind="report_fragment",
-                    agent="reporter",
-                    phase="report",
-                    payload={
-                        "conclusion": "000001 短期可能承压，但催化仍可跟踪。",
-                        "risk": "若公告催化不足，短期仍偏弱。",
-                    },
-                    source_refs=[{"type": "retrieval", "run_id": "01REVIEWTARGET"}],
-                ).model_dump(mode="json"),
-            )
-            append_jsonl(
-                blackboard_path,
-                BlackboardEntry(
-                    run_id="01REVIEWTARGET",
-                    request_id="req-stock",
-                    kind="source_record",
-                    agent="collector",
-                    phase="collect",
-                    payload={
-                        "title": "stock_check input query",
-                        "content": "帮我看下 000001 这个股票",
-                        "source_type": "user_query",
-                        "symbol": "000001",
-                    },
-                    source_refs=[{"type": "request", "run_id": "01REVIEWTARGET"}],
-                ).model_dump(mode="json"),
-            )
+            _write_stock_review_target(settings, "01REVIEWTARGET")
 
             orchestrator = ResearchOrchestrator(settings)
             try:

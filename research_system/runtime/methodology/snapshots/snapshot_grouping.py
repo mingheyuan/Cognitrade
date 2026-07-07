@@ -6,7 +6,7 @@ from research_system.runtime.orchestration.orchestrator_context import RuntimeCo
 class OrchestratorMethodologySnapshotGrouping:
     def group_snapshots_by_symbol(self, context: RuntimeContext) -> dict[str, dict[str, dict]]:
         grouped: dict[str, dict[str, dict]] = {}
-        for entry in context.blackboard.list_entries():
+        for entry in context.blackboard.list_entries(thread_id=context.thread.thread_id):
             if entry.kind != "verified_snapshot":
                 continue
             symbol = str(entry.payload.get("symbol") or "").strip()

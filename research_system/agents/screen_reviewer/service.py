@@ -1,19 +1,45 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.agents.screen_reviewer.screen_reviewer_finding_support import ScreenReviewerFindingSupport
 from research_system.agents.screen_reviewer.screen_reviewer_strategy_support import ScreenReviewerStrategySupport
 from research_system.agents.screen_reviewer.screen_reviewer_summary_support import ScreenReviewerSummarySupport
 
 
-class ScreenReviewerService:
+class ScreenReviewerService(RuntimeBoundSubagentInvoker):
     agent_name = "screen_reviewer"
 
-    def __init__(self) -> None:
+    def __init__(self, runs_root: Path | None = None) -> None:
         self.strategy_support = ScreenReviewerStrategySupport()
         self.finding_support = ScreenReviewerFindingSupport()
         self.summary_support = ScreenReviewerSummarySupport()
+        self.runs_root = runs_root
 
     def run(
+        self,
+        *,
+        source_run_id: str,
+        candidates: list[dict],
+        scorecard: dict | None = None,
+        planning_context_hints: dict[str, str] | None = None,
+    ) -> dict:
+        with self.local_run_scope(
+            intent="stock_screen_review",
+            query=str(source_run_id or "screen_review"),
+            phase="review",
+            title="screen_reviewer",
+            objective="Review stock screen candidates and summarize findings.",
+        ):
+            return self._run_impl(
+                source_run_id=source_run_id,
+                candidates=candidates,
+                scorecard=scorecard,
+                planning_context_hints=planning_context_hints,
+            )
+
+    def _run_impl(
         self,
         *,
         source_run_id: str,

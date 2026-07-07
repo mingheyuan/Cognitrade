@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from research_system.adapters.storage.mem0_adapter import Mem0Adapter
+from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
 from research_system.cli.memory.chat_memory_candidate_dedupe import dedupe_relevant_candidates
 from research_system.cli.memory.chat_memory_external_candidates import (
     build_cross_thread_memory_candidates,
@@ -54,7 +54,7 @@ def build_relevant_memory_context(
     thread_id = ensure_session_thread(settings=settings, state=state)
     store = ChatThreadStore(settings)
     thread_profile = current_thread_summary(settings=settings, state=state)
-    memory_service = MemoryService(Mem0Adapter(settings))
+    memory_service = MemoryService(LocalMemoryAdapter(settings))
 
     candidates: list[tuple[float, dict[str, Any]]] = []
     candidates.extend(build_thread_profile_candidates(query_terms=query_terms, thread_profile=thread_profile))

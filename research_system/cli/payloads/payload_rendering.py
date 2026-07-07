@@ -21,7 +21,7 @@ from research_system.cli.payloads.payload_rendering_specialized import (
     print_replay_payload as specialized_print_replay_payload,
     print_status_payload as specialized_print_status_payload,
 )
-from research_system.services.payloads.run_payloads import run_payload_fields
+from research_system.services.payloads.runs.run_payloads import run_payload_fields
 
 
 def emit_run_context_feed(

@@ -28,29 +28,37 @@ class OrchestratorActionRunner:
     ) -> None:
         phase = action.phase
         agent = action.agent
-        self.support.begin_action(context=context, request=request, intent=intent, action=action)
-
-        if self.handlers.dispatch(
-            agent=agent,
+        self._bind_runtime_registry(
             context=context,
             request=request,
-            plan=plan,
-            intent=intent,
-            action=action,
+            agent=agent,
             phase=phase,
-        ):
-            self._complete_action(
+        )
+        self.support.begin_action(context=context, request=request, intent=intent, action=action)
+
+        try:
+            if self.handlers.dispatch(
+                agent=agent,
                 context=context,
                 request=request,
+                plan=plan,
                 intent=intent,
+                action=action,
                 phase=phase,
-                agent=agent,
-                completed_node_ids=completed_node_ids,
-                pending_actions_after_current=pending_actions_after_current,
-            )
-            return
-
-        raise self.host.orchestrator_error_cls(f"unsupported agent: {agent}")
+            ):
+                self._complete_action(
+                    context=context,
+                    request=request,
+                    intent=intent,
+                    phase=phase,
+                    agent=agent,
+                    completed_node_ids=completed_node_ids,
+                    pending_actions_after_current=pending_actions_after_current,
+                )
+                return
+            raise self.host.orchestrator_error_cls(f"unsupported agent: {agent}")
+        finally:
+            self._clear_runtime_registry(agent=agent)
 
     def _complete_action(
         self,
@@ -72,3 +80,30 @@ class OrchestratorActionRunner:
             completed_node_ids=completed_node_ids,
             pending_actions_after_current=pending_actions_after_current,
         )
+
+    def _bind_runtime_registry(
+        self,
+        *,
+        context: RuntimeContext,
+        request: RequestEnvelope,
+        agent: str,
+        phase: str,
+    ) -> None:
+        service = getattr(self.host, agent, None)
+        if service is None or not hasattr(service, "bind_runtime"):
+            return
+        service.bind_runtime(
+            agent_control=context.agent_control,
+            execution_policy=context.execution_policy,
+            thread_id=context.thread.thread_id,
+            turn_id=context.turn.turn_id,
+            request_id=request.request_id,
+            agent=agent,
+            phase=phase,
+        )
+
+    def _clear_runtime_registry(self, *, agent: str) -> None:
+        service = getattr(self.host, agent, None)
+        if service is None or not hasattr(service, "clear_runtime"):
+            return
+        service.clear_runtime()

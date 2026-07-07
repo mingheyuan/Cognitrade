@@ -4,4 +4,7 @@ from research_system.runtime.orchestration.orchestrator_context import RuntimeCo
 
 
 def collect_blackboard_entries_json(context: RuntimeContext) -> list[dict]:
-    return [entry.model_dump(mode="json") for entry in context.blackboard.list_entries()]
+    return [
+        entry.model_dump(mode="json")
+        for entry in context.blackboard.list_entries(thread_id=context.thread.thread_id)
+    ]

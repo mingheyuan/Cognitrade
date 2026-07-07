@@ -20,8 +20,6 @@ class Settings(BaseModel):
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None
     qdrant_collection_name: str = "research_evidence"
-    mem0_api_key: str | None = None
-    mem0_base_url: str | None = None
     router_redis_url: str | None = None
     router_redis_active_key: str = "cognitrade:router:intent_rules:active"
     router_redis_key_prefix: str = "cognitrade:router:intent_rules:"
@@ -36,6 +34,9 @@ class Settings(BaseModel):
     default_timezone: str = "Asia/Shanghai"
     log_level: str = "INFO"
     llm_request_timeout_seconds: int = 25
+    max_llm_calls_per_turn: int = 1
+    max_subagent_calls_per_turn: int = 32
+    max_child_threads_per_turn: int = 8
     artifacts_retention_days: int = 30
     max_artifacts_size_mb: int = 1024
     run_timeout_seconds: int = 120
@@ -87,6 +88,12 @@ class Settings(BaseModel):
             raise ValueError("external_wait_timeout_seconds must be positive")
         if self.llm_request_timeout_seconds <= 0:
             raise ValueError("llm_request_timeout_seconds must be positive")
+        if self.max_llm_calls_per_turn <= 0:
+            raise ValueError("max_llm_calls_per_turn must be positive")
+        if self.max_subagent_calls_per_turn <= 0:
+            raise ValueError("max_subagent_calls_per_turn must be positive")
+        if self.max_child_threads_per_turn <= 0:
+            raise ValueError("max_child_threads_per_turn must be positive")
         if self.router_redis_timeout_seconds <= 0:
             raise ValueError("router_redis_timeout_seconds must be positive")
         if self.router_rules_cache_ttl_seconds < 0:

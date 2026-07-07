@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.runtime.chat_presenter import ChatStreamPresenter
-from research_system.runtime.chat_presenter_live_accumulator import ChatPresenterLiveAccumulator
-from research_system.runtime.chat_presenter_live_payloads import ChatPresenterLivePayloads
-from research_system.runtime.chat_presenter_payload_state import ChatPresenterPayloadState
-from research_system.runtime.chat_presenter_summaries import ChatPresenterSummaries
-from research_system.runtime.run_trace_row_builder import RunTraceRowBuilder
+from research_system.runtime.presentation.presenter.chat_presenter import ChatStreamPresenter
+from research_system.runtime.presentation.presenter.chat_presenter_live_accumulator import ChatPresenterLiveAccumulator
+from research_system.runtime.presentation.presenter.chat_presenter_live_payloads import ChatPresenterLivePayloads
+from research_system.runtime.presentation.presenter.chat_presenter_payload_state import ChatPresenterPayloadState
+from research_system.runtime.presentation.presenter.chat_presenter_summaries import ChatPresenterSummaries
+from research_system.runtime.history.session.trace.run_trace_row_builder import RunTraceRowBuilder
 from research_system.schemas.runtime import RunEvent
 
 

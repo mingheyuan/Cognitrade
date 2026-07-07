@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from research_system.cli.commands.cli_command_dispatch_registry import CLI_COMMAND_EXECUTORS, resolve_cli_command_executor
 from research_system.runtime.platform.checks import run_checks
-from research_system.runtime.diagnostics.doctor import build_status, run_doctor
+from research_system.runtime.diagnostics.doctoring.doctor import build_status, run_doctor
 from research_system.runtime.orchestrator import ResearchOrchestrator
 from research_system.runtime.platform.settings import Settings
 

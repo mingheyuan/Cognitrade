@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from typing import Any
+from pathlib import Path
 
+from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.agents.reviewer.reviewer_candidate_support import ReviewerCandidateSupport
 from research_system.agents.reviewer.reviewer_strategy_support import ReviewerStrategySupport
 from research_system.agents.reviewer.reviewer_summary_support import ReviewerSummarySupport
@@ -9,17 +11,48 @@ from research_system.agents.reviewer.reviewer_verdict_support import ReviewerVer
 from research_system.schemas.review import ClaimVerdictBreakdown, ReviewFinding
 
 
-class ReviewerService:
+class ReviewerService(RuntimeBoundSubagentInvoker):
     agent_name = "reviewer"
 
-    def __init__(self, review_policy: dict | None = None) -> None:
+    def __init__(self, review_policy: dict | None = None, runs_root: Path | None = None) -> None:
         self.review_policy = review_policy or {}
+        self.runs_root = runs_root
         self.strategy_support = ReviewerStrategySupport(self.review_policy)
         self.candidate_support = ReviewerCandidateSupport()
         self.verdict_support = ReviewerVerdictSupport(strategy_support=self.strategy_support)
         self.summary_support = ReviewerSummarySupport()
 
     def run(
+        self,
+        *,
+        source_run_id: str,
+        query: str,
+        source_entries: list[dict],
+        latest_sector_snapshot: dict | None,
+        latest_market_snapshot: dict | None = None,
+        latest_fundamental_snapshot: dict | None = None,
+        latest_notice_snapshot: dict | None = None,
+        planning_context_hints: dict[str, str] | None = None,
+    ) -> dict:
+        with self.local_run_scope(
+            intent="review_thesis",
+            query=query,
+            phase="review",
+            title="reviewer",
+            objective="Build posterior review findings and summary.",
+        ):
+            return self._run_impl(
+                source_run_id=source_run_id,
+                query=query,
+                source_entries=source_entries,
+                latest_sector_snapshot=latest_sector_snapshot,
+                latest_market_snapshot=latest_market_snapshot,
+                latest_fundamental_snapshot=latest_fundamental_snapshot,
+                latest_notice_snapshot=latest_notice_snapshot,
+                planning_context_hints=planning_context_hints,
+            )
+
+    def _run_impl(
         self,
         *,
         source_run_id: str,

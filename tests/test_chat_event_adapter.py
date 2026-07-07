@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.chat_event_adapter import (
+from research_system.cli.flow.chat_event_adapter import (
     build_chat_presenter,
     chat_event_listener,
     display_chunk_to_update,
     event_to_display_chunks,
 )
-from research_system.cli.chat_updates import TranscriptUpdate, default_update_for_text
+from research_system.cli.state.chat_updates import TranscriptUpdate, default_update_for_text
 from research_system.schemas.runtime import RunEvent
 
 

@@ -1,5 +1,0 @@
-from research_system.services.methodologies.dimensions.dimension_normalizer_entry_builder import build_dimension_entries
-from research_system.services.methodologies.dimensions.dimension_normalizer_index_builder import build_dimension_index
-from research_system.services.methodologies.dimensions.dimension_normalizer_query_support import DimensionNormalizerIndex
-
-__all__ = ["DimensionNormalizerIndex", "build_dimension_entries", "build_dimension_index"]

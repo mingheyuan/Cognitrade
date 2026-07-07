@@ -3,24 +3,24 @@ from __future__ import annotations
 import unittest
 
 from research_system.cli.inspect.chat_inspect_state import InspectPanelRuntime as InspectPackageRuntime
-from research_system.cli.chat_inspect_counts_support import (
+from research_system.cli.inspect.chat_inspect_counts_support import (
     events_rows_for_session,
     trace_branch_paths_for_session,
     trace_child_count_for_session,
     trace_groups_for_session,
     trace_task_count_for_session,
 )
-from research_system.cli.chat_inspect_panel_support import (
+from research_system.cli.inspect.chat_inspect_panel_support import (
     load_events_panel_for_session,
     sync_events_focus_for_session,
     toggle_output_panel_for_session,
     toggle_trace_threads_panel_for_session,
 )
-from research_system.cli.chat_inspect_payload_support import (
+from research_system.cli.inspect.chat_inspect_payload_support import (
     load_events_payload_for_session,
     load_trace_payload_for_session,
 )
-from research_system.cli.chat_inspect_state import (
+from research_system.cli.inspect import (
     InspectPanelRuntime,
     build_inspect_panel_runtime,
     events_rows,

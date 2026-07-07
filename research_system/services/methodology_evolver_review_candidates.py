@@ -1,3 +1,0 @@
-from research_system.services.methodologies.methodology_evolver_review_candidates import MethodologyEvolverReviewCandidates
-
-__all__ = ["MethodologyEvolverReviewCandidates"]

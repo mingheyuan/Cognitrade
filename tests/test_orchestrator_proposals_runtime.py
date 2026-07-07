@@ -11,13 +11,11 @@ from research_system.runtime.proposals.workflow import (
 from research_system.runtime.proposals.workflow import (
     OrchestratorProposalSupport as WorkflowPackageProposalSupport,
 )
-from research_system.runtime.orchestrator_proposal_collect_support import (
+from research_system.runtime.proposals.workflow import (
     OrchestratorProposalCollectSupport,
-)
-from research_system.runtime.orchestrator_proposal_review_pipeline import (
     OrchestratorProposalReviewPipeline,
+    OrchestratorProposalSupport,
 )
-from research_system.runtime.orchestrator_research_proposals import OrchestratorProposalSupport
 
 
 class OrchestratorProposalRuntimeTests(unittest.TestCase):

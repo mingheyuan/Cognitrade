@@ -5,16 +5,16 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from research_system.runtime.jsonl import append_jsonl, write_json
-from research_system.runtime.run_trace_row_builder import RunTraceRowBuilder
-from research_system.runtime.session_history_subagent_payload_builder import (
+from research_system.runtime.storage.jsonl import append_jsonl, write_json
+from research_system.runtime.history.session.trace.run_trace_row_builder import RunTraceRowBuilder
+from research_system.runtime.history.session.trace.subagent_payload_builder import (
     SessionHistorySubagentPayloadBuilder,
 )
-from research_system.runtime.session_history_step_builder import SessionHistoryStepBuilder
-from research_system.runtime.session_history_trace_rebuilder import (
+from research_system.runtime.history.session.steps.step_builder import SessionHistoryStepBuilder
+from research_system.runtime.history.session.trace.trace_rebuilder import (
     SessionHistoryTraceRebuilder,
 )
-from research_system.runtime.session_history import SessionHistory
+from research_system.runtime.history.session.session_history import SessionHistory
 
 
 class SessionHistoryTests(unittest.TestCase):
@@ -322,6 +322,48 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["steps"][1]["status"], "active")
         self.assertTrue(payload["steps"][1]["active_from_supervisor"])
         self.assertEqual(payload["steps"][1]["supervisor_note"], "advance to retrieval")
+
+    def test_thread_states_include_root_thread_and_turn(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            run_root = Path(tmpdir) / "01THREADS"
+            run_root.mkdir(parents=True)
+            write_json(
+                run_root / "thread_state.json",
+                {
+                    "thread_id": "thread-root",
+                    "run_id": "01THREADS",
+                    "request_id": "req-root",
+                    "intent": "stock_compare",
+                    "status": "completed",
+                    "parent_thread_id": None,
+                    "active_turn_id": "turn-root",
+                    "total_turns": 1,
+                },
+            )
+            write_json(
+                run_root / "turn_state.json",
+                {
+                    "turn_id": "turn-root",
+                    "thread_id": "thread-root",
+                    "run_id": "01THREADS",
+                    "request_id": "req-root",
+                    "turn_index": 1,
+                    "status": "completed",
+                    "intent": "stock_compare",
+                    "objective": "compare banks",
+                },
+            )
+
+            history = SessionHistory(run_root)
+            rows = history.thread_states()
+            tree = history.thread_tree()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["thread_id"], "thread-root")
+        self.assertEqual(rows[0]["turns"][0]["turn_id"], "turn-root")
+        self.assertEqual(len(tree), 1)
+        self.assertEqual(tree[0]["thread_id"], "thread-root")
+        self.assertEqual(tree[0]["children"], [])
 
 
 if __name__ == "__main__":

@@ -7,9 +7,9 @@ from unittest.mock import patch
 from prompt_toolkit.keys import Keys
 
 from research_system.cli.chat_keybindings import build_chat_keybindings
-from research_system.cli.chat_types import ChatSessionState, TuiSession
-from research_system.runtime.settings import Settings
-from research_system.services.task_router import TaskRouter
+from research_system.cli.state.chat_types import ChatSessionState, TuiSession
+from research_system.runtime.platform.settings import Settings
+from research_system.services.routing.router.task_router import TaskRouter
 
 
 class ProviderUnavailableStub:

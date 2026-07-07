@@ -31,6 +31,8 @@ class ChatPresenterPayloadState:
             "subagent_trace": [dict(item) for item in payload.get("subagent_trace") or [] if isinstance(item, dict)],
             "dynamic_trace": [dict(item) for item in payload.get("dynamic_trace") or [] if isinstance(item, dict)],
             "wait_trace": [dict(item) for item in payload.get("wait_trace") or [] if isinstance(item, dict)],
+            "threads": [dict(item) for item in payload.get("threads") or [] if isinstance(item, dict)],
+            "thread_tree": [dict(item) for item in payload.get("thread_tree") or [] if isinstance(item, dict)],
             "event_counts": dict(payload.get("event_counts") or {}),
         }
 
@@ -76,6 +78,8 @@ class ChatPresenterPayloadState:
             "subagent_trace": [],
             "dynamic_trace": [],
             "wait_trace": [],
+            "threads": [],
+            "thread_tree": [],
             "event_counts": {"events": 0, "subagent_trace": 0, "dynamic_trace": 0, "wait_trace": 0},
         }
 

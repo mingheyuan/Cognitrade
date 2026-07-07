@@ -6,7 +6,7 @@ from research_system.cli.memory.chat_memory import ensure_session_thread, hydrat
 from research_system.cli.state.chat_types import ChatSessionState
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import OpenAIProvider, ProviderRegistry
-from research_system.services.routing.task_router import TaskRouter
+from research_system.services.routing.router.task_router import TaskRouter
 
 
 @dataclass(frozen=True)

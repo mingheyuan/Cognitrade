@@ -7,8 +7,8 @@ import akshare as ak
 
 from research_system.adapters.vendors.akshare_sector_adapter import AkShareSectorAdapter
 from research_system.adapters.vendors.akshare_utils import call_with_retry, normalize_value
-from research_system.runtime.jsonl import read_json, read_jsonl
-from research_system.runtime.skill_runtime import SkillRuntime
+from research_system.runtime.storage.jsonl import read_json, read_jsonl
+from research_system.runtime.platform.skill_runtime import SkillRuntime
 
 
 def _normalize_query(query: str) -> dict[str, str | None]:

@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.runtime.orchestrator_run_failure_support import (
+from research_system.runtime.orchestration.orchestrator_run_failure_support import (
     OrchestratorRunFailureSupport,
 )
-from research_system.runtime.orchestrator_run_gate_support import OrchestratorRunGateSupport
-from research_system.runtime.orchestrator_run_response_support import (
+from research_system.runtime.orchestration.orchestrator_run_gate_support import OrchestratorRunGateSupport
+from research_system.runtime.orchestration.orchestrator_run_response_support import (
     OrchestratorRunResponseSupport,
 )
-from research_system.runtime.orchestrator_run_success_support import (
+from research_system.runtime.orchestration.orchestrator_run_success_support import (
     OrchestratorRunSuccessSupport,
 )
-from research_system.runtime.orchestrator_run_terminal_support import (
+from research_system.runtime.orchestration.orchestrator_run_terminal_support import (
     OrchestratorRunTerminalSupport,
 )
 

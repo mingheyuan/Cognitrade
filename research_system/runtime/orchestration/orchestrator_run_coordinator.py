@@ -18,21 +18,40 @@ class OrchestratorRunCoordinator:
         self.terminal_support = OrchestratorRunTerminalSupport(host)
 
     def run(self, request: RequestEnvelope) -> ResponseEnvelope:
-        decision = self.host.task_router.identify(request)
+        run_id, paths, context = self.startup_support.create_preflight_context(request=request)
+        self.host._active_runtime_context = context
+        bind_runtime = getattr(self.host.task_router, "bind_runtime", None)
+        clear_runtime = getattr(self.host.task_router, "clear_runtime", None)
+        if callable(bind_runtime):
+            bind_runtime(
+                context=context,
+                support=self.host._execution_support(),
+                request_id=request.request_id,
+            )
+        try:
+            decision = self.host.task_router.identify(request)
+        finally:
+            if callable(clear_runtime):
+                clear_runtime()
         if decision.trace and isinstance(request.constraints, dict):
             request.constraints["routing_trace"] = dict(decision.trace)
         if decision.intent is None:
-            return self.startup_support.build_clarification_response(
-                request=request,
-                decision=decision,
-            )
+            try:
+                return self.startup_support.build_clarification_response(
+                    request=request,
+                    decision=decision,
+                    run_id=run_id,
+                )
+            finally:
+                self.host._active_runtime_context = None
 
         intent = decision.intent
-        run_id, paths, context = self.startup_support.create_context(
+        self.startup_support.promote_context_intent(
+            context=context,
             request=request,
             intent=intent,
         )
-        self.host._active_runtime_context = context
+        self.host._attach_subagent_observers()
 
         try:
             plan = self.startup_support.initialize_run(

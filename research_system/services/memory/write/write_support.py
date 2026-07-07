@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from research_system.services.memory.protocol import (
+from research_system.services.memory.core.protocol import (
     CHAT_RESEARCH_MEMORY_TYPE,
     CHAT_RESEARCH_SNAPSHOT_VERSION,
     MEMORY_RECORD_SCHEMA_VERSION,

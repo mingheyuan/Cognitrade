@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from research_system.adapters.storage.mem0_adapter import Mem0Adapter
 from research_system.services.memory.core.protocol import (
     CHAT_RESEARCH_MEMORY_TYPE,
     CHAT_RESEARCH_SNAPSHOT_VERSION,
@@ -17,7 +16,7 @@ from research_system.services.memory.write.write_support import MemoryServiceWri
 
 
 class MemoryService:
-    def __init__(self, adapter: Mem0Adapter) -> None:
+    def __init__(self, adapter) -> None:
         self.adapter = adapter
         self.write_support = MemoryServiceWriteSupport(adapter=adapter)
         self.query_support = MemoryServiceQuerySupport(adapter=adapter)

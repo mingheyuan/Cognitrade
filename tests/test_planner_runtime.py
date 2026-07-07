@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.runtime.planner import RuntimePlanner
-from research_system.runtime.planner_dynamic_plan_support import PlannerDynamicPlanSupport
-from research_system.runtime.planner_entry_decision_support import PlannerEntryDecisionSupport
-from research_system.runtime.planner_static_plan_support import PlannerStaticPlanSupport
+from research_system.runtime.planning import RuntimePlanner
+from research_system.runtime.planning.dynamic_plan_support import PlannerDynamicPlanSupport
+from research_system.runtime.planning.entry_decision_support import PlannerEntryDecisionSupport
+from research_system.runtime.planning.static_plan_support import PlannerStaticPlanSupport
 
 
 class PlannerRuntimeTests(unittest.TestCase):

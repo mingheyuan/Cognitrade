@@ -9,7 +9,7 @@ from research_system.cli.chat_shell_scene import (
     build_status_bar_items,
     output_mode_label,
 )
-from research_system.cli.chat_types import ChatSessionState, TuiSession
+from research_system.cli.state.chat_types import ChatSessionState, TuiSession
 
 
 class ChatShellSceneRuntimeTests(unittest.TestCase):

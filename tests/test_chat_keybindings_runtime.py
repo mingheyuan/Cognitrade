@@ -8,8 +8,8 @@ from research_system.cli.keybindings.chat_keybinding_bindings import (
 from research_system.cli.keybindings.chat_keybinding_runtime import (
     ChatKeybindingRuntime as KeybindingsChatKeybindingRuntime,
 )
-from research_system.cli.chat_keybinding_bindings import build_chat_keybindings_from_runtime
-from research_system.cli.chat_keybinding_runtime import (
+from research_system.cli.keybindings.chat_keybinding_bindings import build_chat_keybindings_from_runtime
+from research_system.cli.keybindings.chat_keybinding_runtime import (
     ChatKeybindingRuntime,
     build_chat_keybinding_runtime,
     move_output_cursor,

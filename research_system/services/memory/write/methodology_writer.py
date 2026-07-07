@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from research_system.schemas.proposals import ProposalDraft
-from research_system.services.memory.service import MemoryService
+from research_system.services.memory.core.service import MemoryService
 
 
 class MethodologyMemoryWriter:

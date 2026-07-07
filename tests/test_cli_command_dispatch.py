@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from research_system.cli.cli_command_dispatch import execute_cli_payload_command
-from research_system.runtime.settings import Settings
+from research_system.cli.commands.cli_command_dispatch import execute_cli_payload_command
+from research_system.runtime.platform.settings import Settings
 
 
 class _DispatchOrchestratorStub:

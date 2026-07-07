@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from research_system.services.memory.protocol import (
+from research_system.services.memory.core.protocol import (
     METHODOLOGY_MEMORY_TYPES,
     latest_rows_by_entity_scope,
     record_sort_key,

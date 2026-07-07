@@ -50,9 +50,6 @@ QDRANT_URL=
 QDRANT_API_KEY=
 QDRANT_COLLECTION_NAME=research_evidence
 
-MEM0_API_KEY=
-MEM0_BASE_URL=
-
 ROUTER_REDIS_URL=
 ROUTER_REDIS_ACTIVE_KEY=cognitrade:router:intent_rules:active
 ROUTER_REDIS_KEY_PREFIX=cognitrade:router:intent_rules:
@@ -80,7 +77,7 @@ EXTERNAL_WAIT_TIMEOUT_SECONDS=30
 
 - `OPENAI_BASE_URL` 若填写兼容 OpenAI 的网关地址，代码会归一化到 `/v1`
 - 不配置 `QDRANT_URL` 时，会优先使用本地文件模式
-- `MEM0_*` 用于长期 memory 远端同步；未配置时仍会保留本地导出与本地读取 fallback
+- 长期 memory 当前统一落在本地 `workspace/memory/`，包含 `records.jsonl`、`memory_summary.md` 和 `MEMORY.md`
 - `ROUTER_*` 用于 Redis 动态路由控制面；未配置时会退回本地 `router_defaults.yml`
 - `COGNITRADE_PROVIDERS_*` 用于 provider chain 覆盖，优先级高于默认 `provider_policy.yml`
 
@@ -152,7 +149,7 @@ python -m research_system.cli.app chat --ui tui
 1. `thread short-term memory`
    - 当前 chat thread 的 recent turns、summary、checkpoint
 2. `chat long-term memory`
-   - 跨会话的 chat research summary，优先走 mem0，失败时回本地导出
+   - 跨会话的 chat research summary，落在本地 `records.jsonl + memory_summary.md + MEMORY.md`
 3. `methodology long-term memory`
    - 经审核沉淀的方法论记忆，用于 retrieval/evolution 辅助
 
@@ -308,6 +305,6 @@ python -m compileall research_system tests
 ## 当前边界
 
 - `methodology_evolution` 仍是最小闭环，不是完整的自动演进系统
-- `mem0` 已接远端优先 + 本地 fallback，但长期记忆策略还在继续收口
+- 长期记忆当前已经统一收敛到本地 memory adapter；后续仍可继续优化记忆策略，但不再依赖 `mem0`
 - 数据源链已支持 provider/fallback，但还不是最终的全量浏览器/搜索 fallback 方案
 - `chat` 已有 thread、checkpoint、compact、query-aware recall，但还没完全等同于 OpenHands/LangGraph 的完整状态机

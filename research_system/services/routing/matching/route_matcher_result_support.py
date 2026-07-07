@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from research_system.services.routing.route_table import IntentRouteRule
+from research_system.services.routing.tables import IntentRouteRule
 
 
 @dataclass(frozen=True)

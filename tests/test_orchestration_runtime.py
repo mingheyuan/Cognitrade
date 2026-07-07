@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from research_system.runtime import orchestration
 from research_system.runtime.orchestration.orchestrator_admin import (
     OrchestratorAdminService as OrchestrationAdminService,
 )
@@ -65,39 +66,28 @@ from research_system.runtime.orchestration.orchestrator_runtime_io_support impor
 from research_system.runtime.orchestration.orchestrator_subagent_bridge import (
     OrchestratorSubagentBridge as OrchestrationSubagentBridge,
 )
-from research_system.runtime.orchestrator_admin import OrchestratorAdminService
-from research_system.runtime.orchestrator_assembly_support import OrchestratorAssemblySupport
-from research_system.runtime.orchestrator_compat_support import OrchestratorCompatSupport
-from research_system.runtime.orchestrator_context import RuntimeContext
-from research_system.runtime.orchestrator_dependencies import OrchestratorDependencies
-from research_system.runtime.orchestrator_research_forwarding_support import (
-    OrchestratorResearchForwardingSupport,
-)
-from research_system.runtime.orchestrator_research_debug import OrchestratorDebugSupport
-from research_system.runtime.orchestrator_research_support import OrchestratorResearchSupport
-from research_system.runtime.orchestrator_methodology_evolution_input_support import (
+from research_system.runtime.orchestration import (
+    OrchestratorAdminService,
+    OrchestratorAssemblySupport,
+    OrchestratorCompatSupport,
+    OrchestratorDependencies,
     OrchestratorMethodologyEvolutionInputSupport,
-)
-from research_system.runtime.orchestrator_qdrant_admin_support import (
     OrchestratorQdrantAdminSupport,
-)
-from research_system.runtime.orchestrator_run_admin_support import OrchestratorRunAdminSupport
-from research_system.runtime.orchestrator_run_coordinator import OrchestratorRunCoordinator
-from research_system.runtime.orchestrator_run_failure_support import (
+    OrchestratorResearchForwardingSupport,
+    OrchestratorResearchSupport,
+    OrchestratorRunAdminSupport,
+    OrchestratorRunCoordinator,
     OrchestratorRunFailureSupport,
-)
-from research_system.runtime.orchestrator_run_gate_support import OrchestratorRunGateSupport
-from research_system.runtime.orchestrator_run_response_support import (
+    OrchestratorRunGateSupport,
     OrchestratorRunResponseSupport,
-)
-from research_system.runtime.orchestrator_run_startup_support import OrchestratorRunStartupSupport
-from research_system.runtime.orchestrator_run_success_support import (
+    OrchestratorRunStartupSupport,
     OrchestratorRunSuccessSupport,
+    OrchestratorRunTerminalSupport,
+    OrchestratorRuntimeIoSupport,
+    OrchestratorSubagentBridge,
+    RuntimeContext,
 )
-from research_system.runtime.orchestrator_run_terminal_support import OrchestratorRunTerminalSupport
-from research_system.runtime.orchestrator_runtime_io_support import OrchestratorRuntimeIoSupport
-from research_system.runtime.orchestrator_subagent_bridge import OrchestratorSubagentBridge
-from research_system.services.progress_service import ProgressService
+from research_system.runtime.orchestration.orchestrator_research_debug import OrchestratorDebugSupport
 
 
 class OrchestrationRuntimeTests(unittest.TestCase):
@@ -117,7 +107,7 @@ class OrchestrationRuntimeTests(unittest.TestCase):
         self.assertIs(OrchestratorRuntimeIoSupport, OrchestrationRuntimeIoSupport)
         self.assertIs(OrchestratorCompatSupport, OrchestrationCompatSupport)
         self.assertIs(OrchestratorDebugSupport, OrchestrationDebugSupport)
-        self.assertIs(ProgressService, OrchestrationProgressService)
+        self.assertIs(orchestration.ProgressService, OrchestrationProgressService)
         self.assertIs(OrchestratorResearchSupport, OrchestrationResearchSupport)
         self.assertIs(OrchestratorResearchForwardingSupport, OrchestrationResearchForwardingSupport)
         self.assertIs(

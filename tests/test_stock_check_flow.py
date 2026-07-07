@@ -46,6 +46,7 @@ class StockCheckFlowTests(unittest.TestCase):
         adapter = object.__new__(QdrantAdapter)
         entry = BlackboardEntry(
             run_id="run-stock",
+            thread_id="run-stock",
             request_id="req-stock",
             kind="verified_snapshot",
             agent="collector",

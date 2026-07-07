@@ -29,6 +29,8 @@ class RunTraceRowBuilder:
             "invocation_id": row_payload.get("invocation_id"),
             "status": row_payload.get("status"),
             "objective": row_payload.get("objective"),
+            "child_thread_id": row_payload.get("child_thread_id"),
+            "child_turn_id": row_payload.get("child_turn_id"),
             "notes": list(row_payload.get("notes") or []),
             "wait_timeout_seconds": row_payload.get("wait_timeout_seconds"),
             "created_at": created_at,
@@ -75,6 +77,8 @@ class RunTraceRowBuilder:
             "agent_label": agent_label,
             "status": status,
             "objective": row_payload.get("objective"),
+            "child_thread_id": row_payload.get("child_thread_id"),
+            "child_turn_id": row_payload.get("child_turn_id"),
             "notes": list(row_payload.get("notes") or []),
             "created_at": created_at,
         }
@@ -139,4 +143,7 @@ class RunTraceRowBuilder:
             "subagent_started": "running",
             "subagent_completed": "completed",
             "subagent_failed": "failed",
+            "thread_started": "running",
+            "thread_completed": "completed",
+            "thread_failed": "failed",
         }.get(event_type)

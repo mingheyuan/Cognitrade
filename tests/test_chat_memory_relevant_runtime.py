@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.chat_memory_candidate_dedupe import dedupe_relevant_candidates
-from research_system.cli.chat_memory_external_candidates import (
+from research_system.cli.memory.chat_memory_candidate_dedupe import dedupe_relevant_candidates
+from research_system.cli.memory.chat_memory_external_candidates import (
     build_cross_thread_memory_candidates,
     build_methodology_memory_candidates,
 )
-from research_system.cli.chat_memory_relevant_support import build_relevant_memory_context
-from research_system.cli.chat_memory_thread_candidates import (
+from research_system.cli.memory.chat_memory_relevant_support import build_relevant_memory_context
+from research_system.cli.memory.chat_memory_thread_candidates import (
     build_archive_candidates,
     build_summary_candidates,
     build_thread_profile_candidates,

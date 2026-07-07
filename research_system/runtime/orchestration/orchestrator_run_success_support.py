@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from research_system.runtime.storage.jsonl import write_json
 from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
 
 
@@ -33,6 +34,10 @@ class OrchestratorRunSuccessSupport:
             intent=intent,
         )
         if blocked:
+            context.thread.status = "failed"
+            context.turn.status = "failed"
+            write_json(context.paths.thread_state, context.thread.model_dump(mode="json"))
+            write_json(context.paths.turn_state, context.turn.model_dump(mode="json"))
             result = {
                 "intent": intent,
                 "status": "failed",
@@ -74,6 +79,10 @@ class OrchestratorRunSuccessSupport:
             intent=intent,
             message="Run completed",
         )
+        context.thread.status = "completed"
+        context.turn.status = "completed"
+        write_json(context.paths.thread_state, context.thread.model_dump(mode="json"))
+        write_json(context.paths.turn_state, context.turn.model_dump(mode="json"))
         summary = {
             "intent": intent,
             "status": "completed",

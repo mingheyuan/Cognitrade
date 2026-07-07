@@ -3,8 +3,8 @@ from __future__ import annotations
 from research_system.runtime.orchestration.orchestrator_research_debug import (
     OrchestratorDebugSupport,
 )
-from research_system.runtime.methodology.support import OrchestratorMethodologySupport
-from research_system.runtime.proposals.support import OrchestratorProposalSupport
+from research_system.runtime.methodology.core.support import OrchestratorMethodologySupport
+from research_system.runtime.proposals.workflow.support import OrchestratorProposalSupport
 
 
 class OrchestratorResearchSupport:

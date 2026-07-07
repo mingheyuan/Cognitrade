@@ -9,16 +9,58 @@ class PlannerEntryDecisionSupport:
         self.host = host
 
     def decide_research_entry(self, *, intent: str, request) -> EntryPlanDecision:
+        runtime_binding = dict(getattr(self.host, "_runtime_binding", {}) or {})
+        runtime_context = runtime_binding.get("context")
+        runtime_support = runtime_binding.get("support")
+        request_id = str(runtime_binding.get("request_id") or request.request_id)
+        default_initial_actions = self.host.action_factory.default_initial_actions(intent)
+        planner_item = None
+        planner_item_resolved = False
+        if runtime_context is not None:
+            planner_item = runtime_context.agent_control.spawn(
+                thread_id=runtime_context.thread.thread_id,
+                turn_id=runtime_context.turn.turn_id,
+                request_id=request_id,
+                agent="planner",
+                phase="planning",
+                title="planner_entry_decider",
+                objective="Decide whether research subagents are needed and choose entry actions.",
+                payload={"intent": intent},
+            )
+            runtime_context.agent_control.send(
+                planner_item,
+                payload={"intent": intent, "query": request.user_query.strip()},
+            )
         if request.intent:
+            if planner_item is not None:
+                runtime_context.agent_control.wait(
+                    planner_item,
+                    status="completed",
+                    payload={
+                        "source": "explicit_intent",
+                        "initial_actions": default_initial_actions,
+                    },
+                )
             return EntryPlanDecision(
                 source="explicit_intent",
                 use_subagents=True,
-                initial_actions=self.host.action_factory.default_initial_actions(intent),
+                initial_actions=default_initial_actions,
                 reason="explicit intent provided by caller",
             )
 
         query = request.user_query.strip()
-        if self.host.llm_provider and self.host.llm_provider.available:
+        llm_decision = None
+        if runtime_context is not None and runtime_support is not None:
+            llm_decision = runtime_support.resolve_llm_execution(
+                runtime_context,
+                request_id=request_id,
+                agent="planner",
+                phase="planning",
+                strategy="rule_fallback_entry_plan",
+                provider=self.host.llm_provider,
+            )
+        can_use_llm = bool(self.host.llm_provider) and bool(llm_decision and llm_decision.can_use_llm)
+        if can_use_llm:
             try:
                 payload = self.host.llm_provider.parse(
                     system_prompt=(
@@ -44,18 +86,62 @@ class PlannerEntryDecisionSupport:
                     intent=intent,
                     actions=payload.initial_actions,
                 )
+                if planner_item is not None:
+                    runtime_context.agent_control.wait(
+                        planner_item,
+                        status="completed",
+                        payload={
+                            "source": "llm",
+                            "use_subagents": payload.use_subagents,
+                            "initial_actions": initial_actions,
+                            "reason": payload.reason or "llm_entry_plan",
+                        },
+                    )
+                    planner_item_resolved = True
                 return EntryPlanDecision(
                     source="llm",
                     use_subagents=payload.use_subagents,
                     initial_actions=initial_actions,
                     reason=payload.reason or "llm_entry_plan",
                 )
-            except LLMProviderError:
+            except LLMProviderError as exc:
+                if runtime_context is not None and runtime_support is not None:
+                    error_reason = "llm_request_timeout" if "llm_request_timeout" in str(exc) else f"llm_error:{exc.__class__.__name__}"
+                    runtime_support.record_degradation(
+                        runtime_context,
+                        request_id=request_id,
+                        component="planner_entry_decider",
+                        reason=error_reason,
+                        phase="planning",
+                        agent="planner",
+                        payload={"strategy": "rule_fallback_entry_plan"},
+                    )
+                    if planner_item is not None:
+                        runtime_context.agent_control.wait(
+                            planner_item,
+                            status="degraded",
+                            payload={"source": "rule", "reason": "rule_fallback_entry_plan"},
+                            degrade_reason=error_reason,
+                        )
+                        planner_item_resolved = True
                 pass
 
+        if planner_item is not None and not planner_item_resolved:
+            degrade_reason = llm_decision.degrade_reason if llm_decision is not None and not llm_decision.can_use_llm else None
+            runtime_context.agent_control.wait(
+                planner_item,
+                status="degraded" if degrade_reason else "completed",
+                payload={
+                    "source": "rule",
+                    "use_subagents": True,
+                    "initial_actions": default_initial_actions,
+                    "reason": "rule_fallback_entry_plan",
+                },
+                degrade_reason=degrade_reason,
+            )
         return EntryPlanDecision(
             source="rule",
             use_subagents=True,
-            initial_actions=self.host.action_factory.default_initial_actions(intent),
+            initial_actions=default_initial_actions,
             reason="rule_fallback_entry_plan",
         )

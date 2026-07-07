@@ -3,8 +3,12 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from research_system.cli.chat_session_bootstrap import build_chat_banner_lines, build_chat_session_state, build_chat_startup_context
-from research_system.runtime.settings import Settings
+from research_system.cli.runtime.chat_session_bootstrap import (
+    build_chat_banner_lines,
+    build_chat_session_state,
+    build_chat_startup_context,
+)
+from research_system.runtime.platform.settings import Settings
 
 
 class ChatSessionBootstrapTests(unittest.TestCase):

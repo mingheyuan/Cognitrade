@@ -2,19 +2,19 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.chat_rendering_output_refresh import refresh_output_area
-from research_system.cli.chat_rendering_refresh_support import (
+from research_system.cli.rendering import refresh_output_area
+from research_system.cli.rendering import (
     build_tui_hint_text,
     build_tui_status_text,
     commands_popup_text,
     refresh_tui,
     render_tui_output,
 )
-from research_system.cli.chat_rendering_status_support import (
+from research_system.cli.rendering.chat_rendering import (
     build_tui_hint_text as support_build_tui_hint_text,
     build_tui_status_text as support_build_tui_status_text,
 )
-from research_system.cli.chat_rendering_text_support import (
+from research_system.cli.rendering.chat_rendering import (
     commands_popup_text as support_commands_popup_text,
     render_tui_output as support_render_tui_output,
 )

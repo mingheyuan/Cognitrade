@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.chat_commands import clear_pending_clarification
-from research_system.cli.chat_state import (
+from research_system.cli.commands.chat_commands import clear_pending_clarification
+from research_system.cli.state.chat_state import (
     build_new_thread_session_patch,
     build_research_result_session_patch,
     build_show_last_session_patch,
 )
-from research_system.cli.chat_types import ChatSessionState
+from research_system.cli.state.chat_types import ChatSessionState
 
 
 class ChatStateTests(unittest.TestCase):

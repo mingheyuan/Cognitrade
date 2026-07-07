@@ -2,7 +2,7 @@
 
 from typing import Any, Callable
 
-from research_system.services.payloads.run_payloads import render_labeled_field_line
+from research_system.services.payloads.runs.run_payloads import render_labeled_field_line
 from research_system.cli.view.chat_scene_models import TranscriptRenderBlock
 from research_system.cli.view.chat_threads_focus_support import (
     build_focused_thread_blocks as support_build_focused_thread_blocks,

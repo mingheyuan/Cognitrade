@@ -1,7 +1,12 @@
 from __future__ import annotations
 
-from research_system.services.planning_context import normalize_planning_context_hints
-from research_system.services.review_focus_support import build_review_focus_notes, resolve_review_focus
+from research_system.services.methodologies.planning.planning_context_methodology import (
+    normalize_planning_context_hints,
+)
+from research_system.services.methodologies.policy.review_focus_support import (
+    build_review_focus_notes,
+    resolve_review_focus,
+)
 
 
 class ScreenReviewerStrategySupport:

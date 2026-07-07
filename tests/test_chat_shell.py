@@ -9,11 +9,11 @@ from unittest.mock import patch
 
 from prompt_toolkit.output.win32 import NoConsoleScreenBufferError
 
-from research_system.cli.chat_fallback import run_chat_fallback
-from research_system.cli.chat_thread_store import ChatThreadStore
-from research_system.cli.chat_updates import SessionStatePatch, TranscriptUpdate
+from research_system.cli.shell.chat_fallback import run_chat_fallback
+from research_system.cli.memory.chat_thread_store import ChatThreadStore
+from research_system.cli.state.chat_updates import SessionStatePatch, TranscriptUpdate
 from research_system.runtime.orchestrator import ResearchOrchestrator
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.schemas.protocol import RequestEnvelope
 
 
@@ -67,7 +67,7 @@ class ChatShellTests(unittest.TestCase):
             try:
                 orchestrator.retriever.qdrant_available = False
                 orchestrator.retriever.qdrant_error = "disabled_for_test"
-                response = orchestrator.run(RequestEnvelope(intent="stock_check", user_query="帮我看下 000001 这个股票"))
+                response = orchestrator.run(RequestEnvelope(intent="stock_check", user_query="甯垜鐪嬩笅 000001 杩欎釜鑲＄エ"))
 
                 self.assertIn(response.status, {"completed", "failed"})
                 self.assertIn("request_received", events)

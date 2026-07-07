@@ -4,12 +4,18 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_system.cli.chat_actions import handle_chat_cli_action, handle_chat_meta_action
-from research_system.cli.chat_rendering import apply_tui_update
-from research_system.cli.chat_state import persist_thread_checkpoint
-from research_system.cli.chat_types import ChatSessionState, TuiSession
-from research_system.runtime.settings import Settings, ensure_workspace_layout
-from research_system.services.task_router import TaskRouter
+from research_system.cli.runtime.chat_actions import handle_chat_cli_action, handle_chat_meta_action
+from research_system.cli.memory.chat_memory import (
+    archive_session_thread,
+    compact_session_thread,
+    remember_basic_chat_turn,
+    rename_session_thread,
+)
+from research_system.cli.rendering.chat_rendering import apply_tui_update
+from research_system.cli.state import persist_thread_checkpoint
+from research_system.cli.state.chat_types import ChatSessionState, TuiSession
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
+from research_system.services.routing.router.task_router import TaskRouter
 
 
 class ProviderUnavailableStub:
@@ -63,8 +69,6 @@ class ChatActionsTests(unittest.TestCase):
                 task_router=TaskRouter(),
                 output_lines=[],
             )
-
-            from research_system.cli.chat_memory import remember_basic_chat_turn
 
             for idx in range(9):
                 remember_basic_chat_turn(settings=settings, state=session.state, query=f"question {idx}", answer=f"answer {idx}")
@@ -177,8 +181,6 @@ class ChatActionsTests(unittest.TestCase):
                 task_router=TaskRouter(),
                 output_lines=[],
             )
-
-            from research_system.cli.chat_memory import remember_basic_chat_turn
 
             for idx in range(9):
                 remember_basic_chat_turn(settings=settings, state=session.state, query=f"question {idx}", answer=f"answer {idx}")
@@ -335,8 +337,6 @@ class ChatActionsTests(unittest.TestCase):
                 last_run_id="01LATEST",
             )
             persist_thread_checkpoint(settings=settings, state=persisted)
-            from research_system.cli.chat_memory import rename_session_thread
-
             rename_session_thread(settings=settings, state=persisted, thread_label="Saved banking review")
             session = TuiSession(
                 settings=settings,
@@ -375,8 +375,6 @@ class ChatActionsTests(unittest.TestCase):
                 last_result_summary="ranking still inconclusive",
                 last_run_id="01COMPARE",
             )
-            from research_system.cli.chat_memory import remember_basic_chat_turn, rename_session_thread, compact_session_thread
-
             remember_basic_chat_turn(settings=settings, state=saved, query="which bank is stronger", answer="still inconclusive")
             rename_session_thread(settings=settings, state=saved, thread_label="Saved bank compare")
             compact_session_thread(settings=settings, state=saved)
@@ -426,8 +424,6 @@ class ChatActionsTests(unittest.TestCase):
                 output_lines=[],
             )
 
-            from research_system.cli.chat_memory import remember_basic_chat_turn
-
             remember_basic_chat_turn(settings=settings, state=session.state, query="question", answer="answer")
             parent_thread_id = session.state.thread_id
 
@@ -464,8 +460,6 @@ class ChatActionsTests(unittest.TestCase):
                 output_lines=[],
             )
 
-            from research_system.cli.chat_memory import remember_basic_chat_turn
-
             remember_basic_chat_turn(settings=settings, state=session.state, query="question", answer="answer")
             archived_thread_id = session.state.thread_id
 
@@ -499,8 +493,6 @@ class ChatActionsTests(unittest.TestCase):
                 task_router=TaskRouter(),
                 output_lines=[],
             )
-
-            from research_system.cli.chat_memory import archive_session_thread, remember_basic_chat_turn
 
             remember_basic_chat_turn(settings=settings, state=session.state, query="question", answer="answer")
             archived_thread_id = session.state.thread_id
@@ -697,8 +689,6 @@ class ChatActionsTests(unittest.TestCase):
                 task_router=TaskRouter(),
                 output_lines=[],
             )
-
-            from research_system.cli.chat_memory import archive_session_thread, remember_basic_chat_turn
 
             remember_basic_chat_turn(settings=settings, state=session.state, query="question", answer="answer")
             archived_thread_id = session.state.thread_id

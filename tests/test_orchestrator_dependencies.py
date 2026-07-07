@@ -4,112 +4,56 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_system.runtime.orchestrator import ResearchOrchestrator
-from research_system.runtime.orchestrator_action_runner import OrchestratorActionRunner
-from research_system.runtime.orchestrator_agent_handlers import OrchestratorAgentHandlers
-from research_system.runtime.orchestrator_admin import OrchestratorAdminService
-from research_system.runtime.orchestrator_assembly_support import (
-    OrchestratorAssemblySupport,
-)
-from research_system.runtime.orchestrator_compat_support import (
-    OrchestratorCompatSupport,
-)
-from research_system.runtime.orchestrator_dependencies import build_orchestrator_dependencies
-from research_system.runtime.orchestrator_execution_research_facade import (
-    OrchestratorExecutionResearchFacade,
-)
-from research_system.runtime.orchestrator_execution_control_support import (
+from research_system.runtime.execution import (
+    OrchestratorActionRunner,
     OrchestratorExecutionControlSupport,
-)
-from research_system.runtime.orchestrator_execution_lifecycle_support import (
     OrchestratorExecutionLifecycleSupport,
-)
-from research_system.runtime.orchestrator_execution_runtime_support import (
+    OrchestratorExecutionResearchFacade,
     OrchestratorExecutionRuntimeSupport,
-)
-from research_system.runtime.orchestrator_execution_support import OrchestratorExecutionSupport
-from research_system.runtime.orchestrator_execution_trace_support import (
+    OrchestratorExecutionSupport,
     OrchestratorExecutionTraceSupport,
+    OrchestratorPlanExecutor,
 )
-from research_system.runtime.orchestrator_methodology_builder import (
-    OrchestratorMethodologyBuilder,
-)
-from research_system.runtime.orchestrator_methodology_bank_highlight_support import (
+from research_system.runtime.execution.handlers import OrchestratorAgentHandlers
+from research_system.runtime.methodology import (
     OrchestratorMethodologyBankHighlightSupport,
-)
-from research_system.runtime.orchestrator_methodology_bank_metric_support import (
     OrchestratorMethodologyBankMetricSupport,
-)
-from research_system.runtime.orchestrator_methodology_compare_support import (
+    OrchestratorMethodologyBuilder,
     OrchestratorMethodologyCompareSupport,
-)
-from research_system.runtime.orchestrator_methodology_evolution_input_support import (
-    OrchestratorMethodologyEvolutionInputSupport,
-)
-from research_system.runtime.orchestrator_methodology_snapshot_candidate_support import (
-    OrchestratorMethodologySnapshotCandidateSupport,
-)
-from research_system.runtime.orchestrator_methodology_snapshot_fields import (
-    OrchestratorMethodologySnapshotFields,
-)
-from research_system.runtime.orchestrator_methodology_snapshot_grouping import (
-    OrchestratorMethodologySnapshotGrouping,
-)
-from research_system.runtime.orchestrator_plan_executor import OrchestratorPlanExecutor
-from research_system.runtime.orchestrator_run_coordinator import (
-    OrchestratorRunCoordinator,
-)
-from research_system.runtime.orchestrator_run_startup_support import (
-    OrchestratorRunStartupSupport,
-)
-from research_system.runtime.orchestrator_run_failure_support import (
-    OrchestratorRunFailureSupport,
-)
-from research_system.runtime.orchestrator_run_gate_support import (
-    OrchestratorRunGateSupport,
-)
-from research_system.runtime.orchestrator_run_response_support import (
-    OrchestratorRunResponseSupport,
-)
-from research_system.runtime.orchestrator_run_success_support import (
-    OrchestratorRunSuccessSupport,
-)
-from research_system.runtime.orchestrator_run_terminal_support import (
-    OrchestratorRunTerminalSupport,
-)
-from research_system.runtime.orchestrator_runtime_io_support import (
-    OrchestratorRuntimeIoSupport,
-)
-from research_system.runtime.orchestrator_methodology_entry_factory import (
     OrchestratorMethodologyEntryFactory,
-)
-from research_system.runtime.orchestrator_methodology_symbol_support import (
+    OrchestratorMethodologySnapshotCandidateSupport,
+    OrchestratorMethodologySnapshotFields,
+    OrchestratorMethodologySnapshotGrouping,
     OrchestratorMethodologySymbolSupport,
 )
-from research_system.runtime.orchestrator_proposal_entry_factory import (
-    OrchestratorProposalEntryFactory,
+from research_system.runtime.orchestration import (
+    OrchestratorAdminService,
+    OrchestratorAssemblySupport,
+    OrchestratorCompatSupport,
+    OrchestratorMethodologyEvolutionInputSupport,
+    OrchestratorQdrantAdminSupport,
+    OrchestratorResearchForwardingSupport,
+    OrchestratorResearchSupport,
+    OrchestratorRunAdminSupport,
+    OrchestratorRunCoordinator,
+    OrchestratorRunFailureSupport,
+    OrchestratorRunGateSupport,
+    OrchestratorRunResponseSupport,
+    OrchestratorRunStartupSupport,
+    OrchestratorRunSuccessSupport,
+    OrchestratorRunTerminalSupport,
+    OrchestratorRuntimeIoSupport,
+    OrchestratorSubagentBridge,
+    build_orchestrator_dependencies,
 )
-from research_system.runtime.orchestrator_proposal_admin_support import (
+from research_system.runtime.orchestrator import ResearchOrchestrator
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
+from research_system.runtime.proposals import (
     OrchestratorProposalAdminSupport,
-)
-from research_system.runtime.orchestrator_proposal_approval_policy import (
     OrchestratorProposalApprovalPolicy,
-)
-from research_system.runtime.orchestrator_proposal_transition_support import (
+    OrchestratorProposalEntryFactory,
     OrchestratorProposalTransitionSupport,
 )
-from research_system.runtime.orchestrator_qdrant_admin_support import (
-    OrchestratorQdrantAdminSupport,
-)
-from research_system.runtime.orchestrator_research_support import OrchestratorResearchSupport
-from research_system.runtime.orchestrator_research_forwarding_support import (
-    OrchestratorResearchForwardingSupport,
-)
-from research_system.runtime.orchestrator_run_admin_support import (
-    OrchestratorRunAdminSupport,
-)
-from research_system.runtime.orchestrator_subagent_bridge import OrchestratorSubagentBridge
-from research_system.runtime.settings import Settings, ensure_workspace_layout
 
 
 class OrchestratorDependenciesTests(unittest.TestCase):

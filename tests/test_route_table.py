@@ -5,15 +5,28 @@ import time
 import unittest
 from pathlib import Path
 
-from research_system.runtime.settings import Settings, ensure_workspace_layout
-from research_system.services.route_table import (
-    InMemoryRouteTableBackend,
+from research_system.adapters.storage.redis_route_store import InMemoryRouteTableBackend
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
+from research_system.services.routing.router.task_router import TaskRouter
+from research_system.services.routing.tables import (
     IntentRouteRule,
     IntentRouteTable,
     IntentRouteTableStore,
     build_intent_route_table_store,
 )
-from research_system.services.task_router import TaskRouter
+
+
+def _request(query: str):
+    return type(
+        "Req",
+        (),
+        {
+            "intent": None,
+            "user_query": query,
+            "constraints": {},
+            "request_id": "req_route_test",
+        },
+    )()
 
 
 class RouteTableStoreTests(unittest.TestCase):
@@ -23,12 +36,12 @@ class RouteTableStoreTests(unittest.TestCase):
             version="seed-v1",
             rules=[
                 IntentRouteRule(
-                    rule_id="screen_cn",
+                    rule_id="screen_watchlist",
                     intent="stock_screen",
                     match_type="contains_any",
-                    keywords=["值得"],
+                    keywords=["watchlist"],
                     priority=10,
-                    target="query",
+                    target="lowered",
                 )
             ],
         )
@@ -58,12 +71,12 @@ class RouteTableStoreTests(unittest.TestCase):
                     version="good-v1",
                     rules=[
                         IntentRouteRule(
-                            rule_id="review_cn",
+                            rule_id="review_validate",
                             intent="review_thesis",
                             match_type="contains_any",
-                            keywords=["复核"],
+                            keywords=["validate"],
                             priority=10,
-                            target="query",
+                            target="lowered",
                         )
                     ],
                 ).model_dump_json(indent=2),
@@ -93,12 +106,12 @@ class RouteTableStoreTests(unittest.TestCase):
                     version="v1",
                     rules=[
                         IntentRouteRule(
-                            rule_id="stock_cn",
+                            rule_id="stock_keyword",
                             intent="stock_check",
                             match_type="contains_any",
-                            keywords=["股票"],
+                            keywords=["stock"],
                             priority=10,
-                            target="query",
+                            target="lowered",
                         )
                     ],
                 ).model_dump_json(indent=2),
@@ -120,12 +133,12 @@ class RouteTableStoreTests(unittest.TestCase):
                 version="v2",
                 rules=[
                     IntentRouteRule(
-                        rule_id="sector_cn",
+                        rule_id="sector_keyword",
                         intent="sector_research",
                         match_type="contains_any",
-                        keywords=["板块"],
+                        keywords=["sector"],
                         priority=10,
-                        target="query",
+                        target="lowered",
                     )
                 ],
             ).model_dump_json(indent=2),
@@ -151,9 +164,9 @@ class RouteTableStoreTests(unittest.TestCase):
                             rule_id="screen_rule",
                             intent="stock_screen",
                             match_type="contains_any",
-                            keywords=["机会"],
+                            keywords=["watchlist"],
                             priority=10,
-                            target="query",
+                            target="lowered",
                         )
                     ],
                 ).model_dump_json(indent=2),
@@ -188,9 +201,9 @@ class RouteTableStoreTests(unittest.TestCase):
                         rule_id="stock_rule",
                         intent="stock_check",
                         match_type="contains_any",
-                        keywords=["机会"],
+                        keywords=["ticker"],
                         priority=10,
-                        target="query",
+                        target="lowered",
                     )
                 ],
             ).model_dump_json(indent=2),
@@ -219,12 +232,12 @@ class TaskRouterRouteTableTests(unittest.TestCase):
                 version="route-v1",
                 rules=[
                     IntentRouteRule(
-                        rule_id="screen_cn",
+                        rule_id="screen_watchlist",
                         intent="stock_screen",
                         match_type="contains_any",
-                        keywords=["值得"],
+                        keywords=["watchlist"],
                         priority=10,
-                        target="query",
+                        target="lowered",
                     )
                 ],
             ),
@@ -232,30 +245,44 @@ class TaskRouterRouteTableTests(unittest.TestCase):
         )
         router = TaskRouter(route_table_store=store)
 
-        decision = router.identify(type("Req", (), {"intent": None, "user_query": "最近有什么值得关注的票", "constraints": {}})())
+        decision = router.identify(_request("build me a watchlist of candidates"))
 
         self.assertEqual(decision.intent, "stock_screen")
         self.assertEqual((decision.trace or {}).get("source"), "route_table")
-        self.assertEqual((decision.trace or {}).get("rule_id"), "screen_cn")
+        self.assertEqual((decision.trace or {}).get("rule_id"), "screen_watchlist")
 
     def test_router_routes_multi_stock_comparison_to_stock_compare(self) -> None:
-        router = TaskRouter()
-
-        decision = router.identify(
-            type(
-                "Req",
-                (),
-                {
-                    "intent": None,
-                    "user_query": "分析茅台，宁德时代，比亚迪，谁更值得投资",
-                    "constraints": {},
-                },
-            )()
+        store = IntentRouteTableStore(
+            default_table=IntentRouteTable(
+                version="compare-v1",
+                rules=[
+                    IntentRouteRule(
+                        rule_id="stock_compare_rule",
+                        intent="stock_compare",
+                        match_type="contains_any",
+                        keywords=["compare"],
+                        priority=5,
+                        target="lowered",
+                    ),
+                    IntentRouteRule(
+                        rule_id="stock_check_rule",
+                        intent="stock_check",
+                        match_type="regex",
+                        pattern=r"\b\d{6}\b",
+                        priority=10,
+                        target="query",
+                    ),
+                ],
+            ),
+            cache_ttl_seconds=0.0,
         )
+        router = TaskRouter(route_table_store=store)
+
+        decision = router.identify(_request("compare 000001 and 600519 for long-term quality"))
 
         self.assertEqual(decision.intent, "stock_compare")
         self.assertEqual((decision.trace or {}).get("source"), "route_table")
-        self.assertEqual((decision.trace or {}).get("rule_id"), "stock_compare_cn")
+        self.assertEqual((decision.trace or {}).get("rule_id"), "stock_compare_rule")
 
     def test_router_dynamic_hot_reload_changes_result_without_restart(self) -> None:
         backend = InMemoryRouteTableBackend(
@@ -268,9 +295,9 @@ class TaskRouterRouteTableTests(unittest.TestCase):
                             rule_id="stock_rule",
                             intent="stock_check",
                             match_type="contains_any",
-                            keywords=["机会"],
+                            keywords=["ticker"],
                             priority=10,
-                            target="query",
+                            target="lowered",
                         )
                     ],
                 ).model_dump_json(indent=2),
@@ -285,7 +312,7 @@ class TaskRouterRouteTableTests(unittest.TestCase):
             seed_defaults=False,
         )
         router = TaskRouter(route_table_store=store)
-        request = type("Req", (), {"intent": None, "user_query": "最近有什么机会", "constraints": {}})()
+        request = _request("ticker quality check")
 
         first = router.identify(request)
         backend.set_payload(
@@ -297,9 +324,9 @@ class TaskRouterRouteTableTests(unittest.TestCase):
                         rule_id="screen_rule",
                         intent="stock_screen",
                         match_type="contains_any",
-                        keywords=["机会"],
+                        keywords=["ticker"],
                         priority=10,
-                        target="query",
+                        target="lowered",
                     )
                 ],
             ).model_dump_json(indent=2),
@@ -341,7 +368,7 @@ class TaskRouterRouteTableTests(unittest.TestCase):
         )
         router = TaskRouter(route_table_store=store)
 
-        decision = router.identify(type("Req", (), {"intent": None, "user_query": "000001 looks like a worth follow opportunity", "constraints": {}})())
+        decision = router.identify(_request("000001 looks like a worth follow opportunity"))
 
         self.assertEqual(decision.intent, "stock_check")
         self.assertEqual((decision.trace or {}).get("match_type"), "regex")
@@ -367,7 +394,7 @@ class TaskRouterRouteTableTests(unittest.TestCase):
         )
         router = TaskRouter(route_table_store=store)
 
-        decision = router.identify(type("Req", (), {"intent": None, "user_query": "Any follow ideas for the next swing opportunity?", "constraints": {}})())
+        decision = router.identify(_request("Any follow ideas for the next swing opportunity?"))
 
         self.assertEqual(decision.intent, "stock_screen")
         self.assertEqual((decision.trace or {}).get("source"), "route_table_semantic")
@@ -389,9 +416,9 @@ class RouteDefaultsFileTests(unittest.TestCase):
                     "    intent: sector_research\n"
                     "    match_type: contains_any\n"
                     "    priority: 1\n"
-                    "    target: query\n"
+                    "    target: lowered\n"
                     "    keywords:\n"
-                    "      - 赛道\n"
+                    "      - biotech\n"
                     "    enabled: true\n"
                 ),
                 encoding="utf-8",
@@ -399,7 +426,7 @@ class RouteDefaultsFileTests(unittest.TestCase):
             store = build_intent_route_table_store(settings)
             router = TaskRouter(route_table_store=store)
 
-            decision = router.identify(type("Req", (), {"intent": None, "user_query": "这个赛道怎么看", "constraints": {}})())
+            decision = router.identify(_request("biotech sector overview"))
 
             self.assertEqual(decision.intent, "sector_research")
             self.assertEqual((decision.trace or {}).get("route_table_version"), "file-v1")

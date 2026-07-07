@@ -4,16 +4,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_system.adapters.storage.mem0_adapter import Mem0Adapter
-from research_system.cli.chat_controller import handle_chat_line
-from research_system.cli.chat_memory import list_chat_threads
-from research_system.cli.chat_rendering import apply_tui_update
-from research_system.cli.chat_types import ChatSessionState, TuiSession
+from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
+from research_system.cli.flow.chat_controller import handle_chat_line
+from research_system.cli.memory.chat_memory import list_chat_threads
+from research_system.cli.rendering.chat_rendering import apply_tui_update
+from research_system.cli.state.chat_types import ChatSessionState, TuiSession
+from research_system.cli.state.chat_updates import TranscriptUpdate
 from research_system.runtime.orchestrator import ResearchOrchestrator
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.schemas.protocol import RequestEnvelope
-from research_system.services.memory_service import MemoryService
-from research_system.services.task_router import TaskRouter
+from research_system.services.memory import MemoryService
+from research_system.services.routing.router.task_router import TaskRouter
 
 
 class ProviderUnavailableStub:
@@ -38,7 +39,7 @@ class StockCheckSkillRuntimeStub:
                 "symbol": symbol,
                 "query": kwargs.get("query"),
                 "snapshot_date": "2026-06-28",
-                "facts": {"financial_abstract": {"营业总收入": 100, "归母净利润": 20}},
+                "facts": {"financial_abstract": {"revenue": 100, "net_profit": 20}},
                 "source": {"skill": skill_name, "vendor": "stub", "from_cache": False},
             }
         if skill_name == "notice_snapshot_skill":
@@ -121,10 +122,11 @@ class ChatControllerTests(unittest.TestCase):
                 "display_summary": "done",
             }
 
+        query = "\u5206\u6790 000001"
         handle_chat_line(
             Settings.from_env(Path(".")),
             session.state,
-            "帮我看下 000001",
+            query,
             llm_provider=ProviderUnavailableStub(),
             task_router=TaskRouter(),
             cli_command_runner=lambda *args, **kwargs: {},
@@ -134,7 +136,7 @@ class ChatControllerTests(unittest.TestCase):
         )
 
         self.assertEqual(session.state.last_run_id, "01RUNFLOW")
-        self.assertEqual(session.state.last_user_query, "帮我看下 000001")
+        self.assertEqual(session.state.last_user_query, query)
         self.assertEqual(session.state.last_result_intent, "stock_check")
         self.assertEqual(session.state.last_result_summary, "done")
 
@@ -142,7 +144,7 @@ class ChatControllerTests(unittest.TestCase):
         session = TuiSession(
             settings=Settings.from_env(Path(".")),
             state=ChatSessionState(
-                last_user_query="分析茅台，宁德时代，比亚迪，谁更值得投资",
+                last_user_query="compare guizhou maotai and byd",
                 last_result_intent="stock_compare",
                 last_result_summary="compare result is still cautious",
                 last_run_id="01MEMORY",
@@ -165,15 +167,15 @@ class ChatControllerTests(unittest.TestCase):
 
         answers = [message.text for message in session.output_lines if message.kind == "answer"]
         self.assertTrue(answers)
-        self.assertIn("分析茅台，宁德时代，比亚迪，谁更值得投资", answers[-1])
+        self.assertIn("compare guizhou maotai and byd", answers[-1])
         self.assertIn("stock_compare", answers[-1])
 
     def test_handle_chat_line_answers_recent_topic_from_persistent_memory(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings.from_env(Path(temp_dir))
             ensure_workspace_layout(settings)
-            MemoryService(Mem0Adapter(settings)).write_chat_research_memory(
-                query="分析茅台，宁德时代，比亚迪，谁更值得投资",
+            MemoryService(LocalMemoryAdapter(settings)).write_chat_research_memory(
+                query="compare guizhou maotai and byd",
                 intent="stock_compare",
                 run_id="01MEM0",
                 summary="compare result is still cautious",
@@ -202,7 +204,7 @@ class ChatControllerTests(unittest.TestCase):
 
             answers = [message.text for message in session.output_lines if message.kind == "answer"]
             self.assertTrue(answers)
-            self.assertIn("分析茅台，宁德时代，比亚迪，谁更值得投资", answers[-1])
+            self.assertIn("compare guizhou maotai and byd", answers[-1])
             self.assertIn("stock_compare", answers[-1])
             self.assertEqual(session.state.last_run_id, "01MEM0")
 
@@ -303,7 +305,7 @@ class ChatControllerTests(unittest.TestCase):
         handle_chat_line(
             Settings.from_env(Path(".")),
             session.state,
-            "帮我继续分析 000001",
+            "\u5206\u6790 000001",
             llm_provider=ProviderUnavailableStub(),
             task_router=TaskRouter(),
             cli_command_runner=lambda *args, **kwargs: {},
@@ -366,7 +368,7 @@ class ChatControllerTests(unittest.TestCase):
             settings=Settings.from_env(Path(".")),
             state=ChatSessionState(
                 current_intent="stock_check",
-                last_user_query="帮我看下 000001",
+                last_user_query="\u5206\u6790 000001",
                 last_result_intent="stock_check",
                 last_run_id="01PINGAN",
             ),
@@ -386,10 +388,16 @@ class ChatControllerTests(unittest.TestCase):
                 "display_summary": "done",
             }
 
+        bank_compare_query = (
+            "\u4ee5 000001 \u5e73\u5b89\u94f6\u884c\u4e3a\u8d77\u70b9\uff0c\u6269\u5230\u94f6\u884c\u80a1\uff1a"
+            "\u62db\u5546\u94f6\u884c\u3001\u5b81\u6ce2\u94f6\u884c\u3001\u5174\u4e1a\u94f6\u884c\u3001"
+            "\u6c5f\u82cf\u94f6\u884c\u3001\u6210\u90fd\u94f6\u884c\u7b49,\u6700\u8fd1\u54ea\u51e0\u53ea"
+            "\u80a1\u7968\u66f4\u503c\u5f97\u6295\u8d44"
+        )
         handle_chat_line(
             Settings.from_env(Path(".")),
             session.state,
-            "以 000001 平安银行为起点，扩到银行股：招商银行、宁波银行、兴业银行、江苏银行、成都银行等,最近哪几只股票更值得投资",
+            bank_compare_query,
             llm_provider=ProviderUnavailableStub(),
             task_router=TaskRouter(),
             cli_command_runner=lambda *args, **kwargs: {},
@@ -399,13 +407,13 @@ class ChatControllerTests(unittest.TestCase):
         )
 
         self.assertEqual(captured["intent"], "stock_compare")
-        self.assertIn("平安银行", str(captured["query"]))
+        self.assertIn("\u5e73\u5b89\u94f6\u884c", str(captured["query"]))
 
     def test_handle_chat_line_review_follow_up_uses_previous_run_id(self) -> None:
         session = TuiSession(
             settings=Settings.from_env(Path(".")),
             state=ChatSessionState(
-                last_user_query="分析贵州茅台",
+                last_user_query="analyze ping an bank",
                 last_result_intent="stock_check",
                 last_run_id="01PREVIOUS",
             ),
@@ -493,7 +501,7 @@ class ChatControllerTests(unittest.TestCase):
         handle_chat_line(
             Settings.from_env(Path(".")),
             state,
-            "复核上次结论",
+            "continue",
             llm_provider=ProviderUnavailableStub(),
             task_router=TaskRouter(),
             cli_command_runner=lambda *args, **kwargs: {},
@@ -519,7 +527,7 @@ class ChatControllerTests(unittest.TestCase):
             try:
                 orchestrator.retriever.qdrant_available = False
                 orchestrator.retriever.qdrant_error = "disabled_for_test"
-                response = orchestrator.run(RequestEnvelope(intent="stock_check", user_query="帮我看下 000001 这个股票"))
+                response = orchestrator.run(RequestEnvelope(intent="stock_check", user_query="\u5206\u6790 000001"))
 
                 self.assertIn(response.status, {"completed", "failed"})
                 self.assertIn("request_received", events)
@@ -532,7 +540,7 @@ class ChatControllerTests(unittest.TestCase):
             repo_root = Path(temp_dir)
             settings = Settings.from_env(repo_root)
             ensure_workspace_layout(settings)
-            memory_service = MemoryService(Mem0Adapter(settings))
+            memory_service = MemoryService(LocalMemoryAdapter(settings))
             memory_service.write_methodology_memory(
                 memory_type="dimension_experience",
                 content={

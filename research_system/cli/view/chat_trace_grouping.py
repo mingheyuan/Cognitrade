@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from research_system.services.payloads.run_payloads import render_trace_row_text
+from research_system.services.payloads.runs.run_payloads import render_trace_row_text
 
 
 def group_trace_runtime_cards(payload: dict) -> list[dict[str, Any]]:

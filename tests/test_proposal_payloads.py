@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from research_system.schemas.proposals import ProposalDraft, ProposalReviewEvent
-from research_system.services.proposal_payloads import (
+from research_system.services.proposals.payload import (
     proposal_detail_fields,
     proposal_detail_payload,
     proposal_display_summary,

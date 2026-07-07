@@ -5,7 +5,7 @@ from research_system.runtime.presentation.presenter.chat_presenter_payload_state
     ChatPresenterPayloadState,
     PresenterState,
 )
-from research_system.runtime.history.run_trace_row_builder import RunTraceRowBuilder
+from research_system.runtime.history.session.trace.run_trace_row_builder import RunTraceRowBuilder
 from research_system.schemas.runtime import RunEvent
 
 

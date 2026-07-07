@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.runtime.supervisor import RuntimeSupervisor
-from research_system.runtime.supervisor_review_thesis_support import (
+from research_system.runtime.supervision import RuntimeSupervisor
+from research_system.runtime.supervision.review_thesis_support import (
     SupervisorReviewThesisSupport,
 )
-from research_system.runtime.supervisor_sector_research_support import (
+from research_system.runtime.supervision.sector_research_support import (
     SupervisorSectorResearchSupport,
 )
-from research_system.runtime.supervisor_stock_check_support import SupervisorStockCheckSupport
-from research_system.runtime.supervisor_stock_screen_support import (
+from research_system.runtime.supervision.stock_check_support import SupervisorStockCheckSupport
+from research_system.runtime.supervision.stock_screen_support import (
     SupervisorStockScreenSupport,
 )
 

@@ -3,8 +3,11 @@ from __future__ import annotations
 from importlib import import_module
 
 __all__ = [
+    "AgentControl",
     "Blackboard",
     "EventStream",
+    "RuntimeDegradation",
+    "RuntimeExecutionPolicy",
     "GateEvaluator",
     "Mailbox",
     "RunControlPlane",
@@ -15,8 +18,11 @@ __all__ = [
 ]
 
 _EXPORTS = {
+    "AgentControl": ("research_system.runtime.core.agent_control", "AgentControl"),
     "Blackboard": ("research_system.runtime.core.blackboard", "Blackboard"),
     "EventStream": ("research_system.runtime.core.event_stream", "EventStream"),
+    "RuntimeDegradation": ("research_system.runtime.core.execution_policy", "RuntimeDegradation"),
+    "RuntimeExecutionPolicy": ("research_system.runtime.core.execution_policy", "RuntimeExecutionPolicy"),
     "GateEvaluator": ("research_system.runtime.core.gates", "GateEvaluator"),
     "Mailbox": ("research_system.runtime.core.mailbox", "Mailbox"),
     "RunControlPlane": ("research_system.runtime.core.control_plane", "RunControlPlane"),

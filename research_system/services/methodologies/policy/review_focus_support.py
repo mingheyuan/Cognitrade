@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from research_system.services.methodologies.planning_context import (
+from research_system.services.methodologies.planning.planning_context import (
     build_planning_context_view,
     combine_focus_text,
     derive_methodology_focus,

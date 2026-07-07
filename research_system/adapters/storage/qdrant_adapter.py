@@ -7,7 +7,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from qdrant_client.local.persistence import CollectionPersistence
 
-from research_system.runtime.settings import Settings
+from research_system.runtime.platform.settings import Settings
 from research_system.schemas.runtime import BlackboardEntry
 
 

@@ -7,12 +7,12 @@ def collect_screening_inputs(context: RuntimeContext) -> dict[str, list[dict]]:
     return {
         "source_payloads": [
             entry.payload
-            for entry in context.blackboard.list_entries()
+            for entry in context.blackboard.list_entries(thread_id=context.thread.thread_id)
             if entry.kind == "source_record"
         ],
         "snapshot_payloads": [
             entry.payload
-            for entry in context.blackboard.list_entries()
+            for entry in context.blackboard.list_entries(thread_id=context.thread.thread_id)
             if entry.kind == "verified_snapshot"
         ],
     }

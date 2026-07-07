@@ -21,10 +21,12 @@ from research_system.runtime.history.session.trace import (
 from research_system.runtime.history.session.trace import (
     SessionHistoryTraceRebuilder as SessionTracePackageSessionHistoryTraceRebuilder,
 )
-from research_system.runtime.history.run_trace_row_builder import RunTraceRowBuilder
-from research_system.runtime.history.session_history import SessionHistory
-from research_system.runtime.history.step_builder import SessionHistoryStepBuilder
-from research_system.runtime.history.trace_rebuilder import SessionHistoryTraceRebuilder
+from research_system.runtime.history import (
+    RunTraceRowBuilder,
+    SessionHistory,
+    SessionHistoryStepBuilder,
+    SessionHistoryTraceRebuilder,
+)
 from research_system.runtime.planning.action_factory import PlannerActionFactory
 from research_system.runtime.planning.context_hints import PlannerContextHints
 from research_system.runtime.planning.dynamic_plan_support import PlannerDynamicPlanSupport
@@ -33,17 +35,20 @@ from research_system.runtime.planning.models import EntryPlanDecision, EntryPlan
 from research_system.runtime.planning.planner import RuntimePlanner
 from research_system.runtime.planning.static_plan_support import PlannerStaticPlanSupport
 from research_system.runtime.proposals import management as proposals_management_package
-from research_system.runtime.proposals.admin_support import OrchestratorProposalAdminSupport
-from research_system.runtime.proposals.approval_policy import OrchestratorProposalApprovalPolicy
-from research_system.runtime.proposals.auto_approval_support import OrchestratorProposalAutoApprovalSupport
-from research_system.runtime.proposals.collect_support import OrchestratorProposalCollectSupport
-from research_system.runtime.proposals.entry_factory import OrchestratorProposalEntryFactory
-from research_system.runtime.proposals.memory_gate_support import OrchestratorProposalMemoryGateSupport
-from research_system.runtime.proposals.proposal_store import ProposalStore
-from research_system.runtime.proposals.review_pipeline import OrchestratorProposalReviewPipeline
-from research_system.runtime.proposals.support import OrchestratorProposalSupport
-from research_system.runtime.proposals.target_support import OrchestratorProposalTargetSupport
-from research_system.runtime.proposals.transition_support import OrchestratorProposalTransitionSupport
+from research_system.runtime.proposals.management import OrchestratorProposalAdminSupport, ProposalStore
+from research_system.runtime.proposals.policy import (
+    OrchestratorProposalApprovalPolicy,
+    OrchestratorProposalAutoApprovalSupport,
+    OrchestratorProposalMemoryGateSupport,
+    OrchestratorProposalTargetSupport,
+)
+from research_system.runtime.proposals.workflow import (
+    OrchestratorProposalCollectSupport,
+    OrchestratorProposalEntryFactory,
+    OrchestratorProposalReviewPipeline,
+    OrchestratorProposalSupport,
+    OrchestratorProposalTransitionSupport,
+)
 from research_system.runtime.supervision.blackboard_models import (
     ReviewThesisView,
     SectorResearchView,

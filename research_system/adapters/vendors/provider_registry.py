@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
-from research_system.runtime.settings import Settings
+from research_system.runtime.platform.settings import Settings
 
 
 ProviderAccess = Literal["sdk", "http", "browser", "official_disclosure"]

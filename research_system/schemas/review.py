@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from research_system.runtime.id_utils import generate_ulid
+from research_system.runtime.core.id_utils import generate_ulid
 
 
 def utc_now() -> datetime:

@@ -3,10 +3,10 @@ from __future__ import annotations
 import unittest
 
 from research_system.cli.follow_up.chat_follow_up import FollowUpResolution as FollowUpPackageResolution
-from research_system.cli.chat_follow_up import FollowUpResolution
-from research_system.cli.chat_follow_up_markers import looks_like_follow_up_research_query
-from research_system.cli.chat_follow_up_memory_support import short_term_memory_reply
-from research_system.cli.chat_types import ChatSessionState
+from research_system.cli.follow_up import FollowUpResolution
+from research_system.cli.follow_up import looks_like_follow_up_research_query
+from research_system.cli.follow_up import short_term_memory_reply
+from research_system.cli.state.chat_types import ChatSessionState
 
 
 class ChatFollowUpRuntimeTests(unittest.TestCase):

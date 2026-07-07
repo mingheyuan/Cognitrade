@@ -18,6 +18,7 @@ def add_retrieved_evidence(
 ) -> None:
     entry = BlackboardEntry(
         run_id=context.run_id,
+        thread_id=context.thread.thread_id,
         request_id=request.request_id,
         kind="retrieved_evidence",
         agent="retriever",

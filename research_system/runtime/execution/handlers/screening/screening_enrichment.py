@@ -39,10 +39,28 @@ def run_screening_enrichment(
         message=f"Enriching top {len(enrichment_targets)} stock_screen candidates",
         payload={"candidate_symbols": [item.get("symbol") for item in enrichment_targets]},
     )
+    child_thread_ids = list(enrichment_payload.get("child_thread_ids") or [])
+    if child_thread_ids:
+        support.emit_event(
+            context,
+            request_id=request.request_id,
+            intent=intent,
+            event_type="subagent_trace",
+            phase=phase,
+            agent="collector",
+            message="Collector screening enrichment spawned child threads",
+            payload={
+                "subagent_type": "collector_screening_enrichment_threads",
+                "status": "completed",
+                "objective": "Track child-thread fan-out for screening enrichment.",
+                "notes": [f"child_threads={','.join(child_thread_ids)}"],
+            },
+        )
     for snapshot in enrichment_payload.get("snapshots", []):
         snapshot_type = snapshot.get("snapshot_type", "snapshot")
         entry = BlackboardEntry(
             run_id=context.run_id,
+            thread_id=context.thread.thread_id,
             request_id=request.request_id,
             kind="verified_snapshot",
             agent="screener",
@@ -64,7 +82,7 @@ def run_screening_enrichment(
         )
     refreshed_snapshot_payloads = [
         entry.payload
-        for entry in context.blackboard.list_entries()
+        for entry in context.blackboard.list_entries(thread_id=context.thread.thread_id)
         if entry.kind == "verified_snapshot"
     ]
     enriched_constraints = dict(screener_constraints)

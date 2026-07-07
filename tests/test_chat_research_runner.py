@@ -5,17 +5,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from research_system.cli.chat_event_adapter import build_chat_presenter, chat_event_listener
-from research_system.cli.chat_research_runner import run_chat_research
+from research_system.cli.flow.chat_event_adapter import build_chat_presenter, chat_event_listener
+from research_system.cli.flow.chat_research_runner import run_chat_research
 from research_system.runtime.orchestrator import ResearchOrchestrator
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.schemas.protocol import RequestEnvelope
 from research_system.schemas.runtime import RunEvent
-from research_system.services.task_router import ChatDispatchDecision
+from research_system.services.routing.router.task_router import ChatDispatchDecision
 
 
-class _OrchestratorContextStub:
-    instances: list["_OrchestratorContextStub"] = []
+class OrchestratorContextStub:
+    instances: list["OrchestratorContextStub"] = []
 
     def __init__(self, settings, event_listener=None) -> None:
         self.settings = settings
@@ -30,7 +30,7 @@ class _OrchestratorContextStub:
         }
         self.__class__.instances.append(self)
 
-    def __enter__(self) -> "_OrchestratorContextStub":
+    def __enter__(self) -> "OrchestratorContextStub":
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -42,6 +42,19 @@ class _OrchestratorContextStub:
     def run(self, request: RequestEnvelope):
         self.requests.append(request)
         return type("Response", (), {"model_dump": lambda _self, mode="json": dict(self.response)})()
+
+
+class SkillRuntimeStub:
+    def run(self, skill_name: str, **kwargs):
+        snapshot_type = skill_name.removesuffix("_snapshot_skill").replace("_snapshot", "")
+        return {
+            "snapshot_type": snapshot_type,
+            "symbol": kwargs.get("symbol"),
+            "query": kwargs.get("query"),
+            "snapshot_date": "2026-06-28",
+            "facts": {},
+            "source": {"skill": skill_name},
+        }
 
 
 class ChatResearchRunnerTests(unittest.TestCase):
@@ -96,64 +109,63 @@ class ChatResearchRunnerTests(unittest.TestCase):
         self.assertTrue(any(getattr(update.state_patch, "trace_payload", None) is not None for update in patch_updates))
 
     def test_run_chat_research_closes_orchestrator(self) -> None:
-        _OrchestratorContextStub.instances.clear()
-        with patch("research_system.cli.chat_research_runner.ResearchOrchestrator", _OrchestratorContextStub):
-            payload = run_chat_research(
-                Settings.from_env(Path(".")),
-                query="帮我看下 000001",
-                intent="stock_check",
-                run_id=None,
-                thinking_enabled=True,
-                events_mode="compact",
-            )
+        OrchestratorContextStub.instances.clear()
+        payload = run_chat_research(
+            Settings.from_env(Path(".")),
+            query="check 000001",
+            intent="stock_check",
+            run_id=None,
+            thinking_enabled=True,
+            events_mode="compact",
+            orchestrator_cls=OrchestratorContextStub,
+        )
 
         self.assertEqual(payload["run_id"], "01CTX")
-        self.assertEqual(len(_OrchestratorContextStub.instances), 1)
-        stub = _OrchestratorContextStub.instances[0]
+        self.assertEqual(len(OrchestratorContextStub.instances), 1)
+        stub = OrchestratorContextStub.instances[0]
         self.assertTrue(stub.closed)
         self.assertEqual(len(stub.requests), 1)
-        self.assertEqual(stub.requests[0].user_query, "帮我看下 000001")
+        self.assertEqual(stub.requests[0].user_query, "check 000001")
 
     def test_run_chat_research_passes_conversation_context_into_request(self) -> None:
-        _OrchestratorContextStub.instances.clear()
-        with patch("research_system.cli.chat_research_runner.ResearchOrchestrator", _OrchestratorContextStub):
-            run_chat_research(
-                Settings.from_env(Path(".")),
-                query="continue the previous conclusion",
-                intent="stock_check",
-                run_id=None,
-                thinking_enabled=True,
-                events_mode="compact",
-                conversation_context=[
-                    {
-                        "type": "recent_research_memory",
-                        "query": "分析贵州茅台",
-                        "intent": "stock_check",
-                        "summary": "valuation is not cheap but cashflow is resilient",
-                        "run_id": "01MEM",
-                    }
-                ],
-            )
+        OrchestratorContextStub.instances.clear()
+        run_chat_research(
+            Settings.from_env(Path(".")),
+            query="continue the previous conclusion",
+            intent="stock_check",
+            run_id=None,
+            thinking_enabled=True,
+            events_mode="compact",
+            conversation_context=[
+                {
+                    "type": "recent_research_memory",
+                    "query": "check pingan bank",
+                    "intent": "stock_check",
+                    "summary": "valuation is not cheap but cashflow is resilient",
+                    "run_id": "01MEM",
+                }
+            ],
+            orchestrator_cls=OrchestratorContextStub,
+        )
 
-        stub = _OrchestratorContextStub.instances[0]
+        stub = OrchestratorContextStub.instances[0]
         self.assertEqual(len(stub.requests), 1)
-        self.assertEqual(stub.requests[0].conversation_context[0]["query"], "分析贵州茅台")
+        self.assertEqual(stub.requests[0].conversation_context[0]["query"], "check pingan bank")
 
     def test_run_chat_research_applies_review_target_and_dispatch_trace_into_request(self) -> None:
-        _OrchestratorContextStub.instances.clear()
-        with patch("research_system.cli.chat_research_runner.ResearchOrchestrator", _OrchestratorContextStub):
-            run_chat_research(
-                Settings.from_env(Path(".")),
-                query="review the previous conclusion",
-                intent="review_thesis",
-                run_id="01TARGET",
-                thinking_enabled=True,
-                events_mode="compact",
-                dispatch=ChatDispatchDecision(mode="research", intent="review_thesis", reason="chat_dispatch_test"),
-            )
+        OrchestratorContextStub.instances.clear()
+        run_chat_research(
+            Settings.from_env(Path(".")),
+            query="review the previous conclusion",
+            intent="review_thesis",
+            run_id="01TARGET",
+            thinking_enabled=True,
+            events_mode="compact",
+            dispatch=ChatDispatchDecision(mode="research", intent="review_thesis", reason="chat_dispatch_test"),
+            orchestrator_cls=OrchestratorContextStub,
+        )
 
-        stub = _OrchestratorContextStub.instances[0]
-        self.assertEqual(len(stub.requests), 1)
+        stub = OrchestratorContextStub.instances[0]
         request = stub.requests[0]
         self.assertEqual(request.intent, "review_thesis")
         self.assertEqual(request.constraints["review_target_run_id"], "01TARGET")
@@ -168,18 +180,6 @@ class ChatResearchRunnerTests(unittest.TestCase):
         )
 
     def test_chat_research_writes_dispatch_trace_into_result_debug(self) -> None:
-        class SkillRuntimeStub:
-            def run(self, skill_name: str, **kwargs):
-                snapshot_type = skill_name.removesuffix("_snapshot_skill").replace("_snapshot", "")
-                return {
-                    "snapshot_type": snapshot_type,
-                    "symbol": kwargs.get("symbol"),
-                    "query": kwargs.get("query"),
-                    "snapshot_date": "2026-06-28",
-                    "facts": {},
-                    "source": {"skill": skill_name},
-                }
-
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_root = Path(temp_dir)
             settings = Settings.from_env(repo_root)
@@ -192,7 +192,7 @@ class ChatResearchRunnerTests(unittest.TestCase):
                 response = orchestrator.run(
                     RequestEnvelope(
                         intent="stock_check",
-                        user_query="帮我看下 000001",
+                        user_query="check 000001",
                         constraints={
                             "chat_dispatch": {
                                 "mode": "research",

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from research_system.services.methodologies.planning_context import normalize_methodology_preferences
+from research_system.services.methodologies.planning.planning_context_methodology import (
+    normalize_methodology_preferences,
+)
 
 
 DEFAULT_RETRIEVAL_POLICY = {

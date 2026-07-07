@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from research_system.runtime.platform.checks import run_checks
-from research_system.runtime.diagnostics.doctor import build_status, run_doctor
+from research_system.runtime.diagnostics.doctoring.doctor import build_status, run_doctor
 from research_system.runtime.orchestrator import ResearchOrchestrator
 from research_system.runtime.platform.settings import Settings
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from research_system.runtime.presentation.presenter.chat_presenter_payload_state import ChatPresenterPayloadState
-from research_system.runtime.history.run_trace_row_builder import RunTraceRowBuilder
+from research_system.runtime.history.session.trace.run_trace_row_builder import RunTraceRowBuilder
 from research_system.schemas.runtime import RunEvent
 
 
@@ -21,7 +21,16 @@ class ChatPresenterLiveAccumulator:
         event_counts = trace_payload.setdefault("event_counts", {})
         event_counts["events"] = int(event_counts.get("events") or 0) + 1
 
-        if event.event_type in {"subagent_started", "subagent_completed", "subagent_failed", "subagent_trace"}:
+        if event.event_type in {
+            "subagent_started",
+            "subagent_completed",
+            "subagent_failed",
+            "subagent_trace",
+            "thread_started",
+            "thread_completed",
+            "thread_failed",
+            "thread_trace",
+        }:
             trace_payload.setdefault("subagent_trace", []).append(self._subagent_trace_row(event))
         elif event.event_type == "dynamic_action_inserted":
             trace_payload.setdefault("dynamic_trace", []).append(self._dynamic_trace_row(event))

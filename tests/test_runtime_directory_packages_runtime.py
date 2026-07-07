@@ -10,20 +10,14 @@ from research_system.runtime.core.gates import GateEvaluator
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.core.logger import RunLogger
 from research_system.runtime.core.mailbox import Mailbox
-from research_system.runtime.diagnostics.doctor import build_status, run_doctor
-from research_system.runtime.diagnostics.doctor_checks import build_doctor_checks, build_doctor_payload
+from research_system.runtime.diagnostics.doctoring.doctor import build_status, run_doctor
+from research_system.runtime.diagnostics.doctoring.doctor_checks import build_doctor_checks, build_doctor_payload
 from research_system.runtime.diagnostics.doctoring import build_doctor_checks as DoctoringBuildDoctorChecks
 from research_system.runtime.diagnostics.doctoring import build_doctor_payload as DoctoringBuildDoctorPayload
 from research_system.runtime.diagnostics.doctoring import build_status as DoctoringBuildStatus
 from research_system.runtime.diagnostics.doctoring import run_doctor as DoctoringRunDoctor
 from research_system.runtime.diagnostics import status as diagnostics_status
-from research_system.runtime.diagnostics.provider_health import ProviderHealthService
-from research_system.runtime.diagnostics.status_runtime import build_runtime_status
-from research_system.runtime.presentation.chat_presenter import ChatStreamPresenter, DisplayChunk
-from research_system.runtime.presentation.chat_presenter_live_accumulator import ChatPresenterLiveAccumulator
-from research_system.runtime.presentation.chat_presenter_live_payloads import ChatPresenterLivePayloads
-from research_system.runtime.presentation.chat_presenter_payload_state import ChatPresenterPayloadState
-from research_system.runtime.presentation.chat_presenter_summaries import ChatPresenterSummaries
+from research_system.runtime.diagnostics.status import ProviderHealthService, build_runtime_status
 from research_system.runtime.presentation.display import build_display_summary
 from research_system.runtime.presentation.presenter import (
     ChatPresenterLiveAccumulator as PresenterPackageLiveAccumulator,
@@ -41,6 +35,19 @@ from research_system.runtime.presentation.presenter import (
     ChatStreamPresenter as PresenterPackageStreamPresenter,
 )
 from research_system.runtime.presentation.presenter import DisplayChunk as PresenterPackageDisplayChunk
+from research_system.runtime.presentation.presenter.chat_presenter import ChatStreamPresenter, DisplayChunk
+from research_system.runtime.presentation.presenter.chat_presenter_live_accumulator import (
+    ChatPresenterLiveAccumulator,
+)
+from research_system.runtime.presentation.presenter.chat_presenter_live_payloads import (
+    ChatPresenterLivePayloads,
+)
+from research_system.runtime.presentation.presenter.chat_presenter_payload_state import (
+    ChatPresenterPayloadState,
+)
+from research_system.runtime.presentation.presenter.chat_presenter_summaries import (
+    ChatPresenterSummaries,
+)
 
 
 class RuntimeDirectoryPackagesRuntimeTests(unittest.TestCase):

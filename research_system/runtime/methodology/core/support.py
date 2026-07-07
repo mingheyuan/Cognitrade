@@ -83,12 +83,12 @@ class OrchestratorMethodologySupport:
         agent: str,
     ) -> list[BlackboardEntry]:
         source_records = [
-            entry for entry in context.blackboard.list_entries()
+            entry for entry in context.blackboard.list_entries(thread_id=context.thread.thread_id)
             if entry.kind == "source_record"
         ]
         snapshots = {
             str(entry.payload.get("snapshot_type") or ""): entry.payload
-            for entry in context.blackboard.list_entries()
+            for entry in context.blackboard.list_entries(thread_id=context.thread.thread_id)
             if entry.kind == "verified_snapshot"
         }
         compare_request_entry = next(

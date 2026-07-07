@@ -8,7 +8,7 @@ from research_system.runtime.orchestration.orchestrator_context import RuntimeCo
 def collect_distiller_source_records(context: RuntimeContext) -> list[dict]:
     return [
         entry.payload
-        for entry in context.blackboard.list_entries()
+        for entry in context.blackboard.list_entries(thread_id=context.thread.thread_id)
         if entry.kind == "source_record"
     ]
 
@@ -17,7 +17,7 @@ def collect_critic_inputs(context: RuntimeContext) -> dict[str, object]:
     logic_blocks: list[dict] = []
     distilled_dimensions: list[dict] = []
     distillation_summary = None
-    for entry in context.blackboard.list_entries():
+    for entry in context.blackboard.list_entries(thread_id=context.thread.thread_id):
         if entry.kind == "logic_block":
             logic_blocks.append(entry.payload)
         elif entry.kind == "distilled_dimension":

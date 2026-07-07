@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from research_system.cli.state.chat_types import TuiSession as StateTuiSession
-from research_system.cli.chat_types import (
+from research_system.cli.state.chat_types import (
     ChatSessionState,
     ShellUiState,
     ShellViewState,

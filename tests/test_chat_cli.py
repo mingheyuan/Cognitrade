@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from research_system.cli.commands.chat_commands import parse_chat_input as commands_parse_chat_input
-from research_system.cli.chat_commands import (
+from research_system.cli.commands.chat_commands import (
     chat_completion_candidates,
     chat_completion_current_token,
     clear_pending_clarification,
@@ -13,14 +14,15 @@ from research_system.cli.chat_commands import (
     should_resume_pending_clarification,
     store_pending_clarification,
 )
-from research_system.cli.chat_dispatch import answer_basic_chat
-from research_system.cli.chat_follow_up import (
+from research_system.cli.flow.chat_dispatch import answer_basic_chat
+from research_system.cli.follow_up import (
     is_short_term_memory_query,
     looks_like_follow_up_research_query,
     resolve_follow_up_research_request,
     short_term_memory_reply,
 )
-from research_system.cli.chat_types import ChatSessionState
+from research_system.cli.state.chat_types import ChatSessionState
+from research_system.runtime.platform.settings import Settings
 
 
 class ChatCliTests(unittest.TestCase):
@@ -244,6 +246,8 @@ class ChatCliTests(unittest.TestCase):
         provider = ProviderStub()
 
         reply = answer_basic_chat(
+            settings=Settings.from_env(Path(".")),
+            state=object(),
             query="那刚才的结论是什么意思",
             llm_provider=provider,  # type: ignore[arg-type]
             conversation_context=[

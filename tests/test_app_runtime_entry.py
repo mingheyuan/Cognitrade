@@ -3,8 +3,11 @@ from __future__ import annotations
 import unittest
 
 from research_system.cli.app import build_parser, main
-from research_system.cli.app_entry_support import build_app_settings, execute_app_main_command
-from research_system.cli.app_parser_support import build_app_parser
+from research_system.cli.application.app_entry_support import (
+    build_app_settings,
+    execute_app_main_command,
+)
+from research_system.cli.application.app_parser_support import build_app_parser
 
 
 class AppEntryRuntimeTests(unittest.TestCase):

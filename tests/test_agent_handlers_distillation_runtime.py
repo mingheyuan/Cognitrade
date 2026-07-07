@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.runtime.agent_handlers_distillation_context import (
+from research_system.runtime.execution.handlers.distillation.distillation_context import (
     collect_critic_inputs,
     collect_distiller_source_records,
 )
-from research_system.runtime.agent_handlers_distillation_entries import (
+from research_system.runtime.execution.handlers.distillation.distillation_entries import (
     add_critic_outputs,
     add_distillation_outputs,
 )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from research_system.adapters.storage.mem0_adapter import Mem0Adapter
+from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
 from research_system.cli.memory.chat_memory_context import (
     has_recent_chat_memory,
     load_latest_run_memory,
@@ -35,7 +35,7 @@ def hydrate_session_from_persistent_memory(*, settings: Settings, state) -> bool
         apply_turns_to_state(state=state, turns=turns)
         apply_thread_metadata_to_state(state=state, metadata=store.load_thread_metadata(thread_id=thread_id) or {})
         return True
-    record = MemoryService(Mem0Adapter(settings)).load_latest_chat_research_memory(thread_id=thread_id)
+    record = MemoryService(LocalMemoryAdapter(settings)).load_latest_chat_research_memory(thread_id=thread_id)
     if record is None:
         record = load_latest_run_memory(settings)
     if record is None:

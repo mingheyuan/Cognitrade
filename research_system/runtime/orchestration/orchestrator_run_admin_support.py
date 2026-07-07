@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from research_system.runtime.core.control_plane import RunControlPlane
 from research_system.runtime.core.event_stream import EventStream
-from research_system.runtime.history.session_history import SessionHistory
-from research_system.runtime.storage.checkpoint_store import CheckpointStore
+from research_system.runtime.history.session.session_history import SessionHistory
+from research_system.runtime.storage.runs.checkpoint_store import CheckpointStore
 from research_system.runtime.storage.jsonl import write_json
 from research_system.schemas.runtime import RunEvent
 

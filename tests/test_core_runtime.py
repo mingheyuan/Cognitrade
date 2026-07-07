@@ -2,8 +2,17 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.runtime.blackboard import Blackboard
-from research_system.runtime.control_plane import RunControlPlane, RunControlState, utc_now
+from research_system.runtime.core import (
+    Blackboard,
+    EventStream,
+    GateEvaluator,
+    Mailbox,
+    RunControlPlane,
+    RunControlState,
+    RunLogger,
+    generate_ulid,
+    utc_now,
+)
 from research_system.runtime.core.blackboard import Blackboard as CoreBlackboard
 from research_system.runtime.core.control_plane import (
     RunControlPlane as CoreRunControlPlane,
@@ -15,11 +24,6 @@ from research_system.runtime.core.gates import GateEvaluator as CoreGateEvaluato
 from research_system.runtime.core.id_utils import generate_ulid as core_generate_ulid
 from research_system.runtime.core.logger import RunLogger as CoreRunLogger
 from research_system.runtime.core.mailbox import Mailbox as CoreMailbox
-from research_system.runtime.event_stream import EventStream
-from research_system.runtime.gates import GateEvaluator
-from research_system.runtime.id_utils import generate_ulid
-from research_system.runtime.logger import RunLogger
-from research_system.runtime.mailbox import Mailbox
 
 
 class CoreRuntimeTests(unittest.TestCase):

@@ -7,7 +7,7 @@ def collect_review_request_context(context) -> dict[str, object]:
     latest_market_snapshot = None
     latest_fundamental_snapshot = None
     latest_notice_snapshot = None
-    for entry in context.blackboard.list_entries():
+    for entry in context.blackboard.list_entries(thread_id=context.thread.thread_id):
         if entry.kind == "source_record" and entry.payload.get("source_type") == "review_request":
             review_request = entry.payload
         elif entry.kind == "verified_snapshot":
@@ -34,7 +34,7 @@ def collect_review_request_context(context) -> dict[str, object]:
 def collect_screen_review_context(context) -> dict[str, object]:
     screen_candidates: list[dict] = []
     screening_scorecard = None
-    for entry in context.blackboard.list_entries():
+    for entry in context.blackboard.list_entries(thread_id=context.thread.thread_id):
         if entry.kind != "source_record":
             continue
         source_type = str(entry.payload.get("source_type") or "")

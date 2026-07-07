@@ -9,17 +9,17 @@ from research_system.runtime.orchestration.progress_service import ProgressServi
 from research_system.runtime.providers.openai_provider import OpenAIProvider
 from research_system.runtime.providers.provider_registry import ProviderRegistry
 from research_system.runtime.storage import runs as storage_runs_package
-from research_system.runtime.storage.checkpoint_store import CheckpointStore
 from research_system.runtime.storage.jsonl import append_jsonl
-from research_system.runtime.storage.run_store import RunStore
+from research_system.runtime.storage.runs.checkpoint_store import CheckpointStore
+from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.services import methodologies, routing
-from research_system.services.methodologies.dimension_normalizer import DimensionNormalizer
-from research_system.services.methodologies.methodology_evolver import MethodologyEvolver
-from research_system.services.methodologies.retrieval_policy_service import RetrievalPolicyService
+from research_system.services.methodologies.dimensions.dimension_normalizer import DimensionNormalizer
+from research_system.services.methodologies.evolver.methodology_evolver import MethodologyEvolver
+from research_system.services.methodologies.policy.retrieval_policy_service import RetrievalPolicyService
 from research_system.services.routing.router import TaskRouter as PackageTaskRouter
-from research_system.services.routing.route_table_runtime import build_intent_route_table_store
+from research_system.services.routing.tables.route_table_runtime import build_intent_route_table_store
 from research_system.services.routing.stock_target_resolution import extract_stock_symbols
-from research_system.services.routing.task_router import TaskRouter
+from research_system.services.routing.router.task_router import TaskRouter
 
 
 class DirectoryPackageExportsRuntimeTests(unittest.TestCase):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.services.planning_context import (
+from research_system.services.methodologies.planning import (
     PlanningContextView,
     build_planning_context_view,
     combine_focus_text,

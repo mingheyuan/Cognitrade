@@ -1,3 +1,0 @@
-from research_system.services.methodologies.methodology_evolver_review_aggregation import MethodologyEvolverReviewAggregation
-
-__all__ = ["MethodologyEvolverReviewAggregation"]

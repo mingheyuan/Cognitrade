@@ -16,7 +16,7 @@ from research_system.cli.state.chat_state_models import (
 from research_system.cli.transcript.chat_transcript import TranscriptMessage
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import OpenAIProvider
-from research_system.services.routing.task_router import TaskRouter
+from research_system.services.routing.router.task_router import TaskRouter
 
 
 @dataclass

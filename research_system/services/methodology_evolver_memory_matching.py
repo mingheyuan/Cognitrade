@@ -1,3 +1,0 @@
-from research_system.services.methodologies.methodology_evolver_memory_matching import MethodologyEvolverMemoryMatching
-
-__all__ = ["MethodologyEvolverMemoryMatching"]

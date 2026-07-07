@@ -3,25 +3,32 @@ from __future__ import annotations
 import ast
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
+from pathlib import Path
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from research_system.adapters.storage.qdrant_adapter import QdrantAdapter, QdrantUnavailableError
-from research_system.runtime.provider_registry import LLMProviderError, OpenAIProvider
-from research_system.runtime.settings import Settings
+from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
+from research_system.runtime.platform.settings import Settings
+from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.schemas.subagents import SubagentInvocation
-from research_system.services.memory_service import MemoryService
-from research_system.services.planning_context import (
+from research_system.services.memory import MemoryService
+from research_system.services.methodologies.planning.planning_context import (
     methodology_from_benchmark_scope,
     methodology_preference_order,
     normalize_methodology_preferences,
     normalize_planning_context_hints,
 )
-from research_system.services.retrieval_policy_view import normalize_retrieval_policy
+from research_system.services.methodologies.policy.retrieval_policy_view import (
+    normalize_retrieval_policy,
+)
 from research_system.services.reporting.reporting_utils import summarize_proposal_drafts
-from research_system.adapters.storage.mem0_adapter import Mem0Adapter
+from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
 from research_system.subagents.registry import SubagentRegistry
-from research_system.subagents.retrieval import RetrievalDecisionSubagent
+from research_system.subagents.retrieval import (
+    FallbackRetrievalDecisionSubagent,
+    RetrievalDecisionSubagent,
+)
 
 
 class RetrievalDecision(BaseModel):
@@ -36,12 +43,24 @@ class RetrievalDecision(BaseModel):
     degrade_reason: str | None = None
 
 
-class RetrieverService:
+RETRIEVAL_SEARCH_QDRANT = "qdrant"
+RETRIEVAL_SEARCH_BLACKBOARD_ONLY = "blackboard_only"
+
+
+class RetrieverService(RuntimeBoundSubagentInvoker):
     agent_name = "retriever"
 
-    def __init__(self, llm_provider: OpenAIProvider, settings: Settings, retrieval_policy: dict | None = None) -> None:
+    def __init__(
+        self,
+        llm_provider: OpenAIProvider,
+        settings: Settings,
+        retrieval_policy: dict | None = None,
+        runs_root: Path | None = None,
+    ) -> None:
         self.llm_provider = llm_provider
-        self.memory_service = MemoryService(Mem0Adapter(settings))
+        self.settings = settings
+        self.runs_root = runs_root
+        self.memory_service = MemoryService(LocalMemoryAdapter(settings))
         try:
             self.qdrant = QdrantAdapter(settings)
             self.qdrant_available = self.qdrant.available
@@ -68,6 +87,10 @@ class RetrieverService:
                     select_distillation_evidences=self._select_distillation_evidences,
                     select_review_evidences=self._select_review_evidences,
                     retrieval_decision_schema=RetrievalDecision,
+                ),
+                FallbackRetrievalDecisionSubagent(
+                    combine_degrade_reason=self._combine_degrade_reason,
+                    fallback_summary=self._fallback_summary,
                 ),
             ]
         )
@@ -100,6 +123,37 @@ class RetrieverService:
         query: str,
         blackboard_entries: list[dict],
         planning_context_hints: dict[str, str] | None = None,
+        search_mode: str = RETRIEVAL_SEARCH_QDRANT,
+        allow_llm_decision: bool = True,
+        runtime_degraded_reason: str | None = None,
+    ) -> dict:
+        with self.local_run_scope(
+            intent=intent,
+            query=query,
+            phase="retrieve",
+            title="retriever",
+            objective="Select final evidence from blackboard and indexed memory.",
+        ):
+            return self._run_impl(
+                intent=intent,
+                query=query,
+                blackboard_entries=blackboard_entries,
+                planning_context_hints=planning_context_hints,
+                search_mode=search_mode,
+                allow_llm_decision=allow_llm_decision,
+                runtime_degraded_reason=runtime_degraded_reason,
+            )
+
+    def _run_impl(
+        self,
+        *,
+        intent: str,
+        query: str,
+        blackboard_entries: list[dict],
+        planning_context_hints: dict[str, str] | None = None,
+        search_mode: str = RETRIEVAL_SEARCH_QDRANT,
+        allow_llm_decision: bool = True,
+        runtime_degraded_reason: str | None = None,
     ) -> dict:
         trace: list[dict] = []
         indexer_qdrant = self.indexer_qdrant
@@ -124,9 +178,10 @@ class RetrieverService:
         sector = index_outputs.get("sector")
         current_run_id = index_outputs.get("current_run_id")
         top_k = int(self.retrieval_policy.get("final_top_k", 5))
+        use_qdrant_search = search_mode == RETRIEVAL_SEARCH_QDRANT
         qdrant_degraded_reason = None
         should_skip_qdrant = intent == "stock_screen"
-        if effective_qdrant_available and not should_skip_qdrant:
+        if effective_qdrant_available and not should_skip_qdrant and use_qdrant_search:
             search_outputs = self._search_qdrant_evidences(
                 qdrant=searcher_qdrant,
                 intent=intent,
@@ -151,7 +206,7 @@ class RetrieverService:
                     ],
                 )
             )
-        elif not effective_qdrant_available:
+        elif not effective_qdrant_available and not should_skip_qdrant and use_qdrant_search:
             qdrant_degraded_reason = self.qdrant_error or "qdrant_unavailable"
             trace.append(
                 self._build_trace_record(
@@ -163,6 +218,17 @@ class RetrieverService:
                     notes=[f"degrade_reason={qdrant_degraded_reason}"],
                 )
             )
+        elif not should_skip_qdrant and not use_qdrant_search:
+            trace.append(
+                self._build_trace_record(
+                    subagent_type="qdrant_evidence_searcher",
+                    objective="Search indexed evidence candidates via Qdrant.",
+                    status="degraded",
+                    task_name="retrieve:search:qdrant_evidence_searcher",
+                    agent_path="retriever/search/qdrant_evidence_searcher",
+                    notes=[f"degrade_reason={runtime_degraded_reason or 'runtime_fallback'}", "source=runtime_policy"],
+                )
+            )
 
         dedupe_outputs = self._dedupe_evidence_candidates(
             evidences=list(evidence_map.values()),
@@ -171,21 +237,43 @@ class RetrieverService:
         )
         evidences = dedupe_outputs["evidences"]
         planning_context_hints = dict(planning_context_hints or {})
-        decision_outputs, _ = self.registry.invoke(
+        decision_subagent_type = "retrieval_decider" if allow_llm_decision else "fallback_retrieval_decider"
+        decision_inputs = {
+            "intent": intent,
+            "query": query,
+            "evidences": evidences,
+            "top_k": top_k,
+            "qdrant_degraded_reason": qdrant_degraded_reason,
+        }
+        if allow_llm_decision:
+            decision_inputs["planning_context_hints"] = planning_context_hints
+        else:
+            decision_inputs["runtime_degraded_reason"] = runtime_degraded_reason
+        decision_context = {
+            "task_name": f"retrieve:decision:{decision_subagent_type}",
+            "agent_path": f"retriever/decision/{decision_subagent_type}",
+        }
+        decision_outputs, _ = self._invoke_subagent(
             SubagentInvocation(
-                subagent_type="retrieval_decider",
+                subagent_type=decision_subagent_type,
                 objective="Select final evidence set and summarize retrieval.",
-                inputs={
+                inputs=decision_inputs,
+                context=decision_context,
+                requires_llm=allow_llm_decision,
+                fallback_subagent_type="fallback_retrieval_decider" if allow_llm_decision else None,
+                error_fallback_subagent_type="fallback_retrieval_decider" if allow_llm_decision else None,
+                error_fallback_objective="Select fallback evidence set and summarize retrieval after LLM error.",
+                error_fallback_inputs={
                     "intent": intent,
                     "query": query,
                     "evidences": evidences,
                     "top_k": top_k,
                     "qdrant_degraded_reason": qdrant_degraded_reason,
-                    "planning_context_hints": planning_context_hints,
+                    "runtime_degraded_reason": runtime_degraded_reason,
                 },
-                context={
-                    "task_name": "retrieve:decision:retrieval_decider",
-                    "agent_path": "retriever/decision/retrieval_decider",
+                error_fallback_context={
+                    "task_name": "retrieve:decision:fallback_retrieval_decider",
+                    "agent_path": "retriever/decision/fallback_retrieval_decider",
                 },
             )
         )

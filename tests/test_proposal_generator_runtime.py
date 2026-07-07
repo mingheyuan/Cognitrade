@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.services.proposal_generator import ProposalGenerator
-from research_system.services.proposal_generator_dimension_support import ProposalGeneratorDimensionSupport
-from research_system.services.proposal_generator_review_support import ProposalGeneratorReviewSupport
-from research_system.services.proposal_generator_valuation_support import ProposalGeneratorValuationSupport
+from research_system.services.proposals.generator import ProposalGenerator
+from research_system.services.proposals.generator import ProposalGeneratorDimensionSupport
+from research_system.services.proposals.generator import ProposalGeneratorReviewSupport
+from research_system.services.proposals.generator import ProposalGeneratorValuationSupport
 
 
 class ProposalGeneratorRuntimeTests(unittest.TestCase):

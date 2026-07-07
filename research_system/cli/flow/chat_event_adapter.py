@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from research_system.runtime.presentation.chat_presenter import ChatStreamPresenter, DisplayChunk
+from research_system.runtime.presentation.presenter.chat_presenter import ChatStreamPresenter, DisplayChunk
 from research_system.schemas.runtime import RunEvent
 from research_system.cli.state.chat_updates import (
     ShellStatePatch,

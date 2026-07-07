@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.services.run_payloads import (
+from research_system.services.payloads.runs import (
     events_payload_fields,
     latest_run_context,
     render_event_row_text,

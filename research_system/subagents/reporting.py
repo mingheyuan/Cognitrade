@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from research_system.runtime.provider_registry import LLMProviderError, OpenAIProvider
+from research_system.runtime.providers.provider_registry import LLMProviderError, OpenAIProvider
 from research_system.services.reporting.reporting_utils import (
     strategy_follow_up,
     summarize_proposal_drafts,
@@ -63,6 +63,8 @@ class FallbackReportComposerSubagent:
                     "Review the critic findings and confirm which claims are author-original versus "
                     "reply/repost/reported content before reusing this distillation."
                 ),
+                "degraded": True,
+                "degrade_reason": degraded_note,
                 "degraded_note": degraded_note,
             }
         if intent == "review_thesis":
@@ -92,6 +94,8 @@ class FallbackReportComposerSubagent:
                 "review_summary": review_summary_payload,
                 "risk": "Posterior review is running in degraded mode; use the structured review findings as the primary verdict source.",
                 "follow_up": strategy_follow_up_text or "Inspect confirmed versus rejected review findings and keep benchmark-relative interpretation explicit.",
+                "degraded": True,
+                "degrade_reason": degraded_note,
                 "degraded_note": degraded_note,
             }
         if intent == "stock_screen":
@@ -111,6 +115,8 @@ class FallbackReportComposerSubagent:
                 "review_summary": review_summary_payload,
                 "risk": "Stock screening is running in degraded mode; treat the output as a watchlist rather than a direct recommendation.",
                 "follow_up": strategy_follow_up_text or "Review the top candidates manually and confirm price, financial, and notice snapshots before acting.",
+                "degraded": True,
+                "degrade_reason": degraded_note,
                 "degraded_note": degraded_note,
             }
         if intent == "stock_check":
@@ -127,6 +133,8 @@ class FallbackReportComposerSubagent:
                 "methodologies": methodology_payloads or None,
                 "risk": "Stock check is running in degraded mode; validate valuation assumptions and snapshot freshness before using the result.",
                 "follow_up": strategy_follow_up_text or "Review the methodology warnings and confirm the latest market, fundamental, and notice snapshots.",
+                "degraded": True,
+                "degrade_reason": degraded_note,
                 "degraded_note": degraded_note,
             }
         if intent == "stock_compare":
@@ -140,6 +148,8 @@ class FallbackReportComposerSubagent:
                 "methodologies": methodology_payloads or None,
                 "risk": "多标的比较正在降级模式下生成，结论主要依赖快照和轻量方法论模块，不能替代完整财务建模。",
                 "follow_up": "补充同口径行业景气、盈利预期和更完整估值假设后再做最终排序。",
+                "degraded": True,
+                "degrade_reason": degraded_note,
                 "degraded_note": degraded_note,
             }
         if intent == "methodology_evolution":
@@ -157,6 +167,8 @@ class FallbackReportComposerSubagent:
                 "evidence": evidences[:8],
                 "risk": "Methodology evolution ran in degraded mode; review proposal drafts before broad rollout.",
                 "follow_up": "Inspect approved proposals, methodology manifest updates, and memory exports.",
+                "degraded": True,
+                "degrade_reason": degraded_note,
                 "degraded_note": degraded_note,
             }
         return {
@@ -167,6 +179,8 @@ class FallbackReportComposerSubagent:
             "evidence": evidences[:5],
             "risk": "LLM unavailable; report quality is degraded. Exact claims remain constrained by verified snapshots.",
             "follow_up": "Configure OPENAI_API_KEY to enable LLM-powered reporting.",
+            "degraded": True,
+            "degrade_reason": degraded_note,
             "degraded_note": degraded_note,
         }
 
@@ -330,5 +344,7 @@ class LLMErrorReportComposerSubagent:
             "review_summary": review_summary_payload,
             "risk": "LLM reporting failed; report quality is degraded. Exact claims remain constrained by verified snapshots.",
             "follow_up": strategy_follow_up_text or "Check LLM gateway availability or provider compatibility.",
+            "degraded": True,
+            "degrade_reason": f"llm_error:{error_name}",
             "degraded_note": f"llm_error:{error_name}",
         }

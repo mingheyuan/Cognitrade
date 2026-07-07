@@ -1,6 +1,6 @@
 ﻿from __future__ import annotations
 
-from research_system.services.payloads.run_payloads import (
+from research_system.services.payloads.runs.run_payloads import (
     render_labeled_field_line,
     render_trace_row_text,
     trace_payload_fields,

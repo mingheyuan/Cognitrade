@@ -16,8 +16,9 @@ class TaskRouterLlmSupport:
         *,
         query: str,
         llm_provider: OpenAIProvider | None,
+        suppress_errors: bool = True,
     ) -> RoutingDecision | None:
-        if not llm_provider or not llm_provider.available:
+        if llm_provider is None:
             return None
         try:
             payload = llm_provider.parse(
@@ -42,7 +43,9 @@ class TaskRouterLlmSupport:
                 reasoning_effort="low",
             )
         except LLMProviderError:
-            return None
+            if suppress_errors:
+                return None
+            raise
 
         if payload.intent == "clarify":
             clarification = ClarificationPayload(
@@ -67,8 +70,9 @@ class TaskRouterLlmSupport:
         *,
         query: str,
         llm_provider: OpenAIProvider | None,
+        suppress_errors: bool = True,
     ) -> ChatDispatchDecision | None:
-        if not llm_provider or not llm_provider.available:
+        if llm_provider is None:
             return None
         try:
             payload = llm_provider.parse(
@@ -86,5 +90,7 @@ class TaskRouterLlmSupport:
                 reasoning_effort="low",
             )
         except LLMProviderError:
-            return None
+            if suppress_errors:
+                return None
+            raise
         return ChatDispatchDecision(mode=payload.mode, intent=payload.intent, reason=payload.reason)

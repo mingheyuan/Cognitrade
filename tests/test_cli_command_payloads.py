@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.cli_command_payloads import PROPOSAL_COMMANDS, RUN_ID_COMMANDS, STATUS_FILTER_COMMANDS, SUBAGENT_COMMANDS, build_cli_command_payload
+from research_system.cli.commands.cli_command_payloads import PROPOSAL_COMMANDS, RUN_ID_COMMANDS, STATUS_FILTER_COMMANDS, SUBAGENT_COMMANDS, build_cli_command_payload
 
 
 class CliCommandPayloadsTests(unittest.TestCase):

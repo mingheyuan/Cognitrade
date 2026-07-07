@@ -16,8 +16,8 @@ venv/
 
 workspace/qdrant_local/
 workspace/runs/
+workspace/chat_runs/
 workspace/proposals/
-workspace/mem0/
 workspace/memory/
 
 *.sqlite

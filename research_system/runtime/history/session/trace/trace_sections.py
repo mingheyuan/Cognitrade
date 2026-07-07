@@ -20,6 +20,10 @@ class SessionHistoryTraceSections:
                 "subagent_completed",
                 "subagent_failed",
                 "subagent_trace",
+                "thread_started",
+                "thread_completed",
+                "thread_failed",
+                "thread_trace",
             }:
                 continue
             rows.append(

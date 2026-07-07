@@ -9,7 +9,7 @@ from research_system.cli.state.chat_updates import (
     session_patch_update,
     state_patch_update,
 )
-from research_system.services.payloads.run_payloads import (
+from research_system.services.payloads.runs.run_payloads import (
     latest_run_context,
     render_labeled_field_line,
     render_run_row_text,

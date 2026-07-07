@@ -5,19 +5,19 @@ import unittest
 from research_system.cli.commands.cli_command_dispatch import (
     execute_cli_payload_command as commands_execute_cli_payload_command,
 )
-from research_system.cli.cli_command_dispatch import execute_cli_payload_command
-from research_system.cli.cli_command_dispatch_registry import (
+from research_system.cli.commands.cli_command_dispatch import execute_cli_payload_command
+from research_system.cli.commands.cli_command_dispatch_registry import (
     CLI_COMMAND_EXECUTORS,
     resolve_cli_command_executor,
 )
-from research_system.cli.cli_command_history_support import execute_history_command
-from research_system.cli.cli_command_proposal_support import (
+from research_system.cli.commands.cli_command_history_support import execute_history_command
+from research_system.cli.commands.cli_command_proposal_support import (
     execute_proposal_detail_command,
     execute_proposals_command,
     execute_review_proposal_command,
 )
-from research_system.cli.cli_command_run_support import execute_run_id_command, execute_subagent_command
-from research_system.cli.cli_command_system_support import (
+from research_system.cli.commands.cli_command_run_support import execute_run_id_command, execute_subagent_command
+from research_system.cli.commands.cli_command_system_support import (
     execute_check_command,
     execute_cleanup_command,
     execute_doctor_command,

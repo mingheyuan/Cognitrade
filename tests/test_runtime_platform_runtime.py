@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.runtime.checks import run_checks
+from research_system.runtime.platform import run_checks
 from research_system.runtime.platform.checks import run_checks as package_run_checks
 from research_system.runtime.platform.settings import (
     Settings as PackageSettings,
@@ -12,8 +12,8 @@ from research_system.runtime.platform.skill_runtime import (
     LocalSkillBackend as PackageLocalSkillBackend,
     SkillRuntime as PackageSkillRuntime,
 )
-from research_system.runtime.settings import Settings, ensure_workspace_layout
-from research_system.runtime.skill_runtime import LocalSkillBackend, SkillRuntime
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
+from research_system.runtime.platform.skill_runtime import LocalSkillBackend, SkillRuntime
 
 
 class RuntimePlatformRuntimeTests(unittest.TestCase):

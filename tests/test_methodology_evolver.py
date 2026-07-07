@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.services.methodology_evolver import MethodologyEvolver
+from research_system.services.methodologies.evolver import MethodologyEvolver
 
 
 class MethodologyEvolverTests(unittest.TestCase):

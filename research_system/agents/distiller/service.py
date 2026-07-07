@@ -6,8 +6,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from research_system.runtime.provider_registry import LLMProviderError, OpenAIProvider
-from research_system.runtime.settings import Settings
+from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
+from research_system.runtime.platform.settings import Settings
+from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.schemas.distillation import (
     DistillationResult,
     DistillationSummary,
@@ -15,7 +16,7 @@ from research_system.schemas.distillation import (
     LogicBlock,
     SourceSpan,
 )
-from research_system.services.dimension_normalizer import DimensionNormalizer
+from research_system.services.methodologies.dimensions import DimensionNormalizer
 from research_system.schemas.subagents import SubagentInvocation
 from research_system.subagents.distillation import (
     ChunkResultMergerSubagent,
@@ -37,11 +38,16 @@ class DistillationResultPayload(BaseModel):
     distilled_dimensions: list[DistilledDimension] = Field(default_factory=list)
 
 
-class DistillerService:
+DISTILL_EXECUTION_AUTO = "auto"
+DISTILL_EXECUTION_FALLBACK = "fallback"
+
+
+class DistillerService(RuntimeBoundSubagentInvoker):
     agent_name = "distiller"
 
-    def __init__(self, llm_provider: OpenAIProvider, settings: Settings | None = None) -> None:
+    def __init__(self, llm_provider: OpenAIProvider, settings: Settings | None = None, runs_root: Path | None = None) -> None:
         self.llm_provider = llm_provider
+        self.runs_root = runs_root
         taxonomy_config = {}
         if settings is not None:
             yaml_configs = settings.load_yaml_configs()
@@ -73,6 +79,7 @@ class DistillerService:
                     extract_dimensions=self._extract_dimensions,
                     dedupe_logic_blocks=self._dedupe_logic_blocks,
                     merge_dimensions=self._merge_dimensions,
+                    distillation_result_model=DistillationResult,
                 ),
                 ChunkResultMergerSubagent(
                     dedupe_logic_blocks=self._dedupe_logic_blocks,
@@ -85,56 +92,74 @@ class DistillerService:
             ]
         )
 
-    def run(self, *, query: str, source_records: list[dict]) -> dict:
-        normalized_outputs, _ = self.registry.invoke(
-            SubagentInvocation(
-                subagent_type="distill_source_normalizer",
-                objective="Normalize raw distillation source records.",
-                inputs={"query": query, "source_records": source_records},
-                context={
-                    "task_name": "distill:preprocess:source_normalizer",
-                    "agent_path": "distiller/preprocess/source_normalizer",
-                },
+    def run(
+        self,
+        *,
+        query: str,
+        source_records: list[dict],
+        execution_mode: str = DISTILL_EXECUTION_AUTO,
+        runtime_degraded_reason: str | None = None,
+    ) -> dict:
+        with self.local_run_scope(
+            intent="distill_kol_logic",
+            query=query,
+            phase="distill",
+            title="distiller",
+            objective="Distill source records into logic blocks and dimensions.",
+        ):
+            normalized_outputs, _ = self._invoke_subagent(
+                SubagentInvocation(
+                    subagent_type="distill_source_normalizer",
+                    objective="Normalize raw distillation source records.",
+                    inputs={"query": query, "source_records": source_records},
+                    context={
+                        "task_name": "distill:preprocess:source_normalizer",
+                        "agent_path": "distiller/preprocess/source_normalizer",
+                    },
+                )
             )
-        )
-        records = normalized_outputs["records"]
-        if not records:
-            return {
-                "summary": {
-                    "content_type": "empty",
-                    "overall_confidence": 0.0,
-                    "needs_review": True,
-                    "major_risks": ["missing_source_records"],
-                    "processing_notes": ["No source records available for distillation."],
-                },
-                "logic_blocks": [],
-                "distilled_dimensions": [],
-                "degraded": True,
-                "degrade_reason": "missing_source_records",
-            }
+            records = normalized_outputs["records"]
+            if not records:
+                return {
+                    "summary": {
+                        "content_type": "empty",
+                        "overall_confidence": 0.0,
+                        "needs_review": True,
+                        "major_risks": ["missing_source_records"],
+                        "processing_notes": ["No source records available for distillation."],
+                    },
+                    "logic_blocks": [],
+                    "distilled_dimensions": [],
+                    "degraded": True,
+                    "degrade_reason": "missing_source_records",
+                }
 
-        trim_outputs, _ = self.registry.invoke(
-            SubagentInvocation(
-                subagent_type="distill_record_trimmer",
-                objective="Trim source records into bounded distillation input.",
-                inputs={"records": records},
-                context={
-                    "task_name": "distill:preprocess:record_trimmer",
-                    "agent_path": "distiller/preprocess/record_trimmer",
-                },
+            trim_outputs, _ = self._invoke_subagent(
+                SubagentInvocation(
+                    subagent_type="distill_record_trimmer",
+                    objective="Trim source records into bounded distillation input.",
+                    inputs={"records": records},
+                    context={
+                        "task_name": "distill:preprocess:record_trimmer",
+                        "agent_path": "distiller/preprocess/record_trimmer",
+                    },
+                )
             )
-        )
-        trimmed_records = trim_outputs["records"]
-        trim_notes = trim_outputs["notes"]
-        if self.llm_provider.available:
-            result = self._run_chunked(query=query, records=trimmed_records)
-        else:
-            result = self._run_fallback(records=trimmed_records)
-        result["summary"]["processing_notes"].extend(trim_notes)
-        return result
+            trimmed_records = trim_outputs["records"]
+            trim_notes = trim_outputs["notes"]
+            force_fallback = execution_mode == DISTILL_EXECUTION_FALLBACK
+            if not force_fallback:
+                result = self._run_chunked(query=query, records=trimmed_records)
+            else:
+                result = self._run_fallback(records=trimmed_records)
+                if force_fallback:
+                    result["degraded"] = True
+                    result["degrade_reason"] = runtime_degraded_reason or "turn_llm_budget_exhausted"
+            result["summary"]["processing_notes"].extend(trim_notes)
+            return result
 
     def _run_chunked(self, *, query: str, records: list[DistillSourceRecord]) -> dict:
-        chunk_outputs, _ = self.registry.invoke(
+        chunk_outputs, _ = self._invoke_subagent(
             SubagentInvocation(
                 subagent_type="distill_chunk_builder",
                 objective="Split trimmed records into distillation chunks.",
@@ -152,50 +177,70 @@ class DistillerService:
         chunk_results: list[dict] = []
         llm_successes = 0
         fallback_chunks = 0
-        llm_budget_exhausted = False
         llm_timeout_seen = False
 
         for index, chunk in enumerate(chunks, start=1):
             chunk_label = f"chunk_{index}_of_{len(chunks)}"
-            try:
-                if llm_budget_exhausted or not self._should_use_llm(chunk):
-                    raise LLMProviderError("chunk_exceeds_llm_budget")
-                llm_outputs, _ = self.registry.invoke(
-                    SubagentInvocation(
-                        subagent_type="llm_chunk_distiller",
-                        objective=f"Distill {chunk_label} with LLM.",
-                        inputs={"query": f"{query}\nChunk: {chunk_label}", "records": chunk},
-                        context={
-                            "task_name": f"distill:chunks:{chunk_label}:llm_chunk_distiller",
-                            "agent_path": f"distiller/chunks/{chunk_label}/llm_chunk_distiller",
-                        },
-                    )
+            child_thread, child_turn = self.spawn_child_thread(
+                intent="distill_chunk",
+                objective=f"distill:{chunk_label}",
+                agent=self.agent_name,
+                phase="distill_chunk",
+            )
+            llm_outputs, _ = self._invoke_subagent(
+                SubagentInvocation(
+                    subagent_type="llm_chunk_distiller",
+                    objective=f"Distill {chunk_label} with LLM.",
+                    inputs={"query": f"{query}\nChunk: {chunk_label}", "records": chunk},
+                    context={
+                        "task_name": f"distill:chunks:{chunk_label}:llm_chunk_distiller",
+                        "agent_path": f"distiller/chunks/{chunk_label}/llm_chunk_distiller",
+                        "child_thread_id": getattr(child_thread, "thread_id", None),
+                        "child_turn_id": getattr(child_turn, "turn_id", None),
+                    },
+                    requires_llm=True,
+                    fallback_subagent_type="fallback_chunk_distiller",
+                    fallback_objective=f"Fallback-distill {chunk_label}.",
+                    fallback_inputs={"records": chunk},
+                    fallback_context={
+                        "task_name": f"distill:chunks:{chunk_label}:fallback_chunk_distiller",
+                        "agent_path": f"distiller/chunks/{chunk_label}/fallback_chunk_distiller",
+                        "child_thread_id": getattr(child_thread, "thread_id", None),
+                        "child_turn_id": getattr(child_turn, "turn_id", None),
+                    },
+                    error_fallback_subagent_type="fallback_chunk_distiller",
+                    error_fallback_objective=f"Fallback-distill {chunk_label}.",
+                    error_fallback_inputs={"records": chunk},
+                    error_fallback_context={
+                        "task_name": f"distill:chunks:{chunk_label}:fallback_chunk_distiller",
+                        "agent_path": f"distiller/chunks/{chunk_label}/fallback_chunk_distiller",
+                        "child_thread_id": getattr(child_thread, "thread_id", None),
+                        "child_turn_id": getattr(child_turn, "turn_id", None),
+                    },
                 )
-                chunk_result = llm_outputs
-                chunk_result["summary"]["processing_notes"].append(f"{chunk_label}:llm")
-                llm_successes += 1
-                llm_budget_exhausted = True
-            except LLMProviderError as exc:
-                fallback_outputs, _ = self.registry.invoke(
-                    SubagentInvocation(
-                        subagent_type="fallback_chunk_distiller",
-                        objective=f"Fallback-distill {chunk_label}.",
-                        inputs={"records": chunk, "distillation_result_model": DistillationResult},
-                        context={
-                            "task_name": f"distill:chunks:{chunk_label}:fallback_chunk_distiller",
-                            "agent_path": f"distiller/chunks/{chunk_label}/fallback_chunk_distiller",
-                        },
-                    )
-                )
-                chunk_result = fallback_outputs
-                chunk_result["summary"]["processing_notes"].append(f"{chunk_label}:fallback")
-                if "llm_request_timeout" in str(exc):
+            )
+            chunk_result = llm_outputs
+            degrade_reason = str(chunk_result.get("degrade_reason") or "").strip()
+            degrade_tokens = {token.strip() for token in degrade_reason.split(";") if token.strip()}
+            used_fallback = bool(chunk_result.get("degraded")) and bool(
+                degrade_tokens & {"turn_llm_budget_exhausted", "fallback_distillation", "llm_request_timeout", "llm_unavailable"}
+            )
+            chunk_result["summary"]["processing_notes"].append(
+                f"{chunk_label}:{'fallback' if used_fallback else 'llm'}"
+            )
+            if child_thread is not None:
+                chunk_result["summary"]["processing_notes"].append(f"{chunk_label}:child_thread={child_thread.thread_id}")
+            if used_fallback:
+                if "llm_request_timeout" in degrade_tokens:
                     chunk_result["summary"]["processing_notes"].append(f"{chunk_label}:llm_timeout")
                     llm_timeout_seen = True
                 fallback_chunks += 1
+            else:
+                llm_successes += 1
+
             chunk_results.append(chunk_result)
 
-        merged_outputs, _ = self.registry.invoke(
+        merged_outputs, _ = self._invoke_subagent(
             SubagentInvocation(
                 subagent_type="chunk_result_merger",
                 objective="Merge chunk-level distillation outputs.",
@@ -214,12 +259,29 @@ class DistillerService:
                 f"fallback_chunks={fallback_chunks}",
             ]
         )
+        child_thread_ids = sorted(
+            {
+                note.split("=", 1)[1].strip()
+                for chunk_result in chunk_results
+                for note in list((chunk_result.get("summary") or {}).get("processing_notes") or [])
+                if isinstance(note, str) and ":child_thread=" in note and note.split("=", 1)[1].strip()
+            }
+        )
+        if child_thread_ids:
+            merged["summary"]["processing_notes"].append(f"child_threads={','.join(child_thread_ids)}")
         if 0 < fallback_chunks < len(chunks):
             merged["summary"]["processing_notes"].append("partial_llm_distillation")
+            merged["degraded"] = True
+            merged["degrade_reason"] = "partial_llm_distillation"
         if fallback_chunks > 0 and "fallback_distillation" not in merged["summary"]["major_risks"]:
             merged["summary"]["major_risks"].append("fallback_distillation")
+            merged["degraded"] = True
+            merged["degrade_reason"] = str(merged.get("degrade_reason") or "fallback_distillation")
         if llm_timeout_seen and "llm_timeout" not in merged["summary"]["major_risks"]:
             merged["summary"]["major_risks"].append("llm_timeout")
+            merged["degraded"] = True
+            existing_reason = str(merged.get("degrade_reason") or "").strip()
+            merged["degrade_reason"] = existing_reason or "llm_timeout"
         return merged
 
     def _run_fallback(self, *, records: list[DistillSourceRecord]) -> dict:
@@ -281,7 +343,10 @@ class DistillerService:
             summary=summary,
             logic_blocks=self._dedupe_logic_blocks(logic_blocks),
             distilled_dimensions=self._merge_dimensions(list(dimensions.values())),
-        ).model_dump(mode="json")
+        ).model_dump(mode="json") | {
+            "degraded": True,
+            "degrade_reason": "fallback_distillation",
+        }
 
     def _extract_source_path(self, query: str) -> Path | None:
         match = re.search(r"([A-Za-z]:[\\/][^\\/:*?\"<>|\r\n]+(?:[\\/][^\\/:*?\"<>|\r\n]+)*\.jsonl)", query)
@@ -315,26 +380,6 @@ class DistillerService:
         notes.append(f"trimmer_total_chars={total_chars}")
         return selected, notes
 
-    def _build_llm_chunks(self, records: list[DistillSourceRecord]) -> list[list[DistillSourceRecord]]:
-        max_chunk_records = 3
-        max_chunk_chars = 2400
-        chunks: list[list[DistillSourceRecord]] = []
-        current: list[DistillSourceRecord] = []
-        current_chars = 0
-
-        for record in records:
-            content_length = len(record.content)
-            if current and (len(current) >= max_chunk_records or current_chars + content_length > max_chunk_chars):
-                chunks.append(current)
-                current = []
-                current_chars = 0
-            current.append(record)
-            current_chars += content_length
-
-        if current:
-            chunks.append(current)
-        return chunks
-
     def _record_rank(self, record: DistillSourceRecord) -> float:
         metadata = record.metadata or {}
         engagement = float(metadata.get("reply_count") or 0) + float(metadata.get("like_count") or 0) * 0.5
@@ -353,16 +398,6 @@ class DistillerService:
                 keyword_bonus += 1.0
         length_bonus = min(len(record.content) / 300.0, 3.0)
         return engagement + keyword_bonus + length_bonus
-
-    def _should_use_llm(self, records: list[DistillSourceRecord]) -> bool:
-        if not records:
-            return False
-        total_chars = sum(len(record.content) for record in records)
-        if len(records) > 3:
-            return False
-        if total_chars > 2400:
-            return False
-        return True
 
     def _infer_block_type(self, text: str) -> str:
         lowered = text.lower()

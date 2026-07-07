@@ -2,25 +2,25 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.runtime.agent_handlers_review_context import (
+from research_system.runtime.execution.handlers.reviewing.review_context import (
     collect_review_request_context,
     collect_screen_review_context,
 )
-from research_system.runtime.agent_handlers_review_entries import (
+from research_system.runtime.execution.handlers.reviewing.review_entries import (
     add_review_findings,
     add_review_summary,
 )
-from research_system.runtime.agent_handlers_review_events import (
+from research_system.runtime.execution.handlers.reviewing.review_events import (
     emit_reviewer_completed,
     emit_reviewer_requested,
     emit_screen_reviewer_completed,
     emit_screen_reviewer_requested,
 )
-from research_system.runtime.agent_handlers_review_flow import (
+from research_system.runtime.execution.handlers.reviewing.review_flow import (
     run_reviewer_flow,
     run_screen_reviewer_flow,
 )
-from research_system.runtime.agent_handlers_review_trace import (
+from research_system.runtime.execution.handlers.reviewing.review_trace import (
     extend_reviewer_trace,
     extend_screen_reviewer_trace,
 )

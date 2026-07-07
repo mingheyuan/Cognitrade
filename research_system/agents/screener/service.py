@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from typing import Any
+from pathlib import Path
 
+from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.services.methodologies.valuation.comps_service import CompsService
-from research_system.services.planning_context import (
+from research_system.services.methodologies.planning.planning_context import (
     build_planning_context_view,
     derive_methodology_focus,
     has_cashflow_focus,
@@ -13,13 +15,36 @@ from research_system.services.planning_context import (
 )
 
 
-class ScreenerService:
+class ScreenerService(RuntimeBoundSubagentInvoker):
     agent_name = "screener"
 
-    def __init__(self, comps_service: CompsService | None = None) -> None:
+    def __init__(self, comps_service: CompsService | None = None, runs_root: Path | None = None) -> None:
         self.comps_service = comps_service or CompsService()
+        self.runs_root = runs_root
 
     def run(
+        self,
+        *,
+        query: str,
+        source_payloads: list[dict],
+        snapshot_payloads: list[dict],
+        constraints: dict | None = None,
+    ) -> dict:
+        with self.local_run_scope(
+            intent="stock_screen",
+            query=query,
+            phase="screen",
+            title="screener",
+            objective="Rank candidates, score watchlists, and decide enrichment.",
+        ):
+            return self._run_impl(
+                query=query,
+                source_payloads=source_payloads,
+                snapshot_payloads=snapshot_payloads,
+                constraints=constraints,
+            )
+
+    def _run_impl(
         self,
         *,
         query: str,

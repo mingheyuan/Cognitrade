@@ -4,13 +4,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_system.runtime.jsonl import append_jsonl, read_json, read_jsonl, write_json
+from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
 from research_system.runtime.orchestrator import ResearchOrchestrator
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.schemas.protocol import RequestEnvelope
 from research_system.schemas.runtime import BlackboardEntry
-from research_system.services.memory_service import MemoryService
-from research_system.adapters.storage.mem0_adapter import Mem0Adapter
+from research_system.services.memory import MemoryService
+from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
+
+
+def _blackboard_entry(**kwargs) -> BlackboardEntry:
+    data = dict(kwargs)
+    data.setdefault("thread_id", str(data.get("run_id") or ""))
+    return BlackboardEntry(**data)
 
 
 class MethodologyEvolutionTests(unittest.TestCase):
@@ -25,7 +31,7 @@ class MethodologyEvolutionTests(unittest.TestCase):
             run_root.mkdir(parents=True, exist_ok=True)
             append_jsonl(
                 run_root / "blackboard.jsonl",
-                BlackboardEntry(
+                _blackboard_entry(
                     run_id=target_run_id,
                     request_id="req-target",
                     kind="distilled_dimension",
@@ -85,7 +91,7 @@ class MethodologyEvolutionTests(unittest.TestCase):
             self.assertIn(proposal_id, manifest_text)
             retrieval_policy_text = settings.retrieval_policy_path.read_text(encoding="utf-8")
             self.assertIn(proposal_id, retrieval_policy_text)
-            memory_exports = list(read_jsonl(settings.memory_root / "exports" / "mem0_exports.jsonl"))
+            memory_exports = list(read_jsonl(settings.memory_root / "records.jsonl"))
             self.assertTrue(memory_exports)
 
     def test_methodology_evolution_keeps_dimension_proposal_pending_when_sample_size_below_threshold(self) -> None:
@@ -99,7 +105,7 @@ class MethodologyEvolutionTests(unittest.TestCase):
             run_root.mkdir(parents=True, exist_ok=True)
             append_jsonl(
                 run_root / "blackboard.jsonl",
-                BlackboardEntry(
+                _blackboard_entry(
                     run_id=target_run_id,
                     request_id="req-target",
                     kind="distilled_dimension",
@@ -157,7 +163,7 @@ class MethodologyEvolutionTests(unittest.TestCase):
             run_root.mkdir(parents=True, exist_ok=True)
             append_jsonl(
                 run_root / "blackboard.jsonl",
-                BlackboardEntry(
+                _blackboard_entry(
                     run_id=target_run_id,
                     request_id="req-target",
                     kind="distilled_dimension",
@@ -183,7 +189,7 @@ class MethodologyEvolutionTests(unittest.TestCase):
             )
             append_jsonl(
                 run_root / "blackboard.jsonl",
-                BlackboardEntry(
+                _blackboard_entry(
                     run_id=target_run_id,
                     request_id="req-target",
                     kind="source_record",
@@ -231,7 +237,7 @@ class MethodologyEvolutionTests(unittest.TestCase):
                 any("pending_manual_review" in str((payload or {}).get("review_reason") or "") for payload in pending_payloads)
             )
 
-            memory_exports = list(read_jsonl(settings.memory_root / "exports" / "mem0_exports.jsonl"))
+            memory_exports = list(read_jsonl(settings.memory_root / "records.jsonl"))
             self.assertFalse(memory_exports)
 
     def test_methodology_evolution_supports_target_run_ids_and_generates_memory_learning_update(self) -> None:
@@ -248,7 +254,7 @@ class MethodologyEvolutionTests(unittest.TestCase):
                 run_root.mkdir(parents=True, exist_ok=True)
                 append_jsonl(
                     run_root / "blackboard.jsonl",
-                    BlackboardEntry(
+                    _blackboard_entry(
                         run_id=target_run_id,
                         request_id=f"req-{target_run_id}",
                         kind="review_finding",
@@ -288,7 +294,7 @@ class MethodologyEvolutionTests(unittest.TestCase):
             }
             self.assertIn("MemoryLearningUpdate", proposal_types)
 
-            memory_exports = list(read_jsonl(settings.memory_root / "exports" / "mem0_exports.jsonl"))
+            memory_exports = list(read_jsonl(settings.memory_root / "records.jsonl"))
             self.assertTrue(memory_exports)
             self.assertTrue(
                 any(str(item.get("memory_type") or "") == "error_pattern" for item in memory_exports)
@@ -305,7 +311,7 @@ class MethodologyEvolutionTests(unittest.TestCase):
                 run_root.mkdir(parents=True, exist_ok=True)
                 append_jsonl(
                     run_root / "blackboard.jsonl",
-                    BlackboardEntry(
+                    _blackboard_entry(
                         run_id=target_run_id,
                         request_id=f"req-{target_run_id}",
                         kind="distilled_dimension",
@@ -355,7 +361,7 @@ class MethodologyEvolutionTests(unittest.TestCase):
             root = Path(temp_dir)
             settings = Settings.from_env(root)
             ensure_workspace_layout(settings)
-            memory_service = MemoryService(Mem0Adapter(settings))
+            memory_service = MemoryService(LocalMemoryAdapter(settings))
 
             memory_service.write_methodology_memory(
                 memory_type="dimension_experience",
@@ -373,7 +379,7 @@ class MethodologyEvolutionTests(unittest.TestCase):
                 run_root.mkdir(parents=True, exist_ok=True)
                 append_jsonl(
                     run_root / "blackboard.jsonl",
-                    BlackboardEntry(
+                    _blackboard_entry(
                         run_id=target_run_id,
                         request_id=f"req-{target_run_id}",
                         kind="distilled_dimension",
@@ -424,7 +430,7 @@ class MethodologyEvolutionTests(unittest.TestCase):
             root = Path(temp_dir)
             settings = Settings.from_env(root)
             ensure_workspace_layout(settings)
-            memory_service = MemoryService(Mem0Adapter(settings))
+            memory_service = MemoryService(LocalMemoryAdapter(settings))
 
             memory_service.write_methodology_memory(
                 memory_type="dimension_experience",
@@ -442,7 +448,7 @@ class MethodologyEvolutionTests(unittest.TestCase):
                 run_root.mkdir(parents=True, exist_ok=True)
                 append_jsonl(
                     run_root / "blackboard.jsonl",
-                    BlackboardEntry(
+                    _blackboard_entry(
                         run_id=target_run_id,
                         request_id=f"req-{target_run_id}",
                         kind="distilled_dimension",

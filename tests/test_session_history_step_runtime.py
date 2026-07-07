@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.runtime.session_history_step_builder import SessionHistoryStepBuilder
-from research_system.runtime.session_history_step_rows import SessionHistoryStepRows
-from research_system.runtime.session_history_supervisor_state import SessionHistorySupervisorState
+from research_system.runtime.history.session.steps.step_builder import SessionHistoryStepBuilder
+from research_system.runtime.history.session.steps.step_rows import SessionHistoryStepRows
+from research_system.runtime.history.session.steps.supervisor_state import SessionHistorySupervisorState
 
 
 class SessionHistoryStepRuntimeTests(unittest.TestCase):

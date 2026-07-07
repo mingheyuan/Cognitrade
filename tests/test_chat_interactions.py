@@ -6,7 +6,7 @@ import time
 import unittest
 from pathlib import Path
 
-from research_system.cli.chat_interactions import (
+from research_system.cli.interactions import (
     emit_input_update,
     emit_meta_update,
     emit_warning_update,
@@ -15,11 +15,11 @@ from research_system.cli.chat_interactions import (
     toggle_commands_popup,
     write_tui_update,
 )
-from research_system.cli.chat_rendering import apply_tui_update
-from research_system.cli.chat_types import ChatSessionState, TuiSession
-from research_system.cli.chat_updates import default_update_for_text
-from research_system.runtime.settings import Settings
-from research_system.services.task_router import TaskRouter
+from research_system.cli.rendering.chat_rendering import apply_tui_update
+from research_system.cli.state.chat_types import ChatSessionState, TuiSession
+from research_system.cli.state.chat_updates import default_update_for_text
+from research_system.runtime.platform.settings import Settings
+from research_system.services.routing.router.task_router import TaskRouter
 
 
 class ProviderUnavailableStub:

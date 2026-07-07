@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.state.chat_updates import TranscriptUpdate as StateTranscriptUpdate
-from research_system.cli.chat_updates import (
+from research_system.cli.state import TranscriptUpdate as StateTranscriptUpdate
+from research_system.cli.state import (
     SESSION_PATCH_UNSET,
     SessionStatePatch,
     ShellStatePatch,

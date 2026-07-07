@@ -1,3 +1,0 @@
-from research_system.services.methodologies.methodology_evolver_memory_support import MethodologyEvolverMemorySupport
-
-__all__ = ["MethodologyEvolverMemorySupport"]

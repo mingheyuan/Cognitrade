@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from research_system.cli import chat_thread_queries
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 
 
 class ChatThreadQueriesRuntimeTests(unittest.TestCase):

@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from research_system.runtime.doctor import run_doctor
-from research_system.runtime.provider_health import ProviderHealthService
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.runtime.diagnostics import run_doctor
+from research_system.runtime.diagnostics.status import ProviderHealthService
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 
 
 class ProviderHealthTests(unittest.TestCase):
@@ -15,7 +15,10 @@ class ProviderHealthTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings.from_env(Path(temp_dir))
             ensure_workspace_layout(settings)
-            with patch("research_system.runtime.provider_health.NetworkProfile.probe_defaults", return_value={"domestic_reachable": True, "overseas_reachable": False, "domestic": [], "overseas": []}):
+            with patch(
+                "research_system.runtime.diagnostics.status.provider_health.NetworkProfile.probe_defaults",
+                return_value={"domestic_reachable": True, "overseas_reachable": False, "domestic": [], "overseas": []},
+            ):
                 payload = ProviderHealthService(settings).build_report()
 
         rows = {item["dim"]: item for item in payload["provider_rows"]}

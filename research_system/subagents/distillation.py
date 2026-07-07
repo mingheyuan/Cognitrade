@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import Callable
 
 from research_system.adapters.sources.xueqiu_statuses import load_statuses
-from research_system.runtime.id_utils import generate_ulid
-from research_system.runtime.provider_registry import LLMProviderError, OpenAIProvider
+from research_system.runtime.core.id_utils import generate_ulid
+from research_system.runtime.providers.provider_registry import LLMProviderError, OpenAIProvider
 from research_system.schemas.distillation import DistillSourceRecord, DistillationResult, DistilledDimension, LogicBlock
 
 
@@ -193,6 +193,7 @@ class FallbackChunkDistillerSubagent:
         extract_dimensions: Callable[[str], list[tuple[str, str]]],
         dedupe_logic_blocks: Callable[[list[LogicBlock]], list[LogicBlock]],
         merge_dimensions: Callable[[list[DistilledDimension]], list[DistilledDimension]],
+        distillation_result_model: type,
     ) -> None:
         self.infer_block_type = infer_block_type
         self.infer_speaker_type = infer_speaker_type
@@ -205,8 +206,14 @@ class FallbackChunkDistillerSubagent:
         self.extract_dimensions = extract_dimensions
         self.dedupe_logic_blocks = dedupe_logic_blocks
         self.merge_dimensions = merge_dimensions
+        self.distillation_result_model = distillation_result_model
 
-    def run(self, *, records: list[DistillSourceRecord], distillation_result_model: type) -> dict:
+    def run(
+        self,
+        *,
+        records: list[DistillSourceRecord],
+        error_name: str | None = None,
+    ) -> dict:
         logic_blocks: list[LogicBlock] = []
         dimensions: dict[str, DistilledDimension] = {}
         for record in records[:10]:
@@ -259,12 +266,15 @@ class FallbackChunkDistillerSubagent:
             "major_risks": ["fallback_distillation", "quoted_content_may_dominate"],
             "processing_notes": [f"records={len(records)}", f"logic_blocks={len(logic_blocks)}"],
         }
-        return distillation_result_model(
+        return self.distillation_result_model(
             source_record_id=records[0].source_id,
             summary=summary,
             logic_blocks=self.dedupe_logic_blocks(logic_blocks),
             distilled_dimensions=self.merge_dimensions(list(dimensions.values())),
-        ).model_dump(mode="json")
+        ).model_dump(mode="json") | {
+            "degraded": True,
+            "degrade_reason": "fallback_distillation",
+        }
 
 
 class ChunkResultMergerSubagent:

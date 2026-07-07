@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Iterable
+from typing import Iterable
 
-from research_system.runtime.id_utils import generate_ulid
 from research_system.schemas.subagents import SubagentExecutionRecord, SubagentInvocation
 from research_system.subagents.base import SupportsSubagent
 
@@ -21,13 +20,13 @@ class SubagentRegistry:
     def add_observer(self, observer: Callable[..., None]) -> None:
         self._observers.append(observer)
 
-    def invoke(self, invocation: SubagentInvocation) -> tuple[dict[str, Any], SubagentExecutionRecord]:
-        if invocation.subagent_type not in self._subagents:
-            raise KeyError(f"unknown subagent: {invocation.subagent_type}")
-        if not str(invocation.invocation_id or "").strip():
-            invocation = invocation.model_copy(update={"invocation_id": generate_ulid()})
+    def get(self, subagent_type: str) -> SupportsSubagent:
+        try:
+            return self._subagents[subagent_type]
+        except KeyError as exc:
+            raise KeyError(f"unknown subagent: {subagent_type}") from exc
 
-        subagent = self._subagents[invocation.subagent_type]
+    def notify_started(self, *, invocation: SubagentInvocation) -> None:
         self._notify(
             stage="started",
             invocation=invocation,
@@ -35,35 +34,14 @@ class SubagentRegistry:
             outputs=None,
             error=None,
         )
-        try:
-            outputs = subagent.run(**invocation.inputs)
-        except Exception as exc:
-            record = SubagentExecutionRecord(
-                subagent_type=invocation.subagent_type,
-                status="failed",
-                objective=invocation.objective,
-                inputs=invocation.inputs,
-                output_keys=[],
-                notes=[f"{exc.__class__.__name__}: {exc}"],
-            )
-            self._notify(
-                stage="failed",
-                invocation=invocation,
-                record=record,
-                outputs=None,
-                error=exc,
-            )
-            raise
-        notes = []
-        if "notes" in outputs and isinstance(outputs["notes"], list):
-            notes = [str(item) for item in outputs["notes"]]
-        record = SubagentExecutionRecord(
-            subagent_type=invocation.subagent_type,
-            objective=invocation.objective,
-            inputs=invocation.inputs,
-            output_keys=sorted(outputs.keys()),
-            notes=notes,
-        )
+
+    def notify_completed(
+        self,
+        *,
+        invocation: SubagentInvocation,
+        record: SubagentExecutionRecord,
+        outputs: dict[str, Any],
+    ) -> None:
         self._notify(
             stage="completed",
             invocation=invocation,
@@ -71,7 +49,21 @@ class SubagentRegistry:
             outputs=outputs,
             error=None,
         )
-        return outputs, record
+
+    def notify_failed(
+        self,
+        *,
+        invocation: SubagentInvocation,
+        record: SubagentExecutionRecord,
+        error: Exception,
+    ) -> None:
+        self._notify(
+            stage="failed",
+            invocation=invocation,
+            record=record,
+            outputs=None,
+            error=error,
+        )
 
     def _notify(
         self,

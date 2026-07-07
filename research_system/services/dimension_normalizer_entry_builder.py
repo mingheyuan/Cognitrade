@@ -1,3 +1,0 @@
-from research_system.services.methodologies.dimension_normalizer_entry_builder import build_dimension_entries
-
-__all__ = ["build_dimension_entries"]

@@ -4,11 +4,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_system.cli.chat_memory import fork_session_thread, hydrate_session_from_persistent_memory, resume_session_thread, start_new_session_thread, switch_session_thread
-from research_system.cli.chat_state import persist_thread_checkpoint
-from research_system.cli.chat_thread_store import ChatThreadStore
-from research_system.cli.chat_types import ChatSessionState
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.cli.memory.chat_memory import (
+    fork_session_thread,
+    hydrate_session_from_persistent_memory,
+    resume_session_thread,
+    start_new_session_thread,
+    switch_session_thread,
+)
+from research_system.cli.state import persist_thread_checkpoint
+from research_system.cli.memory.chat_thread_store import ChatThreadStore
+from research_system.cli.state.chat_types import ChatSessionState
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 
 
 class ChatThreadCheckpointTests(unittest.TestCase):

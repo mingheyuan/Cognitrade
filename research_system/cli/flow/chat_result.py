@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from research_system.cli.runtime.chat_llm_runtime import stream_text_with_runtime
 from research_system.cli.state.chat_updates import (
     SessionStatePatch,
     ShellStatePatch,
@@ -11,10 +12,23 @@ from research_system.cli.state.chat_updates import (
     meta_update,
     thinking_update,
 )
-from research_system.runtime.providers.provider_registry import LLMProviderError, OpenAIProvider
+from research_system.runtime.providers.provider_registry import OpenAIProvider
+
+_RESULT_RENDER_SYSTEM_PROMPT = (
+    "You are the terminal chat presenter for Cognitrade.\n"
+    "Turn the structured research result into a direct reply for a CLI user.\n"
+    "Do not invent facts. Preserve caveats, review verdicts, and exact uncertainty.\n"
+    "Match the response length to the evidence and the user's question.\n"
+    "If the result needs detail, give detail. If it is simple, keep it short.\n"
+    "If one paragraph is not enough, continue with additional short paragraphs and labeled bullets.\n"
+    "Start directly with the takeaway; do not mention JSON or internal payload structure."
+)
+
 
 def stream_chat_rendered_result(
     *,
+    settings,
+    state,
     llm_provider: OpenAIProvider,
     payload: dict,
     query: str,
@@ -27,50 +41,44 @@ def stream_chat_rendered_result(
     effective_intent = str(payload.get("intent") or requested_intent or "auto")
     status = str(payload.get("status") or "unknown")
     display_summary = payload.get("display_summary")
-    try:
-        text_started = False
-
-        def _on_text_delta(delta: str) -> None:
-            nonlocal text_started
-            text_started = True
-            dispatch_transcript_update(output_writer, default_update_for_text("answer_delta", delta))
-
-        def _on_reasoning_summary(summary: str) -> None:
-            dispatch_transcript_update(output_writer, thinking_update(summary))
-
-        llm_provider.stream_complete(
-            system_prompt=(
-                "You are the terminal chat presenter for Cognitrade.\n"
-                "Turn the structured research result into a direct reply for a CLI user.\n"
-                "Do not invent facts. Preserve caveats, review verdicts, and exact uncertainty.\n"
-                "Match the response length to the evidence and the user's question.\n"
-                "If the result needs detail, give detail. If it is simple, keep it short.\n"
-                "If one paragraph is not enough, continue with additional short paragraphs and labeled bullets.\n"
-                "Start directly with the takeaway; do not mention JSON or internal payload structure."
-            ),
-            user_prompt=(
-                f"Intent: {effective_intent}\n"
-                f"User query: {query}\n"
-                f"Run status: {status}\n"
-                f"Display summary: {display_summary or 'N/A'}\n"
-                f"Structured result: {json.dumps(result, ensure_ascii=False)}"
-            ),
-            on_text_delta=_on_text_delta,
-            on_reasoning_summary=_on_reasoning_summary,
-            temperature=0.2,
-            reasoning_effort="low",
-        )
-        if text_started:
-            dispatch_transcript_update(output_writer, default_update_for_text("answer_done", ""))
-            return True
-    except LLMProviderError:
+    rendered = stream_text_with_runtime(
+        settings=settings,
+        state=state,
+        llm_provider=llm_provider,
+        query=query,
+        conversation_context=None,
+        intent="chat_result_render",
+        phase="chat_result_render",
+        operation="chat_result_render",
+        strategy="render_structured_result",
+        title="chat_result_renderer",
+        objective=f"Render structured result for CLI: {query[:80]}",
+        system_prompt=_RESULT_RENDER_SYSTEM_PROMPT,
+        user_prompt=(
+            f"Intent: {effective_intent}\n"
+            f"User query: {query}\n"
+            f"Run status: {status}\n"
+            f"Display summary: {display_summary or 'N/A'}\n"
+            f"Structured result: {json.dumps(result, ensure_ascii=False)}"
+        ),
+        on_text_delta=lambda delta: dispatch_transcript_update(
+            output_writer,
+            default_update_for_text("answer_delta", delta),
+        ),
+        on_reasoning_summary=lambda summary: dispatch_transcript_update(output_writer, thinking_update(summary)),
+        source_run_id=str(payload.get("run_id") or "").strip() or None,
+    )
+    if not isinstance(rendered, str) or not rendered.strip():
         return False
-    return False
+    dispatch_transcript_update(output_writer, default_update_for_text("answer_done", ""))
+    return True
 
 
 def print_chat_result_payload(
     payload: object,
     *,
+    settings,
+    state,
     llm_provider: OpenAIProvider,
     query: str,
     requested_intent: str | None,
@@ -110,8 +118,10 @@ def print_chat_result_payload(
         if isinstance(maybe_conclusion, str) and maybe_conclusion.strip():
             conclusion = maybe_conclusion.strip()
     summary_text = display_summary.strip() if isinstance(display_summary, str) and display_summary.strip() else None
-    if isinstance(result, dict) and llm_provider.available and status in {"completed", "failed", "timed_out", "cancelled"}:
+    if isinstance(result, dict) and status in {"completed", "failed", "timed_out", "cancelled"}:
         if stream_chat_rendered_result(
+            settings=settings,
+            state=state,
             llm_provider=llm_provider,
             payload=payload,
             query=query,

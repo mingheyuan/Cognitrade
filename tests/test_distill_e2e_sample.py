@@ -30,6 +30,7 @@ class DistillE2ESampleTests(unittest.TestCase):
             entries.append(
                 BlackboardEntry(
                     run_id=run_id,
+                    thread_id=run_id,
                     request_id=request_id,
                     kind="logic_block",
                     agent="distiller",
@@ -51,6 +52,7 @@ class DistillE2ESampleTests(unittest.TestCase):
             entries.append(
                 BlackboardEntry(
                     run_id=run_id,
+                    thread_id=run_id,
                     request_id=request_id,
                     kind="distilled_dimension",
                     agent="distiller",
@@ -70,6 +72,7 @@ class DistillE2ESampleTests(unittest.TestCase):
         entries.append(
             BlackboardEntry(
                 run_id=run_id,
+                thread_id=run_id,
                 request_id=request_id,
                 kind="source_record",
                 agent="distiller",
@@ -89,6 +92,7 @@ class DistillE2ESampleTests(unittest.TestCase):
         entries.append(
             BlackboardEntry(
                 run_id=run_id,
+                thread_id=run_id,
                 request_id=request_id,
                 kind="source_record",
                 agent="critic",
@@ -108,6 +112,7 @@ class DistillE2ESampleTests(unittest.TestCase):
             entries.append(
                 BlackboardEntry(
                     run_id=run_id,
+                    thread_id=run_id,
                     request_id=request_id,
                     kind="review_finding",
                     agent="critic",

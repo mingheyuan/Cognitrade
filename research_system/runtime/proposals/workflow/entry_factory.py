@@ -19,6 +19,7 @@ class OrchestratorProposalEntryFactory:
     ) -> BlackboardEntry:
         return BlackboardEntry(
             run_id=context.run_id,
+            thread_id=context.thread.thread_id,
             request_id=request.request_id,
             kind="source_record",
             agent=agent,
@@ -56,6 +57,7 @@ class OrchestratorProposalEntryFactory:
     ) -> BlackboardEntry:
         return BlackboardEntry(
             run_id=context.run_id,
+            thread_id=context.thread.thread_id,
             request_id=request.request_id,
             kind="proposal_draft",
             agent=agent,

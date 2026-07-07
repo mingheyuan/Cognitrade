@@ -5,7 +5,7 @@ from research_system.cli.commands.research_request_payloads import build_researc
 from research_system.runtime.orchestrator import ResearchOrchestrator
 from research_system.runtime.platform.settings import Settings
 from research_system.schemas.runtime import RunEvent
-from research_system.services.routing.task_router import ChatDispatchDecision
+from research_system.services.routing.router.task_router import ChatDispatchDecision
 
 
 def run_chat_research(

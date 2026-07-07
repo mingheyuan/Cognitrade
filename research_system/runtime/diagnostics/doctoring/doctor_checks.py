@@ -13,7 +13,7 @@ from research_system.runtime.diagnostics.doctoring.doctor_workspace_checks impor
 )
 from research_system.runtime.diagnostics.status.provider_health import ProviderHealthService
 from research_system.runtime.platform.settings import Settings
-from research_system.services.routing.route_table import build_intent_route_table_store
+from research_system.services.routing.tables import build_intent_route_table_store
 
 
 def build_doctor_checks(settings: Settings) -> list[dict]:

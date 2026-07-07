@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from research_system.schemas.protocol import RequestEnvelope
-from research_system.services.routing.task_router import ChatDispatchDecision
+from research_system.services.routing.router.task_router import ChatDispatchDecision
 
 
 def build_research_request(

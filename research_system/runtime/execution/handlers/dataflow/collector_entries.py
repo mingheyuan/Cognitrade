@@ -18,6 +18,7 @@ def add_collector_outputs(
     for source in payload["sources"]:
         entry = BlackboardEntry(
             run_id=context.run_id,
+            thread_id=context.thread.thread_id,
             request_id=request.request_id,
             kind="source_record",
             agent="collector",
@@ -29,6 +30,7 @@ def add_collector_outputs(
     for snapshot in payload["snapshots"]:
         entry = BlackboardEntry(
             run_id=context.run_id,
+            thread_id=context.thread.thread_id,
             request_id=request.request_id,
             kind="verified_snapshot",
             agent="collector",

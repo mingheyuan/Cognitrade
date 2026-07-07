@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from research_system.services.routing.route_table import IntentRouteRule
+from research_system.services.routing.tables import IntentRouteRule
 
 
 class RouteMatcherSemanticSupport:

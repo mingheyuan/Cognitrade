@@ -4,9 +4,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.schemas.proposals import ProposalDraft
-from research_system.services.retrieval_policy_service import RetrievalPolicyService
+from research_system.services.methodologies.policy.retrieval_policy_service import (
+    RetrievalPolicyService,
+)
 
 
 class RetrievalPolicyServiceTests(unittest.TestCase):

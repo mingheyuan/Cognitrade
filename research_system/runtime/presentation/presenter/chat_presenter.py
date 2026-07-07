@@ -51,7 +51,7 @@ class ChatStreamPresenter:
                 )
             return chunks
 
-        if event.event_type == "subagent_started":
+        if event.event_type in {"subagent_started", "thread_started"}:
             summary = self.summaries.subagent_progress_summary(event, status="running")
             if summary:
                 self.state.active_subagent = str((event.payload or {}).get("subagent_type") or "")
@@ -64,14 +64,14 @@ class ChatStreamPresenter:
                 )
             return chunks
 
-        if event.event_type == "subagent_completed":
+        if event.event_type in {"subagent_completed", "thread_completed"}:
             summary = self.summaries.subagent_progress_summary(event, status="completed")
             if summary:
                 self.state.active_subagent = None
                 chunks.append(DisplayChunk(kind="event", text=summary))
             return chunks
 
-        if event.event_type == "subagent_failed":
+        if event.event_type in {"subagent_failed", "thread_failed"}:
             summary = self.summaries.subagent_progress_summary(event, status="failed")
             if summary:
                 self.state.active_subagent = None
@@ -83,7 +83,7 @@ class ChatStreamPresenter:
                 chunks.append(DisplayChunk(kind="event", text=event.message.strip()))
             return chunks
 
-        if event.event_type == "subagent_trace":
+        if event.event_type in {"subagent_trace", "thread_trace"}:
             if event.message.strip():
                 chunks.append(DisplayChunk(kind="event", text=event.message.strip()))
             return chunks

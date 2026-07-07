@@ -3,8 +3,17 @@ from __future__ import annotations
 import unittest
 from unittest.mock import Mock
 
-from research_system.agents.retriever.service import RetrieverService
-from research_system.schemas.subagents import SubagentExecutionRecord
+from research_system.agents.retriever.service import RetrievalDecision, RetrieverService
+from research_system.subagents.registry import SubagentRegistry
+from research_system.subagents.retrieval import (
+    FallbackRetrievalDecisionSubagent,
+    RetrievalDecisionSubagent,
+)
+
+
+class _StubLLMProvider:
+    def parse(self, **kwargs):
+        raise AssertionError("LLM parse should not be called in deterministic retriever tests")
 
 
 class RetrieverServiceTests(unittest.TestCase):
@@ -18,21 +27,27 @@ class RetrieverServiceTests(unittest.TestCase):
         self.service.qdrant_error = "disabled_for_test"
         self.service.indexer_qdrant = None
         self.service.searcher_qdrant = None
-        self.service.registry = Mock()
-        self.service.registry.invoke.side_effect = lambda invocation: (
-            {
-                "evidences": list(invocation.inputs.get("evidences") or []),
-                "retrieval_summary": "mock retrieval summary",
-                "degraded": False,
-            },
-            SubagentExecutionRecord(
-                subagent_type=invocation.subagent_type,
-                objective=invocation.objective,
-                inputs=invocation.inputs,
-                output_keys=["evidences", "retrieval_summary", "degraded"],
-                notes=[],
-                status="completed",
-            ),
+        self.service.registry = SubagentRegistry(
+            [
+                RetrievalDecisionSubagent(
+                    llm_provider=_StubLLMProvider(),
+                    structured_retrieval_summary=self.service._structured_retrieval_summary,
+                    merge_retrieval_summary=self.service._merge_retrieval_summary,
+                    combine_degrade_reason=self.service._combine_degrade_reason,
+                    fallback_summary=self.service._fallback_summary,
+                    select_compare_evidences=self.service._select_compare_evidences,
+                    select_screening_evidences=self.service._select_screening_evidences,
+                    select_stock_check_evidences=self.service._select_stock_check_evidences,
+                    select_methodology_evolution_evidences=self.service._select_methodology_evolution_evidences,
+                    select_distillation_evidences=self.service._select_distillation_evidences,
+                    select_review_evidences=self.service._select_review_evidences,
+                    retrieval_decision_schema=RetrievalDecision,
+                ),
+                FallbackRetrievalDecisionSubagent(
+                    combine_degrade_reason=self.service._combine_degrade_reason,
+                    fallback_summary=self.service._fallback_summary,
+                ),
+            ]
         )
 
     def test_dedupe_prefers_current_run_sector_snapshot(self) -> None:

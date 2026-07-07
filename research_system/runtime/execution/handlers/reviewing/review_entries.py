@@ -17,6 +17,7 @@ def add_review_findings(
     for finding in findings:
         entry = BlackboardEntry(
             run_id=context.run_id,
+            thread_id=context.thread.thread_id,
             request_id=request.request_id,
             kind="review_finding",
             agent=agent,
@@ -43,6 +44,7 @@ def add_review_summary(
 ) -> None:
     entry = BlackboardEntry(
         run_id=context.run_id,
+        thread_id=context.thread.thread_id,
         request_id=request.request_id,
         kind="source_record",
         agent=agent,

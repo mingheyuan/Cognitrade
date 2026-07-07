@@ -2,18 +2,20 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.chat_ui_runtime import (
+from research_system.cli.runtime.chat_ui_runtime import (
     ChatFallbackRuntime,
     ChatShellRuntime,
-    ChatUiRuntime,
     build_chat_fallback_runtime,
     build_chat_shell_runtime,
+)
+from research_system.cli.runtime.chat_ui_runtime_core import (
+    ChatUiRuntime,
     build_chat_ui_runtime,
 )
 
 
 class ChatUiRuntimeRuntimeTests(unittest.TestCase):
-    def test_chat_ui_runtime_facade_exports_runtime_types_and_builders(self) -> None:
+    def test_chat_ui_runtime_package_exports_runtime_types_and_builders(self) -> None:
         self.assertIsNotNone(ChatUiRuntime)
         self.assertIsNotNone(ChatShellRuntime)
         self.assertIsNotNone(ChatFallbackRuntime)

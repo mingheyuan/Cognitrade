@@ -1,3 +1,0 @@
-from research_system.services.proposals.proposal_generator_dimension_support import ProposalGeneratorDimensionSupport
-
-__all__ = ["ProposalGeneratorDimensionSupport"]

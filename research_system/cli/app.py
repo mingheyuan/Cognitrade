@@ -13,7 +13,7 @@ from research_system.cli.state.chat_types import ChatSessionState, TuiSession
 from research_system.runtime.orchestration.orchestrator import ResearchOrchestrator
 from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.runtime.platform.settings import Settings
-from research_system.services.routing.task_router import ChatDispatchDecision, TaskRouter
+from research_system.services.routing.router.task_router import ChatDispatchDecision, TaskRouter
 
 
 def build_parser():

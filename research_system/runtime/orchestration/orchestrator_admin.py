@@ -15,8 +15,8 @@ from research_system.runtime.orchestration.orchestrator_run_admin_support import
     OrchestratorRunAdminSupport,
 )
 from research_system.runtime.platform.settings import Settings
-from research_system.runtime.storage.retention import RunRetentionService
-from research_system.runtime.storage.run_store import RunStore
+from research_system.runtime.storage.runs.retention import RunRetentionService
+from research_system.runtime.storage.runs.run_store import RunStore
 
 
 @dataclass

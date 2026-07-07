@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.services.proposal_generator import ProposalGenerator
+from research_system.services.proposals.generator import ProposalGenerator
 
 
 class ProposalGeneratorTests(unittest.TestCase):

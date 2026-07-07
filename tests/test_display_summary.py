@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.runtime.display import build_display_summary
+from research_system.runtime.presentation.display import build_display_summary
 
 
 class DisplaySummaryTests(unittest.TestCase):

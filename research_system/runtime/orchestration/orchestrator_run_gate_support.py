@@ -18,7 +18,7 @@ class OrchestratorRunGateSupport:
         verdicts = self.host.gates.evaluate(
             run_id=run_id,
             phase="report",
-            entries=context.blackboard.list_entries(),
+            entries=context.blackboard.list_entries(thread_id=context.thread.thread_id),
             requires_verified_snapshot=intent != "methodology_evolution",
             requires_review_findings=intent == "review_thesis",
         )

@@ -5,10 +5,10 @@ from types import SimpleNamespace
 import tempfile
 import unittest
 
-from research_system.runtime.openai_client_support import OpenAIClientSupport
-from research_system.runtime.openai_response_support import OpenAIResponseSupport
-from research_system.runtime.provider_registry import OpenAIProvider, ProviderRegistry
-from research_system.runtime.settings import Settings
+from research_system.runtime.providers.openai_client_support import OpenAIClientSupport
+from research_system.runtime.providers.openai_response_support import OpenAIResponseSupport
+from research_system.runtime.providers.provider_registry import OpenAIProvider, ProviderRegistry
+from research_system.runtime.platform.settings import Settings
 
 
 class _FakeStreamContext:

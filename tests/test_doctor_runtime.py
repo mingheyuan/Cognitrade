@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from research_system.runtime.doctor import build_status, run_doctor
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.runtime.diagnostics.doctoring.doctor import build_status, run_doctor
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 
 
 class DoctorRuntimeTests(unittest.TestCase):
@@ -34,7 +34,7 @@ class DoctorRuntimeTests(unittest.TestCase):
             settings = Settings.from_env(Path(temp_dir))
             ensure_workspace_layout(settings)
             with patch(
-                "research_system.runtime.provider_health.NetworkProfile.probe_defaults",
+                "research_system.runtime.diagnostics.status.provider_health.NetworkProfile.probe_defaults",
                 return_value={"domestic_reachable": True, "overseas_reachable": False, "domestic": [], "overseas": []},
             ):
                 payload = run_doctor(settings)

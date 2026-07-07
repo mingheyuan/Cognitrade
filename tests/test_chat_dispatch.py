@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
-from research_system.cli.chat_dispatch import (
+from research_system.cli.flow.chat_dispatch import (
     answer_basic_chat,
     decide_chat_dispatch,
     print_streamed_basic_chat_answer,
     should_answer_basic_chat,
 )
 from research_system.runtime.orchestrator import ResearchOrchestrator
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
+from research_system.runtime.storage.jsonl import read_json
+from research_system.services.routing.router.task_router import TaskRouter
 
 
 class ProviderUnavailableStub:
@@ -36,11 +41,23 @@ class ProviderStreamingStub:
 
 class ChatDispatchTests(unittest.TestCase):
     def test_basic_identity_question_is_answered_without_research_routing(self) -> None:
-        reply = answer_basic_chat(query="who are you?", llm_provider=ProviderUnavailableStub())
+        settings = Settings.from_env(Path("."))
+        reply = answer_basic_chat(
+            settings=settings,
+            state=object(),
+            query="who are you?",
+            llm_provider=ProviderUnavailableStub(),
+        )
         self.assertIn("Cognitrade", reply)
 
     def test_basic_identity_question_is_answered_in_chinese_without_garbled_text(self) -> None:
-        reply = answer_basic_chat(query="你是谁", llm_provider=ProviderUnavailableStub())
+        settings = Settings.from_env(Path("."))
+        reply = answer_basic_chat(
+            settings=settings,
+            state=object(),
+            query="你是谁？",
+            llm_provider=ProviderUnavailableStub(),
+        )
         self.assertIn("Cognitrade", reply)
         self.assertIn("A 股研究", reply)
         self.assertNotIn("????", reply)
@@ -49,12 +66,15 @@ class ChatDispatchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings.from_env(Path(temp_dir))
             ensure_workspace_layout(settings)
-            orchestrator = ResearchOrchestrator(settings)
-            try:
-                router = orchestrator.task_router
-                self.assertTrue(should_answer_basic_chat(query="who are you?", task_router=router))
-            finally:
-                orchestrator.close()
+            router = TaskRouter()
+            self.assertTrue(
+                should_answer_basic_chat(
+                    settings=settings,
+                    state=object(),
+                    query="who are you?",
+                    task_router=router,
+                )
+            )
 
     def test_chat_dispatch_prefers_direct_answer_for_index_definition_question(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -63,9 +83,61 @@ class ChatDispatchTests(unittest.TestCase):
             orchestrator = ResearchOrchestrator(settings)
             try:
                 router = orchestrator.task_router
-                dispatch = decide_chat_dispatch(query="what is the shanghai composite index?", task_router=router)
+                dispatch = decide_chat_dispatch(
+                    settings=settings,
+                    state=object(),
+                    query="what is the shanghai composite index?",
+                    task_router=router,
+                )
                 self.assertEqual(dispatch.mode, "direct_answer")
                 self.assertIsNone(dispatch.intent)
+            finally:
+                orchestrator.close()
+
+    def test_chat_dispatch_runtime_finalizes_thread_and_turn_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            orchestrator = ResearchOrchestrator(settings)
+            try:
+                router = orchestrator.task_router
+                dispatch = decide_chat_dispatch(
+                    settings=settings,
+                    state=object(),
+                    query="what is the shanghai composite index?",
+                    task_router=router,
+                )
+                self.assertEqual(dispatch.mode, "direct_answer")
+            finally:
+                orchestrator.close()
+            chat_run_root = next((settings.workspace_root / "chat_runs").iterdir())
+            self.assertEqual((read_json(chat_run_root / "thread_state.json") or {}).get("status"), "completed")
+            self.assertEqual((read_json(chat_run_root / "turn_state.json") or {}).get("status"), "completed")
+
+    def test_chat_dispatch_runtime_uses_settings_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.max_llm_calls_per_turn = 3
+            settings.max_subagent_calls_per_turn = 4
+            settings.max_child_threads_per_turn = 2
+            orchestrator = ResearchOrchestrator(settings)
+            try:
+                router = orchestrator.task_router
+                with patch(
+                    "research_system.cli.runtime.chat_llm_runtime.build_runtime_context",
+                    wraps=__import__("research_system.cli.runtime.chat_llm_runtime", fromlist=["build_runtime_context"]).build_runtime_context,
+                ) as build_runtime_context:
+                    dispatch = decide_chat_dispatch(
+                        settings=settings,
+                        state=object(),
+                        query="what is the shanghai composite index?",
+                        task_router=router,
+                    )
+                self.assertEqual(dispatch.mode, "direct_answer")
+                self.assertEqual(build_runtime_context.call_args.kwargs["max_llm_calls_per_turn"], 3)
+                self.assertEqual(build_runtime_context.call_args.kwargs["max_subagent_calls_per_turn"], 4)
+                self.assertEqual(build_runtime_context.call_args.kwargs["max_child_threads_per_turn"], 2)
             finally:
                 orchestrator.close()
 
@@ -76,7 +148,12 @@ class ChatDispatchTests(unittest.TestCase):
             orchestrator = ResearchOrchestrator(settings)
             try:
                 router = orchestrator.task_router
-                dispatch = decide_chat_dispatch(query="latest shanghai composite performance", task_router=router)
+                dispatch = decide_chat_dispatch(
+                    settings=settings,
+                    state=object(),
+                    query="latest shanghai composite performance",
+                    task_router=router,
+                )
                 self.assertEqual(dispatch.mode, "research")
             finally:
                 orchestrator.close()
@@ -89,6 +166,8 @@ class ChatDispatchTests(unittest.TestCase):
             try:
                 router = orchestrator.task_router
                 dispatch = decide_chat_dispatch(
+                    settings=settings,
+                    state=object(),
                     query="what stocks are worth following as a watchlist recently",
                     task_router=router,
                 )
@@ -99,6 +178,12 @@ class ChatDispatchTests(unittest.TestCase):
                 orchestrator.close()
 
     def test_chat_dispatch_prefers_compare_for_single_stock_start_expanded_to_bank_peers(self) -> None:
+        bank_compare_query = (
+            "\u4ee5 000001 \u5e73\u5b89\u94f6\u884c\u4e3a\u8d77\u70b9\uff0c\u6269\u5230\u94f6\u884c\u80a1\uff1a"
+            "\u62db\u5546\u94f6\u884c\u3001\u5b81\u6ce2\u94f6\u884c\u3001\u5174\u4e1a\u94f6\u884c\u3001"
+            "\u6c5f\u82cf\u94f6\u884c\u3001\u6210\u90fd\u94f6\u884c\u7b49,\u6700\u8fd1\u54ea\u51e0\u53ea"
+            "\u80a1\u7968\u66f4\u503c\u5f97\u6295\u8d44"
+        )
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings.from_env(Path(temp_dir))
             ensure_workspace_layout(settings)
@@ -106,7 +191,9 @@ class ChatDispatchTests(unittest.TestCase):
             try:
                 router = orchestrator.task_router
                 dispatch = decide_chat_dispatch(
-                    query="以 000001 平安银行为起点，扩到银行股：招商银行、宁波银行、兴业银行、江苏银行、成都银行等,最近哪几只股票更值得投资",
+                    settings=settings,
+                    state=object(),
+                    query=bank_compare_query,
                     task_router=router,
                 )
                 self.assertEqual(dispatch.mode, "research")
@@ -116,7 +203,11 @@ class ChatDispatchTests(unittest.TestCase):
                 orchestrator.close()
 
     def test_chat_dispatch_uses_semantic_route_before_llm_for_research_queries(self) -> None:
-        from research_system.services.route_table import IntentRouteRule, IntentRouteTable, IntentRouteTableStore
+        from research_system.services.routing.tables import (
+            IntentRouteRule,
+            IntentRouteTable,
+            IntentRouteTableStore,
+        )
 
         store = IntentRouteTableStore(
             default_table=IntentRouteTable(
@@ -135,22 +226,24 @@ class ChatDispatchTests(unittest.TestCase):
             ),
             cache_ttl_seconds=0.0,
         )
-        from research_system.services.task_router import TaskRouter
-
         router = TaskRouter(route_table_store=store)
-        dispatch = decide_chat_dispatch(query="Any follow ideas for the next swing opportunity?", task_router=router)
+        dispatch = decide_chat_dispatch(
+            settings=Settings.from_env(Path(".")),
+            state=object(),
+            query="Any follow ideas for the next swing opportunity?",
+            task_router=router,
+        )
 
         self.assertEqual(dispatch.mode, "research")
         self.assertEqual(dispatch.intent, "stock_screen")
         self.assertIn("fallback_rule_route:route_table_semantic", str(dispatch.reason))
 
     def test_basic_chat_streams_when_provider_supports_streaming(self) -> None:
-        from io import StringIO
-        from contextlib import redirect_stdout
-
         buffer = StringIO()
         with redirect_stdout(buffer):
             print_streamed_basic_chat_answer(
+                settings=Settings.from_env(Path(".")),
+                state=object(),
                 query="Hello",
                 llm_provider=ProviderStreamingStub(),
                 emit_text=lambda output_writer, update: print(update.text, end="" if update.action == "stream_append" else "\n"),

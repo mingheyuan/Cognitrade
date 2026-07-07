@@ -42,6 +42,8 @@ class SessionHistorySubagentPayloadBuilder:
             "phase": self._coalesce(trace_rows, event_rows, "phase"),
             "agent": self._coalesce(trace_rows, event_rows, "agent"),
             "objective": self._coalesce(trace_rows, event_rows, "objective"),
+            "child_thread_id": self._coalesce(trace_rows, event_rows, "child_thread_id"),
+            "child_turn_id": self._coalesce(trace_rows, event_rows, "child_turn_id"),
             "notes": self._coalesce(trace_rows, event_rows, "notes") or [],
             "trace_rows": trace_rows,
             "events": event_rows,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.chat_command_catalog import CHAT_COMMAND_SUMMARY_LINES, CHAT_HELP_LINES, print_chat_help
+from research_system.cli.commands.chat_command_catalog import CHAT_COMMAND_SUMMARY_LINES, CHAT_HELP_LINES, print_chat_help
 
 
 class ChatCommandCatalogTests(unittest.TestCase):

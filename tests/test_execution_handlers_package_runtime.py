@@ -7,46 +7,46 @@ from research_system.runtime.execution.handlers import dataflow as dataflow_pack
 from research_system.runtime.execution.handlers import distillation as distillation_package
 from research_system.runtime.execution.handlers import reviewing as reviewing_package
 from research_system.runtime.execution.handlers import screening as screening_package
-from research_system.runtime.execution.handlers.data import run_collector, run_retriever
-from research_system.runtime.execution.handlers.data_context import collect_blackboard_entries_json
-from research_system.runtime.execution.handlers.collector_entries import (
+from research_system.runtime.execution.handlers.dataflow.collector_entries import (
     add_collector_outputs,
     add_stock_methodology_entries,
 )
-from research_system.runtime.execution.handlers.collector_wait import handle_collector_wait
-from research_system.runtime.execution.handlers.retriever_entries import add_retrieved_evidence
-from research_system.runtime.execution.handlers.distillation import run_critic, run_distiller
-from research_system.runtime.execution.handlers.distillation_context import (
+from research_system.runtime.execution.handlers.dataflow.collector_wait import handle_collector_wait
+from research_system.runtime.execution.handlers.dataflow.data import run_collector, run_retriever
+from research_system.runtime.execution.handlers.dataflow.data_context import collect_blackboard_entries_json
+from research_system.runtime.execution.handlers.dataflow.retriever_entries import add_retrieved_evidence
+from research_system.runtime.execution.handlers.distillation.distillation import run_critic, run_distiller
+from research_system.runtime.execution.handlers.distillation.distillation_context import (
     collect_critic_inputs,
     collect_distiller_source_records,
 )
-from research_system.runtime.execution.handlers.distillation_entries import (
+from research_system.runtime.execution.handlers.distillation.distillation_entries import (
     add_critic_outputs,
     add_distillation_outputs,
 )
 from research_system.runtime.execution.handlers.registry import OrchestratorAgentHandlers
 from research_system.runtime.execution.handlers.reporting import run_reporter
-from research_system.runtime.execution.handlers.review import run_reviewer, run_screen_reviewer
-from research_system.runtime.execution.handlers.review_context import (
+from research_system.runtime.execution.handlers.reviewing.review import run_reviewer, run_screen_reviewer
+from research_system.runtime.execution.handlers.reviewing.review_context import (
     collect_review_request_context,
     collect_screen_review_context,
 )
-from research_system.runtime.execution.handlers.review_entries import add_review_findings, add_review_summary
-from research_system.runtime.execution.handlers.review_events import (
+from research_system.runtime.execution.handlers.reviewing.review_entries import add_review_findings, add_review_summary
+from research_system.runtime.execution.handlers.reviewing.review_events import (
     emit_reviewer_completed,
     emit_reviewer_requested,
     emit_screen_reviewer_completed,
     emit_screen_reviewer_requested,
 )
-from research_system.runtime.execution.handlers.review_flow import run_reviewer_flow, run_screen_reviewer_flow
-from research_system.runtime.execution.handlers.review_trace import (
+from research_system.runtime.execution.handlers.reviewing.review_flow import run_reviewer_flow, run_screen_reviewer_flow
+from research_system.runtime.execution.handlers.reviewing.review_trace import (
     extend_reviewer_trace,
     extend_screen_reviewer_trace,
 )
-from research_system.runtime.execution.handlers.screening import run_screener
-from research_system.runtime.execution.handlers.screening_context import collect_screening_inputs
-from research_system.runtime.execution.handlers.screening_enrichment import run_screening_enrichment
-from research_system.runtime.execution.handlers.screening_entries import (
+from research_system.runtime.execution.handlers.screening.screening import run_screener
+from research_system.runtime.execution.handlers.screening.screening_context import collect_screening_inputs
+from research_system.runtime.execution.handlers.screening.screening_enrichment import run_screening_enrichment
+from research_system.runtime.execution.handlers.screening.screening_entries import (
     add_screening_candidates,
     add_screening_scorecard,
 )

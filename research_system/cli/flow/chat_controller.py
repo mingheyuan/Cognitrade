@@ -7,7 +7,7 @@ from research_system.cli.memory.chat_memory import ensure_session_thread
 from research_system.cli.state.chat_updates import dispatch_transcript_update
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import OpenAIProvider
-from research_system.services.routing.task_router import TaskRouter
+from research_system.services.routing.router.task_router import TaskRouter
 
 
 def handle_chat_line(

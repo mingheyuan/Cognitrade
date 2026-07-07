@@ -29,6 +29,8 @@ class ChatAppRuntime:
     ) -> str | None:
         def _basic_answer_stream(**kwargs):
             return self.basic_answer_stream_print_fn(
+                settings=settings,
+                state=state,
                 emit_text=self.dispatch_transcript_update_fn,
                 **kwargs,
             )
@@ -36,6 +38,8 @@ class ChatAppRuntime:
         def _print_chat_result(payload, *, llm_provider, query, requested_intent, output_writer=None):
             return self.print_chat_result_payload_fn(
                 payload,
+                settings=settings,
+                state=state,
                 llm_provider=llm_provider,
                 query=query,
                 requested_intent=requested_intent,

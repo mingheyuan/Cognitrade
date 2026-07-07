@@ -14,16 +14,10 @@ from research_system.runtime.proposals.policy import (
 from research_system.runtime.proposals.policy import (
     OrchestratorProposalTargetSupport as PolicyPackageTargetSupport,
 )
-from research_system.runtime.orchestrator_proposal_approval_policy import (
+from research_system.runtime.proposals.policy import (
     OrchestratorProposalApprovalPolicy,
-)
-from research_system.runtime.orchestrator_proposal_auto_approval_support import (
     OrchestratorProposalAutoApprovalSupport,
-)
-from research_system.runtime.orchestrator_proposal_memory_gate_support import (
     OrchestratorProposalMemoryGateSupport,
-)
-from research_system.runtime.orchestrator_proposal_target_support import (
     OrchestratorProposalTargetSupport,
 )
 

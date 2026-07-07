@@ -6,7 +6,9 @@ import yaml
 
 from research_system.runtime.platform.settings import Settings
 from research_system.schemas.proposals import ProposalDraft
-from research_system.services.methodologies.planning_context import normalize_methodology_preference
+from research_system.services.methodologies.planning.planning_context_methodology import (
+    normalize_methodology_preference,
+)
 from research_system.services.methodologies.policy.retrieval_policy_view import normalize_retrieval_policy
 
 

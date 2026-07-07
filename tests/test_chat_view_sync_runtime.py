@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.chat_view_focus_sync import sync_focus_target
-from research_system.cli.chat_view_layout_sync import sync_main_layout
-from research_system.cli.chat_view_sync_signature import build_scene_sync_signature
-from research_system.cli.chat_view_sync_support import sync_chat_view_from_scene
-from research_system.cli.chat_view_widget_sync import sync_auxiliary_widgets, sync_input_widget
+from research_system.cli.view.chat_view_focus_sync import sync_focus_target
+from research_system.cli.view.chat_view_layout_sync import sync_main_layout
+from research_system.cli.view.chat_view_sync_signature import build_scene_sync_signature
+from research_system.cli.view.chat_view_sync_support import sync_chat_view_from_scene
+from research_system.cli.view.chat_view_widget_sync import sync_auxiliary_widgets, sync_input_widget
 
 
 class ChatViewSyncRuntimeTests(unittest.TestCase):

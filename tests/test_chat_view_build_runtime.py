@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.chat_view_application_support import (
+from research_system.cli.view.chat_view_application_support import (
     build_chat_application_layout,
     build_chat_application_style,
 )
-from research_system.cli.chat_view_build_support import build_chat_application, build_chat_view
-from research_system.cli.chat_view_widget_factory import (
+from research_system.cli.view.chat_view_build_support import build_chat_application, build_chat_view
+from research_system.cli.view.chat_view_widget_factory import (
     build_commands_popup,
     build_header_bar,
     build_hint_bar,

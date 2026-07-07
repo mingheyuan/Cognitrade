@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_system.cli.chat_thread_store import ChatThreadStore
-from research_system.runtime.settings import Settings, ensure_workspace_layout
+from research_system.cli.memory.chat_thread_store import ChatThreadStore
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 
 
 class ChatThreadStoreRuntimeTests(unittest.TestCase):

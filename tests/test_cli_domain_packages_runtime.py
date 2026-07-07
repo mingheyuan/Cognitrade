@@ -21,10 +21,15 @@ from research_system.cli.runtime.app import (
     ChatAppRuntime as AppPackageChatAppRuntime,
     ChatEntryRuntime as AppPackageChatEntryRuntime,
     CliCommandRuntime as AppPackageCliCommandRuntime,
+    build_chat_app_runtime,
+    build_chat_entry_runtime,
+    build_cli_command_runtime,
+    execute_cli_command,
+    handle_chat_line,
+    print_cli_payload,
+    run_chat_entry,
 )
-from research_system.cli.runtime.app_chat_entry_runtime import ChatEntryRuntime, build_chat_entry_runtime, run_chat_entry
-from research_system.cli.runtime.app_chat_runtime import ChatAppRuntime, build_chat_app_runtime, handle_chat_line, print_cli_payload
-from research_system.cli.runtime.app_cli_runtime import CliCommandRuntime, build_cli_command_runtime, execute_cli_command
+from research_system.cli.runtime.app import ChatAppRuntime, ChatEntryRuntime, CliCommandRuntime
 from research_system.cli.runtime.chat_action_runtime import ChatActionRuntime, build_chat_action_runtime
 from research_system.cli.runtime.chat_actions import handle_chat_cli_action, handle_chat_meta_action
 from research_system.cli.runtime.chat_fallback_runtime import ChatFallbackRuntime, build_chat_fallback_runtime

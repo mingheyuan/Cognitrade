@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
-from research_system.runtime.provider_registry import LLMProviderError, OpenAIProvider
-from research_system.services.planning_context import (
+from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
+from research_system.runtime.providers.provider_registry import OpenAIProvider
+from research_system.services.methodologies.planning.planning_context import (
     build_planning_context_view,
     combine_focus_text,
     derive_methodology_focus,
@@ -38,11 +40,16 @@ class ReportPayload(BaseModel):
     degraded_note: str | None = None
 
 
-class ReporterService:
+REPORT_EXECUTION_AUTO = "auto"
+REPORT_EXECUTION_FALLBACK = "fallback"
+
+
+class ReporterService(RuntimeBoundSubagentInvoker):
     agent_name = "reporter"
 
-    def __init__(self, llm_provider: OpenAIProvider) -> None:
+    def __init__(self, llm_provider: OpenAIProvider, runs_root: Path | None = None) -> None:
         self.llm_provider = llm_provider
+        self.runs_root = runs_root
         self.registry = SubagentRegistry(
             [
                 FallbackReportComposerSubagent(
@@ -68,8 +75,39 @@ class ReporterService:
         evidences: list[dict],
         retrieval_summary: str | None = None,
         planning_context_hints: dict[str, str] | None = None,
+        execution_mode: str = REPORT_EXECUTION_AUTO,
+        runtime_degraded_note: str | None = None,
+    ) -> dict:
+        with self.local_run_scope(
+            intent=intent,
+            query=query,
+            phase="report",
+            title="reporter",
+            objective="Compose the final report from selected evidence.",
+        ):
+            return self._run_impl(
+                intent=intent,
+                query=query,
+                evidences=evidences,
+                retrieval_summary=retrieval_summary,
+                planning_context_hints=planning_context_hints,
+                execution_mode=execution_mode,
+                runtime_degraded_note=runtime_degraded_note,
+            )
+
+    def _run_impl(
+        self,
+        *,
+        intent: str,
+        query: str,
+        evidences: list[dict],
+        retrieval_summary: str | None = None,
+        planning_context_hints: dict[str, str] | None = None,
+        execution_mode: str = REPORT_EXECUTION_AUTO,
+        runtime_degraded_note: str | None = None,
     ) -> dict:
         trace: list[dict] = []
+        force_fallback = execution_mode == REPORT_EXECUTION_FALLBACK
         normalized_planning_hints = self._normalize_planning_context_hints(planning_context_hints)
         report_strategy = self._derive_report_strategy(
             query=query,
@@ -114,13 +152,14 @@ class ReporterService:
             )
             payload["subagent_trace"] = trace
             return payload
-        if not self.llm_provider.available:
+        if force_fallback:
+            degraded_note = runtime_degraded_note or "llm_unavailable"
             scorecard_digest = None
             scorecard_payload = None
             if intent == "distill_kol_logic":
                 scorecard_digest = self._distillation_scorecard_digest(evidences)
                 scorecard_payload = self._distillation_scorecard_payload(evidences)
-            fallback_outputs, _ = self.registry.invoke(
+            fallback_outputs, _ = self._invoke_subagent(
                 SubagentInvocation(
                     subagent_type="fallback_report_composer",
                     objective="Compose degraded fallback report.",
@@ -135,7 +174,7 @@ class ReporterService:
                         "screening_candidates_payload": screening_candidates_payload,
                         "methodology_payloads": methodology_payloads,
                         "report_strategy": report_strategy,
-                        "degraded_note": "llm_unavailable",
+                        "degraded_note": degraded_note,
                     },
                     context={
                         "task_name": "report:fallback:fallback_report_composer",
@@ -152,7 +191,8 @@ class ReporterService:
                     agent_path="reporter/fallback/fallback_report_composer",
                     notes=[
                         f"evidence_count={len(evidences)}",
-                        "degraded_note=llm_unavailable",
+                        f"degraded_note={degraded_note}",
+                        f"execution_mode={execution_mode}",
                     ],
                 )
             )
@@ -160,65 +200,110 @@ class ReporterService:
             outputs["subagent_trace"] = trace
             return outputs
 
-        try:
-            llm_outputs, _ = self.registry.invoke(
-                SubagentInvocation(
-                    subagent_type="llm_report_composer",
-                    objective="Compose final report via LLM.",
-                    inputs={
-                        "intent": intent,
-                        "query": query,
-                        "evidences": evidences,
-                        "retrieval_summary": retrieval_summary,
-                        "review_summary_payload": review_summary_payload,
-                        "report_strategy": report_strategy,
-                    },
-                    context={
-                        "task_name": "report:llm:llm_report_composer",
-                        "agent_path": "reporter/llm/llm_report_composer",
-                    },
-                )
+        scorecard_digest = None
+        scorecard_payload = None
+        if intent == "distill_kol_logic":
+            scorecard_digest = self._distillation_scorecard_digest(evidences)
+            scorecard_payload = self._distillation_scorecard_payload(evidences)
+        llm_outputs, _ = self._invoke_subagent(
+            SubagentInvocation(
+                subagent_type="llm_report_composer",
+                objective="Compose final report via LLM.",
+                inputs={
+                    "intent": intent,
+                    "query": query,
+                    "evidences": evidences,
+                    "retrieval_summary": retrieval_summary,
+                    "review_summary_payload": review_summary_payload,
+                    "report_strategy": report_strategy,
+                },
+                context={
+                    "task_name": "report:llm:llm_report_composer",
+                    "agent_path": "reporter/llm/llm_report_composer",
+                },
+                requires_llm=True,
+                fallback_subagent_type="fallback_report_composer",
+                fallback_objective="Compose degraded fallback report.",
+                fallback_inputs={
+                    "intent": intent,
+                    "query": query,
+                    "evidences": evidences,
+                    "review_summary_payload": review_summary_payload,
+                    "scorecard_digest": scorecard_digest,
+                    "scorecard_payload": scorecard_payload,
+                    "screening_scorecard_payload": screening_scorecard_payload,
+                    "screening_candidates_payload": screening_candidates_payload,
+                    "methodology_payloads": methodology_payloads,
+                    "report_strategy": report_strategy,
+                    "degraded_note": runtime_degraded_note,
+                },
+                fallback_context={
+                    "task_name": "report:fallback:fallback_report_composer",
+                    "agent_path": "reporter/fallback/fallback_report_composer",
+                },
+                error_fallback_subagent_type="llm_error_report_composer",
+                error_fallback_objective="Compose degraded report after LLM error.",
+                error_fallback_inputs={
+                    "intent": intent,
+                    "query": query,
+                    "evidences": evidences,
+                    "review_summary_payload": review_summary_payload,
+                    "scorecard_digest": scorecard_digest,
+                    "scorecard_payload": scorecard_payload,
+                    "screening_scorecard_payload": screening_scorecard_payload,
+                    "screening_candidates_payload": screening_candidates_payload,
+                    "screening_digest": self._screening_digest(screening_scorecard_payload, screening_candidates_payload) if intent == "stock_screen" else None,
+                    "methodology_payloads": methodology_payloads,
+                    "report_strategy": report_strategy,
+                },
+                error_fallback_context={
+                    "task_name": "report:llm:error:llm_error_report_composer",
+                    "agent_path": "reporter/llm/error/llm_error_report_composer",
+                },
             )
-        except LLMProviderError as exc:
-            trace.append(
-                self._build_trace_record(
-                    subagent_type="llm_report_composer",
-                    objective="Compose final report via LLM.",
-                    status="failed",
-                    task_name="report:llm:llm_report_composer",
-                    agent_path="reporter/llm/llm_report_composer",
-                    notes=[f"error_name={exc.__class__.__name__}"],
+        )
+        degrade_reason = str(llm_outputs.get("degrade_reason") or "").strip()
+        if "selected_evidence" not in llm_outputs and "evidence" in llm_outputs:
+            if degrade_reason.startswith("llm_error:"):
+                trace.append(
+                    self._build_trace_record(
+                        subagent_type="llm_report_composer",
+                        objective="Compose final report via LLM.",
+                        status="failed",
+                        task_name="report:llm:llm_report_composer",
+                        agent_path="reporter/llm/llm_report_composer",
+                        notes=[f"error_name={degrade_reason.split(':', 1)[1] or 'LLMProviderError'}"],
+                    )
                 )
-            )
-            scorecard_digest = None
-            scorecard_payload = None
-            if intent == "distill_kol_logic":
-                scorecard_digest = self._distillation_scorecard_digest(evidences)
-                scorecard_payload = self._distillation_scorecard_payload(evidences)
-            error_outputs, _ = self.registry.invoke(
-                SubagentInvocation(
-                    subagent_type="llm_error_report_composer",
-                    objective="Compose degraded report after LLM error.",
-                    inputs={
-                        "intent": intent,
-                        "query": query,
-                        "evidences": evidences,
-                        "review_summary_payload": review_summary_payload,
-                        "scorecard_digest": scorecard_digest,
-                        "scorecard_payload": scorecard_payload,
-                        "screening_scorecard_payload": screening_scorecard_payload,
-                        "screening_candidates_payload": screening_candidates_payload,
-                        "screening_digest": self._screening_digest(screening_scorecard_payload, screening_candidates_payload) if intent == "stock_screen" else None,
-                        "methodology_payloads": methodology_payloads,
-                        "report_strategy": report_strategy,
-                        "error_name": exc.__class__.__name__,
-                    },
-                    context={
-                        "task_name": "report:llm:error:llm_error_report_composer",
-                        "agent_path": "reporter/llm/error/llm_error_report_composer",
-                    },
+                trace.append(
+                    self._build_trace_record(
+                        subagent_type="llm_error_report_composer",
+                        objective="Compose degraded report after LLM error.",
+                        status="completed",
+                        task_name="report:llm:error:llm_error_report_composer",
+                        agent_path="reporter/llm/error/llm_error_report_composer",
+                        notes=[f"degrade_reason={degrade_reason}"],
+                    )
                 )
-            )
+            else:
+                trace.append(
+                    self._build_trace_record(
+                        subagent_type="fallback_report_composer",
+                        objective="Compose degraded fallback report.",
+                        status="completed",
+                        task_name="report:fallback:fallback_report_composer",
+                        agent_path="reporter/fallback/fallback_report_composer",
+                        notes=[
+                            f"evidence_count={len(evidences)}",
+                            f"degraded_note={degrade_reason or runtime_degraded_note or 'runtime_fallback'}",
+                            "execution_mode=runtime_fallback",
+                        ],
+                    )
+                )
+            outputs = dict(llm_outputs)
+            outputs["subagent_trace"] = trace
+            return outputs
+        if degrade_reason.startswith("llm_error:"):
             trace.append(
                 self._build_trace_record(
                     subagent_type="llm_error_report_composer",
@@ -226,14 +311,15 @@ class ReporterService:
                     status="completed",
                     task_name="report:llm:error:llm_error_report_composer",
                     agent_path="reporter/llm/error/llm_error_report_composer",
-                    notes=[f"error_name={exc.__class__.__name__}"],
+                    notes=[f"degrade_reason={llm_outputs.get('degrade_reason')}"],
                 )
             )
-            outputs = dict(error_outputs)
+            outputs = dict(llm_outputs)
             outputs["subagent_trace"] = trace
             return outputs
-        screening_scorecard = self._screening_scorecard_payload(llm_outputs["selected_evidence"]) if intent == "stock_screen" else None
-        screening_candidates = self._screening_candidates_payload(llm_outputs["selected_evidence"]) if intent == "stock_screen" else None
+        selected_evidence = list(llm_outputs.get("selected_evidence") or [])
+        screening_scorecard = self._screening_scorecard_payload(selected_evidence) if intent == "stock_screen" else None
+        screening_candidates = self._screening_candidates_payload(selected_evidence) if intent == "stock_screen" else None
         trace.append(
             self._build_trace_record(
                 subagent_type="llm_report_composer",
@@ -242,21 +328,28 @@ class ReporterService:
                 task_name="report:llm:llm_report_composer",
                 agent_path="reporter/llm/llm_report_composer",
                 notes=[
-                    f"selected_evidence={len(llm_outputs.get('selected_evidence') or [])}",
+                    f"selected_evidence={len(selected_evidence)}",
                     f"degraded_note={str(llm_outputs.get('degraded_note') or 'none')}",
                 ],
             )
         )
         return {
             "conclusion": llm_outputs["conclusion"],
-            "evidence": llm_outputs["selected_evidence"][:5],
-            "scorecard": self._distillation_scorecard_payload(llm_outputs["selected_evidence"]) if intent == "distill_kol_logic" else None,
+            "evidence": selected_evidence[:5],
+            "scorecard": self._distillation_scorecard_payload(selected_evidence) if intent == "distill_kol_logic" else None,
             "screening_scorecard": screening_scorecard,
             "candidates": screening_candidates,
             "methodologies": methodology_payloads or None,
             "review_summary": review_summary_payload,
             "risk": llm_outputs["risk"],
             "follow_up": self._merge_follow_up(llm_outputs["follow_up"], report_strategy),
+            "degraded": bool(llm_outputs.get("degraded") or llm_outputs.get("degraded_note")),
+            "degrade_reason": str(
+                llm_outputs.get("degrade_reason")
+                or llm_outputs.get("degraded_note")
+                or ""
+            ).strip()
+            or None,
             "degraded_note": llm_outputs["degraded_note"],
             "subagent_trace": trace,
         }

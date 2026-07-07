@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.runtime.agent_handlers_screening_context import collect_screening_inputs
-from research_system.runtime.agent_handlers_screening_enrichment import run_screening_enrichment
-from research_system.runtime.agent_handlers_screening_entries import (
+from research_system.runtime.execution.handlers.screening.screening_context import collect_screening_inputs
+from research_system.runtime.execution.handlers.screening.screening_enrichment import run_screening_enrichment
+from research_system.runtime.execution.handlers.screening.screening_entries import (
     add_screening_candidates,
     add_screening_scorecard,
 )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from research_system.runtime.storage.jsonl import write_json
 from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
 
 
@@ -16,6 +17,10 @@ class OrchestratorRunFailureSupport:
         run_id: str,
         intent: str,
     ) -> ResponseEnvelope:
+        context.thread.status = "cancelled"
+        context.turn.status = "cancelled"
+        write_json(context.paths.thread_state, context.thread.model_dump(mode="json"))
+        write_json(context.paths.turn_state, context.turn.model_dump(mode="json"))
         result = {"intent": intent, "status": "cancelled"}
         summary = {"intent": intent, "status": "cancelled", "message": "Run cancelled"}
         return self.response_support.finalize_terminal_response(
@@ -43,6 +48,10 @@ class OrchestratorRunFailureSupport:
         run_id: str,
         intent: str,
     ) -> ResponseEnvelope:
+        context.thread.status = "failed"
+        context.turn.status = "failed"
+        write_json(context.paths.thread_state, context.thread.model_dump(mode="json"))
+        write_json(context.paths.turn_state, context.turn.model_dump(mode="json"))
         result = {"intent": intent, "status": "timed_out"}
         summary = {"intent": intent, "status": "timed_out", "message": "Run timed out"}
         return self.response_support.finalize_terminal_response(
@@ -79,6 +88,10 @@ class OrchestratorRunFailureSupport:
             message="Run failed unexpectedly",
             error_summary=str(error),
         )
+        context.thread.status = "failed"
+        context.turn.status = "failed"
+        write_json(context.paths.thread_state, context.thread.model_dump(mode="json"))
+        write_json(context.paths.turn_state, context.turn.model_dump(mode="json"))
         self.host._emit_event(
             context,
             request_id=request.request_id,

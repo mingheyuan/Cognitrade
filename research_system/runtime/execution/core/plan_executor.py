@@ -27,7 +27,7 @@ class OrchestratorPlanExecutor:
                 plan=plan,
                 completed_actions=executed_node_ids[:],
                 pending_actions=pending_actions[:],
-                blackboard_entries=context.blackboard.list_entries(),
+                blackboard_entries=context.blackboard.list_entries(thread_id=context.thread.thread_id),
             )
             self._emit_supervisor_decision(
                 context=context,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from research_system.runtime.provider_registry import LLMProviderError, OpenAIProvider
+from research_system.runtime.providers.provider_registry import OpenAIProvider
 
 
 class RetrievalDecisionSubagent:
@@ -156,21 +156,6 @@ class RetrievalDecisionSubagent:
                 "degrade_reason": "missing_candidates",
             }
 
-        if not self.llm_provider.available:
-            fallback_evidences = evidences[:top_k]
-            return {
-                "intent": intent,
-                "query": query,
-                "evidences": fallback_evidences,
-                "degraded": True,
-                "degrade_reason": self.combine_degrade_reason("llm_unavailable", qdrant_degraded_reason),
-                "retrieval_summary": self.fallback_summary(
-                    intent=intent,
-                    evidences=fallback_evidences,
-                    qdrant_degraded_reason=qdrant_degraded_reason,
-                ),
-            }
-
         evidence_block = [
             {
                 "evidence_id": item["evidence_id"],
@@ -182,40 +167,25 @@ class RetrievalDecisionSubagent:
             for item in evidences
         ]
 
-        try:
-            decision = self.llm_provider.parse(
-                system_prompt=(
-                    "You are a retrieval agent for an A-share research system.\n"
-                    "Select the most relevant evidence candidates for the user's research intent.\n"
-                    "Do not invent evidence. Prefer verified snapshots when exact claims may matter."
-                ),
-                user_prompt=(
-                    f"Intent: {intent}\n"
-                    f"User query: {query}\n"
-                    f"Top K limit: {top_k}\n"
-                    f"Evidence candidates: {evidence_block}\n\n"
-                    "Return a JSON object with keys "
-                    "`selected_evidence_ids`, `retrieval_summary`, `degraded`, and `degrade_reason`.\n"
-                    "Use `selected_evidence_ids` for the chosen evidence ids."
-                ),
-                schema=self.retrieval_decision_schema,
-                temperature=0.0,
-                reasoning_effort="low",
-            )
-        except LLMProviderError as exc:
-            fallback_evidences = evidences[:top_k]
-            return {
-                "intent": intent,
-                "query": query,
-                "evidences": fallback_evidences,
-                "degraded": True,
-                "degrade_reason": self.combine_degrade_reason(f"llm_error:{exc.__class__.__name__}", qdrant_degraded_reason),
-                "retrieval_summary": self.fallback_summary(
-                    intent=intent,
-                    evidences=fallback_evidences,
-                    qdrant_degraded_reason=qdrant_degraded_reason,
-                ),
-            }
+        decision = self.llm_provider.parse(
+            system_prompt=(
+                "You are a retrieval agent for an A-share research system.\n"
+                "Select the most relevant evidence candidates for the user's research intent.\n"
+                "Do not invent evidence. Prefer verified snapshots when exact claims may matter."
+            ),
+            user_prompt=(
+                f"Intent: {intent}\n"
+                f"User query: {query}\n"
+                f"Top K limit: {top_k}\n"
+                f"Evidence candidates: {evidence_block}\n\n"
+                "Return a JSON object with keys "
+                "`selected_evidence_ids`, `retrieval_summary`, `degraded`, and `degrade_reason`.\n"
+                "Use `selected_evidence_ids` for the chosen evidence ids."
+            ),
+            schema=self.retrieval_decision_schema,
+            temperature=0.0,
+            reasoning_effort="low",
+        )
 
         selected_ids = decision.selected_evidence_ids[:top_k]
         if not selected_ids:
@@ -238,4 +208,43 @@ class RetrievalDecisionSubagent:
             "degraded": decision.degraded or bool(qdrant_degraded_reason),
             "degrade_reason": self.combine_degrade_reason(decision.degrade_reason, qdrant_degraded_reason),
             "retrieval_summary": self.merge_retrieval_summary(structured_summary, decision.retrieval_summary),
+        }
+
+
+class FallbackRetrievalDecisionSubagent:
+    subagent_type = "fallback_retrieval_decider"
+
+    def __init__(
+        self,
+        *,
+        combine_degrade_reason: Callable[[str | None, str | None], str | None],
+        fallback_summary: Callable[..., str],
+    ) -> None:
+        self.combine_degrade_reason = combine_degrade_reason
+        self.fallback_summary = fallback_summary
+
+    def run(
+        self,
+        *,
+        intent: str,
+        query: str,
+        evidences: list[dict],
+        top_k: int,
+        qdrant_degraded_reason: str | None,
+        runtime_degraded_reason: str | None = None,
+        error_name: str | None = None,
+    ) -> dict:
+        fallback_evidences = evidences[:top_k]
+        base_reason = runtime_degraded_reason or (f"llm_error:{error_name}" if error_name else "llm_unavailable")
+        return {
+            "intent": intent,
+            "query": query,
+            "evidences": fallback_evidences,
+            "degraded": True,
+            "degrade_reason": self.combine_degrade_reason(base_reason, qdrant_degraded_reason),
+            "retrieval_summary": self.fallback_summary(
+                intent=intent,
+                evidences=fallback_evidences,
+                qdrant_degraded_reason=qdrant_degraded_reason,
+            ),
         }
