@@ -195,6 +195,9 @@ class ResearchOrchestrator:
     def events(self, run_id: str) -> dict:
         return self._admin().events(run_id)
 
+    def metrics(self, run_id: str) -> dict:
+        return self._admin().metrics(run_id)
+
     def subagent(self, run_id: str, invocation_id: str) -> dict:
         return self._admin().subagent(run_id, invocation_id)
 

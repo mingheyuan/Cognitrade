@@ -31,6 +31,9 @@ class OrchestratorExecutionRuntimeSupport:
     def complete_action(self, **kwargs) -> None:
         self.lifecycle_support.complete_action(control_support=self.control_support, **kwargs)
 
+    def fail_action(self, **kwargs) -> None:
+        self.lifecycle_support.fail_action(control_support=self.control_support, **kwargs)
+
     def add_entry(self, *args, **kwargs) -> None:
         self.lifecycle_support.add_entry(*args, **kwargs)
 

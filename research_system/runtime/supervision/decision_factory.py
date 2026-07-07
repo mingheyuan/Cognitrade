@@ -51,6 +51,10 @@ class SupervisorDecisionFactory:
             objective="Review screened candidates before retrieval/reporting.",
             inputs={"planning_context_hints": planning_context_hints} if planning_context_hints else {},
             tags=["dynamic_inserted"],
+            depends_on=["screen"],
+            max_retries=1,
+            cache_scope="run",
+            cache_key="stock_screen:screen_review",
         )
 
     def review_action(self, *, plan, existing: ActionSpec | None) -> ActionSpec:
@@ -64,6 +68,10 @@ class SupervisorDecisionFactory:
             objective="Run posterior review after verifying source context and snapshots.",
             inputs={"planning_context_hints": planning_context_hints} if planning_context_hints else {},
             tags=["dynamic_inserted"],
+            depends_on=["collect"],
+            max_retries=1,
+            cache_scope="run",
+            cache_key="review_thesis:review",
         )
 
     def stock_check_replenish_action(
@@ -85,6 +93,11 @@ class SupervisorDecisionFactory:
                 "source_type": "stock_check_replenish",
             },
             tags=["dynamic_inserted", "replenish"],
+            depends_on=["collect"],
+            max_retries=1,
+            failure_mode="isolate",
+            cache_scope="run",
+            cache_key=f"stock_check:replenish:{'_'.join(missing_snapshot_types)}",
         )
 
     def sector_replenish_action(
@@ -105,4 +118,9 @@ class SupervisorDecisionFactory:
                 "missing_evidence": missing_sector_evidence,
             },
             tags=["dynamic_inserted", "replenish"],
+            depends_on=["collect"],
+            max_retries=1,
+            failure_mode="isolate",
+            cache_scope="run",
+            cache_key=f"sector_research:replenish:{'_'.join(missing_sector_evidence)}",
         )

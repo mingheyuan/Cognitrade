@@ -238,6 +238,9 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertEqual(plan.strategy, "dynamic")
         self.assertIn(plan.entry_strategy, {"rule", "llm"})
         self.assertEqual([action.node_id for action in plan.actions], ["collect", "screen", "retrieve", "report"])
+        self.assertEqual(plan.actions[1].depends_on, ["collect"])
+        self.assertEqual(plan.actions[2].depends_on, ["screen"])
+        self.assertEqual(plan.actions[3].depends_on, ["retrieve"])
 
     def test_review_thesis_initial_plan_is_dynamic_and_excludes_review(self) -> None:
         planner = RuntimePlanner()
@@ -249,6 +252,22 @@ class PlannerSupervisorTests(unittest.TestCase):
 
         self.assertEqual(plan.strategy, "dynamic")
         self.assertEqual([action.node_id for action in plan.actions], ["collect", "retrieve", "report"])
+        self.assertEqual(plan.actions[1].depends_on, ["collect"])
+        self.assertEqual(plan.actions[2].depends_on, ["retrieve"])
+
+    def test_distill_plan_uses_explicit_action_dag(self) -> None:
+        planner = RuntimePlanner()
+
+        plan = planner.build_initial_plan(
+            intent="distill_kol_logic",
+            request=RequestEnvelope(user_query="distill recent kol logic"),
+        )
+
+        self.assertEqual([action.node_id for action in plan.actions], ["collect", "distill", "critic", "retrieve", "report"])
+        self.assertEqual(plan.actions[1].depends_on, ["collect"])
+        self.assertEqual(plan.actions[2].depends_on, ["distill"])
+        self.assertEqual(plan.actions[3].depends_on, ["critic"])
+        self.assertEqual(plan.actions[4].depends_on, ["retrieve"])
 
     def test_supervisor_inserts_screen_review_after_screening_when_candidates_exist(self) -> None:
         planner = RuntimePlanner()

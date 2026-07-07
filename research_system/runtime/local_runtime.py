@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from research_system.runtime.execution.core.runtime_support import OrchestratorExecutionRuntimeSupport
+from research_system.runtime.history.session.session_history import SessionHistory
 from research_system.runtime.orchestration.orchestrator_context import RuntimeContext, build_runtime_context
 from research_system.runtime.storage.jsonl import write_json
 from research_system.runtime.storage.runs.run_store import RunStore
@@ -84,6 +85,22 @@ class LocalRuntimeRun:
     intent: str
     phase: str
     _temp_dir: TemporaryDirectory[str]
+
+    @property
+    def run_root(self) -> Path:
+        return Path(self.context.paths.root)
+
+    def replay(self) -> dict[str, Any]:
+        return SessionHistory(self.run_root).replay()
+
+    def trace(self) -> dict[str, Any]:
+        return SessionHistory(self.run_root).trace()
+
+    def events(self) -> dict[str, Any]:
+        return SessionHistory(self.run_root).events()
+
+    def metrics(self) -> dict[str, Any]:
+        return SessionHistory(self.run_root).metrics()
 
     def close(self) -> None:
         self._temp_dir.cleanup()
@@ -281,8 +298,49 @@ def _normalize_request(request: RequestEnvelope | Any) -> RequestEnvelope:
     return RequestEnvelope(**payload)
 
 
+def inject_runtime_degradation(
+    runtime: LocalRuntimeRun,
+    *,
+    exhaust_llm_budget: bool = False,
+    exhaust_subagent_budget: bool = False,
+    exhaust_child_thread_budget: bool = False,
+) -> dict[str, bool]:
+    policy = runtime.context.execution_policy
+    turn_id = runtime.context.turn.turn_id
+    injected = {
+        "llm_budget_exhausted": False,
+        "subagent_budget_exhausted": False,
+        "child_thread_budget_exhausted": False,
+    }
+    if exhaust_llm_budget:
+        reserve_llm_call = getattr(policy, "reserve_llm_call", None)
+        while callable(reserve_llm_call) and bool(reserve_llm_call(turn_id=turn_id)):
+            injected["llm_budget_exhausted"] = True
+    if exhaust_subagent_budget:
+        reserve_subagent_call = getattr(policy, "reserve_subagent_call", None)
+        while callable(reserve_subagent_call) and bool(reserve_subagent_call(turn_id=turn_id)):
+            injected["subagent_budget_exhausted"] = True
+    if exhaust_child_thread_budget:
+        reserve_child_thread = getattr(policy, "reserve_child_thread", None)
+        while callable(reserve_child_thread) and bool(reserve_child_thread(turn_id=turn_id)):
+            injected["child_thread_budget_exhausted"] = True
+    if any(injected.values()):
+        runtime.support.emit_event(
+            runtime.context,
+            request_id=runtime.request.request_id,
+            intent=runtime.intent,
+            event_type="runtime_degradation_injected",
+            phase=runtime.phase,
+            agent=None,
+            message="Injected runtime degradation for local runtime",
+            payload=injected,
+        )
+    return injected
+
+
 __all__ = [
     "LocalRuntimeRun",
     "bind_local_runtime",
+    "inject_runtime_degradation",
     "start_local_runtime",
 ]

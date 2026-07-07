@@ -127,6 +127,49 @@ class OrchestratorExecutionLifecycleSupport:
         context.current_action_objective = None
         context.checkpoint_store.save(context.state)
 
+    def fail_action(
+        self,
+        *,
+        context: RuntimeContext,
+        request: RequestEnvelope,
+        intent: str,
+        phase: str,
+        agent: str,
+        error_summary: str,
+        pending_actions_after_current: list[ActionSpec],
+        control_support,
+    ) -> None:
+        self.emit_event(
+            context,
+            request_id=request.request_id,
+            intent=intent,
+            event_type="agent_failed",
+            phase=phase,
+            agent=agent,
+            message=f"Agent failed: {agent}",
+            payload={"error_summary": error_summary},
+        )
+        self.emit_event(
+            context,
+            request_id=request.request_id,
+            intent=intent,
+            event_type="phase_failed",
+            phase=phase,
+            agent=agent,
+            message=f"Phase failed: {phase}",
+            payload={"error_summary": error_summary},
+        )
+        self.update_state(
+            context,
+            pending_nodes=[item.node_id for item in pending_actions_after_current],
+            completed_nodes=list(context.state.completed_nodes or []),
+        )
+        self._fail_action_item(context, error_summary=error_summary)
+        context.current_action_id = None
+        context.current_node_id = None
+        context.current_action_objective = None
+        context.checkpoint_store.save(context.state)
+
     def add_entry(self, context: RuntimeContext, request: RequestEnvelope, intent: str, entry: BlackboardEntry) -> None:
         context.blackboard.add(entry)
         self.emit_event(
@@ -223,5 +266,20 @@ class OrchestratorExecutionLifecycleSupport:
         context.state.active_item_id = None
         context.turn.current_item_id = None
         context.turn.status = "completed"
+        context.thread.status = "running"
+        context.current_action_item = None
+
+    def _fail_action_item(self, context: RuntimeContext, *, error_summary: str) -> None:
+        action_item = getattr(context, "current_action_item", None)
+        if action_item is None:
+            return
+        context.agent_control.wait(
+            action_item,
+            status="failed",
+            payload={"failed_item_id": action_item.item_id, "error_summary": error_summary},
+        )
+        context.state.active_item_id = None
+        context.turn.current_item_id = None
+        context.turn.status = "failed"
         context.thread.status = "running"
         context.current_action_item = None

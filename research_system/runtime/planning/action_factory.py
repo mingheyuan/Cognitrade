@@ -29,6 +29,7 @@ class PlannerActionFactory:
     ) -> list[ActionSpec]:
         action_specs: list[ActionSpec] = []
         inputs = {"planning_context_hints": planning_context_hints} if planning_context_hints else {}
+        dependency_chain: list[str] = []
         for action_id in action_ids:
             if action_id == "collect":
                 objective = {
@@ -44,6 +45,10 @@ class PlannerActionFactory:
                         agent="collector",
                         objective=objective,
                         inputs=inputs,
+                        depends_on=dependency_chain[:],
+                        max_retries=1,
+                        cache_scope="run",
+                        cache_key=f"{intent}:collect",
                     )
                 )
             elif action_id == "screen" and intent == "stock_screen":
@@ -54,6 +59,10 @@ class PlannerActionFactory:
                         agent="screener",
                         objective="Screen and rank stock candidates.",
                         inputs=inputs,
+                        depends_on=dependency_chain[:],
+                        max_retries=1,
+                        cache_scope="run",
+                        cache_key=f"{intent}:screen",
                     )
                 )
             elif action_id == "retrieve":
@@ -70,6 +79,10 @@ class PlannerActionFactory:
                         agent="retriever",
                         objective=objective,
                         inputs=inputs,
+                        depends_on=dependency_chain[:],
+                        max_retries=1,
+                        cache_scope="run",
+                        cache_key=f"{intent}:retrieve",
                     )
                 )
             elif action_id == "report":
@@ -86,8 +99,14 @@ class PlannerActionFactory:
                         agent="reporter",
                         objective=objective,
                         inputs=inputs,
+                        depends_on=dependency_chain[:],
+                        max_retries=1,
+                        cache_scope="run",
+                        cache_key=f"{intent}:report",
                     )
                 )
+            if action_specs:
+                dependency_chain = [action_specs[-1].node_id]
         return action_specs
 
     def build_research_plan(

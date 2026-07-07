@@ -18,6 +18,12 @@ class ActionSpec(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
     status: Literal["pending", "completed", "skipped"] = "pending"
     tags: list[str] = Field(default_factory=list)
+    depends_on: list[str] = Field(default_factory=list)
+    max_retries: int = Field(default=0, ge=0)
+    failure_mode: Literal["halt", "isolate"] = "halt"
+    cache_scope: Literal["run", "thread", "global"] | None = None
+    cache_key: str | None = None
+    replayable: bool = True
 
 
 class ActionPlan(BaseModel):

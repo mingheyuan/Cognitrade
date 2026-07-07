@@ -25,6 +25,9 @@ class OrchestratorExecutionSupport:
     def complete_action(self, **kwargs) -> None:
         self.runtime_support.complete_action(**kwargs)
 
+    def fail_action(self, **kwargs) -> None:
+        self.runtime_support.fail_action(**kwargs)
+
     def add_entry(self, *args, **kwargs) -> None:
         self.runtime_support.add_entry(*args, **kwargs)
 

@@ -57,6 +57,17 @@ class OrchestratorActionRunner:
                 )
                 return
             raise self.host.orchestrator_error_cls(f"unsupported agent: {agent}")
+        except Exception as exc:
+            self.support.fail_action(
+                context=context,
+                request=request,
+                intent=intent,
+                phase=phase,
+                agent=agent,
+                error_summary=f"{exc.__class__.__name__}: {exc}",
+                pending_actions_after_current=pending_actions_after_current,
+            )
+            raise
         finally:
             self._clear_runtime_registry(agent=agent)
 

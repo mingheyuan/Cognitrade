@@ -24,6 +24,10 @@ class OrchestratorRunAdminSupport:
         paths = self.host.run_store.load_run_paths(run_id)
         return SessionHistory(paths.root).events()
 
+    def metrics(self, run_id: str) -> dict:
+        paths = self.host.run_store.load_run_paths(run_id)
+        return SessionHistory(paths.root).metrics()
+
     def subagent(self, run_id: str, invocation_id: str) -> dict:
         paths = self.host.run_store.load_run_paths(run_id)
         return SessionHistory(paths.root).subagent(invocation_id)
