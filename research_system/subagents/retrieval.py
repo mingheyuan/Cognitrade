@@ -2,11 +2,214 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from research_system.runtime.providers.provider_registry import OpenAIProvider
+from research_system.subagents.base import SubagentRuntimePolicy
+
+
+def _normalize_evidence_rows(evidences: list[Any]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for item in evidences:
+        if isinstance(item, BaseModel):
+            normalized.append(item.model_dump(mode="python"))
+        else:
+            normalized.append(dict(item))
+    return normalized
+
+
+class RetrievalEvidenceModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    evidence_id: str
+    title: str
+    summary: str
+    source_refs: list[dict[str, Any]] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    retrieval_hint: dict[str, Any] | None = None
+    score: float | None = None
+
+
+class RetrievalDecisionInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: str
+    query: str
+    evidences: list[RetrievalEvidenceModel] = Field(default_factory=list)
+    top_k: int
+    qdrant_degraded_reason: str | None = None
+    planning_context_hints: dict[str, str] | None = None
+
+
+class FallbackRetrievalDecisionInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: str
+    query: str
+    evidences: list[RetrievalEvidenceModel] = Field(default_factory=list)
+    top_k: int
+    qdrant_degraded_reason: str | None = None
+    runtime_degraded_reason: str | None = None
+    error_name: str | None = None
+
+
+class RetrievalDecisionOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: str
+    query: str
+    evidences: list[RetrievalEvidenceModel] = Field(default_factory=list)
+    degraded: bool = False
+    degrade_reason: str | None = None
+    retrieval_summary: str
+
+
+class QdrantEvidenceSearchInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: str
+    query: str
+    top_k: int
+    symbol: str | None = None
+    sector: str | None = None
+    current_run_id: str | None = None
+
+
+class QdrantEvidenceSearchOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidences: list[RetrievalEvidenceModel] = Field(default_factory=list)
+    metadata_filters: dict[str, str] = Field(default_factory=dict)
+    degraded: bool = False
+    degrade_reason: str | None = None
+
+
+class MethodologyMemoryRowModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    memory_type: str | None = None
+    content: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    match_score: float | None = None
+
+
+class MethodologyMemoryRecallInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: str
+    query: str | None = None
+    planning_context_hints: dict[str, str] | None = None
+    limit: int = 5
+
+
+class MethodologyMemoryRecallOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_rows: list[MethodologyMemoryRowModel] = Field(default_factory=list)
+    search_query: str | None = None
+    benchmark_scope: str | None = None
+    degraded: bool = False
+    degrade_reason: str | None = None
+
+
+class QdrantEvidenceSearchSubagent:
+    subagent_type = "qdrant_evidence_searcher"
+    input_model = QdrantEvidenceSearchInputModel
+    output_model = QdrantEvidenceSearchOutputModel
+    runtime_policy = SubagentRuntimePolicy(allow_parallel=True, max_concurrency=2)
+
+    def __init__(self, *, search_qdrant_evidences: Callable[..., dict[str, Any]]) -> None:
+        self.search_qdrant_evidences = search_qdrant_evidences
+
+    def run(
+        self,
+        *,
+        intent: str,
+        query: str,
+        top_k: int,
+        symbol: str | None = None,
+        sector: str | None = None,
+        current_run_id: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            outputs = self.search_qdrant_evidences(
+                intent=intent,
+                query=query,
+                top_k=top_k,
+                symbol=symbol,
+                sector=sector,
+                current_run_id=current_run_id,
+            )
+        except Exception as exc:
+            return {
+                "evidences": [],
+                "metadata_filters": {},
+                "degraded": True,
+                "degrade_reason": f"qdrant_search_error:{type(exc).__name__}",
+            }
+        return {
+            "evidences": _normalize_evidence_rows(outputs.get("evidences") or []),
+            "metadata_filters": dict(outputs.get("metadata_filters") or {}),
+            "degraded": bool(outputs.get("degraded")),
+            "degrade_reason": outputs.get("degrade_reason"),
+        }
+
+
+class MethodologyMemoryRecallSubagent:
+    subagent_type = "methodology_memory_recaller"
+    input_model = MethodologyMemoryRecallInputModel
+    output_model = MethodologyMemoryRecallOutputModel
+    runtime_policy = SubagentRuntimePolicy(allow_parallel=True, max_concurrency=2)
+
+    def __init__(self, *, recall_methodology_memory: Callable[..., dict[str, Any]]) -> None:
+        self.recall_methodology_memory = recall_methodology_memory
+
+    def run(
+        self,
+        *,
+        intent: str,
+        query: str | None = None,
+        planning_context_hints: dict[str, str] | None = None,
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        try:
+            outputs = self.recall_methodology_memory(
+                intent=intent,
+                query=query,
+                planning_context_hints=planning_context_hints,
+                limit=limit,
+            )
+        except Exception as exc:
+            return {
+                "memory_rows": [],
+                "search_query": None,
+                "benchmark_scope": None,
+                "degraded": True,
+                "degrade_reason": f"methodology_memory_error:{type(exc).__name__}",
+            }
+        rows = outputs.get("memory_rows") or []
+        normalized_rows = [
+            MethodologyMemoryRowModel.model_validate(row).model_dump(mode="python")
+            for row in rows
+        ]
+        return {
+            "memory_rows": normalized_rows,
+            "search_query": outputs.get("search_query"),
+            "benchmark_scope": outputs.get("benchmark_scope"),
+            "degraded": bool(outputs.get("degraded")),
+            "degrade_reason": outputs.get("degrade_reason"),
+        }
 
 
 class RetrievalDecisionSubagent:
     subagent_type = "retrieval_decider"
+    input_model = RetrievalDecisionInputModel
+    output_model = RetrievalDecisionOutputModel
+    runtime_policy = SubagentRuntimePolicy(
+        requires_llm=True,
+        fallback_subagent_type="fallback_retrieval_decider",
+        error_fallback_subagent_type="fallback_retrieval_decider",
+    )
 
     def __init__(
         self,
@@ -47,6 +250,7 @@ class RetrievalDecisionSubagent:
         qdrant_degraded_reason: str | None,
         planning_context_hints: dict[str, str] | None = None,
     ) -> dict:
+        evidences = _normalize_evidence_rows(evidences)
         if intent == "distill_kol_logic":
             selected = self.select_distillation_evidences(evidences=evidences, top_k=top_k)
             return {
@@ -213,6 +417,9 @@ class RetrievalDecisionSubagent:
 
 class FallbackRetrievalDecisionSubagent:
     subagent_type = "fallback_retrieval_decider"
+    input_model = FallbackRetrievalDecisionInputModel
+    output_model = RetrievalDecisionOutputModel
+    runtime_policy = SubagentRuntimePolicy()
 
     def __init__(
         self,
@@ -234,6 +441,7 @@ class FallbackRetrievalDecisionSubagent:
         runtime_degraded_reason: str | None = None,
         error_name: str | None = None,
     ) -> dict:
+        evidences = _normalize_evidence_rows(evidences)
         fallback_evidences = evidences[:top_k]
         base_reason = runtime_degraded_reason or (f"llm_error:{error_name}" if error_name else "llm_unavailable")
         return {

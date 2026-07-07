@@ -2,15 +2,91 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from research_system.schemas.review import CriticReviewFinding, CriticReviewSummary
+from research_system.subagents.base import SubagentRuntimePolicy
+
+
+class CriticDistillationSummaryInputModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    content_type: str | None = None
+    overall_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    needs_review: bool = False
+    major_risks: list[str] = Field(default_factory=list)
+    processing_notes: list[str] = Field(default_factory=list)
+
+
+class SummaryRiskCriticInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    distillation_summary: CriticDistillationSummaryInputModel | None = None
+
+
+class CriticFindingsOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    findings: list[CriticReviewFinding] = Field(default_factory=list)
+
+
+class CriticLogicBlockInputItemModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    block_id: str | None = None
+    speaker_type: str = "author"
+    attribution_label: str | None = None
+    normalized_claim: str | None = None
+    risk_flags: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class LogicBlockCriticInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    logic_blocks: list[CriticLogicBlockInputItemModel] = Field(default_factory=list)
+
+
+class CriticDimensionInputItemModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    dimension_id: str | None = None
+    dimension_name: str | None = None
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    supported_claim_block_ids: list[str] = Field(default_factory=list)
+    evidence_block_ids: list[str] = Field(default_factory=list)
+
+
+class DimensionCriticInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    distilled_dimensions: list[CriticDimensionInputItemModel] = Field(default_factory=list)
+    logic_blocks: list[CriticLogicBlockInputItemModel] = Field(default_factory=list)
+
+
+class CriticSummaryBuilderInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    findings: list[CriticReviewFinding] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class CriticSummaryBuilderOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: CriticReviewSummary
+    findings: list[CriticReviewFinding] = Field(default_factory=list)
 
 
 class SummaryRiskCriticSubagent:
     subagent_type = "summary_risk_critic"
+    input_model = SummaryRiskCriticInputModel
+    output_model = CriticFindingsOutputModel
+    runtime_policy = SubagentRuntimePolicy()
 
-    def run(self, *, distillation_summary: dict | None) -> dict:
+    def run(self, *, distillation_summary: CriticDistillationSummaryInputModel | None) -> dict:
         findings: list[CriticReviewFinding] = []
-        summary_risks = list((distillation_summary or {}).get("major_risks") or [])
+        summary_risks = list((distillation_summary.major_risks if distillation_summary else []) or [])
         review_target_id = "distillation_summary"
 
         if "fallback_distillation" in summary_risks:
@@ -42,18 +118,21 @@ class SummaryRiskCriticSubagent:
 
 class LogicBlockCriticSubagent:
     subagent_type = "logic_block_critic"
+    input_model = LogicBlockCriticInputModel
+    output_model = CriticFindingsOutputModel
+    runtime_policy = SubagentRuntimePolicy()
 
     def __init__(self, *, attribution_review_payload) -> None:
         self.attribution_review_payload = attribution_review_payload
 
-    def run(self, *, logic_blocks: list[dict]) -> dict:
+    def run(self, *, logic_blocks: list[CriticLogicBlockInputItemModel]) -> dict:
         findings: list[CriticReviewFinding] = []
         claim_clusters: dict[str, list[str]] = defaultdict(list)
         for block in logic_blocks:
-            entry_id = str(block.get("block_id") or "")
-            confidence = float(block.get("confidence") or 0.0)
-            risk_flags = list(block.get("risk_flags") or [])
-            normalized_claim = str(block.get("normalized_claim") or "").strip().lower()
+            entry_id = str(block.block_id or "")
+            confidence = float(block.confidence or 0.0)
+            risk_flags = list(block.risk_flags or [])
+            normalized_claim = str(block.normalized_claim or "").strip().lower()
             if normalized_claim:
                 claim_clusters[normalized_claim].append(entry_id)
 
@@ -69,7 +148,10 @@ class LogicBlockCriticSubagent:
                     )
                 )
             if "quoted_content_present" in risk_flags:
-                severity, reason, action = self.attribution_review_payload(block=block, risk_flags=risk_flags)
+                severity, reason, action = self.attribution_review_payload(
+                    block=block.model_dump(mode="python"),
+                    risk_flags=risk_flags,
+                )
                 findings.append(
                     CriticReviewFinding(
                         target_entry_id=entry_id or "distillation_summary",
@@ -111,8 +193,16 @@ class LogicBlockCriticSubagent:
 
 class DimensionCriticSubagent:
     subagent_type = "dimension_critic"
+    input_model = DimensionCriticInputModel
+    output_model = CriticFindingsOutputModel
+    runtime_policy = SubagentRuntimePolicy()
 
-    def run(self, *, distilled_dimensions: list[dict], logic_blocks: list[dict]) -> dict:
+    def run(
+        self,
+        *,
+        distilled_dimensions: list[CriticDimensionInputItemModel],
+        logic_blocks: list[CriticLogicBlockInputItemModel],
+    ) -> dict:
         findings: list[CriticReviewFinding] = []
         if len(distilled_dimensions) < 2 and logic_blocks:
             findings.append(
@@ -126,10 +216,10 @@ class DimensionCriticSubagent:
                 )
             )
         for dimension in distilled_dimensions:
-            entry_id = str(dimension.get("dimension_id") or dimension.get("dimension_name") or "distillation_summary")
-            confidence = float(dimension.get("confidence") or 0.0)
-            support_count = len(dimension.get("supported_claim_block_ids") or [])
-            evidence_count = len(dimension.get("evidence_block_ids") or [])
+            entry_id = str(dimension.dimension_id or dimension.dimension_name or "distillation_summary")
+            confidence = float(dimension.confidence or 0.0)
+            support_count = len(dimension.supported_claim_block_ids or [])
+            evidence_count = len(dimension.evidence_block_ids or [])
             if confidence < 0.6:
                 findings.append(
                     CriticReviewFinding(
@@ -159,8 +249,11 @@ class DimensionCriticSubagent:
 
 class CriticSummaryBuilderSubagent:
     subagent_type = "critic_summary_builder"
+    input_model = CriticSummaryBuilderInputModel
+    output_model = CriticSummaryBuilderOutputModel
+    runtime_policy = SubagentRuntimePolicy()
 
-    def run(self, *, findings: list[dict], notes: list[str]) -> dict:
+    def run(self, *, findings: list[CriticReviewFinding], notes: list[str]) -> dict:
         typed_findings = [CriticReviewFinding.model_validate(item) for item in findings]
         severity_counter = Counter(finding.severity for finding in typed_findings)
         type_counter = Counter(finding.finding_type for finding in typed_findings)

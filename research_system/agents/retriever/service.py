@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import ast
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -27,6 +28,8 @@ from research_system.adapters.storage.local_memory_adapter import LocalMemoryAda
 from research_system.subagents.registry import SubagentRegistry
 from research_system.subagents.retrieval import (
     FallbackRetrievalDecisionSubagent,
+    MethodologyMemoryRecallSubagent,
+    QdrantEvidenceSearchSubagent,
     RetrievalDecisionSubagent,
 )
 
@@ -62,7 +65,7 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
         self.runs_root = runs_root
         self.memory_service = MemoryService(LocalMemoryAdapter(settings))
         try:
-            self.qdrant = QdrantAdapter(settings)
+            self.qdrant = QdrantAdapter(settings, embedding_provider=self.llm_provider)
             self.qdrant_available = self.qdrant.available
             self.qdrant_error: str | None = None
         except QdrantUnavailableError as exc:
@@ -91,6 +94,12 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 FallbackRetrievalDecisionSubagent(
                     combine_degrade_reason=self._combine_degrade_reason,
                     fallback_summary=self._fallback_summary,
+                ),
+                QdrantEvidenceSearchSubagent(
+                    search_qdrant_evidences=self._search_qdrant_evidences,
+                ),
+                MethodologyMemoryRecallSubagent(
+                    recall_methodology_memory=self._recall_methodology_memory_rows,
                 ),
             ]
         )
@@ -181,29 +190,36 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
         use_qdrant_search = search_mode == RETRIEVAL_SEARCH_QDRANT
         qdrant_degraded_reason = None
         should_skip_qdrant = intent == "stock_screen"
+        recall_jobs: list[tuple[str, SubagentInvocation]] = []
         if effective_qdrant_available and not should_skip_qdrant and use_qdrant_search:
-            search_outputs = self._search_qdrant_evidences(
-                qdrant=searcher_qdrant,
+            qdrant_thread_id, qdrant_turn_id = self.spawn_child_thread(
                 intent=intent,
-                query=query,
-                top_k=top_k,
-                symbol=symbol,
-                sector=sector,
-                current_run_id=current_run_id,
-                evidence_map=evidence_map,
+                objective="Search indexed evidence candidates via Qdrant.",
+                agent=self.agent_name,
+                phase="retrieve_search_qdrant",
             )
-            evidence_map = dict(search_outputs["evidence_map"])
-            trace.append(
-                self._build_trace_record(
-                    subagent_type="qdrant_evidence_searcher",
-                    objective="Search indexed evidence candidates via Qdrant.",
-                    status="completed",
-                    task_name="retrieve:search:qdrant_evidence_searcher",
-                    agent_path="retriever/search/qdrant_evidence_searcher",
-                    notes=[
-                        f"top_k={top_k}",
-                        f"filters={search_outputs.get('metadata_filters') or {}}",
-                    ],
+            recall_jobs.append(
+                (
+                    "qdrant",
+                    SubagentInvocation(
+                        subagent_type="qdrant_evidence_searcher",
+                        objective="Search indexed evidence candidates via Qdrant.",
+                        inputs={
+                            "intent": intent,
+                            "query": query,
+                            "top_k": top_k,
+                            "symbol": symbol,
+                            "sector": sector,
+                            "current_run_id": current_run_id,
+                        },
+                        context={
+                            "task_name": "retrieve:search:qdrant_evidence_searcher",
+                            "agent_path": "retriever/search/qdrant_evidence_searcher",
+                            "phase": "retrieve_search_qdrant",
+                            "child_thread_id": qdrant_thread_id,
+                            "child_turn_id": qdrant_turn_id,
+                        },
+                    ),
                 )
             )
         elif not effective_qdrant_available and not should_skip_qdrant and use_qdrant_search:
@@ -230,53 +246,141 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 )
             )
 
-        dedupe_outputs = self._dedupe_evidence_candidates(
-            evidences=list(evidence_map.values()),
-            current_run_id=current_run_id,
-            intent=intent,
-        )
-        evidences = dedupe_outputs["evidences"]
-        planning_context_hints = dict(planning_context_hints or {})
-        decision_subagent_type = "retrieval_decider" if allow_llm_decision else "fallback_retrieval_decider"
-        decision_inputs = {
-            "intent": intent,
-            "query": query,
-            "evidences": evidences,
-            "top_k": top_k,
-            "qdrant_degraded_reason": qdrant_degraded_reason,
-        }
-        if allow_llm_decision:
-            decision_inputs["planning_context_hints"] = planning_context_hints
-        else:
-            decision_inputs["runtime_degraded_reason"] = runtime_degraded_reason
-        decision_context = {
-            "task_name": f"retrieve:decision:{decision_subagent_type}",
-            "agent_path": f"retriever/decision/{decision_subagent_type}",
-        }
-        decision_outputs, _ = self._invoke_subagent(
-            SubagentInvocation(
-                subagent_type=decision_subagent_type,
-                objective="Select final evidence set and summarize retrieval.",
-                inputs=decision_inputs,
-                context=decision_context,
-                requires_llm=allow_llm_decision,
-                fallback_subagent_type="fallback_retrieval_decider" if allow_llm_decision else None,
-                error_fallback_subagent_type="fallback_retrieval_decider" if allow_llm_decision else None,
-                error_fallback_objective="Select fallback evidence set and summarize retrieval after LLM error.",
-                error_fallback_inputs={
-                    "intent": intent,
-                    "query": query,
-                    "evidences": evidences,
-                    "top_k": top_k,
-                    "qdrant_degraded_reason": qdrant_degraded_reason,
-                    "runtime_degraded_reason": runtime_degraded_reason,
-                },
-                error_fallback_context={
-                    "task_name": "retrieve:decision:fallback_retrieval_decider",
-                    "agent_path": "retriever/decision/fallback_retrieval_decider",
-                },
+        if self._should_recall_methodology_memory(intent):
+            memory_thread_id, memory_turn_id = self.spawn_child_thread(
+                intent=intent,
+                objective="Recall methodology memory rows for retrieval ranking and summarization.",
+                agent=self.agent_name,
+                phase="retrieve_search_methodology_memory",
             )
-        )
+            recall_jobs.append(
+                (
+                    "methodology_memory",
+                    SubagentInvocation(
+                        subagent_type="methodology_memory_recaller",
+                        objective="Recall methodology memory rows for retrieval ranking and summarization.",
+                        inputs={
+                            "intent": intent,
+                            "query": query,
+                            "planning_context_hints": planning_context_hints,
+                            "limit": 5,
+                        },
+                        context={
+                            "task_name": "retrieve:search:methodology_memory_recaller",
+                            "agent_path": "retriever/search/methodology_memory_recaller",
+                            "phase": "retrieve_search_methodology_memory",
+                            "child_thread_id": memory_thread_id,
+                            "child_turn_id": memory_turn_id,
+                        },
+                    ),
+                )
+            )
+
+        prefetched_methodology_rows: list[dict] = []
+        if recall_jobs:
+            recall_results = self._invoke_subagents_concurrently(
+                [invocation for _, invocation in recall_jobs],
+                max_workers=len(recall_jobs),
+            )
+            for (source_name, _), (source_outputs, _) in zip(recall_jobs, recall_results):
+                if source_name == "qdrant":
+                    qdrant_status = "degraded" if source_outputs.get("degraded") else "completed"
+                    qdrant_reason = str(source_outputs.get("degrade_reason") or "").strip() or None
+                    if qdrant_reason and not qdrant_degraded_reason:
+                        qdrant_degraded_reason = qdrant_reason
+                    evidence_map = self._merge_evidence_candidates(
+                        evidence_map=evidence_map,
+                        evidences=list(source_outputs.get("evidences") or []),
+                    )
+                    trace.append(
+                        self._build_trace_record(
+                            subagent_type="qdrant_evidence_searcher",
+                            objective="Search indexed evidence candidates via Qdrant.",
+                            status=qdrant_status,
+                            task_name="retrieve:search:qdrant_evidence_searcher",
+                            agent_path="retriever/search/qdrant_evidence_searcher",
+                            notes=[
+                                f"top_k={top_k}",
+                                f"filters={source_outputs.get('metadata_filters') or {}}",
+                                *( [f"degrade_reason={qdrant_reason}"] if qdrant_reason else [] ),
+                            ],
+                        )
+                    )
+                    continue
+
+                memory_status = "degraded" if source_outputs.get("degraded") else "completed"
+                memory_reason = str(source_outputs.get("degrade_reason") or "").strip() or None
+                prefetched_methodology_rows = [
+                    row for row in list(source_outputs.get("memory_rows") or [])
+                    if isinstance(row, dict)
+                ]
+                trace.append(
+                    self._build_trace_record(
+                        subagent_type="methodology_memory_recaller",
+                        objective="Recall methodology memory rows for retrieval ranking and summarization.",
+                        status=memory_status,
+                        task_name="retrieve:search:methodology_memory_recaller",
+                        agent_path="retriever/search/methodology_memory_recaller",
+                        notes=[
+                            f"row_count={len(prefetched_methodology_rows)}",
+                            f"benchmark_scope={source_outputs.get('benchmark_scope') or 'none'}",
+                            *( [f"degrade_reason={memory_reason}"] if memory_reason else [] ),
+                        ],
+                    )
+                )
+
+        with self._prefetched_methodology_memory_scope(
+            rows=prefetched_methodology_rows,
+            query=query,
+            planning_context_hints=planning_context_hints,
+        ):
+            dedupe_outputs = self._dedupe_evidence_candidates(
+                evidences=list(evidence_map.values()),
+                current_run_id=current_run_id,
+                intent=intent,
+            )
+            evidences = dedupe_outputs["evidences"]
+            planning_context_hints = dict(planning_context_hints or {})
+            decision_subagent_type = "retrieval_decider" if allow_llm_decision else "fallback_retrieval_decider"
+            decision_inputs = {
+                "intent": intent,
+                "query": query,
+                "evidences": evidences,
+                "top_k": top_k,
+                "qdrant_degraded_reason": qdrant_degraded_reason,
+            }
+            if allow_llm_decision:
+                decision_inputs["planning_context_hints"] = planning_context_hints
+            else:
+                decision_inputs["runtime_degraded_reason"] = runtime_degraded_reason
+            decision_context = {
+                "task_name": f"retrieve:decision:{decision_subagent_type}",
+                "agent_path": f"retriever/decision/{decision_subagent_type}",
+            }
+            decision_outputs, _ = self._invoke_subagent(
+                SubagentInvocation(
+                    subagent_type=decision_subagent_type,
+                    objective="Select final evidence set and summarize retrieval.",
+                    inputs=decision_inputs,
+                    context=decision_context,
+                    requires_llm=allow_llm_decision,
+                    fallback_subagent_type="fallback_retrieval_decider" if allow_llm_decision else None,
+                    error_fallback_subagent_type="fallback_retrieval_decider" if allow_llm_decision else None,
+                    error_fallback_objective="Select fallback evidence set and summarize retrieval after LLM error.",
+                    error_fallback_inputs={
+                        "intent": intent,
+                        "query": query,
+                        "evidences": evidences,
+                        "top_k": top_k,
+                        "qdrant_degraded_reason": qdrant_degraded_reason,
+                        "runtime_degraded_reason": runtime_degraded_reason,
+                    },
+                    error_fallback_context={
+                        "task_name": "retrieve:decision:fallback_retrieval_decider",
+                        "agent_path": "retriever/decision/fallback_retrieval_decider",
+                    },
+                )
+            )
         if intent == "stock_compare":
             decision_outputs = self._ensure_compare_scorecard_selected(
                 payload=dict(decision_outputs),
@@ -321,6 +425,117 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             "notes": list(notes or []),
         }
 
+    def _should_recall_methodology_memory(self, intent: str) -> bool:
+        return intent in {"stock_check", "stock_compare", "stock_screen", "review_thesis", "methodology_evolution"}
+
+    def _merge_evidence_candidates(
+        self,
+        *,
+        evidence_map: dict[str, dict],
+        evidences: list[dict],
+    ) -> dict[str, dict]:
+        merged = dict(evidence_map)
+        for candidate in evidences:
+            evidence_id = str(candidate.get("evidence_id") or "").strip()
+            if not evidence_id:
+                continue
+            existing = merged.get(evidence_id)
+            if existing is None or float(existing.get("score") or 0.0) < float(candidate.get("score") or 0.0):
+                payload = dict(existing or {})
+                payload.update(candidate)
+                merged[evidence_id] = payload
+        return merged
+
+    @contextmanager
+    def _prefetched_methodology_memory_scope(
+        self,
+        *,
+        rows: list[dict],
+        query: str | None,
+        planning_context_hints: dict[str, str] | None,
+    ):
+        previous = getattr(self, "_prefetched_methodology_memory_context", None)
+        search_query, benchmark_scope = self._resolve_methodology_memory_request(
+            query=query,
+            planning_context_hints=planning_context_hints,
+        )
+        self._prefetched_methodology_memory_context = {
+            "rows": [row for row in rows if isinstance(row, dict)],
+            "search_query": search_query,
+            "benchmark_scope": benchmark_scope,
+        }
+        try:
+            yield
+        finally:
+            if previous is None:
+                if hasattr(self, "_prefetched_methodology_memory_context"):
+                    delattr(self, "_prefetched_methodology_memory_context")
+            else:
+                self._prefetched_methodology_memory_context = previous
+
+    def _resolve_methodology_memory_request(
+        self,
+        *,
+        query: str | None = None,
+        planning_context_hints: dict[str, str] | None = None,
+    ) -> tuple[str, str | None]:
+        normalized_hints = normalize_planning_context_hints(planning_context_hints)
+        benchmark_scope = str(normalized_hints.get("methodology_benchmark_scope") or "").strip() or None
+        search_query = str(query or "").strip()
+        if not search_query and normalized_hints:
+            search_query = " ".join(
+                str(normalized_hints.get(key) or "").strip()
+                for key in ("recommended_next_step", "open_question", "previous_summary", "thread_topic")
+            ).strip()
+        return search_query, benchmark_scope
+
+    def _recall_methodology_memory_rows(
+        self,
+        *,
+        intent: str,
+        query: str | None = None,
+        planning_context_hints: dict[str, str] | None = None,
+        limit: int = 5,
+    ) -> dict:
+        if not self._should_recall_methodology_memory(intent):
+            return {
+                "memory_rows": [],
+                "search_query": None,
+                "benchmark_scope": None,
+                "degraded": False,
+                "degrade_reason": None,
+            }
+        memory_service = getattr(self, "memory_service", None)
+        if memory_service is None:
+            return {
+                "memory_rows": [],
+                "search_query": None,
+                "benchmark_scope": None,
+                "degraded": True,
+                "degrade_reason": "memory_service_unavailable",
+            }
+        search_query, benchmark_scope = self._resolve_methodology_memory_request(
+            query=query,
+            planning_context_hints=planning_context_hints,
+        )
+        if search_query:
+            rows = memory_service.search_methodology_memory(
+                query=search_query,
+                limit=limit,
+                benchmark_scope=benchmark_scope,
+            )
+        else:
+            rows = memory_service.read_recent_methodology_memory(limit_per_type=limit)
+        if not isinstance(rows, list):
+            rows = []
+        return {
+            "memory_rows": [row for row in rows if isinstance(row, dict)],
+            "search_query": search_query or None,
+            "benchmark_scope": benchmark_scope,
+            "degraded": False,
+            "degrade_reason": None,
+        }
+
     def _index_blackboard_evidences(self, *, blackboard_entries: list[dict], qdrant) -> dict:
         evidence_map: dict[str, dict] = {}
         symbol = None
@@ -344,15 +559,21 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
     def _search_qdrant_evidences(
         self,
         *,
-        qdrant,
         intent: str,
         query: str,
         top_k: int,
         symbol: str | None,
         sector: str | None,
         current_run_id: str | None,
-        evidence_map: dict[str, dict],
     ) -> dict:
+        qdrant = self.searcher_qdrant
+        if qdrant is None:
+            return {
+                "evidences": [],
+                "metadata_filters": {},
+                "degraded": True,
+                "degrade_reason": self.qdrant_error or "qdrant_unavailable",
+            }
         metadata_filters: dict[str, str] = {}
         if intent != "distill_kol_logic":
             metadata_filters["record_type"] = "verified_snapshot"
@@ -368,31 +589,39 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             top_k=top_k,
             metadata_filters=metadata_filters,
         )
+        evidences: list[dict] = []
         for hit in qdrant_hits:
             payload = hit["payload"]
-            evidence_id = payload["entry_id"]
-            candidate = {
-                "evidence_id": evidence_id,
-                "title": payload["document_title"],
-                "summary": payload["content"],
-                "retrieval_hint": self._retrieval_hint_from_qdrant_payload(payload),
-                "source_refs": payload.get("source_refs", []),
-                "metadata": {
-                    "phase": payload.get("phase"),
-                    "agent": payload.get("agent"),
-                    "record_type": payload.get("record_type"),
-                    "source_type": payload.get("source_type"),
-                },
-                "score": hit["score"],
-            }
-            existing = evidence_map.get(evidence_id)
-            if existing is None or (existing.get("score") or 0.0) < (candidate.get("score") or 0.0):
-                merged = dict(existing or {})
-                merged.update(candidate)
-                evidence_map[evidence_id] = merged
+            evidences.append(
+                {
+                    "evidence_id": payload["entry_id"],
+                    "title": payload["document_title"],
+                    "summary": payload["content"],
+                    "retrieval_hint": self._retrieval_hint_from_qdrant_payload(payload),
+                    "source_refs": payload.get("source_refs", []),
+                    "metadata": {
+                        "phase": payload.get("phase"),
+                        "agent": payload.get("agent"),
+                        "record_type": payload.get("record_type"),
+                        "source_type": payload.get("source_type"),
+                        "symbol": payload.get("symbol"),
+                        "sector": payload.get("sector"),
+                        "dimension_family": payload.get("dimension_family"),
+                        "dimension_key": payload.get("dimension_key"),
+                        "scenario_tags": payload.get("scenario_tags", []),
+                        "methodology_tags": payload.get("methodology_tags", []),
+                        "dimension_tags": payload.get("dimension_tags", []),
+                        "methodology_type": payload.get("methodology_type"),
+                        "valuation_band_label": payload.get("valuation_band_label"),
+                    },
+                    "score": hit["score"],
+                }
+            )
         return {
-            "evidence_map": evidence_map,
+            "evidences": evidences,
             "metadata_filters": metadata_filters,
+            "degraded": False,
+            "degrade_reason": None,
         }
 
     def _dedupe_evidence_candidates(
@@ -1215,17 +1444,21 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
         query: str | None = None,
         planning_context_hints: dict[str, str] | None = None,
     ) -> list[dict]:
+        search_query, benchmark_scope = self._resolve_methodology_memory_request(
+            query=query,
+            planning_context_hints=planning_context_hints,
+        )
+        cached = getattr(self, "_prefetched_methodology_memory_context", None)
+        if isinstance(cached, dict):
+            cached_query = str(cached.get("search_query") or "").strip()
+            cached_scope = str(cached.get("benchmark_scope") or "").strip() or None
+            if cached_query == search_query and cached_scope == benchmark_scope:
+                cached_rows = cached.get("rows")
+                if isinstance(cached_rows, list):
+                    return [row for row in cached_rows[:limit] if isinstance(row, dict)]
         memory_service = getattr(self, "memory_service", None)
         if memory_service is None:
             return []
-        normalized_hints = normalize_planning_context_hints(planning_context_hints)
-        benchmark_scope = str(normalized_hints.get("methodology_benchmark_scope") or "").strip() or None
-        search_query = str(query or "").strip()
-        if not search_query and normalized_hints:
-            search_query = " ".join(
-                str(normalized_hints.get(key) or "").strip()
-                for key in ("recommended_next_step", "open_question", "previous_summary", "thread_topic")
-            ).strip()
         if search_query:
             rows = memory_service.search_methodology_memory(
                 query=search_query,

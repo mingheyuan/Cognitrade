@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 import akshare as ak
+from pydantic import BaseModel, ConfigDict, Field
 
 from research_system.adapters.vendors.akshare_sector_adapter import AkShareSectorAdapter
 from research_system.adapters.vendors.akshare_utils import call_with_retry, normalize_value
+from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
+from research_system.schemas.subagents import SubagentInvocation
 from research_system.runtime.storage.jsonl import read_json, read_jsonl
 from research_system.runtime.platform.skill_runtime import SkillRuntime
+from research_system.subagents.base import SubagentRuntimePolicy
+from research_system.subagents.registry import SubagentRegistry
 
 
 def _normalize_query(query: str) -> dict[str, str | None]:
@@ -60,11 +66,124 @@ def _extract_investment_cycle(query: str) -> str | None:
     return None
 
 
-class StockSnapshotCollectorSubagent:
+class StockSnapshotCollectorInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    symbol: str | None = None
+    snapshot_types: list[str] = Field(default_factory=list)
+    allow_partial: bool = False
+
+
+class StockSnapshotCollectorOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    snapshots: list[dict[str, Any]] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class SnapshotSkillRunnerInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    symbol: str | None = None
+    snapshot_type: str
+
+
+class SnapshotSkillRunnerOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot_type: str
+    snapshot: dict[str, Any] | None = None
+    degraded: bool = False
+    degrade_reason: str | None = None
+
+
+class SectorSnapshotCollectorInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    include_policy_snapshot: bool = False
+
+
+class SectorSnapshotCollectorOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot: dict[str, Any]
+    related_snapshots: list[dict[str, Any]] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class CandidateUniverseBuilderInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    sector_query: str | None = None
+    top_n: int = 12
+
+
+class CandidateUniverseBuilderOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_universe: list[dict[str, Any]] = Field(default_factory=list)
+    sector_context: dict[str, Any] | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class ReviewTargetLoaderInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    constraints: dict[str, Any] = Field(default_factory=dict)
+    query: str
+
+
+class ReviewTargetLoaderOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    review_target_run_id: str
+    review_source_entries: list[dict[str, Any]] = Field(default_factory=list)
+    review_source_result: dict[str, Any] = Field(default_factory=dict)
+    sector: str | None = None
+    symbol: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class SnapshotSkillRunnerSubagent:
+    input_model = SnapshotSkillRunnerInputModel
+    output_model = SnapshotSkillRunnerOutputModel
+    runtime_policy = SubagentRuntimePolicy(allow_parallel=True, max_concurrency=8)
+
+    def __init__(self, *, snapshot_type: str, skill_name: str, skill_runtime: SkillRuntime) -> None:
+        self.subagent_type = f"{snapshot_type}_snapshot_skill_runner"
+        self.snapshot_type = snapshot_type
+        self.skill_name = skill_name
+        self.skill_runtime = skill_runtime
+
+    def run(self, *, query: str, symbol: str | None, snapshot_type: str) -> dict:
+        try:
+            snapshot = self.skill_runtime.run(self.skill_name, query=query, symbol=symbol)
+        except Exception as exc:
+            return {
+                "snapshot_type": snapshot_type,
+                "snapshot": None,
+                "degraded": True,
+                "degrade_reason": type(exc).__name__,
+            }
+        return {
+            "snapshot_type": snapshot_type,
+            "snapshot": snapshot,
+            "degraded": False,
+            "degrade_reason": None,
+        }
+
+
+class StockSnapshotCollectorSubagent(RuntimeBoundSubagentInvoker):
     subagent_type = "stock_snapshot_collector"
+    input_model = StockSnapshotCollectorInputModel
+    output_model = StockSnapshotCollectorOutputModel
+    runtime_policy = SubagentRuntimePolicy(allow_parallel=True, max_concurrency=8)
 
     def __init__(self, skill_runtime: SkillRuntime) -> None:
-        self.skill_runtime = skill_runtime
         self.optional_snapshot_types = {"lhb", "capital_flow", "sentiment", "events"}
         self.skill_map = {
             "market": "market_snapshot_skill",
@@ -75,6 +194,28 @@ class StockSnapshotCollectorSubagent:
             "sentiment": "sentiment_snapshot_skill",
             "events": "events_snapshot_skill",
         }
+        self._skill_runtime = skill_runtime
+        self.registry = SubagentRegistry(
+            [
+                SnapshotSkillRunnerSubagent(
+                    snapshot_type=snapshot_type,
+                    skill_name=skill_name,
+                    skill_runtime=skill_runtime,
+                )
+                for snapshot_type, skill_name in self.skill_map.items()
+            ]
+        )
+
+    @property
+    def skill_runtime(self) -> SkillRuntime:
+        return self._skill_runtime
+
+    @skill_runtime.setter
+    def skill_runtime(self, value: SkillRuntime) -> None:
+        self._skill_runtime = value
+        for subagent in self.registry._subagents.values():
+            if hasattr(subagent, "skill_runtime"):
+                setattr(subagent, "skill_runtime", value)
 
     def run(
         self,
@@ -86,20 +227,45 @@ class StockSnapshotCollectorSubagent:
     ) -> dict:
         snapshots = []
         notes = [f"stock_snapshot_types={','.join(snapshot_types or ['market', 'fundamental', 'notice'])}"]
-        for snapshot_type in snapshot_types or ["market", "fundamental", "notice"]:
+        invocations: list[SubagentInvocation] = []
+        ordered_snapshot_types = list(snapshot_types or ["market", "fundamental", "notice"])
+        for snapshot_type in ordered_snapshot_types:
             skill_name = self.skill_map.get(snapshot_type)
             if not skill_name:
                 if allow_partial and snapshot_type in self.optional_snapshot_types:
                     notes.append(f"snapshot_skipped={snapshot_type}:unsupported_mapping")
                     continue
                 raise ValueError(f"unsupported snapshot_type: {snapshot_type}")
-            try:
-                snapshots.append(self.skill_runtime.run(skill_name, query=query, symbol=symbol))
-            except Exception as exc:
-                if allow_partial and snapshot_type in self.optional_snapshot_types:
-                    notes.append(f"snapshot_skipped={snapshot_type}:{type(exc).__name__}")
-                    continue
-                raise
+            invocations.append(
+                SubagentInvocation(
+                    subagent_type=f"{snapshot_type}_snapshot_skill_runner",
+                    objective=f"Collect {snapshot_type} stock snapshot.",
+                    inputs={
+                        "query": query,
+                        "symbol": symbol,
+                        "snapshot_type": snapshot_type,
+                    },
+                    context={
+                        "task_name": "collect:stock_snapshot_collector",
+                        "agent_path": "collector/stock_snapshot_collector",
+                    },
+                )
+            )
+        runs = self._invoke_subagents_concurrently(invocations, max_workers=len(invocations))
+        for snapshot_type, (outputs, _) in zip(
+            [item for item in ordered_snapshot_types if item in self.skill_map],
+            runs,
+            strict=False,
+        ):
+            snapshot = outputs.get("snapshot")
+            degrade_reason = str(outputs.get("degrade_reason") or "").strip() or "snapshot_failed"
+            if snapshot is not None:
+                snapshots.append(snapshot)
+                continue
+            if allow_partial and snapshot_type in self.optional_snapshot_types:
+                notes.append(f"snapshot_skipped={snapshot_type}:{degrade_reason}")
+                continue
+            raise RuntimeError(f"snapshot collection failed for {snapshot_type}: {degrade_reason}")
         return {
             "snapshots": snapshots,
             "notes": notes,
@@ -108,6 +274,9 @@ class StockSnapshotCollectorSubagent:
 
 class SectorSnapshotCollectorSubagent:
     subagent_type = "sector_snapshot_collector"
+    input_model = SectorSnapshotCollectorInputModel
+    output_model = SectorSnapshotCollectorOutputModel
+    runtime_policy = SubagentRuntimePolicy()
 
     def __init__(self, skill_runtime: SkillRuntime) -> None:
         self.skill_runtime = skill_runtime
@@ -132,6 +301,9 @@ class SectorSnapshotCollectorSubagent:
 
 class CandidateUniverseBuilderSubagent:
     subagent_type = "candidate_universe_builder"
+    input_model = CandidateUniverseBuilderInputModel
+    output_model = CandidateUniverseBuilderOutputModel
+    runtime_policy = SubagentRuntimePolicy()
 
     def __init__(self, skill_runtime: SkillRuntime) -> None:
         self.skill_runtime = skill_runtime
@@ -225,6 +397,9 @@ class CandidateUniverseBuilderSubagent:
 
 class ReviewTargetLoaderSubagent:
     subagent_type = "review_target_loader"
+    input_model = ReviewTargetLoaderInputModel
+    output_model = ReviewTargetLoaderOutputModel
+    runtime_policy = SubagentRuntimePolicy()
 
     def __init__(self, runs_root: Path | None = None) -> None:
         self.runs_root = runs_root

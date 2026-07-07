@@ -174,6 +174,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                     "compare_targets": compare_targets,
                 }
             )
+            compare_jobs: list[tuple[str, object | None, SubagentInvocation]] = []
             for compare_symbol in compare_symbols:
                 child_thread, child_turn = self.spawn_child_thread(
                     intent="collector_compare_target",
@@ -181,30 +182,31 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                     agent=self.agent_name,
                     phase="collect_compare_target",
                 )
-                stock_outputs, record = self._invoke_subagent(
-                    SubagentInvocation(
-                        subagent_type="stock_snapshot_collector",
-                        objective="Collect stock-level verified snapshots for comparison targets.",
-                        inputs={
-                            "query": compare_symbol,
-                            "symbol": compare_symbol,
-                            "snapshot_types": requested_snapshot_types,
-                            "allow_partial": bool(constraints.get("allow_partial_snapshot_types")) or bool(collection_strategy.get("hint_augmented_snapshot_types")),
-                        },
-                        context={
-                            "task_name": f"collect:compare:{compare_symbol}:stock_snapshot_collector",
-                            "agent_path": f"collector/compare/{compare_symbol}/stock_snapshot_collector",
-                            "child_thread_id": getattr(child_thread, "thread_id", None),
-                            "child_turn_id": getattr(child_turn, "turn_id", None),
-                        },
+                compare_jobs.append(
+                    (
+                        compare_symbol,
+                        child_thread,
+                        self._build_stock_snapshot_invocation(
+                            objective="Collect stock-level verified snapshots for comparison targets.",
+                            query=compare_symbol,
+                            symbol=compare_symbol,
+                            snapshot_types=requested_snapshot_types,
+                            allow_partial=bool(constraints.get("allow_partial_snapshot_types")) or bool(collection_strategy.get("hint_augmented_snapshot_types")),
+                            task_name=f"collect:compare:{compare_symbol}:stock_snapshot_collector",
+                            agent_path=f"collector/compare/{compare_symbol}/stock_snapshot_collector",
+                            child_thread=child_thread,
+                            child_turn=child_turn,
+                            phase="collect_compare_target",
+                        ),
                     )
                 )
-                trace_record = record.model_dump(mode="json")
-                if child_thread is not None:
-                    trace_record.setdefault("notes", []).append(f"child_thread={child_thread.thread_id}")
-                    child_thread_ids.append(child_thread.thread_id)
-                trace.append(trace_record)
-                snapshot_payloads.extend(stock_outputs["snapshots"])
+            compare_trace_rows, compare_snapshots, compare_child_thread_ids = self._run_stock_snapshot_jobs(
+                compare_jobs,
+                max_workers=len(compare_jobs),
+            )
+            trace.extend(compare_trace_rows)
+            snapshot_payloads.extend(compare_snapshots)
+            child_thread_ids.extend(compare_child_thread_ids)
         elif intent == "sector_research":
             include_policy_snapshot = bool(constraints.get("include_policy_snapshot")) or bool(collection_strategy.get("include_policy_snapshot"))
             sector_outputs, record = self._invoke_subagent(
@@ -370,7 +372,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         snapshots: list[dict] = []
         requested_snapshot_types = snapshot_types or ["market", "fundamental", "notice", "lhb", "capital_flow", "sentiment", "events"]
         seen_symbols: set[str] = set()
-
+        enrichment_jobs: list[tuple[str, object | None, SubagentInvocation]] = []
         for candidate in candidates:
             symbol = str(candidate.get("symbol") or "").strip()
             if not symbol or symbol in seen_symbols:
@@ -381,48 +383,100 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                 agent=self.agent_name,
                 phase="collect_screen_candidate",
             )
-            stock_outputs, record = self._invoke_subagent(
-                SubagentInvocation(
-                    subagent_type="stock_snapshot_collector",
-                    objective="Collect deep stock snapshots for shortlisted screen candidates.",
-                    inputs={
-                        "query": f"{symbol} {str(candidate.get('name') or '').strip()}".strip(),
-                        "symbol": symbol,
-                        "snapshot_types": requested_snapshot_types,
-                        "allow_partial": True,
-                    },
-                    context={
-                        "task_name": f"collect:screen_candidate:{symbol}:stock_snapshot_collector",
-                        "agent_path": f"collector/screen/{symbol}/stock_snapshot_collector",
-                        "child_thread_id": getattr(child_thread, "thread_id", None),
-                        "child_turn_id": getattr(child_turn, "turn_id", None),
-                    },
+            enrichment_jobs.append(
+                (
+                    symbol,
+                    child_thread,
+                    self._build_stock_snapshot_invocation(
+                        objective="Collect deep stock snapshots for shortlisted screen candidates.",
+                        query=f"{symbol} {str(candidate.get('name') or '').strip()}".strip(),
+                        symbol=symbol,
+                        snapshot_types=requested_snapshot_types,
+                        allow_partial=True,
+                        task_name=f"collect:screen_candidate:{symbol}:stock_snapshot_collector",
+                        agent_path=f"collector/screen/{symbol}/stock_snapshot_collector",
+                        child_thread=child_thread,
+                        child_turn=child_turn,
+                        phase="collect_screen_candidate",
+                    ),
                 )
             )
-            trace_record = record.model_dump(mode="json")
-            if child_thread is not None:
-                trace_record.setdefault("notes", []).append(f"child_thread={child_thread.thread_id}")
-            trace.append(trace_record)
-            snapshots.extend(stock_outputs["snapshots"])
             seen_symbols.add(symbol)
+        trace_rows, snapshot_rows, child_thread_ids = self._run_stock_snapshot_jobs(
+            enrichment_jobs,
+            max_workers=len(enrichment_jobs),
+        )
+        trace.extend(trace_rows)
+        snapshots.extend(snapshot_rows)
 
         return {
             "snapshots": snapshots,
             "subagent_trace": trace,
-            "child_thread_ids": sorted(
-                {
-                    note.split("=", 1)[1].strip()
-                    for row in trace
-                    for note in list(row.get("notes") or [])
-                    if isinstance(note, str) and note.startswith("child_thread=") and note.split("=", 1)[1].strip()
-                }
-            ),
+            "child_thread_ids": sorted(set(child_thread_ids)),
             "notes": [
                 f"enriched_candidate_count={len(seen_symbols)}",
                 f"snapshot_types={','.join(requested_snapshot_types)}",
                 *self._child_thread_notes(trace),
             ],
         }
+
+    def _build_stock_snapshot_invocation(
+        self,
+        *,
+        objective: str,
+        query: str,
+        symbol: str | None,
+        snapshot_types: list[str],
+        allow_partial: bool,
+        task_name: str,
+        agent_path: str,
+        child_thread=None,
+        child_turn=None,
+        phase: str | None = None,
+    ) -> SubagentInvocation:
+        context = {
+            "task_name": task_name,
+            "agent_path": agent_path,
+            "child_thread_id": getattr(child_thread, "thread_id", None),
+            "child_turn_id": getattr(child_turn, "turn_id", None),
+        }
+        if phase:
+            context["phase"] = phase
+        return SubagentInvocation(
+            subagent_type="stock_snapshot_collector",
+            objective=objective,
+            inputs={
+                "query": query,
+                "symbol": symbol,
+                "snapshot_types": snapshot_types,
+                "allow_partial": allow_partial,
+            },
+            context=context,
+        )
+
+    def _run_stock_snapshot_jobs(
+        self,
+        jobs: list[tuple[str, object | None, SubagentInvocation]],
+        *,
+        max_workers: int | None = None,
+    ) -> tuple[list[dict], list[dict], list[str]]:
+        if not jobs:
+            return [], [], []
+        trace_rows: list[dict] = []
+        snapshots: list[dict] = []
+        child_thread_ids: list[str] = []
+        runs = self._invoke_subagents_concurrently(
+            [invocation for _, _, invocation in jobs],
+            max_workers=max_workers,
+        )
+        for (_, child_thread, _), (stock_outputs, record) in zip(jobs, runs, strict=False):
+            trace_record = record.model_dump(mode="json")
+            if child_thread is not None:
+                trace_record.setdefault("notes", []).append(f"child_thread={child_thread.thread_id}")
+                child_thread_ids.append(child_thread.thread_id)
+            trace_rows.append(trace_record)
+            snapshots.extend(list(stock_outputs.get("snapshots") or []))
+        return trace_rows, snapshots, child_thread_ids
 
     def _normalize_query(self, *, query: str) -> dict:
         return {

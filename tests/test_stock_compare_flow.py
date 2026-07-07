@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -297,6 +298,20 @@ class CompareSkillRuntimeStub:
         raise AssertionError(f"unexpected skill: {skill_name}")
 
 
+class ConcurrentCompareSkillRuntimeStub(CompareSkillRuntimeStub):
+    def __init__(self, *, parties: int) -> None:
+        self.barrier = threading.Barrier(parties)
+        self.lock = threading.Lock()
+        self.market_thread_names: list[str] = []
+
+    def run(self, skill_name: str, **kwargs):
+        if skill_name == "market_snapshot_skill":
+            with self.lock:
+                self.market_thread_names.append(threading.current_thread().name)
+            self.barrier.wait(timeout=2.0)
+        return super().run(skill_name, **kwargs)
+
+
 class TaskRouterStockCompareTests(unittest.TestCase):
     def test_router_identifies_stock_compare_for_named_multi_stock_query(self) -> None:
         decision = TaskRouter().identify(RequestEnvelope(user_query=BANK_COMPARE_QUERY))
@@ -363,6 +378,16 @@ class StockCompareFlowTests(unittest.TestCase):
             ]
             self.assertEqual(len({row.get("item_id") for row in child_subagent_items}), len(source["symbols"]))
             self.assertTrue(all(str(row.get("turn_id") or "").strip() for row in child_subagent_items))
+
+    def test_collector_runs_compare_target_snapshot_batches_concurrently(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = ConcurrentCompareSkillRuntimeStub(parties=6)
+            collector = CollectorService(runtime, runs_root=Path(temp_dir))
+
+            payload = collector.run(intent="stock_compare", query=BANK_COMPARE_QUERY)
+
+            symbols = payload["sources"][0]["symbols"]
+            self.assertEqual(len(runtime.market_thread_names), len(symbols))
 
     def test_orchestrator_runs_stock_compare_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

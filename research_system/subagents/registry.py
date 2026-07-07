@@ -1,21 +1,23 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Iterable
+from typing import Any, Iterable
 
 from research_system.schemas.subagents import SubagentExecutionRecord, SubagentInvocation
-from research_system.subagents.base import SupportsSubagent
+from research_system.subagents.base import SubagentDefinition, SupportsSubagent, build_subagent_definition
 
 
 class SubagentRegistry:
     def __init__(self, subagents: Iterable[SupportsSubagent] | None = None) -> None:
         self._subagents: dict[str, SupportsSubagent] = {}
+        self._definitions: dict[str, SubagentDefinition] = {}
         self._observers: list[Callable[..., None]] = []
         for subagent in subagents or []:
             self.register(subagent)
 
     def register(self, subagent: SupportsSubagent) -> None:
         self._subagents[subagent.subagent_type] = subagent
+        self._definitions[subagent.subagent_type] = build_subagent_definition(subagent)
 
     def add_observer(self, observer: Callable[..., None]) -> None:
         self._observers.append(observer)
@@ -25,6 +27,12 @@ class SubagentRegistry:
             return self._subagents[subagent_type]
         except KeyError as exc:
             raise KeyError(f"unknown subagent: {subagent_type}") from exc
+
+    def definition(self, subagent_type: str) -> SubagentDefinition:
+        try:
+            return self._definitions[subagent_type]
+        except KeyError as exc:
+            raise KeyError(f"unknown subagent definition: {subagent_type}") from exc
 
     def notify_started(self, *, invocation: SubagentInvocation) -> None:
         self._notify(

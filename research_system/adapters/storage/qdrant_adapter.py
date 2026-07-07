@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import math
+import re
 import uuid
+from collections import Counter
 from typing import Any
 
 from qdrant_client import QdrantClient
@@ -10,17 +13,46 @@ from qdrant_client.local.persistence import CollectionPersistence
 from research_system.runtime.platform.settings import Settings
 from research_system.schemas.runtime import BlackboardEntry
 
+_SEARCH_STOPWORDS = {
+    "a",
+    "about",
+    "an",
+    "and",
+    "are",
+    "for",
+    "from",
+    "how",
+    "into",
+    "just",
+    "more",
+    "previous",
+    "recent",
+    "review",
+    "than",
+    "that",
+    "the",
+    "this",
+    "what",
+    "which",
+    "who",
+    "with",
+}
+
 
 class QdrantUnavailableError(RuntimeError):
     pass
 
 
 class QdrantAdapter:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, embedding_provider: Any | None = None) -> None:
         self.settings = settings
+        self.embedding_provider = embedding_provider
         self.collection_name = settings.qdrant_collection_name
+        self.vector_size = max(int(settings.embedding_dimensions or 1536), 1)
+        self.hybrid_candidate_limit = max(int(settings.qdrant_hybrid_candidate_limit or 50), 10)
+        self.vector_weight = float(settings.qdrant_vector_weight or 0.0)
+        self.lexical_weight = float(settings.qdrant_lexical_weight or 0.0)
         self.client = self._build_client()
-        self.vector_size = 8
         self.available = self.client is not None
         if self.available:
             self._ensure_collection()
@@ -43,11 +75,38 @@ class QdrantAdapter:
             return
         existing = [item.name for item in self.client.get_collections().collections]
         if self.collection_name in existing:
-            return
+            existing_size = self._collection_vector_size()
+            if existing_size == self.vector_size:
+                return
+            if self.settings.qdrant_url:
+                raise QdrantUnavailableError(
+                    f"collection '{self.collection_name}' uses vector size {existing_size}, expected {self.vector_size}"
+                )
+            self.client.delete_collection(collection_name=self.collection_name)
         self.client.create_collection(
             collection_name=self.collection_name,
             vectors_config=models.VectorParams(size=self.vector_size, distance=models.Distance.COSINE),
         )
+
+    def _collection_vector_size(self) -> int | None:
+        if self.client is None:
+            return None
+        try:
+            collection = self.client.get_collection(self.collection_name)
+        except Exception:
+            return None
+        config = getattr(collection, "config", None)
+        params = getattr(config, "params", None)
+        vectors = getattr(params, "vectors", None)
+        size = getattr(vectors, "size", None)
+        if size is not None:
+            return int(size)
+        if isinstance(vectors, dict):
+            for value in vectors.values():
+                nested_size = getattr(value, "size", None)
+                if nested_size is not None:
+                    return int(nested_size)
+        return None
 
     def reset_collection(self) -> None:
         if self.client is None:
@@ -83,26 +142,25 @@ class QdrantAdapter:
         top_k: int = 5,
         metadata_filters: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        if self.client is None:
+        if self.client is None or top_k <= 0:
             return []
-        vector = self._vectorize_text(query_text)
         query_filter = self._build_filter(metadata_filters or {})
-        response = self.client.query_points(
-            collection_name=self.collection_name,
-            query=vector,
-            limit=top_k,
+        candidate_limit = max(top_k * 8, self.hybrid_candidate_limit)
+        vector_hits = self._query_vector_hits(
+            query_text=query_text,
+            limit=candidate_limit,
             query_filter=query_filter,
-            with_payload=True,
-            with_vectors=False,
         )
-        return [
-            {
-                "id": item.id,
-                "score": item.score,
-                "payload": item.payload,
-            }
-            for item in response.points
-        ]
+        lexical_points = self._scroll_points(
+            limit=candidate_limit,
+            query_filter=query_filter,
+        )
+        return self._fuse_hybrid_hits(
+            query_text=query_text,
+            top_k=top_k,
+            vector_hits=vector_hits,
+            lexical_points=lexical_points,
+        )
 
     def close(self) -> None:
         if self.client is None:
@@ -397,7 +455,268 @@ class QdrantAdapter:
             return None
         return models.Filter(must=conditions)
 
+    def _query_vector_hits(
+        self,
+        *,
+        query_text: str,
+        limit: int,
+        query_filter: models.Filter | None,
+    ) -> list[Any]:
+        if self.client is None:
+            return []
+        vector = self._vectorize_text(query_text)
+        response = self.client.query_points(
+            collection_name=self.collection_name,
+            query=vector,
+            limit=limit,
+            query_filter=query_filter,
+            with_payload=True,
+            with_vectors=False,
+        )
+        return list(getattr(response, "points", []) or [])
+
+    def _scroll_points(
+        self,
+        *,
+        limit: int,
+        query_filter: models.Filter | None,
+    ) -> list[Any]:
+        if self.client is None:
+            return []
+        scroll = getattr(self.client, "scroll", None)
+        if not callable(scroll):
+            return []
+        kwargs: dict[str, Any] = {
+            "collection_name": self.collection_name,
+            "limit": limit,
+            "with_payload": True,
+            "with_vectors": False,
+        }
+        if query_filter is not None:
+            kwargs["scroll_filter"] = query_filter
+        try:
+            response = scroll(**kwargs)
+        except TypeError:
+            if "scroll_filter" in kwargs:
+                kwargs["query_filter"] = kwargs.pop("scroll_filter")
+            response = scroll(**kwargs)
+        if isinstance(response, tuple):
+            return list(response[0] or [])
+        return list(getattr(response, "points", response) or [])
+
+    def _fuse_hybrid_hits(
+        self,
+        *,
+        query_text: str,
+        top_k: int,
+        vector_hits: list[Any],
+        lexical_points: list[Any],
+    ) -> list[dict[str, Any]]:
+        candidates: dict[str, dict[str, Any]] = {}
+        vector_rank: dict[str, int] = {}
+        vector_score: dict[str, float] = {}
+        for rank, point in enumerate(vector_hits, start=1):
+            key = self._candidate_key(point)
+            vector_rank[key] = rank
+            vector_score[key] = float(getattr(point, "score", 0.0) or 0.0)
+            candidates[key] = {
+                "id": getattr(point, "id", key),
+                "payload": dict(getattr(point, "payload", {}) or {}),
+            }
+
+        lexical_hits = self._score_lexical_hits(
+            query_text=query_text,
+            points=lexical_points,
+        )
+        lexical_rank: dict[str, int] = {}
+        lexical_score: dict[str, float] = {}
+        lexical_match_terms: dict[str, list[str]] = {}
+        max_lexical_score = max((row["lexical_score"] for row in lexical_hits), default=0.0)
+        for rank, row in enumerate(lexical_hits, start=1):
+            key = row["key"]
+            lexical_rank[key] = rank
+            lexical_score[key] = float(row["lexical_score"])
+            lexical_match_terms[key] = list(row["matched_terms"])
+            candidates.setdefault(
+                key,
+                {
+                    "id": getattr(row["point"], "id", key),
+                    "payload": dict(getattr(row["point"], "payload", {}) or {}),
+                },
+            )
+
+        results: list[dict[str, Any]] = []
+        for key, candidate in candidates.items():
+            fused_score = 0.0
+            if key in vector_rank and self.vector_weight > 0:
+                fused_score += self.vector_weight * self._rrf_score(vector_rank[key])
+            if key in lexical_rank and self.lexical_weight > 0:
+                fused_score += self.lexical_weight * self._rrf_score(lexical_rank[key])
+            if key in lexical_score and max_lexical_score > 0:
+                fused_score += 0.05 * (lexical_score[key] / max_lexical_score)
+            results.append(
+                {
+                    "id": candidate["id"],
+                    "score": fused_score,
+                    "payload": candidate["payload"],
+                    "vector_score": vector_score.get(key),
+                    "lexical_score": lexical_score.get(key),
+                    "matched_terms": lexical_match_terms.get(key, []),
+                }
+            )
+        results.sort(
+            key=lambda item: (
+                float(item.get("score") or 0.0),
+                float(item.get("lexical_score") or 0.0),
+                float(item.get("vector_score") or 0.0),
+            ),
+            reverse=True,
+        )
+        return [
+            {
+                "id": item["id"],
+                "score": item["score"],
+                "payload": item["payload"],
+                "vector_score": item.get("vector_score"),
+                "lexical_score": item.get("lexical_score"),
+                "matched_terms": item.get("matched_terms", []),
+            }
+            for item in results[:top_k]
+        ]
+
+    def _rrf_score(self, rank: int) -> float:
+        return 1.0 / (60.0 + float(rank))
+
+    def _score_lexical_hits(
+        self,
+        *,
+        query_text: str,
+        points: list[Any],
+    ) -> list[dict[str, Any]]:
+        query_terms = sorted(self._extract_search_terms(query_text))
+        if not query_terms:
+            return []
+        rows: list[dict[str, Any]] = []
+        document_frequency: Counter[str] = Counter()
+        total_docs = 0
+        total_length = 0
+        for point in points:
+            payload = getattr(point, "payload", {}) or {}
+            tokens = self._tokenize_text(str(payload.get("content") or ""))
+            if not tokens:
+                continue
+            counts = Counter(tokens)
+            total_docs += 1
+            total_length += sum(counts.values())
+            for term in query_terms:
+                if counts.get(term):
+                    document_frequency[term] += 1
+            rows.append(
+                {
+                    "key": self._candidate_key(point),
+                    "point": point,
+                    "counts": counts,
+                }
+            )
+        if not rows or total_docs <= 0:
+            return []
+        average_doc_length = total_length / total_docs if total_length > 0 else 1.0
+        scored: list[dict[str, Any]] = []
+        for row in rows:
+            counts = row["counts"]
+            matched_terms = [term for term in query_terms if counts.get(term)]
+            if not matched_terms:
+                continue
+            score = self._bm25_score(
+                query_terms=query_terms,
+                counts=counts,
+                document_frequency=document_frequency,
+                total_docs=total_docs,
+                average_doc_length=average_doc_length,
+            )
+            if score <= 0:
+                continue
+            scored.append(
+                {
+                    "key": row["key"],
+                    "point": row["point"],
+                    "lexical_score": score,
+                    "matched_terms": matched_terms,
+                }
+            )
+        scored.sort(key=lambda item: float(item["lexical_score"]), reverse=True)
+        return scored
+
+    def _bm25_score(
+        self,
+        *,
+        query_terms: list[str],
+        counts: Counter[str],
+        document_frequency: Counter[str],
+        total_docs: int,
+        average_doc_length: float,
+    ) -> float:
+        k1 = 1.5
+        b = 0.75
+        doc_length = max(sum(counts.values()), 1)
+        score = 0.0
+        for term in query_terms:
+            tf = float(counts.get(term, 0))
+            if tf <= 0:
+                continue
+            df = float(document_frequency.get(term, 0))
+            idf = math.log(1.0 + ((total_docs - df + 0.5) / (df + 0.5)))
+            numerator = tf * (k1 + 1.0)
+            denominator = tf + k1 * (1.0 - b + b * (doc_length / max(average_doc_length, 1.0)))
+            score += idf * (numerator / denominator)
+        return score
+
+    def _candidate_key(self, point: Any) -> str:
+        payload = getattr(point, "payload", {}) or {}
+        entry_id = str(payload.get("entry_id") or "").strip()
+        if entry_id:
+            return entry_id
+        return str(getattr(point, "id", "") or "")
+
     def _vectorize_text(self, text: str) -> list[float]:
+        normalized = str(text or "").strip()
+        if normalized:
+            embedded = self._embedding_vector(normalized)
+            if embedded is not None:
+                return embedded
+        return self._hash_vectorize(normalized)
+
+    def _vectorize_payload(self, payload: dict[str, Any]) -> list[float]:
+        return self._vectorize_text(payload.get("content", ""))
+
+    def _embedding_vector(self, text: str) -> list[float] | None:
+        provider = getattr(self, "embedding_provider", None)
+        embed_texts = getattr(provider, "embed_texts", None)
+        if not callable(embed_texts):
+            return None
+        available = getattr(provider, "available", True)
+        if available is False:
+            return None
+        try:
+            vectors = embed_texts(
+                texts=[text],
+                model=self.settings.embedding_model,
+            )
+        except Exception:
+            return None
+        if not vectors:
+            return None
+        return self._coerce_vector_size(vectors[0])
+
+    def _coerce_vector_size(self, vector: list[float]) -> list[float]:
+        normalized = [float(item) for item in list(vector or [])]
+        if len(normalized) == self.vector_size:
+            return normalized
+        if len(normalized) > self.vector_size:
+            return normalized[: self.vector_size]
+        return normalized + [0.0] * (self.vector_size - len(normalized))
+
+    def _hash_vectorize(self, text: str) -> list[float]:
         base = [0.0] * self.vector_size
         encoded = text.encode("utf-8", errors="ignore")
         if not encoded:
@@ -406,8 +725,21 @@ class QdrantAdapter:
             base[index % self.vector_size] += byte / 255.0
         return base
 
-    def _vectorize_payload(self, payload: dict[str, Any]) -> list[float]:
-        return self._vectorize_text(payload.get("content", ""))
+    def _extract_search_terms(self, query: str) -> set[str]:
+        return set(self._tokenize_text(query))
+
+    def _tokenize_text(self, text: str) -> list[str]:
+        tokens: list[str] = []
+        lowered = text.lower()
+        for token in re.findall(r"[a-z0-9]{2,}", lowered):
+            if token not in _SEARCH_STOPWORDS:
+                tokens.append(token)
+        for token in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+            tokens.append(token)
+            if len(token) <= 16:
+                for index in range(0, len(token) - 1):
+                    tokens.append(token[index:index + 2])
+        return [token for token in tokens if token.strip()]
 
     def _source_type(self, entry: BlackboardEntry) -> str:
         if entry.kind == "verified_snapshot":
@@ -436,7 +768,7 @@ class QdrantAdapter:
     def _publish_time(self, entry: BlackboardEntry) -> str:
         if entry.kind == "verified_snapshot" and entry.payload.get("snapshot_type") == "notice":
             latest_notice = entry.payload.get("facts", {}).get("latest_notice", {})
-            for key in ("公告时间", "公告日期"):
+            for key in ("鍏憡鏃堕棿", "鍏憡鏃ユ湡"):
                 value = latest_notice.get(key)
                 if value:
                     return str(value)

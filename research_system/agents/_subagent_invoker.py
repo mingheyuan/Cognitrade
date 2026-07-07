@@ -61,6 +61,48 @@ class RuntimeBoundSubagentInvoker:
                 self._release_local_runtime(local_runtime)
         raise AttributeError("runtime-bound subagent execution requires SubagentRegistry or AgentControl binding")
 
+    def _invoke_subagents_concurrently(
+        self,
+        invocations: list[SubagentInvocation],
+        *,
+        max_workers: int | None = None,
+    ) -> list[tuple[dict, SubagentExecutionRecord]]:
+        if not invocations:
+            return []
+        registry = getattr(self, "registry")
+        local_binding = dict(getattr(self, "_local_runtime_binding", {}) or {})
+        local_agent_control = local_binding.get("agent_control")
+        if local_agent_control is not None and local_binding and isinstance(registry, SubagentRegistry):
+            return local_agent_control.run_many_bound(
+                registry=registry,
+                invocations=invocations,
+                binding=local_binding,
+                max_workers=max_workers,
+            )
+        binding = dict(getattr(self, "_runtime_binding", {}) or {})
+        agent_control = binding.get("agent_control")
+        if agent_control is not None and binding and isinstance(registry, SubagentRegistry):
+            return agent_control.run_many_bound(
+                registry=registry,
+                invocations=invocations,
+                binding=binding,
+                max_workers=max_workers,
+            )
+        if isinstance(registry, SubagentRegistry):
+            local_runtime = self._ensure_local_runtime(invocations[0])
+            try:
+                self._bind_local_runtime(local_runtime)
+                return local_runtime.context.agent_control.run_many_bound(
+                    registry=registry,
+                    invocations=invocations,
+                    binding=dict(getattr(self, "_local_runtime_binding", {}) or {}),
+                    max_workers=max_workers,
+                )
+            finally:
+                self._clear_local_runtime()
+                self._release_local_runtime(local_runtime)
+        raise AttributeError("runtime-bound concurrent subagent execution requires SubagentRegistry or AgentControl binding")
+
     def bind_runtime(
         self,
         *,

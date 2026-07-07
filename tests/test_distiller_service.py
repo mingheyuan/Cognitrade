@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -18,14 +19,17 @@ class DistillerChunkProviderStub:
 
     def __init__(self) -> None:
         self.calls = 0
+        self.lock = threading.Lock()
 
     def parse(self, **kwargs):
-        self.calls += 1
+        with self.lock:
+            self.calls += 1
+            call_number = self.calls
         schema = kwargs["schema"]
         user_prompt = kwargs["user_prompt"]
         return schema.model_validate(
             {
-                "source_record_id": f"llm-src-{self.calls}",
+                "source_record_id": f"llm-src-{call_number}",
                 "summary": {
                     "content_type": "text_records",
                     "overall_confidence": 0.72,
@@ -35,14 +39,14 @@ class DistillerChunkProviderStub:
                 },
                 "logic_blocks": [
                     {
-                        "block_id": f"llm-block-{self.calls}",
+                        "block_id": f"llm-block-{call_number}",
                         "block_type": "claim",
-                        "source_record_id": f"llm-src-{self.calls}",
+                        "source_record_id": f"llm-src-{call_number}",
                         "source_span": {"start_line": 1, "end_line": 1, "excerpt": "excerpt"},
                         "speaker_type": "author",
                         "attribution_label": "author_original",
                         "text": user_prompt[:60],
-                        "normalized_claim": f"claim-{self.calls}",
+                        "normalized_claim": f"claim-{call_number}",
                         "symbols": [],
                         "sectors": ["AI"],
                         "time_horizon": None,
@@ -54,11 +58,11 @@ class DistillerChunkProviderStub:
                 ],
                 "distilled_dimensions": [
                     {
-                        "dimension_id": f"dim-{self.calls}",
+                        "dimension_id": f"dim-{call_number}",
                         "dimension_name": "AI",
                         "dimension_category": "technology",
                         "alias_hits": ["AI"],
-                        "supported_claim_block_ids": [f"llm-block-{self.calls}"],
+                        "supported_claim_block_ids": [f"llm-block-{call_number}"],
                         "evidence_block_ids": [],
                         "is_new_candidate": True,
                         "confidence": 0.72,

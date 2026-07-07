@@ -152,6 +152,30 @@ class OpenAIProvider:
         except Exception as exc:
             raise LLMProviderError(f"llm_request_failed: {exc.__class__.__name__}: {exc}") from exc
 
+    def embed_texts(
+        self,
+        *,
+        texts: list[str],
+        model: str | None = None,
+    ) -> list[list[float]]:
+        if not texts:
+            return []
+        client = self._client_instance()
+        try:
+            response = client.embeddings.create(
+                model=model or self.settings.embedding_model,
+                input=texts,
+                dimensions=int(self.settings.embedding_dimensions),
+                timeout=self.request_timeout_seconds,
+            )
+            return [list(item.embedding) for item in response.data]
+        except LLMProviderError:
+            raise
+        except APITimeoutError as exc:
+            raise LLMProviderError(f"llm_request_timeout: {self.request_timeout_seconds}s") from exc
+        except Exception as exc:
+            raise LLMProviderError(f"embedding_request_failed: {exc.__class__.__name__}: {exc}") from exc
+
     def _normalize_base_url(self, base_url: str | None) -> str | None:
         return self.client_support.normalize_base_url(base_url)
 

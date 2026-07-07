@@ -15,11 +15,16 @@ class Settings(BaseModel):
 
     provider_name: str = "openai"
     default_model: str = "GPT-5.5"
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dimensions: int = 1536
     openai_api_key: str | None = None
     openai_base_url: str | None = None
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None
     qdrant_collection_name: str = "research_evidence"
+    qdrant_hybrid_candidate_limit: int = 50
+    qdrant_vector_weight: float = 0.55
+    qdrant_lexical_weight: float = 0.45
     router_redis_url: str | None = None
     router_redis_active_key: str = "cognitrade:router:intent_rules:active"
     router_redis_key_prefix: str = "cognitrade:router:intent_rules:"
@@ -84,10 +89,14 @@ class Settings(BaseModel):
             raise ValueError("default_model must be configured")
         if self.run_timeout_seconds <= 0:
             raise ValueError("run_timeout_seconds must be positive")
+        if self.embedding_dimensions <= 0:
+            raise ValueError("embedding_dimensions must be positive")
         if self.external_wait_timeout_seconds <= 0:
             raise ValueError("external_wait_timeout_seconds must be positive")
         if self.llm_request_timeout_seconds <= 0:
             raise ValueError("llm_request_timeout_seconds must be positive")
+        if self.qdrant_hybrid_candidate_limit <= 0:
+            raise ValueError("qdrant_hybrid_candidate_limit must be positive")
         if self.max_llm_calls_per_turn <= 0:
             raise ValueError("max_llm_calls_per_turn must be positive")
         if self.max_subagent_calls_per_turn <= 0:
@@ -100,6 +109,10 @@ class Settings(BaseModel):
             raise ValueError("router_rules_cache_ttl_seconds must be non-negative")
         if self.provider_probe_timeout_seconds <= 0:
             raise ValueError("provider_probe_timeout_seconds must be positive")
+        if self.qdrant_vector_weight < 0 or self.qdrant_lexical_weight < 0:
+            raise ValueError("qdrant hybrid weights must be non-negative")
+        if self.qdrant_vector_weight == 0 and self.qdrant_lexical_weight == 0:
+            raise ValueError("at least one qdrant hybrid weight must be positive")
 
 
 def ensure_workspace_layout(settings: Settings, template_root: Path | None = None) -> None:

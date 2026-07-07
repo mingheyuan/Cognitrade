@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import unittest
 
 from research_system.adapters.storage.qdrant_adapter import QdrantAdapter
@@ -24,6 +25,28 @@ class FakeSkillRuntime:
         }
 
 
+class ConcurrentStockCheckSkillRuntimeStub:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+        self.barrier = threading.Barrier(3, timeout=1.0)
+        self.thread_names: list[str] = []
+
+    def run(self, skill_name: str, **kwargs) -> dict:
+        self.calls.append((skill_name, kwargs))
+        if skill_name in {"market_snapshot_skill", "fundamental_snapshot_skill", "notice_snapshot_skill"}:
+            self.thread_names.append(threading.current_thread().name)
+            self.barrier.wait()
+        snapshot_type = skill_name.removesuffix("_snapshot_skill").replace("_snapshot", "")
+        return {
+            "snapshot_type": snapshot_type,
+            "symbol": kwargs.get("symbol"),
+            "query": kwargs.get("query"),
+            "snapshot_date": "2026-06-28",
+            "facts": {},
+            "source": {"skill": skill_name, "vendor": "stub", "from_cache": False},
+        }
+
+
 class StockCheckFlowTests(unittest.TestCase):
     def test_collector_runs_three_stock_check_skills_with_symbol(self) -> None:
         runtime = FakeSkillRuntime()
@@ -33,14 +56,31 @@ class StockCheckFlowTests(unittest.TestCase):
 
         self.assertEqual(payload["sources"][0]["symbol"], "000001")
         self.assertEqual(
-            [name for name, _ in runtime.calls],
-            [
+            {name for name, _ in runtime.calls},
+            {
                 "market_snapshot_skill",
                 "fundamental_snapshot_skill",
                 "notice_snapshot_skill",
-            ],
+            },
+        )
+        self.assertEqual(
+            [item["snapshot_type"] for item in payload["snapshots"]],
+            ["market", "fundamental", "notice"],
         )
         self.assertTrue(all(kwargs["symbol"] == "000001" for _, kwargs in runtime.calls))
+
+    def test_collector_runs_stock_check_snapshot_batch_concurrently(self) -> None:
+        runtime = ConcurrentStockCheckSkillRuntimeStub()
+        collector = CollectorService(runtime)
+
+        payload = collector.run(intent="stock_check", query="甯垜鐪嬩笅 000001 杩欎釜鑲＄エ")
+
+        self.assertEqual(
+            [item["snapshot_type"] for item in payload["snapshots"]],
+            ["market", "fundamental", "notice"],
+        )
+        self.assertEqual(len(runtime.thread_names), 3)
+        self.assertGreaterEqual(len(set(runtime.thread_names)), 2)
 
     def test_market_snapshot_payload_text_is_stable(self) -> None:
         adapter = object.__new__(QdrantAdapter)

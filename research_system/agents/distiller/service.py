@@ -10,6 +10,7 @@ from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.schemas.distillation import (
+    DistillSourceRecord,
     DistillationResult,
     DistillationSummary,
     DistilledDimension,
@@ -178,6 +179,8 @@ class DistillerService(RuntimeBoundSubagentInvoker):
         llm_successes = 0
         fallback_chunks = 0
         llm_timeout_seen = False
+        chunk_invocations: list[SubagentInvocation] = []
+        chunk_thread_bindings: list[tuple[str, object | None]] = []
 
         for index, chunk in enumerate(chunks, start=1):
             chunk_label = f"chunk_{index}_of_{len(chunks)}"
@@ -187,7 +190,8 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                 agent=self.agent_name,
                 phase="distill_chunk",
             )
-            llm_outputs, _ = self._invoke_subagent(
+            chunk_thread_bindings.append((chunk_label, child_thread))
+            chunk_invocations.append(
                 SubagentInvocation(
                     subagent_type="llm_chunk_distiller",
                     objective=f"Distill {chunk_label} with LLM.",
@@ -197,6 +201,7 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                         "agent_path": f"distiller/chunks/{chunk_label}/llm_chunk_distiller",
                         "child_thread_id": getattr(child_thread, "thread_id", None),
                         "child_turn_id": getattr(child_turn, "turn_id", None),
+                        "phase": "distill_chunk",
                     },
                     requires_llm=True,
                     fallback_subagent_type="fallback_chunk_distiller",
@@ -207,6 +212,7 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                         "agent_path": f"distiller/chunks/{chunk_label}/fallback_chunk_distiller",
                         "child_thread_id": getattr(child_thread, "thread_id", None),
                         "child_turn_id": getattr(child_turn, "turn_id", None),
+                        "phase": "distill_chunk",
                     },
                     error_fallback_subagent_type="fallback_chunk_distiller",
                     error_fallback_objective=f"Fallback-distill {chunk_label}.",
@@ -216,9 +222,17 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                         "agent_path": f"distiller/chunks/{chunk_label}/fallback_chunk_distiller",
                         "child_thread_id": getattr(child_thread, "thread_id", None),
                         "child_turn_id": getattr(child_turn, "turn_id", None),
+                        "phase": "distill_chunk",
                     },
                 )
             )
+
+        chunk_runs = self._invoke_subagents_concurrently(
+            chunk_invocations,
+            max_workers=len(chunk_invocations),
+        )
+
+        for (chunk_label, child_thread), (llm_outputs, _) in zip(chunk_thread_bindings, chunk_runs, strict=False):
             chunk_result = llm_outputs
             degrade_reason = str(chunk_result.get("degrade_reason") or "").strip()
             degrade_tokens = {token.strip() for token in degrade_reason.split(";") if token.strip()}

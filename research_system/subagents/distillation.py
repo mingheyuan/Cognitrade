@@ -3,14 +3,100 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from research_system.adapters.sources.xueqiu_statuses import load_statuses
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.providers.provider_registry import LLMProviderError, OpenAIProvider
-from research_system.schemas.distillation import DistillSourceRecord, DistillationResult, DistilledDimension, LogicBlock
+from research_system.schemas.distillation import (
+    DistillSourceRecord,
+    DistillationResult,
+    DistillationSummary,
+    DistilledDimension,
+    LogicBlock,
+)
+from research_system.subagents.base import SubagentRuntimePolicy
+
+
+class DistillSourceNormalizerInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    source_records: list[dict] = Field(default_factory=list)
+
+
+class DistillSourceNormalizerOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    records: list[DistillSourceRecord] = Field(default_factory=list)
+
+
+class DistillRecordTrimmerInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    records: list[DistillSourceRecord] = Field(default_factory=list)
+    max_records: int = 6
+    max_chars: int = 6000
+
+
+class DistillRecordTrimmerOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    records: list[DistillSourceRecord] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class DistillChunkBuilderInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    records: list[DistillSourceRecord] = Field(default_factory=list)
+    max_chunk_records: int = 3
+    max_chunk_chars: int = 2400
+
+
+class DistillChunkBuilderOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chunks: list[list[DistillSourceRecord]] = Field(default_factory=list)
+
+
+class LLMChunkDistillerInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    records: list[DistillSourceRecord] = Field(default_factory=list)
+
+
+class FallbackChunkDistillerInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    records: list[DistillSourceRecord] = Field(default_factory=list)
+    error_name: str | None = None
+
+
+class DistillationEnvelopeOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_record_id: str
+    summary: DistillationSummary
+    logic_blocks: list[LogicBlock] = Field(default_factory=list)
+    distilled_dimensions: list[DistilledDimension] = Field(default_factory=list)
+    degraded: bool = False
+    degrade_reason: str | None = None
+
+
+class ChunkResultMergerInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    records: list[DistillSourceRecord] = Field(default_factory=list)
+    chunk_results: list[DistillationEnvelopeOutputModel] = Field(default_factory=list)
 
 
 class DistillSourceNormalizerSubagent:
     subagent_type = "distill_source_normalizer"
+    input_model = DistillSourceNormalizerInputModel
+    output_model = DistillSourceNormalizerOutputModel
+    runtime_policy = SubagentRuntimePolicy()
 
     def __init__(self, *, extract_source_path: Callable[[str], Path | None]) -> None:
         self.extract_source_path = extract_source_path
@@ -92,6 +178,9 @@ class DistillSourceNormalizerSubagent:
 
 class DistillRecordTrimmerSubagent:
     subagent_type = "distill_record_trimmer"
+    input_model = DistillRecordTrimmerInputModel
+    output_model = DistillRecordTrimmerOutputModel
+    runtime_policy = SubagentRuntimePolicy()
 
     def __init__(self, *, record_rank: Callable[[DistillSourceRecord], float]) -> None:
         self.record_rank = record_rank
@@ -123,6 +212,9 @@ class DistillRecordTrimmerSubagent:
 
 class DistillChunkBuilderSubagent:
     subagent_type = "distill_chunk_builder"
+    input_model = DistillChunkBuilderInputModel
+    output_model = DistillChunkBuilderOutputModel
+    runtime_policy = SubagentRuntimePolicy()
 
     def run(self, *, records: list[DistillSourceRecord], max_chunk_records: int = 3, max_chunk_chars: int = 2400) -> dict:
         chunks: list[list[DistillSourceRecord]] = []
@@ -145,6 +237,15 @@ class DistillChunkBuilderSubagent:
 
 class LLMChunkDistillerSubagent:
     subagent_type = "llm_chunk_distiller"
+    input_model = LLMChunkDistillerInputModel
+    output_model = DistillationEnvelopeOutputModel
+    runtime_policy = SubagentRuntimePolicy(
+        requires_llm=True,
+        fallback_subagent_type="fallback_chunk_distiller",
+        error_fallback_subagent_type="fallback_chunk_distiller",
+        allow_parallel=True,
+        max_concurrency=4,
+    )
 
     def __init__(self, *, llm_provider: OpenAIProvider, schema: type, distillation_model: type) -> None:
         self.llm_provider = llm_provider
@@ -178,6 +279,9 @@ class LLMChunkDistillerSubagent:
 
 class FallbackChunkDistillerSubagent:
     subagent_type = "fallback_chunk_distiller"
+    input_model = FallbackChunkDistillerInputModel
+    output_model = DistillationEnvelopeOutputModel
+    runtime_policy = SubagentRuntimePolicy(allow_parallel=True, max_concurrency=4)
 
     def __init__(
         self,
@@ -279,6 +383,9 @@ class FallbackChunkDistillerSubagent:
 
 class ChunkResultMergerSubagent:
     subagent_type = "chunk_result_merger"
+    input_model = ChunkResultMergerInputModel
+    output_model = DistillationEnvelopeOutputModel
+    runtime_policy = SubagentRuntimePolicy()
 
     def __init__(
         self,
@@ -307,7 +414,12 @@ class ChunkResultMergerSubagent:
         needs_review = False
 
         for chunk_result in chunk_results:
-            summary = chunk_result.get("summary") or {}
+            normalized_chunk_result = (
+                chunk_result.model_dump(mode="python")
+                if isinstance(chunk_result, BaseModel)
+                else dict(chunk_result)
+            )
+            summary = normalized_chunk_result.get("summary") or {}
             content_type = summary.get("content_type")
             if content_type:
                 content_types.add(str(content_type))
@@ -324,10 +436,10 @@ class ChunkResultMergerSubagent:
                 if note_value not in processing_notes:
                     processing_notes.append(note_value)
 
-            for block_payload in chunk_result.get("logic_blocks") or []:
+            for block_payload in normalized_chunk_result.get("logic_blocks") or []:
                 merged_logic_blocks.append(self.logic_block_model.model_validate(block_payload))
 
-            for dimension_payload in chunk_result.get("distilled_dimensions") or []:
+            for dimension_payload in normalized_chunk_result.get("distilled_dimensions") or []:
                 dimension = self.distilled_dimension_model.model_validate(dimension_payload)
                 key = dimension.dimension_name.strip().lower() or dimension.dimension_name
                 existing = dimensions_by_name.get(key)

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import unittest
+import threading
 from unittest.mock import Mock
 
 from research_system.agents.retriever.service import RetrievalDecision, RetrieverService
 from research_system.subagents.registry import SubagentRegistry
 from research_system.subagents.retrieval import (
     FallbackRetrievalDecisionSubagent,
+    MethodologyMemoryRecallSubagent,
+    QdrantEvidenceSearchSubagent,
     RetrievalDecisionSubagent,
 )
 
@@ -46,6 +49,12 @@ class RetrieverServiceTests(unittest.TestCase):
                 FallbackRetrievalDecisionSubagent(
                     combine_degrade_reason=self.service._combine_degrade_reason,
                     fallback_summary=self.service._fallback_summary,
+                ),
+                QdrantEvidenceSearchSubagent(
+                    search_qdrant_evidences=self.service._search_qdrant_evidences,
+                ),
+                MethodologyMemoryRecallSubagent(
+                    recall_methodology_memory=self.service._recall_methodology_memory_rows,
                 ),
             ]
         )
@@ -822,6 +831,44 @@ class RetrieverServiceTests(unittest.TestCase):
         self.assertEqual(selected[0]["metadata"]["source_type"], "compare_request")
         self.assertEqual(selected[1]["metadata"]["source_type"], "bank_compare_scorecard")
 
+    def test_run_recalls_qdrant_and_methodology_memory_concurrently(self) -> None:
+        barrier = threading.Barrier(2, timeout=1.0)
+
+        class _ConcurrentQdrant:
+            available = True
+
+            def upsert_entry(self, entry) -> None:
+                return None
+
+            def search(self, *, query_text, top_k, metadata_filters):
+                barrier.wait()
+                return []
+
+        service = self.service
+        service.qdrant = _ConcurrentQdrant()
+        service.indexer_qdrant = service.qdrant
+        service.searcher_qdrant = service.qdrant
+        service.qdrant_available = True
+        service.qdrant_error = None
+        service.memory_service.search_methodology_memory.side_effect = lambda **kwargs: (barrier.wait(), [])[1]
+
+        outputs = service._run_impl(
+            intent="stock_check",
+            query="which bank is more resilient on cash flow",
+            blackboard_entries=[],
+            planning_context_hints={"methodology_benchmark_scope": "cashflow_resilience"},
+            allow_llm_decision=False,
+            runtime_degraded_reason="runtime_policy_fallback",
+        )
+
+        trace_by_path = {
+            item.get("agent_path"): item
+            for item in list(outputs.get("subagent_trace") or [])
+        }
+        self.assertEqual(trace_by_path["retriever/search/qdrant_evidence_searcher"]["status"], "completed")
+        self.assertEqual(trace_by_path["retriever/search/methodology_memory_recaller"]["status"], "completed")
+        self.service.memory_service.search_methodology_memory.assert_called_once()
+
     def test_run_emits_nested_retrieval_trace_context(self) -> None:
         service = self.service
         service.disable_qdrant_for_test("disabled_for_test")
@@ -856,6 +903,7 @@ class RetrieverServiceTests(unittest.TestCase):
             [
                 "retriever/indexing/blackboard_evidence_indexer",
                 "retriever/search/qdrant_evidence_searcher",
+                "retriever/search/methodology_memory_recaller",
                 "retriever/decision/retrieval_decider",
             ],
         )

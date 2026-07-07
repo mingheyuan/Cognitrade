@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import RLock
 from typing import Any
+
+from pydantic import BaseModel
 
 from research_system.runtime.providers.provider_registry import LLMProviderError
 from research_system.runtime.storage.jsonl import append_jsonl, read_json, write_json
 from research_system.schemas.runtime import RuntimeItemRecord, RuntimeThreadState, RuntimeTurnState
 from research_system.schemas.subagents import SubagentExecutionRecord, SubagentInvocation
+from research_system.subagents.base import SubagentDefinition, build_subagent_definition
 
 
 def _utc_now() -> datetime:
@@ -20,6 +25,7 @@ class AgentControl:
         self.paths = paths
         self.run_id = run_id
         self._observers: list[Callable[..., None]] = []
+        self._state_lock = RLock()
 
     def add_observer(self, observer: Callable[..., None]) -> None:
         self._observers.append(observer)
@@ -37,21 +43,22 @@ class AgentControl:
         payload: dict[str, Any] | None = None,
         item_type: str = "subagent",
     ) -> RuntimeItemRecord:
-        item = RuntimeItemRecord(
-            thread_id=thread_id,
-            turn_id=turn_id,
-            run_id=self.run_id,
-            request_id=request_id,
-            item_type=item_type,  # type: ignore[arg-type]
-            status="queued",
-            agent=agent,
-            phase=phase,
-            title=title,
-            objective=objective,
-            payload=dict(payload or {}),
-        )
-        self._write_item(item)
-        return item
+        with self._state_lock:
+            item = RuntimeItemRecord(
+                thread_id=thread_id,
+                turn_id=turn_id,
+                run_id=self.run_id,
+                request_id=request_id,
+                item_type=item_type,  # type: ignore[arg-type]
+                status="queued",
+                agent=agent,
+                phase=phase,
+                title=title,
+                objective=objective,
+                payload=dict(payload or {}),
+            )
+            self._write_item(item)
+            return item
 
     def spawn_child_thread(
         self,
@@ -65,75 +72,77 @@ class AgentControl:
         phase: str | None,
         execution_policy=None,
     ) -> tuple[RuntimeThreadState | None, RuntimeTurnState | None]:
-        child_thread_budget_exhausted = False
-        if execution_policy is not None:
-            reserve = getattr(execution_policy, "reserve_child_thread", None)
-            if callable(reserve):
-                child_thread_budget_exhausted = not bool(reserve(turn_id=parent_turn_id))
-        if child_thread_budget_exhausted:
-            self._record_child_thread_budget_degradation(
+        with self._state_lock:
+            child_thread_budget_exhausted = False
+            if execution_policy is not None:
+                reserve = getattr(execution_policy, "reserve_child_thread", None)
+                if callable(reserve):
+                    child_thread_budget_exhausted = not bool(reserve(turn_id=parent_turn_id))
+            if child_thread_budget_exhausted:
+                self._record_child_thread_budget_degradation(
+                    thread_id=parent_thread_id,
+                    turn_id=parent_turn_id,
+                    request_id=request_id,
+                    agent=agent,
+                    phase=phase,
+                    intent=intent,
+                    objective=objective,
+                    execution_policy=execution_policy,
+                )
+                return None, None
+            thread = RuntimeThreadState(
+                run_id=self.run_id,
+                request_id=request_id,
+                intent=intent,
+                status="ready",
+                parent_thread_id=parent_thread_id,
+                total_turns=1,
+            )
+            turn = RuntimeTurnState(
+                thread_id=thread.thread_id,
+                run_id=self.run_id,
+                request_id=request_id,
+                turn_index=1,
+                status="ready",
+                intent=intent,
+                objective=objective,
+            )
+            thread.active_turn_id = turn.turn_id
+            self._write_child_thread_state(thread)
+            self._write_child_turn_state(thread, turn)
+            lifecycle_item = self.spawn(
                 thread_id=parent_thread_id,
                 turn_id=parent_turn_id,
                 request_id=request_id,
                 agent=agent,
                 phase=phase,
-                intent=intent,
+                title=f"child_thread:{thread.thread_id}",
                 objective=objective,
-                execution_policy=execution_policy,
+                payload={
+                    "child_thread_id": thread.thread_id,
+                    "child_turn_id": turn.turn_id,
+                    "intent": intent,
+                },
+                item_type="thread",
             )
-            return None, None
-        thread = RuntimeThreadState(
-            run_id=self.run_id,
-            request_id=request_id,
-            intent=intent,
-            status="ready",
-            parent_thread_id=parent_thread_id,
-            total_turns=1,
-        )
-        turn = RuntimeTurnState(
-            thread_id=thread.thread_id,
-            run_id=self.run_id,
-            request_id=request_id,
-            turn_index=1,
-            status="ready",
-            intent=intent,
-            objective=objective,
-        )
-        thread.active_turn_id = turn.turn_id
-        self._write_child_thread_state(thread)
-        self._write_child_turn_state(thread, turn)
-        lifecycle_item = self.spawn(
-            thread_id=parent_thread_id,
-            turn_id=parent_turn_id,
-            request_id=request_id,
-            agent=agent,
-            phase=phase,
-            title=f"child_thread:{thread.thread_id}",
-            objective=objective,
-            payload={
-                "child_thread_id": thread.thread_id,
-                "child_turn_id": turn.turn_id,
-                "intent": intent,
-            },
-            item_type="thread",
-        )
-        self.send(lifecycle_item, payload={"child_thread_id": thread.thread_id})
-        self.wait(
-            lifecycle_item,
-            status="completed",
-            payload={"child_thread_id": thread.thread_id, "child_turn_id": turn.turn_id},
-        )
-        return thread, turn
+            self.send(lifecycle_item, payload={"child_thread_id": thread.thread_id})
+            self.wait(
+                lifecycle_item,
+                status="completed",
+                payload={"child_thread_id": thread.thread_id, "child_turn_id": turn.turn_id},
+            )
+            return thread, turn
 
     def send(self, item: RuntimeItemRecord, *, payload: dict[str, Any] | None = None) -> RuntimeItemRecord:
-        item.status = "running"
-        item.updated_at = _utc_now()
-        if payload:
-            item.payload.update(payload)
-        self._write_item(item)
-        self._sync_child_execution_state(thread_id=item.thread_id, turn_id=item.turn_id, status="running")
-        self._notify(stage="started", item=item, payload=payload or {})
-        return item
+        with self._state_lock:
+            item.status = "running"
+            item.updated_at = _utc_now()
+            if payload:
+                item.payload.update(payload)
+            self._write_item(item)
+            self._sync_child_execution_state(thread_id=item.thread_id, turn_id=item.turn_id, status="running")
+            self._notify(stage="started", item=item, payload=payload or {})
+            return item
 
     def wait(
         self,
@@ -143,23 +152,24 @@ class AgentControl:
         payload: dict[str, Any] | None = None,
         degrade_reason: str | None = None,
     ) -> RuntimeItemRecord:
-        item.status = status  # type: ignore[assignment]
-        item.degrade_reason = degrade_reason
-        item.updated_at = _utc_now()
-        if payload:
-            item.payload.update(payload)
-        self._write_item(item)
-        self._sync_child_execution_state(
-            thread_id=item.thread_id,
-            turn_id=item.turn_id,
-            status="completed" if status in {"completed", "degraded"} else "failed" if status == "failed" else None,
-        )
-        self._notify(
-            stage="completed" if status == "completed" else "failed" if status == "failed" else "updated",
-            item=item,
-            payload=payload or {},
-        )
-        return item
+        with self._state_lock:
+            item.status = status  # type: ignore[assignment]
+            item.degrade_reason = degrade_reason
+            item.updated_at = _utc_now()
+            if payload:
+                item.payload.update(payload)
+            self._write_item(item)
+            self._sync_child_execution_state(
+                thread_id=item.thread_id,
+                turn_id=item.turn_id,
+                status="completed" if status in {"completed", "degraded"} else "failed" if status == "failed" else None,
+            )
+            self._notify(
+                stage="completed" if status == "completed" else "failed" if status == "failed" else "updated",
+                item=item,
+                payload=payload or {},
+            )
+            return item
 
     def invoke(
         self,
@@ -200,6 +210,12 @@ class AgentControl:
             if registry is None:
                 raise ValueError("registry or subagent is required")
             subagent = registry.get(invocation.subagent_type)
+        definition = (
+            registry.definition(invocation.subagent_type)
+            if registry is not None and hasattr(registry, "definition")
+            else build_subagent_definition(subagent)
+        )
+        invocation = self._apply_subagent_definition(invocation=invocation, definition=definition)
         if not str(invocation.invocation_id or "").strip():
             invocation = invocation.model_copy(update={"invocation_id": self._build_invocation_id()})
         item = self.spawn(
@@ -222,7 +238,17 @@ class AgentControl:
         if callable(notify_started):
             notify_started(invocation=invocation)
         try:
-            outputs, record = self._run_subagent(subagent=subagent, invocation=invocation)
+            outputs, record = self._run_bound_subagent(
+                subagent=subagent,
+                invocation=invocation,
+                definition=definition,
+                execution_policy=execution_policy,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                request_id=request_id,
+                agent=agent,
+                phase=phase,
+            )
         except LLMProviderError as exc:
             fallback_bundle = self._prepare_error_fallback(
                 invocation=invocation,
@@ -245,8 +271,27 @@ class AgentControl:
                 )
                 raise
             fallback_invocation, fallback_subagent, error_degrade_reason = fallback_bundle
+            fallback_definition = (
+                registry.definition(fallback_invocation.subagent_type)
+                if registry is not None and hasattr(registry, "definition")
+                else build_subagent_definition(fallback_subagent)
+            )
+            fallback_invocation = self._apply_subagent_definition(
+                invocation=fallback_invocation,
+                definition=fallback_definition,
+            )
             try:
-                outputs, record = self._run_subagent(subagent=fallback_subagent, invocation=fallback_invocation)
+                outputs, record = self._run_bound_subagent(
+                    subagent=fallback_subagent,
+                    invocation=fallback_invocation,
+                    definition=fallback_definition,
+                    execution_policy=execution_policy,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    request_id=request_id,
+                    agent=agent,
+                    phase=phase,
+                )
             except Exception as fallback_exc:
                 self._notify_registry_failed(
                     registry=registry,
@@ -298,6 +343,68 @@ class AgentControl:
             notify_completed(invocation=invocation, record=record, outputs=outputs)
         return outputs, record
 
+    def _run_bound_subagent(
+        self,
+        *,
+        subagent,
+        invocation: SubagentInvocation,
+        definition: SubagentDefinition,
+        execution_policy,
+        thread_id: str,
+        turn_id: str,
+        request_id: str,
+        agent: str | None,
+        phase: str | None,
+    ) -> tuple[dict[str, Any], SubagentExecutionRecord]:
+        bound = self._bind_nested_runtime_if_supported(
+            subagent=subagent,
+            execution_policy=execution_policy,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            request_id=request_id,
+            agent=agent,
+            phase=phase,
+        )
+        try:
+            return self._run_subagent(
+                subagent=subagent,
+                invocation=invocation,
+                definition=definition,
+            )
+        finally:
+            if bound:
+                self._clear_nested_runtime_if_supported(subagent)
+
+    def _bind_nested_runtime_if_supported(
+        self,
+        *,
+        subagent,
+        execution_policy,
+        thread_id: str,
+        turn_id: str,
+        request_id: str,
+        agent: str | None,
+        phase: str | None,
+    ) -> bool:
+        bind_runtime = getattr(subagent, "bind_runtime", None)
+        if not callable(bind_runtime):
+            return False
+        bind_runtime(
+            agent_control=self,
+            execution_policy=execution_policy,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            request_id=request_id,
+            agent=agent,
+            phase=phase,
+        )
+        return True
+
+    def _clear_nested_runtime_if_supported(self, subagent) -> None:
+        clear_runtime = getattr(subagent, "clear_runtime", None)
+        if callable(clear_runtime):
+            clear_runtime()
+
     def run_bound(
         self,
         *,
@@ -316,6 +423,47 @@ class AgentControl:
             execution_policy=binding.get("execution_policy"),
         )
 
+    def run_many_bound(
+        self,
+        *,
+        registry,
+        invocations: list[SubagentInvocation],
+        binding: dict[str, Any],
+        max_workers: int | None = None,
+    ) -> list[tuple[dict[str, Any], SubagentExecutionRecord]]:
+        if not invocations:
+            return []
+        worker_count = self._resolve_parallel_worker_count(
+            registry=registry,
+            invocations=invocations,
+            requested=max_workers,
+        )
+        if worker_count <= 1:
+            return [
+                self.run_bound(
+                    registry=registry,
+                    invocation=invocation,
+                    binding=self._binding_for_invocation(binding=binding, invocation=invocation),
+                )
+                for invocation in invocations
+            ]
+
+        results: list[tuple[dict[str, Any], SubagentExecutionRecord] | None] = [None] * len(invocations)
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="cognitrade-subagent") as executor:
+            futures = {
+                executor.submit(
+                    self.run_bound,
+                    registry=registry,
+                    invocation=invocation,
+                    binding=self._binding_for_invocation(binding=binding, invocation=invocation),
+                ): index
+                for index, invocation in enumerate(invocations)
+            }
+            for future in as_completed(futures):
+                index = futures[future]
+                results[index] = future.result()
+        return [result for result in results if result is not None]
+
     def _extract_degrade_reason(self, outputs: dict[str, Any]) -> str | None:
         if not isinstance(outputs, dict):
             return None
@@ -324,6 +472,70 @@ class AgentControl:
         if degraded and reason:
             return reason
         return None
+
+    def _apply_subagent_definition(
+        self,
+        *,
+        invocation: SubagentInvocation,
+        definition: SubagentDefinition,
+    ) -> SubagentInvocation:
+        policy = definition.runtime_policy
+        updates: dict[str, Any] = {}
+        if policy.requires_llm and not invocation.requires_llm:
+            updates["requires_llm"] = True
+        if not invocation.fallback_subagent_type and policy.fallback_subagent_type:
+            updates["fallback_subagent_type"] = policy.fallback_subagent_type
+        if not invocation.error_fallback_subagent_type and policy.error_fallback_subagent_type:
+            updates["error_fallback_subagent_type"] = policy.error_fallback_subagent_type
+        if not updates:
+            return invocation
+        return invocation.model_copy(update=updates)
+
+    def _binding_for_invocation(
+        self,
+        *,
+        binding: dict[str, Any],
+        invocation: SubagentInvocation,
+    ) -> dict[str, Any]:
+        resolved = dict(binding or {})
+        context = dict(invocation.context or {})
+        child_thread_id = str(context.get("child_thread_id") or "").strip()
+        child_turn_id = str(context.get("child_turn_id") or "").strip()
+        if child_thread_id and child_turn_id:
+            resolved["thread_id"] = child_thread_id
+            resolved["turn_id"] = child_turn_id
+        child_phase = str(context.get("phase") or "").strip()
+        if child_phase:
+            resolved["phase"] = child_phase
+        return resolved
+
+    def _resolve_parallel_worker_count(
+        self,
+        *,
+        registry,
+        invocations: list[SubagentInvocation],
+        requested: int | None,
+    ) -> int:
+        if not invocations:
+            return 0
+        allowed_limits: list[int] = []
+        for invocation in invocations:
+            definition = (
+                registry.definition(invocation.subagent_type)
+                if registry is not None and hasattr(registry, "definition")
+                else None
+            )
+            if definition is None:
+                return 1
+            policy = definition.runtime_policy
+            if not policy.allow_parallel:
+                return 1
+            if policy.max_concurrency is not None and policy.max_concurrency > 0:
+                allowed_limits.append(policy.max_concurrency)
+        default_limit = len(invocations)
+        requested_limit = requested if requested is not None and requested > 0 else default_limit
+        metadata_limit = min(allowed_limits) if allowed_limits else default_limit
+        return max(1, min(requested_limit, metadata_limit, default_limit))
 
     def _prepare_invocation_for_runtime(
         self,
@@ -605,8 +817,37 @@ class AgentControl:
         write_json(thread_path, thread_payload)
         write_json(turn_path, turn_payload)
 
-    def _run_subagent(self, *, subagent, invocation: SubagentInvocation) -> tuple[dict[str, Any], SubagentExecutionRecord]:
-        outputs = subagent.run(**invocation.inputs)
+    def _run_subagent(
+        self,
+        *,
+        subagent,
+        invocation: SubagentInvocation,
+        definition: SubagentDefinition,
+    ) -> tuple[dict[str, Any], SubagentExecutionRecord]:
+        call_kwargs = self._validate_subagent_inputs(
+            inputs=invocation.inputs,
+            input_model=definition.input_model,
+        )
+        attempts = max(int(definition.runtime_policy.max_retries or 0), 0) + 1
+        last_error: Exception | None = None
+        outputs: dict[str, Any] | None = None
+        for _ in range(attempts):
+            try:
+                raw_outputs = self._execute_subagent_once(
+                    subagent=subagent,
+                    call_kwargs=call_kwargs,
+                    timeout_seconds=definition.runtime_policy.timeout_seconds,
+                )
+                outputs = self._validate_subagent_outputs(
+                    outputs=raw_outputs,
+                    output_model=definition.output_model,
+                )
+                break
+            except Exception as exc:
+                last_error = exc
+        if outputs is None:
+            assert last_error is not None
+            raise last_error
         notes = []
         if "notes" in outputs and isinstance(outputs["notes"], list):
             notes = [str(item) for item in outputs["notes"]]
@@ -618,6 +859,51 @@ class AgentControl:
             notes=notes,
         )
         return outputs, record
+
+    def _execute_subagent_once(
+        self,
+        *,
+        subagent,
+        call_kwargs: dict[str, Any],
+        timeout_seconds: float | None,
+    ) -> Any:
+        if timeout_seconds is None or timeout_seconds <= 0:
+            return subagent.run(**call_kwargs)
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="cognitrade-subagent-timeout") as executor:
+            future = executor.submit(subagent.run, **call_kwargs)
+            try:
+                return future.result(timeout=float(timeout_seconds))
+            except FutureTimeoutError as exc:
+                future.cancel()
+                raise TimeoutError(f"subagent_timeout: {timeout_seconds}s") from exc
+
+    def _validate_subagent_inputs(
+        self,
+        *,
+        inputs: dict[str, Any],
+        input_model: type[BaseModel] | None,
+    ) -> dict[str, Any]:
+        if input_model is None:
+            return dict(inputs)
+        validated = input_model.model_validate(inputs)
+        return {
+            field_name: getattr(validated, field_name)
+            for field_name in type(validated).model_fields
+        }
+
+    def _validate_subagent_outputs(
+        self,
+        *,
+        outputs: Any,
+        output_model: type[BaseModel] | None,
+    ) -> dict[str, Any]:
+        normalized_outputs = outputs.model_dump(mode="python") if isinstance(outputs, BaseModel) else outputs
+        if not isinstance(normalized_outputs, dict):
+            raise TypeError("subagent outputs must be a dict or BaseModel")
+        if output_model is None:
+            return dict(normalized_outputs)
+        validated = output_model.model_validate(normalized_outputs)
+        return dict(validated.model_dump(mode="json"))
 
     def _build_invocation_id(self) -> str:
         from research_system.runtime.core.id_utils import generate_ulid

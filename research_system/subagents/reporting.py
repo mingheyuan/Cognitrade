@@ -1,16 +1,114 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
-from research_system.runtime.providers.provider_registry import LLMProviderError, OpenAIProvider
+from pydantic import BaseModel, ConfigDict, Field
+
+from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.services.reporting.reporting_utils import (
     strategy_follow_up,
     summarize_proposal_drafts,
 )
+from research_system.subagents.base import SubagentRuntimePolicy
+
+
+def _normalize_report_evidences(evidences: list[Any]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for item in evidences:
+        if isinstance(item, BaseModel):
+            normalized.append(item.model_dump(mode="python"))
+            continue
+        normalized.append(dict(item))
+    return normalized
+
+
+class ReportEvidenceInputModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    evidence_id: str
+    title: str
+    summary: Any
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    source_refs: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FallbackReportComposerInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: str
+    query: str
+    evidences: list[ReportEvidenceInputModel] = Field(default_factory=list)
+    review_summary_payload: dict[str, Any] | None = None
+    scorecard_digest: str | None = None
+    scorecard_payload: dict[str, Any] | None = None
+    screening_scorecard_payload: dict[str, Any] | None = None
+    screening_candidates_payload: list[dict[str, Any]] = Field(default_factory=list)
+    methodology_payloads: list[dict[str, Any]] = Field(default_factory=list)
+    report_strategy: dict[str, Any] | None = None
+    degraded_note: str
+
+
+class FallbackReportComposerOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conclusion: str
+    evidence: list[ReportEvidenceInputModel] = Field(default_factory=list)
+    scorecard: dict[str, Any] | None = None
+    screening_scorecard: dict[str, Any] | None = None
+    candidates: list[dict[str, Any]] | None = None
+    methodologies: list[dict[str, Any]] | None = None
+    review_summary: dict[str, Any] | None = None
+    risk: str
+    follow_up: str | None = None
+    degraded: bool = False
+    degrade_reason: str | None = None
+    degraded_note: str | None = None
+
+
+class LLMReportComposerInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: str
+    query: str
+    evidences: list[ReportEvidenceInputModel] = Field(default_factory=list)
+    retrieval_summary: str | None = None
+    review_summary_payload: dict[str, Any] | None = None
+    report_strategy: dict[str, Any] | None = None
+
+
+class LLMReportComposerOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conclusion: str
+    selected_evidence: list[ReportEvidenceInputModel] = Field(default_factory=list)
+    risk: str
+    follow_up: str | None = None
+    degraded_note: str | None = None
+    degrade_reason: str | None = None
+
+
+class LLMErrorReportComposerInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: str
+    query: str
+    evidences: list[ReportEvidenceInputModel] = Field(default_factory=list)
+    review_summary_payload: dict[str, Any] | None = None
+    scorecard_digest: str | None = None
+    scorecard_payload: dict[str, Any] | None = None
+    screening_scorecard_payload: dict[str, Any] | None = None
+    screening_candidates_payload: list[dict[str, Any]] = Field(default_factory=list)
+    screening_digest: str | None = None
+    methodology_payloads: list[dict[str, Any]] = Field(default_factory=list)
+    report_strategy: dict[str, Any] | None = None
+    error_name: str
 
 
 class FallbackReportComposerSubagent:
     subagent_type = "fallback_report_composer"
+    input_model = FallbackReportComposerInputModel
+    output_model = FallbackReportComposerOutputModel
+    runtime_policy = SubagentRuntimePolicy()
 
     def __init__(
         self,
@@ -40,6 +138,7 @@ class FallbackReportComposerSubagent:
         report_strategy: dict | None,
         degraded_note: str,
     ) -> dict:
+        evidences = _normalize_report_evidences(evidences)
         strategy_follow_up_text = strategy_follow_up(report_strategy or {})
         if intent == "distill_kol_logic":
             review_count = len(
@@ -186,6 +285,13 @@ class FallbackReportComposerSubagent:
 
 class LLMReportComposerSubagent:
     subagent_type = "llm_report_composer"
+    input_model = LLMReportComposerInputModel
+    output_model = LLMReportComposerOutputModel
+    runtime_policy = SubagentRuntimePolicy(
+        requires_llm=True,
+        fallback_subagent_type="fallback_report_composer",
+        error_fallback_subagent_type="llm_error_report_composer",
+    )
 
     def __init__(self, *, llm_provider: OpenAIProvider, schema: type, normalize_review_conclusion: Callable[..., str]) -> None:
         self.llm_provider = llm_provider
@@ -202,6 +308,7 @@ class LLMReportComposerSubagent:
         review_summary_payload: dict | None,
         report_strategy: dict | None,
     ) -> dict:
+        evidences = _normalize_report_evidences(evidences)
         evidence_block = [
             {
                 "evidence_id": item["evidence_id"],
@@ -265,6 +372,9 @@ class LLMReportComposerSubagent:
 
 class LLMErrorReportComposerSubagent:
     subagent_type = "llm_error_report_composer"
+    input_model = LLMErrorReportComposerInputModel
+    output_model = FallbackReportComposerOutputModel
+    runtime_policy = SubagentRuntimePolicy()
 
     def run(
         self,
@@ -282,6 +392,7 @@ class LLMErrorReportComposerSubagent:
         report_strategy: dict | None,
         error_name: str,
     ) -> dict:
+        evidences = _normalize_report_evidences(evidences)
         strategy_follow_up_text = strategy_follow_up(report_strategy or {})
         review_conclusion = (
             f"LLM request failed during reporting for {intent}. "
