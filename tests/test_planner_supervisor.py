@@ -305,6 +305,89 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertEqual(decision.next_actions[0].agent, "screen_reviewer")
         self.assertEqual(decision.next_actions[0].inputs, {})
 
+    def test_supervisor_inserts_screen_enrich_before_review_and_retrieval_when_scorecard_pending(self) -> None:
+        planner = RuntimePlanner()
+        supervisor = RuntimeSupervisor()
+        plan = planner.build_initial_plan(
+            intent="stock_screen",
+            request=RequestEnvelope(user_query="recent stock ideas"),
+        )
+        pending_actions = [action for action in plan.actions if action.node_id in {"retrieve", "report"}]
+        scorecard_entry = _blackboard_entry(
+            kind="source_record",
+            agent="screener",
+            phase="screen",
+            payload={
+                "title": "screening_scorecard",
+                "content": "{}",
+                "source_type": "screening_scorecard",
+                "scorecard": {
+                    "top_candidate_count": 2,
+                    "watchlist_candidate_count": 1,
+                    "enrichment_target_count": 2,
+                    "enrichment_pending": True,
+                },
+            },
+        )
+
+        decision = supervisor.decide(
+            plan=plan,
+            completed_actions=["collect", "screen"],
+            pending_actions=pending_actions,
+            blackboard_entries=[scorecard_entry],
+        )
+
+        self.assertEqual(decision.decision_type, "continue")
+        self.assertEqual(len(decision.next_actions), 1)
+        self.assertEqual(decision.next_actions[0].node_id, "screen_enrich")
+        self.assertEqual(decision.next_actions[0].agent, "screener")
+        retrieve_action = next(action for action in plan.actions if action.node_id == "retrieve")
+        self.assertEqual(retrieve_action.depends_on, ["screen_enrich"])
+
+    def test_screen_review_action_depends_on_screen_enrich_when_present(self) -> None:
+        planner = RuntimePlanner()
+        supervisor = RuntimeSupervisor()
+        plan = planner.build_initial_plan(
+            intent="stock_screen",
+            request=RequestEnvelope(user_query="recent stock ideas"),
+        )
+        plan.actions.append(
+            ActionSpec(
+                node_id="screen_enrich",
+                phase="screen",
+                agent="screener",
+                depends_on=["screen"],
+            )
+        )
+        pending_actions = [action for action in plan.actions if action.node_id in {"retrieve", "report"}]
+        scorecard_entry = _blackboard_entry(
+            kind="source_record",
+            agent="screener",
+            phase="screen",
+            payload={
+                "title": "screening_scorecard",
+                "content": "{}",
+                "source_type": "screening_scorecard",
+                "scorecard": {
+                    "top_candidate_count": 1,
+                    "watchlist_candidate_count": 0,
+                    "enrichment_target_count": 0,
+                    "enrichment_pending": False,
+                },
+            },
+        )
+
+        decision = supervisor.decide(
+            plan=plan,
+            completed_actions=["collect", "screen", "screen_enrich"],
+            pending_actions=pending_actions,
+            blackboard_entries=[scorecard_entry],
+        )
+
+        self.assertEqual(decision.decision_type, "continue")
+        self.assertEqual(decision.next_actions[0].node_id, "screen_review")
+        self.assertEqual(decision.next_actions[0].depends_on, ["screen_enrich"])
+
     def test_supervisor_passes_context_hints_into_dynamic_screen_review_action(self) -> None:
         planner = RuntimePlanner()
         supervisor = RuntimeSupervisor()

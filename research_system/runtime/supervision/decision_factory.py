@@ -44,6 +44,7 @@ class SupervisorDecisionFactory:
         if existing is not None:
             return existing
         planning_context_hints = self.planning_context_hints(plan)
+        depends_on = ["screen_enrich"] if any(action.node_id == "screen_enrich" for action in plan.actions) else ["screen"]
         return ActionSpec(
             node_id="screen_review",
             phase="review",
@@ -51,10 +52,28 @@ class SupervisorDecisionFactory:
             objective="Review screened candidates before retrieval/reporting.",
             inputs={"planning_context_hints": planning_context_hints} if planning_context_hints else {},
             tags=["dynamic_inserted"],
-            depends_on=["screen"],
+            depends_on=depends_on,
             max_retries=1,
             cache_scope="run",
             cache_key="stock_screen:screen_review",
+        )
+
+    def screen_enrich_action(self, *, plan, existing: ActionSpec | None) -> ActionSpec:
+        if existing is not None:
+            return existing
+        planning_context_hints = self.planning_context_hints(plan)
+        return ActionSpec(
+            node_id="screen_enrich",
+            phase="screen",
+            agent="screener",
+            objective="Enrich top screening candidates and rerank screening outputs.",
+            inputs={"planning_context_hints": planning_context_hints} if planning_context_hints else {},
+            tags=["dynamic_inserted", "enrichment"],
+            depends_on=["screen"],
+            max_retries=1,
+            failure_mode="isolate",
+            cache_scope="run",
+            cache_key="stock_screen:screen_enrich",
         )
 
     def review_action(self, *, plan, existing: ActionSpec | None) -> ActionSpec:

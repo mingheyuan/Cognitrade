@@ -18,6 +18,8 @@ class SupervisorBlackboardScreenSupport:
             review_summary_present=self.source_support.review_summary_present(blackboard_entries),
             top_candidate_count=int(scorecard.get("top_candidate_count") or 0),
             watchlist_candidate_count=int(scorecard.get("watchlist_candidate_count") or 0),
+            enrichment_target_count=int(scorecard.get("enrichment_target_count") or 0),
+            enrichment_pending=bool(scorecard.get("enrichment_pending")),
         )
 
 

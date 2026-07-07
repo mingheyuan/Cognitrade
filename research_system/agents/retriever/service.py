@@ -1359,12 +1359,18 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
         planning_context_hints: dict[str, str] | None = None,
     ) -> str | None:
         if intent == "stock_screen":
+            latest_candidate_items = self._latest_screening_candidate_evidences(
+                [
+                    item for item in evidences
+                    if str((item.get("metadata") or {}).get("source_type") or "") in {"screen_candidate", "watchlist_candidate"}
+                ]
+            )
             candidates = [
-                item for item in evidences
+                item for item in latest_candidate_items
                 if str((item.get("metadata") or {}).get("source_type") or "") == "screen_candidate"
             ]
             watchlist_candidates = [
-                item for item in evidences
+                item for item in latest_candidate_items
                 if str((item.get("metadata") or {}).get("source_type") or "") == "watchlist_candidate"
             ]
             scorecards = [
@@ -1401,8 +1407,9 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 parts.append(f"top_symbols={top_symbols}")
             if best_score is not None:
                 parts.append(f"best_score={best_score}")
-            if scorecards:
-                scorecard_payload = self._screening_scorecard_payload_from_evidence(scorecards[0])
+            preferred_scorecard = self._preferred_screening_scorecard_item(scorecards)
+            if preferred_scorecard is not None:
+                scorecard_payload = self._screening_scorecard_payload_from_evidence(preferred_scorecard)
                 if isinstance(scorecard_payload, dict):
                     if scorecard_payload.get("investment_cycle"):
                         parts.append(f"investment_cycle={scorecard_payload.get('investment_cycle')}")
@@ -1859,6 +1866,54 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             return None
         return parsed if isinstance(parsed, dict) else None
 
+    def _preferred_screening_scorecard_item(self, scorecards: list[dict]) -> dict | None:
+        best = None
+        for item in reversed(scorecards):
+            if best is None:
+                best = item
+                continue
+            if self._screening_scorecard_preference(item) < self._screening_scorecard_preference(best):
+                best = item
+        return best
+
+    def _screening_scorecard_preference(self, item: dict) -> tuple[int, int]:
+        payload = self._screening_scorecard_payload_from_evidence(item) or {}
+        pending_rank = 1 if bool(payload.get("enrichment_pending")) else 0
+        return (pending_rank, self._screening_source_rank(item))
+
+    def _latest_screening_candidate_evidences(self, items: list[dict]) -> list[dict]:
+        selected_reversed: list[dict] = []
+        seen_symbols: set[str] = set()
+        for item in reversed(items):
+            symbol = self._screening_candidate_symbol(item)
+            if not symbol or symbol in seen_symbols:
+                continue
+            seen_symbols.add(symbol)
+            selected_reversed.append(item)
+        selected_reversed.reverse()
+        return selected_reversed
+
+    def _screening_candidate_symbol(self, item: dict) -> str:
+        title = str(item.get("title") or "").strip()
+        if ":" in title:
+            return title.split(":", 1)[1].strip()
+        summary = str(item.get("summary") or "")
+        if "symbol=" not in summary:
+            return ""
+        return summary.split("symbol=", 1)[1].split()[0].strip()
+
+    def _screening_source_rank(self, item: dict) -> int:
+        source_ref_types = {
+            str(ref.get("type") or "").strip()
+            for ref in list(item.get("source_refs") or [])
+            if isinstance(ref, dict)
+        }
+        if "screening_enrichment" in source_ref_types:
+            return 0
+        if "screening" in source_ref_types or "screening_watchlist" in source_ref_types:
+            return 1
+        return 2
+
     def _dedupe_evidences(self, *, evidences: list[dict], current_run_id: str | None) -> list[dict]:
         best_by_key: dict[str, dict] = {}
         passthrough: list[dict] = []
@@ -2076,12 +2131,18 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
         query: str | None = None,
         planning_context_hints: dict[str, str] | None = None,
     ) -> list[dict]:
+        latest_candidate_items = self._latest_screening_candidate_evidences(
+            [
+                item for item in evidences
+                if str((item.get("metadata") or {}).get("source_type") or "") in {"screen_candidate", "watchlist_candidate"}
+            ]
+        )
         screen_candidates = [
-            item for item in evidences
+            item for item in latest_candidate_items
             if str((item.get("metadata") or {}).get("source_type") or "") == "screen_candidate"
         ]
         watchlist_candidates = [
-            item for item in evidences
+            item for item in latest_candidate_items
             if str((item.get("metadata") or {}).get("source_type") or "") == "watchlist_candidate"
         ]
         screening_scorecards = [
@@ -2101,8 +2162,9 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             if str((item.get("metadata") or {}).get("source_type") or "") == "sector_snapshot"
         ]
         selected: list[dict] = []
-        if screening_scorecards:
-            selected.append(screening_scorecards[0])
+        preferred_scorecard = self._preferred_screening_scorecard_item(screening_scorecards)
+        if preferred_scorecard is not None:
+            selected.append(preferred_scorecard)
         preferred_methodology_items = self._prioritize_methodology_evidences(
             methodology_items,
             query=query,

@@ -17,7 +17,7 @@ class SupervisorBlackboardSourceSupport:
         return next(
             (
                 entry
-                for entry in source_records
+                for entry in reversed(source_records)
                 if str((entry.payload or {}).get("source_type") or "") in source_types
             ),
             None,

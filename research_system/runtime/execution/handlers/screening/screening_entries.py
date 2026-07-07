@@ -17,6 +17,7 @@ def add_screening_candidates(
     candidates: list[dict],
     source_type: str,
     source_ref_type: str,
+    include_methodology_entries: bool = True,
 ) -> None:
     for candidate in candidates:
         entry = BlackboardEntry(
@@ -37,6 +38,8 @@ def add_screening_candidates(
             risk_flags=candidate.get("missing_evidence") or [],
         )
         support.add_entry(context, request, intent, entry)
+        if not include_methodology_entries:
+            continue
         for methodology_entry in support.build_candidate_methodology_entries(
             context=context,
             request=request,
@@ -57,6 +60,7 @@ def add_screening_scorecard(
     phase: str,
     agent: str,
     scorecard: dict,
+    source_ref_type: str = "screening",
 ) -> None:
     scorecard_entry = BlackboardEntry(
         run_id=context.run_id,
@@ -71,8 +75,38 @@ def add_screening_scorecard(
             "source_type": "screening_scorecard",
             "scorecard": scorecard,
         },
-        source_refs=[{"type": "screening", "run_id": context.run_id}],
+        source_refs=[{"type": source_ref_type, "run_id": context.run_id}],
         confidence=1.0,
         risk_flags=[],
     )
     support.add_entry(context, request, intent, scorecard_entry)
+
+
+def add_screening_enrichment_plan(
+    support: OrchestratorExecutionSupport,
+    *,
+    context: RuntimeContext,
+    request: RequestEnvelope,
+    intent: str,
+    phase: str,
+    agent: str,
+    enrichment_plan: dict,
+) -> None:
+    entry = BlackboardEntry(
+        run_id=context.run_id,
+        thread_id=context.thread.thread_id,
+        request_id=request.request_id,
+        kind="source_record",
+        agent=agent,
+        phase=phase,
+        payload={
+            "title": "screening_enrichment_plan",
+            "content": str(enrichment_plan),
+            "source_type": "screening_enrichment_plan",
+            "enrichment_plan": enrichment_plan,
+        },
+        source_refs=[{"type": "screening_enrichment_plan", "run_id": context.run_id}],
+        confidence=1.0,
+        risk_flags=[],
+    )
+    support.add_entry(context, request, intent, entry)

@@ -146,6 +146,58 @@ class RetrieverServiceTests(unittest.TestCase):
         self.assertEqual(merged["shared-evidence"]["summary"], "current blackboard evidence")
         self.assertEqual(merged["shared-evidence"]["score"], 1.0)
 
+    def test_screening_selection_prefers_enriched_scorecard_and_latest_candidate_versions(self) -> None:
+        provisional_scorecard = {
+            "evidence_id": "screening-scorecard-provisional",
+            "title": "screening_scorecard",
+            "summary": "screening_scorecard\n{'investment_cycle': 'mid_term', 'candidate_count': 2, 'summary': 'pending deep checks', 'enrichment_pending': True}",
+            "source_refs": [{"type": "screening", "run_id": "01RUN"}],
+            "metadata": {"source_type": "screening_scorecard"},
+        }
+        enriched_scorecard = {
+            "evidence_id": "screening-scorecard-enriched",
+            "title": "screening_scorecard",
+            "summary": "screening_scorecard\n{'investment_cycle': 'mid_term', 'candidate_count': 2, 'summary': 'deep checks completed', 'enrichment_pending': False}",
+            "source_refs": [{"type": "screening_enrichment", "run_id": "01RUN"}],
+            "metadata": {"source_type": "screening_scorecard"},
+        }
+        provisional_candidate = {
+            "evidence_id": "candidate-provisional",
+            "title": "screen_candidate:300363",
+            "summary": "screen_candidate symbol=300363 name=Alpha score=1.8 deep_checked=False",
+            "source_refs": [{"type": "screening", "run_id": "01RUN"}],
+            "metadata": {"source_type": "screen_candidate"},
+        }
+        enriched_candidate = {
+            "evidence_id": "candidate-enriched",
+            "title": "screen_candidate:300363",
+            "summary": "screen_candidate symbol=300363 name=Alpha score=2.6 deep_checked=True",
+            "source_refs": [{"type": "screening_enrichment", "run_id": "01RUN"}],
+            "metadata": {"source_type": "screen_candidate"},
+        }
+        watchlist_candidate = {
+            "evidence_id": "candidate-watchlist",
+            "title": "watchlist_candidate:300347",
+            "summary": "watchlist_candidate symbol=300347 name=Beta score=1.2 deep_checked=False",
+            "source_refs": [{"type": "screening_enrichment", "run_id": "01RUN"}],
+            "metadata": {"source_type": "watchlist_candidate"},
+        }
+
+        selected = self.service._select_screening_evidences(
+            evidences=[
+                provisional_scorecard,
+                provisional_candidate,
+                enriched_scorecard,
+                enriched_candidate,
+                watchlist_candidate,
+            ],
+            top_k=4,
+        )
+
+        self.assertEqual(selected[0]["evidence_id"], "screening-scorecard-enriched")
+        self.assertTrue(any(item["evidence_id"] == "candidate-enriched" for item in selected))
+        self.assertFalse(any(item["evidence_id"] == "candidate-provisional" for item in selected))
+
     def test_structured_retrieval_summary_uses_signal_scorecard_fields(self) -> None:
         evidence = {
             "evidence_id": "sector-snapshot",

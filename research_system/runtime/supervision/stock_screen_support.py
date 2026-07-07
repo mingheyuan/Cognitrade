@@ -36,7 +36,33 @@ class SupervisorStockScreenSupport:
 
         if (
             "screen" in completed_actions
+            and view.enrichment_pending
+            and view.enrichment_target_count > 0
+            and ("screen_enrich" not in completed_actions)
+        ):
+            enrich_action = self.decision_factory.screen_enrich_action(
+                plan=plan,
+                existing=pending_by_id.get("screen_enrich"),
+            )
+            for plan_action in plan.actions:
+                if plan_action.node_id == "retrieve":
+                    plan_action.depends_on = ["screen_enrich"]
+                elif plan_action.node_id == "screen_review":
+                    plan_action.depends_on = ["screen_enrich"]
+            if "retrieve" in pending_by_id:
+                pending_by_id["retrieve"].depends_on = ["screen_enrich"]
+            if "screen_review" in pending_by_id:
+                pending_by_id["screen_review"].depends_on = ["screen_enrich"]
+            return self.decision_factory.continue_with(
+                action=enrich_action,
+                completed_actions=completed_actions,
+                notes=["insert screening enrichment before review/retrieval when deep checks are still missing"],
+            )
+
+        if (
+            "screen" in completed_actions
             and not view.review_summary_present
+            and not view.enrichment_pending
             and ("screen_review" not in completed_actions)
             and (view.top_candidate_count > 0 or view.watchlist_candidate_count > 0)
         ):

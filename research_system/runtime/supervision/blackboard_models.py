@@ -8,6 +8,8 @@ class StockScreenView:
     review_summary_present: bool
     top_candidate_count: int
     watchlist_candidate_count: int
+    enrichment_target_count: int
+    enrichment_pending: bool
 
 
 @dataclass(frozen=True)

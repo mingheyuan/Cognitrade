@@ -361,6 +361,7 @@ class StockScreenFlowTests(unittest.TestCase):
                 first_call_count = len(runtime.calls)
                 task_plan_payload = read_json(settings.runs_root / first_run_id / "task_plan.json") or {}
                 task_plan_nodes = [str(item.get("node_id") or "") for item in list(task_plan_payload.get("actions") or [])]
+                self.assertIn("screen_enrich", task_plan_nodes)
                 self.assertIn("screen_review", task_plan_nodes)
 
                 steps_payload = orchestrator.steps(first_run_id)
@@ -368,6 +369,7 @@ class StockScreenFlowTests(unittest.TestCase):
                     str(item.get("node_id") or ""): item
                     for item in list(steps_payload.get("steps") or [])
                 }
+                self.assertEqual(step_by_node["screen_enrich"]["status"], "completed")
                 self.assertEqual(step_by_node["screen_review"]["status"], "completed")
 
                 with patch("research_system.subagents.collector.call_with_retry", return_value=spot_table()):
@@ -389,6 +391,55 @@ class StockScreenFlowTests(unittest.TestCase):
                 )
                 self.assertIsNotNone(cache_hit_row)
                 self.assertIn("screen", list(((cache_hit_row or {}).get("payload") or {}).get("cached_nodes") or []))
+            finally:
+                orchestrator.close()
+
+    def test_dynamic_screen_enrich_is_persisted_and_can_rerun_from_node(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            settings = Settings.from_env(repo_root)
+            ensure_workspace_layout(settings)
+            orchestrator = ResearchOrchestrator(settings)
+            try:
+                orchestrator.retriever.disable_qdrant_for_test()
+                orchestrator.collector.skill_runtime = SkillRuntimeStub()
+
+                with patch("research_system.subagents.collector.call_with_retry", return_value=spot_table()):
+                    response = orchestrator.run(RequestEnvelope(user_query="screen growth stocks"))
+
+                first_run_id = str(response.run_id or "")
+                task_plan_payload = read_json(settings.runs_root / first_run_id / "task_plan.json") or {}
+                task_plan_nodes = [str(item.get("node_id") or "") for item in list(task_plan_payload.get("actions") or [])]
+                self.assertIn("screen_enrich", task_plan_nodes)
+
+                rerun_response = orchestrator.rerun_from(first_run_id, from_node="screen_enrich")
+
+                self.assertEqual(rerun_response.status, "completed")
+                rerun_run_id = str(rerun_response.run_id or "")
+                replay_payload = orchestrator.replay(rerun_run_id)
+                self.assertTrue(
+                    any(
+                        str(row.get("event_type") or "") == "dag_partial_rerun_requested"
+                        and str(((row.get("payload") or {}).get("rerun_from_node") or "")) == "screen_enrich"
+                        for row in replay_payload["events"]
+                    )
+                )
+                cache_hit_row = next(
+                    (
+                        row for row in replay_payload["events"]
+                        if str(row.get("event_type") or "") == "dag_cache_hit"
+                    ),
+                    None,
+                )
+                self.assertIsNotNone(cache_hit_row)
+                cached_nodes = list(((cache_hit_row or {}).get("payload") or {}).get("cached_nodes") or [])
+                self.assertIn("collect", cached_nodes)
+                self.assertIn("screen", cached_nodes)
+                step_by_node = {
+                    str(item.get("node_id") or ""): item
+                    for item in list(orchestrator.steps(rerun_run_id).get("steps") or [])
+                }
+                self.assertEqual(step_by_node["screen_enrich"]["status"], "completed")
             finally:
                 orchestrator.close()
 
