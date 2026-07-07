@@ -58,5 +58,8 @@ def execute_app_main_command(
         run_id=getattr(args, "run_id", getattr(args, "proposal_id", None)),
         limit=getattr(args, "limit", 20),
         status_filter=getattr(args, "status", getattr(args, "reason", None)),
+        action_node_id=getattr(args, "action_node_id", None),
+        dag_id=getattr(args, "dag_id", None),
+        subagent_node_id=getattr(args, "subagent_node_id", None),
     )
     return print_payload_fn(payload, as_json=getattr(args, "as_json", False))

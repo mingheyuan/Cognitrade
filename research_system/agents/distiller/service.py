@@ -118,6 +118,9 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                 [
                     SubagentDagNodeSpec(
                         node_id="source_normalizer",
+                        replayable=True,
+                        cache_scope="run",
+                        cache_key="source_normalizer",
                         build_invocation=lambda _results: self._build_subagent_invocation(
                             subagent_type="distill_source_normalizer",
                             objective="Normalize raw distillation source records.",
@@ -134,6 +137,9 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                     SubagentDagNodeSpec(
                         node_id="record_trimmer",
                         depends_on=("source_normalizer",),
+                        replayable=True,
+                        cache_scope="run",
+                        cache_key="record_trimmer",
                         build_invocation=lambda results: self._build_subagent_invocation(
                             subagent_type="distill_record_trimmer",
                             objective="Trim source records into bounded distillation input.",
@@ -154,6 +160,9 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                     SubagentDagNodeSpec(
                         node_id="chunk_builder",
                         depends_on=("record_trimmer",),
+                        replayable=True,
+                        cache_scope="run",
+                        cache_key="chunk_builder",
                         build_invocation=lambda results: self._build_subagent_invocation(
                             subagent_type="distill_chunk_builder",
                             objective="Split trimmed records into distillation chunks.",
@@ -171,7 +180,8 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                             objective="Split trimmed records into distillation chunks.",
                         ),
                     ),
-                ]
+                ],
+                dag_id="preprocess",
             )
             records = list((preprocess_results["source_normalizer"].outputs or {}).get("records") or [])
             if not records:
@@ -239,6 +249,9 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                     node_id=dag_node_id,
                     failure_mode="isolate",
                     max_attempts=2,
+                    replayable=True,
+                    cache_scope="run",
+                    cache_key=f"chunk:{chunk_label}",
                     build_invocation=lambda _results, *, chunk=chunk_records, label=chunk_label, thread=child_thread, turn=child_turn: self._build_subagent_invocation(
                         subagent_type="llm_chunk_distiller",
                         objective=f"Distill {label} with LLM.",
@@ -300,6 +313,7 @@ class DistillerService(RuntimeBoundSubagentInvoker):
         chunk_dag_results = self._execute_subagent_dag(
             chunk_specs,
             max_workers=max(len(chunk_node_ids), 1),
+            dag_id="chunk_execution",
         )
 
         for index, dag_node_id in enumerate(chunk_node_ids, start=1):
@@ -392,12 +406,22 @@ class DistillerService(RuntimeBoundSubagentInvoker):
         nodes: list[SubagentDagNodeSpec],
         *,
         max_workers: int | None = None,
+        dag_id: str,
+        start_from_node_id: str | None = None,
     ) -> dict[str, SubagentDagNodeResult]:
         executor = SubagentDagExecutor(
             invoke_subagent=self._invoke_subagent,
             emit_event=self._emit_runtime_event,
         )
-        return executor.execute(nodes, max_workers=max_workers)
+        resolved_start_from_node_id = start_from_node_id or self._subagent_dag_start_from_node_id(
+            dag_id=dag_id,
+        )
+        return executor.execute(
+            nodes,
+            max_workers=max_workers,
+            cache_context=self._subagent_dag_cache_context(dag_id=dag_id),
+            start_from_node_id=resolved_start_from_node_id,
+        )
 
     def _dag_metadata(
         self,

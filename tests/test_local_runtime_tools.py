@@ -133,6 +133,8 @@ class LocalRuntimeToolsTests(unittest.TestCase):
                 steps_payload = runtime.steps()
                 subagent_payload = runtime.subagent("inv-local")
                 thread_payload = runtime.thread(child_thread.thread_id)
+                thread_replay_payload = runtime.thread_replay(child_thread.thread_id)
+                thread_metrics_payload = runtime.thread_metrics(child_thread.thread_id)
                 thread_tree = runtime.thread_tree()
 
                 self.assertTrue(injected["llm_budget_exhausted"])
@@ -168,6 +170,12 @@ class LocalRuntimeToolsTests(unittest.TestCase):
                 self.assertGreaterEqual(int(subagent_payload["duration_ms"] or 0), 0)
                 self.assertEqual(thread_payload["thread"]["thread_id"], child_thread.thread_id)
                 self.assertEqual(thread_payload["event_counts"]["items"], 1)
+                self.assertEqual(thread_replay_payload["thread"]["thread_id"], child_thread.thread_id)
+                self.assertEqual(thread_replay_payload["scope"], "thread_subtree")
+                self.assertEqual(thread_replay_payload["metrics"]["counts"]["threads"], 1)
+                self.assertEqual(thread_metrics_payload["thread_id"], child_thread.thread_id)
+                self.assertEqual(thread_metrics_payload["counts"]["subagents"], 1)
+                self.assertGreaterEqual(thread_metrics_payload["latency_ms"]["subagents"]["count"], 1)
                 self.assertTrue(thread_tree)
             finally:
                 runtime.close()
@@ -209,6 +217,8 @@ class LocalRuntimeToolsTests(unittest.TestCase):
                 self.assertEqual(child_thread.thread_id, "det-0001")
                 self.assertEqual(child_turn.turn_id, "det-0002")
                 self.assertEqual(harness.thread(child_thread.thread_id)["thread_id"], child_thread.thread_id)
+                self.assertEqual(harness.thread_replay(child_thread.thread_id)["thread_id"], child_thread.thread_id)
+                self.assertEqual(harness.thread_metrics(child_thread.thread_id)["thread_id"], child_thread.thread_id)
                 self.assertTrue(harness.thread_tree())
                 self.assertEqual(harness.steps()["run_id"], "RUNDET")
             finally:

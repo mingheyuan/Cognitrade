@@ -402,12 +402,22 @@ class StockScreenFlowTests(unittest.TestCase):
             orchestrator = ResearchOrchestrator(settings)
             try:
                 orchestrator.retriever.disable_qdrant_for_test()
-                orchestrator.collector.skill_runtime = SkillRuntimeStub()
+                runtime = SkillRuntimeStub()
+                runtime.calls = []
+                original_run = runtime.run
+
+                def _tracking_run(skill_name: str, **kwargs):
+                    runtime.calls.append((skill_name, kwargs))
+                    return original_run(skill_name, **kwargs)
+
+                runtime.run = _tracking_run
+                orchestrator.collector.skill_runtime = runtime
 
                 with patch("research_system.subagents.collector.call_with_retry", return_value=spot_table()):
                     response = orchestrator.run(RequestEnvelope(user_query="screen growth stocks"))
 
                 first_run_id = str(response.run_id or "")
+                first_call_count = len(runtime.calls)
                 task_plan_payload = read_json(settings.runs_root / first_run_id / "task_plan.json") or {}
                 task_plan_nodes = [str(item.get("node_id") or "") for item in list(task_plan_payload.get("actions") or [])]
                 self.assertIn("screen_enrich", task_plan_nodes)
@@ -415,6 +425,7 @@ class StockScreenFlowTests(unittest.TestCase):
                 rerun_response = orchestrator.rerun_from(first_run_id, from_node="screen_enrich")
 
                 self.assertEqual(rerun_response.status, "completed")
+                self.assertEqual(len(runtime.calls), first_call_count)
                 rerun_run_id = str(rerun_response.run_id or "")
                 replay_payload = orchestrator.replay(rerun_run_id)
                 self.assertTrue(
@@ -435,6 +446,9 @@ class StockScreenFlowTests(unittest.TestCase):
                 cached_nodes = list(((cache_hit_row or {}).get("payload") or {}).get("cached_nodes") or [])
                 self.assertIn("collect", cached_nodes)
                 self.assertIn("screen", cached_nodes)
+                self.assertTrue(
+                    any(str(row.get("event_type") or "") == "subagent_dag_cache_hit" for row in replay_payload["events"])
+                )
                 step_by_node = {
                     str(item.get("node_id") or ""): item
                     for item in list(orchestrator.steps(rerun_run_id).get("steps") or [])

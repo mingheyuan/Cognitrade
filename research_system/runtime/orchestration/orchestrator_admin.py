@@ -50,6 +50,12 @@ class OrchestratorAdminService:
     def thread(self, run_id: str, thread_id: str) -> dict:
         return self.run_admin.thread(run_id, thread_id)
 
+    def thread_replay(self, run_id: str, thread_id: str) -> dict:
+        return self.run_admin.thread_replay(run_id, thread_id)
+
+    def thread_metrics(self, run_id: str, thread_id: str) -> dict:
+        return self.run_admin.thread_metrics(run_id, thread_id)
+
     def subagent(self, run_id: str, invocation_id: str) -> dict:
         return self.run_admin.subagent(run_id, invocation_id)
 

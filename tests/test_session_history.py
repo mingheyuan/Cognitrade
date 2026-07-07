@@ -696,6 +696,250 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["thread_id"], "thread-child")
         self.assertEqual(len(payload["events"]), 2)
         self.assertEqual(payload["subagent_trace"][-1]["thread_id"], "thread-child")
+        self.assertEqual(payload["metrics"]["counts"]["threads"], 1)
+        self.assertEqual(payload["metrics"]["counts"]["subagents"], 1)
+        self.assertEqual(payload["event_counts"]["dynamic_trace"], 0)
+
+    def test_thread_replay_includes_descendants_blackboard_and_scoped_metrics(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            run_root = Path(tmpdir) / "01THREADREPLAY"
+            run_root.mkdir(parents=True)
+            threads_root = run_root / "threads"
+            threads_root.mkdir(parents=True)
+            write_json(run_root / "request.json", {"request_id": "req-thread-replay", "intent": "stock_compare", "user_query": "thread replay"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            write_json(
+                run_root / "thread_state.json",
+                {
+                    "thread_id": "thread-root",
+                    "run_id": "01THREADREPLAY",
+                    "request_id": "req-thread-replay",
+                    "intent": "stock_compare",
+                    "status": "completed",
+                    "parent_thread_id": None,
+                    "active_turn_id": "turn-root",
+                    "total_turns": 1,
+                },
+            )
+            write_json(
+                run_root / "turn_state.json",
+                {
+                    "turn_id": "turn-root",
+                    "thread_id": "thread-root",
+                    "run_id": "01THREADREPLAY",
+                    "request_id": "req-thread-replay",
+                    "turn_index": 1,
+                    "status": "completed",
+                    "intent": "stock_compare",
+                    "objective": "root",
+                },
+            )
+            write_json(
+                threads_root / "thread-child.thread.json",
+                {
+                    "thread_id": "thread-child",
+                    "run_id": "01THREADREPLAY",
+                    "request_id": "req-thread-replay",
+                    "intent": "stock_compare",
+                    "status": "completed",
+                    "parent_thread_id": "thread-root",
+                    "active_turn_id": "turn-child",
+                    "total_turns": 1,
+                },
+            )
+            write_json(
+                threads_root / "thread-child.turn.turn-child.json",
+                {
+                    "turn_id": "turn-child",
+                    "thread_id": "thread-child",
+                    "run_id": "01THREADREPLAY",
+                    "request_id": "req-thread-replay",
+                    "turn_index": 1,
+                    "status": "completed",
+                    "intent": "stock_compare",
+                    "objective": "child",
+                },
+            )
+            write_json(
+                threads_root / "thread-grandchild.thread.json",
+                {
+                    "thread_id": "thread-grandchild",
+                    "run_id": "01THREADREPLAY",
+                    "request_id": "req-thread-replay",
+                    "intent": "stock_compare",
+                    "status": "completed",
+                    "parent_thread_id": "thread-child",
+                    "active_turn_id": "turn-grandchild",
+                    "total_turns": 1,
+                },
+            )
+            write_json(
+                threads_root / "thread-grandchild.turn.turn-grandchild.json",
+                {
+                    "turn_id": "turn-grandchild",
+                    "thread_id": "thread-grandchild",
+                    "run_id": "01THREADREPLAY",
+                    "request_id": "req-thread-replay",
+                    "turn_index": 1,
+                    "status": "completed",
+                    "intent": "stock_compare",
+                    "objective": "grandchild",
+                },
+            )
+            append_jsonl(
+                run_root / "items.jsonl",
+                {
+                    "item_id": "child-item",
+                    "thread_id": "thread-child",
+                    "turn_id": "turn-child",
+                    "run_id": "01THREADREPLAY",
+                    "request_id": "req-thread-replay",
+                    "item_type": "subagent",
+                    "status": "completed",
+                    "agent": "collector",
+                    "phase": "collect_child",
+                    "title": "stock_snapshot_collector",
+                    "objective": "Collect child snapshot",
+                    "payload": {"llm_used": False},
+                    "created_at": "2026-07-07T10:00:00+00:00",
+                    "updated_at": "2026-07-07T10:00:01+00:00",
+                },
+            )
+            append_jsonl(
+                run_root / "items.jsonl",
+                {
+                    "item_id": "grandchild-item",
+                    "thread_id": "thread-grandchild",
+                    "turn_id": "turn-grandchild",
+                    "run_id": "01THREADREPLAY",
+                    "request_id": "req-thread-replay",
+                    "item_type": "subagent",
+                    "status": "degraded",
+                    "agent": "retriever",
+                    "phase": "retrieve_child",
+                    "title": "qdrant_evidence_searcher",
+                    "objective": "Search child evidence",
+                    "payload": {"llm_used": True},
+                    "degrade_reason": "runtime_fallback",
+                    "created_at": "2026-07-07T10:00:02+00:00",
+                    "updated_at": "2026-07-07T10:00:04+00:00",
+                },
+            )
+            append_jsonl(
+                run_root / "blackboard.jsonl",
+                {
+                    "entry_id": "entry-child",
+                    "run_id": "01THREADREPLAY",
+                    "thread_id": "thread-child",
+                    "request_id": "req-thread-replay",
+                    "kind": "verified_snapshot",
+                    "agent": "collector",
+                    "phase": "collect_child",
+                    "status": "active",
+                    "payload": {"symbol": "600036"},
+                    "source_refs": [],
+                    "created_at": "2026-07-07T10:00:00+00:00",
+                },
+            )
+            append_jsonl(
+                run_root / "blackboard.jsonl",
+                {
+                    "entry_id": "entry-grandchild",
+                    "run_id": "01THREADREPLAY",
+                    "thread_id": "thread-grandchild",
+                    "request_id": "req-thread-replay",
+                    "kind": "retrieved_evidence",
+                    "agent": "retriever",
+                    "phase": "retrieve_child",
+                    "status": "active",
+                    "payload": {"summary": "hit"},
+                    "source_refs": [],
+                    "created_at": "2026-07-07T10:00:02+00:00",
+                },
+            )
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-thread-start",
+                    "request_id": "req-thread-replay",
+                    "run_id": "01THREADREPLAY",
+                    "intent": "stock_compare",
+                    "event_type": "thread_started",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "child thread started",
+                    "payload": {
+                        "thread_id": "thread-root",
+                        "turn_id": "turn-root",
+                        "payload": {"child_thread_id": "thread-child"},
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-07T10:00:00+00:00",
+                },
+            )
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-grandchild-subagent",
+                    "request_id": "req-thread-replay",
+                    "run_id": "01THREADREPLAY",
+                    "intent": "stock_compare",
+                    "event_type": "subagent_completed",
+                    "phase": "retrieve_child",
+                    "agent": "retriever",
+                    "message": "grandchild retrieval completed",
+                    "payload": {
+                        "thread_id": "thread-grandchild",
+                        "turn_id": "turn-grandchild",
+                        "subagent_type": "qdrant_evidence_searcher",
+                        "status": "completed",
+                        "notes": ["hit_count=1"],
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-07T10:00:04+00:00",
+                },
+            )
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-grandchild-dag",
+                    "request_id": "req-thread-replay",
+                    "run_id": "01THREADREPLAY",
+                    "intent": "stock_compare",
+                    "event_type": "subagent_dag_node_completed",
+                    "phase": "retrieve_child",
+                    "agent": "retriever",
+                    "message": "Completed DAG node: qdrant_evidence_searcher",
+                    "payload": {
+                        "thread_id": "thread-grandchild",
+                        "turn_id": "turn-grandchild",
+                        "task_name": "retrieve:qdrant_evidence_searcher",
+                        "agent_path": "retriever/qdrant_evidence_searcher",
+                        "subagent_type": "qdrant_evidence_searcher",
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-07T10:00:05+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).thread_replay("thread-child")
+            metrics = SessionHistory(run_root).thread_metrics("thread-child")
+
+        self.assertEqual(payload["thread"]["thread_id"], "thread-child")
+        self.assertEqual(payload["scope"], "thread_subtree")
+        self.assertEqual(payload["scope_thread_ids"], ["thread-child", "thread-grandchild"])
+        self.assertEqual(payload["event_counts"]["threads"], 2)
+        self.assertEqual(payload["event_counts"]["blackboard"], 2)
+        self.assertEqual(payload["dynamic_trace"][0]["event"], "subagent_dag_node_completed")
+        self.assertEqual(payload["thread_tree"][0]["thread_id"], "thread-child")
+        self.assertEqual(payload["thread_tree"][0]["children"][0]["thread_id"], "thread-grandchild")
+        self.assertEqual(metrics["counts"]["threads"], 2)
+        self.assertEqual(metrics["counts"]["subagents"], 2)
+        self.assertEqual(metrics["counts"]["llm_calls"], 1)
+        self.assertEqual(metrics["rates"]["qdrant_hit_rate"], 1.0)
+        self.assertEqual(metrics["fanout"]["max_depth"], 1)
+        self.assertEqual(metrics["degrade_reason_counts"]["runtime_fallback"], 1)
 
 
 if __name__ == "__main__":

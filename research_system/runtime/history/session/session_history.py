@@ -94,8 +94,57 @@ class SessionHistory:
         events = read_jsonl(self.run_root / "events.jsonl")
         items = self._latest_items()
         threads = self.thread_states()
-        trace_payload = self.trace()
-        subagent_trace = list(trace_payload.get("subagent_trace") or [])
+        return self._build_metrics_payload(
+            request_payload=request_payload,
+            result_payload=result_payload,
+            summary_payload=summary_payload,
+            events=events,
+            items=items,
+            threads=threads,
+            thread_tree=self.thread_tree(),
+        )
+
+    def thread_metrics(self, thread_id: str, *, include_descendants: bool = True) -> dict[str, Any]:
+        request_payload = read_json(self.run_root / "request.json") or {}
+        result_payload = read_json(self.run_root / "result.json") or {}
+        summary_payload = read_json(self.run_root / "summary.json") or {}
+        threads = self.thread_states()
+        normalized_thread_id, scoped_threads, thread_tree, scope_thread_ids = self._thread_scope_payload(
+            thread_id=thread_id,
+            include_descendants=include_descendants,
+            threads=threads,
+        )
+        events = self._filter_events_for_threads(
+            read_jsonl(self.run_root / "events.jsonl"),
+            scope_thread_ids=scope_thread_ids,
+        )
+        items = self._filter_items_for_threads(scope_thread_ids)
+        payload = self._build_metrics_payload(
+            request_payload=request_payload,
+            result_payload=result_payload,
+            summary_payload=summary_payload,
+            events=events,
+            items=items,
+            threads=scoped_threads,
+            thread_tree=thread_tree,
+        )
+        payload["thread_id"] = normalized_thread_id
+        payload["scope_thread_ids"] = sorted(scope_thread_ids)
+        payload["scope"] = "thread_subtree" if include_descendants else "thread"
+        return payload
+
+    def _build_metrics_payload(
+        self,
+        *,
+        request_payload: dict[str, Any],
+        result_payload: dict[str, Any],
+        summary_payload: dict[str, Any],
+        events: list[dict[str, Any]],
+        items: list[dict[str, Any]],
+        threads: list[dict[str, Any]],
+        thread_tree: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        subagent_trace = self.trace_rebuilder.subagent_trace({}, events)
 
         subagent_items = [row for row in items if str(row.get("item_type") or "") == "subagent"]
         action_items = [row for row in items if str(row.get("item_type") or "") == "action"]
@@ -174,6 +223,8 @@ class SessionHistory:
             },
             "turn_usage": self._turn_usage(threads=threads, items=items),
             "fanout": fanout,
+            "threads": threads,
+            "thread_tree": thread_tree,
             "degrade_reason_counts": degrade_reason_counts,
             "event_type_counts": event_type_counts,
             "dag_event_counts": {
@@ -235,31 +286,58 @@ class SessionHistory:
         return payload
 
     def thread(self, thread_id: str) -> dict[str, Any]:
+        return self._build_thread_payload(thread_id=thread_id, include_descendants=False)
+
+    def thread_replay(self, thread_id: str, *, include_descendants: bool = True) -> dict[str, Any]:
+        return self._build_thread_payload(thread_id=thread_id, include_descendants=include_descendants)
+
+    def _build_thread_payload(
+        self,
+        *,
+        thread_id: str,
+        include_descendants: bool,
+    ) -> dict[str, Any]:
         normalized_thread_id = str(thread_id or "").strip()
         if not normalized_thread_id:
             raise ValueError("thread_id is required")
         threads = self.thread_states()
-        thread_payload = next(
-            (row for row in threads if str(row.get("thread_id") or "").strip() == normalized_thread_id),
-            None,
+        (
+            normalized_thread_id,
+            scoped_threads,
+            thread_tree,
+            scope_thread_ids,
+        ) = self._thread_scope_payload(
+            thread_id=normalized_thread_id,
+            include_descendants=include_descendants,
+            threads=threads,
         )
-        if thread_payload is None:
-            raise KeyError(f"thread not found: {normalized_thread_id}")
+        thread_payload = next(
+            row
+            for row in scoped_threads
+            if str(row.get("thread_id") or "").strip() == normalized_thread_id
+        )
         request_payload = read_json(self.run_root / "request.json") or {}
         result_payload = read_json(self.run_root / "result.json") or {}
         summary_payload = read_json(self.run_root / "summary.json") or {}
-        raw_events = read_jsonl(self.run_root / "events.jsonl")
-        filtered_events = [row for row in raw_events if self._event_matches_thread(row, normalized_thread_id)]
+        filtered_events = self._filter_events_for_threads(
+            read_jsonl(self.run_root / "events.jsonl"),
+            scope_thread_ids=scope_thread_ids,
+        )
         event_timeline = self.trace_rebuilder.event_timeline(filtered_events)
         subagent_trace = self.trace_rebuilder.subagent_trace({}, filtered_events)
+        dynamic_trace = self.trace_rebuilder.dynamic_trace({}, filtered_events)
         wait_trace = self.trace_rebuilder.wait_trace(filtered_events)
-        items = [
-            row for row in self._latest_items()
-            if str(row.get("thread_id") or "").strip() == normalized_thread_id
-        ]
+        items = self._filter_items_for_threads(scope_thread_ids)
+        blackboard = self._filter_blackboard_for_threads(scope_thread_ids)
+        metrics = self.thread_metrics(
+            normalized_thread_id,
+            include_descendants=include_descendants,
+        )
         return {
             "run_id": self.run_root.name,
             "thread_id": normalized_thread_id,
+            "scope": "thread_subtree" if include_descendants else "thread",
+            "scope_thread_ids": sorted(scope_thread_ids),
             "request": request_payload,
             "summary": summary_payload,
             "display_summary": build_display_summary(
@@ -267,15 +345,23 @@ class SessionHistory:
                 summary_payload=summary_payload,
             ),
             "thread": thread_payload,
+            "threads": scoped_threads,
+            "thread_tree": thread_tree,
             "events": event_timeline,
+            "blackboard": blackboard,
             "subagent_trace": subagent_trace,
+            "dynamic_trace": dynamic_trace,
             "wait_trace": wait_trace,
             "items": items,
+            "metrics": metrics,
             "event_counts": {
                 "events": len(event_timeline),
                 "subagent_trace": len(subagent_trace),
+                "dynamic_trace": len(dynamic_trace),
                 "wait_trace": len(wait_trace),
                 "items": len(items),
+                "blackboard": len(blackboard),
+                "threads": len(scoped_threads),
             },
         }
 
@@ -310,23 +396,7 @@ class SessionHistory:
         return rows
 
     def thread_tree(self) -> list[dict[str, Any]]:
-        rows = self.thread_states()
-        if not rows:
-            return []
-        indexed = {str(row.get("thread_id") or ""): dict(row) for row in rows if str(row.get("thread_id") or "").strip()}
-        children_by_parent: dict[str, list[dict[str, Any]]] = {}
-        roots: list[dict[str, Any]] = []
-        for row in indexed.values():
-            row["children"] = []
-        for row in indexed.values():
-            parent_thread_id = str(row.get("parent_thread_id") or "").strip()
-            if not parent_thread_id or parent_thread_id not in indexed:
-                roots.append(row)
-                continue
-            children_by_parent.setdefault(parent_thread_id, []).append(row)
-        for thread_id, children in children_by_parent.items():
-            indexed[thread_id]["children"] = children
-        return roots
+        return self._build_thread_tree(self.thread_states())
 
     def _duration_stats(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         samples = [sample for sample in (self._duration_ms(row) for row in items) if sample is not None]
@@ -375,15 +445,17 @@ class SessionHistory:
         return counts
 
     def _fanout_metrics(self, threads: list[dict[str, Any]]) -> dict[str, Any]:
-        children_by_parent: dict[str, list[str]] = {}
         indexed: dict[str, dict[str, Any]] = {}
         for row in threads:
             thread_id = str(row.get("thread_id") or "").strip()
             if not thread_id:
                 continue
             indexed[thread_id] = row
+        children_by_parent: dict[str, list[str]] = {}
+        for row in threads:
+            thread_id = str(row.get("thread_id") or "").strip()
             parent = str(row.get("parent_thread_id") or "").strip()
-            if parent:
+            if thread_id and parent and parent in indexed:
                 children_by_parent.setdefault(parent, []).append(thread_id)
 
         def depth(thread_id: str) -> int:
@@ -395,7 +467,7 @@ class SessionHistory:
         max_depth = 0
         for thread_id, row in indexed.items():
             parent = str(row.get("parent_thread_id") or "").strip()
-            if parent:
+            if parent and parent in indexed:
                 continue
             max_depth = max(max_depth, depth(thread_id))
         return {
@@ -483,6 +555,9 @@ class SessionHistory:
         return turn_index
 
     def _event_matches_thread(self, event: dict[str, Any], thread_id: str) -> bool:
+        return self._event_matches_threads(event, {thread_id})
+
+    def _event_matches_threads(self, event: dict[str, Any], thread_ids: set[str]) -> bool:
         if not isinstance(event, dict):
             return False
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
@@ -496,7 +571,7 @@ class SessionHistory:
             str(nested_payload.get("child_thread_id") or "").strip(),
         }
         candidate_ids.discard("")
-        return thread_id in candidate_ids
+        return any(candidate_id in thread_ids for candidate_id in candidate_ids)
 
     def _int_note_value(self, notes: list[str], *, prefix: str) -> int:
         raw_value = next((note for note in notes if note.startswith(prefix)), "")
@@ -537,6 +612,113 @@ class SessionHistory:
             if str(payload.get("invocation_id") or "").strip() == normalized_invocation_id:
                 return row
         return None
+
+    def _thread_scope_payload(
+        self,
+        *,
+        thread_id: str,
+        include_descendants: bool,
+        threads: list[dict[str, Any]],
+    ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], set[str]]:
+        normalized_thread_id = str(thread_id or "").strip()
+        if not normalized_thread_id:
+            raise ValueError("thread_id is required")
+        indexed = {
+            str(row.get("thread_id") or "").strip(): row
+            for row in threads
+            if str(row.get("thread_id") or "").strip()
+        }
+        if normalized_thread_id not in indexed:
+            raise KeyError(f"thread not found: {normalized_thread_id}")
+        scope_thread_ids = self._thread_scope_ids(
+            threads=threads,
+            root_thread_id=normalized_thread_id,
+            include_descendants=include_descendants,
+        )
+        scoped_threads = [
+            row
+            for row in threads
+            if str(row.get("thread_id") or "").strip() in scope_thread_ids
+        ]
+        thread_tree = self._build_thread_tree(scoped_threads)
+        return normalized_thread_id, scoped_threads, thread_tree, scope_thread_ids
+
+    def _thread_scope_ids(
+        self,
+        *,
+        threads: list[dict[str, Any]],
+        root_thread_id: str,
+        include_descendants: bool,
+    ) -> set[str]:
+        normalized_root_thread_id = str(root_thread_id or "").strip()
+        if not normalized_root_thread_id:
+            return set()
+        if not include_descendants:
+            return {normalized_root_thread_id}
+        children_by_parent: dict[str, list[str]] = {}
+        for row in threads:
+            thread_id = str(row.get("thread_id") or "").strip()
+            parent_thread_id = str(row.get("parent_thread_id") or "").strip()
+            if thread_id and parent_thread_id:
+                children_by_parent.setdefault(parent_thread_id, []).append(thread_id)
+        resolved = {normalized_root_thread_id}
+        stack = [normalized_root_thread_id]
+        while stack:
+            current = stack.pop()
+            for child_id in children_by_parent.get(current, []):
+                if child_id in resolved:
+                    continue
+                resolved.add(child_id)
+                stack.append(child_id)
+        return resolved
+
+    def _build_thread_tree(self, threads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not threads:
+            return []
+        indexed = {
+            str(row.get("thread_id") or "").strip(): dict(row)
+            for row in threads
+            if str(row.get("thread_id") or "").strip()
+        }
+        children_by_parent: dict[str, list[dict[str, Any]]] = {}
+        roots: list[dict[str, Any]] = []
+        for row in indexed.values():
+            row["children"] = []
+        for row in indexed.values():
+            parent_thread_id = str(row.get("parent_thread_id") or "").strip()
+            if not parent_thread_id or parent_thread_id not in indexed:
+                roots.append(row)
+                continue
+            children_by_parent.setdefault(parent_thread_id, []).append(row)
+        for thread_id, children in children_by_parent.items():
+            indexed[thread_id]["children"] = children
+        return roots
+
+    def _filter_events_for_threads(
+        self,
+        events: list[dict[str, Any]],
+        *,
+        scope_thread_ids: set[str],
+    ) -> list[dict[str, Any]]:
+        return [
+            row
+            for row in events
+            if self._event_matches_threads(row, scope_thread_ids)
+        ]
+
+    def _filter_items_for_threads(self, scope_thread_ids: set[str]) -> list[dict[str, Any]]:
+        return [
+            row
+            for row in self._latest_items()
+            if str(row.get("thread_id") or "").strip() in scope_thread_ids
+        ]
+
+    def _filter_blackboard_for_threads(self, scope_thread_ids: set[str]) -> list[dict[str, Any]]:
+        return [
+            row
+            for row in read_jsonl(self.run_root / "blackboard.jsonl")
+            if isinstance(row, dict) and str(row.get("thread_id") or "").strip() in scope_thread_ids
+        ]
 
 
 __all__ = ["SessionHistory"]

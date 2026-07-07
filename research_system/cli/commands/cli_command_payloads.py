@@ -3,6 +3,7 @@ from __future__ import annotations
 STATUS_FILTER_COMMANDS = frozenset({"history", "status", "doctor", "check", "cleanup", "reindex-qdrant"})
 RUN_ID_COMMANDS = frozenset({"replay", "resume", "cancel", "trace", "events", "run-steps", "metrics"})
 RUN_ID_QUERY_COMMANDS = frozenset({"subagent-read", "run-thread", "rerun-from"})
+RUN_ID_SELECTOR_COMMANDS = frozenset({"rerun-subagent"})
 SUBAGENT_COMMANDS = frozenset({"subagent-read"})
 PROPOSAL_COMMANDS = frozenset({"proposals", "proposal", "review-proposal"})
 
@@ -19,6 +20,9 @@ def build_cli_command_payload(
     reviewer: str | None = None,
     reason: str | None = None,
     status: str | None = None,
+    action_node_id: str | None = None,
+    dag_id: str | None = None,
+    subagent_node_id: str | None = None,
 ) -> dict:
     if command in STATUS_FILTER_COMMANDS:
         return {
@@ -36,6 +40,14 @@ def build_cli_command_payload(
             "command": command,
             "run_id": str(run_id or "").strip(),
             "query": str(query if query is not None else decision or "").strip(),
+        }
+    if command in RUN_ID_SELECTOR_COMMANDS:
+        return {
+            "command": command,
+            "run_id": str(run_id or "").strip(),
+            "action_node_id": str(action_node_id or "").strip(),
+            "dag_id": str(dag_id or "").strip(),
+            "subagent_node_id": str(subagent_node_id or "").strip(),
         }
     if command == "proposals":
         return {

@@ -8,6 +8,7 @@ from research_system.cli.commands.cli_command_payloads import (
     PROPOSAL_COMMANDS,
     RUN_ID_COMMANDS,
     RUN_ID_QUERY_COMMANDS,
+    RUN_ID_SELECTOR_COMMANDS,
     STATUS_FILTER_COMMANDS,
     SUBAGENT_COMMANDS,
     build_cli_command_payload,
@@ -126,6 +127,30 @@ def _handle_rerun_from_cli_action(runtime: ChatActionRuntime) -> bool:
     return True
 
 
+def _handle_rerun_subagent_cli_action(runtime: ChatActionRuntime) -> bool:
+    resolved_run_id = _resolve_required_run_id(runtime)
+    if not resolved_run_id:
+        return True
+    action_node_id = str(runtime.parsed.get("action_node_id") or "").strip()
+    dag_id = str(runtime.parsed.get("dag_id") or "").strip()
+    subagent_node_id = str(runtime.parsed.get("subagent_node_id") or "").strip()
+    if not action_node_id or not dag_id or not subagent_node_id:
+        runtime.emit_warning("action_node_id, dag_id, and subagent_node_id are required")
+        return True
+    payload = runtime.run_cli_command(
+        **build_cli_command_payload(
+            command="rerun-subagent",
+            run_id=resolved_run_id,
+            action_node_id=action_node_id,
+            dag_id=dag_id,
+            subagent_node_id=subagent_node_id,
+        ),
+    )
+    runtime.print_payload(payload)
+    _emit_last_run_patch(runtime, _payload_run_id(payload, fallback=resolved_run_id))
+    return True
+
+
 def _handle_status_like_cli_action(runtime: ChatActionRuntime) -> bool:
     kwargs = build_cli_command_payload(
         command=str(runtime.action),
@@ -180,6 +205,7 @@ _CLI_ACTION_HANDLERS = {
     "run-thread": _handle_run_thread_cli_action,
     "run-steps": _handle_status_like_cli_action,
     "rerun-from": _handle_rerun_from_cli_action,
+    "rerun-subagent": _handle_rerun_subagent_cli_action,
     "proposals": _handle_proposals_cli_action,
     "proposal": _handle_proposal_detail_cli_action,
     "review-proposal": _handle_review_proposal_cli_action,
@@ -191,6 +217,11 @@ def handle_chat_cli_action(runtime: ChatActionRuntime) -> bool:
         return _handle_run_id_cli_action(runtime)
 
     if runtime.action in RUN_ID_QUERY_COMMANDS:
+        handler = _CLI_ACTION_HANDLERS.get(runtime.action or "")
+        if handler is not None:
+            return handler(runtime)
+
+    if runtime.action in RUN_ID_SELECTOR_COMMANDS:
         handler = _CLI_ACTION_HANDLERS.get(runtime.action or "")
         if handler is not None:
             return handler(runtime)

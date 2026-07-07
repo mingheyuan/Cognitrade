@@ -476,6 +476,7 @@ class StockCompareFlowTests(unittest.TestCase):
                 self.assertIsNotNone(cache_hit_row)
                 self.assertIn("collect", list(((cache_hit_row or {}).get("payload") or {}).get("cached_nodes") or []))
                 self.assertGreaterEqual(history.metrics()["event_type_counts"].get("dag_cache_hit", 0), 1)
+                self.assertGreaterEqual(history.metrics()["dag_event_counts"].get("subagent_dag_cache_hit", 0), 1)
                 self.assertTrue(trace_rows)
                 subagent_payload = history.subagent(str(trace_rows[0]["invocation_id"]))
                 self.assertEqual(subagent_payload["invocation_id"], trace_rows[0]["invocation_id"])
@@ -484,6 +485,67 @@ class StockCompareFlowTests(unittest.TestCase):
                 self.assertTrue(str(subagent_payload.get("phase") or "").strip())
                 self.assertTrue(str(subagent_payload.get("agent") or "").strip())
                 self.assertIsNotNone(subagent_payload.get("duration_ms"))
+            finally:
+                orchestrator.close()
+
+    def test_orchestrator_can_rerun_retrieve_subagent_dag_branch_using_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            settings = Settings.from_env(repo_root)
+            ensure_workspace_layout(settings)
+            orchestrator = ResearchOrchestrator(settings)
+            try:
+                orchestrator.retriever.disable_qdrant_for_test()
+                runtime = CompareSkillRuntimeStub()
+                runtime.calls = []
+                original_run = runtime.run
+
+                def _tracking_run(skill_name: str, **kwargs):
+                    runtime.calls.append((skill_name, kwargs))
+                    return original_run(skill_name, **kwargs)
+
+                runtime.run = _tracking_run
+                orchestrator.collector.skill_runtime = runtime
+
+                first_response = orchestrator.run(RequestEnvelope(user_query=BANK_COMPARE_QUERY))
+                first_run_id = str(first_response.run_id or "")
+                first_call_count = len(runtime.calls)
+
+                rerun_response = orchestrator.rerun_subagent_from(
+                    first_run_id,
+                    action_node="retrieve",
+                    dag_id="phase_two",
+                    from_node="retrieval_decider",
+                )
+
+                self.assertEqual(rerun_response.intent, "stock_compare")
+                self.assertEqual(rerun_response.status, "completed")
+                self.assertEqual(len(runtime.calls), first_call_count)
+
+                rerun_run_id = str(rerun_response.run_id or "")
+                history = SessionHistory(settings.runs_root / rerun_run_id)
+                raw_events = list(history.replay()["events"])
+                self.assertTrue(
+                    any(
+                        str(row.get("event_type") or "") == "dag_partial_rerun_requested"
+                        and str(((row.get("payload") or {}).get("rerun_from_node") or "")) == "retrieve"
+                        and str(((row.get("payload") or {}).get("rerun_subagent_dag_id") or "")) == "phase_two"
+                        and str(((row.get("payload") or {}).get("rerun_subagent_from_node") or "")) == "retrieval_decider"
+                        for row in raw_events
+                    )
+                )
+                self.assertTrue(
+                    any(
+                        str(row.get("event_type") or "") == "subagent_dag_partial_rerun_requested"
+                        and str(((row.get("payload") or {}).get("dag_id") or "")) == "retrieve:phase_two"
+                        and str(((row.get("payload") or {}).get("start_from_node_id") or "")) == "retrieval_decider"
+                        for row in raw_events
+                    )
+                )
+                self.assertGreaterEqual(
+                    history.metrics()["dag_event_counts"].get("subagent_dag_cache_hit", 0),
+                    1,
+                )
             finally:
                 orchestrator.close()
 

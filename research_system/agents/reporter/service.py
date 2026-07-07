@@ -148,6 +148,7 @@ class ReporterService(RuntimeBoundSubagentInvoker):
                 branch_mode=branch_mode,
             ),
             max_workers=1,
+            dag_id="report",
         )
         trace = self._report_trace(
             intent=intent,
@@ -201,12 +202,22 @@ class ReporterService(RuntimeBoundSubagentInvoker):
         nodes: list[SubagentDagNodeSpec],
         *,
         max_workers: int | None = None,
+        dag_id: str,
+        start_from_node_id: str | None = None,
     ) -> dict[str, SubagentDagNodeResult]:
         executor = SubagentDagExecutor(
             invoke_subagent=self._invoke_subagent,
             emit_event=self._emit_runtime_event,
         )
-        return executor.execute(nodes, max_workers=max_workers)
+        resolved_start_from_node_id = start_from_node_id or self._subagent_dag_start_from_node_id(
+            dag_id=dag_id,
+        )
+        return executor.execute(
+            nodes,
+            max_workers=max_workers,
+            cache_context=self._subagent_dag_cache_context(dag_id=dag_id),
+            start_from_node_id=resolved_start_from_node_id,
+        )
 
     def _report_branch_mode(
         self,
@@ -238,6 +249,9 @@ class ReporterService(RuntimeBoundSubagentInvoker):
         nodes = [
             SubagentDagNodeSpec(
                 node_id="report_strategy_resolver",
+                replayable=True,
+                cache_scope="run",
+                cache_key="report_strategy_resolver",
                 build_invocation=lambda _results: self._build_subagent_invocation(
                     subagent_type="report_strategy_resolver",
                     objective="Resolve report strategy from retrieval summary and planning context.",

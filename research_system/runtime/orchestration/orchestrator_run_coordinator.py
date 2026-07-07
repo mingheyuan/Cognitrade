@@ -95,17 +95,35 @@ class OrchestratorRunCoordinator:
             self.host._active_runtime_context = None
 
     def rerun_from(self, source_run_id: str, *, from_node: str) -> ResponseEnvelope:
-        source_paths = self.host.run_store.load_run_paths(source_run_id)
-        request_payload = self.host._load_json_payload(source_paths.request)
-        if not isinstance(request_payload, dict):
-            raise self.host.orchestrator_error_cls(f"missing_request_payload:{source_run_id}")
-        task_plan_payload = self.host._load_json_payload(source_paths.task_plan)
-        if not isinstance(task_plan_payload, dict):
-            raise self.host.orchestrator_error_cls(f"missing_task_plan_payload:{source_run_id}")
-        source_thread_payload = self.host._load_json_payload(source_paths.thread_state) or {}
+        return self._rerun_existing_plan(
+            source_run_id=source_run_id,
+            from_node=from_node,
+        )
 
-        request = RequestEnvelope.model_validate(request_payload)
-        plan = self.host._assembly().plan_from_payload(task_plan_payload)
+    def rerun_subagent_from(
+        self,
+        source_run_id: str,
+        *,
+        action_node: str,
+        dag_id: str,
+        from_node: str,
+    ) -> ResponseEnvelope:
+        return self._rerun_existing_plan(
+            source_run_id=source_run_id,
+            from_node=action_node,
+            rerun_subagent_dag_id=dag_id,
+            rerun_subagent_from_node=from_node,
+        )
+
+    def _rerun_existing_plan(
+        self,
+        *,
+        source_run_id: str,
+        from_node: str,
+        rerun_subagent_dag_id: str | None = None,
+        rerun_subagent_from_node: str | None = None,
+    ) -> ResponseEnvelope:
+        source_paths, request, plan, source_thread_payload = self._load_rerun_source(source_run_id)
         if not any(action.node_id == from_node for action in plan.actions):
             raise self.host.orchestrator_error_cls(f"unknown_rerun_node:{from_node}")
         rerun_nodes = {from_node, *self.dag_scheduler.descendants(plan, from_node)}
@@ -119,6 +137,10 @@ class OrchestratorRunCoordinator:
         context.cache_restore_run_root = source_paths.root
         context.cache_restore_thread_id = str(source_thread_payload.get("thread_id") or "").strip() or None
         context.rerun_from_node_id = from_node
+        if rerun_subagent_dag_id and rerun_subagent_from_node:
+            context.rerun_subagent_action_node_id = from_node
+            context.rerun_subagent_dag_id = rerun_subagent_dag_id
+            context.rerun_subagent_from_node_id = rerun_subagent_from_node
         context.state.completed_nodes = completed_nodes
         self.host._active_runtime_context = context
         self.host._attach_subagent_observers()
@@ -131,6 +153,8 @@ class OrchestratorRunCoordinator:
                 plan=plan,
                 source_run_id=source_run_id,
                 rerun_from_node=from_node,
+                rerun_subagent_dag_id=rerun_subagent_dag_id,
+                rerun_subagent_from_node=rerun_subagent_from_node,
             )
             self.host._update_state(
                 context,
@@ -169,3 +193,19 @@ class OrchestratorRunCoordinator:
             )
         finally:
             self.host._active_runtime_context = None
+
+    def _load_rerun_source(
+        self,
+        source_run_id: str,
+    ) -> tuple[Any, RequestEnvelope, Any, dict[str, Any]]:
+        source_paths = self.host.run_store.load_run_paths(source_run_id)
+        request_payload = self.host._load_json_payload(source_paths.request)
+        if not isinstance(request_payload, dict):
+            raise self.host.orchestrator_error_cls(f"missing_request_payload:{source_run_id}")
+        task_plan_payload = self.host._load_json_payload(source_paths.task_plan)
+        if not isinstance(task_plan_payload, dict):
+            raise self.host.orchestrator_error_cls(f"missing_task_plan_payload:{source_run_id}")
+        source_thread_payload = self.host._load_json_payload(source_paths.thread_state) or {}
+        request = RequestEnvelope.model_validate(request_payload)
+        plan = self.host._assembly().plan_from_payload(task_plan_payload)
+        return source_paths, request, plan, source_thread_payload

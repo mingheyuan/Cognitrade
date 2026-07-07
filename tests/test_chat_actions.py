@@ -400,6 +400,53 @@ class ChatActionsTests(unittest.TestCase):
         self.assertTrue(handled)
         self.assertEqual(session.state.last_run_id, "01RERUN")
 
+    def test_handle_chat_cli_action_rerun_subagent_updates_last_run_to_new_rerun(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(last_run_id="01SOURCE"),
+            llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+            task_router=TaskRouter(),
+            output_lines=[],
+        )
+
+        calls: list[dict[str, object]] = []
+        handled = handle_chat_cli_action(
+            action="rerun-subagent",
+            parsed={
+                "action": "rerun-subagent",
+                "run_id": "last",
+                "action_node_id": "retrieve",
+                "dag_id": "phase_two",
+                "subagent_node_id": "retrieval_decider",
+            },
+            state=session.state,
+            settings=session.settings,
+            emit_text=lambda output_writer, update: apply_tui_update(session, update),
+            cli_command_runner=lambda _settings, **kwargs: calls.append(dict(kwargs)) or {
+                "run_id": "01SUBRERUN",
+                "status": "completed",
+                "message": "reran retrieve/phase_two/retrieval_decider",
+                "source_run_id": kwargs.get("run_id"),
+            },
+            payload_printer=lambda payload, as_json=False, output_writer=None: None,
+            output_writer=None,
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(session.state.last_run_id, "01SUBRERUN")
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "command": "rerun-subagent",
+                    "run_id": "01SOURCE",
+                    "action_node_id": "retrieve",
+                    "dag_id": "phase_two",
+                    "subagent_node_id": "retrieval_decider",
+                }
+            ],
+        )
+
     def test_handle_chat_meta_action_emits_session_patch_for_intent_change(self) -> None:
         session = TuiSession(
             settings=Settings.from_env(Path(".")),

@@ -24,10 +24,29 @@ def run_screening_enrichment(
     if intent != "stock_screen" or not enrichment_targets:
         return payload
 
-    enrichment_payload = host.collector.enrich_stock_screen_candidates(
-        candidates=enrichment_targets,
-        snapshot_types=["market", "fundamental", "notice", "lhb", "capital_flow", "sentiment", "events"],
-    )
+    bind_runtime = getattr(host.collector, "bind_runtime", None)
+    clear_runtime = getattr(host.collector, "clear_runtime", None)
+    if callable(bind_runtime):
+        bind_runtime(
+            agent_control=context.agent_control,
+            execution_policy=context.execution_policy,
+            context=context,
+            support=support,
+            intent=intent,
+            thread_id=context.thread.thread_id,
+            turn_id=context.turn.turn_id,
+            request_id=request.request_id,
+            agent="collector",
+            phase=phase,
+        )
+    try:
+        enrichment_payload = host.collector.enrich_stock_screen_candidates(
+            candidates=enrichment_targets,
+            snapshot_types=["market", "fundamental", "notice", "lhb", "capital_flow", "sentiment", "events"],
+        )
+    finally:
+        if callable(clear_runtime):
+            clear_runtime()
     support.extend_subagent_trace(context, agent="collector", phase=phase, payload=enrichment_payload)
     support.emit_event(
         context,

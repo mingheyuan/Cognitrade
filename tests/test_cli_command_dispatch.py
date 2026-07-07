@@ -63,22 +63,53 @@ class _DispatchOrchestratorStub:
     def subagent(self, run_id: str, invocation_id: str) -> dict:
         return {"run_id": run_id, "invocation_id": invocation_id, "trace_rows": [], "events": [], "event_counts": {"trace_rows": 0, "events": 0}}
 
-    def thread(self, run_id: str, thread_id: str) -> dict:
+    def thread_replay(self, run_id: str, thread_id: str) -> dict:
         return {
             "run_id": run_id,
             "thread_id": thread_id,
+            "scope": "thread_subtree",
+            "scope_thread_ids": [thread_id],
             "request": {"intent": "stock_check", "user_query": "inspect child"},
             "summary": {"status": "completed"},
             "thread": {"thread_id": thread_id, "status": "completed"},
+            "threads": [{"thread_id": thread_id, "status": "completed", "children": []}],
+            "thread_tree": [{"thread_id": thread_id, "status": "completed", "children": []}],
             "subagent_trace": [],
             "events": [],
+            "blackboard": [],
             "wait_trace": [],
             "items": [],
-            "event_counts": {"events": 0, "subagent_trace": 0, "wait_trace": 0, "items": 0},
+            "metrics": {
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "counts": {"threads": 1, "subagents": 0},
+                "rates": {"fallback_rate": 0.0, "memory_hit_rate": None, "qdrant_hit_rate": None},
+                "latency_ms": {"subagents": {}, "actions": {}, "per_subagent": {}, "per_action": {}},
+                "fanout": {"max_depth": 0, "per_parent_child_count": {}},
+                "turn_usage": {},
+                "event_type_counts": {},
+                "degrade_reason_counts": {},
+            },
+            "event_counts": {"events": 0, "subagent_trace": 0, "dynamic_trace": 0, "wait_trace": 0, "items": 0, "blackboard": 0, "threads": 1},
         }
 
     def rerun_from(self, run_id: str, *, from_node: str) -> dict:
         return {"run_id": "01RERUN", "status": "completed", "message": f"reran from {from_node}", "source_run_id": run_id}
+
+    def rerun_subagent_from(
+        self,
+        run_id: str,
+        *,
+        action_node: str,
+        dag_id: str,
+        from_node: str,
+    ) -> dict:
+        return {
+            "run_id": "01SUBRERUN",
+            "status": "completed",
+            "message": f"reran {action_node}/{dag_id}/{from_node}",
+            "source_run_id": run_id,
+        }
 
     def steps(self, run_id: str) -> dict:
         return {"run_id": run_id, "steps": [], "step_counts": {"total": 0, "active": 0, "completed": 0, "pending": 0}}
@@ -183,6 +214,15 @@ class CliCommandDispatchTests(unittest.TestCase):
             query="retrieve",
             orchestrator_cls=_DispatchOrchestratorStub,
         )
+        rerun_subagent = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="rerun-subagent",
+            run_id="01RUN",
+            action_node_id="retrieve",
+            dag_id="phase_two",
+            subagent_node_id="retrieval_decider",
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
         resumed = execute_cli_payload_command(
             Settings.from_env(Path(".")),
             command="resume",
@@ -203,6 +243,7 @@ class CliCommandDispatchTests(unittest.TestCase):
         self.assertEqual(thread_payload["thread_id"], "thread-child")
         self.assertEqual(subagent["invocation_id"], "01INV")
         self.assertEqual(rerun["run_id"], "01RERUN")
+        self.assertEqual(rerun_subagent["run_id"], "01SUBRERUN")
         self.assertEqual(resumed["status"], "resumed")
         self.assertEqual(cancelled["status"], "cancelled")
 

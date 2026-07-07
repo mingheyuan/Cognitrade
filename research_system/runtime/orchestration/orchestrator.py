@@ -201,6 +201,12 @@ class ResearchOrchestrator:
     def thread(self, run_id: str, thread_id: str) -> dict:
         return self._admin().thread(run_id, thread_id)
 
+    def thread_replay(self, run_id: str, thread_id: str) -> dict:
+        return self._admin().thread_replay(run_id, thread_id)
+
+    def thread_metrics(self, run_id: str, thread_id: str) -> dict:
+        return self._admin().thread_metrics(run_id, thread_id)
+
     def subagent(self, run_id: str, invocation_id: str) -> dict:
         return self._admin().subagent(run_id, invocation_id)
 
@@ -236,6 +242,21 @@ class ResearchOrchestrator:
 
     def rerun_from(self, run_id: str, *, from_node: str) -> ResponseEnvelope:
         return self._run_coordinator().rerun_from(run_id, from_node=from_node)
+
+    def rerun_subagent_from(
+        self,
+        run_id: str,
+        *,
+        action_node: str,
+        dag_id: str,
+        from_node: str,
+    ) -> ResponseEnvelope:
+        return self._run_coordinator().rerun_subagent_from(
+            run_id,
+            action_node=action_node,
+            dag_id=dag_id,
+            from_node=from_node,
+        )
 
     def cancel(self, run_id: str) -> dict:
         return self._admin().cancel(run_id)

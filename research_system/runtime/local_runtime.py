@@ -143,6 +143,18 @@ class LocalRuntimeRun:
     def thread(self, thread_id: str) -> dict[str, Any]:
         return SessionHistory(self.run_root).thread(thread_id)
 
+    def thread_replay(self, thread_id: str, *, include_descendants: bool = True) -> dict[str, Any]:
+        return SessionHistory(self.run_root).thread_replay(
+            thread_id,
+            include_descendants=include_descendants,
+        )
+
+    def thread_metrics(self, thread_id: str, *, include_descendants: bool = True) -> dict[str, Any]:
+        return SessionHistory(self.run_root).thread_metrics(
+            thread_id,
+            include_descendants=include_descendants,
+        )
+
     def thread_tree(self) -> list[dict[str, Any]]:
         return SessionHistory(self.run_root).thread_tree()
 
@@ -500,6 +512,18 @@ class LocalRuntimeHarness:
 
     def thread(self, thread_id: str) -> dict[str, Any]:
         return SessionHistory(self.runs_root / self.run_id).thread(thread_id)
+
+    def thread_replay(self, thread_id: str, *, include_descendants: bool = True) -> dict[str, Any]:
+        return SessionHistory(self.runs_root / self.run_id).thread_replay(
+            thread_id,
+            include_descendants=include_descendants,
+        )
+
+    def thread_metrics(self, thread_id: str, *, include_descendants: bool = True) -> dict[str, Any]:
+        return SessionHistory(self.runs_root / self.run_id).thread_metrics(
+            thread_id,
+            include_descendants=include_descendants,
+        )
 
     def thread_tree(self) -> list[dict[str, Any]]:
         return SessionHistory(self.runs_root / self.run_id).thread_tree()

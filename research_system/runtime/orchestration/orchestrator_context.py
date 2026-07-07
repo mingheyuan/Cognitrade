@@ -38,6 +38,9 @@ class RuntimeContext:
     cache_restore_run_root: Path | None = None
     cache_restore_thread_id: str | None = None
     rerun_from_node_id: str | None = None
+    rerun_subagent_action_node_id: str | None = None
+    rerun_subagent_dag_id: str | None = None
+    rerun_subagent_from_node_id: str | None = None
     current_action_id: str | None = None
     current_node_id: str | None = None
     current_action_objective: str | None = None

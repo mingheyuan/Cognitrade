@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from research_system.agents._subagent_dag import (
+    SubagentDagCacheContext,
     SubagentDagExecutor,
     SubagentDagNodeSpec,
 )
@@ -138,6 +141,196 @@ class SubagentDagExecutorTests(unittest.TestCase):
         self.assertEqual(results["merge"].outputs["merged_chunk_count"], 1)
         self.assertIn("subagent_dag_node_isolated_failure", event_types)
         self.assertIn("subagent_dag_node_completed", event_types)
+
+    def test_executor_restores_replayable_nodes_from_cache_and_reruns_terminal_node(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runs_root = Path(temp_dir) / "runs"
+            first_run_root = runs_root / "RUN1"
+            first_run_root.mkdir(parents=True, exist_ok=True)
+            second_run_root = runs_root / "RUN2"
+            second_run_root.mkdir(parents=True, exist_ok=True)
+            call_order: list[str] = []
+            event_types: list[str] = []
+
+            def invoke(invocation: SubagentInvocation):
+                call_order.append(invocation.subagent_type)
+                return (
+                    {"value": invocation.subagent_type},
+                    SubagentExecutionRecord(
+                        subagent_type=invocation.subagent_type,
+                        invocation_id=f"inv-{invocation.subagent_type}",
+                        objective=invocation.objective,
+                        inputs=invocation.inputs,
+                        output_keys=["value"],
+                    ),
+                )
+
+            executor = SubagentDagExecutor(
+                invoke_subagent=invoke,
+                emit_event=lambda **kwargs: event_types.append(str(kwargs["event_type"])),
+            )
+            nodes = [
+                SubagentDagNodeSpec(
+                    node_id="index",
+                    replayable=True,
+                    cache_scope="run",
+                    cache_key="index",
+                    build_invocation=lambda _results: SubagentInvocation(
+                        subagent_type="index_inputs",
+                        objective="index",
+                    ),
+                ),
+                SubagentDagNodeSpec(
+                    node_id="decide",
+                    depends_on=("index",),
+                    build_invocation=lambda results: SubagentInvocation(
+                        subagent_type="decide_outputs",
+                        objective=str((results["index"].outputs or {}).get("value")),
+                    ),
+                ),
+            ]
+            executor.execute(
+                nodes,
+                cache_context=SubagentDagCacheContext(
+                    dag_id="retrieve:phase_one",
+                    run_root=first_run_root,
+                    run_id="RUN1",
+                    thread_id="thread-1",
+                    turn_id="turn-1",
+                    request_id="req-1",
+                ),
+            )
+            self.assertEqual(call_order, ["index_inputs", "decide_outputs"])
+
+            call_order.clear()
+            results = executor.execute(
+                nodes,
+                cache_context=SubagentDagCacheContext(
+                    dag_id="retrieve:phase_one",
+                    run_root=second_run_root,
+                    run_id="RUN2",
+                    thread_id="thread-2",
+                    turn_id="turn-2",
+                    request_id="req-2",
+                    source_run_root=first_run_root,
+                    source_thread_id="thread-1",
+                ),
+            )
+
+        self.assertEqual(call_order, ["decide_outputs"])
+        self.assertTrue(results["index"].cache_hit)
+        self.assertEqual(results["index"].record.notes[-1], "cache_hit=RUN1:index")
+        self.assertIn("subagent_dag_cache_hit", event_types)
+        self.assertIn("subagent_dag_cache_restored", event_types)
+
+    def test_executor_partial_rerun_restores_ancestors_and_skips_independent_branches(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runs_root = Path(temp_dir) / "runs"
+            first_run_root = runs_root / "RUN1"
+            first_run_root.mkdir(parents=True, exist_ok=True)
+            second_run_root = runs_root / "RUN2"
+            second_run_root.mkdir(parents=True, exist_ok=True)
+            call_order: list[str] = []
+            event_types: list[str] = []
+
+            def invoke(invocation: SubagentInvocation):
+                call_order.append(invocation.subagent_type)
+                return (
+                    {"value": invocation.subagent_type},
+                    SubagentExecutionRecord(
+                        subagent_type=invocation.subagent_type,
+                        invocation_id=f"inv-{invocation.subagent_type}",
+                        objective=invocation.objective,
+                        inputs=invocation.inputs,
+                        output_keys=["value"],
+                    ),
+                )
+
+            executor = SubagentDagExecutor(
+                invoke_subagent=invoke,
+                emit_event=lambda **kwargs: event_types.append(str(kwargs["event_type"])),
+            )
+            nodes = [
+                SubagentDagNodeSpec(
+                    node_id="prepare",
+                    replayable=True,
+                    cache_scope="run",
+                    cache_key="prepare",
+                    build_invocation=lambda _results: SubagentInvocation(
+                        subagent_type="prepare_inputs",
+                        objective="prepare",
+                    ),
+                ),
+                SubagentDagNodeSpec(
+                    node_id="branch_a",
+                    depends_on=("prepare",),
+                    replayable=True,
+                    cache_scope="run",
+                    cache_key="branch_a",
+                    build_invocation=lambda _results: SubagentInvocation(
+                        subagent_type="branch_a",
+                        objective="branch a",
+                    ),
+                ),
+                SubagentDagNodeSpec(
+                    node_id="branch_b",
+                    depends_on=("prepare",),
+                    replayable=True,
+                    cache_scope="run",
+                    cache_key="branch_b",
+                    build_invocation=lambda _results: SubagentInvocation(
+                        subagent_type="branch_b",
+                        objective="branch b",
+                    ),
+                ),
+                SubagentDagNodeSpec(
+                    node_id="merge",
+                    depends_on=("branch_a", "branch_b"),
+                    build_invocation=lambda results: SubagentInvocation(
+                        subagent_type="merge",
+                        objective="merge",
+                        inputs={
+                            "values": [
+                                (results["branch_a"].outputs or {}).get("value"),
+                                (results["branch_b"].outputs or {}).get("value"),
+                            ]
+                        },
+                    ),
+                ),
+            ]
+            executor.execute(
+                nodes,
+                cache_context=SubagentDagCacheContext(
+                    dag_id="distill:chunks",
+                    run_root=first_run_root,
+                    run_id="RUN1",
+                    thread_id="thread-1",
+                    turn_id="turn-1",
+                    request_id="req-1",
+                ),
+            )
+
+            call_order.clear()
+            results = executor.execute(
+                nodes,
+                cache_context=SubagentDagCacheContext(
+                    dag_id="distill:chunks",
+                    run_root=second_run_root,
+                    run_id="RUN2",
+                    thread_id="thread-2",
+                    turn_id="turn-2",
+                    request_id="req-2",
+                    source_run_root=first_run_root,
+                    source_thread_id="thread-1",
+                ),
+                start_from_node_id="branch_b",
+            )
+
+        self.assertEqual(call_order, ["branch_b", "merge"])
+        self.assertTrue(results["prepare"].cache_hit)
+        self.assertTrue(results["branch_a"].cache_hit)
+        self.assertIn("subagent_dag_partial_rerun_requested", event_types)
+        self.assertIn("subagent_dag_cache_hit", event_types)
 
 
 if __name__ == "__main__":

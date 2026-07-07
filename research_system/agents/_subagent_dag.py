@@ -3,8 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
+from research_system.runtime.storage.runs.subagent_dag_cache_store import SubagentDagCacheStore
 from research_system.schemas.subagents import SubagentExecutionRecord, SubagentInvocation
 
 
@@ -16,6 +18,9 @@ class SubagentDagNodeSpec:
     failure_mode: Literal["raise", "isolate"] = "raise"
     allow_partial_dependencies: bool = False
     max_attempts: int = 1
+    replayable: bool = False
+    cache_scope: Literal["run", "thread", "global"] | None = None
+    cache_key: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -31,6 +36,7 @@ class SubagentDagNodeResult:
     retry_errors: list[str] = field(default_factory=list)
     error_summary: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    cache_hit: bool = False
 
     @property
     def succeeded(self) -> bool:
@@ -58,6 +64,20 @@ class SubagentDagExecutionError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class SubagentDagCacheContext:
+    dag_id: str
+    run_root: Path
+    run_id: str
+    thread_id: str
+    turn_id: str
+    request_id: str
+    source_run_root: Path | None = None
+    source_thread_id: str | None = None
+    action_id: str | None = None
+    action_node_id: str | None = None
+
+
 class SubagentDagExecutor:
     def __init__(
         self,
@@ -73,22 +93,49 @@ class SubagentDagExecutor:
         nodes: list[SubagentDagNodeSpec],
         *,
         max_workers: int | None = None,
+        cache_context: SubagentDagCacheContext | None = None,
+        start_from_node_id: str | None = None,
     ) -> dict[str, SubagentDagNodeResult]:
         if not nodes:
             return {}
         node_map = self._build_node_map(nodes)
         self._validate_graph(node_map)
+        rerun_scope = self._rerun_scope(node_map, start_from_node_id)
+        active_node_ids = self._active_node_ids(node_map, rerun_scope)
         results: dict[str, SubagentDagNodeResult] = {}
-        pending = dict(node_map)
+        pending = {
+            node_id: spec
+            for node_id, spec in node_map.items()
+            if node_id in active_node_ids
+        }
         self._emit(
             event_type="subagent_dag_initialized",
             message="Initialized subagent DAG execution",
             payload={
+                "dag_id": cache_context.dag_id if cache_context is not None else None,
                 "dag_node_ids": list(node_map.keys()),
                 "dag_node_count": len(node_map),
                 "dag_edge_count": sum(len(spec.depends_on) for spec in node_map.values()),
             },
         )
+        if start_from_node_id:
+            self._emit(
+                event_type="subagent_dag_partial_rerun_requested",
+                message=f"Requested partial rerun from DAG node: {start_from_node_id}",
+                payload={
+                    "dag_id": cache_context.dag_id if cache_context is not None else None,
+                    "start_from_node_id": start_from_node_id,
+                    "active_node_ids": sorted(active_node_ids),
+                    "rerun_scope": sorted(rerun_scope),
+                },
+            )
+        if cache_context is not None:
+            self._restore_cached_results(
+                results=results,
+                pending=pending,
+                cache_context=cache_context,
+                rerun_scope=rerun_scope,
+            )
 
         while pending:
             ready_specs: list[SubagentDagNodeSpec] = []
@@ -190,6 +237,11 @@ class SubagentDagExecutor:
                         metadata=dict(spec.metadata),
                     )
                     results[spec.node_id] = result
+                    self._save_cached_result(
+                        cache_context=cache_context,
+                        spec=spec,
+                        result=result,
+                    )
                     self._emit(
                         event_type="subagent_dag_node_completed",
                         message=f"Completed DAG node: {spec.node_id}",
@@ -251,6 +303,203 @@ class SubagentDagExecutor:
                 ) from outcome.error
 
         return results
+
+    def _restore_cached_results(
+        self,
+        *,
+        results: dict[str, SubagentDagNodeResult],
+        pending: dict[str, SubagentDagNodeSpec],
+        cache_context: SubagentDagCacheContext,
+        rerun_scope: set[str],
+    ) -> None:
+        cache_store = SubagentDagCacheStore(run_root=cache_context.run_root)
+        restored_node_ids: list[str] = []
+        source_thread_id = str(cache_context.source_thread_id or cache_context.thread_id or "").strip()
+        if not source_thread_id:
+            return
+        for node_id, spec in list(pending.items()):
+            should_restore = bool(cache_context.source_run_root and spec.replayable)
+            if rerun_scope and node_id in rerun_scope:
+                should_restore = False
+            if not should_restore:
+                continue
+            payload = cache_store.load_snapshot(
+                dag_id=cache_context.dag_id,
+                node_id=node_id,
+                cache_scope=spec.cache_scope,
+                cache_key=spec.cache_key,
+                thread_id=source_thread_id,
+                source_run_root=cache_context.source_run_root,
+            )
+            if not isinstance(payload, dict):
+                continue
+            restored_result = self._restored_result(spec=spec, payload=payload)
+            if restored_result is None:
+                continue
+            results[node_id] = restored_result
+            pending.pop(node_id, None)
+            restored_node_ids.append(node_id)
+            self._emit(
+                event_type="subagent_dag_cache_hit",
+                message=f"Restored cached DAG node: {node_id}",
+                payload=self._event_payload(
+                    spec,
+                    {
+                        "status": restored_result.status,
+                        "cache_scope": spec.cache_scope,
+                        "cache_key": spec.cache_key,
+                        "source_run_id": payload.get("run_id"),
+                        "source_thread_id": payload.get("thread_id"),
+                        "cached_attempts": restored_result.attempts,
+                    },
+                ),
+            )
+            restored_record = restored_result.record
+            if restored_record is not None:
+                self._emit(
+                    event_type="subagent_completed",
+                    message=f"Restored cached subagent DAG node: {node_id}",
+                    payload=self._event_payload(
+                        spec,
+                        {
+                            "thread_id": cache_context.thread_id,
+                            "turn_id": cache_context.turn_id,
+                            "status": restored_result.status,
+                            "objective": restored_record.objective,
+                            "subagent_type": restored_record.subagent_type,
+                            "invocation_id": restored_result.invocation_id,
+                            "notes": list(restored_record.notes or []),
+                            "degrade_reason": restored_record.degrade_reason,
+                            "degrade_reasons": list(restored_record.degrade_reasons or []),
+                            "output_keys": list(restored_record.output_keys or []),
+                            "duration_ms": 0,
+                        },
+                    ),
+                )
+        if restored_node_ids:
+            self._emit(
+                event_type="subagent_dag_cache_restored",
+                message="Restored cached subagent DAG nodes",
+                payload={
+                    "dag_id": cache_context.dag_id,
+                    "cached_node_ids": restored_node_ids,
+                    "cached_node_count": len(restored_node_ids),
+                    "source_run_id": (
+                        cache_context.source_run_root.name
+                        if cache_context.source_run_root is not None
+                        else None
+                    ),
+                },
+            )
+
+    def _save_cached_result(
+        self,
+        *,
+        cache_context: SubagentDagCacheContext | None,
+        spec: SubagentDagNodeSpec,
+        result: SubagentDagNodeResult,
+    ) -> None:
+        if cache_context is None or not spec.replayable or result.outputs is None:
+            return
+        cache_store = SubagentDagCacheStore(run_root=cache_context.run_root)
+        record_payload = (
+            result.record.model_dump(mode="json")
+            if result.record is not None
+            else None
+        )
+        cache_store.save_snapshot(
+            dag_id=cache_context.dag_id,
+            node_id=spec.node_id,
+            cache_scope=spec.cache_scope,
+            cache_key=spec.cache_key,
+            run_id=cache_context.run_id,
+            thread_id=cache_context.thread_id,
+            request_id=cache_context.request_id,
+            status=result.status,
+            attempts=result.attempts,
+            outputs=result.outputs,
+            record_payload=record_payload,
+            metadata=dict(result.metadata or {}),
+        )
+
+    def _restored_result(
+        self,
+        *,
+        spec: SubagentDagNodeSpec,
+        payload: dict[str, Any],
+    ) -> SubagentDagNodeResult | None:
+        outputs = payload.get("outputs")
+        if not isinstance(outputs, dict):
+            return None
+        raw_record = payload.get("record")
+        record = None
+        if isinstance(raw_record, dict) and raw_record:
+            record = SubagentExecutionRecord.model_validate(raw_record)
+            notes = list(record.notes or [])
+            cache_note = f"cache_hit={payload.get('run_id')}:{spec.node_id}"
+            if cache_note not in notes:
+                notes.append(cache_note)
+            record = record.model_copy(update={"notes": notes})
+        metadata = dict(spec.metadata)
+        if isinstance(payload.get("metadata"), dict):
+            metadata.update(dict(payload.get("metadata") or {}))
+        metadata["cache_hit"] = True
+        metadata["cache_source_run_id"] = payload.get("run_id")
+        metadata["cache_source_thread_id"] = payload.get("thread_id")
+        status = str(payload.get("status") or (record.status if record is not None else "completed"))
+        return SubagentDagNodeResult(
+            node_id=spec.node_id,
+            status=status,  # type: ignore[arg-type]
+            outputs=dict(outputs),
+            record=record,
+            invocation_id=str(payload.get("invocation_id") or (record.invocation_id if record is not None else "")) or None,
+            attempts=int(payload.get("attempts") or 0),
+            metadata=metadata,
+            cache_hit=True,
+        )
+
+    def _rerun_scope(
+        self,
+        node_map: dict[str, SubagentDagNodeSpec],
+        start_from_node_id: str | None,
+    ) -> set[str]:
+        normalized = str(start_from_node_id or "").strip()
+        if not normalized:
+            return set()
+        if normalized not in node_map:
+            raise ValueError(f"unknown subagent dag rerun node: {normalized}")
+        children: dict[str, set[str]] = {node_id: set() for node_id in node_map}
+        for node_id, spec in node_map.items():
+            for dependency_id in spec.depends_on:
+                children.setdefault(dependency_id, set()).add(node_id)
+        resolved = {normalized}
+        stack = [normalized]
+        while stack:
+            current = stack.pop()
+            for child_id in children.get(current, set()):
+                if child_id in resolved:
+                    continue
+                resolved.add(child_id)
+                stack.append(child_id)
+        return resolved
+
+    def _active_node_ids(
+        self,
+        node_map: dict[str, SubagentDagNodeSpec],
+        rerun_scope: set[str],
+    ) -> set[str]:
+        if not rerun_scope:
+            return set(node_map)
+        resolved = set(rerun_scope)
+        stack = list(rerun_scope)
+        while stack:
+            current = stack.pop()
+            for dependency_id in node_map[current].depends_on:
+                if dependency_id in resolved:
+                    continue
+                resolved.add(dependency_id)
+                stack.append(dependency_id)
+        return resolved
 
     def _execute_frontier(
         self,
@@ -353,6 +602,10 @@ class SubagentDagExecutor:
         resolved.setdefault("event", payload.get("event"))
         resolved["dag_node_id"] = spec.node_id
         resolved["depends_on"] = list(spec.depends_on)
+        if spec.cache_scope:
+            resolved.setdefault("cache_scope", spec.cache_scope)
+        if spec.cache_key:
+            resolved.setdefault("cache_key", spec.cache_key)
         if invocation is not None:
             invocation_context = dict(invocation.context or {})
             resolved.setdefault("objective", invocation.objective)
@@ -379,6 +632,7 @@ class SubagentDagExecutor:
 
 
 __all__ = [
+    "SubagentDagCacheContext",
     "SubagentDagExecutionError",
     "SubagentDagExecutor",
     "SubagentDagNodeResult",

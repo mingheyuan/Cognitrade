@@ -29,6 +29,9 @@ class ApplicationRuntimeTests(unittest.TestCase):
         metrics_args = parser.parse_args(["metrics", "01RUN"])
         run_thread_args = parser.parse_args(["run-thread", "01RUN", "thread-child"])
         rerun_args = parser.parse_args(["rerun-from", "01RUN", "retrieve"])
+        rerun_subagent_args = parser.parse_args(
+            ["rerun-subagent", "01RUN", "retrieve", "phase_two", "retrieval_decider"]
+        )
 
         self.assertEqual(metrics_args.command, "metrics")
         self.assertEqual(metrics_args.run_id, "01RUN")
@@ -36,6 +39,10 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertEqual(run_thread_args.thread_id, "thread-child")
         self.assertEqual(rerun_args.command, "rerun-from")
         self.assertEqual(rerun_args.node_id, "retrieve")
+        self.assertEqual(rerun_subagent_args.command, "rerun-subagent")
+        self.assertEqual(rerun_subagent_args.action_node_id, "retrieve")
+        self.assertEqual(rerun_subagent_args.dag_id, "phase_two")
+        self.assertEqual(rerun_subagent_args.subagent_node_id, "retrieval_decider")
 
     def test_execute_app_main_command_routes_query_from_thread_and_node_arguments(self) -> None:
         calls: list[dict[str, object]] = []
@@ -56,6 +63,14 @@ class ApplicationRuntimeTests(unittest.TestCase):
             command="rerun-from",
             run_id="01RUN",
             node_id="retrieve",
+            as_json=False,
+        )
+        rerun_subagent_args = argparse.Namespace(
+            command="rerun-subagent",
+            run_id="01RUN",
+            action_node_id="retrieve",
+            dag_id="phase_two",
+            subagent_node_id="retrieval_decider",
             as_json=False,
         )
 
@@ -87,11 +102,29 @@ class ApplicationRuntimeTests(unittest.TestCase):
             ),
             0,
         )
+        self.assertEqual(
+            application_execute_app_main_command(
+                settings,
+                rerun_subagent_args,
+                build_chat_entry_runtime_fn=None,
+                run_chat_entry_fn=None,
+                run_chat_tui_fn=None,
+                run_chat_fallback_fn=None,
+                handle_chat_line_fn=None,
+                execute_cli_command_fn=fake_execute_cli_command_fn,
+                print_payload_fn=lambda payload, as_json: 0,
+            ),
+            0,
+        )
 
         self.assertEqual(calls[0]["command"], "run-thread")
         self.assertEqual(calls[0]["query"], "thread-child")
         self.assertEqual(calls[1]["command"], "rerun-from")
         self.assertEqual(calls[1]["query"], "retrieve")
+        self.assertEqual(calls[2]["command"], "rerun-subagent")
+        self.assertEqual(calls[2]["action_node_id"], "retrieve")
+        self.assertEqual(calls[2]["dag_id"], "phase_two")
+        self.assertEqual(calls[2]["subagent_node_id"], "retrieval_decider")
 
 
 if __name__ == "__main__":

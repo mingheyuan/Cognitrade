@@ -212,6 +212,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             compare_trace_rows, compare_snapshots, compare_child_thread_ids = self._run_stock_snapshot_jobs(
                 compare_jobs,
                 max_workers=len(compare_jobs),
+                dag_id="compare_stock_snapshot_jobs",
             )
             trace.extend(compare_trace_rows)
             snapshot_payloads.extend(compare_snapshots)
@@ -396,12 +397,22 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         nodes: list[SubagentDagNodeSpec],
         *,
         max_workers: int | None = None,
+        dag_id: str,
+        start_from_node_id: str | None = None,
     ) -> dict:
         executor = SubagentDagExecutor(
             invoke_subagent=self._invoke_subagent,
             emit_event=self._emit_runtime_event,
         )
-        return executor.execute(nodes, max_workers=max_workers)
+        resolved_start_from_node_id = start_from_node_id or self._subagent_dag_start_from_node_id(
+            dag_id=dag_id,
+        )
+        return executor.execute(
+            nodes,
+            max_workers=max_workers,
+            cache_context=self._subagent_dag_cache_context(dag_id=dag_id),
+            start_from_node_id=resolved_start_from_node_id,
+        )
 
     def _execute_single_subagent_node(
         self,
@@ -414,6 +425,9 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             [
                 SubagentDagNodeSpec(
                     node_id=node_id,
+                    replayable=True,
+                    cache_scope="run",
+                    cache_key=node_id,
                     build_invocation=lambda _results, *, current_invocation=invocation: current_invocation,
                     max_attempts=max_attempts,
                     metadata={
@@ -424,6 +438,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                 )
             ],
             max_workers=1,
+            dag_id=f"single_node:{node_id}",
         )
         result = results[node_id]
         if result.record is None or result.outputs is None:
@@ -480,6 +495,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         trace_rows, snapshot_rows, child_thread_ids = self._run_stock_snapshot_jobs(
             enrichment_jobs,
             max_workers=len(enrichment_jobs),
+            dag_id="screen_enrichment_stock_snapshot_jobs",
         )
         trace.extend(trace_rows)
         snapshots.extend(snapshot_rows)
@@ -534,6 +550,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         jobs: list[tuple[str, object | None, SubagentInvocation]],
         *,
         max_workers: int | None = None,
+        dag_id: str,
     ) -> tuple[list[dict], list[dict], list[str]]:
         if not jobs:
             return [], [], []
@@ -549,6 +566,9 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             nodes.append(
                 SubagentDagNodeSpec(
                     node_id=f"stock_snapshot_collector:{index}:{symbol}",
+                    replayable=True,
+                    cache_scope="run",
+                    cache_key=f"stock_snapshot_collector:{symbol}",
                     build_invocation=lambda _results, *, current_invocation=invocation: current_invocation,
                     max_attempts=2,
                     metadata={
@@ -560,7 +580,11 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                     },
                 )
             )
-        results = executor.execute(nodes, max_workers=max_workers)
+        results = executor.execute(
+            nodes,
+            max_workers=max_workers,
+            cache_context=self._subagent_dag_cache_context(dag_id=dag_id),
+        )
         for (symbol, child_thread, _), node in zip(jobs, nodes, strict=False):
             result = results[node.node_id]
             if result.record is None or result.outputs is None:

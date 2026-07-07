@@ -37,12 +37,29 @@ def execute_run_query_command(
     orchestrator_cls=ResearchOrchestrator,
     run_id: str | None,
     query: str | None,
+    action_node_id: str | None = None,
+    dag_id: str | None = None,
+    subagent_node_id: str | None = None,
     **_: object,
 ) -> object:
-    payload = build_cli_command_payload(command=command, run_id=run_id, query=query)
+    payload = build_cli_command_payload(
+        command=command,
+        run_id=run_id,
+        query=query,
+        action_node_id=action_node_id,
+        dag_id=dag_id,
+        subagent_node_id=subagent_node_id,
+    )
     with orchestrator_cls(settings) as orchestrator:
         if command == "subagent-read":
             return orchestrator.subagent(payload["run_id"], payload["query"])
         if command == "run-thread":
-            return orchestrator.thread(payload["run_id"], payload["query"])
+            return orchestrator.thread_replay(payload["run_id"], payload["query"])
+        if command == "rerun-subagent":
+            return orchestrator.rerun_subagent_from(
+                payload["run_id"],
+                action_node=payload["action_node_id"],
+                dag_id=payload["dag_id"],
+                from_node=payload["subagent_node_id"],
+            )
         return orchestrator.rerun_from(payload["run_id"], from_node=payload["query"])

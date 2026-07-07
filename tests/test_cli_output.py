@@ -111,23 +111,54 @@ class _AppOrchestratorStub:
             "degrade_reason_counts": {"llm_budget_exhausted": 1},
         }
 
-    def thread(self, run_id: str, thread_id: str) -> dict:
+    def thread_replay(self, run_id: str, thread_id: str) -> dict:
         return {
             "run_id": run_id,
             "thread_id": thread_id,
+            "scope": "thread_subtree",
+            "scope_thread_ids": [thread_id],
             "request": {"intent": "stock_check", "user_query": "inspect child"},
             "summary": {"status": "completed"},
             "display_summary": "thread ready",
             "thread": {"thread_id": thread_id, "status": "completed"},
+            "threads": [{"thread_id": thread_id, "status": "completed", "children": []}],
+            "thread_tree": [{"thread_id": thread_id, "status": "completed", "children": []}],
             "subagent_trace": [],
             "events": [],
+            "blackboard": [],
             "wait_trace": [],
             "items": [],
-            "event_counts": {"events": 0, "subagent_trace": 0, "wait_trace": 0, "items": 0},
+            "metrics": {
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "counts": {"threads": 1, "subagents": 0},
+                "rates": {"fallback_rate": 0.0, "memory_hit_rate": None, "qdrant_hit_rate": None},
+                "latency_ms": {"subagents": {}, "actions": {}, "per_subagent": {}, "per_action": {}},
+                "fanout": {"max_depth": 0, "per_parent_child_count": {}},
+                "turn_usage": {},
+                "event_type_counts": {},
+                "degrade_reason_counts": {},
+            },
+            "event_counts": {"events": 0, "subagent_trace": 0, "dynamic_trace": 0, "wait_trace": 0, "items": 0, "blackboard": 0, "threads": 1},
         }
 
     def rerun_from(self, run_id: str, *, from_node: str) -> dict:
         return {"run_id": "01RERUN", "status": "completed", "message": f"reran from {from_node}", "source_run_id": run_id}
+
+    def rerun_subagent_from(
+        self,
+        run_id: str,
+        *,
+        action_node: str,
+        dag_id: str,
+        from_node: str,
+    ) -> dict:
+        return {
+            "run_id": "01SUBRERUN",
+            "status": "completed",
+            "message": f"reran {action_node}/{dag_id}/{from_node}",
+            "source_run_id": run_id,
+        }
 
 
 THREAD_SUMMARY = {
@@ -232,6 +263,7 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("/resume <run_id|last>", output)
         self.assertIn("/metrics <run_id|last>", output)
         self.assertIn("/rerun-from <run_id|last> <node_id>", output)
+        self.assertIn("/rerun-subagent <run_id|last> <action_node_id> <dag_id> <subagent_node_id>", output)
         self.assertIn("show checkpoint resumability", output)
 
     def test_execute_cli_command_closes_orchestrator_for_history(self) -> None:

@@ -182,6 +182,8 @@ class OrchestratorRunStartupSupport:
         plan,
         source_run_id: str | None = None,
         rerun_from_node: str | None = None,
+        rerun_subagent_dag_id: str | None = None,
+        rerun_subagent_from_node: str | None = None,
     ):
         self.host._emit_event(
             context,
@@ -224,19 +226,25 @@ class OrchestratorRunStartupSupport:
                 "notes": plan.notes,
                 "source_run_id": source_run_id,
                 "rerun_from_node": rerun_from_node,
+                "rerun_subagent_dag_id": rerun_subagent_dag_id,
+                "rerun_subagent_from_node": rerun_subagent_from_node,
             },
         )
         if source_run_id and rerun_from_node:
+            payload = {
+                "source_run_id": source_run_id,
+                "rerun_from_node": rerun_from_node,
+            }
+            if rerun_subagent_dag_id and rerun_subagent_from_node:
+                payload["rerun_subagent_dag_id"] = rerun_subagent_dag_id
+                payload["rerun_subagent_from_node"] = rerun_subagent_from_node
             self.host._emit_event(
                 context,
                 request_id=request.request_id,
                 intent=intent,
                 event_type="dag_partial_rerun_requested",
                 message=f"Partial DAG rerun requested from {rerun_from_node}",
-                payload={
-                    "source_run_id": source_run_id,
-                    "rerun_from_node": rerun_from_node,
-                },
+                payload=payload,
             )
         self.host._transition(
             context,

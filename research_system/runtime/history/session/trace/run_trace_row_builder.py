@@ -34,6 +34,7 @@ class RunTraceRowBuilder:
             "child_thread_id": row_payload.get("child_thread_id"),
             "child_turn_id": row_payload.get("child_turn_id"),
             "notes": list(row_payload.get("notes") or []),
+            "duration_ms": row_payload.get("duration_ms"),
             "wait_timeout_seconds": row_payload.get("wait_timeout_seconds"),
             "created_at": created_at,
         }
@@ -84,6 +85,7 @@ class RunTraceRowBuilder:
             "child_thread_id": row_payload.get("child_thread_id"),
             "child_turn_id": row_payload.get("child_turn_id"),
             "notes": list(row_payload.get("notes") or []),
+            "duration_ms": row_payload.get("duration_ms"),
             "created_at": created_at,
         }
 

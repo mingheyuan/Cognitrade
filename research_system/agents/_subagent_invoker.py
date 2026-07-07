@@ -5,6 +5,7 @@ from typing import Any
 
 from pathlib import Path
 
+from research_system.agents._subagent_dag import SubagentDagCacheContext
 from research_system.runtime.local_runtime import start_local_runtime
 from research_system.runtime.storage.jsonl import write_json
 from research_system.schemas.runtime import RuntimeItemRecord
@@ -193,6 +194,54 @@ class RuntimeBoundSubagentInvoker:
     def _runtime_execution_policy(self):
         binding = self._runtime_binding_for_events()
         return binding.get("execution_policy")
+
+    def _subagent_dag_cache_context(self, *, dag_id: str) -> SubagentDagCacheContext | None:
+        binding = self._runtime_binding_for_events()
+        context = binding.get("context")
+        run_root = getattr(getattr(context, "paths", None), "root", None)
+        run_id = str(getattr(context, "run_id", "") or "").strip()
+        thread_id = str(binding.get("thread_id") or "").strip()
+        request_id = str(binding.get("request_id") or "").strip()
+        if context is None or run_root is None or not run_id or not thread_id or not request_id:
+            return None
+        current_node_id = str(getattr(context, "current_node_id", "") or "").strip()
+        effective_dag_id = f"{current_node_id}:{dag_id}" if current_node_id else dag_id
+        return SubagentDagCacheContext(
+            dag_id=effective_dag_id,
+            run_root=Path(run_root),
+            run_id=run_id,
+            thread_id=thread_id,
+            turn_id=str(binding.get("turn_id") or "").strip(),
+            request_id=request_id,
+            source_run_root=getattr(context, "cache_restore_run_root", None),
+            source_thread_id=str(getattr(context, "cache_restore_thread_id", "") or "").strip() or None,
+            action_id=str(getattr(context, "current_action_id", "") or "").strip() or None,
+            action_node_id=current_node_id or None,
+        )
+
+    def _subagent_dag_start_from_node_id(self, *, dag_id: str) -> str | None:
+        binding = self._runtime_binding_for_events()
+        context = binding.get("context")
+        if context is None:
+            return None
+        current_node_id = str(getattr(context, "current_node_id", "") or "").strip()
+        target_action_node_id = str(
+            getattr(context, "rerun_subagent_action_node_id", "") or ""
+        ).strip()
+        target_dag_id = str(getattr(context, "rerun_subagent_dag_id", "") or "").strip()
+        target_node_id = str(
+            getattr(context, "rerun_subagent_from_node_id", "") or ""
+        ).strip()
+        if (
+            not current_node_id
+            or not target_action_node_id
+            or current_node_id != target_action_node_id
+            or not target_dag_id
+            or target_dag_id != dag_id
+            or not target_node_id
+        ):
+            return None
+        return target_node_id
 
     def _has_runtime_degradation(self, reason: object) -> bool:
         policy = self._runtime_execution_policy()

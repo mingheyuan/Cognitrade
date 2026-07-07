@@ -212,6 +212,7 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 qdrant_disabled_reason=qdrant_disabled_reason,
             ),
             max_workers=3,
+            dag_id="phase_one",
         )
         trace = self._retrieval_phase_one_trace(
             results=phase_one_results,
@@ -250,6 +251,7 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                     evidence_map=evidence_map,
                 ),
                 max_workers=1,
+                dag_id="phase_two",
             )
         trace.extend(self._retrieval_phase_two_trace(results=phase_two_results))
         decision_outputs = dict((phase_two_results["retrieval_decider"].outputs or {}) or {})
@@ -271,12 +273,22 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
         nodes: list[SubagentDagNodeSpec],
         *,
         max_workers: int | None = None,
+        dag_id: str,
+        start_from_node_id: str | None = None,
     ) -> dict[str, SubagentDagNodeResult]:
         executor = SubagentDagExecutor(
             invoke_subagent=self._invoke_subagent,
             emit_event=self._emit_runtime_event,
         )
-        return executor.execute(nodes, max_workers=max_workers)
+        resolved_start_from_node_id = start_from_node_id or self._subagent_dag_start_from_node_id(
+            dag_id=dag_id,
+        )
+        return executor.execute(
+            nodes,
+            max_workers=max_workers,
+            cache_context=self._subagent_dag_cache_context(dag_id=dag_id),
+            start_from_node_id=resolved_start_from_node_id,
+        )
 
     def _build_trace_record(
         self,
@@ -331,6 +343,9 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
         nodes = [
             SubagentDagNodeSpec(
                 node_id="blackboard_evidence_indexer",
+                replayable=True,
+                cache_scope="run",
+                cache_key="blackboard_evidence_indexer",
                 build_invocation=lambda _results: self._build_subagent_invocation(
                     subagent_type="blackboard_evidence_indexer",
                     objective="Index blackboard entries and expose evidence candidates.",
@@ -358,6 +373,9 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                     depends_on=("blackboard_evidence_indexer",),
                     failure_mode="isolate",
                     max_attempts=2,
+                    replayable=True,
+                    cache_scope="run",
+                    cache_key="qdrant_evidence_searcher",
                     build_invocation=lambda results, *, child_thread=qdrant_thread, child_turn=qdrant_turn: self._build_subagent_invocation(
                         subagent_type="qdrant_evidence_searcher",
                         objective="Search indexed evidence candidates via Qdrant.",
@@ -400,6 +418,9 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                     depends_on=("blackboard_evidence_indexer",),
                     failure_mode="isolate",
                     max_attempts=2,
+                    replayable=True,
+                    cache_scope="run",
+                    cache_key="methodology_memory_recaller",
                     build_invocation=lambda _results, *, child_thread=memory_thread, child_turn=memory_turn: self._build_subagent_invocation(
                         subagent_type="methodology_memory_recaller",
                         objective="Recall methodology memory rows for retrieval ranking and summarization.",
@@ -446,6 +467,9 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
         return [
             SubagentDagNodeSpec(
                 node_id="evidence_candidate_deduper",
+                replayable=True,
+                cache_scope="run",
+                cache_key="evidence_candidate_deduper",
                 build_invocation=lambda _results: self._build_subagent_invocation(
                     subagent_type="evidence_candidate_deduper",
                     objective="Dedupe and rerank retrieval evidence candidates.",
