@@ -940,6 +940,49 @@ class RetrieverServiceTests(unittest.TestCase):
             ],
         )
 
+    def test_search_qdrant_evidences_reports_hit_count(self) -> None:
+        class _StubQdrant:
+            def search(self, *, query_text, top_k, metadata_filters):
+                return [
+                    {
+                        "score": 0.9,
+                        "payload": {
+                            "entry_id": "entry-1",
+                            "document_title": "market_snapshot:000001",
+                            "content": "market snapshot for 000001",
+                            "source_refs": [],
+                            "phase": "collect",
+                            "agent": "collector",
+                            "record_type": "verified_snapshot",
+                            "source_type": "market_snapshot",
+                            "symbol": "000001",
+                            "sector": None,
+                            "dimension_family": None,
+                            "dimension_key": None,
+                            "scenario_tags": [],
+                            "methodology_tags": [],
+                            "dimension_tags": [],
+                            "methodology_type": None,
+                            "valuation_band_label": None,
+                        },
+                    }
+                ]
+
+        self.service.searcher_qdrant = _StubQdrant()
+        self.service.qdrant_error = None
+
+        outputs = self.service._search_qdrant_evidences(
+            intent="stock_check",
+            query="check 000001",
+            top_k=3,
+            symbol="000001",
+            sector=None,
+            current_run_id="01RUN",
+        )
+
+        self.assertEqual(outputs["hit_count"], 1)
+        self.assertEqual(outputs["evidences"][0]["evidence_id"], "entry-1")
+
 
 if __name__ == "__main__":
     unittest.main()

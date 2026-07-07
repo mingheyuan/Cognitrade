@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from research_system.runtime.core.blackboard import Blackboard
 from research_system.runtime.core.control_plane import RunControlPlane
 from research_system.runtime.core.event_stream import EventStream
+from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.core.logger import RunLogger
 from research_system.runtime.core.agent_control import AgentControl
 from research_system.runtime.history.session.session_history import SessionHistory
@@ -32,6 +35,9 @@ class RuntimeContext:
     execution_policy: RuntimeExecutionPolicy
     subagent_trace: list[dict]
     dynamic_trace: list[dict]
+    cache_restore_run_root: Path | None = None
+    cache_restore_thread_id: str | None = None
+    rerun_from_node_id: str | None = None
     current_action_id: str | None = None
     current_node_id: str | None = None
     current_action_objective: str | None = None
@@ -47,8 +53,12 @@ def build_runtime_context(
     max_llm_calls_per_turn: int = 1,
     max_subagent_calls_per_turn: int = 32,
     max_child_threads_per_turn: int = 8,
+    thread_id: str | None = None,
+    turn_id: str | None = None,
+    id_factory: Callable[[], str] | None = None,
 ) -> RuntimeContext:
     thread = RuntimeThreadState(
+        thread_id=thread_id or generate_ulid(),
         run_id=run_id,
         request_id=state.request_id,
         intent=state.intent,
@@ -56,6 +66,7 @@ def build_runtime_context(
         total_turns=1,
     )
     turn = RuntimeTurnState(
+        turn_id=turn_id or generate_ulid(),
         thread_id=thread.thread_id,
         run_id=run_id,
         request_id=state.request_id,
@@ -82,7 +93,7 @@ def build_runtime_context(
         state=state,
         thread=thread,
         turn=turn,
-        agent_control=AgentControl(paths=paths, run_id=run_id),
+        agent_control=AgentControl(paths=paths, run_id=run_id, id_factory=id_factory),
         execution_policy=RuntimeExecutionPolicy(
             max_llm_calls_per_turn=max_llm_calls_per_turn,
             max_subagent_calls_per_turn=max_subagent_calls_per_turn,

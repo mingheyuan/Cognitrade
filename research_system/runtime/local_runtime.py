@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Callable
 
 from research_system.runtime.execution.core.runtime_support import OrchestratorExecutionRuntimeSupport
 from research_system.runtime.history.session.session_history import SessionHistory
@@ -102,6 +102,9 @@ class LocalRuntimeRun:
     def metrics(self) -> dict[str, Any]:
         return SessionHistory(self.run_root).metrics()
 
+    def thread(self, thread_id: str) -> dict[str, Any]:
+        return SessionHistory(self.run_root).thread(thread_id)
+
     def close(self) -> None:
         self._temp_dir.cleanup()
 
@@ -112,6 +115,10 @@ def start_local_runtime(
     intent: str,
     phase: str,
     runs_root: Path | None = None,
+    run_id: str | None = None,
+    thread_id: str | None = None,
+    turn_id: str | None = None,
+    id_factory: Callable[[], str] | None = None,
     run_timeout_seconds: int = 120,
     max_llm_calls_per_turn: int = 1,
     max_subagent_calls_per_turn: int = 32,
@@ -121,7 +128,7 @@ def start_local_runtime(
     temp_dir = TemporaryDirectory(prefix="cognitrade-local-runtime-")
     effective_runs_root = runs_root or (Path(temp_dir.name) / "runs")
     run_store = RunStore(effective_runs_root)
-    run_id, paths, snapshot = run_store.create_run(normalized_request, intent)
+    run_id, paths, snapshot = run_store.create_run(normalized_request, intent, run_id=run_id)
     context = build_runtime_context(
         run_id=run_id,
         paths=paths,
@@ -130,6 +137,9 @@ def start_local_runtime(
         max_llm_calls_per_turn=max_llm_calls_per_turn,
         max_subagent_calls_per_turn=max_subagent_calls_per_turn,
         max_child_threads_per_turn=max_child_threads_per_turn,
+        thread_id=thread_id,
+        turn_id=turn_id,
+        id_factory=id_factory,
     )
     support = OrchestratorExecutionRuntimeSupport(_LocalRuntimeHost())
     runtime = LocalRuntimeRun(
@@ -180,6 +190,10 @@ def bind_local_runtime(
     intent: str,
     phase: str,
     runs_root: Path | None = None,
+    run_id: str | None = None,
+    thread_id: str | None = None,
+    turn_id: str | None = None,
+    id_factory: Callable[[], str] | None = None,
     run_timeout_seconds: int = 120,
     max_llm_calls_per_turn: int = 1,
     max_subagent_calls_per_turn: int = 32,
@@ -190,6 +204,10 @@ def bind_local_runtime(
         intent=intent,
         phase=phase,
         runs_root=runs_root,
+        run_id=run_id,
+        thread_id=thread_id,
+        turn_id=turn_id,
+        id_factory=id_factory,
         run_timeout_seconds=run_timeout_seconds,
         max_llm_calls_per_turn=max_llm_calls_per_turn,
         max_subagent_calls_per_turn=max_subagent_calls_per_turn,
@@ -338,8 +356,93 @@ def inject_runtime_degradation(
     return injected
 
 
+@dataclass
+class LocalRuntimeHarness:
+    runs_root: Path
+    run_id: str = "local-runtime-run"
+    request_id: str = "local-runtime-request"
+    thread_id: str = "local-runtime-thread"
+    turn_id: str = "local-runtime-turn"
+    id_prefix: str = "local-runtime"
+    _id_counter: int = 0
+
+    def build_request(
+        self,
+        *,
+        user_query: str,
+        intent: str | None = None,
+        conversation_context: list[dict[str, Any]] | None = None,
+        slots: dict[str, Any] | None = None,
+        constraints: dict[str, Any] | None = None,
+        clarification_status: str = "not_needed",
+    ) -> RequestEnvelope:
+        return RequestEnvelope(
+            request_id=self.request_id,
+            intent=intent,
+            user_query=user_query,
+            conversation_context=list(conversation_context or []),
+            slots=dict(slots or {}),
+            constraints=dict(constraints or {}),
+            clarification_status=clarification_status,
+        )
+
+    def start(
+        self,
+        *,
+        intent: str,
+        phase: str,
+        user_query: str | None = None,
+        request: RequestEnvelope | None = None,
+        run_timeout_seconds: int = 120,
+        max_llm_calls_per_turn: int = 1,
+        max_subagent_calls_per_turn: int = 32,
+        max_child_threads_per_turn: int = 8,
+    ) -> LocalRuntimeRun:
+        effective_request = _normalize_request(
+            request
+            or self.build_request(
+                user_query=user_query or f"{intent}:{phase}",
+                intent=intent,
+            )
+        )
+        return start_local_runtime(
+            request=effective_request,
+            intent=intent,
+            phase=phase,
+            runs_root=self.runs_root,
+            run_id=self.run_id,
+            thread_id=self.thread_id,
+            turn_id=self.turn_id,
+            id_factory=self._next_id,
+            run_timeout_seconds=run_timeout_seconds,
+            max_llm_calls_per_turn=max_llm_calls_per_turn,
+            max_subagent_calls_per_turn=max_subagent_calls_per_turn,
+            max_child_threads_per_turn=max_child_threads_per_turn,
+        )
+
+    def replay(self) -> dict[str, Any]:
+        return SessionHistory(self.runs_root / self.run_id).replay()
+
+    def trace(self) -> dict[str, Any]:
+        return SessionHistory(self.runs_root / self.run_id).trace()
+
+    def events(self) -> dict[str, Any]:
+        return SessionHistory(self.runs_root / self.run_id).events()
+
+    def metrics(self) -> dict[str, Any]:
+        return SessionHistory(self.runs_root / self.run_id).metrics()
+
+    def thread(self, thread_id: str) -> dict[str, Any]:
+        return SessionHistory(self.runs_root / self.run_id).thread(thread_id)
+
+    def _next_id(self) -> str:
+        self._id_counter += 1
+        return f"{self.id_prefix}-{self._id_counter:04d}"
+
+
 __all__ = [
     "LocalRuntimeRun",
+    "LocalRuntimeHarness",
     "bind_local_runtime",
     "inject_runtime_degradation",
     "start_local_runtime",

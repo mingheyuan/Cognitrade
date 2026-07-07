@@ -5,6 +5,9 @@ from typing import Any
 
 from research_system.runtime.execution.core.dag_scheduler import ActionDagScheduler
 from research_system.runtime.orchestration.orchestrator_context import RuntimeContext
+from research_system.runtime.storage.jsonl import read_json, write_json
+from research_system.runtime.storage.runs.action_cache_store import ActionCacheStore
+from research_system.schemas.runtime import BlackboardEntry
 from research_system.schemas.planning import ActionPlan, ActionSpec
 from research_system.schemas.protocol import RequestEnvelope
 
@@ -31,17 +34,40 @@ class OrchestratorPlanExecutor:
         failed_node_ids: list[str] = []
         skipped_node_ids: list[str] = []
         fanout_depth = self.dag_scheduler.fanout_depth(plan)
+        cache_store = ActionCacheStore(run_root=context.paths.root)
 
         if completed_node_ids:
             completed_set = set(completed_node_ids)
             cached_actions = [action for action in pending_actions if action.node_id in completed_set]
-            pending_actions = [action for action in pending_actions if action.node_id not in completed_set]
-            if cached_actions:
+            restored_actions, missing_actions, restored_entry_count = self._restore_cached_actions(
+                context=context,
+                request=request,
+                cached_actions=cached_actions,
+                cache_store=cache_store,
+            )
+            if missing_actions:
+                missing_ids = {action.node_id for action in missing_actions}
+                completed_node_ids = [
+                    node_id
+                    for node_id in completed_node_ids
+                    if node_id not in missing_ids
+                ]
+            restored_ids = {action.node_id for action in restored_actions}
+            if getattr(context, "cache_restore_run_root", None) is None:
+                restored_ids = restored_ids or completed_set
+            pending_actions = [
+                action
+                for action in pending_actions
+                if action.node_id not in restored_ids
+            ]
+            if restored_actions:
                 self._emit_cache_restored(
                     context=context,
                     request=request,
                     plan=plan,
-                    cached_actions=cached_actions,
+                    cached_actions=restored_actions,
+                    restored_entry_count=restored_entry_count,
+                    missing_actions=missing_actions,
                 )
 
         self.host._update_state(
@@ -89,7 +115,8 @@ class OrchestratorPlanExecutor:
                 context=context,
                 request=request,
                 plan=plan,
-                executed_node_ids=completed_node_ids + skipped_node_ids,
+                completed_node_ids=completed_node_ids,
+                skipped_node_ids=skipped_node_ids,
                 next_actions=decision.next_actions,
                 notes=decision.notes,
             )
@@ -171,6 +198,8 @@ class OrchestratorPlanExecutor:
         max_attempts = max(int(action.max_retries or 0), 0) + 1
         for attempt in range(1, max_attempts + 1):
             started = perf_counter()
+            before_entries = context.blackboard.list_entries(thread_id=context.thread.thread_id)
+            before_entry_ids = {entry.entry_id for entry in before_entries}
             try:
                 self.host._run_action(
                     context=context,
@@ -207,6 +236,12 @@ class OrchestratorPlanExecutor:
                     return {"status": "skipped", "error": exc, "attempt": attempt, "duration_ms": duration_ms}
                 raise
             duration_ms = int((perf_counter() - started) * 1000)
+            self._save_action_cache_snapshot(
+                context=context,
+                request=request,
+                action=action,
+                before_entry_ids=before_entry_ids,
+            )
             self._emit_action_succeeded(
                 context=context,
                 request=request,
@@ -224,10 +259,15 @@ class OrchestratorPlanExecutor:
         context: RuntimeContext,
         request: RequestEnvelope,
         plan: ActionPlan,
-        executed_node_ids: list[str],
+        completed_node_ids: list[str],
+        skipped_node_ids: list[str],
         next_actions: list[ActionSpec],
         notes: list[str],
     ) -> None:
+        action_id_by_node_id = {
+            action.node_id: action.action_id
+            for action in plan.actions
+        }
         self.host._emit_event(
             context,
             request_id=request.request_id,
@@ -235,7 +275,19 @@ class OrchestratorPlanExecutor:
             event_type="supervisor_decision",
             message="Supervisor evaluated next actions",
             payload={
-                "completed_actions": executed_node_ids[:],
+                "completed_actions": completed_node_ids[:] + skipped_node_ids[:],
+                "completed_node_ids": completed_node_ids[:],
+                "skipped_node_ids": skipped_node_ids[:],
+                "completed_action_ids": [
+                    action_id_by_node_id[node_id]
+                    for node_id in completed_node_ids
+                    if node_id in action_id_by_node_id
+                ],
+                "skipped_action_ids": [
+                    action_id_by_node_id[node_id]
+                    for node_id in skipped_node_ids
+                    if node_id in action_id_by_node_id
+                ],
                 "next_actions": [
                     {"node_id": action.node_id, "phase": action.phase, "agent": action.agent}
                     for action in next_actions
@@ -411,6 +463,8 @@ class OrchestratorPlanExecutor:
         request: RequestEnvelope,
         plan: ActionPlan,
         cached_actions: list[ActionSpec],
+        restored_entry_count: int,
+        missing_actions: list[ActionSpec],
     ) -> None:
         self.host._emit_event(
             context,
@@ -421,8 +475,93 @@ class OrchestratorPlanExecutor:
             payload={
                 "cached_nodes": [action.node_id for action in cached_actions],
                 "cache_keys": [action.cache_key for action in cached_actions if action.cache_key],
+                "restored_entry_count": restored_entry_count,
+                "missing_nodes": [action.node_id for action in missing_actions],
             },
         )
+
+    def _save_action_cache_snapshot(
+        self,
+        *,
+        context: RuntimeContext,
+        request: RequestEnvelope,
+        action: ActionSpec,
+        before_entry_ids: set[str],
+    ) -> None:
+        cache_store = ActionCacheStore(run_root=context.paths.root)
+        after_entries = context.blackboard.list_entries(thread_id=context.thread.thread_id)
+        new_entries = [
+            entry
+            for entry in after_entries
+            if entry.entry_id not in before_entry_ids
+        ]
+        result_payload = None
+        if action.agent == "reporter" or action.phase == "report":
+            payload = read_json(context.paths.result)
+            if isinstance(payload, dict):
+                result_payload = payload
+        cache_store.save_snapshot(
+            action=action,
+            run_id=context.run_id,
+            thread_id=context.thread.thread_id,
+            request_id=request.request_id,
+            blackboard_entries=new_entries,
+            result_payload=result_payload,
+        )
+
+    def _restore_cached_actions(
+        self,
+        *,
+        context: RuntimeContext,
+        request: RequestEnvelope,
+        cached_actions: list[ActionSpec],
+        cache_store: ActionCacheStore,
+    ) -> tuple[list[ActionSpec], list[ActionSpec], int]:
+        source_run_root = getattr(context, "cache_restore_run_root", None)
+        if source_run_root is None:
+            return cached_actions, [], 0
+        existing_entries = context.blackboard.list_entries(thread_id=context.thread.thread_id)
+        existing_entry_ids = {entry.entry_id for entry in existing_entries}
+        restored_actions: list[ActionSpec] = []
+        missing_actions: list[ActionSpec] = []
+        restored_entry_count = 0
+        for action in cached_actions:
+            payload = cache_store.restore_snapshot(
+                action=action,
+                source_run_root=source_run_root,
+                target_run_id=context.run_id,
+                target_thread_id=context.thread.thread_id,
+                target_request_id=request.request_id,
+                thread_id_hint=(
+                    str(getattr(context, "cache_restore_thread_id", None) or "").strip()
+                    or context.thread.thread_id
+                ),
+            )
+            if payload is None:
+                missing_actions.append(action)
+                continue
+            for entry in list(payload.get("blackboard_entries") or []):
+                if not isinstance(entry, BlackboardEntry):
+                    continue
+                if entry.entry_id in existing_entry_ids:
+                    continue
+                context.blackboard.add(entry)
+                existing_entry_ids.add(entry.entry_id)
+                restored_entry_count += 1
+            result_payload = payload.get("result_payload")
+            if isinstance(result_payload, dict):
+                write_json(context.paths.result, result_payload)
+            context.dynamic_trace.append(
+                {
+                    "event": "dag_cache_restored",
+                    "node_id": action.node_id,
+                    "cache_key": action.cache_key,
+                    "source_run_id": payload.get("run_id"),
+                    "restored_entry_count": len(list(payload.get("blackboard_entries") or [])),
+                }
+            )
+            restored_actions.append(action)
+        return restored_actions, missing_actions, restored_entry_count
 
     def _insert_dynamic_action_if_missing(
         self,
@@ -435,6 +574,9 @@ class OrchestratorPlanExecutor:
     ) -> None:
         if action.node_id in [existing.node_id for existing in pending_actions]:
             return
+        if action.node_id not in [existing.node_id for existing in plan.actions]:
+            plan.actions.append(action)
+            write_json(context.paths.task_plan, plan.model_dump(mode="json"))
         pending_actions.append(action)
         context.dynamic_trace.append(
             {

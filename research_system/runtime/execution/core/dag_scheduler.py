@@ -92,6 +92,26 @@ class ActionDagScheduler:
             resolve(node_id)
         return depth_cache
 
+    def descendants(self, plan: ActionPlan, node_id: str) -> set[str]:
+        action_map = self._action_map(plan.actions)
+        if node_id not in action_map:
+            raise KeyError(f"unknown_node:{node_id}")
+        children: dict[str, set[str]] = {}
+        for action in plan.actions:
+            for dependency in action.depends_on:
+                children.setdefault(dependency, set()).add(action.node_id)
+        resolved: set[str] = set()
+
+        def visit(current: str) -> None:
+            for child_id in children.get(current, set()):
+                if child_id in resolved:
+                    continue
+                resolved.add(child_id)
+                visit(child_id)
+
+        visit(node_id)
+        return resolved
+
     @staticmethod
     def _action_map(actions: list[ActionSpec]) -> dict[str, ActionSpec]:
         action_map: dict[str, ActionSpec] = {}

@@ -418,6 +418,54 @@ class StockCompareFlowTests(unittest.TestCase):
             finally:
                 orchestrator.close()
 
+    def test_orchestrator_can_rerun_from_retrieve_using_cached_collect_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            settings = Settings.from_env(repo_root)
+            ensure_workspace_layout(settings)
+            orchestrator = ResearchOrchestrator(settings)
+            try:
+                orchestrator.retriever.disable_qdrant_for_test()
+                runtime = CompareSkillRuntimeStub()
+                runtime.calls = []
+                original_run = runtime.run
+
+                def _tracking_run(skill_name: str, **kwargs):
+                    runtime.calls.append((skill_name, kwargs))
+                    return original_run(skill_name, **kwargs)
+
+                runtime.run = _tracking_run
+                orchestrator.collector.skill_runtime = runtime
+
+                first_response = orchestrator.run(RequestEnvelope(user_query=BANK_COMPARE_QUERY))
+                first_run_id = str(first_response.run_id or "")
+                first_call_count = len(runtime.calls)
+
+                rerun_response = orchestrator.rerun_from(first_run_id, from_node="retrieve")
+
+                self.assertEqual(rerun_response.intent, "stock_compare")
+                self.assertEqual(rerun_response.status, "completed")
+                self.assertEqual(len(runtime.calls), first_call_count)
+
+                rerun_run_id = str(rerun_response.run_id or "")
+                history = SessionHistory(settings.runs_root / rerun_run_id)
+                raw_events = history.replay()["events"]
+                self.assertTrue(
+                    any(str(row.get("event_type") or "") == "dag_partial_rerun_requested" for row in raw_events)
+                )
+                cache_hit_row = next(
+                    (
+                        row for row in raw_events
+                        if str(row.get("event_type") or "") == "dag_cache_hit"
+                    ),
+                    None,
+                )
+                self.assertIsNotNone(cache_hit_row)
+                self.assertIn("collect", list(((cache_hit_row or {}).get("payload") or {}).get("cached_nodes") or []))
+                self.assertGreaterEqual(history.metrics()["event_type_counts"].get("dag_cache_hit", 0), 1)
+            finally:
+                orchestrator.close()
+
 
 if __name__ == "__main__":
     unittest.main()

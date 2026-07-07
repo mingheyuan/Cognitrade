@@ -173,17 +173,93 @@ class OrchestratorRunStartupSupport:
         )
         return plan
 
-    def write_task_plan(self, *, context, plan) -> None:
-        write_json(
-            context.paths.task_plan,
-            {
-                "intent": plan.intent,
+    def initialize_existing_plan(
+        self,
+        *,
+        context,
+        request: RequestEnvelope,
+        intent: str,
+        plan,
+        source_run_id: str | None = None,
+        rerun_from_node: str | None = None,
+    ):
+        self.host._emit_event(
+            context,
+            request_id=request.request_id,
+            intent=intent,
+            event_type="request_received",
+            message="Request received",
+        )
+        self.host._transition(
+            context,
+            "identifying_intent",
+            request_id=request.request_id,
+            intent=intent,
+            message="Identifying intent",
+        )
+        self.host._emit_event(
+            context,
+            request_id=request.request_id,
+            intent=intent,
+            event_type="intent_identified",
+            message=f"Intent identified: {intent}",
+        )
+        self.write_task_plan(context=context, plan=plan)
+        self.host._emit_event(
+            context,
+            request_id=request.request_id,
+            intent=intent,
+            event_type="plan_created",
+            message="Execution plan restored",
+            payload={
                 "strategy": plan.strategy,
                 "entry_strategy": plan.entry_strategy,
                 "entry_reason": plan.entry_reason,
                 "subagent_required": plan.subagent_required,
                 "dispatch_trace": plan.dispatch_trace,
+                "actions": [
+                    {"node_id": action.node_id, "phase": action.phase, "agent": action.agent}
+                    for action in plan.actions
+                ],
                 "notes": plan.notes,
-                "actions": [action.model_dump(mode="json") for action in plan.actions],
+                "source_run_id": source_run_id,
+                "rerun_from_node": rerun_from_node,
             },
         )
+        if source_run_id and rerun_from_node:
+            self.host._emit_event(
+                context,
+                request_id=request.request_id,
+                intent=intent,
+                event_type="dag_partial_rerun_requested",
+                message=f"Partial DAG rerun requested from {rerun_from_node}",
+                payload={
+                    "source_run_id": source_run_id,
+                    "rerun_from_node": rerun_from_node,
+                },
+            )
+        self.host._transition(
+            context,
+            "ready",
+            request_id=request.request_id,
+            intent=intent,
+            message="Execution plan restored",
+        )
+        self.host._transition(
+            context,
+            "running",
+            request_id=request.request_id,
+            intent=intent,
+            message="Run accepted",
+        )
+        self.host._emit_event(
+            context,
+            request_id=request.request_id,
+            intent=intent,
+            event_type="run_accepted",
+            message="Run accepted",
+        )
+        return plan
+
+    def write_task_plan(self, *, context, plan) -> None:
+        write_json(context.paths.task_plan, plan.model_dump(mode="json"))

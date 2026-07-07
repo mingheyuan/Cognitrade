@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from research_system.runtime.execution.core.dag_scheduler import ActionDagScheduler
 from research_system.runtime.orchestration.orchestrator_run_startup_support import (
     OrchestratorRunStartupSupport,
 )
@@ -16,6 +17,7 @@ class OrchestratorRunCoordinator:
         self.host = host
         self.startup_support = OrchestratorRunStartupSupport(host)
         self.terminal_support = OrchestratorRunTerminalSupport(host)
+        self.dag_scheduler = ActionDagScheduler()
 
     def run(self, request: RequestEnvelope) -> ResponseEnvelope:
         run_id, paths, context = self.startup_support.create_preflight_context(request=request)
@@ -87,6 +89,82 @@ class OrchestratorRunCoordinator:
                 request=request,
                 run_id=run_id,
                 intent=intent,
+                error=exc,
+            )
+        finally:
+            self.host._active_runtime_context = None
+
+    def rerun_from(self, source_run_id: str, *, from_node: str) -> ResponseEnvelope:
+        source_paths = self.host.run_store.load_run_paths(source_run_id)
+        request_payload = self.host._load_json_payload(source_paths.request)
+        if not isinstance(request_payload, dict):
+            raise self.host.orchestrator_error_cls(f"missing_request_payload:{source_run_id}")
+        task_plan_payload = self.host._load_json_payload(source_paths.task_plan)
+        if not isinstance(task_plan_payload, dict):
+            raise self.host.orchestrator_error_cls(f"missing_task_plan_payload:{source_run_id}")
+        source_thread_payload = self.host._load_json_payload(source_paths.thread_state) or {}
+
+        request = RequestEnvelope.model_validate(request_payload)
+        plan = self.host._assembly().plan_from_payload(task_plan_payload)
+        if not any(action.node_id == from_node for action in plan.actions):
+            raise self.host.orchestrator_error_cls(f"unknown_rerun_node:{from_node}")
+        rerun_nodes = {from_node, *self.dag_scheduler.descendants(plan, from_node)}
+        completed_nodes = [
+            action.node_id
+            for action in plan.actions
+            if action.node_id not in rerun_nodes
+        ]
+
+        run_id, paths, context = self.startup_support.create_context(request=request, intent=plan.intent)
+        context.cache_restore_run_root = source_paths.root
+        context.cache_restore_thread_id = str(source_thread_payload.get("thread_id") or "").strip() or None
+        context.rerun_from_node_id = from_node
+        context.state.completed_nodes = completed_nodes
+        self.host._active_runtime_context = context
+        self.host._attach_subagent_observers()
+
+        try:
+            self.startup_support.initialize_existing_plan(
+                context=context,
+                request=request,
+                intent=plan.intent,
+                plan=plan,
+                source_run_id=source_run_id,
+                rerun_from_node=from_node,
+            )
+            self.host._update_state(
+                context,
+                pending_nodes=[action.node_id for action in plan.actions if action.node_id in rerun_nodes],
+                completed_nodes=completed_nodes,
+            )
+            self.host._execute_plan(context=context, request=request, plan=plan)
+            return self.terminal_support.finalize_success_path(
+                context=context,
+                request=request,
+                run_id=run_id,
+                intent=plan.intent,
+                result_path=paths.result,
+            )
+        except self.host.run_cancelled_error_cls:
+            return self.terminal_support.build_cancelled_response(
+                context=context,
+                request=request,
+                run_id=run_id,
+                intent=plan.intent,
+            )
+        except self.host.run_timed_out_error_cls:
+            return self.terminal_support.build_timed_out_response(
+                context=context,
+                request=request,
+                run_id=run_id,
+                intent=plan.intent,
+            )
+        except Exception as exc:  # pragma: no cover - final guardrail
+            return self.terminal_support.build_failed_response(
+                context=context,
+                request=request,
+                run_id=run_id,
+                intent=plan.intent,
                 error=exc,
             )
         finally:

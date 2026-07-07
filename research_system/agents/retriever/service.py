@@ -309,6 +309,7 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                             agent_path="retriever/search/qdrant_evidence_searcher",
                             notes=[
                                 f"top_k={top_k}",
+                                f"hit_count={int(source_outputs.get('hit_count') or 0)}",
                                 f"filters={source_outputs.get('metadata_filters') or {}}",
                                 *( [f"degrade_reason={qdrant_reason}"] if qdrant_reason else [] ),
                             ],
@@ -592,6 +593,7 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             return {
                 "evidences": [],
                 "metadata_filters": {},
+                "hit_count": 0,
                 "degraded": True,
                 "degrade_reason": self.qdrant_error or RuntimeDegradeReason.QDRANT_UNAVAILABLE.value,
             }
@@ -643,6 +645,7 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
         return {
             "evidences": evidences,
             "metadata_filters": metadata_filters,
+            "hit_count": len(qdrant_hits),
             "degraded": False,
             "degrade_reason": None,
         }

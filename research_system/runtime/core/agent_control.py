@@ -16,6 +16,7 @@ from research_system.runtime.core.execution_policy import (
     normalize_degrade_reason,
     split_degrade_reasons,
 )
+from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.providers.provider_registry import LLMProviderError
 from research_system.runtime.storage.jsonl import append_jsonl, read_json, write_json
 from research_system.schemas.runtime import RuntimeItemRecord, RuntimeThreadState, RuntimeTurnState
@@ -28,9 +29,10 @@ def _utc_now() -> datetime:
 
 
 class AgentControl:
-    def __init__(self, *, paths, run_id: str) -> None:
+    def __init__(self, *, paths, run_id: str, id_factory: Callable[[], str] | None = None) -> None:
         self.paths = paths
         self.run_id = run_id
+        self.id_factory = id_factory
         self._observers: list[Callable[..., None]] = []
         self._state_lock = RLock()
 
@@ -52,6 +54,7 @@ class AgentControl:
     ) -> RuntimeItemRecord:
         with self._state_lock:
             item = RuntimeItemRecord(
+                item_id=self._new_id(),
                 thread_id=thread_id,
                 turn_id=turn_id,
                 run_id=self.run_id,
@@ -98,6 +101,7 @@ class AgentControl:
                 )
                 return None, None
             thread = RuntimeThreadState(
+                thread_id=self._new_id(),
                 run_id=self.run_id,
                 request_id=request_id,
                 intent=intent,
@@ -106,6 +110,7 @@ class AgentControl:
                 total_turns=1,
             )
             turn = RuntimeTurnState(
+                turn_id=self._new_id(),
                 thread_id=thread.thread_id,
                 run_id=self.run_id,
                 request_id=request_id,
@@ -191,6 +196,8 @@ class AgentControl:
         phase: str | None,
         execution_policy=None,
     ) -> tuple[dict[str, Any], SubagentExecutionRecord]:
+        requested_subagent_type = invocation.subagent_type
+        requested_requires_llm = bool(invocation.requires_llm)
         invocation, llm_degrade_reason = self._prepare_invocation_for_runtime(
             invocation=invocation,
             registry=registry,
@@ -198,6 +205,7 @@ class AgentControl:
             turn_id=turn_id,
             execution_policy=execution_policy,
         )
+        llm_used = requested_requires_llm and not bool(llm_degrade_reason) and bool(invocation.requires_llm)
         budget_exhausted = False
         if execution_policy is not None:
             reserve = getattr(execution_policy, "reserve_subagent_call", None)
@@ -235,6 +243,10 @@ class AgentControl:
             objective=invocation.objective,
             payload={
                 "subagent_type": invocation.subagent_type,
+                "requested_subagent_type": requested_subagent_type,
+                "requested_requires_llm": requested_requires_llm,
+                "requires_llm": invocation.requires_llm,
+                "llm_used": llm_used,
                 "invocation_id": invocation.invocation_id,
                 "inputs": invocation.inputs,
                 "context": invocation.context or {},
@@ -348,6 +360,7 @@ class AgentControl:
             payload={
                 "output_keys": sorted(outputs.keys()),
                 "notes": list(record.notes or []),
+                "llm_used": llm_used,
             },
             degrade_reason=degrade_reason,
         )
@@ -919,8 +932,11 @@ class AgentControl:
         return dict(validated.model_dump(mode="json"))
 
     def _build_invocation_id(self) -> str:
-        from research_system.runtime.core.id_utils import generate_ulid
+        return self._new_id()
 
+    def _new_id(self) -> str:
+        if callable(self.id_factory):
+            return str(self.id_factory())
         return generate_ulid()
 
     def _notify(self, *, stage: str, item: RuntimeItemRecord, payload: dict[str, Any]) -> None:

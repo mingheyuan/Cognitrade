@@ -16,6 +16,7 @@ from research_system.runtime.orchestration.orchestrator_runtime_io_support impor
 from research_system.runtime.orchestration.orchestrator_subagent_bridge import OrchestratorSubagentBridge
 from research_system.runtime.storage.runs.retention import RunRetentionService
 from research_system.runtime.storage.runs.run_store import RunStore
+from research_system.schemas.planning import ActionPlan
 
 
 class OrchestratorAssemblySupport:
@@ -148,3 +149,7 @@ class OrchestratorAssemblySupport:
             compat = self.build_compat_support()
             self.host.compat = compat
         return compat
+
+    @staticmethod
+    def plan_from_payload(payload: dict) -> ActionPlan:
+        return ActionPlan.model_validate(payload)

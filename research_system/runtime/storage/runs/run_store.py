@@ -34,9 +34,17 @@ class RunStore:
         self.runs_root = runs_root
         self.runs_root.mkdir(parents=True, exist_ok=True)
 
-    def create_run(self, request: RequestEnvelope, intent: str) -> tuple[str, RunPaths, RunStateSnapshot]:
-        run_id = generate_ulid()
+    def create_run(
+        self,
+        request: RequestEnvelope,
+        intent: str,
+        *,
+        run_id: str | None = None,
+    ) -> tuple[str, RunPaths, RunStateSnapshot]:
+        run_id = str(run_id or "").strip() or generate_ulid()
         root = self.runs_root / run_id
+        if root.exists():
+            raise FileExistsError(f"run already exists: {run_id}")
         paths = RunPaths(root)
         paths.root.mkdir(parents=True, exist_ok=True)
         paths.artifacts.mkdir(parents=True, exist_ok=True)

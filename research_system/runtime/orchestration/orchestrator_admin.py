@@ -47,6 +47,9 @@ class OrchestratorAdminService:
     def metrics(self, run_id: str) -> dict:
         return self.run_admin.metrics(run_id)
 
+    def thread(self, run_id: str, thread_id: str) -> dict:
+        return self.run_admin.thread(run_id, thread_id)
+
     def subagent(self, run_id: str, invocation_id: str) -> dict:
         return self.run_admin.subagent(run_id, invocation_id)
 

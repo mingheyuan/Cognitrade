@@ -81,6 +81,7 @@ class QdrantEvidenceSearchOutputModel(BaseModel):
 
     evidences: list[RetrievalEvidenceModel] = Field(default_factory=list)
     metadata_filters: dict[str, str] = Field(default_factory=dict)
+    hit_count: int = 0
     degraded: bool = False
     degrade_reason: str | None = None
 
@@ -145,12 +146,14 @@ class QdrantEvidenceSearchSubagent:
             return {
                 "evidences": [],
                 "metadata_filters": {},
+                "hit_count": 0,
                 "degraded": True,
                 "degrade_reason": f"qdrant_search_error:{type(exc).__name__}",
             }
         return {
             "evidences": _normalize_evidence_rows(outputs.get("evidences") or []),
             "metadata_filters": dict(outputs.get("metadata_filters") or {}),
+            "hit_count": int(outputs.get("hit_count") or 0),
             "degraded": bool(outputs.get("degraded")),
             "degrade_reason": outputs.get("degrade_reason"),
         }

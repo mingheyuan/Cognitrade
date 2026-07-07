@@ -97,21 +97,26 @@ class SessionHistory:
         subagent_items = [row for row in items if str(row.get("item_type") or "") == "subagent"]
         action_items = [row for row in items if str(row.get("item_type") or "") == "action"]
         degradation_items = [row for row in items if str(row.get("item_type") or "") == "degradation"]
+        llm_items = [
+            row for row in subagent_items
+            if bool((row.get("payload") if isinstance(row.get("payload"), dict) else {}).get("llm_used"))
+        ]
 
         methodology_search_total = 0
         methodology_search_hits = 0
+        qdrant_search_total = 0
+        qdrant_search_hits = 0
         for item in subagent_trace:
-            if str(item.get("subagent_type") or "") != "methodology_memory_recaller":
-                continue
-            methodology_search_total += 1
             notes = [str(note) for note in list(item.get("notes") or [])]
-            row_count_note = next((note for note in notes if note.startswith("row_count=")), "")
-            try:
-                row_count = int(row_count_note.split("=", 1)[1]) if row_count_note else 0
-            except ValueError:
-                row_count = 0
-            if row_count > 0:
-                methodology_search_hits += 1
+            subagent_type = str(item.get("subagent_type") or "")
+            if subagent_type == "methodology_memory_recaller":
+                methodology_search_total += 1
+                if self._int_note_value(notes, prefix="row_count=") > 0:
+                    methodology_search_hits += 1
+            if subagent_type == "qdrant_evidence_searcher":
+                qdrant_search_total += 1
+                if self._int_note_value(notes, prefix="hit_count=") > 0:
+                    qdrant_search_hits += 1
 
         child_threads = [row for row in threads if str(row.get("parent_thread_id") or "").strip()]
         degraded_subagents = [
@@ -131,8 +136,11 @@ class SessionHistory:
             "counts": {
                 "events": len(events),
                 "items": len(items),
+                "threads": len(threads),
+                "turns": sum(len(list(row.get("turns") or [])) for row in threads),
                 "actions": len(action_items),
                 "subagents": len(subagent_items),
+                "llm_calls": len(llm_items),
                 "degradations": len(degradation_items),
                 "child_threads": len(child_threads),
             },
@@ -143,7 +151,11 @@ class SessionHistory:
                     if methodology_search_total
                     else None
                 ),
-                "qdrant_hit_rate": None,
+                "qdrant_hit_rate": (
+                    round(qdrant_search_hits / qdrant_search_total, 4)
+                    if qdrant_search_total
+                    else None
+                ),
             },
             "latency_ms": {
                 "subagents": durations,
@@ -151,6 +163,7 @@ class SessionHistory:
                 "per_subagent": per_subagent,
                 "per_action": per_action,
             },
+            "turn_usage": self._turn_usage(threads=threads, items=items),
             "fanout": fanout,
             "degrade_reason_counts": degrade_reason_counts,
             "event_type_counts": event_type_counts,
@@ -187,6 +200,51 @@ class SessionHistory:
             events_payload=events_payload,
             invocation_id=invocation_id,
         )
+
+    def thread(self, thread_id: str) -> dict[str, Any]:
+        normalized_thread_id = str(thread_id or "").strip()
+        if not normalized_thread_id:
+            raise ValueError("thread_id is required")
+        threads = self.thread_states()
+        thread_payload = next(
+            (row for row in threads if str(row.get("thread_id") or "").strip() == normalized_thread_id),
+            None,
+        )
+        if thread_payload is None:
+            raise KeyError(f"thread not found: {normalized_thread_id}")
+        request_payload = read_json(self.run_root / "request.json") or {}
+        result_payload = read_json(self.run_root / "result.json") or {}
+        summary_payload = read_json(self.run_root / "summary.json") or {}
+        raw_events = read_jsonl(self.run_root / "events.jsonl")
+        filtered_events = [row for row in raw_events if self._event_matches_thread(row, normalized_thread_id)]
+        event_timeline = self.trace_rebuilder.event_timeline(filtered_events)
+        subagent_trace = self.trace_rebuilder.subagent_trace({}, filtered_events)
+        wait_trace = self.trace_rebuilder.wait_trace(filtered_events)
+        items = [
+            row for row in self._latest_items()
+            if str(row.get("thread_id") or "").strip() == normalized_thread_id
+        ]
+        return {
+            "run_id": self.run_root.name,
+            "thread_id": normalized_thread_id,
+            "request": request_payload,
+            "summary": summary_payload,
+            "display_summary": build_display_summary(
+                result_payload=result_payload,
+                summary_payload=summary_payload,
+            ),
+            "thread": thread_payload,
+            "events": event_timeline,
+            "subagent_trace": subagent_trace,
+            "wait_trace": wait_trace,
+            "items": items,
+            "event_counts": {
+                "events": len(event_timeline),
+                "subagent_trace": len(subagent_trace),
+                "wait_trace": len(wait_trace),
+                "items": len(items),
+            },
+        }
 
     def write_result(self, result: dict[str, Any], summary: dict[str, Any]) -> None:
         write_json(self.run_root / "result.json", result)
@@ -314,6 +372,82 @@ class SessionHistory:
                 for parent, children in children_by_parent.items()
             },
         }
+
+    def _turn_usage(self, *, threads: list[dict[str, Any]], items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        turn_index: dict[str, dict[str, Any]] = {}
+        for thread in threads:
+            thread_id = str(thread.get("thread_id") or "").strip()
+            for turn in list(thread.get("turns") or []):
+                if not isinstance(turn, dict):
+                    continue
+                turn_id = str(turn.get("turn_id") or "").strip()
+                if not turn_id:
+                    continue
+                turn_index[turn_id] = {
+                    "thread_id": thread_id,
+                    "intent": turn.get("intent"),
+                    "status": turn.get("status"),
+                    "llm_calls": 0,
+                    "subagents": 0,
+                    "actions": 0,
+                    "child_threads_spawned": 0,
+                    "degradations": 0,
+                }
+        for row in items:
+            turn_id = str(row.get("turn_id") or "").strip()
+            if not turn_id:
+                continue
+            usage = turn_index.setdefault(
+                turn_id,
+                {
+                    "thread_id": str(row.get("thread_id") or "").strip() or None,
+                    "intent": None,
+                    "status": None,
+                    "llm_calls": 0,
+                    "subagents": 0,
+                    "actions": 0,
+                    "child_threads_spawned": 0,
+                    "degradations": 0,
+                },
+            )
+            item_type = str(row.get("item_type") or "")
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            if item_type == "subagent":
+                usage["subagents"] += 1
+                if bool(payload.get("llm_used")):
+                    usage["llm_calls"] += 1
+            elif item_type == "action":
+                usage["actions"] += 1
+            elif item_type == "thread":
+                usage["child_threads_spawned"] += 1
+            elif item_type == "degradation":
+                usage["degradations"] += 1
+        return turn_index
+
+    def _event_matches_thread(self, event: dict[str, Any], thread_id: str) -> bool:
+        if not isinstance(event, dict):
+            return False
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        nested_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        candidate_ids = {
+            str(payload.get("thread_id") or "").strip(),
+            str(payload.get("child_thread_id") or "").strip(),
+            str(nested_payload.get("thread_id") or "").strip(),
+            str(nested_payload.get("child_thread_id") or "").strip(),
+        }
+        candidate_ids.discard("")
+        return thread_id in candidate_ids
+
+    def _int_note_value(self, notes: list[str], *, prefix: str) -> int:
+        raw_value = next((note for note in notes if note.startswith(prefix)), "")
+        if not raw_value:
+            return 0
+        try:
+            return int(raw_value.split("=", 1)[1])
+        except ValueError:
+            return 0
 
     def _parse_datetime(self, value: object) -> datetime | None:
         token = str(value or "").strip()

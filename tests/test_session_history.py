@@ -365,6 +365,243 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(tree[0]["thread_id"], "thread-root")
         self.assertEqual(tree[0]["children"], [])
 
+    def test_metrics_expose_llm_qdrant_memory_and_turn_usage(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            run_root = Path(tmpdir) / "01METRICS"
+            run_root.mkdir(parents=True)
+            write_json(run_root / "request.json", {"request_id": "req-metrics", "intent": "stock_check", "user_query": "check bank"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            write_json(
+                run_root / "thread_state.json",
+                {
+                    "thread_id": "thread-root",
+                    "run_id": "01METRICS",
+                    "request_id": "req-metrics",
+                    "intent": "stock_check",
+                    "status": "completed",
+                    "parent_thread_id": None,
+                    "active_turn_id": "turn-root",
+                    "total_turns": 1,
+                },
+            )
+            write_json(
+                run_root / "turn_state.json",
+                {
+                    "turn_id": "turn-root",
+                    "thread_id": "thread-root",
+                    "run_id": "01METRICS",
+                    "request_id": "req-metrics",
+                    "turn_index": 1,
+                    "status": "completed",
+                    "intent": "stock_check",
+                    "objective": "check bank",
+                },
+            )
+            append_jsonl(
+                run_root / "items.jsonl",
+                {
+                    "item_id": "item-1",
+                    "thread_id": "thread-root",
+                    "turn_id": "turn-root",
+                    "run_id": "01METRICS",
+                    "request_id": "req-metrics",
+                    "item_type": "subagent",
+                    "status": "completed",
+                    "agent": "retriever",
+                    "phase": "retrieve",
+                    "title": "retrieval_decider",
+                    "objective": "Select final evidence.",
+                    "payload": {"llm_used": True},
+                    "created_at": "2026-07-07T10:00:00+00:00",
+                    "updated_at": "2026-07-07T10:00:01+00:00",
+                },
+            )
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-qdrant",
+                    "request_id": "req-metrics",
+                    "run_id": "01METRICS",
+                    "intent": "stock_check",
+                    "event_type": "subagent_completed",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                    "message": "qdrant completed",
+                    "payload": {
+                        "thread_id": "thread-root",
+                        "turn_id": "turn-root",
+                        "subagent_type": "qdrant_evidence_searcher",
+                        "status": "completed",
+                        "notes": ["hit_count=2"],
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-07T10:00:02+00:00",
+                },
+            )
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-memory",
+                    "request_id": "req-metrics",
+                    "run_id": "01METRICS",
+                    "intent": "stock_check",
+                    "event_type": "subagent_completed",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                    "message": "memory completed",
+                    "payload": {
+                        "thread_id": "thread-root",
+                        "turn_id": "turn-root",
+                        "subagent_type": "methodology_memory_recaller",
+                        "status": "completed",
+                        "notes": ["row_count=1"],
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-07T10:00:03+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).metrics()
+
+        self.assertEqual(payload["counts"]["llm_calls"], 1)
+        self.assertEqual(payload["rates"]["qdrant_hit_rate"], 1.0)
+        self.assertEqual(payload["rates"]["memory_hit_rate"], 1.0)
+        self.assertEqual(payload["turn_usage"]["turn-root"]["llm_calls"], 1)
+        self.assertEqual(payload["turn_usage"]["turn-root"]["subagents"], 1)
+
+    def test_thread_payload_filters_child_thread_events_and_items(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            run_root = Path(tmpdir) / "01THREADPAYLOAD"
+            run_root.mkdir(parents=True)
+            threads_root = run_root / "threads"
+            threads_root.mkdir(parents=True)
+            write_json(run_root / "request.json", {"request_id": "req-thread", "intent": "stock_check", "user_query": "child replay"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            write_json(
+                run_root / "thread_state.json",
+                {
+                    "thread_id": "thread-root",
+                    "run_id": "01THREADPAYLOAD",
+                    "request_id": "req-thread",
+                    "intent": "stock_check",
+                    "status": "completed",
+                    "parent_thread_id": None,
+                    "active_turn_id": "turn-root",
+                    "total_turns": 1,
+                },
+            )
+            write_json(
+                run_root / "turn_state.json",
+                {
+                    "turn_id": "turn-root",
+                    "thread_id": "thread-root",
+                    "run_id": "01THREADPAYLOAD",
+                    "request_id": "req-thread",
+                    "turn_index": 1,
+                    "status": "completed",
+                    "intent": "stock_check",
+                    "objective": "root",
+                },
+            )
+            write_json(
+                threads_root / "thread-child.thread.json",
+                {
+                    "thread_id": "thread-child",
+                    "run_id": "01THREADPAYLOAD",
+                    "request_id": "req-thread",
+                    "intent": "stock_check",
+                    "status": "completed",
+                    "parent_thread_id": "thread-root",
+                    "active_turn_id": "turn-child",
+                    "total_turns": 1,
+                },
+            )
+            write_json(
+                threads_root / "thread-child.turn.turn-child.json",
+                {
+                    "turn_id": "turn-child",
+                    "thread_id": "thread-child",
+                    "run_id": "01THREADPAYLOAD",
+                    "request_id": "req-thread",
+                    "turn_index": 1,
+                    "status": "completed",
+                    "intent": "stock_check",
+                    "objective": "child",
+                },
+            )
+            append_jsonl(
+                run_root / "items.jsonl",
+                {
+                    "item_id": "child-item",
+                    "thread_id": "thread-child",
+                    "turn_id": "turn-child",
+                    "run_id": "01THREADPAYLOAD",
+                    "request_id": "req-thread",
+                    "item_type": "subagent",
+                    "status": "completed",
+                    "agent": "collector",
+                    "phase": "collect_child",
+                    "title": "stock_snapshot_collector",
+                    "objective": "Collect child snapshot",
+                    "payload": {},
+                    "created_at": "2026-07-07T10:00:00+00:00",
+                    "updated_at": "2026-07-07T10:00:01+00:00",
+                },
+            )
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-thread",
+                    "request_id": "req-thread",
+                    "run_id": "01THREADPAYLOAD",
+                    "intent": "stock_check",
+                    "event_type": "thread_completed",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "child_thread:thread-child completed",
+                    "payload": {
+                        "thread_id": "thread-root",
+                        "turn_id": "turn-root",
+                        "status": "completed",
+                        "payload": {"child_thread_id": "thread-child"},
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-07T10:00:02+00:00",
+                },
+            )
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-subagent",
+                    "request_id": "req-thread",
+                    "run_id": "01THREADPAYLOAD",
+                    "intent": "stock_check",
+                    "event_type": "subagent_completed",
+                    "phase": "collect_child",
+                    "agent": "collector",
+                    "message": "child subagent completed",
+                    "payload": {
+                        "thread_id": "thread-child",
+                        "turn_id": "turn-child",
+                        "subagent_type": "stock_snapshot_collector",
+                        "status": "completed",
+                        "objective": "Collect child snapshot",
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-07T10:00:03+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).thread("thread-child")
+
+        self.assertEqual(payload["thread"]["thread_id"], "thread-child")
+        self.assertEqual(payload["event_counts"]["items"], 1)
+        self.assertEqual(payload["items"][0]["thread_id"], "thread-child")
+        self.assertEqual(len(payload["events"]), 2)
+        self.assertEqual(payload["subagent_trace"][-1]["thread_id"], "thread-child")
+
 
 if __name__ == "__main__":
     unittest.main()

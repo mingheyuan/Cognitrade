@@ -8,7 +8,7 @@ from unittest.mock import patch
 from research_system.agents.collector.service import CollectorService
 from research_system.agents.screen_reviewer.service import ScreenReviewerService
 from research_system.agents.screener.service import ScreenerService
-from research_system.runtime.storage.jsonl import read_jsonl
+from research_system.runtime.storage.jsonl import read_json, read_jsonl
 from research_system.runtime.orchestrator import ResearchOrchestrator
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.schemas.protocol import RequestEnvelope
@@ -332,6 +332,63 @@ class StockScreenFlowTests(unittest.TestCase):
                     self.assertIsInstance(report.get("candidates"), list)
                 self.assertEqual(report.get("degraded_note"), "llm_unavailable")
                 self.assertEqual((report.get("debug") or {}).get("intent"), "stock_screen")
+            finally:
+                orchestrator.close()
+
+    def test_dynamic_screen_review_is_persisted_into_dag_and_can_rerun_from_node(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            settings = Settings.from_env(repo_root)
+            ensure_workspace_layout(settings)
+            orchestrator = ResearchOrchestrator(settings)
+            try:
+                orchestrator.retriever.disable_qdrant_for_test()
+                runtime = SkillRuntimeStub()
+                runtime.calls = []
+                original_run = runtime.run
+
+                def _tracking_run(skill_name: str, **kwargs):
+                    runtime.calls.append((skill_name, kwargs))
+                    return original_run(skill_name, **kwargs)
+
+                runtime.run = _tracking_run
+                orchestrator.collector.skill_runtime = runtime
+
+                with patch("research_system.subagents.collector.call_with_retry", return_value=spot_table()):
+                    response = orchestrator.run(RequestEnvelope(user_query="screen growth stocks"))
+
+                first_run_id = str(response.run_id or "")
+                first_call_count = len(runtime.calls)
+                task_plan_payload = read_json(settings.runs_root / first_run_id / "task_plan.json") or {}
+                task_plan_nodes = [str(item.get("node_id") or "") for item in list(task_plan_payload.get("actions") or [])]
+                self.assertIn("screen_review", task_plan_nodes)
+
+                steps_payload = orchestrator.steps(first_run_id)
+                step_by_node = {
+                    str(item.get("node_id") or ""): item
+                    for item in list(steps_payload.get("steps") or [])
+                }
+                self.assertEqual(step_by_node["screen_review"]["status"], "completed")
+
+                with patch("research_system.subagents.collector.call_with_retry", return_value=spot_table()):
+                    rerun_response = orchestrator.rerun_from(first_run_id, from_node="screen_review")
+
+                self.assertEqual(rerun_response.status, "completed")
+                self.assertEqual(len(runtime.calls), first_call_count)
+                rerun_run_id = str(rerun_response.run_id or "")
+                replay_payload = orchestrator.replay(rerun_run_id)
+                self.assertTrue(
+                    any(str(row.get("event_type") or "") == "dag_partial_rerun_requested" for row in replay_payload["events"])
+                )
+                cache_hit_row = next(
+                    (
+                        row for row in replay_payload["events"]
+                        if str(row.get("event_type") or "") == "dag_cache_hit"
+                    ),
+                    None,
+                )
+                self.assertIsNotNone(cache_hit_row)
+                self.assertIn("screen", list(((cache_hit_row or {}).get("payload") or {}).get("cached_nodes") or []))
             finally:
                 orchestrator.close()
 
