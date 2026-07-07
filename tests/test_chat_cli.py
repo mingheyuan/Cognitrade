@@ -77,11 +77,20 @@ class ChatCliTests(unittest.TestCase):
     def test_events_read_command_is_parsed(self) -> None:
         self.assertEqual(parse_chat_input("/events last"), {"action": "events", "run_id": "last"})
         self.assertEqual(parse_chat_input("/events-read 01ABC"), {"action": "events", "run_id": "01ABC"})
+        self.assertEqual(parse_chat_input("/metrics 01ABC"), {"action": "metrics", "run_id": "01ABC"})
+        self.assertEqual(
+            parse_chat_input("/run-thread last thread-child"),
+            {"action": "run-thread", "run_id": "last", "thread_id": "thread-child"},
+        )
         self.assertEqual(
             parse_chat_input("/subagent-read last 01INVOCATION"),
             {"action": "subagent-read", "run_id": "last", "call_id": "01INVOCATION"},
         )
         self.assertEqual(parse_chat_input("/run-steps last"), {"action": "run-steps", "run_id": "last"})
+        self.assertEqual(
+            parse_chat_input("/rerun-from last retrieve"),
+            {"action": "rerun-from", "run_id": "last", "node_id": "retrieve"},
+        )
 
     def test_stop_command_is_parsed(self) -> None:
         parsed = parse_chat_input("/stop")
@@ -186,8 +195,11 @@ class ChatCliTests(unittest.TestCase):
         self.assertEqual(chat_completion_candidates("/trace ", state), ["last", "01LAST", "01TARGET"])
         self.assertEqual(chat_completion_candidates("/events ", state), ["off", "compact", "full", "last", "01LAST", "01TARGET"])
         self.assertEqual(chat_completion_candidates("/events-read ", state), ["last", "01LAST", "01TARGET"])
+        self.assertEqual(chat_completion_candidates("/metrics ", state), ["last", "01LAST", "01TARGET"])
+        self.assertEqual(chat_completion_candidates("/run-thread ", state), ["last", "01LAST", "01TARGET"])
         self.assertEqual(chat_completion_candidates("/subagent-read ", state), ["last", "01LAST", "01TARGET"])
         self.assertEqual(chat_completion_candidates("/run-steps ", state), ["last", "01LAST", "01TARGET"])
+        self.assertEqual(chat_completion_candidates("/rerun-from ", state), ["last", "01LAST", "01TARGET"])
 
     def test_completion_candidates_for_proposal_commands(self) -> None:
         self.assertEqual(chat_completion_candidates("/proposals ", ChatSessionState()), ["10", "20", "50", "pending", "approved", "rejected"])

@@ -4,6 +4,7 @@ from research_system.cli.commands.cli_command_history_support import execute_his
 from research_system.cli.commands.cli_command_payloads import (
     PROPOSAL_COMMANDS,
     RUN_ID_COMMANDS,
+    RUN_ID_QUERY_COMMANDS,
     STATUS_FILTER_COMMANDS,
     SUBAGENT_COMMANDS,
 )
@@ -12,7 +13,7 @@ from research_system.cli.commands.cli_command_proposal_support import (
     execute_proposals_command,
     execute_review_proposal_command,
 )
-from research_system.cli.commands.cli_command_run_support import execute_run_id_command, execute_subagent_command
+from research_system.cli.commands.cli_command_run_support import execute_run_id_command, execute_run_query_command
 from research_system.cli.commands.cli_command_system_support import (
     execute_check_command,
     execute_cleanup_command,
@@ -31,7 +32,10 @@ def build_cli_command_executors() -> dict[str, object]:
         "replay": execute_run_id_command,
         "events": execute_run_id_command,
         "run-steps": execute_run_id_command,
-        "subagent-read": execute_subagent_command,
+        "metrics": execute_run_id_command,
+        "subagent-read": execute_run_query_command,
+        "run-thread": execute_run_query_command,
+        "rerun-from": execute_run_query_command,
         "trace": execute_run_id_command,
         "resume": execute_run_id_command,
         "cancel": execute_run_id_command,
@@ -52,6 +56,8 @@ def resolve_cli_command_executor(command: str, *, executors: dict[str, object] |
         raise ValueError(f"missing status command executor: {command}")
     if command in RUN_ID_COMMANDS and command not in resolved_executors:
         raise ValueError(f"missing run-id command executor: {command}")
+    if command in RUN_ID_QUERY_COMMANDS and command not in resolved_executors:
+        raise ValueError(f"missing run-id query command executor: {command}")
     if command in SUBAGENT_COMMANDS and command not in resolved_executors:
         raise ValueError(f"missing subagent command executor: {command}")
     if command in PROPOSAL_COMMANDS and command not in resolved_executors:

@@ -4,10 +4,12 @@ import unittest
 
 from research_system.services.payloads.runs.run_payload_fields import (
     events_payload_fields,
+    metrics_payload_fields,
     replay_payload_fields,
     run_payload_fields,
     steps_payload_fields,
     subagent_payload_fields,
+    thread_payload_fields,
     trace_payload_fields,
 )
 from research_system.services.payloads.runs.run_payload_renderers import (
@@ -31,8 +33,10 @@ class RunPayloadsRuntimeTests(unittest.TestCase):
         self.assertTrue(callable(replay_payload_fields))
         self.assertTrue(callable(trace_payload_fields))
         self.assertTrue(callable(events_payload_fields))
+        self.assertTrue(callable(metrics_payload_fields))
         self.assertTrue(callable(steps_payload_fields))
         self.assertTrue(callable(subagent_payload_fields))
+        self.assertTrue(callable(thread_payload_fields))
         self.assertTrue(callable(latest_run_context))
 
 

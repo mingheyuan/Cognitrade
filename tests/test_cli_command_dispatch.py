@@ -46,8 +46,39 @@ class _DispatchOrchestratorStub:
     def trace(self, run_id: str) -> dict:
         return {"run_id": run_id, "status": "completed", "subagent_trace": [], "dynamic_trace": [], "wait_trace": []}
 
+    def metrics(self, run_id: str) -> dict:
+        return {
+            "run_id": run_id,
+            "request": {"intent": "stock_check", "user_query": "inspect runtime"},
+            "summary": {"status": "completed"},
+            "counts": {"events": 1, "items": 1, "threads": 1, "subagents": 1, "llm_calls": 0},
+            "rates": {"fallback_rate": 0.0, "memory_hit_rate": None, "qdrant_hit_rate": None},
+            "latency_ms": {"subagents": {}, "actions": {}, "per_subagent": {}, "per_action": {}},
+            "fanout": {"max_depth": 0, "per_parent_child_count": {}},
+            "turn_usage": {},
+            "event_type_counts": {},
+            "degrade_reason_counts": {},
+        }
+
     def subagent(self, run_id: str, invocation_id: str) -> dict:
         return {"run_id": run_id, "invocation_id": invocation_id, "trace_rows": [], "events": [], "event_counts": {"trace_rows": 0, "events": 0}}
+
+    def thread(self, run_id: str, thread_id: str) -> dict:
+        return {
+            "run_id": run_id,
+            "thread_id": thread_id,
+            "request": {"intent": "stock_check", "user_query": "inspect child"},
+            "summary": {"status": "completed"},
+            "thread": {"thread_id": thread_id, "status": "completed"},
+            "subagent_trace": [],
+            "events": [],
+            "wait_trace": [],
+            "items": [],
+            "event_counts": {"events": 0, "subagent_trace": 0, "wait_trace": 0, "items": 0},
+        }
+
+    def rerun_from(self, run_id: str, *, from_node: str) -> dict:
+        return {"run_id": "01RERUN", "status": "completed", "message": f"reran from {from_node}", "source_run_id": run_id}
 
     def steps(self, run_id: str) -> dict:
         return {"run_id": run_id, "steps": [], "step_counts": {"total": 0, "active": 0, "completed": 0, "pending": 0}}
@@ -119,10 +150,23 @@ class CliCommandDispatchTests(unittest.TestCase):
             run_id="01RUN",
             orchestrator_cls=_DispatchOrchestratorStub,
         )
+        metrics = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="metrics",
+            run_id="01RUN",
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
         steps = execute_cli_payload_command(
             Settings.from_env(Path(".")),
             command="run-steps",
             run_id="01RUN",
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
+        thread_payload = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="run-thread",
+            run_id="01RUN",
+            query="thread-child",
             orchestrator_cls=_DispatchOrchestratorStub,
         )
         subagent = execute_cli_payload_command(
@@ -130,6 +174,13 @@ class CliCommandDispatchTests(unittest.TestCase):
             command="subagent-read",
             run_id="01RUN",
             query="01INV",
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
+        rerun = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="rerun-from",
+            run_id="01RUN",
+            query="retrieve",
             orchestrator_cls=_DispatchOrchestratorStub,
         )
         resumed = execute_cli_payload_command(
@@ -147,8 +198,11 @@ class CliCommandDispatchTests(unittest.TestCase):
 
         self.assertEqual(replayed["status"], "completed")
         self.assertIn("subagent_trace", traced)
+        self.assertIn("counts", metrics)
         self.assertIn("step_counts", steps)
+        self.assertEqual(thread_payload["thread_id"], "thread-child")
         self.assertEqual(subagent["invocation_id"], "01INV")
+        self.assertEqual(rerun["run_id"], "01RERUN")
         self.assertEqual(resumed["status"], "resumed")
         self.assertEqual(cancelled["status"], "cancelled")
 

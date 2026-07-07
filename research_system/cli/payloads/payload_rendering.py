@@ -10,8 +10,10 @@ from research_system.cli.payloads.payload_rendering_common import (
 )
 from research_system.cli.payloads.payload_rendering_inspect import (
     print_events_payload as inspect_print_events_payload,
+    print_metrics_payload as inspect_print_metrics_payload,
     print_steps_payload as inspect_print_steps_payload,
     print_subagent_payload as inspect_print_subagent_payload,
+    print_thread_payload as inspect_print_thread_payload,
     print_trace_payload as inspect_print_trace_payload,
 )
 from research_system.cli.payloads.payload_rendering_specialized import (
@@ -63,9 +65,13 @@ def print_payload(payload: object, *, as_json: bool, emit_text, output_writer=No
             return 0
         if print_trace_payload(payload, emit_text=emit_text, output_writer=output_writer):
             return 0
+        if print_metrics_payload(payload, emit_text=emit_text, output_writer=output_writer):
+            return 0
         if print_steps_payload(payload, emit_text=emit_text, output_writer=output_writer):
             return 0
         if print_subagent_payload(payload, emit_text=emit_text, output_writer=output_writer):
+            return 0
+        if print_thread_payload(payload, emit_text=emit_text, output_writer=output_writer):
             return 0
         if print_events_payload(payload, emit_text=emit_text, output_writer=output_writer):
             return 0
@@ -114,12 +120,20 @@ def print_events_payload(payload: dict, *, emit_text, output_writer=None) -> boo
     return inspect_print_events_payload(payload, emit_text=emit_text, output_writer=output_writer)
 
 
+def print_metrics_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
+    return inspect_print_metrics_payload(payload, emit_text=emit_text, output_writer=output_writer)
+
+
 def print_steps_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
     return inspect_print_steps_payload(payload, emit_text=emit_text, output_writer=output_writer)
 
 
 def print_subagent_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
     return inspect_print_subagent_payload(payload, emit_text=emit_text, output_writer=output_writer)
+
+
+def print_thread_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
+    return inspect_print_thread_payload(payload, emit_text=emit_text, output_writer=output_writer)
 
 
 def print_doctor_payload(payload: dict, *, emit_text, output_writer=None) -> bool:

@@ -7,10 +7,12 @@ from research_system.services.payloads.runs.run_payload_common_fields import (
 )
 from research_system.services.payloads.runs.run_payload_fields import (
     events_payload_fields,
+    metrics_payload_fields,
     replay_payload_fields,
     run_payload_fields,
     steps_payload_fields,
     subagent_payload_fields,
+    thread_payload_fields,
     trace_payload_fields,
 )
 from research_system.services.payloads.runs.run_payload_renderers import (
@@ -27,6 +29,7 @@ __all__ = [
     "append_run_id",
     "events_payload_fields",
     "latest_run_context",
+    "metrics_payload_fields",
     "render_event_row_text",
     "render_labeled_field_line",
     "render_run_row_text",
@@ -37,5 +40,6 @@ __all__ = [
     "run_payload_fields",
     "steps_payload_fields",
     "subagent_payload_fields",
+    "thread_payload_fields",
     "trace_payload_fields",
 ]

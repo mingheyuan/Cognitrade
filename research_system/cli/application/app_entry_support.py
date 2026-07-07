@@ -45,7 +45,15 @@ def execute_app_main_command(
     payload = execute_cli_command_fn(
         settings,
         command=args.command,
-        query=getattr(args, "query", getattr(args, "call_id", None)),
+        query=getattr(
+            args,
+            "query",
+            getattr(
+                args,
+                "call_id",
+                getattr(args, "thread_id", getattr(args, "node_id", None)),
+            ),
+        ),
         intent=getattr(args, "intent", getattr(args, "reviewer", None)),
         run_id=getattr(args, "run_id", getattr(args, "proposal_id", None)),
         limit=getattr(args, "limit", 20),

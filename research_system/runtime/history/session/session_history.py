@@ -88,6 +88,9 @@ class SessionHistory:
         }
 
     def metrics(self) -> dict[str, Any]:
+        request_payload = read_json(self.run_root / "request.json") or {}
+        result_payload = read_json(self.run_root / "result.json") or {}
+        summary_payload = read_json(self.run_root / "summary.json") or {}
         events = read_jsonl(self.run_root / "events.jsonl")
         items = self._latest_items()
         threads = self.thread_states()
@@ -133,6 +136,12 @@ class SessionHistory:
 
         return {
             "run_id": self.run_root.name,
+            "request": request_payload,
+            "summary": summary_payload,
+            "display_summary": build_display_summary(
+                result_payload=result_payload,
+                summary_payload=summary_payload,
+            ),
             "counts": {
                 "events": len(events),
                 "items": len(items),

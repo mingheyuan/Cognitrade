@@ -16,7 +16,7 @@ from research_system.cli.commands.cli_command_proposal_support import (
     execute_proposals_command,
     execute_review_proposal_command,
 )
-from research_system.cli.commands.cli_command_run_support import execute_run_id_command, execute_subagent_command
+from research_system.cli.commands.cli_command_run_support import execute_run_id_command, execute_run_query_command
 from research_system.cli.commands.cli_command_system_support import (
     execute_check_command,
     execute_cleanup_command,
@@ -38,7 +38,10 @@ class CliCommandDispatchRuntimeTests(unittest.TestCase):
         self.assertIs(CLI_COMMAND_EXECUTORS["proposal"], execute_proposal_detail_command)
         self.assertIs(CLI_COMMAND_EXECUTORS["review-proposal"], execute_review_proposal_command)
         self.assertIs(CLI_COMMAND_EXECUTORS["trace"], execute_run_id_command)
-        self.assertIs(CLI_COMMAND_EXECUTORS["subagent-read"], execute_subagent_command)
+        self.assertIs(CLI_COMMAND_EXECUTORS["metrics"], execute_run_id_command)
+        self.assertIs(CLI_COMMAND_EXECUTORS["subagent-read"], execute_run_query_command)
+        self.assertIs(CLI_COMMAND_EXECUTORS["run-thread"], execute_run_query_command)
+        self.assertIs(CLI_COMMAND_EXECUTORS["rerun-from"], execute_run_query_command)
         self.assertIs(CLI_COMMAND_EXECUTORS["cleanup"], execute_cleanup_command)
         self.assertIs(CLI_COMMAND_EXECUTORS["reindex-qdrant"], execute_reindex_command)
         self.assertIs(CLI_COMMAND_EXECUTORS["check"], execute_check_command)

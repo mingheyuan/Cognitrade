@@ -48,6 +48,14 @@ class ChatCommandCatalogTests(unittest.TestCase):
         self.assertTrue(any("/run-steps" in line for line in CHAT_HELP_LINES))
         self.assertTrue(any("/run-steps" in line for line in CHAT_COMMAND_SUMMARY_LINES))
 
+    def test_help_and_popup_command_catalog_cover_runtime_devtool_commands(self) -> None:
+        self.assertTrue(any("/metrics" in line for line in CHAT_HELP_LINES))
+        self.assertTrue(any("/run-thread" in line for line in CHAT_HELP_LINES))
+        self.assertTrue(any("/rerun-from" in line for line in CHAT_HELP_LINES))
+        self.assertTrue(any("/metrics" in line for line in CHAT_COMMAND_SUMMARY_LINES))
+        self.assertTrue(any("/run-thread" in line for line in CHAT_COMMAND_SUMMARY_LINES))
+        self.assertTrue(any("/rerun-from" in line for line in CHAT_COMMAND_SUMMARY_LINES))
+
 
 if __name__ == "__main__":
     unittest.main()

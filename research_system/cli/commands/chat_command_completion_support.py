@@ -24,8 +24,11 @@ CHAT_COMMANDS = [
     "/thinking",
     "/events",
     "/events-read",
+    "/metrics",
+    "/run-thread",
     "/subagent-read",
     "/run-steps",
+    "/rerun-from",
     "/run",
     "/review",
     "/history",
@@ -97,10 +100,16 @@ def chat_completion_candidates(text_before_cursor: str, state) -> list[str]:
         return ["off", "compact", "full", *unique_run_ids]
     if command == "/events-read":
         return unique_run_ids
+    if command == "/metrics":
+        return unique_run_ids
+    if command == "/run-thread":
+        return unique_run_ids if len(parts) <= 2 else []
     if command == "/subagent-read":
         return unique_run_ids
     if command == "/run-steps":
         return unique_run_ids
+    if command == "/rerun-from":
+        return unique_run_ids if len(parts) <= 2 else []
     if command == "/run-id":
         return ["clear", *recent_run_ids]
     if command in {"/replay", "/resume", "/cancel", "/trace"}:

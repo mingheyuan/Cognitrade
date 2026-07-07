@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from research_system.services.payloads.runs.run_payload_fields import (
     events_payload_fields,
+    metrics_payload_fields,
     replay_payload_fields,
     run_payload_fields,
     steps_payload_fields,
     subagent_payload_fields,
+    thread_payload_fields,
     trace_payload_fields,
 )
 from research_system.services.payloads.runs.run_payload_renderers import (

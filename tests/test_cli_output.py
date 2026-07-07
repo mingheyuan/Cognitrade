@@ -96,6 +96,39 @@ class _AppOrchestratorStub:
             },
         }
 
+    def metrics(self, run_id: str) -> dict:
+        return {
+            "run_id": run_id,
+            "request": {"intent": "stock_check", "user_query": "inspect runtime"},
+            "summary": {"status": "completed"},
+            "display_summary": "metrics ready",
+            "counts": {"events": 2, "items": 3, "threads": 2, "subagents": 2, "llm_calls": 1},
+            "rates": {"fallback_rate": 0.5, "memory_hit_rate": 1.0, "qdrant_hit_rate": 0.5},
+            "latency_ms": {"subagents": {"count": 2}, "actions": {"count": 1}, "per_subagent": {}, "per_action": {}},
+            "fanout": {"max_depth": 1, "per_parent_child_count": {"thread-root": 1}},
+            "turn_usage": {"turn-root": {"thread_id": "thread-root", "llm_calls": 1}},
+            "event_type_counts": {"subagent_completed": 2},
+            "degrade_reason_counts": {"llm_budget_exhausted": 1},
+        }
+
+    def thread(self, run_id: str, thread_id: str) -> dict:
+        return {
+            "run_id": run_id,
+            "thread_id": thread_id,
+            "request": {"intent": "stock_check", "user_query": "inspect child"},
+            "summary": {"status": "completed"},
+            "display_summary": "thread ready",
+            "thread": {"thread_id": thread_id, "status": "completed"},
+            "subagent_trace": [],
+            "events": [],
+            "wait_trace": [],
+            "items": [],
+            "event_counts": {"events": 0, "subagent_trace": 0, "wait_trace": 0, "items": 0},
+        }
+
+    def rerun_from(self, run_id: str, *, from_node: str) -> dict:
+        return {"run_id": "01RERUN", "status": "completed", "message": f"reran from {from_node}", "source_run_id": run_id}
+
 
 THREAD_SUMMARY = {
     "thread_id": "thread-root",
@@ -197,6 +230,8 @@ class CliOutputTests(unittest.TestCase):
         output = buffer.getvalue()
         self.assertIn("/stop", output)
         self.assertIn("/resume <run_id|last>", output)
+        self.assertIn("/metrics <run_id|last>", output)
+        self.assertIn("/rerun-from <run_id|last> <node_id>", output)
         self.assertIn("show checkpoint resumability", output)
 
     def test_execute_cli_command_closes_orchestrator_for_history(self) -> None:
@@ -491,6 +526,65 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("call_id=01INVOCATION", output)
         self.assertIn("[dynamic_action_inserted]", output)
         self.assertEqual(session.events_payload, payload)
+
+    def test_print_metrics_payload_renders_runtime_observability_sections(self) -> None:
+        payload = {
+            "run_id": "01METRICS",
+            "request": {"intent": "stock_check", "user_query": "inspect runtime"},
+            "summary": {"status": "completed"},
+            "display_summary": "metrics ready",
+            "counts": {"events": 2, "items": 3, "threads": 2, "subagents": 2, "llm_calls": 1},
+            "rates": {"fallback_rate": 0.5, "memory_hit_rate": 1.0, "qdrant_hit_rate": 0.5},
+            "latency_ms": {"subagents": {"count": 2}, "actions": {"count": 1}, "per_subagent": {}, "per_action": {}},
+            "fanout": {"max_depth": 1, "per_parent_child_count": {"thread-root": 1}},
+            "turn_usage": {"turn-root": {"thread_id": "thread-root", "llm_calls": 1}},
+            "event_type_counts": {"subagent_completed": 2},
+            "degrade_reason_counts": {"llm_budget_exhausted": 1},
+        }
+
+        output = self._capture_payload_text(payload)
+
+        self.assertIn("run_id: 01METRICS", output)
+        self.assertIn("counts:", output)
+        self.assertIn("rates:", output)
+        self.assertIn("latency_ms:", output)
+        self.assertIn("turn_usage:", output)
+
+    def test_print_thread_payload_renders_thread_scoped_trace_and_items(self) -> None:
+        payload = {
+            "run_id": "01RUN",
+            "thread_id": "thread-child",
+            "request": {"intent": "stock_check", "user_query": "inspect child"},
+            "summary": {"status": "completed"},
+            "display_summary": "thread ready",
+            "thread": {"thread_id": "thread-child", "status": "completed"},
+            "subagent_trace": [
+                {
+                    "task_name": "retrieve:qdrant_evidence_searcher",
+                    "agent_label": "Qdrant Evidence Searcher",
+                    "agent_path": "retriever/qdrant_evidence_searcher",
+                    "status": "completed",
+                }
+            ],
+            "events": [
+                {
+                    "event_type": "subagent_completed",
+                    "task_name": "retrieve:qdrant_evidence_searcher",
+                    "agent_path": "retriever/qdrant_evidence_searcher",
+                }
+            ],
+            "wait_trace": [],
+            "items": [{"item_id": "item-1", "item_type": "subagent", "status": "completed"}],
+            "event_counts": {"events": 1, "subagent_trace": 1, "wait_trace": 0, "items": 1},
+        }
+
+        output = self._capture_payload_text(payload)
+
+        self.assertIn("thread_id: thread-child", output)
+        self.assertIn("thread:", output)
+        self.assertIn("subagent_trace:", output)
+        self.assertIn("events:", output)
+        self.assertIn("items:", output)
 
     def test_print_steps_payload_renders_strategy_dispatch_and_steps(self) -> None:
         payload = {

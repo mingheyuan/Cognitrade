@@ -86,6 +86,14 @@ def parse_chat_input(line: str) -> dict[str, object]:
         if len(parts) != 2:
             return {"action": "error", "message": "usage: /events-read <run_id|last>"}
         return {"action": "events", "run_id": parts[1]}
+    if command == "/metrics":
+        if len(parts) != 2:
+            return {"action": "error", "message": "usage: /metrics <run_id|last>"}
+        return {"action": "metrics", "run_id": parts[1]}
+    if command == "/run-thread":
+        if len(parts) != 3:
+            return {"action": "error", "message": "usage: /run-thread <run_id|last> <thread_id>"}
+        return {"action": "run-thread", "run_id": parts[1], "thread_id": parts[2]}
     if command == "/subagent-read":
         if len(parts) != 3:
             return {"action": "error", "message": "usage: /subagent-read <run_id|last> <call_id>"}
@@ -94,6 +102,10 @@ def parse_chat_input(line: str) -> dict[str, object]:
         if len(parts) != 2:
             return {"action": "error", "message": "usage: /run-steps <run_id|last>"}
         return {"action": "run-steps", "run_id": parts[1]}
+    if command == "/rerun-from":
+        if len(parts) != 3:
+            return {"action": "error", "message": "usage: /rerun-from <run_id|last> <node_id>"}
+        return {"action": "rerun-from", "run_id": parts[1], "node_id": parts[2]}
     if command == "/history":
         return _parse_history_command(parts)
     if command == "/proposals":

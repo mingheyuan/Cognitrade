@@ -46,14 +46,28 @@ def build_app_parser() -> argparse.ArgumentParser:
     events_parser.add_argument("run_id")
     events_parser.add_argument("--json", action="store_true", dest="as_json")
 
+    metrics_parser = subparsers.add_parser("metrics")
+    metrics_parser.add_argument("run_id")
+    metrics_parser.add_argument("--json", action="store_true", dest="as_json")
+
     run_steps_parser = subparsers.add_parser("run-steps")
     run_steps_parser.add_argument("run_id")
     run_steps_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    run_thread_parser = subparsers.add_parser("run-thread")
+    run_thread_parser.add_argument("run_id")
+    run_thread_parser.add_argument("thread_id")
+    run_thread_parser.add_argument("--json", action="store_true", dest="as_json")
 
     subagent_parser = subparsers.add_parser("subagent-read")
     subagent_parser.add_argument("run_id")
     subagent_parser.add_argument("call_id")
     subagent_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    rerun_from_parser = subparsers.add_parser("rerun-from")
+    rerun_from_parser.add_argument("run_id")
+    rerun_from_parser.add_argument("node_id")
+    rerun_from_parser.add_argument("--json", action="store_true", dest="as_json")
 
     resume_parser = subparsers.add_parser("resume")
     resume_parser.add_argument("run_id")

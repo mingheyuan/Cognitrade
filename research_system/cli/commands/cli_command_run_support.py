@@ -21,6 +21,8 @@ def execute_run_id_command(
             return orchestrator.events(payload["run_id"])
         if command == "run-steps":
             return orchestrator.steps(payload["run_id"])
+        if command == "metrics":
+            return orchestrator.metrics(payload["run_id"])
         if command == "resume":
             return orchestrator.resume(payload["run_id"])
         if command == "trace":
@@ -28,7 +30,7 @@ def execute_run_id_command(
         return orchestrator.cancel(payload["run_id"])
 
 
-def execute_subagent_command(
+def execute_run_query_command(
     settings: Settings,
     *,
     command: str,
@@ -37,6 +39,10 @@ def execute_subagent_command(
     query: str | None,
     **_: object,
 ) -> object:
-    payload = build_cli_command_payload(command=command, run_id=run_id, decision=query)
+    payload = build_cli_command_payload(command=command, run_id=run_id, query=query)
     with orchestrator_cls(settings) as orchestrator:
-        return orchestrator.subagent(payload["run_id"], payload["query"])
+        if command == "subagent-read":
+            return orchestrator.subagent(payload["run_id"], payload["query"])
+        if command == "run-thread":
+            return orchestrator.thread(payload["run_id"], payload["query"])
+        return orchestrator.rerun_from(payload["run_id"], from_node=payload["query"])

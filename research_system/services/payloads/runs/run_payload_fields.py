@@ -68,6 +68,26 @@ def events_payload_fields(payload: dict) -> list[tuple[str, str]]:
     return fields
 
 
+def metrics_payload_fields(payload: dict) -> list[tuple[str, str]]:
+    request, summary = request_summary(payload)
+    counts = payload.get("counts") or {}
+    fields: list[tuple[str, str]] = []
+    append_run_id(fields, payload)
+    append_intent_query_summary_status(
+        fields,
+        payload=payload,
+        intent=str(request.get("intent") or "unknown"),
+        query=str(request.get("user_query") or ""),
+        status=summary.get("status"),
+    )
+    fields.append(("events", str(counts.get("events") or 0)))
+    fields.append(("items", str(counts.get("items") or 0)))
+    fields.append(("threads", str(counts.get("threads") or 0)))
+    fields.append(("subagents", str(counts.get("subagents") or 0)))
+    fields.append(("llm_calls", str(counts.get("llm_calls") or 0)))
+    return fields
+
+
 def steps_payload_fields(payload: dict) -> list[tuple[str, str]]:
     request, summary = request_summary(payload)
     step_counts = payload.get("step_counts") or {}
@@ -116,4 +136,27 @@ def subagent_payload_fields(payload: dict) -> list[tuple[str, str]]:
         fields.append(("subagent_type", str(payload.get("subagent_type"))))
     fields.append(("trace_rows", str(event_counts.get("trace_rows") or 0)))
     fields.append(("events", str(event_counts.get("events") or 0)))
+    return fields
+
+
+def thread_payload_fields(payload: dict) -> list[tuple[str, str]]:
+    request, summary = request_summary(payload)
+    thread_payload = payload.get("thread") or {}
+    event_counts = payload.get("event_counts") or {}
+    fields: list[tuple[str, str]] = []
+    append_run_id(fields, payload)
+    if payload.get("thread_id") not in (None, ""):
+        fields.append(("thread_id", str(payload.get("thread_id"))))
+    append_intent_query_summary_status(
+        fields,
+        payload=payload,
+        intent=str(request.get("intent") or "unknown"),
+        query=str(request.get("user_query") or ""),
+        status=summary.get("status"),
+    )
+    if thread_payload.get("status") not in (None, ""):
+        fields.append(("thread_status", str(thread_payload.get("status"))))
+    fields.append(("events", str(event_counts.get("events") or 0)))
+    fields.append(("subagent_trace", str(event_counts.get("subagent_trace") or 0)))
+    fields.append(("items", str(event_counts.get("items") or 0)))
     return fields

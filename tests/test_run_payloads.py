@@ -5,6 +5,7 @@ import unittest
 from research_system.services.payloads.runs import (
     events_payload_fields,
     latest_run_context,
+    metrics_payload_fields,
     render_event_row_text,
     render_labeled_field_line,
     replay_payload_fields,
@@ -12,6 +13,7 @@ from research_system.services.payloads.runs import (
     render_status_counts_text,
     steps_payload_fields,
     subagent_payload_fields,
+    thread_payload_fields,
     render_trace_row_text,
     trace_payload_fields,
     run_payload_fields,
@@ -141,6 +143,31 @@ class RunPayloadsTests(unittest.TestCase):
             ],
         )
 
+    def test_metrics_payload_fields_use_metrics_field_order(self) -> None:
+        self.assertEqual(
+            metrics_payload_fields(
+                {
+                    "run_id": "01METRICS",
+                    "request": {"intent": "stock_check", "user_query": "inspect runtime"},
+                    "summary": {"status": "completed"},
+                    "display_summary": "done",
+                    "counts": {"events": 5, "items": 4, "threads": 2, "subagents": 3, "llm_calls": 1},
+                }
+            ),
+            [
+                ("run_id", "01METRICS"),
+                ("intent", "stock_check"),
+                ("query", "inspect runtime"),
+                ("summary", "done"),
+                ("status", "completed"),
+                ("events", "5"),
+                ("items", "4"),
+                ("threads", "2"),
+                ("subagents", "3"),
+                ("llm_calls", "1"),
+            ],
+        )
+
     def test_subagent_payload_fields_use_subagent_field_order(self) -> None:
         self.assertEqual(
             subagent_payload_fields(
@@ -170,6 +197,33 @@ class RunPayloadsTests(unittest.TestCase):
                 ("subagent_type", "stock_snapshot_collector"),
                 ("trace_rows", "2"),
                 ("events", "3"),
+            ],
+        )
+
+    def test_thread_payload_fields_use_thread_field_order(self) -> None:
+        self.assertEqual(
+            thread_payload_fields(
+                {
+                    "run_id": "01THREAD",
+                    "thread_id": "thread-child",
+                    "request": {"intent": "stock_compare", "user_query": "compare banks"},
+                    "summary": {"status": "completed"},
+                    "display_summary": "done",
+                    "thread": {"status": "completed"},
+                    "event_counts": {"events": 2, "subagent_trace": 1, "items": 3},
+                }
+            ),
+            [
+                ("run_id", "01THREAD"),
+                ("thread_id", "thread-child"),
+                ("intent", "stock_compare"),
+                ("query", "compare banks"),
+                ("summary", "done"),
+                ("status", "completed"),
+                ("thread_status", "completed"),
+                ("events", "2"),
+                ("subagent_trace", "1"),
+                ("items", "3"),
             ],
         )
 

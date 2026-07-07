@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import argparse
 import unittest
+from pathlib import Path
 
 from research_system.cli.app import build_parser, main
 from research_system.cli.application.app_entry_support import (
@@ -10,6 +12,7 @@ from research_system.cli.application.app_entry_support import (
 from research_system.cli.application.app_parser_support import (
     build_app_parser as application_build_app_parser,
 )
+from research_system.runtime.platform.settings import Settings
 
 
 class ApplicationRuntimeTests(unittest.TestCase):
@@ -19,6 +22,76 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertIsNotNone(application_build_app_settings)
         self.assertIsNotNone(application_execute_app_main_command)
         self.assertIsNotNone(application_build_app_parser)
+
+    def test_application_parser_supports_runtime_devtool_commands(self) -> None:
+        parser = application_build_app_parser()
+
+        metrics_args = parser.parse_args(["metrics", "01RUN"])
+        run_thread_args = parser.parse_args(["run-thread", "01RUN", "thread-child"])
+        rerun_args = parser.parse_args(["rerun-from", "01RUN", "retrieve"])
+
+        self.assertEqual(metrics_args.command, "metrics")
+        self.assertEqual(metrics_args.run_id, "01RUN")
+        self.assertEqual(run_thread_args.command, "run-thread")
+        self.assertEqual(run_thread_args.thread_id, "thread-child")
+        self.assertEqual(rerun_args.command, "rerun-from")
+        self.assertEqual(rerun_args.node_id, "retrieve")
+
+    def test_execute_app_main_command_routes_query_from_thread_and_node_arguments(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def fake_execute_cli_command_fn(settings, **kwargs):
+            calls.append(kwargs)
+            return {"run_id": "01RUN", "status": "completed"}
+
+        settings = Settings.from_env(Path("."))
+
+        thread_args = argparse.Namespace(
+            command="run-thread",
+            run_id="01RUN",
+            thread_id="thread-child",
+            as_json=False,
+        )
+        rerun_args = argparse.Namespace(
+            command="rerun-from",
+            run_id="01RUN",
+            node_id="retrieve",
+            as_json=False,
+        )
+
+        self.assertEqual(
+            application_execute_app_main_command(
+                settings,
+                thread_args,
+                build_chat_entry_runtime_fn=None,
+                run_chat_entry_fn=None,
+                run_chat_tui_fn=None,
+                run_chat_fallback_fn=None,
+                handle_chat_line_fn=None,
+                execute_cli_command_fn=fake_execute_cli_command_fn,
+                print_payload_fn=lambda payload, as_json: 0,
+            ),
+            0,
+        )
+        self.assertEqual(
+            application_execute_app_main_command(
+                settings,
+                rerun_args,
+                build_chat_entry_runtime_fn=None,
+                run_chat_entry_fn=None,
+                run_chat_tui_fn=None,
+                run_chat_fallback_fn=None,
+                handle_chat_line_fn=None,
+                execute_cli_command_fn=fake_execute_cli_command_fn,
+                print_payload_fn=lambda payload, as_json: 0,
+            ),
+            0,
+        )
+
+        self.assertEqual(calls[0]["command"], "run-thread")
+        self.assertEqual(calls[0]["query"], "thread-child")
+        self.assertEqual(calls[1]["command"], "rerun-from")
+        self.assertEqual(calls[1]["query"], "retrieve")
 
 
 if __name__ == "__main__":

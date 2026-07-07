@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from research_system.cli.state.chat_updates import (
     ShellStatePatch,
     meta_update,
@@ -7,12 +9,14 @@ from research_system.cli.state.chat_updates import (
 )
 from research_system.services.payloads.runs.run_payloads import (
     events_payload_fields,
+    metrics_payload_fields,
     render_event_row_text,
     render_labeled_field_line,
     render_status_counts_text,
     render_trace_row_text,
     steps_payload_fields,
     subagent_payload_fields,
+    thread_payload_fields,
     trace_payload_fields,
 )
 
@@ -75,6 +79,91 @@ def print_events_payload(payload: dict, *, emit_text, output_writer=None) -> boo
         if not isinstance(row, dict):
             continue
         emit_text(output_writer, meta_update(render_event_row_text(row, indent="  ")))
+    return True
+
+
+def print_metrics_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
+    if "counts" not in payload or "rates" not in payload or "latency_ms" not in payload:
+        return False
+    emit_run_detail_fields(
+        metrics_payload_fields(payload),
+        emit_text=emit_text,
+        output_writer=output_writer,
+    )
+    counts = payload.get("counts") or {}
+    rates = payload.get("rates") or {}
+    fanout = payload.get("fanout") or {}
+    degrade_reason_counts = payload.get("degrade_reason_counts") or {}
+    event_type_counts = payload.get("event_type_counts") or {}
+    turn_usage = payload.get("turn_usage") or {}
+    latency_ms = payload.get("latency_ms") or {}
+    emit_text(output_writer, meta_update(f"counts: {json.dumps(counts, ensure_ascii=True, sort_keys=True)}"))
+    emit_text(output_writer, meta_update(f"rates: {json.dumps(rates, ensure_ascii=True, sort_keys=True)}"))
+    emit_text(output_writer, meta_update(f"fanout: {json.dumps(fanout, ensure_ascii=True, sort_keys=True)}"))
+    if degrade_reason_counts:
+        emit_text(
+            output_writer,
+            meta_update(f"degrade_reason_counts: {json.dumps(degrade_reason_counts, ensure_ascii=True, sort_keys=True)}"),
+        )
+    if event_type_counts:
+        emit_text(
+            output_writer,
+            meta_update(f"event_type_counts: {json.dumps(event_type_counts, ensure_ascii=True, sort_keys=True)}"),
+        )
+    emit_text(output_writer, meta_update("latency_ms:"))
+    for key in ("subagents", "actions", "per_subagent", "per_action"):
+        value = latency_ms.get(key)
+        emit_text(output_writer, meta_update(f"  {key}: {json.dumps(value, ensure_ascii=True, sort_keys=True)}"))
+    emit_text(output_writer, meta_update("turn_usage:"))
+    if not isinstance(turn_usage, dict) or not turn_usage:
+        emit_text(output_writer, meta_update("  -"))
+        return True
+    for turn_id in sorted(turn_usage):
+        emit_text(output_writer, meta_update(f"  {turn_id}: {json.dumps(turn_usage[turn_id], ensure_ascii=True, sort_keys=True)}"))
+    return True
+
+
+def print_thread_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
+    if "thread" not in payload or "thread_id" not in payload or "items" not in payload:
+        return False
+    emit_run_detail_fields(
+        thread_payload_fields(payload),
+        emit_text=emit_text,
+        output_writer=output_writer,
+    )
+    thread_payload = payload.get("thread") or {}
+    emit_text(output_writer, meta_update(f"thread: {json.dumps(thread_payload, ensure_ascii=True, sort_keys=True)}"))
+    emit_text(output_writer, meta_update("subagent_trace:"))
+    trace_rows = payload.get("subagent_trace") or []
+    if not isinstance(trace_rows, list) or not trace_rows:
+        emit_text(output_writer, meta_update("  -"))
+    else:
+        for row in trace_rows:
+            if isinstance(row, dict):
+                emit_text(output_writer, meta_update(render_trace_row_text(row, indent="  ")))
+    emit_text(output_writer, meta_update("events:"))
+    event_rows = payload.get("events") or []
+    if not isinstance(event_rows, list) or not event_rows:
+        emit_text(output_writer, meta_update("  -"))
+    else:
+        for row in event_rows:
+            if isinstance(row, dict):
+                emit_text(output_writer, meta_update(render_event_row_text(row, indent="  ")))
+    emit_text(output_writer, meta_update("items:"))
+    items = payload.get("items") or []
+    if not isinstance(items, list) or not items:
+        emit_text(output_writer, meta_update("  -"))
+        return True
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        item_id = str(row.get("item_id") or row.get("title") or "unknown")
+        item_type = str(row.get("item_type") or "item")
+        status = str(row.get("status") or "")
+        line = f"  {item_id} [{item_type}]"
+        if status:
+            line += f"  status={status}"
+        emit_text(output_writer, meta_update(line))
     return True
 
 

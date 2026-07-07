@@ -306,6 +306,100 @@ class ChatActionsTests(unittest.TestCase):
         self.assertTrue(handled)
         self.assertEqual(calls, [("run-steps", "01RUN", None)])
 
+    def test_handle_chat_cli_action_metrics_dispatches_run_scoped_metrics_inspect(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(last_run_id="01RUN"),
+            llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+            task_router=TaskRouter(),
+            output_lines=[],
+        )
+        calls: list[tuple[str, str | None, str | None]] = []
+        handled = handle_chat_cli_action(
+            action="metrics",
+            parsed={"action": "metrics", "run_id": "last"},
+            state=session.state,
+            settings=session.settings,
+            emit_text=lambda output_writer, update: apply_tui_update(session, update),
+            cli_command_runner=lambda _settings, **kwargs: calls.append((kwargs.get("command"), kwargs.get("run_id"), kwargs.get("query"))) or {
+                "run_id": "01RUN",
+                "request": {"intent": "stock_check", "user_query": "inspect runtime"},
+                "summary": {"status": "completed"},
+                "counts": {"events": 1, "items": 1, "threads": 1, "subagents": 1, "llm_calls": 0},
+                "rates": {"fallback_rate": 0.0, "memory_hit_rate": None, "qdrant_hit_rate": None},
+                "latency_ms": {"subagents": {}, "actions": {}, "per_subagent": {}, "per_action": {}},
+                "fanout": {"max_depth": 0, "per_parent_child_count": {}},
+                "turn_usage": {},
+                "event_type_counts": {},
+                "degrade_reason_counts": {},
+            },
+            payload_printer=lambda payload, as_json=False, output_writer=None: None,
+            output_writer=None,
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(calls, [("metrics", "01RUN", None)])
+
+    def test_handle_chat_cli_action_run_thread_dispatches_thread_scoped_inspect(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(last_run_id="01RUN"),
+            llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+            task_router=TaskRouter(),
+            output_lines=[],
+        )
+        calls: list[tuple[str, str | None, str | None]] = []
+        handled = handle_chat_cli_action(
+            action="run-thread",
+            parsed={"action": "run-thread", "run_id": "last", "thread_id": "thread-child"},
+            state=session.state,
+            settings=session.settings,
+            emit_text=lambda output_writer, update: apply_tui_update(session, update),
+            cli_command_runner=lambda _settings, **kwargs: calls.append((kwargs.get("command"), kwargs.get("run_id"), kwargs.get("query"))) or {
+                "run_id": "01RUN",
+                "thread_id": "thread-child",
+                "thread": {"thread_id": "thread-child", "status": "completed"},
+                "events": [],
+                "subagent_trace": [],
+                "wait_trace": [],
+                "items": [],
+                "event_counts": {"events": 0, "subagent_trace": 0, "wait_trace": 0, "items": 0},
+            },
+            payload_printer=lambda payload, as_json=False, output_writer=None: None,
+            output_writer=None,
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(calls, [("run-thread", "01RUN", "thread-child")])
+
+    def test_handle_chat_cli_action_rerun_from_updates_last_run_to_new_rerun(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(last_run_id="01SOURCE"),
+            llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+            task_router=TaskRouter(),
+            output_lines=[],
+        )
+
+        handled = handle_chat_cli_action(
+            action="rerun-from",
+            parsed={"action": "rerun-from", "run_id": "last", "node_id": "retrieve"},
+            state=session.state,
+            settings=session.settings,
+            emit_text=lambda output_writer, update: apply_tui_update(session, update),
+            cli_command_runner=lambda _settings, **kwargs: {
+                "run_id": "01RERUN",
+                "status": "completed",
+                "message": "reran from retrieve",
+                "source_run_id": kwargs.get("run_id"),
+            },
+            payload_printer=lambda payload, as_json=False, output_writer=None: None,
+            output_writer=None,
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(session.state.last_run_id, "01RERUN")
+
     def test_handle_chat_meta_action_emits_session_patch_for_intent_change(self) -> None:
         session = TuiSession(
             settings=Settings.from_env(Path(".")),

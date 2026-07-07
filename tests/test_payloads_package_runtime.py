@@ -10,10 +10,12 @@ from research_system.services.payloads.runs.run_payload_common_fields import (
 )
 from research_system.services.payloads.runs.run_payload_fields import (
     events_payload_fields as package_events_payload_fields,
+    metrics_payload_fields as package_metrics_payload_fields,
     replay_payload_fields as package_replay_payload_fields,
     run_payload_fields as package_run_payload_fields,
     steps_payload_fields as package_steps_payload_fields,
     subagent_payload_fields as package_subagent_payload_fields,
+    thread_payload_fields as package_thread_payload_fields,
     trace_payload_fields as package_trace_payload_fields,
 )
 from research_system.services.payloads.runs.run_payload_renderers import (
@@ -43,8 +45,10 @@ class PayloadsPackageRuntimeTests(unittest.TestCase):
         self.assertIs(runs_payloads_package.replay_payload_fields, package_replay_payload_fields)
         self.assertIs(runs_payloads_package.trace_payload_fields, package_trace_payload_fields)
         self.assertIs(runs_payloads_package.events_payload_fields, package_events_payload_fields)
+        self.assertIs(runs_payloads_package.metrics_payload_fields, package_metrics_payload_fields)
         self.assertIs(runs_payloads_package.steps_payload_fields, package_steps_payload_fields)
         self.assertIs(runs_payloads_package.subagent_payload_fields, package_subagent_payload_fields)
+        self.assertIs(runs_payloads_package.thread_payload_fields, package_thread_payload_fields)
 
     def test_run_payload_renderer_exports_match_package_exports(self) -> None:
         self.assertIs(runs_payloads_package.render_labeled_field_line, package_render_labeled_field_line)
@@ -70,8 +74,10 @@ class PayloadsPackageRuntimeTests(unittest.TestCase):
         self.assertIs(runs_payloads_package.replay_payload_fields, package_replay_payload_fields)
         self.assertIs(runs_payloads_package.trace_payload_fields, package_trace_payload_fields)
         self.assertIs(runs_payloads_package.events_payload_fields, package_events_payload_fields)
+        self.assertIs(runs_payloads_package.metrics_payload_fields, package_metrics_payload_fields)
         self.assertIs(runs_payloads_package.steps_payload_fields, package_steps_payload_fields)
         self.assertIs(runs_payloads_package.subagent_payload_fields, package_subagent_payload_fields)
+        self.assertIs(runs_payloads_package.thread_payload_fields, package_thread_payload_fields)
         self.assertIs(runs_payloads_package.render_labeled_field_line, package_render_labeled_field_line)
         self.assertIs(runs_payloads_package.render_run_row_text, package_render_run_row_text)
         self.assertIs(runs_payloads_package.render_status_counts_text, package_render_status_counts_text)

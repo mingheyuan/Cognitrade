@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 STATUS_FILTER_COMMANDS = frozenset({"history", "status", "doctor", "check", "cleanup", "reindex-qdrant"})
-RUN_ID_COMMANDS = frozenset({"replay", "resume", "cancel", "trace", "events", "run-steps"})
+RUN_ID_COMMANDS = frozenset({"replay", "resume", "cancel", "trace", "events", "run-steps", "metrics"})
+RUN_ID_QUERY_COMMANDS = frozenset({"subagent-read", "run-thread", "rerun-from"})
 SUBAGENT_COMMANDS = frozenset({"subagent-read"})
 PROPOSAL_COMMANDS = frozenset({"proposals", "proposal", "review-proposal"})
 
@@ -13,6 +14,7 @@ def build_cli_command_payload(
     limit: int = 20,
     status_filter: str | None = None,
     proposal_id: str | None = None,
+    query: str | None = None,
     decision: str | None = None,
     reviewer: str | None = None,
     reason: str | None = None,
@@ -29,11 +31,11 @@ def build_cli_command_payload(
             "command": command,
             "run_id": str(run_id or "").strip(),
         }
-    if command in SUBAGENT_COMMANDS:
+    if command in RUN_ID_QUERY_COMMANDS:
         return {
             "command": command,
             "run_id": str(run_id or "").strip(),
-            "query": str(decision or "").strip(),
+            "query": str(query if query is not None else decision or "").strip(),
         }
     if command == "proposals":
         return {
