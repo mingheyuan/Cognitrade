@@ -250,6 +250,25 @@ def print_subagent_payload(payload: dict, *, emit_text, output_writer=None) -> b
             text = str(item).strip()
             if text:
                 emit_text(output_writer, meta_update(f"  {text}"))
+    if isinstance(payload.get("item"), dict):
+        item_payload = payload["item"]
+        emit_text(
+            output_writer,
+            meta_update(
+                "item: "
+                + json.dumps(
+                    {
+                        "item_id": item_payload.get("item_id"),
+                        "thread_id": item_payload.get("thread_id"),
+                        "turn_id": item_payload.get("turn_id"),
+                        "status": item_payload.get("status"),
+                        "degrade_reason": item_payload.get("degrade_reason"),
+                    },
+                    ensure_ascii=True,
+                    sort_keys=True,
+                )
+            ),
+        )
     emit_text(output_writer, meta_update("trace_rows:"))
     trace_rows = payload.get("trace_rows") or []
     if not isinstance(trace_rows, list) or not trace_rows:

@@ -6,6 +6,11 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from research_system.agents._subagent_dag import (
+    SubagentDagExecutor,
+    SubagentDagNodeResult,
+    SubagentDagNodeSpec,
+)
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.runtime.core.execution_policy import RuntimeDegradeReason
 from research_system.runtime.platform.settings import Settings
@@ -109,18 +114,66 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             title="distiller",
             objective="Distill source records into logic blocks and dimensions.",
         ):
-            normalized_outputs, _ = self._invoke_subagent(
-                SubagentInvocation(
-                    subagent_type="distill_source_normalizer",
-                    objective="Normalize raw distillation source records.",
-                    inputs={"query": query, "source_records": source_records},
-                    context={
-                        "task_name": "distill:preprocess:source_normalizer",
-                        "agent_path": "distiller/preprocess/source_normalizer",
-                    },
-                )
+            preprocess_results = self._execute_subagent_dag(
+                [
+                    SubagentDagNodeSpec(
+                        node_id="source_normalizer",
+                        build_invocation=lambda _results: self._build_subagent_invocation(
+                            subagent_type="distill_source_normalizer",
+                            objective="Normalize raw distillation source records.",
+                            inputs={"query": query, "source_records": source_records},
+                            task_name="distill:preprocess:source_normalizer",
+                            agent_path="distiller/preprocess/source_normalizer",
+                        ),
+                        metadata=self._dag_metadata(
+                            task_name="distill:preprocess:source_normalizer",
+                            agent_path="distiller/preprocess/source_normalizer",
+                            objective="Normalize raw distillation source records.",
+                        ),
+                    ),
+                    SubagentDagNodeSpec(
+                        node_id="record_trimmer",
+                        depends_on=("source_normalizer",),
+                        build_invocation=lambda results: self._build_subagent_invocation(
+                            subagent_type="distill_record_trimmer",
+                            objective="Trim source records into bounded distillation input.",
+                            inputs={
+                                "records": list(
+                                    ((results["source_normalizer"].outputs or {}).get("records") or [])
+                                ),
+                            },
+                            task_name="distill:preprocess:record_trimmer",
+                            agent_path="distiller/preprocess/record_trimmer",
+                        ),
+                        metadata=self._dag_metadata(
+                            task_name="distill:preprocess:record_trimmer",
+                            agent_path="distiller/preprocess/record_trimmer",
+                            objective="Trim source records into bounded distillation input.",
+                        ),
+                    ),
+                    SubagentDagNodeSpec(
+                        node_id="chunk_builder",
+                        depends_on=("record_trimmer",),
+                        build_invocation=lambda results: self._build_subagent_invocation(
+                            subagent_type="distill_chunk_builder",
+                            objective="Split trimmed records into distillation chunks.",
+                            inputs={
+                                "records": list(
+                                    ((results["record_trimmer"].outputs or {}).get("records") or [])
+                                ),
+                            },
+                            task_name="distill:chunking:chunk_builder",
+                            agent_path="distiller/chunking/chunk_builder",
+                        ),
+                        metadata=self._dag_metadata(
+                            task_name="distill:chunking:chunk_builder",
+                            agent_path="distiller/chunking/chunk_builder",
+                            objective="Split trimmed records into distillation chunks.",
+                        ),
+                    ),
+                ]
             )
-            records = normalized_outputs["records"]
+            records = list((preprocess_results["source_normalizer"].outputs or {}).get("records") or [])
             if not records:
                 return {
                     "summary": {
@@ -136,22 +189,14 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                     "degrade_reason": "missing_source_records",
                 }
 
-            trim_outputs, _ = self._invoke_subagent(
-                SubagentInvocation(
-                    subagent_type="distill_record_trimmer",
-                    objective="Trim source records into bounded distillation input.",
-                    inputs={"records": records},
-                    context={
-                        "task_name": "distill:preprocess:record_trimmer",
-                        "agent_path": "distiller/preprocess/record_trimmer",
-                    },
-                )
-            )
-            trimmed_records = trim_outputs["records"]
-            trim_notes = trim_outputs["notes"]
+            trim_outputs = preprocess_results["record_trimmer"].outputs or {}
+            chunk_outputs = preprocess_results["chunk_builder"].outputs or {}
+            trimmed_records = list(trim_outputs.get("records") or [])
+            trim_notes = list(trim_outputs.get("notes") or [])
+            chunks = list(chunk_outputs.get("chunks") or [])
             force_fallback = execution_mode == DISTILL_EXECUTION_FALLBACK
             if not force_fallback:
-                result = self._run_chunked(query=query, records=trimmed_records)
+                result = self._run_chunked(query=query, records=trimmed_records, chunks=chunks)
             else:
                 result = self._run_fallback(records=trimmed_records)
                 if force_fallback:
@@ -162,19 +207,13 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             result["summary"]["processing_notes"].extend(trim_notes)
             return result
 
-    def _run_chunked(self, *, query: str, records: list[DistillSourceRecord]) -> dict:
-        chunk_outputs, _ = self._invoke_subagent(
-            SubagentInvocation(
-                subagent_type="distill_chunk_builder",
-                objective="Split trimmed records into distillation chunks.",
-                inputs={"records": records},
-                context={
-                    "task_name": "distill:chunking:chunk_builder",
-                    "agent_path": "distiller/chunking/chunk_builder",
-                },
-            )
-        )
-        chunks = chunk_outputs["chunks"]
+    def _run_chunked(
+        self,
+        *,
+        query: str,
+        records: list[DistillSourceRecord],
+        chunks: list[list[DistillSourceRecord]],
+    ) -> dict:
         if not chunks:
             return self._run_fallback(records=records)
 
@@ -182,61 +221,93 @@ class DistillerService(RuntimeBoundSubagentInvoker):
         llm_successes = 0
         fallback_chunks = 0
         llm_timeout_seen = False
-        chunk_invocations: list[SubagentInvocation] = []
-        chunk_thread_bindings: list[tuple[str, object | None]] = []
+        chunk_node_ids: list[str] = []
+        chunk_specs: list[SubagentDagNodeSpec] = []
 
-        for index, chunk in enumerate(chunks, start=1):
+        for index, chunk_records in enumerate(chunks, start=1):
             chunk_label = f"chunk_{index}_of_{len(chunks)}"
+            dag_node_id = f"chunk_{index}"
             child_thread, child_turn = self.spawn_child_thread(
                 intent="distill_chunk",
                 objective=f"distill:{chunk_label}",
                 agent=self.agent_name,
                 phase="distill_chunk",
             )
-            chunk_thread_bindings.append((chunk_label, child_thread))
-            chunk_invocations.append(
-                SubagentInvocation(
-                    subagent_type="llm_chunk_distiller",
-                    objective=f"Distill {chunk_label} with LLM.",
-                    inputs={"query": f"{query}\nChunk: {chunk_label}", "records": chunk},
-                    context={
-                        "task_name": f"distill:chunks:{chunk_label}:llm_chunk_distiller",
-                        "agent_path": f"distiller/chunks/{chunk_label}/llm_chunk_distiller",
-                        "child_thread_id": getattr(child_thread, "thread_id", None),
-                        "child_turn_id": getattr(child_turn, "turn_id", None),
-                        "phase": "distill_chunk",
-                    },
-                    requires_llm=True,
-                    fallback_subagent_type="fallback_chunk_distiller",
-                    fallback_objective=f"Fallback-distill {chunk_label}.",
-                    fallback_inputs={"records": chunk},
-                    fallback_context={
-                        "task_name": f"distill:chunks:{chunk_label}:fallback_chunk_distiller",
-                        "agent_path": f"distiller/chunks/{chunk_label}/fallback_chunk_distiller",
-                        "child_thread_id": getattr(child_thread, "thread_id", None),
-                        "child_turn_id": getattr(child_turn, "turn_id", None),
-                        "phase": "distill_chunk",
-                    },
-                    error_fallback_subagent_type="fallback_chunk_distiller",
-                    error_fallback_objective=f"Fallback-distill {chunk_label}.",
-                    error_fallback_inputs={"records": chunk},
-                    error_fallback_context={
-                        "task_name": f"distill:chunks:{chunk_label}:fallback_chunk_distiller",
-                        "agent_path": f"distiller/chunks/{chunk_label}/fallback_chunk_distiller",
-                        "child_thread_id": getattr(child_thread, "thread_id", None),
-                        "child_turn_id": getattr(child_turn, "turn_id", None),
-                        "phase": "distill_chunk",
-                    },
+            chunk_node_ids.append(dag_node_id)
+            chunk_specs.append(
+                SubagentDagNodeSpec(
+                    node_id=dag_node_id,
+                    failure_mode="isolate",
+                    max_attempts=2,
+                    build_invocation=lambda _results, *, chunk=chunk_records, label=chunk_label, thread=child_thread, turn=child_turn: self._build_subagent_invocation(
+                        subagent_type="llm_chunk_distiller",
+                        objective=f"Distill {label} with LLM.",
+                        inputs={"query": f"{query}\nChunk: {label}", "records": chunk},
+                        task_name=f"distill:chunks:{label}:llm_chunk_distiller",
+                        agent_path=f"distiller/chunks/{label}/llm_chunk_distiller",
+                        phase="distill_chunk",
+                        child_thread_id=getattr(thread, "thread_id", None),
+                        child_turn_id=getattr(turn, "turn_id", None),
+                        requires_llm=True,
+                        fallback_subagent_type="fallback_chunk_distiller",
+                        fallback_objective=f"Fallback-distill {label}.",
+                        fallback_inputs={"records": chunk},
+                        fallback_task_name=f"distill:chunks:{label}:fallback_chunk_distiller",
+                        fallback_agent_path=f"distiller/chunks/{label}/fallback_chunk_distiller",
+                        error_fallback_subagent_type="fallback_chunk_distiller",
+                        error_fallback_objective=f"Fallback-distill {label}.",
+                        error_fallback_inputs={"records": chunk},
+                        error_fallback_task_name=f"distill:chunks:{label}:fallback_chunk_distiller",
+                        error_fallback_agent_path=f"distiller/chunks/{label}/fallback_chunk_distiller",
+                    ),
+                    metadata=self._dag_metadata(
+                        task_name=f"distill:chunks:{chunk_label}:llm_chunk_distiller",
+                        agent_path=f"distiller/chunks/{chunk_label}/llm_chunk_distiller",
+                        objective=f"Distill {chunk_label} with LLM.",
+                        child_thread_id=getattr(child_thread, "thread_id", None),
+                        child_turn_id=getattr(child_turn, "turn_id", None),
+                        phase="distill_chunk",
+                    ),
                 )
             )
 
-        chunk_runs = self._invoke_subagents_concurrently(
-            chunk_invocations,
-            max_workers=len(chunk_invocations),
+        chunk_specs.append(
+            SubagentDagNodeSpec(
+                node_id="chunk_result_merger",
+                depends_on=tuple(chunk_node_ids),
+                allow_partial_dependencies=True,
+                build_invocation=lambda results: self._build_subagent_invocation(
+                    subagent_type="chunk_result_merger",
+                    objective="Merge chunk-level distillation outputs.",
+                    inputs={
+                        "records": records,
+                        "chunk_results": [
+                            result.outputs
+                            for node_id, result in results.items()
+                            if node_id in chunk_node_ids and result.outputs is not None
+                        ],
+                    },
+                    task_name="distill:postprocess:chunk_result_merger",
+                    agent_path="distiller/postprocess/chunk_result_merger",
+                ),
+                metadata=self._dag_metadata(
+                    task_name="distill:postprocess:chunk_result_merger",
+                    agent_path="distiller/postprocess/chunk_result_merger",
+                    objective="Merge chunk-level distillation outputs.",
+                ),
+            )
+        )
+        chunk_dag_results = self._execute_subagent_dag(
+            chunk_specs,
+            max_workers=max(len(chunk_node_ids), 1),
         )
 
-        for (chunk_label, child_thread), (llm_outputs, _) in zip(chunk_thread_bindings, chunk_runs, strict=False):
-            chunk_result = llm_outputs
+        for index, dag_node_id in enumerate(chunk_node_ids, start=1):
+            dag_result = chunk_dag_results[dag_node_id]
+            if dag_result.outputs is None:
+                continue
+            chunk_label = f"chunk_{index}_of_{len(chunks)}"
+            chunk_result = dag_result.outputs
             degrade_reason = str(chunk_result.get("degrade_reason") or "").strip()
             degrade_tokens = {token.strip() for token in degrade_reason.split(";") if token.strip()}
             used_fallback = bool(chunk_result.get("degraded")) and bool(
@@ -251,8 +322,9 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             chunk_result["summary"]["processing_notes"].append(
                 f"{chunk_label}:{'fallback' if used_fallback else 'llm'}"
             )
-            if child_thread is not None:
-                chunk_result["summary"]["processing_notes"].append(f"{chunk_label}:child_thread={child_thread.thread_id}")
+            child_thread_id = str((dag_result.metadata or {}).get("child_thread_id") or "").strip()
+            if child_thread_id:
+                chunk_result["summary"]["processing_notes"].append(f"{chunk_label}:child_thread={child_thread_id}")
             if used_fallback:
                 if RuntimeDegradeReason.LLM_REQUEST_TIMEOUT.value in degrade_tokens:
                     chunk_result["summary"]["processing_notes"].append(f"{chunk_label}:llm_timeout")
@@ -263,18 +335,13 @@ class DistillerService(RuntimeBoundSubagentInvoker):
 
             chunk_results.append(chunk_result)
 
-        merged_outputs, _ = self._invoke_subagent(
-            SubagentInvocation(
-                subagent_type="chunk_result_merger",
-                objective="Merge chunk-level distillation outputs.",
-                inputs={"records": records, "chunk_results": chunk_results},
-                context={
-                    "task_name": "distill:postprocess:chunk_result_merger",
-                    "agent_path": "distiller/postprocess/chunk_result_merger",
-                },
-            )
-        )
-        merged = merged_outputs
+        merged = dict((chunk_dag_results["chunk_result_merger"].outputs or {}) or {})
+        if not merged:
+            merged = self._run_fallback(records=records)
+        for chunk_result in chunk_results:
+            for note in list((chunk_result.get("summary") or {}).get("processing_notes") or []):
+                if note not in merged["summary"]["processing_notes"]:
+                    merged["summary"]["processing_notes"].append(note)
         merged["summary"]["processing_notes"].extend(
             [
                 f"chunk_count={len(chunks)}",
@@ -305,7 +372,127 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             merged["degraded"] = True
             existing_reason = str(merged.get("degrade_reason") or "").strip()
             merged["degrade_reason"] = existing_reason or "llm_timeout"
+        isolated_failures = [
+            result
+            for node_id, result in chunk_dag_results.items()
+            if node_id in chunk_node_ids and result.status == "failed"
+        ]
+        if isolated_failures:
+            merged["summary"]["processing_notes"].append(
+                f"isolated_chunk_failures={len(isolated_failures)}"
+            )
+            if "isolated_chunk_failure" not in merged["summary"]["major_risks"]:
+                merged["summary"]["major_risks"].append("isolated_chunk_failure")
+            merged["degraded"] = True
+            merged["degrade_reason"] = str(merged.get("degrade_reason") or "isolated_chunk_failure")
         return merged
+
+    def _execute_subagent_dag(
+        self,
+        nodes: list[SubagentDagNodeSpec],
+        *,
+        max_workers: int | None = None,
+    ) -> dict[str, SubagentDagNodeResult]:
+        executor = SubagentDagExecutor(
+            invoke_subagent=self._invoke_subagent,
+            emit_event=self._emit_runtime_event,
+        )
+        return executor.execute(nodes, max_workers=max_workers)
+
+    def _dag_metadata(
+        self,
+        *,
+        task_name: str,
+        agent_path: str,
+        objective: str | None,
+        child_thread_id: str | None = None,
+        child_turn_id: str | None = None,
+        phase: str | None = None,
+    ) -> dict:
+        payload = {
+            "task_name": task_name,
+            "agent_path": agent_path,
+            "objective": objective,
+            "phase": phase or "distill",
+        }
+        if child_thread_id:
+            payload["child_thread_id"] = child_thread_id
+        if child_turn_id:
+            payload["child_turn_id"] = child_turn_id
+        return payload
+
+    def _build_subagent_invocation(
+        self,
+        *,
+        subagent_type: str,
+        objective: str | None,
+        inputs: dict,
+        task_name: str,
+        agent_path: str,
+        phase: str | None = None,
+        child_thread_id: str | None = None,
+        child_turn_id: str | None = None,
+        requires_llm: bool = False,
+        fallback_subagent_type: str | None = None,
+        fallback_objective: str | None = None,
+        fallback_inputs: dict | None = None,
+        fallback_task_name: str | None = None,
+        fallback_agent_path: str | None = None,
+        error_fallback_subagent_type: str | None = None,
+        error_fallback_objective: str | None = None,
+        error_fallback_inputs: dict | None = None,
+        error_fallback_task_name: str | None = None,
+        error_fallback_agent_path: str | None = None,
+    ) -> SubagentInvocation:
+        context = {
+            "task_name": task_name,
+            "agent_path": agent_path,
+            "phase": phase or "distill",
+        }
+        if child_thread_id:
+            context["child_thread_id"] = child_thread_id
+        if child_turn_id:
+            context["child_turn_id"] = child_turn_id
+
+        fallback_context = {}
+        if fallback_task_name or fallback_agent_path:
+            fallback_context = {
+                "task_name": fallback_task_name or task_name,
+                "agent_path": fallback_agent_path or agent_path,
+                "phase": phase or "distill",
+            }
+            if child_thread_id:
+                fallback_context["child_thread_id"] = child_thread_id
+            if child_turn_id:
+                fallback_context["child_turn_id"] = child_turn_id
+
+        error_fallback_context = {}
+        if error_fallback_task_name or error_fallback_agent_path:
+            error_fallback_context = {
+                "task_name": error_fallback_task_name or task_name,
+                "agent_path": error_fallback_agent_path or agent_path,
+                "phase": phase or "distill",
+            }
+            if child_thread_id:
+                error_fallback_context["child_thread_id"] = child_thread_id
+            if child_turn_id:
+                error_fallback_context["child_turn_id"] = child_turn_id
+
+        return SubagentInvocation(
+            subagent_type=subagent_type,
+            objective=objective,
+            inputs=inputs,
+            context=context,
+            requires_llm=requires_llm,
+            fallback_subagent_type=fallback_subagent_type,
+            fallback_objective=fallback_objective,
+            fallback_inputs=dict(fallback_inputs or {}),
+            fallback_context=fallback_context,
+            error_fallback_subagent_type=error_fallback_subagent_type,
+            error_fallback_objective=error_fallback_objective,
+            error_fallback_inputs=dict(error_fallback_inputs or {}),
+            error_fallback_context=error_fallback_context,
+        )
 
     def _run_fallback(self, *, records: list[DistillSourceRecord]) -> dict:
         logic_blocks: list[LogicBlock] = []

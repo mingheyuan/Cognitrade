@@ -32,6 +32,30 @@ class ReportEvidenceInputModel(BaseModel):
     source_refs: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ReportStrategyResolverInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: str
+    query: str
+    evidences: list[ReportEvidenceInputModel] = Field(default_factory=list)
+    retrieval_summary: str | None = None
+    planning_context_hints: dict[str, Any] | None = None
+
+
+class ReportStrategyResolverOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    report_strategy: dict[str, Any] = Field(default_factory=dict)
+    review_summary_payload: dict[str, Any] | None = None
+    screening_scorecard_payload: dict[str, Any] | None = None
+    screening_candidates_payload: list[dict[str, Any]] = Field(default_factory=list)
+    methodology_payloads: list[dict[str, Any]] = Field(default_factory=list)
+    bank_compare_scorecard_payload: dict[str, Any] | None = None
+    scorecard_digest: str | None = None
+    scorecard_payload: dict[str, Any] | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
 class FallbackReportComposerInputModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -63,6 +87,27 @@ class FallbackReportComposerOutputModel(BaseModel):
     degraded: bool = False
     degrade_reason: str | None = None
     degraded_note: str | None = None
+
+
+class DeterministicBankCompareReportComposerInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidences: list[ReportEvidenceInputModel] = Field(default_factory=list)
+    methodology_payloads: list[dict[str, Any]] = Field(default_factory=list)
+    report_strategy: dict[str, Any] | None = None
+
+
+class DeterministicBankCompareReportComposerOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conclusion: str
+    evidence: list[ReportEvidenceInputModel] = Field(default_factory=list)
+    methodologies: list[dict[str, Any]] | None = None
+    review_summary: dict[str, Any] | None = None
+    risk: str
+    follow_up: str | None = None
+    degraded_note: str | None = None
+    notes: list[str] = Field(default_factory=list)
 
 
 class LLMReportComposerInputModel(BaseModel):
@@ -282,6 +327,112 @@ class FallbackReportComposerSubagent:
             "degrade_reason": degraded_note,
             "degraded_note": degraded_note,
         }
+
+
+class ReportStrategyResolverSubagent:
+    subagent_type = "report_strategy_resolver"
+    input_model = ReportStrategyResolverInputModel
+    output_model = ReportStrategyResolverOutputModel
+    runtime_policy = SubagentRuntimePolicy()
+
+    def __init__(
+        self,
+        *,
+        normalize_planning_context_hints: Callable[[Any], dict[str, str]],
+        derive_report_strategy: Callable[..., dict[str, Any]],
+        screening_scorecard_payload: Callable[[list[dict]], dict[str, Any] | None],
+        screening_candidates_payload: Callable[[list[dict]], list[dict[str, Any]]],
+        methodology_payloads: Callable[[list[dict]], list[dict[str, Any]]],
+        review_summary_payload: Callable[[list[dict]], dict[str, Any] | None],
+        bank_compare_scorecard_payload: Callable[[list[dict]], dict[str, Any] | None],
+        distillation_scorecard_digest: Callable[[list[dict]], str | None],
+        distillation_scorecard_payload: Callable[[list[dict]], dict[str, Any] | None],
+        report_strategy_trace_notes: Callable[[dict[str, Any]], list[str]],
+    ) -> None:
+        self.normalize_planning_context_hints = normalize_planning_context_hints
+        self.derive_report_strategy = derive_report_strategy
+        self.screening_scorecard_payload = screening_scorecard_payload
+        self.screening_candidates_payload = screening_candidates_payload
+        self.methodology_payloads = methodology_payloads
+        self.review_summary_payload = review_summary_payload
+        self.bank_compare_scorecard_payload = bank_compare_scorecard_payload
+        self.distillation_scorecard_digest = distillation_scorecard_digest
+        self.distillation_scorecard_payload = distillation_scorecard_payload
+        self.report_strategy_trace_notes = report_strategy_trace_notes
+
+    def run(
+        self,
+        *,
+        intent: str,
+        query: str,
+        evidences: list[dict],
+        retrieval_summary: str | None,
+        planning_context_hints: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        evidences = _normalize_report_evidences(evidences)
+        normalized_planning_hints = self.normalize_planning_context_hints(planning_context_hints)
+        report_strategy = self.derive_report_strategy(
+            query=query,
+            retrieval_summary=retrieval_summary,
+            planning_context_hints=normalized_planning_hints,
+        )
+        screening_scorecard_payload = self.screening_scorecard_payload(evidences) if intent == "stock_screen" else None
+        screening_candidates_payload = self.screening_candidates_payload(evidences) if intent == "stock_screen" else []
+        methodology_payloads = self.methodology_payloads(evidences) if intent in {"stock_screen", "stock_check", "stock_compare", "review_thesis"} else []
+        review_summary_payload = self.review_summary_payload(evidences) if intent in {"review_thesis", "stock_screen"} else None
+        bank_compare_scorecard_payload = self.bank_compare_scorecard_payload(methodology_payloads) if intent == "stock_compare" else None
+        scorecard_digest = self.distillation_scorecard_digest(evidences) if intent == "distill_kol_logic" else None
+        scorecard_payload = self.distillation_scorecard_payload(evidences) if intent == "distill_kol_logic" else None
+        return {
+            "report_strategy": report_strategy,
+            "review_summary_payload": review_summary_payload,
+            "screening_scorecard_payload": screening_scorecard_payload,
+            "screening_candidates_payload": screening_candidates_payload,
+            "methodology_payloads": methodology_payloads,
+            "bank_compare_scorecard_payload": bank_compare_scorecard_payload,
+            "scorecard_digest": scorecard_digest,
+            "scorecard_payload": scorecard_payload,
+            "notes": self.report_strategy_trace_notes(report_strategy),
+        }
+
+
+class DeterministicBankCompareReportComposerSubagent:
+    subagent_type = "bank_compare_report_composer"
+    input_model = DeterministicBankCompareReportComposerInputModel
+    output_model = DeterministicBankCompareReportComposerOutputModel
+    runtime_policy = SubagentRuntimePolicy()
+
+    def __init__(
+        self,
+        *,
+        compose_report: Callable[..., dict[str, Any]],
+        bank_compare_scorecard_payload: Callable[[list[dict]], dict[str, Any] | None],
+    ) -> None:
+        self.compose_report = compose_report
+        self.bank_compare_scorecard_payload = bank_compare_scorecard_payload
+
+    def run(
+        self,
+        *,
+        evidences: list[dict],
+        methodology_payloads: list[dict],
+        report_strategy: dict | None,
+    ) -> dict[str, Any]:
+        evidences = _normalize_report_evidences(evidences)
+        payload = dict(
+            self.compose_report(
+                evidences=evidences,
+                methodology_payloads=methodology_payloads,
+                report_strategy=report_strategy or {},
+            )
+        )
+        scorecard = self.bank_compare_scorecard_payload(methodology_payloads) or {}
+        payload["notes"] = [
+            f"candidate_count={int(scorecard.get('candidate_count') or 0)}",
+            f"ranked_candidates={len(list(scorecard.get('ranked_candidates') or []))}",
+        ]
+        return payload
+
 
 class LLMReportComposerSubagent:
     subagent_type = "llm_report_composer"

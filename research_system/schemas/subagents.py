@@ -28,6 +28,7 @@ class SubagentExecutionRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     subagent_type: str
+    invocation_id: str | None = None
     status: Literal["completed", "skipped", "degraded", "failed"] = "completed"
     objective: str | None = None
     inputs: dict[str, Any] = Field(default_factory=dict)

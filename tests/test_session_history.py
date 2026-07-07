@@ -163,6 +163,67 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["event_counts"]["dynamic_trace"], 1)
         self.assertEqual(payload["event_counts"]["wait_trace"], 1)
 
+    def test_trace_rebuilds_subagent_dag_dynamic_rows_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "01TRACEDAG"
+            run_root.mkdir(parents=True, exist_ok=True)
+
+            write_json(run_root / "request.json", {"intent": "distill_kol_logic", "user_query": "distill records"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-dag-1",
+                    "request_id": "req-dag",
+                    "run_id": "01TRACEDAG",
+                    "intent": "distill_kol_logic",
+                    "event_type": "subagent_dag_initialized",
+                    "phase": "distill",
+                    "agent": "distiller",
+                    "message": "Initialized subagent DAG execution",
+                    "payload": {
+                        "task_name": "distill:preprocess:source_normalizer",
+                        "agent_path": "distiller/preprocess/source_normalizer",
+                        "objective": "Normalize raw distillation source records.",
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-07T10:00:00+00:00",
+                },
+            )
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-dag-2",
+                    "request_id": "req-dag",
+                    "run_id": "01TRACEDAG",
+                    "intent": "distill_kol_logic",
+                    "event_type": "subagent_dag_node_completed",
+                    "phase": "distill",
+                    "agent": "distiller",
+                    "message": "Completed DAG node: source_normalizer",
+                    "payload": {
+                        "task_name": "distill:preprocess:source_normalizer",
+                        "agent_path": "distiller/preprocess/source_normalizer",
+                        "subagent_type": "distill_source_normalizer",
+                        "status": "completed",
+                        "objective": "Normalize raw distillation source records.",
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-07T10:00:01+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(len(payload["dynamic_trace"]), 2)
+        self.assertEqual(payload["dynamic_trace"][0]["event"], "subagent_dag_initialized")
+        self.assertEqual(payload["dynamic_trace"][1]["event"], "subagent_dag_node_completed")
+        self.assertEqual(
+            payload["dynamic_trace"][1]["task_name"],
+            "distill:preprocess:source_normalizer",
+        )
+
     def test_subagent_builds_call_scoped_payload(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "01SUBAGENT"
@@ -195,6 +256,29 @@ class SessionHistoryTests(unittest.TestCase):
                 },
             )
             write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "items.jsonl",
+                {
+                    "item_id": "item-subagent",
+                    "thread_id": "thread-root",
+                    "turn_id": "turn-root",
+                    "run_id": "01SUBAGENT",
+                    "request_id": "req1",
+                    "item_type": "subagent",
+                    "status": "completed",
+                    "agent": "collector",
+                    "phase": "collect",
+                    "title": "stock_snapshot_collector",
+                    "objective": "Collect stock-level verified snapshots.",
+                    "payload": {
+                        "invocation_id": "01INVOCATION",
+                        "llm_used": False,
+                        "output_keys": ["snapshots", "sources"],
+                    },
+                    "created_at": "2026-07-02T10:00:00+00:00",
+                    "updated_at": "2026-07-02T10:00:02+00:00",
+                },
+            )
             append_jsonl(
                 run_root / "events.jsonl",
                 {
@@ -229,7 +313,14 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["task_name"], "collect:stock_snapshot_collector")
         self.assertEqual(payload["agent_path"], "collector/stock_snapshot_collector")
         self.assertEqual(payload["subagent_type"], "stock_snapshot_collector")
-        self.assertEqual(payload["status"], "running")
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["thread_id"], "thread-root")
+        self.assertEqual(payload["turn_id"], "turn-root")
+        self.assertEqual(payload["phase"], "collect")
+        self.assertEqual(payload["agent"], "collector")
+        self.assertEqual(payload["duration_ms"], 2000)
+        self.assertFalse(payload["llm_used"])
+        self.assertEqual(payload["output_keys"], ["snapshots", "sources"])
         self.assertEqual(len(payload["trace_rows"]), 1)
         self.assertEqual(len(payload["events"]), 1)
         self.assertEqual(payload["event_counts"]["trace_rows"], 1)
@@ -469,6 +560,10 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["rates"]["memory_hit_rate"], 1.0)
         self.assertEqual(payload["turn_usage"]["turn-root"]["llm_calls"], 1)
         self.assertEqual(payload["turn_usage"]["turn-root"]["subagents"], 1)
+        self.assertEqual(payload["turn_usage"]["turn-root"]["subagent_latency_ms"], 1000)
+        self.assertEqual(payload["turn_usage"]["turn-root"]["degraded_subagents"], 0)
+        self.assertEqual(payload["turn_usage"]["turn-root"]["failed_subagents"], 0)
+        self.assertEqual(payload["turn_usage"]["turn-root"]["degrade_reason_counts"], {})
 
     def test_thread_payload_filters_child_thread_events_and_items(self) -> None:
         with TemporaryDirectory() as tmpdir:

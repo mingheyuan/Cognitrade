@@ -31,6 +31,21 @@ class RetrievalEvidenceModel(BaseModel):
     score: float | None = None
 
 
+class BlackboardEvidenceIndexerInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    blackboard_entries: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class BlackboardEvidenceIndexerOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_map: dict[str, RetrievalEvidenceModel] = Field(default_factory=dict)
+    symbol: str | None = None
+    sector: str | None = None
+    current_run_id: str | None = None
+
+
 class RetrievalDecisionInputModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -50,6 +65,7 @@ class FallbackRetrievalDecisionInputModel(BaseModel):
     evidences: list[RetrievalEvidenceModel] = Field(default_factory=list)
     top_k: int
     qdrant_degraded_reason: str | None = None
+    planning_context_hints: dict[str, str] | None = None
     runtime_degraded_reason: str | None = None
     error_name: str | None = None
 
@@ -71,6 +87,8 @@ class QdrantEvidenceSearchInputModel(BaseModel):
     intent: str
     query: str
     top_k: int
+    enabled: bool = True
+    disabled_reason: str | None = None
     symbol: str | None = None
     sector: str | None = None
     current_run_id: str | None = None
@@ -114,6 +132,43 @@ class MethodologyMemoryRecallOutputModel(BaseModel):
     degrade_reason: str | None = None
 
 
+class EvidenceCandidateDeduperInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidences: list[RetrievalEvidenceModel] = Field(default_factory=list)
+    current_run_id: str | None = None
+    intent: str | None = None
+
+
+class EvidenceCandidateDeduperOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidences: list[RetrievalEvidenceModel] = Field(default_factory=list)
+
+
+class BlackboardEvidenceIndexerSubagent:
+    subagent_type = "blackboard_evidence_indexer"
+    input_model = BlackboardEvidenceIndexerInputModel
+    output_model = BlackboardEvidenceIndexerOutputModel
+    runtime_policy = SubagentRuntimePolicy()
+
+    def __init__(self, *, index_blackboard_evidences: Callable[..., dict[str, Any]]) -> None:
+        self.index_blackboard_evidences = index_blackboard_evidences
+
+    def run(self, *, blackboard_entries: list[dict[str, Any]]) -> dict[str, Any]:
+        outputs = self.index_blackboard_evidences(blackboard_entries=blackboard_entries)
+        evidence_map = {
+            str(evidence_id): RetrievalEvidenceModel.model_validate(payload).model_dump(mode="python")
+            for evidence_id, payload in dict(outputs.get("evidence_map") or {}).items()
+        }
+        return {
+            "evidence_map": evidence_map,
+            "symbol": outputs.get("symbol"),
+            "sector": outputs.get("sector"),
+            "current_run_id": outputs.get("current_run_id"),
+        }
+
+
 class QdrantEvidenceSearchSubagent:
     subagent_type = "qdrant_evidence_searcher"
     input_model = QdrantEvidenceSearchInputModel
@@ -129,10 +184,20 @@ class QdrantEvidenceSearchSubagent:
         intent: str,
         query: str,
         top_k: int,
+        enabled: bool = True,
+        disabled_reason: str | None = None,
         symbol: str | None = None,
         sector: str | None = None,
         current_run_id: str | None = None,
     ) -> dict[str, Any]:
+        if not enabled:
+            return {
+                "evidences": [],
+                "metadata_filters": {},
+                "hit_count": 0,
+                "degraded": True,
+                "degrade_reason": disabled_reason or RuntimeDegradeReason.RUNTIME_FALLBACK.value,
+            }
         try:
             outputs = self.search_qdrant_evidences(
                 intent=intent,
@@ -202,6 +267,32 @@ class MethodologyMemoryRecallSubagent:
             "benchmark_scope": outputs.get("benchmark_scope"),
             "degraded": bool(outputs.get("degraded")),
             "degrade_reason": outputs.get("degrade_reason"),
+        }
+
+
+class EvidenceCandidateDeduperSubagent:
+    subagent_type = "evidence_candidate_deduper"
+    input_model = EvidenceCandidateDeduperInputModel
+    output_model = EvidenceCandidateDeduperOutputModel
+    runtime_policy = SubagentRuntimePolicy()
+
+    def __init__(self, *, dedupe_evidence_candidates: Callable[..., dict[str, Any]]) -> None:
+        self.dedupe_evidence_candidates = dedupe_evidence_candidates
+
+    def run(
+        self,
+        *,
+        evidences: list[dict[str, Any]],
+        current_run_id: str | None = None,
+        intent: str | None = None,
+    ) -> dict[str, Any]:
+        outputs = self.dedupe_evidence_candidates(
+            evidences=_normalize_evidence_rows(evidences),
+            current_run_id=current_run_id,
+            intent=intent,
+        )
+        return {
+            "evidences": _normalize_evidence_rows(outputs.get("evidences") or []),
         }
 
 
@@ -430,9 +521,21 @@ class FallbackRetrievalDecisionSubagent:
         *,
         combine_degrade_reason: Callable[[str | None, str | None], str | None],
         fallback_summary: Callable[..., str],
+        select_compare_evidences: Callable[..., list[dict]],
+        select_screening_evidences: Callable[..., list[dict]],
+        select_stock_check_evidences: Callable[..., list[dict]],
+        select_methodology_evolution_evidences: Callable[..., list[dict]],
+        select_distillation_evidences: Callable[..., list[dict]],
+        select_review_evidences: Callable[..., list[dict]],
     ) -> None:
         self.combine_degrade_reason = combine_degrade_reason
         self.fallback_summary = fallback_summary
+        self.select_compare_evidences = select_compare_evidences
+        self.select_screening_evidences = select_screening_evidences
+        self.select_stock_check_evidences = select_stock_check_evidences
+        self.select_methodology_evolution_evidences = select_methodology_evolution_evidences
+        self.select_distillation_evidences = select_distillation_evidences
+        self.select_review_evidences = select_review_evidences
 
     def run(
         self,
@@ -442,11 +545,51 @@ class FallbackRetrievalDecisionSubagent:
         evidences: list[dict],
         top_k: int,
         qdrant_degraded_reason: str | None,
+        planning_context_hints: dict[str, str] | None = None,
         runtime_degraded_reason: str | None = None,
         error_name: str | None = None,
     ) -> dict:
         evidences = _normalize_evidence_rows(evidences)
-        fallback_evidences = evidences[:top_k]
+        if intent == "distill_kol_logic":
+            fallback_evidences = self.select_distillation_evidences(
+                evidences=evidences,
+                top_k=top_k,
+            )
+        elif intent == "stock_screen":
+            fallback_evidences = self.select_screening_evidences(
+                evidences=evidences,
+                top_k=top_k,
+                query=query,
+                planning_context_hints=planning_context_hints or {},
+            )
+        elif intent == "stock_compare":
+            fallback_evidences = self.select_compare_evidences(
+                evidences=evidences,
+                top_k=top_k,
+                query=query,
+                planning_context_hints=planning_context_hints or {},
+            )
+        elif intent == "stock_check":
+            fallback_evidences = self.select_stock_check_evidences(
+                evidences=evidences,
+                top_k=top_k,
+                query=query,
+                planning_context_hints=planning_context_hints or {},
+            )
+        elif intent == "review_thesis":
+            fallback_evidences = self.select_review_evidences(
+                evidences=evidences,
+                top_k=top_k,
+                query=query,
+                planning_context_hints=planning_context_hints or {},
+            )
+        elif intent == "methodology_evolution":
+            fallback_evidences = self.select_methodology_evolution_evidences(
+                evidences=evidences,
+                top_k=top_k,
+            )
+        else:
+            fallback_evidences = evidences[:top_k]
         base_reason = runtime_degraded_reason or (
             f"llm_error:{error_name}" if error_name else RuntimeDegradeReason.LLM_UNAVAILABLE.value
         )

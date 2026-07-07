@@ -30,6 +30,7 @@ class _LocalRuntimeObserver:
         if item.item_type not in {"agent", "subagent", "thread", "degradation"}:
             return
         event_type = self._event_type(item_type=item.item_type, stage=stage)
+        item_payload = dict(item.payload or {})
         self.runtime.support.emit_event(
             self.runtime.context,
             request_id=self.runtime.request.request_id,
@@ -46,9 +47,10 @@ class _LocalRuntimeObserver:
                 "title": item.title,
                 "objective": item.objective,
                 "degrade_reason": item.degrade_reason,
-                "payload": item.payload,
+                "payload": item_payload,
                 "observer_payload": dict(payload or {}),
-            },
+            }
+            | self._derived_payload_fields(item_type=item.item_type, item=item, item_payload=item_payload),
         )
 
     @staticmethod
@@ -76,6 +78,35 @@ class _LocalRuntimeObserver:
             "updated": "subagent_updated",
         }.get(stage, "subagent_trace")
 
+    @staticmethod
+    def _derived_payload_fields(*, item_type: str, item, item_payload: dict[str, Any]) -> dict[str, Any]:
+        derived: dict[str, Any] = {
+            "invocation_id": item_payload.get("invocation_id"),
+            "subagent_type": item_payload.get("subagent_type"),
+            "action_id": item_payload.get("action_id"),
+            "node_id": item_payload.get("node_id"),
+            "task_name": item_payload.get("task_name"),
+            "agent_path": item_payload.get("agent_path"),
+            "agent_label": item_payload.get("agent_label"),
+            "child_thread_id": item_payload.get("child_thread_id"),
+            "child_turn_id": item_payload.get("child_turn_id"),
+            "notes": list(item_payload.get("notes") or []),
+            "llm_used": item_payload.get("llm_used"),
+        }
+        if item_type == "subagent":
+            derived["subagent_type"] = derived.get("subagent_type") or item.title
+            if not derived.get("task_name"):
+                phase = str(item.phase or "").strip()
+                derived["task_name"] = f"{phase}:{item.title}" if phase else item.title
+            if not derived.get("agent_path"):
+                agent = str(item.agent or "").strip()
+                derived["agent_path"] = f"{agent}/{item.title}" if agent else item.title
+            if not derived.get("agent_label"):
+                derived["agent_label"] = " ".join(
+                    segment.capitalize() for segment in str(item.title or "").split("_") if segment
+                ).strip() or item.title
+        return {key: value for key, value in derived.items() if value not in (None, "", [])}
+
 
 @dataclass
 class LocalRuntimeRun:
@@ -102,8 +133,17 @@ class LocalRuntimeRun:
     def metrics(self) -> dict[str, Any]:
         return SessionHistory(self.run_root).metrics()
 
+    def steps(self) -> dict[str, Any]:
+        return SessionHistory(self.run_root).steps()
+
+    def subagent(self, invocation_id: str) -> dict[str, Any]:
+        return SessionHistory(self.run_root).subagent(invocation_id)
+
     def thread(self, thread_id: str) -> dict[str, Any]:
         return SessionHistory(self.run_root).thread(thread_id)
+
+    def thread_tree(self) -> list[dict[str, Any]]:
+        return SessionHistory(self.run_root).thread_tree()
 
     def close(self) -> None:
         self._temp_dir.cleanup()
@@ -432,8 +472,17 @@ class LocalRuntimeHarness:
     def metrics(self) -> dict[str, Any]:
         return SessionHistory(self.runs_root / self.run_id).metrics()
 
+    def steps(self) -> dict[str, Any]:
+        return SessionHistory(self.runs_root / self.run_id).steps()
+
+    def subagent(self, invocation_id: str) -> dict[str, Any]:
+        return SessionHistory(self.runs_root / self.run_id).subagent(invocation_id)
+
     def thread(self, thread_id: str) -> dict[str, Any]:
         return SessionHistory(self.runs_root / self.run_id).thread(thread_id)
+
+    def thread_tree(self) -> list[dict[str, Any]]:
+        return SessionHistory(self.runs_root / self.run_id).thread_tree()
 
     def _next_id(self) -> str:
         self._id_counter += 1

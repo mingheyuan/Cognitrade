@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import akshare as ak
 from pydantic import BaseModel, ConfigDict, Field
@@ -146,6 +146,42 @@ class ReviewTargetLoaderOutputModel(BaseModel):
     sector: str | None = None
     symbol: str | None = None
     notes: list[str] = Field(default_factory=list)
+
+
+class QueryNormalizerInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+
+
+class QueryNormalizerOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str | None = None
+    symbols: list[str] = Field(default_factory=list)
+    jsonl_path: str | None = None
+    sector_query: str | None = None
+    investment_cycle: str | None = None
+
+
+class QueryNormalizerSubagent:
+    subagent_type = "query_normalizer"
+    input_model = QueryNormalizerInputModel
+    output_model = QueryNormalizerOutputModel
+    runtime_policy = SubagentRuntimePolicy()
+
+    def __init__(self, *, normalize_query: Callable[..., dict[str, Any]]) -> None:
+        self.normalize_query = normalize_query
+
+    def run(self, *, query: str) -> dict[str, Any]:
+        outputs = dict(self.normalize_query(query=query) or {})
+        return {
+            "symbol": outputs.get("symbol"),
+            "symbols": [str(item).strip() for item in list(outputs.get("symbols") or []) if str(item).strip()],
+            "jsonl_path": outputs.get("jsonl_path"),
+            "sector_query": outputs.get("sector_query"),
+            "investment_cycle": outputs.get("investment_cycle"),
+        }
 
 
 class SnapshotSkillRunnerSubagent:

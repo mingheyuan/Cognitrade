@@ -32,7 +32,7 @@ class ChatPresenterLiveAccumulator:
             "thread_trace",
         }:
             trace_payload.setdefault("subagent_trace", []).append(self._subagent_trace_row(event))
-        elif event.event_type == "dynamic_action_inserted":
+        elif event.event_type == "dynamic_action_inserted" or event.event_type.startswith("subagent_dag_"):
             trace_payload.setdefault("dynamic_trace", []).append(self._dynamic_trace_row(event))
         else:
             wait_row = self._wait_trace_row(event)
@@ -76,6 +76,7 @@ class ChatPresenterLiveAccumulator:
 
     def _dynamic_trace_row(self, event: RunEvent) -> dict[str, Any]:
         return self.row_builder.dynamic_trace_row(
+            event_type=event.event_type,
             phase=event.phase,
             agent=event.agent,
             payload=event.payload or {},

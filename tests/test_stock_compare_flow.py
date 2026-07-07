@@ -361,6 +361,15 @@ class StockCompareFlowTests(unittest.TestCase):
             self.assertEqual(root_rows[0]["status"], "completed")
             self.assertEqual(len(history.thread_tree()), 1)
             self.assertEqual(len(history.thread_tree()[0]["children"]), len(source["symbols"]))
+            trace_payload = history.trace()
+            dag_events = [str(row.get("event") or "") for row in list(trace_payload.get("dynamic_trace") or [])]
+            self.assertIn("subagent_dag_initialized", dag_events)
+            self.assertIn("subagent_dag_node_completed", dag_events)
+            metrics_payload = history.metrics()
+            self.assertGreaterEqual(
+                metrics_payload["dag_event_counts"].get("subagent_dag_node_completed", 0),
+                len(source["symbols"]),
+            )
 
             items = read_jsonl(run_root / "items.jsonl")
             child_thread_items = [row for row in items if row.get("item_type") == "thread"]
@@ -450,6 +459,10 @@ class StockCompareFlowTests(unittest.TestCase):
                 rerun_run_id = str(rerun_response.run_id or "")
                 history = SessionHistory(settings.runs_root / rerun_run_id)
                 raw_events = history.replay()["events"]
+                trace_rows = [
+                    row for row in list(history.trace().get("subagent_trace") or [])
+                    if str(row.get("invocation_id") or "").strip()
+                ]
                 self.assertTrue(
                     any(str(row.get("event_type") or "") == "dag_partial_rerun_requested" for row in raw_events)
                 )
@@ -463,6 +476,14 @@ class StockCompareFlowTests(unittest.TestCase):
                 self.assertIsNotNone(cache_hit_row)
                 self.assertIn("collect", list(((cache_hit_row or {}).get("payload") or {}).get("cached_nodes") or []))
                 self.assertGreaterEqual(history.metrics()["event_type_counts"].get("dag_cache_hit", 0), 1)
+                self.assertTrue(trace_rows)
+                subagent_payload = history.subagent(str(trace_rows[0]["invocation_id"]))
+                self.assertEqual(subagent_payload["invocation_id"], trace_rows[0]["invocation_id"])
+                self.assertTrue(str(subagent_payload.get("thread_id") or "").strip())
+                self.assertTrue(str(subagent_payload.get("turn_id") or "").strip())
+                self.assertTrue(str(subagent_payload.get("phase") or "").strip())
+                self.assertTrue(str(subagent_payload.get("agent") or "").strip())
+                self.assertIsNotNone(subagent_payload.get("duration_ms"))
             finally:
                 orchestrator.close()
 

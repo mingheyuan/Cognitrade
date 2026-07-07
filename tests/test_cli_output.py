@@ -642,6 +642,19 @@ class CliOutputTests(unittest.TestCase):
             "invocation_id": "01INVOCATION",
             "subagent_type": "stock_snapshot_collector",
             "objective": "Collect stock-level verified snapshots.",
+            "thread_id": "thread-root",
+            "turn_id": "turn-root",
+            "phase": "collect",
+            "agent": "collector",
+            "llm_used": False,
+            "duration_ms": 42,
+            "item": {
+                "item_id": "item-1",
+                "thread_id": "thread-root",
+                "turn_id": "turn-root",
+                "status": "completed",
+                "degrade_reason": None,
+            },
             "trace_rows": [
                 {
                     "task_name": "collect:stock_snapshot_collector",
@@ -665,6 +678,9 @@ class CliOutputTests(unittest.TestCase):
 
         self.assertIn("call_id: 01INVOCATION", output)
         self.assertIn("objective: Collect stock-level verified snapshots.", output)
+        self.assertIn("thread_id: thread-root", output)
+        self.assertIn("duration_ms: 42", output)
+        self.assertIn("item:", output)
         self.assertIn("trace_rows:", output)
         self.assertIn("events:", output)
         self.assertEqual(session.subagent_payload, payload)

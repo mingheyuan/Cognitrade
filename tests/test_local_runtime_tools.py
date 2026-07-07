@@ -30,7 +30,7 @@ class LocalRuntimeToolsTests(unittest.TestCase):
                     phase="collect",
                     title="stock_snapshot_collector",
                     objective="collect snapshot",
-                    payload={"llm_used": True},
+                    payload={"llm_used": True, "invocation_id": "inv-local"},
                     item_type="subagent",
                 )
                 runtime.context.agent_control.send(item, payload={"source": "test"})
@@ -79,7 +79,10 @@ class LocalRuntimeToolsTests(unittest.TestCase):
                 trace_payload = runtime.trace()
                 events_payload = runtime.events()
                 metrics_payload = runtime.metrics()
+                steps_payload = runtime.steps()
+                subagent_payload = runtime.subagent("inv-local")
                 thread_payload = runtime.thread(child_thread.thread_id)
+                thread_tree = runtime.thread_tree()
 
                 self.assertTrue(injected["llm_budget_exhausted"])
                 self.assertTrue(injected["subagent_budget_exhausted"])
@@ -95,6 +98,8 @@ class LocalRuntimeToolsTests(unittest.TestCase):
                 self.assertGreaterEqual(metrics_payload["fanout"]["max_depth"], 1)
                 self.assertEqual(metrics_payload["turn_usage"][runtime.context.turn.turn_id]["llm_calls"], 1)
                 self.assertEqual(metrics_payload["turn_usage"][child_turn.turn_id]["subagents"], 1)
+                self.assertGreaterEqual(metrics_payload["turn_usage"][runtime.context.turn.turn_id]["degraded_subagents"], 1)
+                self.assertGreaterEqual(metrics_payload["turn_usage"][runtime.context.turn.turn_id]["subagent_latency_ms"], 0)
                 self.assertTrue(
                     any(
                         str(event.get("event_type") or "") == "runtime_degradation_injected"
@@ -102,8 +107,17 @@ class LocalRuntimeToolsTests(unittest.TestCase):
                     )
                 )
                 self.assertTrue(replay_payload["thread_tree"])
+                self.assertEqual(steps_payload["run_id"], runtime.run_root.name)
+                self.assertEqual(subagent_payload["invocation_id"], "inv-local")
+                self.assertEqual(subagent_payload["thread_id"], runtime.context.thread.thread_id)
+                self.assertEqual(subagent_payload["phase"], "collect")
+                self.assertEqual(subagent_payload["agent"], "collector")
+                self.assertTrue(subagent_payload["llm_used"])
+                self.assertEqual(subagent_payload["degrade_reason"], "runtime_fallback")
+                self.assertGreaterEqual(int(subagent_payload["duration_ms"] or 0), 0)
                 self.assertEqual(thread_payload["thread"]["thread_id"], child_thread.thread_id)
                 self.assertEqual(thread_payload["event_counts"]["items"], 1)
+                self.assertTrue(thread_tree)
             finally:
                 runtime.close()
 
@@ -144,6 +158,8 @@ class LocalRuntimeToolsTests(unittest.TestCase):
                 self.assertEqual(child_thread.thread_id, "det-0001")
                 self.assertEqual(child_turn.turn_id, "det-0002")
                 self.assertEqual(harness.thread(child_thread.thread_id)["thread_id"], child_thread.thread_id)
+                self.assertTrue(harness.thread_tree())
+                self.assertEqual(harness.steps()["run_id"], "RUNDET")
             finally:
                 runtime.close()
 

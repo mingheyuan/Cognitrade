@@ -90,6 +90,7 @@ class RunTraceRowBuilder:
     def dynamic_trace_row(
         self,
         *,
+        event_type: str | None = None,
         phase: str | None,
         agent: str | None,
         payload: dict[str, Any] | None,
@@ -97,7 +98,7 @@ class RunTraceRowBuilder:
         default_context: bool,
     ) -> dict[str, Any]:
         row_payload = dict(payload or {})
-        row_payload.setdefault("event", "dynamic_action_inserted")
+        row_payload.setdefault("event", event_type or "dynamic_action_inserted")
         if default_context:
             row_payload.setdefault("phase", phase)
             row_payload.setdefault("agent", agent)

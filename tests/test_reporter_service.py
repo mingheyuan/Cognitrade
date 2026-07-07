@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from research_system.agents.reporter.service import ReporterService
+from research_system.runtime.history.session.session_history import SessionHistory
 from research_system.runtime.providers.provider_registry import LLMProviderError
 
 
@@ -152,6 +155,28 @@ class ReporterServiceTests(unittest.TestCase):
         self.assertEqual(
             [item["subagent_type"] for item in payload["subagent_trace"]],
             ["report_strategy_resolver", "bank_compare_report_composer"],
+        )
+
+    def test_reporter_persists_subagent_dag_trace_and_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runs_root = Path(temp_dir) / "runs"
+            payload = ReporterService(ReporterProviderUnavailableStub(), runs_root=runs_root).run(
+                intent="stock_screen",
+                query="screen stocks",
+                retrieval_summary="Stock screening: candidates=1",
+                evidences=_screening_evidences(),
+            )
+            run_root = next(runs_root.iterdir())
+            trace_payload = SessionHistory(run_root).trace()
+            metrics_payload = SessionHistory(run_root).metrics()
+
+        self.assertTrue(payload["subagent_trace"])
+        dag_events = [str(row.get("event") or "") for row in trace_payload["dynamic_trace"]]
+        self.assertIn("subagent_dag_initialized", dag_events)
+        self.assertIn("subagent_dag_node_completed", dag_events)
+        self.assertGreaterEqual(
+            metrics_payload["dag_event_counts"].get("subagent_dag_node_completed", 0),
+            2,
         )
 
 

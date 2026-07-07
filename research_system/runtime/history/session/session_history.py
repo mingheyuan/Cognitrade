@@ -179,7 +179,7 @@ class SessionHistory:
             "dag_event_counts": {
                 key: value
                 for key, value in event_type_counts.items()
-                if str(key).startswith("dag_")
+                if str(key).startswith("dag_") or str(key).startswith("subagent_dag_")
             },
         }
 
@@ -203,12 +203,36 @@ class SessionHistory:
     def subagent(self, invocation_id: str) -> dict[str, Any]:
         trace_payload = self.trace()
         events_payload = self.events()
-        return self.trace_rebuilder.build_subagent_payload(
+        payload = self.trace_rebuilder.build_subagent_payload(
             run_id=self.run_root.name,
             trace_payload=trace_payload,
             events_payload=events_payload,
             invocation_id=invocation_id,
         )
+        item = self._subagent_item(invocation_id)
+        if item is None:
+            return payload
+        item_payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+        payload["item"] = item
+        payload["item_id"] = str(item.get("item_id") or "").strip() or None
+        payload["status"] = item.get("status") or payload.get("status")
+        payload["thread_id"] = payload.get("thread_id") or item.get("thread_id")
+        payload["turn_id"] = payload.get("turn_id") or item.get("turn_id")
+        payload["phase"] = payload.get("phase") or item.get("phase")
+        payload["agent"] = payload.get("agent") or item.get("agent")
+        payload["child_thread_id"] = payload.get("child_thread_id") or item_payload.get("child_thread_id")
+        payload["child_turn_id"] = payload.get("child_turn_id") or item_payload.get("child_turn_id")
+        payload["degrade_reason"] = payload.get("degrade_reason") or item.get("degrade_reason")
+        payload["created_at"] = item.get("created_at")
+        payload["updated_at"] = item.get("updated_at")
+        payload["duration_ms"] = self._duration_ms(item)
+        if "llm_used" in item_payload:
+            payload["llm_used"] = bool(item_payload.get("llm_used"))
+        if isinstance(item_payload.get("output_keys"), list):
+            payload["output_keys"] = list(item_payload.get("output_keys") or [])
+        if (not payload.get("notes")) and isinstance(item_payload.get("notes"), list):
+            payload["notes"] = list(item_payload.get("notes") or [])
+        return payload
 
     def thread(self, thread_id: str) -> dict[str, Any]:
         normalized_thread_id = str(thread_id or "").strip()
@@ -401,6 +425,11 @@ class SessionHistory:
                     "actions": 0,
                     "child_threads_spawned": 0,
                     "degradations": 0,
+                    "degraded_subagents": 0,
+                    "failed_subagents": 0,
+                    "subagent_latency_ms": 0,
+                    "action_latency_ms": 0,
+                    "degrade_reason_counts": {},
                 }
         for row in items:
             turn_id = str(row.get("turn_id") or "").strip()
@@ -417,20 +446,40 @@ class SessionHistory:
                     "actions": 0,
                     "child_threads_spawned": 0,
                     "degradations": 0,
+                    "degraded_subagents": 0,
+                    "failed_subagents": 0,
+                    "subagent_latency_ms": 0,
+                    "action_latency_ms": 0,
+                    "degrade_reason_counts": {},
                 },
             )
             item_type = str(row.get("item_type") or "")
             payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            duration_ms = self._duration_ms(row) or 0
             if item_type == "subagent":
                 usage["subagents"] += 1
+                usage["subagent_latency_ms"] += duration_ms
                 if bool(payload.get("llm_used")):
                     usage["llm_calls"] += 1
+                status = str(row.get("status") or "").strip()
+                if status == "degraded":
+                    usage["degraded_subagents"] += 1
+                elif status == "failed":
+                    usage["failed_subagents"] += 1
             elif item_type == "action":
                 usage["actions"] += 1
+                usage["action_latency_ms"] += duration_ms
             elif item_type == "thread":
                 usage["child_threads_spawned"] += 1
             elif item_type == "degradation":
                 usage["degradations"] += 1
+            degrade_reason = str(row.get("degrade_reason") or "").strip()
+            if degrade_reason:
+                counts = usage.get("degrade_reason_counts")
+                if not isinstance(counts, dict):
+                    counts = {}
+                    usage["degrade_reason_counts"] = counts
+                counts[degrade_reason] = int(counts.get(degrade_reason) or 0) + 1
         return turn_index
 
     def _event_matches_thread(self, event: dict[str, Any], thread_id: str) -> bool:
@@ -478,6 +527,16 @@ class SessionHistory:
                 continue
             indexed[item_id] = row
         return list(indexed.values())
+
+    def _subagent_item(self, invocation_id: str) -> dict[str, Any] | None:
+        normalized_invocation_id = str(invocation_id or "").strip()
+        if not normalized_invocation_id:
+            return None
+        for row in reversed(self._latest_items()):
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            if str(payload.get("invocation_id") or "").strip() == normalized_invocation_id:
+                return row
+        return None
 
 
 __all__ = ["SessionHistory"]

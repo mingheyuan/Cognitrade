@@ -130,10 +130,26 @@ def subagent_payload_fields(payload: dict) -> list[tuple[str, str]]:
         fields.append(("subagent_status", str(payload.get("status"))))
     if payload.get("task_name") not in (None, ""):
         fields.append(("task_name", str(payload.get("task_name"))))
+    if payload.get("node_id") not in (None, ""):
+        fields.append(("node_id", str(payload.get("node_id"))))
     if payload.get("agent_path") not in (None, ""):
         fields.append(("agent_path", str(payload.get("agent_path"))))
     if payload.get("subagent_type") not in (None, ""):
         fields.append(("subagent_type", str(payload.get("subagent_type"))))
+    if payload.get("thread_id") not in (None, ""):
+        fields.append(("thread_id", str(payload.get("thread_id"))))
+    if payload.get("turn_id") not in (None, ""):
+        fields.append(("turn_id", str(payload.get("turn_id"))))
+    if payload.get("phase") not in (None, ""):
+        fields.append(("phase", str(payload.get("phase"))))
+    if payload.get("agent") not in (None, ""):
+        fields.append(("agent", str(payload.get("agent"))))
+    if payload.get("llm_used") is not None:
+        fields.append(("llm_used", "yes" if bool(payload.get("llm_used")) else "no"))
+    if payload.get("duration_ms") is not None:
+        fields.append(("duration_ms", str(payload.get("duration_ms"))))
+    if payload.get("degrade_reason") not in (None, ""):
+        fields.append(("degrade_reason", str(payload.get("degrade_reason"))))
     fields.append(("trace_rows", str(event_counts.get("trace_rows") or 0)))
     fields.append(("events", str(event_counts.get("events") or 0)))
     return fields

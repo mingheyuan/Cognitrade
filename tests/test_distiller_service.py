@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from research_system.agents.distiller.service import DistillerService
+from research_system.runtime.history.session.session_history import SessionHistory
 from research_system.runtime.storage.jsonl import read_jsonl
 from research_system.runtime.providers.provider_registry import LLMProviderError
 
@@ -445,6 +446,62 @@ class DistillerServiceTests(unittest.TestCase):
         self.assertEqual(dimensions[0]["dimension_name"], "AI")
         self.assertIn("AI", dimensions[0]["alias_hits"])
         self.assertIn("artificial intelligence", dimensions[0]["alias_hits"])
+
+    def test_distiller_persists_subagent_dag_trace_and_metrics(self) -> None:
+        provider = DistillerChunkProviderStub()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runs_root = Path(temp_dir) / "runs"
+            service = DistillerService(provider, runs_root=runs_root)
+
+            result = service.run(
+                query="distill multi chunk records",
+                source_records=[
+                    {
+                        "source_id": "src-1",
+                        "title": "note-1",
+                        "content": "AI " * 150,
+                        "source_type": "inline_text",
+                    },
+                    {
+                        "source_id": "src-2",
+                        "title": "note-2",
+                        "content": "internet " * 150,
+                        "source_type": "inline_text",
+                    },
+                    {
+                        "source_id": "src-3",
+                        "title": "note-3",
+                        "content": "biotech " * 150,
+                        "source_type": "inline_text",
+                    },
+                    {
+                        "source_id": "src-4",
+                        "title": "note-4",
+                        "content": "export " * 150,
+                        "source_type": "inline_text",
+                    },
+                ],
+            )
+
+            run_root = next(runs_root.iterdir())
+            trace_payload = SessionHistory(run_root).trace()
+            metrics_payload = SessionHistory(run_root).metrics()
+
+        self.assertTrue(result["logic_blocks"])
+        dag_events = [str(row.get("event") or "") for row in trace_payload["dynamic_trace"]]
+        self.assertIn("subagent_dag_initialized", dag_events)
+        self.assertIn("subagent_dag_node_completed", dag_events)
+        self.assertTrue(
+            any(
+                str(row.get("task_name") or "") == "distill:preprocess:source_normalizer"
+                for row in trace_payload["dynamic_trace"]
+            )
+        )
+        self.assertGreaterEqual(
+            metrics_payload["dag_event_counts"].get("subagent_dag_node_completed", 0),
+            1,
+        )
 
 
 if __name__ == "__main__":

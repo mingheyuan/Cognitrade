@@ -392,11 +392,13 @@ class AgentControl:
             phase=phase,
         )
         try:
-            return self._run_subagent(
+            outputs, record = self._run_subagent(
                 subagent=subagent,
                 invocation=invocation,
                 definition=definition,
             )
+            record.invocation_id = invocation.invocation_id
+            return outputs, record
         finally:
             if bound:
                 self._clear_nested_runtime_if_supported(subagent)

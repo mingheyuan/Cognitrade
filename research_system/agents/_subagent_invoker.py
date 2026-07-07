@@ -108,6 +108,9 @@ class RuntimeBoundSubagentInvoker:
         *,
         agent_control,
         execution_policy=None,
+        context=None,
+        support=None,
+        intent: str | None = None,
         thread_id: str,
         turn_id: str,
         request_id: str,
@@ -117,6 +120,9 @@ class RuntimeBoundSubagentInvoker:
         self._runtime_binding = {
             "agent_control": agent_control,
             "execution_policy": execution_policy,
+            "context": context,
+            "support": support,
+            "intent": intent,
             "thread_id": thread_id,
             "turn_id": turn_id,
             "request_id": request_id,
@@ -177,6 +183,52 @@ class RuntimeBoundSubagentInvoker:
         if child_phase:
             binding["phase"] = child_phase
         return binding
+
+    def _runtime_binding_for_events(self) -> dict[str, Any]:
+        local_binding = dict(getattr(self, "_local_runtime_binding", {}) or {})
+        if local_binding:
+            return local_binding
+        return dict(getattr(self, "_runtime_binding", {}) or {})
+
+    def _emit_runtime_event(
+        self,
+        *,
+        event_type: str,
+        message: str,
+        payload: dict[str, Any] | None = None,
+        phase: str | None = None,
+        agent: str | None = None,
+    ) -> None:
+        binding = self._runtime_binding_for_events()
+        context = binding.get("context")
+        support = binding.get("support")
+        request_id = str(binding.get("request_id") or "").strip()
+        context_intent = getattr(getattr(context, "state", None), "intent", "") if context is not None else ""
+        intent = str(binding.get("intent") or context_intent or "").strip()
+        if context is None or support is None or not request_id or not intent:
+            return
+        resolved_payload = dict(payload or {})
+        resolved_payload.setdefault("thread_id", binding.get("thread_id"))
+        resolved_payload.setdefault("turn_id", binding.get("turn_id"))
+        current_action_id = getattr(context, "current_action_id", None)
+        current_node_id = getattr(context, "current_node_id", None)
+        current_action_objective = getattr(context, "current_action_objective", None)
+        if current_action_id is not None:
+            resolved_payload.setdefault("action_id", current_action_id)
+        if current_node_id is not None:
+            resolved_payload.setdefault("node_id", current_node_id)
+        if current_action_objective is not None:
+            resolved_payload.setdefault("action_objective", current_action_objective)
+        support.emit_event(
+            context,
+            request_id=request_id,
+            intent=intent,
+            event_type=event_type,
+            phase=phase or binding.get("phase"),
+            agent=agent or binding.get("agent") or getattr(self, "agent_name", None),
+            message=message,
+            payload=resolved_payload,
+        )
 
     def _local_runtime_phase(self, invocation: SubagentInvocation) -> str:
         phase = str((invocation.context or {}).get("phase") or "").strip()

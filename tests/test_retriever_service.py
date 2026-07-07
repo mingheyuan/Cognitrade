@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 import threading
+from pathlib import Path
 from unittest.mock import Mock
 
 from research_system.agents.retriever.service import RetrievalDecision, RetrieverService
+from research_system.runtime.history.session.session_history import SessionHistory
 from research_system.subagents.registry import SubagentRegistry
 from research_system.subagents.retrieval import (
+    BlackboardEvidenceIndexerSubagent,
+    EvidenceCandidateDeduperSubagent,
     FallbackRetrievalDecisionSubagent,
     MethodologyMemoryRecallSubagent,
     QdrantEvidenceSearchSubagent,
@@ -32,6 +37,9 @@ class RetrieverServiceTests(unittest.TestCase):
         self.service.searcher_qdrant = None
         self.service.registry = SubagentRegistry(
             [
+                BlackboardEvidenceIndexerSubagent(
+                    index_blackboard_evidences=self.service._index_blackboard_evidences,
+                ),
                 RetrievalDecisionSubagent(
                     llm_provider=_StubLLMProvider(),
                     structured_retrieval_summary=self.service._structured_retrieval_summary,
@@ -49,12 +57,21 @@ class RetrieverServiceTests(unittest.TestCase):
                 FallbackRetrievalDecisionSubagent(
                     combine_degrade_reason=self.service._combine_degrade_reason,
                     fallback_summary=self.service._fallback_summary,
+                    select_compare_evidences=self.service._select_compare_evidences,
+                    select_screening_evidences=self.service._select_screening_evidences,
+                    select_stock_check_evidences=self.service._select_stock_check_evidences,
+                    select_methodology_evolution_evidences=self.service._select_methodology_evolution_evidences,
+                    select_distillation_evidences=self.service._select_distillation_evidences,
+                    select_review_evidences=self.service._select_review_evidences,
                 ),
                 QdrantEvidenceSearchSubagent(
                     search_qdrant_evidences=self.service._search_qdrant_evidences,
                 ),
                 MethodologyMemoryRecallSubagent(
                     recall_methodology_memory=self.service._recall_methodology_memory_rows,
+                ),
+                EvidenceCandidateDeduperSubagent(
+                    dedupe_evidence_candidates=self.service._dedupe_evidence_candidates,
                 ),
             ]
         )
@@ -939,6 +956,108 @@ class RetrieverServiceTests(unittest.TestCase):
                 "retriever/decision/retrieval_decider",
             ],
         )
+
+    def test_retriever_persists_subagent_dag_trace_and_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = self.service
+            service.runs_root = Path(temp_dir) / "runs"
+            service.disable_qdrant_for_test("disabled_for_test")
+
+            outputs = service.run(
+                intent="stock_compare",
+                query="compare banks",
+                blackboard_entries=[
+                    {
+                        "entry_id": "src-1",
+                        "run_id": "01TRACE",
+                        "kind": "source_record",
+                        "phase": "collect",
+                        "agent": "collector",
+                        "payload": {"title": "compare request", "content": "compare", "source_type": "compare_request"},
+                        "source_refs": [],
+                    },
+                    {
+                        "entry_id": "snap-1",
+                        "run_id": "01TRACE",
+                        "kind": "verified_snapshot",
+                        "phase": "collect",
+                        "agent": "collector",
+                        "payload": {"title": "bank compare scorecard", "content": "scorecard", "source_type": "bank_compare_scorecard"},
+                        "source_refs": [],
+                    },
+                ],
+                allow_llm_decision=False,
+                runtime_degraded_reason="runtime_policy_fallback",
+            )
+
+            run_root = next((Path(temp_dir) / "runs").iterdir())
+            trace_payload = SessionHistory(run_root).trace()
+            metrics_payload = SessionHistory(run_root).metrics()
+
+        self.assertTrue(outputs["subagent_trace"])
+        dag_events = [str(row.get("event") or "") for row in trace_payload["dynamic_trace"]]
+        self.assertIn("subagent_dag_initialized", dag_events)
+        self.assertIn("subagent_dag_node_completed", dag_events)
+        self.assertGreaterEqual(
+            metrics_payload["dag_event_counts"].get("subagent_dag_node_completed", 0),
+            1,
+        )
+
+    def test_runtime_fallback_compare_selection_keeps_bank_scorecard(self) -> None:
+        outputs = self.service._run_impl(
+            intent="stock_compare",
+            query="compare banks",
+            blackboard_entries=[
+                {
+                    "entry_id": "src-1",
+                    "run_id": "01TRACE",
+                    "kind": "source_record",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "payload": {
+                        "title": "stock compare request",
+                        "content": "{'symbols': ['000001', '600036'], 'compare_targets': [{'symbol': '000001', 'name': '平安银行'}, {'symbol': '600036', 'name': '招商银行'}]}",
+                        "source_type": "compare_request",
+                    },
+                    "source_refs": [],
+                },
+                {
+                    "entry_id": "scorecard-1",
+                    "run_id": "01TRACE",
+                    "kind": "source_record",
+                    "phase": "distill",
+                    "agent": "distiller",
+                    "payload": {
+                        "title": "bank compare scorecard",
+                        "content": "{'candidate_count': 2, 'metric_weights': {'pb': 0.24}, 'ranked_candidates': [{'symbol': '600036', 'name': '招商银行', 'score': 0.91, 'pb': 0.78}, {'symbol': '000001', 'name': '平安银行', 'score': 0.62, 'pb': 0.42}], 'summary': 'bank peer comparison ranked 2 banks using same-basis banking metrics and valuation anchors'}",
+                        "source_type": "bank_compare_scorecard",
+                    },
+                    "source_refs": [],
+                },
+                {
+                    "entry_id": "method-1",
+                    "run_id": "01TRACE",
+                    "kind": "source_record",
+                    "phase": "distill",
+                    "agent": "distiller",
+                    "payload": {
+                        "title": "comps:000001",
+                        "content": "methodology_result type=comps symbol=000001",
+                        "source_type": "methodology_comps",
+                        "methodology_type": "comps",
+                    },
+                    "source_refs": [],
+                },
+            ],
+            allow_llm_decision=False,
+            runtime_degraded_reason="runtime_policy_fallback",
+        )
+
+        selected_types = [
+            str((item.get("metadata") or {}).get("source_type") or "")
+            for item in list(outputs.get("evidences") or [])
+        ]
+        self.assertIn("bank_compare_scorecard", selected_types)
 
     def test_search_qdrant_evidences_reports_hit_count(self) -> None:
         class _StubQdrant:

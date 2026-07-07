@@ -246,6 +246,33 @@ class ChatPresenterTests(unittest.TestCase):
         self.assertEqual(trace_payload["wait_trace"][0]["event"], "waiting_external_started")
         self.assertEqual(trace_payload["wait_trace"][0]["node_id"], "collect")
 
+    def test_presenter_accumulates_subagent_dag_events_into_dynamic_trace(self) -> None:
+        presenter = ChatStreamPresenter()
+
+        presenter.on_event(
+            _event(
+                event_type="subagent_dag_node_completed",
+                phase="distill",
+                agent="distiller",
+                payload={
+                    "task_name": "distill:preprocess:source_normalizer",
+                    "agent_path": "distiller/preprocess/source_normalizer",
+                    "subagent_type": "distill_source_normalizer",
+                    "status": "completed",
+                    "objective": "Normalize raw distillation source records.",
+                },
+            )
+        )
+
+        trace_payload = presenter.current_trace_payload()
+        self.assertIsNotNone(trace_payload)
+        self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "subagent_dag_node_completed")
+        self.assertEqual(
+            trace_payload["dynamic_trace"][0]["task_name"],
+            "distill:preprocess:source_normalizer",
+        )
+
     def test_presenter_accumulates_live_events_payload_from_runtime_events(self) -> None:
         presenter = ChatStreamPresenter()
 

@@ -46,10 +46,12 @@ class SessionHistoryTraceSections:
         for event in events:
             if not isinstance(event, dict):
                 continue
-            if str(event.get("event_type") or "") != "dynamic_action_inserted":
+            event_type = str(event.get("event_type") or "")
+            if event_type != "dynamic_action_inserted" and not event_type.startswith("subagent_dag_"):
                 continue
             rows.append(
                 self.row_builder.dynamic_trace_row(
+                    event_type=event_type,
                     phase=event.get("phase"),
                     agent=event.get("agent"),
                     payload=event.get("payload") or {},
