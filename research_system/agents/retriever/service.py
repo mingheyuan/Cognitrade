@@ -838,6 +838,14 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 "degraded": False,
                 "degrade_reason": None,
             }
+        if self._has_runtime_degradation(RuntimeDegradeReason.MEMORY_SERVICE_UNAVAILABLE.value):
+            return {
+                "memory_rows": [],
+                "search_query": None,
+                "benchmark_scope": None,
+                "degraded": True,
+                "degrade_reason": RuntimeDegradeReason.MEMORY_SERVICE_UNAVAILABLE.value,
+            }
         memory_service = getattr(self, "memory_service", None)
         if memory_service is None:
             return {
@@ -870,7 +878,8 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
         }
 
     def _index_blackboard_evidences(self, *, blackboard_entries: list[dict], qdrant=None) -> dict:
-        if qdrant is None:
+        qdrant_degraded = self._has_runtime_degradation(RuntimeDegradeReason.QDRANT_UNAVAILABLE.value)
+        if qdrant is None and not qdrant_degraded:
             qdrant = self.indexer_qdrant
         evidence_map: dict[str, dict] = {}
         symbol = None
@@ -901,6 +910,14 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
         sector: str | None,
         current_run_id: str | None,
     ) -> dict:
+        if self._has_runtime_degradation(RuntimeDegradeReason.QDRANT_UNAVAILABLE.value):
+            return {
+                "evidences": [],
+                "metadata_filters": {},
+                "hit_count": 0,
+                "degraded": True,
+                "degrade_reason": RuntimeDegradeReason.QDRANT_UNAVAILABLE.value,
+            }
         qdrant = self.searcher_qdrant
         if qdrant is None:
             return {
@@ -1804,6 +1821,8 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 if isinstance(cached_rows, list):
                     return [row for row in cached_rows[:limit] if isinstance(row, dict)]
         memory_service = getattr(self, "memory_service", None)
+        if self._has_runtime_degradation(RuntimeDegradeReason.MEMORY_SERVICE_UNAVAILABLE.value):
+            return []
         if memory_service is None:
             return []
         if search_query:

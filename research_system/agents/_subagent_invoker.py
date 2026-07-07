@@ -190,6 +190,17 @@ class RuntimeBoundSubagentInvoker:
             return local_binding
         return dict(getattr(self, "_runtime_binding", {}) or {})
 
+    def _runtime_execution_policy(self):
+        binding = self._runtime_binding_for_events()
+        return binding.get("execution_policy")
+
+    def _has_runtime_degradation(self, reason: object) -> bool:
+        policy = self._runtime_execution_policy()
+        has_degradation = getattr(policy, "has_degradation", None)
+        if not callable(has_degradation):
+            return False
+        return bool(has_degradation(reason))
+
     def _emit_runtime_event(
         self,
         *,

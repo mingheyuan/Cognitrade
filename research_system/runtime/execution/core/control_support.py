@@ -107,7 +107,11 @@ class OrchestratorExecutionControlSupport:
         provider=None,
         reserve: bool = True,
     ) -> RuntimeLLMExecutionDecision:
-        if provider is not None and not bool(getattr(provider, "available", True)):
+        has_degradation = getattr(context.execution_policy, "has_degradation", None)
+        if callable(has_degradation) and bool(has_degradation(RuntimeDegradeReason.LLM_UNAVAILABLE.value)):
+            reason = RuntimeDegradeReason.LLM_UNAVAILABLE.value
+            component = f"{agent}_llm_injected"
+        elif provider is not None and not bool(getattr(provider, "available", True)):
             reason = RuntimeDegradeReason.LLM_UNAVAILABLE.value
             component = f"{agent}_llm_provider"
         elif reserve and self.reserve_llm_slot(context):

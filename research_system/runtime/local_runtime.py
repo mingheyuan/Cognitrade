@@ -7,6 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Callable
 
+from research_system.runtime.core.execution_policy import RuntimeDegradeReason
 from research_system.runtime.execution.core.runtime_support import OrchestratorExecutionRuntimeSupport
 from research_system.runtime.history.session.session_history import SessionHistory
 from research_system.runtime.orchestration.orchestrator_context import RuntimeContext, build_runtime_context
@@ -144,6 +145,9 @@ class LocalRuntimeRun:
 
     def thread_tree(self) -> list[dict[str, Any]]:
         return SessionHistory(self.run_root).thread_tree()
+
+    def inject_degradation(self, **kwargs) -> dict[str, bool]:
+        return inject_runtime_degradation(self, **kwargs)
 
     def close(self) -> None:
         self._temp_dir.cleanup()
@@ -362,6 +366,9 @@ def inject_runtime_degradation(
     exhaust_llm_budget: bool = False,
     exhaust_subagent_budget: bool = False,
     exhaust_child_thread_budget: bool = False,
+    llm_unavailable: bool = False,
+    qdrant_unavailable: bool = False,
+    memory_unavailable: bool = False,
 ) -> dict[str, bool]:
     policy = runtime.context.execution_policy
     turn_id = runtime.context.turn.turn_id
@@ -369,6 +376,9 @@ def inject_runtime_degradation(
         "llm_budget_exhausted": False,
         "subagent_budget_exhausted": False,
         "child_thread_budget_exhausted": False,
+        "llm_unavailable": False,
+        "qdrant_unavailable": False,
+        "memory_unavailable": False,
     }
     if exhaust_llm_budget:
         reserve_llm_call = getattr(policy, "reserve_llm_call", None)
@@ -382,6 +392,16 @@ def inject_runtime_degradation(
         reserve_child_thread = getattr(policy, "reserve_child_thread", None)
         while callable(reserve_child_thread) and bool(reserve_child_thread(turn_id=turn_id)):
             injected["child_thread_budget_exhausted"] = True
+    inject_degradation = getattr(policy, "inject_degradation", None)
+    if llm_unavailable and callable(inject_degradation):
+        inject_degradation(RuntimeDegradeReason.LLM_UNAVAILABLE.value)
+        injected["llm_unavailable"] = True
+    if qdrant_unavailable and callable(inject_degradation):
+        inject_degradation(RuntimeDegradeReason.QDRANT_UNAVAILABLE.value)
+        injected["qdrant_unavailable"] = True
+    if memory_unavailable and callable(inject_degradation):
+        inject_degradation(RuntimeDegradeReason.MEMORY_SERVICE_UNAVAILABLE.value)
+        injected["memory_unavailable"] = True
     if any(injected.values()):
         runtime.support.emit_event(
             runtime.context,

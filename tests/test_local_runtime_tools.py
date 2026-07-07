@@ -4,12 +4,63 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from research_system.agents.retriever.service import RetrieverService
 from research_system.runtime.local_runtime import (
     LocalRuntimeHarness,
     inject_runtime_degradation,
     start_local_runtime,
 )
 from research_system.schemas.protocol import RequestEnvelope
+from research_system.schemas.subagents import SubagentInvocation
+from research_system.subagents.registry import SubagentRegistry
+
+
+class _AvailableProvider:
+    available = True
+
+
+class _LLMPrimarySubagent:
+    subagent_type = "llm_primary"
+
+    def __init__(self) -> None:
+        self.llm_provider = _AvailableProvider()
+
+    def run(self, **kwargs):
+        return {"path": "primary", **kwargs}
+
+
+class _LLMFallbackSubagent:
+    subagent_type = "llm_fallback"
+
+    def run(self, **kwargs):
+        return {"path": "fallback", **kwargs}
+
+
+class _QdrantStub:
+    def __init__(self) -> None:
+        self.search_calls = 0
+        self.upsert_calls = 0
+
+    def search(self, **kwargs):
+        self.search_calls += 1
+        return []
+
+    def upsert_entry(self, entry) -> None:
+        self.upsert_calls += 1
+
+
+class _MemoryStub:
+    def __init__(self) -> None:
+        self.search_calls = 0
+        self.read_calls = 0
+
+    def search_methodology_memory(self, **kwargs):
+        self.search_calls += 1
+        return [{"memory_type": "dimension_experience", "content": {"title": "stub"}}]
+
+    def read_recent_methodology_memory(self, **kwargs):
+        self.read_calls += 1
+        return [{"memory_type": "dimension_experience", "content": {"title": "stub"}}]
 
 
 class LocalRuntimeToolsTests(unittest.TestCase):
@@ -160,6 +211,110 @@ class LocalRuntimeToolsTests(unittest.TestCase):
                 self.assertEqual(harness.thread(child_thread.thread_id)["thread_id"], child_thread.thread_id)
                 self.assertTrue(harness.thread_tree())
                 self.assertEqual(harness.steps()["run_id"], "RUNDET")
+            finally:
+                runtime.close()
+
+    def test_local_runtime_degradation_injection_forces_llm_fallback_and_dependency_unavailability(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = start_local_runtime(
+                request=RequestEnvelope(user_query="inject degradation"),
+                intent="stock_check",
+                phase="retrieve",
+                runs_root=Path(temp_dir) / "runs",
+            )
+            try:
+                injected = runtime.inject_degradation(
+                    llm_unavailable=True,
+                    qdrant_unavailable=True,
+                    memory_unavailable=True,
+                )
+                self.assertTrue(injected["llm_unavailable"])
+                self.assertTrue(injected["qdrant_unavailable"])
+                self.assertTrue(injected["memory_unavailable"])
+                llm_decision = runtime.support.resolve_llm_execution(
+                    runtime.context,
+                    request_id=runtime.request.request_id,
+                    agent="reporter",
+                    phase="report",
+                    strategy="fallback_report_composer",
+                    provider=_AvailableProvider(),
+                    reserve=False,
+                )
+                self.assertFalse(llm_decision.can_use_llm)
+                self.assertEqual(llm_decision.degrade_reason, "llm_unavailable")
+
+                registry = SubagentRegistry([_LLMPrimarySubagent(), _LLMFallbackSubagent()])
+                outputs, record = runtime.context.agent_control.invoke(
+                    registry=registry,
+                    invocation=SubagentInvocation(
+                        subagent_type="llm_primary",
+                        objective="run llm path",
+                        inputs={"query": "inject"},
+                        requires_llm=True,
+                        fallback_subagent_type="llm_fallback",
+                        fallback_inputs={"query": "inject", "runtime_degraded_reason": ""},
+                    ),
+                    thread_id=runtime.context.thread.thread_id,
+                    turn_id=runtime.context.turn.turn_id,
+                    request_id=runtime.request.request_id,
+                    agent="tester",
+                    phase="retrieve",
+                    execution_policy=runtime.context.execution_policy,
+                )
+
+                self.assertEqual(outputs["path"], "fallback")
+                self.assertEqual(record.degrade_reason, "llm_unavailable")
+
+                qdrant_stub = _QdrantStub()
+                memory_stub = _MemoryStub()
+                retriever = object.__new__(RetrieverService)
+                retriever.memory_service = memory_stub
+                retriever.retrieval_policy = {}
+                retriever.qdrant = qdrant_stub
+                retriever.qdrant_available = True
+                retriever.qdrant_error = None
+                retriever.indexer_qdrant = qdrant_stub
+                retriever.searcher_qdrant = qdrant_stub
+                retriever.bind_runtime(
+                    agent_control=runtime.context.agent_control,
+                    execution_policy=runtime.context.execution_policy,
+                    context=runtime.context,
+                    support=runtime.support,
+                    intent="stock_check",
+                    thread_id=runtime.context.thread.thread_id,
+                    turn_id=runtime.context.turn.turn_id,
+                    request_id=runtime.request.request_id,
+                    agent="retriever",
+                    phase="retrieve",
+                )
+                qdrant_payload = retriever._search_qdrant_evidences(
+                    intent="stock_check",
+                    query="check 000001",
+                    top_k=3,
+                    symbol="000001",
+                    sector=None,
+                    current_run_id=runtime.run_root.name,
+                )
+                memory_payload = retriever._recall_methodology_memory_rows(
+                    intent="stock_check",
+                    query="check 000001",
+                    planning_context_hints={},
+                    limit=3,
+                )
+                summary_rows = retriever._methodology_memory_rows(
+                    limit=3,
+                    query="check 000001",
+                    planning_context_hints={},
+                )
+
+                self.assertTrue(qdrant_payload["degraded"])
+                self.assertEqual(qdrant_payload["degrade_reason"], "qdrant_unavailable")
+                self.assertTrue(memory_payload["degraded"])
+                self.assertEqual(memory_payload["degrade_reason"], "memory_service_unavailable")
+                self.assertEqual(summary_rows, [])
+                self.assertEqual(qdrant_stub.search_calls, 0)
+                self.assertEqual(memory_stub.search_calls, 0)
+                self.assertEqual(memory_stub.read_calls, 0)
             finally:
                 runtime.close()
 

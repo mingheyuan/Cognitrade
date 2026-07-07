@@ -71,6 +71,7 @@ class RuntimeExecutionPolicy:
         self._llm_calls_by_turn: dict[str, int] = {}
         self._subagent_calls_by_turn: dict[str, int] = {}
         self._child_threads_by_turn: dict[str, int] = {}
+        self._degradation_overrides: set[str] = set()
 
     def can_use_llm(self, *, turn_id: str) -> bool:
         with self._lock:
@@ -113,6 +114,34 @@ class RuntimeExecutionPolicy:
             self._llm_calls_by_turn.pop(turn_id, None)
             self._subagent_calls_by_turn.pop(turn_id, None)
             self._child_threads_by_turn.pop(turn_id, None)
+
+    def inject_degradation(self, *reasons: object) -> list[str]:
+        parts = split_degrade_reasons(*reasons)
+        if not parts:
+            return []
+        with self._lock:
+            self._degradation_overrides.update(parts)
+        return parts
+
+    def clear_degradation(self, *reasons: object) -> list[str]:
+        parts = split_degrade_reasons(*reasons)
+        if not parts:
+            return []
+        with self._lock:
+            for reason in parts:
+                self._degradation_overrides.discard(reason)
+        return parts
+
+    def has_degradation(self, reason: object) -> bool:
+        normalized = normalize_degrade_reason(reason)
+        if not normalized:
+            return False
+        with self._lock:
+            return normalized in self._degradation_overrides
+
+    def active_degradations(self) -> list[str]:
+        with self._lock:
+            return sorted(self._degradation_overrides)
 
 
 __all__ = [

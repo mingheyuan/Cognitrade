@@ -580,7 +580,11 @@ class AgentControl:
         if target_subagent is None and registry is not None:
             target_subagent = registry.get(invocation.subagent_type)
         provider = getattr(target_subagent, "llm_provider", None)
-        if provider is not None and not bool(getattr(provider, "available", True)):
+        has_degradation = getattr(execution_policy, "has_degradation", None)
+        llm_unavailable_injected = callable(has_degradation) and bool(
+            has_degradation(RuntimeDegradeReason.LLM_UNAVAILABLE.value)
+        )
+        if llm_unavailable_injected or (provider is not None and not bool(getattr(provider, "available", True))):
             fallback_type = str(invocation.fallback_subagent_type or "").strip()
             if fallback_type:
                 fallback_inputs = dict(invocation.fallback_inputs or invocation.inputs)
