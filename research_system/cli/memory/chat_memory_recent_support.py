@@ -16,7 +16,11 @@ def build_recent_research_context(*, settings: Settings, state, limit: int = 1) 
         return [context] if context is not None else []
 
     service = MemoryService(LocalMemoryAdapter(settings))
-    rows = service.read_recent_chat_memory(limit=limit)
+    thread_id = str(getattr(state, "thread_id", None) or "").strip() or None
+    if thread_id:
+        rows = service.read_recent_chat_memory(limit=limit, thread_id=thread_id)
+    else:
+        rows = []
     contexts = []
     for row in rows:
         content = row.get("content")
@@ -25,14 +29,7 @@ def build_recent_research_context(*, settings: Settings, state, limit: int = 1) 
         context = context_from_record(content)
         if context is not None:
             contexts.append(context)
-    if contexts:
-        return contexts
-
-    fallback = load_latest_run_memory(settings)
-    if fallback is None:
-        return []
-    context = context_from_record(fallback)
-    return [context] if context is not None else []
+    return contexts
 
 
 def has_recent_chat_memory(state) -> bool:

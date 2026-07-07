@@ -7,6 +7,7 @@ from pathlib import Path
 from research_system.cli.memory.chat_memory import (
     archive_session_thread,
     build_chat_conversation_context,
+    build_recent_research_context,
     build_relevant_memory_context,
     compact_session_thread,
     current_thread_summary,
@@ -41,6 +42,69 @@ class ChatMemoryTests(unittest.TestCase):
 
             self.assertTrue(any(item.get("type") == "chat_thread_turn" for item in context))
             self.assertTrue(any(item.get("type") == "recent_research_memory" for item in context))
+
+    def test_build_recent_research_context_prefers_thread_scoped_memory_over_global_latest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            state = ChatSessionState(thread_id="active-thread")
+
+            from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
+            from research_system.services.memory import MemoryService
+
+            service = MemoryService(LocalMemoryAdapter(settings))
+            service.write_chat_research_memory(
+                query="global latest query",
+                intent="stock_check",
+                run_id="01GLOBAL",
+                summary="global latest summary",
+                conclusion="global latest conclusion",
+                follow_up="global next step",
+                status="completed",
+                thread_id="other-thread",
+            )
+            service.write_chat_research_memory(
+                query="thread scoped query",
+                intent="stock_compare",
+                run_id="01THREAD",
+                summary="thread scoped summary",
+                conclusion="thread scoped conclusion",
+                follow_up="thread scoped next step",
+                status="completed",
+                thread_id="active-thread",
+            )
+
+            context = build_recent_research_context(settings=settings, state=state)
+
+            self.assertEqual(len(context), 1)
+            self.assertEqual(context[0]["thread_id"], "active-thread")
+            self.assertEqual(context[0]["run_id"], "01THREAD")
+            self.assertEqual(context[0]["query"], "thread scoped query")
+
+    def test_build_recent_research_context_skips_unrelated_global_memory_without_current_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            state = ChatSessionState()
+
+            from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
+            from research_system.services.memory import MemoryService
+
+            service = MemoryService(LocalMemoryAdapter(settings))
+            service.write_chat_research_memory(
+                query="global latest query",
+                intent="stock_check",
+                run_id="01GLOBAL",
+                summary="global latest summary",
+                conclusion="global latest conclusion",
+                follow_up="global next step",
+                status="completed",
+                thread_id="other-thread",
+            )
+
+            context = build_recent_research_context(settings=settings, state=state)
+
+            self.assertEqual(context, [])
 
     def test_compact_session_thread_adds_thread_summary_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -412,6 +476,75 @@ class ChatMemoryTests(unittest.TestCase):
                     "relevant_chat_memory",
                 ],
             )
+
+    def test_relevant_memory_context_keeps_current_thread_ahead_of_external_memory_layers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            state = ChatSessionState(
+                thread_id="active-thread",
+                last_user_query="compare maotai cashflow resilience",
+                last_result_intent="stock_compare",
+                last_result_summary="thread summary keeps focusing on cashflow resilience",
+                last_result_follow_up="stay on same-basis cashflow resilience",
+                last_run_id="01ACTIVE",
+            )
+
+            remember_basic_chat_turn(
+                settings=settings,
+                state=state,
+                query="focus on cashflow resilience",
+                answer="current thread still prefers cashflow resilience framing",
+            )
+
+            from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
+            from research_system.services.memory import MemoryService
+
+            service = MemoryService(LocalMemoryAdapter(settings))
+            service.write_chat_research_memory(
+                query="compare maotai cashflow resilience",
+                intent="stock_compare",
+                run_id="01COMPARE",
+                summary="same-intent summary",
+                conclusion="same-intent conclusion",
+                follow_up="same-intent next step",
+                status="completed",
+                thread_id="other-compare-thread",
+            )
+            service.write_methodology_memory(
+                memory_type="dimension_experience",
+                content={
+                    "title": "Cashflow resilience heuristic",
+                    "summary": "Prefer stable free cash flow and lower leverage.",
+                    "benchmark_scope": "defensive_compounder",
+                },
+            )
+            service.write_chat_research_memory(
+                query="analyze maotai cashflow resilience",
+                intent="stock_check",
+                run_id="01CHECK",
+                summary="global summary",
+                conclusion="global conclusion",
+                follow_up="global next step",
+                status="completed",
+                thread_id="other-check-thread",
+            )
+
+            relevant = build_relevant_memory_context(
+                settings=settings,
+                state=state,
+                query="cashflow resilience",
+                limit=6,
+            )
+
+            priorities = [item.get("memory_priority") for item in relevant]
+            self.assertIn("current_thread", priorities)
+            self.assertIn("same_intent_recent_memory", priorities)
+            self.assertIn("methodology_memory", priorities)
+            self.assertIn("global_memory", priorities)
+            self.assertLess(priorities.index("current_thread"), priorities.index("same_intent_recent_memory"))
+            self.assertLess(priorities.index("same_intent_recent_memory"), priorities.index("methodology_memory"))
+            self.assertLess(priorities.index("methodology_memory"), priorities.index("global_memory"))
 
     def test_fork_session_thread_copies_turns_and_exposes_lineage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -15,7 +15,11 @@ def dedupe_relevant_candidates(
     for _, context in sorted(
         candidates,
         key=lambda item: (
-            int(item[1].get("memory_priority_rank") or 99),
+            (
+                int(item[1].get("memory_priority_rank"))
+                if item[1].get("memory_priority_rank") is not None
+                else 99
+            ),
             -float(item[0]),
         ),
     ):
