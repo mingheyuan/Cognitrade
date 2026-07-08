@@ -55,7 +55,8 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
                 ScreenReviewSummaryBuilderSubagent(
                     build_review_summary=self.summary_support.build_review_summary,
                 ),
-            ]
+            ],
+            catalog_overlay_provider=self._approved_catalog_overlay_entries,
         )
         self.phase_controller = SubagentPhaseController(
             registry=self.registry,

@@ -414,8 +414,20 @@ class SubagentPhaseController:
         preferred_subagent_type: str | None,
         requires_llm: bool | None,
     ) -> SubagentCapabilityGap:
-        stage_entries = self.registry.catalog_entries(stage=stage)
-        candidate_entries = self.registry.catalog_entries(stage=stage, capability=capability)
+        stage_entries = self.registry.catalog_entries(stage=stage, include_candidates=True)
+        candidate_entries = self.registry.catalog_entries(
+            stage=stage,
+            capability=capability,
+            include_candidates=True,
+        )
+        notes = [
+            "catalog_capability_gap",
+            f"stage={stage}",
+            f"intent={intent}",
+            f"capability={capability}",
+        ]
+        if any("approved_discovery_candidate" in list(entry.tags or []) for entry in candidate_entries):
+            notes.append("approved_discovery_candidates_available")
         return SubagentCapabilityGap(
             intent=intent,
             stage=stage,
@@ -444,12 +456,7 @@ class SubagentPhaseController:
                     if str(item).strip()
                 }
             ),
-            notes=[
-                "catalog_capability_gap",
-                f"stage={stage}",
-                f"intent={intent}",
-                f"capability={capability}",
-            ],
+            notes=notes,
         )
 
     @staticmethod

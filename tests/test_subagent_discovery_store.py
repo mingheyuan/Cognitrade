@@ -90,6 +90,14 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
             )
             self.assertEqual(result["status"], "approved")
             self.assertEqual(result["result"]["review_reason"], "approved for follow-up packaging")
+            self.assertEqual(len(result["result"]["candidate_catalog_entries"]), 1)
+            self.assertEqual(
+                result["result"]["candidate_catalog_entries"][0]["capabilities"],
+                ["news_sentiment_enrichment"],
+            )
+            approved_entries = store.approved_catalog_entries()
+            self.assertEqual(len(approved_entries), 1)
+            self.assertIn("approved_discovery_candidate", approved_entries[0].tags)
 
 
 if __name__ == "__main__":

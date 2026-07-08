@@ -197,6 +197,17 @@ class RuntimeBoundSubagentInvoker:
         binding = self._runtime_binding_for_events()
         return binding.get("execution_policy")
 
+    def _approved_catalog_overlay_entries(self):
+        binding = self._runtime_binding_for_events()
+        store = binding.get("subagent_discovery_store")
+        approved_catalog_entries = getattr(store, "approved_catalog_entries", None)
+        if not callable(approved_catalog_entries):
+            return []
+        try:
+            return list(approved_catalog_entries() or [])
+        except Exception:
+            return []
+
     def _subagent_dag_cache_context(self, *, dag_id: str) -> SubagentDagCacheContext | None:
         binding = self._runtime_binding_for_events()
         context = binding.get("context")

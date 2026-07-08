@@ -10,6 +10,9 @@ from pydantic import BaseModel, ConfigDict
 from research_system.runtime.core.agent_control import AgentControl
 from research_system.runtime.core.execution_policy import RuntimeDegradeReason
 from research_system.runtime.orchestration.orchestrator_context import build_runtime_context
+from research_system.runtime.orchestration.subagent_discovery_admin_support import OrchestratorSubagentDiscoveryAdminSupport
+from research_system.runtime.orchestration.subagent_discovery_store import SubagentDiscoveryStore
+from research_system.schemas.subagents import SubagentCapabilityGap, SubagentToolDiscoveryRequest
 from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.schemas.protocol import RequestEnvelope
 from research_system.schemas.subagents import SubagentInvocation
@@ -285,6 +288,51 @@ class SubagentRegistryTests(unittest.TestCase):
         self.assertEqual([entry.subagent_type for entry in stock_screen_entries], ["typed_subagent"])
         self.assertEqual([entry.subagent_type for entry in transform_entries], ["typed_subagent"])
         self.assertEqual(llm_entries, [])
+
+    def test_registry_can_expose_approved_discovery_overlay_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="analysis",
+                capability="sector_signal_enrichment",
+                reason="missing sector signal enrichment capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="analysis",
+                capability="sector_signal_enrichment",
+                search_query="stock_check analysis sector_signal_enrichment",
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            admin.review_request(ticket.ticket_id, decision="approve")
+
+            registry = SubagentRegistry(
+                [_TypedSubagent()],
+                catalog_overlay_provider=store.approved_catalog_entries,
+            )
+
+            default_entries = registry.catalog_entries(stage="analysis", capability="sector_signal_enrichment")
+            candidate_entries = registry.catalog_entries(
+                stage="analysis",
+                capability="sector_signal_enrichment",
+                include_candidates=True,
+            )
+
+            self.assertEqual(default_entries, [])
+            self.assertEqual(len(candidate_entries), 1)
+            self.assertEqual(candidate_entries[0].capabilities, ["sector_signal_enrichment"])
+            self.assertIn("approved_discovery_candidate", candidate_entries[0].tags)
 
     def test_agent_control_validates_typed_subagent_inputs_and_outputs(self) -> None:
         temp_dir, context, request = self._build_runtime()

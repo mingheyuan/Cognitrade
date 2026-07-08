@@ -6,12 +6,17 @@ import unittest
 from pathlib import Path
 
 from research_system.agents._subagent_phase_controller import SubagentCapabilityGapError, SubagentPhaseController
+from research_system.runtime.orchestration.subagent_discovery_admin_support import (
+    OrchestratorSubagentDiscoveryAdminSupport,
+)
 from research_system.runtime.orchestration.subagent_discovery_store import SubagentDiscoveryStore
 from research_system.schemas.subagents import (
+    SubagentCapabilityGap,
     SubagentExecutionRecord,
     SubagentGraphPatch,
     SubagentGraphPatchOperation,
     SubagentPlan,
+    SubagentToolDiscoveryRequest,
 )
 from research_system.subagents.base import SubagentCatalogMetadata, SubagentRuntimePolicy
 from research_system.subagents.registry import SubagentRegistry
@@ -168,6 +173,84 @@ class SubagentPhaseControllerTests(unittest.TestCase):
             self.assertEqual(
                 pending_tickets[0].tool_discovery_request.search_query,
                 "review_thesis review missing_capability",
+            )
+
+    def test_capability_gap_surfaces_approved_candidate_catalog_entries(self) -> None:
+        runtime_context = SimpleNamespace(
+            subagent_capability_gaps=[],
+            subagent_tool_discovery_requests=[],
+            dynamic_trace=[],
+        )
+        support = SimpleNamespace(emit_event=lambda *_args, **_kwargs: None)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            discovery_store = SubagentDiscoveryStore(Path(temp_dir))
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: discovery_store,
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            ticket = discovery_store.create_request(
+                gap=SubagentCapabilityGap(
+                    intent="review_thesis",
+                    stage="review",
+                    capability="missing_capability",
+                    reason="missing review capability",
+                ),
+                request=SubagentToolDiscoveryRequest(
+                    intent="review_thesis",
+                    stage="review",
+                    capability="missing_capability",
+                    search_query="review_thesis review missing_capability",
+                    reason="missing review capability",
+                ),
+            )
+            admin.review_request(ticket.ticket_id, decision="approve")
+            controller = SubagentPhaseController(
+                registry=SubagentRegistry(
+                    [_CheapReviewSubagent(), _PreferredReviewSubagent()],
+                    catalog_overlay_provider=discovery_store.approved_catalog_entries,
+                ),
+                invoke_subagent=lambda invocation: (
+                    {"ok": True},
+                    SubagentExecutionRecord(
+                        subagent_type=invocation.subagent_type,
+                        invocation_id=invocation.invocation_id,
+                        status="completed",
+                        objective=invocation.objective,
+                        inputs=invocation.inputs,
+                        output_keys=["ok"],
+                    ),
+                ),
+                emit_event=None,
+                cache_context_builder=lambda **_: None,
+                start_from_node_id_builder=lambda **_: None,
+                runtime_binding_getter=lambda: {
+                    "context": runtime_context,
+                    "support": support,
+                    "subagent_discovery_store": discovery_store,
+                    "request_id": "req-gap-approved",
+                    "intent": "review_thesis",
+                },
+            )
+
+            with self.assertRaises(SubagentCapabilityGapError) as exc_info:
+                controller.select_catalog_entry(
+                    stage="review",
+                    intent="review_thesis",
+                    capability="missing_capability",
+                )
+
+            self.assertIn(
+                "candidate_review_missing_capability",
+                exc_info.exception.gap.candidate_subagent_types,
+            )
+            self.assertIn(
+                "approved_discovery_candidates_available",
+                exc_info.exception.gap.notes,
             )
 
     def test_execute_plan_injects_plan_metadata_and_trace(self) -> None:

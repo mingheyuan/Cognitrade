@@ -14,10 +14,16 @@ from research_system.subagents.base import SubagentDefinition, SupportsSubagent,
 
 
 class SubagentRegistry:
-    def __init__(self, subagents: Iterable[SupportsSubagent] | None = None) -> None:
+    def __init__(
+        self,
+        subagents: Iterable[SupportsSubagent] | None = None,
+        *,
+        catalog_overlay_provider: Callable[[], Iterable[SubagentCatalogEntry]] | None = None,
+    ) -> None:
         self._subagents: dict[str, SupportsSubagent] = {}
         self._definitions: dict[str, SubagentDefinition] = {}
         self._observers: list[Callable[..., None]] = []
+        self._catalog_overlay_provider = catalog_overlay_provider
         for subagent in subagents or []:
             self.register(subagent)
 
@@ -50,11 +56,14 @@ class SubagentRegistry:
         intent: str | None = None,
         capability: str | None = None,
         requires_llm: bool | None = None,
+        include_candidates: bool = False,
     ) -> list[SubagentCatalogEntry]:
         entries = [
             self._definition_to_catalog_entry(definition)
             for definition in self.definitions()
         ]
+        if include_candidates:
+            entries.extend(self._catalog_overlay_entries())
         normalized_stage = str(stage or "").strip().lower()
         normalized_intent = str(intent or "").strip().lower()
         normalized_capability = str(capability or "").strip().lower()
@@ -70,6 +79,20 @@ class SubagentRegistry:
                 continue
             filtered.append(entry)
         return filtered
+
+    def _catalog_overlay_entries(self) -> list[SubagentCatalogEntry]:
+        provider = self._catalog_overlay_provider
+        if not callable(provider):
+            return []
+        try:
+            entries = provider()
+        except Exception:
+            return []
+        normalized: list[SubagentCatalogEntry] = []
+        for entry in entries or []:
+            if isinstance(entry, SubagentCatalogEntry):
+                normalized.append(entry)
+        return normalized
 
     def notify_started(self, *, invocation: SubagentInvocation) -> None:
         self._notify(

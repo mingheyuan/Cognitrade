@@ -71,7 +71,8 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                 SectorSnapshotCollectorSubagent(skill_runtime),
                 CandidateUniverseBuilderSubagent(skill_runtime),
                 ReviewTargetLoaderSubagent(runs_root),
-            ]
+            ],
+            catalog_overlay_provider=self._approved_catalog_overlay_entries,
         )
         self.phase_controller = SubagentPhaseController(
             registry=self.registry,

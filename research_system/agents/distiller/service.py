@@ -106,7 +106,8 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                     distilled_dimension_model=DistilledDimension,
                     distillation_result_model=DistillationResult,
                 ),
-            ]
+            ],
+            catalog_overlay_provider=self._approved_catalog_overlay_entries,
         )
         self.phase_controller = SubagentPhaseController(
             registry=self.registry,

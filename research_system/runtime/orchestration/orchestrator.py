@@ -233,12 +233,14 @@ class ResearchOrchestrator:
         decision: str,
         reviewer: str = "manual_cli_review",
         reason: str | None = None,
+        candidate_catalog_entries: list[dict] | None = None,
     ) -> dict:
         return self._admin().review_subagent_discovery_request(
             ticket_id,
             decision=decision,
             reviewer=reviewer,
             reason=reason,
+            candidate_catalog_entries=candidate_catalog_entries,
         )
 
     def show_proposal(self, proposal_id: str) -> dict:

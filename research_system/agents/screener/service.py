@@ -54,7 +54,8 @@ class ScreenerService(RuntimeBoundSubagentInvoker):
                 ScreeningExecutionSubagent(
                     execute_screening_pipeline=self._execute_screening_pipeline,
                 ),
-            ]
+            ],
+            catalog_overlay_provider=self._approved_catalog_overlay_entries,
         )
         self.phase_controller = SubagentPhaseController(
             registry=self.registry,

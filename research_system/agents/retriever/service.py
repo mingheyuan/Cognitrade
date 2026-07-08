@@ -130,7 +130,8 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 EvidenceCandidateDeduperSubagent(
                     dedupe_evidence_candidates=self._dedupe_evidence_candidates,
                 ),
-            ]
+            ],
+            catalog_overlay_provider=self._approved_catalog_overlay_entries,
         )
         self.phase_controller = SubagentPhaseController(
             registry=self.registry,

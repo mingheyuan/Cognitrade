@@ -100,7 +100,8 @@ class ReporterService(RuntimeBoundSubagentInvoker):
                     normalize_review_conclusion=self._normalize_review_conclusion,
                 ),
                 LLMErrorReportComposerSubagent(),
-            ]
+            ],
+            catalog_overlay_provider=self._approved_catalog_overlay_entries,
         )
         self.phase_controller = SubagentPhaseController(
             registry=self.registry,

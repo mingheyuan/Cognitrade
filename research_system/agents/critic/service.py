@@ -47,7 +47,8 @@ class CriticService(RuntimeBoundSubagentInvoker):
                 LogicBlockCriticSubagent(attribution_review_payload=self._attribution_review_payload),
                 DimensionCriticSubagent(),
                 CriticSummaryBuilderSubagent(),
-            ]
+            ],
+            catalog_overlay_provider=self._approved_catalog_overlay_entries,
         )
         self.phase_controller = SubagentPhaseController(
             registry=self.registry,

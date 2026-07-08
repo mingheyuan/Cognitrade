@@ -4,6 +4,7 @@ from pathlib import Path
 
 from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.schemas.subagents import (
+    SubagentCatalogEntry,
     SubagentCapabilityGap,
     SubagentDiscoveryTicket,
     SubagentToolDiscoveryRequest,
@@ -70,6 +71,13 @@ class SubagentDiscoveryStore:
                 return ticket, status
         return None
 
+    def approved_catalog_entries(self) -> list[SubagentCatalogEntry]:
+        entries: list[SubagentCatalogEntry] = []
+        for ticket in self.list("approved"):
+            for entry in ticket.candidate_catalog_entries:
+                entries.append(self._normalize_candidate_entry(ticket, entry))
+        return entries
+
     def save(self, ticket: SubagentDiscoveryTicket, *, previous_status: str | None = None) -> SubagentDiscoveryTicket:
         old_status = previous_status or ticket.status
         if old_status != ticket.status:
@@ -78,6 +86,24 @@ class SubagentDiscoveryStore:
                 old_path.unlink()
         write_json(self._path(ticket.status, ticket.ticket_id), ticket.model_dump(mode="json"))
         return ticket
+
+    @staticmethod
+    def _normalize_candidate_entry(
+        ticket: SubagentDiscoveryTicket,
+        entry: SubagentCatalogEntry,
+    ) -> SubagentCatalogEntry:
+        tags = list(entry.tags or [])
+        if "approved_discovery_candidate" not in tags:
+            tags.append("approved_discovery_candidate")
+        ticket_tag = f"discovery_ticket:{ticket.ticket_id}"
+        if ticket_tag not in tags:
+            tags.append(ticket_tag)
+        return entry.model_copy(
+            update={
+                "tags": tags,
+            },
+            deep=True,
+        )
 
 
 __all__ = ["SubagentDiscoveryStore"]

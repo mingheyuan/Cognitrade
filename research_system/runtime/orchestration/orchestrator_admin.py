@@ -89,12 +89,14 @@ class OrchestratorAdminService:
         decision: str,
         reviewer: str = "manual_cli_review",
         reason: str | None = None,
+        candidate_catalog_entries: list[dict] | None = None,
     ) -> dict:
         return self.subagent_discovery_admin.review_request(
             ticket_id,
             decision=decision,
             reviewer=reviewer,
             reason=reason,
+            candidate_catalog_entries=candidate_catalog_entries,
         )
 
     def review_proposal(
