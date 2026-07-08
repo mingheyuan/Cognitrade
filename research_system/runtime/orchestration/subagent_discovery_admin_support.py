@@ -102,7 +102,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         located = self.host.require_subagent_discovery_store().find(ticket_id)
         if located is None:
             raise self.host.orchestrator_error_cls(f"subagent discovery ticket not found: {ticket_id}")
-        ticket, previous_status = located
+        ticket, _stored_status = located
         if ticket.status in {"approved", "rejected"}:
             current = self.show_request(ticket.ticket_id)
             return {
@@ -111,25 +111,15 @@ class OrchestratorSubagentDiscoveryAdminSupport:
                 "message": f"discovery ticket already {ticket.status}",
                 "result": current,
             }
-        previous_status = str(ticket.status or "pending").strip() or "pending"
-        review_resolution = self.policy_controller.resolve_manual_review(
+        self.policy_controller.apply_manual_review(
             ticket=ticket,
             decision=normalized_decision,
             reviewer=reviewer,
             reason=str(reason or ""),
             source="manual_cli_review",
             candidate_catalog_entries=candidate_catalog_entries,
+            store=self.host.require_subagent_discovery_store(),
         )
-        if review_resolution.candidate_result is not None:
-            self.discovery_decision_source.apply_candidate_selection(
-                ticket=ticket,
-                candidate_result=review_resolution.candidate_result,
-            )
-        previous_status = self.discovery_decision_source.apply_review(
-            ticket=ticket,
-            review_decision=review_resolution.review_decision,
-        )
-        self.host.require_subagent_discovery_store().save(ticket, previous_status=previous_status)
         return {
             "ticket_id": ticket.ticket_id,
             "status": ticket.status,
@@ -160,12 +150,12 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         located = self.host.require_subagent_discovery_store().find(ticket_id)
         if located is None:
             raise self.host.orchestrator_error_cls(f"subagent discovery ticket not found: {ticket_id}")
-        ticket, previous_status = located
+        ticket, _stored_status = located
         if ticket.status != "approved":
             raise self.host.orchestrator_error_cls(
                 f"subagent discovery ticket must be approved before activation: {ticket.status}"
             )
-        activation_resolution = self.policy_controller.resolve_manual_activation(
+        activation_application = self.policy_controller.apply_manual_activation(
             ticket=ticket,
             delegate_subagent_type=delegate_subagent_type,
             candidate_subagent_type=candidate_subagent_type,
@@ -182,18 +172,14 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             openapi_spec_uri=openapi_spec_uri,
             openapi_operation_id=openapi_operation_id,
             timeout_seconds=timeout_seconds,
+            store=self.host.require_subagent_discovery_store(),
         )
-        activation_target = activation_resolution.activation_target
+        activation_target = activation_application.activation_resolution.activation_target
         if activation_target is None:
             raise self.host.orchestrator_error_cls(
                 f"activation target could not be resolved for discovery ticket: {ticket.ticket_id}"
             )
-        _activation_entry, created = self.discovery_decision_source.apply_activation(
-            ticket=ticket,
-            activation_decision=activation_resolution.activation_decision,
-            candidate_entry=activation_target.candidate_entry,
-        )
-        if not created:
+        if not activation_application.created:
             current = self.show_request(ticket.ticket_id)
             return {
                 "ticket_id": ticket.ticket_id,
@@ -201,7 +187,6 @@ class OrchestratorSubagentDiscoveryAdminSupport:
                 "message": f"activation already exists for {activation_target.candidate_entry.subagent_type}",
                 "result": current,
             }
-        self.host.require_subagent_discovery_store().save(ticket, previous_status=previous_status)
         activation_message = (
             f"activated discovery runtime alias {activation_target.candidate_entry.subagent_type}"
             if activation_target.runtime_registration is not None

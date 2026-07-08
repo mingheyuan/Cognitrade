@@ -93,85 +93,61 @@ class SubagentDiscoveryController:
         return self.preview_ticket(ticket=ticket, store=store)
 
     def preview_ticket(self, *, ticket, store):
-        preview_resolution = self.discovery_policy_controller.resolve_runtime_preview(
+        preview_application = self.discovery_policy_controller.apply_runtime_preview(
             ticket=ticket,
+            store=store,
+            raise_on_save_error=False,
         )
+        preview_resolution = preview_application.preview_resolution
         candidate_result = preview_resolution.candidate_result
-        self.discovery_decision_source.apply_candidate_selection(
-            ticket=ticket,
-            candidate_result=candidate_result,
-        )
         self._record_stage_decision(
             event_name="subagent_tool_discovery_candidate_decided",
             payload=candidate_result.decision.event_payload(),
         )
-        approval_decision = preview_resolution.review_decision
-        previous_status = self.discovery_decision_source.apply_review(
-            ticket=ticket,
-            review_decision=approval_decision,
-        )
+        approval_decision = preview_application.review_application.review_resolution.review_decision
         self._record_stage_decision(
             event_name="subagent_tool_discovery_review_decided",
             payload=approval_decision.event_payload(),
         )
-        save = getattr(store, "save", None)
-        if callable(save):
-            try:
-                save(ticket, previous_status=previous_status)
-            except Exception:
-                return ticket
-        if preview_resolution.activation_resolution is not None:
+        if not preview_application.review_application.persisted:
+            return ticket
+        if preview_application.activation_application is not None:
             return self.maybe_auto_activate_ticket(
                 ticket=ticket,
                 store=store,
-                activation_resolution=preview_resolution.activation_resolution,
+                activation_resolution=preview_application.activation_application.activation_resolution,
+                activation_application=preview_application.activation_application,
             )
         return ticket
 
-    def maybe_auto_activate_ticket(self, *, ticket, store, activation_resolution: SubagentDiscoveryActivationResolution | None = None):
-        activation_resolution = activation_resolution or self.discovery_policy_controller.resolve_runtime_activation(
+    def maybe_auto_activate_ticket(
+        self,
+        *,
+        ticket,
+        store,
+        activation_resolution: SubagentDiscoveryActivationResolution | None = None,
+        activation_application=None,
+    ):
+        activation_application = activation_application or self.discovery_policy_controller.apply_activation_resolution(
             ticket=ticket,
+            activation_resolution=activation_resolution or self.discovery_policy_controller.resolve_runtime_activation(
+                ticket=ticket,
+            ),
+            store=store,
+            previous_status="approved",
+            raise_on_save_error=False,
         )
-        activation_decision = activation_resolution.activation_decision
-        if not activation_decision.activate:
+        activation_decision = activation_application.activation_resolution.activation_decision
+        if activation_application.activation_outcome == "skipped":
             self._record_stage_decision(
                 event_name="subagent_tool_discovery_activation_decided",
                 payload=activation_decision.event_payload(activation_outcome="skipped"),
             )
             return ticket
-        activation_target = activation_resolution.activation_target
-        if activation_target is None:
+        if activation_application.activation_outcome == "failed":
             self._record_stage_decision(
                 event_name="subagent_tool_discovery_activation_decided",
                 payload=activation_decision.event_payload(activation_outcome="failed"),
-            )
-            return ticket
-        try:
-            _activation_entry, created = self.discovery_decision_source.apply_activation(
-                ticket=ticket,
-                activation_decision=activation_decision,
-                candidate_entry=activation_target.candidate_entry,
-            )
-        except Exception:
-            self._record_stage_decision(
-                event_name="subagent_tool_discovery_activation_decided",
-                payload=activation_decision.event_payload(activation_outcome="failed"),
-            )
-            return ticket
-        save = getattr(store, "save", None)
-        if created and callable(save):
-            try:
-                save(ticket, previous_status="approved")
-            except Exception:
-                self._record_stage_decision(
-                    event_name="subagent_tool_discovery_activation_decided",
-                    payload=activation_decision.event_payload(activation_outcome="failed"),
-                )
-                return ticket
-        if not created:
-            self._record_stage_decision(
-                event_name="subagent_tool_discovery_activation_decided",
-                payload=activation_decision.event_payload(activation_outcome="activated"),
             )
             return ticket
         self._record_stage_decision(

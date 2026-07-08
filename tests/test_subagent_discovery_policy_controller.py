@@ -42,7 +42,7 @@ from research_system.schemas.subagents import SubagentCapabilityGap
 
 
 class SubagentDiscoveryPolicyControllerTests(unittest.TestCase):
-    def test_policy_controller_can_resolve_runtime_preview_with_bound_auto_activation(self) -> None:
+    def test_policy_controller_can_apply_runtime_preview_with_bound_auto_activation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             settings = Settings.from_env(root)
@@ -110,27 +110,33 @@ class SubagentDiscoveryPolicyControllerTests(unittest.TestCase):
             protocol_decision = decision_source.resolve_protocols(gap=gap)
             ticket = store.create_request(gap=gap, request=protocol_decision.request)
 
-            preview_resolution = policy_controller.resolve_runtime_preview(ticket=ticket)
+            preview_application = policy_controller.apply_runtime_preview(
+                ticket=ticket,
+                store=store,
+            )
 
+            self.assertTrue(preview_application.review_application.persisted)
+            self.assertIsNotNone(preview_application.activation_application)
+            self.assertTrue(preview_application.activation_application.created)
             self.assertEqual(
-                preview_resolution.candidate_result.decision.recommendation.candidate_subagent_type,
+                preview_application.preview_resolution.candidate_result.decision.recommendation.candidate_subagent_type,
                 "candidate_collect_market_snapshot_skill",
             )
-            self.assertEqual(preview_resolution.review_decision.decision, "approved")
-            self.assertIsNotNone(preview_resolution.activation_resolution)
-            self.assertTrue(preview_resolution.activation_resolution.activation_decision.activate)
-            self.assertIsNone(preview_resolution.activation_resolution.resolution_error)
-            self.assertIsNotNone(preview_resolution.activation_resolution.activation_target)
+            self.assertEqual(preview_application.preview_resolution.review_decision.decision, "approved")
+            self.assertTrue(preview_application.activation_application.activation_resolution.activation_decision.activate)
+            self.assertIsNone(preview_application.activation_application.activation_resolution.resolution_error)
             self.assertEqual(
-                preview_resolution.activation_resolution.activation_target.candidate_entry.subagent_type,
+                preview_application.activation_application.activation_resolution.activation_target.candidate_entry.subagent_type,
                 "candidate_collect_market_snapshot_skill",
             )
             self.assertEqual(
-                preview_resolution.activation_resolution.activation_target.runtime_registration.registration_type,
+                preview_application.activation_application.activation_resolution.activation_target.runtime_registration.registration_type,
                 "snapshot_skill_runner",
             )
+            self.assertEqual(ticket.status, "approved")
+            self.assertEqual(len(ticket.activated_entries), 1)
 
-    def test_policy_controller_can_resolve_manual_review_and_activation(self) -> None:
+    def test_policy_controller_can_apply_manual_review_and_activation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             settings = Settings.from_env(root)
@@ -198,7 +204,7 @@ class SubagentDiscoveryPolicyControllerTests(unittest.TestCase):
             protocol_decision = decision_source.resolve_protocols(gap=gap)
             ticket = store.create_request(gap=gap, request=protocol_decision.request)
 
-            review_resolution = policy_controller.resolve_manual_review(
+            review_application = policy_controller.apply_manual_review(
                 ticket=ticket,
                 decision="approve",
                 reviewer="tester",
@@ -207,35 +213,33 @@ class SubagentDiscoveryPolicyControllerTests(unittest.TestCase):
                     entry.model_dump(mode="json")
                     for entry in candidate_support.candidate_entries(ticket)
                 ],
+                store=store,
             )
-            self.assertIsNotNone(review_resolution.candidate_result)
-            self.assertEqual(review_resolution.review_decision.policy_source, "explicit")
-            decision_source.apply_candidate_selection(
-                ticket=ticket,
-                candidate_result=review_resolution.candidate_result,
-            )
-            decision_source.apply_review(
-                ticket=ticket,
-                review_decision=review_resolution.review_decision,
-            )
+            self.assertTrue(review_application.persisted)
+            self.assertIsNotNone(review_application.review_resolution.candidate_result)
+            self.assertEqual(review_application.review_resolution.review_decision.policy_source, "explicit")
+            self.assertEqual(ticket.status, "approved")
 
-            activation_resolution = policy_controller.resolve_manual_activation(
+            activation_application = policy_controller.apply_manual_activation(
                 ticket=ticket,
                 registration_template_id="snapshot:market:market_snapshot_skill",
                 activated_by="tester",
                 reason="activate runtime alias from approved ticket",
+                store=store,
             )
 
-            self.assertIsNotNone(activation_resolution.activation_target)
-            self.assertEqual(activation_resolution.activation_decision.policy_source, "explicit")
+            self.assertTrue(activation_application.created)
+            self.assertIsNotNone(activation_application.activation_resolution.activation_target)
+            self.assertEqual(activation_application.activation_resolution.activation_decision.policy_source, "explicit")
             self.assertEqual(
-                activation_resolution.activation_target.candidate_entry.subagent_type,
+                activation_application.activation_resolution.activation_target.candidate_entry.subagent_type,
                 "candidate_collect_market_snapshot_skill",
             )
             self.assertEqual(
-                activation_resolution.activation_target.runtime_registration.registration_template_id,
+                activation_application.activation_resolution.activation_target.runtime_registration.registration_template_id,
                 "snapshot:market:market_snapshot_skill",
             )
+            self.assertEqual(len(ticket.activated_entries), 1)
 
 
 if __name__ == "__main__":
