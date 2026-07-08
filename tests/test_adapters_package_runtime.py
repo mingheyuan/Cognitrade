@@ -14,6 +14,7 @@ from research_system.adapters.storage.redis_route_store import (
 )
 from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
 from research_system.adapters.vendors.fallback_merge import merge_provider_facts
+from research_system.adapters.vendors.http_json_source_registry import HttpJsonSourceRegistry
 from research_system.adapters.vendors.market_router import MarketRouter
 from research_system.adapters.vendors.mcp_source_registry import McpSourceRegistry
 from research_system.adapters.vendors.network_profile import NetworkProfile
@@ -35,6 +36,7 @@ class AdaptersPackageRuntimeTests(unittest.TestCase):
 
     def test_vendors_package_exports(self) -> None:
         self.assertIs(vendors_package.DataSourceRegistry, DataSourceRegistry)
+        self.assertIs(vendors_package.HttpJsonSourceRegistry, HttpJsonSourceRegistry)
         self.assertIs(vendors_package.MarketRouter, MarketRouter)
         self.assertIs(vendors_package.McpSourceRegistry, McpSourceRegistry)
         self.assertIs(vendors_package.NetworkProfile, NetworkProfile)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
+from research_system.adapters.vendors.http_json_source_registry import HttpJsonSourceRegistry
 from research_system.adapters.vendors.mcp_source_registry import McpSourceRegistry
 from research_system.adapters.vendors.openapi_source_registry import OpenApiSourceRegistry
 from research_system.adapters.vendors.skill_source_registry import SkillSourceRegistry
@@ -30,6 +31,7 @@ _DISCOVERY_CANDIDATE_SOURCE_HANDLERS = (
     _DiscoveryCandidateSourceHandler(protocol="mcp", loader_name="_mcp_candidate_entries"),
     _DiscoveryCandidateSourceHandler(protocol="openapi", loader_name="_openapi_candidate_entries"),
     _DiscoveryCandidateSourceHandler(protocol="skill", loader_name="_skill_candidate_entries"),
+    _DiscoveryCandidateSourceHandler(protocol="http_json", loader_name="_http_json_candidate_entries"),
 )
 
 SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES = tuple(
@@ -300,6 +302,83 @@ class SubagentDiscoveryCandidateSupport:
             )
         return entries
 
+    def _http_json_candidate_entries(self, ticket: SubagentDiscoveryTicket) -> list[SubagentCatalogEntry]:
+        registry = self._http_json_registry()
+        gap = ticket.capability_gap
+        matching_rows = []
+        for endpoint in registry.list_all():
+            if not bool(endpoint.read_only):
+                continue
+            if not self._matches_stage(gap.stage, endpoint.stage):
+                continue
+            if not self._matches_intent(gap.intent, endpoint.suitable_intents):
+                continue
+            if not self._matches_capability(gap.capability, endpoint.capabilities):
+                continue
+            if not self._is_object_schema(endpoint.input_json_schema):
+                continue
+            if not self._is_object_schema(endpoint.output_json_schema):
+                continue
+            if not self._is_discovery_http_source_allowed(endpoint.source_id):
+                continue
+            normalized_endpoint_path = str(endpoint.endpoint_path or "").strip()
+            normalized_http_method = str(endpoint.http_method or "").strip().upper()
+            if not normalized_endpoint_path.startswith("/"):
+                continue
+            if normalized_http_method not in {"GET", "POST"}:
+                continue
+            matching_rows.append(endpoint)
+        total = len(matching_rows)
+        entries: list[SubagentCatalogEntry] = []
+        for index, endpoint in enumerate(matching_rows):
+            runtime_hints = {
+                "http_json": {
+                    "source_id": str(endpoint.source_id).strip(),
+                    "endpoint_path": str(endpoint.endpoint_path).strip(),
+                    "http_method": str(endpoint.http_method).strip().upper() or "GET",
+                    "summary": str(endpoint.summary or "").strip()
+                    or f"HTTP JSON alias for {endpoint.source_id}",
+                }
+            }
+            if endpoint.timeout_seconds is not None:
+                runtime_hints["http_json"]["timeout_seconds"] = float(endpoint.timeout_seconds)
+            entries.append(
+                SubagentCatalogEntry(
+                    subagent_type=self._candidate_subagent_type(
+                        ticket,
+                        source_id=str(endpoint.source_id).strip(),
+                        tool_name=str(endpoint.endpoint_path).strip(),
+                        explicit_subagent_type=endpoint.candidate_subagent_type,
+                        total=total,
+                        index=index,
+                    ),
+                    summary=str(endpoint.summary or "").strip()
+                    or f"Approved HTTP JSON candidate for {endpoint.source_id}{endpoint.endpoint_path}",
+                    capabilities=list(endpoint.capabilities or [str(gap.capability).strip()]),
+                    stage=str(endpoint.stage or gap.stage or "").strip() or None,
+                    cost_class="medium",
+                    latency_class="medium",
+                    side_effect_level="read_only",
+                    suitable_intents=list(
+                        endpoint.suitable_intents
+                        or ([str(gap.intent).strip()] if str(gap.intent or "").strip() else [])
+                    ),
+                    tags=[
+                        "approved_discovery_candidate",
+                        "configured_http_json_endpoint",
+                        "pending_runtime_registration",
+                        f"http_json_source:{endpoint.source_id}",
+                    ],
+                    requires_llm=bool(gap.requires_llm),
+                    allow_parallel=False,
+                    max_concurrency=1,
+                    input_json_schema=dict(endpoint.input_json_schema or {}),
+                    output_json_schema=dict(endpoint.output_json_schema or {}),
+                    runtime_registration_hints=runtime_hints,
+                )
+            )
+        return entries
+
     @staticmethod
     def _matches_stage(gap_stage: str | None, tool_stage: str | None) -> bool:
         normalized_gap_stage = str(gap_stage or "").strip().lower()
@@ -437,6 +516,15 @@ class SubagentDiscoveryCandidateSupport:
                 return registry
         settings = getattr(self.host, "settings", None)
         return OpenApiSourceRegistry(settings=settings)
+
+    def _http_json_registry(self) -> HttpJsonSourceRegistry:
+        factory = getattr(self.host, "require_http_json_source_registry", None)
+        if callable(factory):
+            registry = factory()
+            if isinstance(registry, HttpJsonSourceRegistry):
+                return registry
+        settings = getattr(self.host, "settings", None)
+        return HttpJsonSourceRegistry(settings=settings)
 
     def _skill_source_registry(self) -> SkillSourceRegistry:
         factory = getattr(self.host, "require_skill_source_registry", None)

@@ -115,7 +115,7 @@ class SubagentToolDiscoveryRequest(BaseModel):
     stage: str | None = None
     capability: str
     search_query: str
-    preferred_protocols: list[str] = Field(default_factory=lambda: ["mcp", "openapi", "skill"])
+    preferred_protocols: list[str] = Field(default_factory=lambda: ["mcp", "openapi", "skill", "http_json"])
     reason: str
     policy_source: Literal["rule", "llm", "hybrid", "explicit"] = "rule"
     notes: list[str] = Field(default_factory=list)

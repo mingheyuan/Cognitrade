@@ -30,6 +30,7 @@ class SettingsRuntimeTests(unittest.TestCase):
                     "router_defaults",
                     "provider_policy",
                     "data_sources",
+                    "http_json_sources",
                     "mcp_servers",
                     "openapi_sources",
                     "skill_sources",
@@ -51,6 +52,7 @@ class SettingsRuntimeTests(unittest.TestCase):
                 "workspace/config/router_defaults.yml": "router: seeded\n",
                 "workspace/config/provider_policy.yml": "provider: seeded\n",
                 "workspace/config/data_sources.yml": "sources: seeded\n",
+                "workspace/config/http_json_sources.yml": "sources: seeded-http-json\n",
                 "workspace/config/mcp_servers.yml": "servers: seeded\n",
                 "workspace/config/openapi_sources.yml": "sources: seeded-openapi\n",
                 "workspace/config/skill_sources.yml": "sources: seeded-skill\n",
@@ -70,6 +72,7 @@ class SettingsRuntimeTests(unittest.TestCase):
             self.assertTrue((settings.proposals_root / "rejected").is_dir())
             self.assertEqual(settings.retrieval_policy_path.read_text(encoding="utf-8"), "retrieval: seeded\n")
             self.assertEqual(settings.mcp_servers_path.read_text(encoding="utf-8"), "servers: seeded\n")
+            self.assertEqual(settings.http_json_sources_path.read_text(encoding="utf-8"), "sources: seeded-http-json\n")
             self.assertEqual(settings.openapi_sources_path.read_text(encoding="utf-8"), "sources: seeded-openapi\n")
             self.assertEqual(settings.skill_sources_path.read_text(encoding="utf-8"), "sources: seeded-skill\n")
             self.assertEqual(settings.taxonomy_dimension_patterns_path.read_text(encoding="utf-8"), "patterns: seeded\n")

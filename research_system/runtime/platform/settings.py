@@ -35,6 +35,7 @@ class Settings(BaseModel):
     provider_probe_timeout_seconds: float = 1.0
     provider_policy_path: Path
     data_sources_path: Path
+    http_json_sources_path: Path
     mcp_servers_path: Path
     openapi_sources_path: Path
     skill_sources_path: Path
@@ -89,6 +90,7 @@ class Settings(BaseModel):
             "router_defaults": self.router_defaults_path,
             "provider_policy": self.provider_policy_path,
             "data_sources": self.data_sources_path,
+            "http_json_sources": self.http_json_sources_path,
             "mcp_servers": self.mcp_servers_path,
             "openapi_sources": self.openapi_sources_path,
             "skill_sources": self.skill_sources_path,

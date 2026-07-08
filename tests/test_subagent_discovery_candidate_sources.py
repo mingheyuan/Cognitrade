@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import unittest
 
+from research_system.adapters.vendors.http_json_source_registry import (
+    HttpJsonEndpointDefinition,
+    HttpJsonSourceRegistry,
+)
 from research_system.adapters.vendors.mcp_source_registry import (
     McpServerSource,
     McpSourceRegistry,
@@ -36,7 +40,7 @@ class SubagentDiscoveryCandidateSourceTests(unittest.TestCase):
             support.source_types(),
             SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES,
         )
-        self.assertEqual(SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES, ("mcp", "openapi", "skill"))
+        self.assertEqual(SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES, ("mcp", "openapi", "skill", "http_json"))
 
     def test_mcp_source_generates_candidates_only_for_matching_tools(self) -> None:
         registry = McpSourceRegistry(
@@ -462,6 +466,113 @@ class SubagentDiscoveryCandidateSourceTests(unittest.TestCase):
             {
                 "skill_name": "analysis_skill",
                 "summary": "Run local report analysis skill.",
+            },
+        )
+
+    def test_http_json_source_generates_candidates_only_for_matching_endpoints(self) -> None:
+        registry = HttpJsonSourceRegistry(
+            endpoints=[
+                HttpJsonEndpointDefinition(
+                    source_id="eastmoney",
+                    endpoint_path="/api/market-signal",
+                    http_method="GET",
+                    summary="Lookup one market signal via HTTP JSON.",
+                    timeout_seconds=8.5,
+                    input_json_schema={
+                        "type": "object",
+                        "properties": {"symbol": {"type": "string"}},
+                        "required": ["symbol"],
+                    },
+                    output_json_schema={
+                        "type": "object",
+                        "properties": {"signal": {"type": "string"}},
+                        "required": ["signal"],
+                    },
+                    capabilities=("market_signal_extension",),
+                    suitable_intents=("stock_check",),
+                    stage="collect",
+                    candidate_subagent_type="candidate_collect_market_signal_http",
+                ),
+                HttpJsonEndpointDefinition(
+                    source_id="eastmoney",
+                    endpoint_path="/api/wrong-intent",
+                    http_method="GET",
+                    input_json_schema={
+                        "type": "object",
+                        "properties": {"symbol": {"type": "string"}},
+                    },
+                    output_json_schema={
+                        "type": "object",
+                        "properties": {"signal": {"type": "string"}},
+                    },
+                    capabilities=("market_signal_extension",),
+                    suitable_intents=("review_thesis",),
+                    stage="collect",
+                ),
+                HttpJsonEndpointDefinition(
+                    source_id="tushare",
+                    endpoint_path="/api/keyed",
+                    http_method="GET",
+                    input_json_schema={
+                        "type": "object",
+                        "properties": {"symbol": {"type": "string"}},
+                    },
+                    output_json_schema={
+                        "type": "object",
+                        "properties": {"signal": {"type": "string"}},
+                    },
+                    capabilities=("market_signal_extension",),
+                    suitable_intents=("stock_check",),
+                    stage="collect",
+                ),
+            ]
+        )
+        host = type(
+            "_Host",
+            (),
+            {
+                "require_http_json_source_registry": lambda self: registry,
+            },
+        )()
+        support = SubagentDiscoveryCandidateSupport(host)
+        ticket = SubagentDiscoveryTicket(
+            ticket_id="ticket_market_signal_http_json",
+            capability_gap=SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                preferred_subagent_type="candidate_collect_market_signal_extension",
+                reason="missing http json market signal extension capability",
+            ),
+            tool_discovery_request=SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                search_query="stock_check collect market_signal_extension",
+                preferred_protocols=["http_json"],
+                reason="discover controlled http json market signal extension",
+            ),
+        )
+
+        entries = support.candidate_entries(ticket)
+
+        self.assertEqual(len(entries), 1)
+        entry = entries[0]
+        self.assertEqual(entry.subagent_type, "candidate_collect_market_signal_http")
+        self.assertIn("configured_http_json_endpoint", entry.tags)
+        self.assertIn("http_json_source:eastmoney", entry.tags)
+        self.assertEqual(
+            entry.runtime_registration_templates[0].template_id,
+            "http:eastmoney:get:api_market_signal",
+        )
+        self.assertEqual(
+            runtime_registration_hint_payload(entry.runtime_registration_hints, section="http_json"),
+            {
+                "source_id": "eastmoney",
+                "endpoint_path": "/api/market-signal",
+                "http_method": "GET",
+                "timeout_seconds": 8.5,
+                "summary": "Lookup one market signal via HTTP JSON.",
             },
         )
 

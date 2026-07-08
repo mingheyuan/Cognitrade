@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from research_system.adapters.vendors.http_json_source_registry import HttpJsonSourceRegistry
 from research_system.adapters.vendors.mcp_source_registry import McpSourceRegistry
 from research_system.adapters.vendors.openapi_source_registry import OpenApiSourceRegistry
 from research_system.adapters.vendors.skill_source_registry import SkillSourceRegistry
@@ -35,6 +36,7 @@ class OrchestratorAdminService:
     proposal_store: object | None = None
     subagent_discovery_store: object | None = None
     research_support: object | None = None
+    http_json_source_registry: object | None = None
     mcp_source_registry: object | None = None
     openapi_source_registry: object | None = None
     skill_source_registry: object | None = None
@@ -205,6 +207,14 @@ class OrchestratorAdminService:
             return registry
         registry = McpSourceRegistry(settings=self.settings)
         self.mcp_source_registry = registry
+        return registry
+
+    def require_http_json_source_registry(self):
+        registry = self.http_json_source_registry
+        if isinstance(registry, HttpJsonSourceRegistry):
+            return registry
+        registry = HttpJsonSourceRegistry(settings=self.settings)
+        self.http_json_source_registry = registry
         return registry
 
     def require_openapi_source_registry(self):

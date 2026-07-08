@@ -1158,6 +1158,109 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
                 "GET",
             )
 
+    def test_admin_support_auto_generates_http_json_candidate_entries_from_registry(self) -> None:
+        from research_system.adapters.vendors.http_json_source_registry import (
+            HttpJsonEndpointDefinition,
+            HttpJsonSourceRegistry,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                preferred_subagent_type="candidate_collect_market_signal_extension",
+                reason="missing http-json market signal capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                search_query="stock_check collect market_signal_extension",
+                preferred_protocols=["http_json"],
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            registry = HttpJsonSourceRegistry(
+                endpoints=[
+                    HttpJsonEndpointDefinition(
+                        source_id="eastmoney",
+                        endpoint_path="/api/market-signal",
+                        http_method="GET",
+                        summary="Lookup one market signal via HTTP JSON.",
+                        timeout_seconds=8.5,
+                        input_json_schema={
+                            "type": "object",
+                            "properties": {"symbol": {"type": "string"}},
+                            "required": ["symbol"],
+                        },
+                        output_json_schema={
+                            "type": "object",
+                            "properties": {"signal": {"type": "string"}},
+                            "required": ["signal"],
+                        },
+                        capabilities=("market_signal_extension",),
+                        suitable_intents=("stock_check",),
+                        stage="collect",
+                        candidate_subagent_type="candidate_collect_market_signal_http",
+                    )
+                ]
+            )
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_http_json_source_registry": lambda self: registry,
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+
+            result = admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                reviewer="tester",
+                reason="approve generated http json discovery candidate",
+            )
+
+            self.assertEqual(result["status"], "approved")
+            approved_entries = store.approved_catalog_entries()
+            self.assertEqual(len(approved_entries), 1)
+            approved_entry = approved_entries[0]
+            self.assertEqual(
+                approved_entry.subagent_type,
+                "candidate_collect_market_signal_http",
+            )
+            self.assertEqual(
+                approved_entry.runtime_registration_templates[0].template_id,
+                "http:eastmoney:get:api_market_signal",
+            )
+
+            activation = admin.activate_request(
+                ticket.ticket_id,
+                registration_template_id="http:eastmoney:get:api_market_signal",
+                activated_by="tester",
+                reason="activate auto-generated http json alias",
+            )
+
+            self.assertIn("runtime alias", activation["message"])
+            activated_entry = activation["result"]["activated_entries"][0]
+            self.assertEqual(
+                activated_entry["runtime_registration"]["registration_type"],
+                "http_json_runner",
+            )
+            self.assertEqual(activated_entry["runtime_registration"]["source_id"], "eastmoney")
+            self.assertEqual(
+                activated_entry["runtime_registration"]["endpoint_path"],
+                "/api/market-signal",
+            )
+            self.assertEqual(
+                activated_entry["runtime_registration"]["http_method"],
+                "GET",
+            )
+
     def test_admin_support_auto_generates_snapshot_skill_candidate_entries_from_registry(self) -> None:
         from research_system.adapters.vendors.skill_source_registry import (
             SkillSourceDefinition,

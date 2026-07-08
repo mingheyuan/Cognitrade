@@ -39,6 +39,7 @@ class OrchestratorAssemblySupport:
             proposal_store=getattr(self.host, "proposal_store", None),
             subagent_discovery_store=getattr(self.host, "subagent_discovery_store", None),
             research_support=getattr(self.host, "research_support", None),
+            http_json_source_registry=getattr(self.host, "http_json_source_registry", None),
             mcp_source_registry=getattr(self.host, "mcp_source_registry", None),
             openapi_source_registry=getattr(self.host, "openapi_source_registry", None),
             skill_source_registry=getattr(self.host, "skill_source_registry", None),
