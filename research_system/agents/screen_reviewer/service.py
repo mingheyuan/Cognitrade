@@ -3,12 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from research_system.agents._subagent_dag import (
-    SubagentDagExecutor,
-    SubagentDagNodeResult,
-    SubagentDagNodeSpec,
-)
+from research_system.agents._subagent_dag import SubagentDagNodeResult
 from research_system.agents._subagent_phase_controller import SubagentPhaseController
+from research_system.agents._subagent_phase_policy import ScreenReviewerPhasePolicy
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.agents.screen_reviewer.screen_reviewer_finding_support import ScreenReviewerFindingSupport
 from research_system.agents.screen_reviewer.screen_reviewer_strategy_support import ScreenReviewerStrategySupport
@@ -17,12 +14,10 @@ from research_system.schemas.review import ReviewFinding
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
     SubagentGraphPatch,
-    SubagentGraphPatchOperation,
     SubagentInvocation,
     SubagentPlan,
     SubagentPlanNode,
 )
-from research_system.subagents.planning import apply_subagent_graph_patch
 from research_system.subagents.registry import SubagentRegistry
 from research_system.subagents.reviewing import (
     ScreenReviewCandidateSubagent,
@@ -60,6 +55,7 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
             cache_context_builder=self._subagent_dag_cache_context,
             start_from_node_id_builder=self._subagent_dag_start_from_node_id,
         )
+        self.phase_policy = ScreenReviewerPhasePolicy()
 
     def run(
         self,
@@ -92,36 +88,21 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
         planning_context_hints: dict[str, str] | None = None,
     ) -> dict:
         subagent_plan = self._build_screen_review_subagent_plan()
-        base_results = self._execute_subagent_plan(
+        subagent_plan, _base_results, subagent_plan_patches, final_results = self.phase_controller.execute_patch_cycle(
             plan=subagent_plan,
-            max_workers=1,
             dag_id="screen_review_execution",
-            build_invocation=self._build_screen_review_plan_invocations(
-                plan=subagent_plan,
+            base_max_workers=1,
+            final_max_workers=6,
+            build_invocation_factory=lambda current_plan: self._build_screen_review_plan_invocations(
+                plan=current_plan,
                 source_run_id=source_run_id,
                 candidates=candidates,
                 scorecard=scorecard,
                 planning_context_hints=planning_context_hints,
             ),
-        )
-        subagent_plan_patch = self._build_screen_review_subagent_plan_patch(
-            source_run_id=source_run_id,
-            candidates=candidates,
-        )
-        subagent_plan_patches: list[dict[str, Any]] = []
-        if subagent_plan_patch is not None:
-            subagent_plan = apply_subagent_graph_patch(subagent_plan, subagent_plan_patch)
-            subagent_plan_patches.append(subagent_plan_patch.model_dump(mode="json"))
-        final_results = self._execute_subagent_plan(
-            plan=subagent_plan,
-            max_workers=6,
-            dag_id="screen_review_execution",
-            build_invocation=self._build_screen_review_plan_invocations(
-                plan=subagent_plan,
+            patch_builder=lambda _base_results: self._build_screen_review_subagent_plan_patch(
                 source_run_id=source_run_id,
                 candidates=candidates,
-                scorecard=scorecard,
-                planning_context_hints=planning_context_hints,
             ),
         )
         findings = [
@@ -227,49 +208,35 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
             capability="screen_review_summary",
             preferred_subagent_type="screen_review_summary_builder",
         )
-        operations: list[SubagentGraphPatchOperation] = []
-        candidate_node_ids: list[str] = []
+        candidate_nodes: list[SubagentPlanNode] = []
         for index, candidate in enumerate(candidates, start=1):
             node_id = f"screen_review_candidate_{index}"
-            candidate_node_ids.append(node_id)
-            operations.append(
-                SubagentGraphPatchOperation(
-                    op_type="insert_subagent",
-                    node=self._build_catalog_plan_node(
-                        node_id=node_id,
-                        subagent_type=candidate_entry.subagent_type,
-                        objective=f"Review screened candidate {index}.",
-                        inputs={
-                            "source_run_id": source_run_id,
-                            "candidate": candidate,
-                        },
-                        tags=["catalog_selected", "parallel_candidate"],
-                        cache_key=node_id,
-                        notes=["phase=review_execution", f"symbol={candidate.get('symbol') or ''}"],
-                    ),
-                    reason="insert screen candidate review node",
+            candidate_nodes.append(
+                self._build_catalog_plan_node(
+                    node_id=node_id,
+                    subagent_type=candidate_entry.subagent_type,
+                    objective=f"Review screened candidate {index}.",
+                    inputs={
+                        "source_run_id": source_run_id,
+                        "candidate": candidate,
+                    },
+                    tags=["catalog_selected", "parallel_candidate"],
+                    cache_key=node_id,
+                    notes=["phase=review_execution", f"symbol={candidate.get('symbol') or ''}"],
                 )
             )
-        operations.append(
-            SubagentGraphPatchOperation(
-                op_type="insert_subagent",
-                node=self._build_catalog_plan_node(
-                    node_id="screen_review_summary_builder",
-                    subagent_type=summary_entry.subagent_type,
-                    objective="Aggregate screen-review findings into summary.",
-                    inputs={"candidate_count": len(candidates)},
-                    depends_on=["screen_review_strategy_resolver", *candidate_node_ids],
-                    cache_key="screen_review_summary_builder",
-                    notes=["phase=postprocess"],
-                ),
-                reason="insert screen review summary builder",
-            )
+        summary_node = self._build_catalog_plan_node(
+            node_id="screen_review_summary_builder",
+            subagent_type=summary_entry.subagent_type,
+            objective="Aggregate screen-review findings into summary.",
+            inputs={"candidate_count": len(candidates)},
+            depends_on=["screen_review_strategy_resolver", *[node.node_id for node in candidate_nodes]],
+            cache_key="screen_review_summary_builder",
+            notes=["phase=postprocess"],
         )
-        return SubagentGraphPatch(
-            policy_source="rule",
-            confidence=1.0,
-            notes=["insert_screen_review_summary_builder", "insert_screen_review_candidate_nodes" if candidate_node_ids else "no_screen_review_candidate_nodes"],
-            operations=operations,
+        return self.phase_policy.build_screen_review_patch(
+            candidate_nodes=candidate_nodes,
+            summary_node=summary_node,
         )
 
     def _execute_subagent_plan(
@@ -373,29 +340,6 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
                 continue
             unique.append(normalized)
         return unique
-
-    def _execute_subagent_dag(
-        self,
-        nodes: list[SubagentDagNodeSpec],
-        *,
-        max_workers: int | None = None,
-        dag_id: str,
-        start_from_node_id: str | None = None,
-    ) -> dict[str, SubagentDagNodeResult]:
-        _ = start_from_node_id
-        executor = SubagentDagExecutor(
-            invoke_subagent=self._invoke_subagent,
-            emit_event=self._emit_runtime_event,
-        )
-        resolved_start_from_node_id = start_from_node_id or self._subagent_dag_start_from_node_id(
-            dag_id=dag_id,
-        )
-        return executor.execute(
-            nodes,
-            max_workers=max_workers,
-            cache_context=self._subagent_dag_cache_context(dag_id=dag_id),
-            start_from_node_id=resolved_start_from_node_id,
-        )
 
     def _dag_metadata(
         self,

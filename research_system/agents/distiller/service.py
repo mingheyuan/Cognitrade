@@ -38,7 +38,6 @@ from research_system.subagents.distillation import (
     FallbackChunkDistillerSubagent,
     LLMChunkDistillerSubagent,
 )
-from research_system.subagents.planning import apply_subagent_graph_patch
 from research_system.subagents.registry import SubagentRegistry
 
 
@@ -212,9 +211,11 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             force_fallback=force_fallback,
             runtime_degraded_reason=runtime_degraded_reason,
         )
-        if chunk_plan_patch is not None:
-            chunk_plan = apply_subagent_graph_patch(chunk_plan, chunk_plan_patch)
-            subagent_plan_patches.append(chunk_plan_patch.model_dump(mode="json"))
+        chunk_plan, chunk_patch_rows = self.phase_controller.apply_patch(
+            plan=chunk_plan,
+            patch=chunk_plan_patch,
+        )
+        subagent_plan_patches.extend(chunk_patch_rows)
         subagent_plans.append(chunk_plan.model_dump(mode="json"))
 
         chunk_node_ids = [

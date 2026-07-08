@@ -40,7 +40,6 @@ from research_system.services.methodologies.policy.retrieval_policy_view import 
 )
 from research_system.services.reporting.reporting_utils import summarize_proposal_drafts
 from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
-from research_system.subagents.planning import apply_subagent_graph_patch
 from research_system.subagents.registry import SubagentRegistry
 from research_system.subagents.retrieval import (
     BlackboardEvidenceIndexerSubagent,
@@ -249,9 +248,11 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             intent=intent,
             should_skip_qdrant=should_skip_qdrant,
         )
-        if phase_one_patch is not None:
-            phase_one_plan = apply_subagent_graph_patch(phase_one_plan, phase_one_patch)
-            subagent_plan_patches.append(phase_one_patch.model_dump(mode="json"))
+        phase_one_plan, phase_one_patch_rows = self._get_phase_controller().apply_patch(
+            plan=phase_one_plan,
+            patch=phase_one_patch,
+        )
+        subagent_plan_patches.extend(phase_one_patch_rows)
         subagent_plans.append(phase_one_plan.model_dump(mode="json"))
         phase_one_results = self._execute_subagent_plan(
             plan=phase_one_plan,
@@ -303,9 +304,11 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 intent=intent,
                 allow_llm_decision=allow_llm_decision,
             )
-            if phase_two_patch is not None:
-                phase_two_plan = apply_subagent_graph_patch(phase_two_plan, phase_two_patch)
-                subagent_plan_patches.append(phase_two_patch.model_dump(mode="json"))
+            phase_two_plan, phase_two_patch_rows = self._get_phase_controller().apply_patch(
+                plan=phase_two_plan,
+                patch=phase_two_patch,
+            )
+            subagent_plan_patches.extend(phase_two_patch_rows)
             subagent_plans.append(phase_two_plan.model_dump(mode="json"))
             phase_two_results = self._execute_subagent_plan(
                 plan=phase_two_plan,

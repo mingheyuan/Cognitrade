@@ -30,7 +30,6 @@ from research_system.schemas.subagents import (
     SubagentPlan,
     SubagentPlanNode,
 )
-from research_system.subagents.planning import apply_subagent_graph_patch
 from research_system.subagents.registry import SubagentRegistry
 from research_system.subagents.reporting import (
     DeterministicBankCompareReportComposerSubagent,
@@ -165,10 +164,10 @@ class ReporterService(RuntimeBoundSubagentInvoker):
             runtime_degraded_note=runtime_degraded_note,
             branch_mode=branch_mode,
         )
-        subagent_plan_patches: list[dict[str, Any]] = []
-        if subagent_plan_patch is not None:
-            subagent_plan = apply_subagent_graph_patch(subagent_plan, subagent_plan_patch)
-            subagent_plan_patches.append(subagent_plan_patch.model_dump(mode="json"))
+        subagent_plan, subagent_plan_patches = self.phase_controller.apply_patch(
+            plan=subagent_plan,
+            patch=subagent_plan_patch,
+        )
         results = self._execute_subagent_plan(
             plan=subagent_plan,
             dag_id="report",

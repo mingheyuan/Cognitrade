@@ -10,10 +10,12 @@ from research_system.agents._subagent_dag import (
 )
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
+    SubagentGraphPatch,
     SubagentInvocation,
     SubagentPlan,
     SubagentPlanNode,
 )
+from research_system.subagents.planning import apply_subagent_graph_patch
 from research_system.subagents.registry import SubagentRegistry
 
 
@@ -146,6 +148,45 @@ class SubagentPhaseController:
             cache_context=self.cache_context_builder(dag_id=dag_id),
             start_from_node_id=resolved_start_from_node_id,
         )
+
+    def apply_patch(
+        self,
+        *,
+        plan: SubagentPlan,
+        patch: SubagentGraphPatch | None,
+    ) -> tuple[SubagentPlan, list[dict[str, Any]]]:
+        if patch is None:
+            return plan, []
+        updated_plan = apply_subagent_graph_patch(plan, patch)
+        return updated_plan, [patch.model_dump(mode="json")]
+
+    def execute_patch_cycle(
+        self,
+        *,
+        plan: SubagentPlan,
+        dag_id: str,
+        base_max_workers: int | None,
+        final_max_workers: int | None,
+        build_invocation_factory: Callable[[SubagentPlan], dict[str, dict[str, Any]]],
+        patch_builder: Callable[[dict[str, SubagentDagNodeResult]], SubagentGraphPatch | None],
+    ) -> tuple[SubagentPlan, dict[str, SubagentDagNodeResult], list[dict[str, Any]], dict[str, SubagentDagNodeResult]]:
+        base_results = self.execute_plan(
+            plan=plan,
+            build_invocation=build_invocation_factory(plan),
+            dag_id=dag_id,
+            max_workers=base_max_workers,
+        )
+        patch = patch_builder(base_results)
+        final_plan, patch_rows = self.apply_patch(plan=plan, patch=patch)
+        if not patch_rows:
+            return final_plan, base_results, patch_rows, base_results
+        final_results = self.execute_plan(
+            plan=final_plan,
+            build_invocation=build_invocation_factory(final_plan),
+            dag_id=dag_id,
+            max_workers=final_max_workers,
+        )
+        return final_plan, base_results, patch_rows, final_results
 
     def build_metadata(
         self,

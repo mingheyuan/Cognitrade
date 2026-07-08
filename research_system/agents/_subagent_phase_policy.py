@@ -47,6 +47,14 @@ class SubagentPhaseRulePolicy:
             reason=reason,
         )
 
+    @staticmethod
+    def insert_subagent(*, node: SubagentPlanNode, reason: str) -> SubagentGraphPatchOperation:
+        return SubagentGraphPatchOperation(
+            op_type="insert_subagent",
+            node=node,
+            reason=reason,
+        )
+
 
 class RetrieverPhasePolicy(SubagentPhaseRulePolicy):
     def build_phase_one_patch(
@@ -152,9 +160,66 @@ class DistillerPhasePolicy(SubagentPhaseRulePolicy):
         )
 
 
+class ReviewerPhasePolicy(SubagentPhaseRulePolicy):
+    def build_review_patch(
+        self,
+        *,
+        candidate_nodes: list[SubagentPlanNode],
+        summary_node: SubagentPlanNode,
+    ) -> SubagentGraphPatch | None:
+        operations = [
+            self.insert_subagent(
+                node=node,
+                reason="insert candidate-level posterior review node",
+            )
+            for node in candidate_nodes
+        ]
+        operations.append(
+            self.insert_subagent(
+                node=summary_node,
+                reason="insert terminal review summary builder",
+            )
+        )
+        notes = ["insert_review_summary_builder"]
+        if candidate_nodes:
+            notes.append("insert_review_candidate_nodes")
+        return self.build_patch(notes=notes, operations=operations)
+
+
+class ScreenReviewerPhasePolicy(SubagentPhaseRulePolicy):
+    def build_screen_review_patch(
+        self,
+        *,
+        candidate_nodes: list[SubagentPlanNode],
+        summary_node: SubagentPlanNode,
+    ) -> SubagentGraphPatch | None:
+        operations = [
+            self.insert_subagent(
+                node=node,
+                reason="insert screen candidate review node",
+            )
+            for node in candidate_nodes
+        ]
+        operations.append(
+            self.insert_subagent(
+                node=summary_node,
+                reason="insert screen review summary builder",
+            )
+        )
+        return self.build_patch(
+            notes=[
+                "insert_screen_review_summary_builder",
+                "insert_screen_review_candidate_nodes" if candidate_nodes else "no_screen_review_candidate_nodes",
+            ],
+            operations=operations,
+        )
+
+
 __all__ = [
     "DistillerPhasePolicy",
     "ReporterPhasePolicy",
+    "ReviewerPhasePolicy",
     "RetrieverPhasePolicy",
+    "ScreenReviewerPhasePolicy",
     "SubagentPhaseRulePolicy",
 ]

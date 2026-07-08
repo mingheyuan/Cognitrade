@@ -3,12 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from research_system.agents._subagent_dag import (
-    SubagentDagExecutor,
-    SubagentDagNodeResult,
-    SubagentDagNodeSpec,
-)
+from research_system.agents._subagent_dag import SubagentDagNodeResult
 from research_system.agents._subagent_phase_controller import SubagentPhaseController
+from research_system.agents._subagent_phase_policy import ReviewerPhasePolicy
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.agents.reviewer.reviewer_candidate_support import ReviewerCandidateSupport
 from research_system.agents.reviewer.reviewer_strategy_support import ReviewerStrategySupport
@@ -18,12 +15,10 @@ from research_system.schemas.review import ClaimVerdictBreakdown, ReviewFinding
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
     SubagentGraphPatch,
-    SubagentGraphPatchOperation,
     SubagentInvocation,
     SubagentPlan,
     SubagentPlanNode,
 )
-from research_system.subagents.planning import apply_subagent_graph_patch
 from research_system.subagents.registry import SubagentRegistry
 from research_system.subagents.reviewing import (
     ReviewCandidateVerdictSubagent,
@@ -77,6 +72,7 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
             cache_context_builder=self._subagent_dag_cache_context,
             start_from_node_id_builder=self._subagent_dag_start_from_node_id,
         )
+        self.phase_policy = ReviewerPhasePolicy()
 
     def run(
         self,
@@ -121,12 +117,13 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
         planning_context_hints: dict[str, str] | None = None,
     ) -> dict:
         subagent_plan = self._build_review_subagent_plan()
-        base_results = self._execute_subagent_plan(
+        subagent_plan, _base_results, subagent_plan_patches, final_results = self.phase_controller.execute_patch_cycle(
             plan=subagent_plan,
-            max_workers=3,
             dag_id="review_execution",
-            build_invocation=self._build_review_plan_invocations(
-                plan=subagent_plan,
+            base_max_workers=3,
+            final_max_workers=4,
+            build_invocation_factory=lambda current_plan: self._build_review_plan_invocations(
+                plan=current_plan,
                 source_run_id=source_run_id,
                 query=query,
                 source_entries=source_entries,
@@ -136,36 +133,12 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
                 latest_notice_snapshot=latest_notice_snapshot,
                 planning_context_hints=planning_context_hints,
             ),
-        )
-
-        claim_outputs = base_results["review_claim_extractor"].outputs or {}
-        context_outputs = base_results["review_context_resolver"].outputs or {}
-        subagent_plan_patch = self._build_review_subagent_plan_patch(
-            source_run_id=source_run_id,
-            candidates=list(claim_outputs.get("candidates") or []),
-            claim_type_counts=dict(claim_outputs.get("claim_type_counts") or {}),
-            review_required=bool(context_outputs.get("review_required")),
-            sector_snapshot_available=bool(context_outputs.get("sector_snapshot_available")),
-        )
-        subagent_plan_patches: list[dict[str, Any]] = []
-        if subagent_plan_patch is not None:
-            subagent_plan = apply_subagent_graph_patch(subagent_plan, subagent_plan_patch)
-            subagent_plan_patches.append(subagent_plan_patch.model_dump(mode="json"))
-
-        final_results = self._execute_subagent_plan(
-            plan=subagent_plan,
-            max_workers=4,
-            dag_id="review_execution",
-            build_invocation=self._build_review_plan_invocations(
-                plan=subagent_plan,
+            patch_builder=lambda base_results: self._build_review_subagent_plan_patch(
                 source_run_id=source_run_id,
-                query=query,
-                source_entries=source_entries,
-                latest_sector_snapshot=latest_sector_snapshot,
-                latest_market_snapshot=latest_market_snapshot,
-                latest_fundamental_snapshot=latest_fundamental_snapshot,
-                latest_notice_snapshot=latest_notice_snapshot,
-                planning_context_hints=planning_context_hints,
+                candidates=list(((base_results["review_claim_extractor"].outputs or {}).get("candidates") or [])),
+                claim_type_counts=dict(((base_results["review_claim_extractor"].outputs or {}).get("claim_type_counts") or {})),
+                review_required=bool(((base_results["review_context_resolver"].outputs or {}).get("review_required") or False)),
+                sector_snapshot_available=bool(((base_results["review_context_resolver"].outputs or {}).get("sector_snapshot_available") or False)),
             ),
         )
         summary_outputs = final_results["review_summary_builder"].outputs or {}
@@ -321,59 +294,42 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
             capability="review_summary",
             preferred_subagent_type="review_summary_builder",
         )
-        operations: list[SubagentGraphPatchOperation] = []
-        candidate_node_ids: list[str] = []
+        candidate_nodes: list[SubagentPlanNode] = []
         if sector_snapshot_available:
             for index, candidate in enumerate(candidates, start=1):
                 node_id = f"review_candidate_{index}"
-                candidate_node_ids.append(node_id)
-                operations.append(
-                    SubagentGraphPatchOperation(
-                        op_type="insert_subagent",
-                        node=self._build_catalog_plan_node(
-                            node_id=node_id,
-                            subagent_type=candidate_entry.subagent_type,
-                            objective=f"Review extracted claim candidate {index}.",
-                            inputs={
-                                "source_run_id": source_run_id,
-                                "candidate": candidate,
-                            },
-                            depends_on=["review_context_resolver"],
-                            tags=["catalog_selected", "parallel_candidate"],
-                            max_attempts=1,
-                            cache_key=node_id,
-                            notes=["phase=review_execution", f"claim_type={candidate.get('claim_type') or 'unknown'}"],
-                        ),
-                        reason="insert candidate-level posterior review node",
+                candidate_nodes.append(
+                    self._build_catalog_plan_node(
+                        node_id=node_id,
+                        subagent_type=candidate_entry.subagent_type,
+                        objective=f"Review extracted claim candidate {index}.",
+                        inputs={
+                            "source_run_id": source_run_id,
+                            "candidate": candidate,
+                        },
+                        depends_on=["review_context_resolver"],
+                        tags=["catalog_selected", "parallel_candidate"],
+                        max_attempts=1,
+                        cache_key=node_id,
+                        notes=["phase=review_execution", f"claim_type={candidate.get('claim_type') or 'unknown'}"],
                     )
                 )
-        operations.append(
-            SubagentGraphPatchOperation(
-                op_type="insert_subagent",
-                node=self._build_catalog_plan_node(
-                    node_id="review_summary_builder",
-                    subagent_type=summary_entry.subagent_type,
-                    objective="Aggregate posterior review findings into review summary.",
-                    inputs={
-                        "review_required": review_required,
-                        "claim_type_counts": claim_type_counts,
-                        "candidate_count": len(candidates),
-                    },
-                    depends_on=["review_focus_validator", *candidate_node_ids],
-                    cache_key="review_summary_builder",
-                    notes=["phase=postprocess"],
-                ),
-                reason="insert terminal review summary builder",
-            )
+        summary_node = self._build_catalog_plan_node(
+            node_id="review_summary_builder",
+            subagent_type=summary_entry.subagent_type,
+            objective="Aggregate posterior review findings into review summary.",
+            inputs={
+                "review_required": review_required,
+                "claim_type_counts": claim_type_counts,
+                "candidate_count": len(candidates),
+            },
+            depends_on=["review_focus_validator", *[node.node_id for node in candidate_nodes]],
+            cache_key="review_summary_builder",
+            notes=["phase=postprocess"],
         )
-        notes = ["insert_review_summary_builder"]
-        if candidate_node_ids:
-            notes.append("insert_review_candidate_nodes")
-        return SubagentGraphPatch(
-            policy_source="rule",
-            confidence=1.0,
-            notes=notes,
-            operations=operations,
+        return self.phase_policy.build_review_patch(
+            candidate_nodes=candidate_nodes,
+            summary_node=summary_node,
         )
 
     def _execute_subagent_plan(
@@ -549,29 +505,6 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
                 continue
             unique.append(normalized)
         return unique
-
-    def _execute_subagent_dag(
-        self,
-        nodes: list[SubagentDagNodeSpec],
-        *,
-        max_workers: int | None = None,
-        dag_id: str,
-        start_from_node_id: str | None = None,
-    ) -> dict[str, SubagentDagNodeResult]:
-        _ = start_from_node_id
-        executor = SubagentDagExecutor(
-            invoke_subagent=self._invoke_subagent,
-            emit_event=self._emit_runtime_event,
-        )
-        resolved_start_from_node_id = start_from_node_id or self._subagent_dag_start_from_node_id(
-            dag_id=dag_id,
-        )
-        return executor.execute(
-            nodes,
-            max_workers=max_workers,
-            cache_context=self._subagent_dag_cache_context(dag_id=dag_id),
-            start_from_node_id=resolved_start_from_node_id,
-        )
 
     def _dag_metadata(
         self,

@@ -5,7 +5,9 @@ import unittest
 from research_system.agents._subagent_phase_policy import (
     DistillerPhasePolicy,
     ReporterPhasePolicy,
+    ReviewerPhasePolicy,
     RetrieverPhasePolicy,
+    ScreenReviewerPhasePolicy,
 )
 from research_system.schemas.subagents import SubagentPlanNode
 
@@ -71,6 +73,40 @@ class SubagentPhasePolicyTests(unittest.TestCase):
         self.assertEqual(
             [str(op.target_node_id) for op in list(patch.operations or [])],
             ["chunk_1", "chunk_2"],
+        )
+
+    def test_reviewer_patch_inserts_candidate_and_summary_nodes(self) -> None:
+        patch = ReviewerPhasePolicy().build_review_patch(
+            candidate_nodes=[
+                _node(node_id="review_candidate_1", subagent_type="review_candidate_verdict"),
+                _node(node_id="review_candidate_2", subagent_type="review_candidate_verdict"),
+            ],
+            summary_node=_node(node_id="review_summary_builder", subagent_type="review_summary_builder"),
+        )
+
+        self.assertIsNotNone(patch)
+        self.assertEqual(len(list(patch.operations or [])), 3)
+        self.assertEqual(
+            [str(op.node.node_id) for op in list(patch.operations or []) if op.node is not None],
+            ["review_candidate_1", "review_candidate_2", "review_summary_builder"],
+        )
+        self.assertEqual(
+            list(patch.notes or []),
+            ["insert_review_summary_builder", "insert_review_candidate_nodes"],
+        )
+
+    def test_screen_reviewer_patch_handles_empty_candidates(self) -> None:
+        patch = ScreenReviewerPhasePolicy().build_screen_review_patch(
+            candidate_nodes=[],
+            summary_node=_node(node_id="screen_review_summary_builder", subagent_type="screen_review_summary_builder"),
+        )
+
+        self.assertIsNotNone(patch)
+        self.assertEqual(len(list(patch.operations or [])), 1)
+        self.assertEqual(str(patch.operations[0].node.node_id), "screen_review_summary_builder")
+        self.assertEqual(
+            list(patch.notes or []),
+            ["insert_screen_review_summary_builder", "no_screen_review_candidate_nodes"],
         )
 
 
