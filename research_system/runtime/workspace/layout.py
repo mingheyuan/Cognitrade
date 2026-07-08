@@ -62,6 +62,10 @@ def workspace_template_candidates(settings: "Settings", template_root: Path) -> 
             settings.data_sources_path,
         ),
         (
+            [template_root / "workspace" / "config" / "mcp_servers.yml"],
+            settings.mcp_servers_path,
+        ),
+        (
             [
                 template_root / "workspace" / "taxonomy" / "dimensions.yml",
                 template_root / "research_system" / "taxonomy" / "dimensions.yml",

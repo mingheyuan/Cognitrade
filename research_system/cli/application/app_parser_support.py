@@ -61,6 +61,7 @@ def build_app_parser() -> argparse.ArgumentParser:
     activate_discovery_parser.add_argument("--skill-name")
     activate_discovery_parser.add_argument("--snapshot-type")
     activate_discovery_parser.add_argument("--source-id")
+    activate_discovery_parser.add_argument("--tool-name")
     activate_discovery_parser.add_argument("--endpoint-path")
     activate_discovery_parser.add_argument("--http-method", choices=("GET", "POST"))
     activate_discovery_parser.add_argument("--openapi-spec-uri")

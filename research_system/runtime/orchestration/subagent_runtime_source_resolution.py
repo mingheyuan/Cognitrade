@@ -9,6 +9,7 @@ import requests
 import yaml
 
 from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
+from research_system.adapters.vendors.mcp_source_registry import McpSourceRegistry
 from research_system.schemas.subagents import SubagentCatalogEntry
 
 
@@ -26,6 +27,10 @@ _RUNTIME_SOURCE_RESOLVER_HANDLERS = (
     _RuntimeSourceResolverHandler(
         registration_type="openapi_http_runner",
         resolver_name="_resolve_openapi_http_source",
+    ),
+    _RuntimeSourceResolverHandler(
+        registration_type="mcp_tool_runner",
+        resolver_name="_resolve_mcp_tool_source",
     ),
 )
 
@@ -53,6 +58,7 @@ class SubagentRuntimeSourceResolutionSupport:
         openapi_spec_uri: str | None = None,
         openapi_operation_id: str | None = None,
         openapi_hints: dict[str, Any] | None = None,
+        tool_name: str | None = None,
     ) -> dict[str, str]:
         handler = self._handler(registration_type)
         return getattr(self, handler.resolver_name)(
@@ -63,6 +69,7 @@ class SubagentRuntimeSourceResolutionSupport:
             openapi_spec_uri=openapi_spec_uri,
             openapi_operation_id=openapi_operation_id,
             openapi_hints=dict(openapi_hints or {}),
+            tool_name=tool_name,
         )
 
     def _handler(self, registration_type: str) -> _RuntimeSourceResolverHandler:
@@ -82,8 +89,9 @@ class SubagentRuntimeSourceResolutionSupport:
         openapi_spec_uri: str | None,
         openapi_operation_id: str | None,
         openapi_hints: dict[str, Any],
+        tool_name: str | None,
     ) -> dict[str, str]:
-        del openapi_spec_uri, openapi_operation_id, openapi_hints
+        del openapi_spec_uri, openapi_operation_id, openapi_hints, tool_name
         if candidate_entry.side_effect_level not in {"none", "read_only"}:
             raise self._error(
                 f"http_json_runner activation only supports read-only candidates: {candidate_entry.subagent_type}"
@@ -118,8 +126,9 @@ class SubagentRuntimeSourceResolutionSupport:
         openapi_spec_uri: str | None,
         openapi_operation_id: str | None,
         openapi_hints: dict[str, Any],
+        tool_name: str | None,
     ) -> dict[str, str]:
-        del endpoint_path, http_method
+        del endpoint_path, http_method, tool_name
         if candidate_entry.side_effect_level not in {"none", "read_only"}:
             raise self._error(
                 f"openapi_http_runner activation only supports read-only candidates: {candidate_entry.subagent_type}"
@@ -144,6 +153,53 @@ class SubagentRuntimeSourceResolutionSupport:
             "http_method": resolved_http_method,
             "openapi_spec_uri": resolved_spec_uri,
             "openapi_operation_id": resolved_operation_id,
+        }
+
+    def _resolve_mcp_tool_source(
+        self,
+        *,
+        candidate_entry: SubagentCatalogEntry,
+        source_id: str | None,
+        endpoint_path: str | None,
+        http_method: str | None,
+        openapi_spec_uri: str | None,
+        openapi_operation_id: str | None,
+        openapi_hints: dict[str, Any],
+        tool_name: str | None,
+    ) -> dict[str, str]:
+        del endpoint_path, http_method, openapi_spec_uri, openapi_operation_id, openapi_hints
+        if candidate_entry.side_effect_level not in {"none", "read_only"}:
+            raise self._error(
+                f"mcp_tool_runner activation only supports read-only candidates: {candidate_entry.subagent_type}"
+            )
+        normalized_source_id = str(source_id or "").strip()
+        normalized_tool_name = str(tool_name or "").strip()
+        registry = self._mcp_registry()
+        server = registry.get(normalized_source_id)
+        if server is None:
+            raise self._error(f"unknown source_id for mcp_tool_runner activation: {normalized_source_id}")
+        if str(server.transport or "").strip().lower() != "stdio":
+            raise self._error(
+                f"mcp_tool_runner activation currently requires stdio transport: {normalized_source_id}"
+            )
+        if not normalized_tool_name:
+            raise self._error("tool_name is required for mcp_tool_runner activation")
+        tool = registry.tool(normalized_source_id, normalized_tool_name)
+        if tool is None:
+            raise self._error(
+                f"unknown tool_name for mcp_tool_runner activation: {normalized_source_id}/{normalized_tool_name}"
+            )
+        if not bool(tool.read_only):
+            raise self._error(
+                f"mcp_tool_runner activation only supports read-only tools: {normalized_source_id}/{normalized_tool_name}"
+            )
+        return {
+            "source_id": normalized_source_id,
+            "tool_name": normalized_tool_name,
+            "endpoint_path": "",
+            "http_method": "",
+            "openapi_spec_uri": "",
+            "openapi_operation_id": "",
         }
 
     def _validate_http_source(self, source_id: str, *, registration_type: str) -> None:
@@ -233,6 +289,15 @@ class SubagentRuntimeSourceResolutionSupport:
     def _error(self, message: str) -> Exception:
         error_cls = getattr(self.host, "orchestrator_error_cls", ValueError) or ValueError
         return error_cls(message)
+
+    def _mcp_registry(self) -> McpSourceRegistry:
+        factory = getattr(self.host, "require_mcp_source_registry", None)
+        if callable(factory):
+            registry = factory()
+            if isinstance(registry, McpSourceRegistry):
+                return registry
+        settings = getattr(self.host, "settings", None)
+        return McpSourceRegistry(settings=settings)
 
 
 __all__ = [

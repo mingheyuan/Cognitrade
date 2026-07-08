@@ -8,6 +8,7 @@ RuntimeRegistrationType = Literal[
     "skill_runner",
     "http_json_runner",
     "openapi_http_runner",
+    "mcp_tool_runner",
 ]
 
 SUPPORTED_RUNTIME_REGISTRATION_TYPES: tuple[RuntimeRegistrationType, ...] = (
@@ -15,6 +16,7 @@ SUPPORTED_RUNTIME_REGISTRATION_TYPES: tuple[RuntimeRegistrationType, ...] = (
     "skill_runner",
     "http_json_runner",
     "openapi_http_runner",
+    "mcp_tool_runner",
 )
 
 
@@ -40,7 +42,14 @@ _RUNTIME_REGISTRATION_SPECS: dict[str, RuntimeRegistrationSpec] = {
         required_fields=("skill_name", "snapshot_type"),
         forbidden_field_groups=(
             RuntimeRegistrationForbiddenFieldGroup(
-                fields=("source_id", "endpoint_path", "http_method", "openapi_spec_uri", "openapi_operation_id"),
+                fields=(
+                    "source_id",
+                    "endpoint_path",
+                    "http_method",
+                    "openapi_spec_uri",
+                    "openapi_operation_id",
+                    "tool_name",
+                ),
                 error_message="snapshot_skill_runner does not support http source settings",
             ),
         ),
@@ -56,7 +65,14 @@ _RUNTIME_REGISTRATION_SPECS: dict[str, RuntimeRegistrationSpec] = {
                 error_message="skill_runner does not support snapshot_type",
             ),
             RuntimeRegistrationForbiddenFieldGroup(
-                fields=("source_id", "endpoint_path", "http_method", "openapi_spec_uri", "openapi_operation_id"),
+                fields=(
+                    "source_id",
+                    "endpoint_path",
+                    "http_method",
+                    "openapi_spec_uri",
+                    "openapi_operation_id",
+                    "tool_name",
+                ),
                 error_message="skill_runner does not support http source settings",
             ),
         ),
@@ -68,7 +84,7 @@ _RUNTIME_REGISTRATION_SPECS: dict[str, RuntimeRegistrationSpec] = {
         required_fields=("source_id", "endpoint_path", "http_method"),
         forbidden_field_groups=(
             RuntimeRegistrationForbiddenFieldGroup(
-                fields=("skill_name", "snapshot_type"),
+                fields=("skill_name", "snapshot_type", "tool_name"),
                 error_message="http_json_runner does not support skill_name or snapshot_type",
             ),
             RuntimeRegistrationForbiddenFieldGroup(
@@ -91,8 +107,20 @@ _RUNTIME_REGISTRATION_SPECS: dict[str, RuntimeRegistrationSpec] = {
         required_fields=("source_id", "endpoint_path", "http_method", "openapi_operation_id"),
         forbidden_field_groups=(
             RuntimeRegistrationForbiddenFieldGroup(
-                fields=("skill_name", "snapshot_type"),
+                fields=("skill_name", "snapshot_type", "tool_name"),
                 error_message="openapi_http_runner does not support skill_name or snapshot_type",
+            ),
+        ),
+        supports_timeout_seconds=True,
+    ),
+    "mcp_tool_runner": RuntimeRegistrationSpec(
+        registration_type="mcp_tool_runner",
+        template_allowed_keys=("source_id", "tool_name", "timeout_seconds"),
+        required_fields=("source_id", "tool_name"),
+        forbidden_field_groups=(
+            RuntimeRegistrationForbiddenFieldGroup(
+                fields=("skill_name", "snapshot_type", "endpoint_path", "http_method", "openapi_spec_uri", "openapi_operation_id"),
+                error_message="mcp_tool_runner does not support skill/http/openapi routing fields",
             ),
         ),
         supports_timeout_seconds=True,
@@ -141,6 +169,7 @@ def validate_runtime_registration_shape(
     http_method: str,
     openapi_spec_uri: str,
     openapi_operation_id: str,
+    tool_name: str,
     has_timeout_seconds: bool,
 ) -> None:
     spec = runtime_registration_spec(registration_type)
@@ -152,6 +181,7 @@ def validate_runtime_registration_shape(
         "http_method": http_method,
         "openapi_spec_uri": openapi_spec_uri,
         "openapi_operation_id": openapi_operation_id,
+        "tool_name": tool_name,
     }
     for field_name in spec.required_fields:
         if str(normalized_values.get(field_name) or "").strip():

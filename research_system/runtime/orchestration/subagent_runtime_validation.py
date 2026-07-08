@@ -28,6 +28,10 @@ _RUNTIME_VALIDATION_HANDLERS = (
         registration_type="openapi_http_runner",
         validator_name="_validate_contract_registration",
     ),
+    _RuntimeValidationHandler(
+        registration_type="mcp_tool_runner",
+        validator_name="_validate_contract_registration",
+    ),
 )
 
 SUPPORTED_RUNTIME_VALIDATION_TYPES = tuple(handler.registration_type for handler in _RUNTIME_VALIDATION_HANDLERS)

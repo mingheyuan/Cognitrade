@@ -14,7 +14,13 @@ class SubagentRuntimeValidationTests(unittest.TestCase):
     def test_validation_types_cover_current_runtime_registration_families(self) -> None:
         self.assertEqual(
             SUPPORTED_RUNTIME_VALIDATION_TYPES,
-            ("snapshot_skill_runner", "skill_runner", "http_json_runner", "openapi_http_runner"),
+            (
+                "snapshot_skill_runner",
+                "skill_runner",
+                "http_json_runner",
+                "openapi_http_runner",
+                "mcp_tool_runner",
+            ),
         )
 
     def test_snapshot_skill_validation_rejects_non_collect_stage(self) -> None:

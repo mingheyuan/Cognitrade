@@ -5,6 +5,7 @@ from typing import Any
 
 from pathlib import Path
 
+from research_system.adapters.vendors.mcp_source_registry import McpSourceRegistry
 from research_system.agents._subagent_dag import SubagentDagCacheContext
 from research_system.runtime.local_runtime import start_local_runtime
 from research_system.runtime.orchestration.subagent_runtime_packaging import SubagentRuntimePackagingSupport
@@ -17,6 +18,7 @@ from research_system.subagents.registry import SubagentRegistry
 
 class RuntimeBoundSubagentInvoker:
     registry: object
+    orchestrator_error_cls = RuntimeError
     _runtime_binding: dict[str, Any] | None = None
     _local_runtime_binding: dict[str, Any] | None = None
     _local_agent_item_stack: list[RuntimeItemRecord] | None = None
@@ -211,9 +213,18 @@ class RuntimeBoundSubagentInvoker:
     def _runtime_packaging_support(self) -> SubagentRuntimePackagingSupport:
         support = getattr(self, "_runtime_packaging_support_instance", None)
         if support is None:
-            support = SubagentRuntimePackagingSupport()
+            support = SubagentRuntimePackagingSupport(self)
             self._runtime_packaging_support_instance = support
         return support
+
+    def require_mcp_source_registry(self) -> McpSourceRegistry:
+        registry = getattr(self, "mcp_source_registry", None)
+        if isinstance(registry, McpSourceRegistry):
+            return registry
+        settings = getattr(self, "settings", None)
+        registry = McpSourceRegistry(settings=settings)
+        self.mcp_source_registry = registry
+        return registry
 
     def _activated_discovery_runtime_subagent(
         self,

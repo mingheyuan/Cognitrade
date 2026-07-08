@@ -114,6 +114,7 @@ class _DispatchOrchestratorStub:
         skill_name: str | None = None,
         snapshot_type: str | None = None,
         source_id: str | None = None,
+        tool_name: str | None = None,
         endpoint_path: str | None = None,
         http_method: str | None = None,
         openapi_spec_uri: str | None = None,
@@ -137,6 +138,7 @@ class _DispatchOrchestratorStub:
                                 "skill_name": skill_name,
                                 "snapshot_type": snapshot_type,
                                 "source_id": source_id,
+                                "tool_name": tool_name,
                                 "endpoint_path": endpoint_path,
                                 "http_method": http_method,
                                 "openapi_spec_uri": openapi_spec_uri,
@@ -365,6 +367,19 @@ class CliCommandDispatchTests(unittest.TestCase):
             openapi_operation_id="getMarketSignal",
             orchestrator_cls=_DispatchOrchestratorStub,
         )
+        mcp_runtime_activated = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            activated_by="ops_user",
+            status_filter="activate mcp runtime skill",
+            candidate_subagent_type="candidate_collect_mcp_extension",
+            registration_type="mcp_tool_runner",
+            source_id="akshare_mcp",
+            tool_name="market_signal_lookup",
+            timeout_seconds=7.5,
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
         template_runtime_activated = execute_cli_payload_command(
             Settings.from_env(Path(".")),
             command="activate-subagent-discovery",
@@ -403,6 +418,14 @@ class CliCommandDispatchTests(unittest.TestCase):
         self.assertEqual(
             openapi_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["openapi_operation_id"],
             "getMarketSignal",
+        )
+        self.assertEqual(
+            mcp_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["registration_type"],
+            "mcp_tool_runner",
+        )
+        self.assertEqual(
+            mcp_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["tool_name"],
+            "market_signal_lookup",
         )
         self.assertEqual(
             template_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["registration_template_id"],

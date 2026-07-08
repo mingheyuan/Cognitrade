@@ -127,6 +127,25 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertEqual(openapi_runtime_activate_args.source_id, "eastmoney")
         self.assertEqual(openapi_runtime_activate_args.openapi_spec_uri, "https://example.com/openapi.json")
         self.assertEqual(openapi_runtime_activate_args.openapi_operation_id, "getMarketSignal")
+        mcp_runtime_activate_args = parser.parse_args(
+            [
+                "activate-subagent-discovery",
+                "01DISC",
+                "--registration-type",
+                "mcp_tool_runner",
+                "--source-id",
+                "akshare_mcp",
+                "--tool-name",
+                "market_signal_lookup",
+                "--timeout-seconds",
+                "7.5",
+            ]
+        )
+        self.assertIsNone(mcp_runtime_activate_args.delegate_subagent_type)
+        self.assertEqual(mcp_runtime_activate_args.registration_type, "mcp_tool_runner")
+        self.assertEqual(mcp_runtime_activate_args.source_id, "akshare_mcp")
+        self.assertEqual(mcp_runtime_activate_args.tool_name, "market_signal_lookup")
+        self.assertEqual(mcp_runtime_activate_args.timeout_seconds, 7.5)
         template_runtime_activate_args = parser.parse_args(
             [
                 "activate-subagent-discovery",
@@ -190,6 +209,7 @@ class ApplicationRuntimeTests(unittest.TestCase):
             skill_name=None,
             snapshot_type=None,
             source_id=None,
+            tool_name=None,
             endpoint_path=None,
             http_method=None,
             openapi_spec_uri=None,
@@ -209,6 +229,7 @@ class ApplicationRuntimeTests(unittest.TestCase):
             skill_name="market_snapshot_skill",
             snapshot_type="market",
             source_id=None,
+            tool_name=None,
             endpoint_path=None,
             http_method=None,
             openapi_spec_uri=None,
@@ -228,6 +249,7 @@ class ApplicationRuntimeTests(unittest.TestCase):
             skill_name="analysis_skill",
             snapshot_type=None,
             source_id=None,
+            tool_name=None,
             endpoint_path=None,
             http_method=None,
             openapi_spec_uri=None,
@@ -247,6 +269,7 @@ class ApplicationRuntimeTests(unittest.TestCase):
             skill_name=None,
             snapshot_type=None,
             source_id="eastmoney",
+            tool_name=None,
             endpoint_path="/api/market-signal",
             http_method="GET",
             openapi_spec_uri=None,
@@ -266,11 +289,32 @@ class ApplicationRuntimeTests(unittest.TestCase):
             skill_name=None,
             snapshot_type=None,
             source_id="eastmoney",
+            tool_name=None,
             endpoint_path=None,
             http_method=None,
             openapi_spec_uri="https://example.com/openapi.json",
             openapi_operation_id="getMarketSignal",
             timeout_seconds=None,
+            as_json=False,
+        )
+        mcp_runtime_activate_discovery_args = argparse.Namespace(
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            delegate_subagent_type=None,
+            candidate_subagent_type="candidate_collect_mcp_extension",
+            activated_by="ops_user",
+            reason="activate mcp runtime skill",
+            registration_template_id=None,
+            registration_type="mcp_tool_runner",
+            skill_name=None,
+            snapshot_type=None,
+            source_id="akshare_mcp",
+            tool_name="market_signal_lookup",
+            endpoint_path=None,
+            http_method=None,
+            openapi_spec_uri=None,
+            openapi_operation_id=None,
+            timeout_seconds=7.5,
             as_json=False,
         )
         template_runtime_activate_discovery_args = argparse.Namespace(
@@ -285,6 +329,7 @@ class ApplicationRuntimeTests(unittest.TestCase):
             skill_name=None,
             snapshot_type=None,
             source_id=None,
+            tool_name=None,
             endpoint_path=None,
             http_method=None,
             openapi_spec_uri=None,
@@ -422,6 +467,20 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertEqual(
             application_execute_app_main_command(
                 settings,
+                mcp_runtime_activate_discovery_args,
+                build_chat_entry_runtime_fn=None,
+                run_chat_entry_fn=None,
+                run_chat_tui_fn=None,
+                run_chat_fallback_fn=None,
+                handle_chat_line_fn=None,
+                execute_cli_command_fn=fake_execute_cli_command_fn,
+                print_payload_fn=lambda payload, as_json: 0,
+            ),
+            0,
+        )
+        self.assertEqual(
+            application_execute_app_main_command(
+                settings,
                 template_runtime_activate_discovery_args,
                 build_chat_entry_runtime_fn=None,
                 run_chat_entry_fn=None,
@@ -468,8 +527,13 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertEqual(calls[8]["openapi_spec_uri"], "https://example.com/openapi.json")
         self.assertEqual(calls[8]["openapi_operation_id"], "getMarketSignal")
         self.assertEqual(calls[9]["command"], "activate-subagent-discovery")
-        self.assertEqual(calls[9]["registration_template_id"], "openapi:getMarketSignal")
-        self.assertEqual(calls[9]["candidate_subagent_type"], "candidate_collect_http_extension")
+        self.assertEqual(calls[9]["registration_type"], "mcp_tool_runner")
+        self.assertEqual(calls[9]["source_id"], "akshare_mcp")
+        self.assertEqual(calls[9]["tool_name"], "market_signal_lookup")
+        self.assertEqual(calls[9]["timeout_seconds"], 7.5)
+        self.assertEqual(calls[10]["command"], "activate-subagent-discovery")
+        self.assertEqual(calls[10]["registration_template_id"], "openapi:getMarketSignal")
+        self.assertEqual(calls[10]["candidate_subagent_type"], "candidate_collect_http_extension")
 
 
 if __name__ == "__main__":

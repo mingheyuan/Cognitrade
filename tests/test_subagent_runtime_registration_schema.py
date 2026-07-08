@@ -41,6 +41,19 @@ class SubagentRuntimeRegistrationSchemaTests(unittest.TestCase):
         self.assertEqual(template.registration_type, "http_json_runner")
         self.assertEqual(template.defaults["timeout_seconds"], 9.5)
 
+    def test_template_defaults_accept_valid_mcp_fields(self) -> None:
+        template = SubagentRuntimeRegistrationTemplate(
+            template_id="mcp:mock_market_tools:market_signal_lookup",
+            registration_type="mcp_tool_runner",
+            defaults={
+                "source_id": "mock_market_tools",
+                "tool_name": "market_signal_lookup",
+                "timeout_seconds": 11.5,
+            },
+        )
+        self.assertEqual(template.registration_type, "mcp_tool_runner")
+        self.assertEqual(template.defaults["tool_name"], "market_signal_lookup")
+
     def test_runtime_registration_rejects_timeout_for_skill_runner(self) -> None:
         with self.assertRaises(ValueError):
             SubagentRuntimeRegistration(
@@ -60,6 +73,16 @@ class SubagentRuntimeRegistrationSchemaTests(unittest.TestCase):
         )
         self.assertEqual(registration.registration_type, "openapi_http_runner")
         self.assertEqual(registration.timeout_seconds, 12.5)
+
+    def test_runtime_registration_accepts_mcp_runner_shape(self) -> None:
+        registration = SubagentRuntimeRegistration(
+            registration_type="mcp_tool_runner",
+            source_id="mock_market_tools",
+            tool_name="market_signal_lookup",
+            timeout_seconds=11.5,
+        )
+        self.assertEqual(registration.registration_type, "mcp_tool_runner")
+        self.assertEqual(registration.tool_name, "market_signal_lookup")
 
 
 if __name__ == "__main__":

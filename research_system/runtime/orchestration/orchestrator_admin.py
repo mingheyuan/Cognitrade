@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from research_system.adapters.vendors.mcp_source_registry import McpSourceRegistry
 from research_system.runtime.proposals.management.admin_support import (
     OrchestratorProposalAdminSupport,
 )
@@ -32,6 +33,7 @@ class OrchestratorAdminService:
     proposal_store: object | None = None
     subagent_discovery_store: object | None = None
     research_support: object | None = None
+    mcp_source_registry: object | None = None
     orchestrator_error_cls: type[Exception] = Exception
 
     def __post_init__(self) -> None:
@@ -113,6 +115,7 @@ class OrchestratorAdminService:
         skill_name: str | None = None,
         snapshot_type: str | None = None,
         source_id: str | None = None,
+        tool_name: str | None = None,
         endpoint_path: str | None = None,
         http_method: str | None = None,
         openapi_spec_uri: str | None = None,
@@ -130,6 +133,7 @@ class OrchestratorAdminService:
             skill_name=skill_name,
             snapshot_type=snapshot_type,
             source_id=source_id,
+            tool_name=tool_name,
             endpoint_path=endpoint_path,
             http_method=http_method,
             openapi_spec_uri=openapi_spec_uri,
@@ -190,3 +194,11 @@ class OrchestratorAdminService:
         if self.skill_runtime is None:
             raise self.orchestrator_error_cls("skill_runtime is not configured")
         return self.skill_runtime
+
+    def require_mcp_source_registry(self):
+        registry = self.mcp_source_registry
+        if isinstance(registry, McpSourceRegistry):
+            return registry
+        registry = McpSourceRegistry(settings=self.settings)
+        self.mcp_source_registry = registry
+        return registry

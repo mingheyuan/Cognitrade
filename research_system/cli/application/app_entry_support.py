@@ -75,6 +75,7 @@ def execute_app_main_command(
         skill_name=getattr(args, "skill_name", None),
         snapshot_type=getattr(args, "snapshot_type", None),
         source_id=getattr(args, "source_id", None),
+        tool_name=getattr(args, "tool_name", None),
         endpoint_path=getattr(args, "endpoint_path", None),
         http_method=getattr(args, "http_method", None),
         openapi_spec_uri=getattr(args, "openapi_spec_uri", None),

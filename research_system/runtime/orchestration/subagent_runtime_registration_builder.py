@@ -42,6 +42,10 @@ _RUNTIME_REGISTRATION_BUILDER_HANDLERS = (
         registration_type="openapi_http_runner",
         builder_name="_build_openapi_http_registration",
     ),
+    _RuntimeRegistrationBuilderHandler(
+        registration_type="mcp_tool_runner",
+        builder_name="_build_mcp_tool_registration",
+    ),
 )
 
 SUPPORTED_RUNTIME_REGISTRATION_BUILDER_TYPES = tuple(
@@ -71,6 +75,7 @@ class SubagentRuntimeRegistrationBuilderSupport:
         skill_name: str = "",
         snapshot_type: str = "",
         source_id: str | None = None,
+        tool_name: str = "",
         endpoint_path: str = "",
         http_method: str = "",
         openapi_spec_uri: str | None = None,
@@ -84,6 +89,7 @@ class SubagentRuntimeRegistrationBuilderSupport:
             skill_name=str(skill_name or "").strip(),
             snapshot_type=str(snapshot_type or "").strip(),
             source_id=str(source_id or "").strip() or None,
+            tool_name=str(tool_name or "").strip(),
             endpoint_path=str(endpoint_path or "").strip(),
             http_method=str(http_method or "").strip().upper(),
             openapi_spec_uri=str(openapi_spec_uri or "").strip() or None,
@@ -167,6 +173,7 @@ class SubagentRuntimeRegistrationBuilderSupport:
             endpoint_path=endpoint_path,
             http_method=http_method,
             openapi_hints={},
+            tool_name=None,
         )
         validation_notes = self.validation_support.validate_registration(
             registration_type="http_json_runner",
@@ -205,6 +212,7 @@ class SubagentRuntimeRegistrationBuilderSupport:
             openapi_spec_uri=openapi_spec_uri,
             openapi_operation_id=openapi_operation_id,
             openapi_hints=self.template_support.openapi_hints(candidate_entry),
+            tool_name=None,
         )
         validation_notes = self.validation_support.validate_registration(
             registration_type="openapi_http_runner",
@@ -222,6 +230,41 @@ class SubagentRuntimeRegistrationBuilderSupport:
             notes=[
                 *self._template_notes(template),
                 "validated_via_openapi_operation_spec",
+                *validation_notes,
+            ],
+        )
+
+    def _build_mcp_tool_registration(
+        self,
+        *,
+        candidate_entry: SubagentCatalogEntry,
+        template: SubagentRuntimeRegistrationTemplate | None,
+        source_id: str | None,
+        tool_name: str,
+        timeout_seconds: float | None,
+        **_ignored: Any,
+    ) -> SubagentRuntimeRegistration:
+        resolved_tool = self.source_resolution.resolve(
+            registration_type="mcp_tool_runner",
+            candidate_entry=candidate_entry,
+            source_id=source_id,
+            openapi_hints={},
+            tool_name=tool_name,
+        )
+        validation_notes = self.validation_support.validate_registration(
+            registration_type="mcp_tool_runner",
+            candidate_entry=candidate_entry,
+        )
+        return SubagentRuntimeRegistration(
+            registration_type="mcp_tool_runner",
+            source_id=resolved_tool["source_id"],
+            tool_name=resolved_tool["tool_name"] or None,
+            registration_template_id=template.template_id if template is not None else None,
+            timeout_seconds=float(timeout_seconds) if timeout_seconds is not None else None,
+            notes=[
+                *self._template_notes(template),
+                "validated_via_mcp_source_registry",
+                "validated_mcp_tool_contract",
                 *validation_notes,
             ],
         )

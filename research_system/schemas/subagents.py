@@ -145,6 +145,7 @@ class SubagentRuntimeRegistration(BaseModel):
     skill_name: str | None = None
     snapshot_type: str | None = None
     source_id: str | None = None
+    tool_name: str | None = None
     endpoint_path: str | None = None
     http_method: Literal["GET", "POST"] | None = None
     openapi_spec_uri: str | None = None
@@ -159,6 +160,7 @@ class SubagentRuntimeRegistration(BaseModel):
         normalized_skill_name = str(self.skill_name or "").strip()
         normalized_snapshot_type = str(self.snapshot_type or "").strip()
         normalized_source_id = str(self.source_id or "").strip()
+        normalized_tool_name = str(self.tool_name or "").strip()
         normalized_endpoint_path = str(self.endpoint_path or "").strip()
         normalized_http_method = str(self.http_method or "").strip().upper()
         normalized_openapi_spec_uri = str(self.openapi_spec_uri or "").strip()
@@ -168,6 +170,7 @@ class SubagentRuntimeRegistration(BaseModel):
             skill_name=normalized_skill_name,
             snapshot_type=normalized_snapshot_type,
             source_id=normalized_source_id,
+            tool_name=normalized_tool_name,
             endpoint_path=normalized_endpoint_path,
             http_method=normalized_http_method,
             openapi_spec_uri=normalized_openapi_spec_uri,

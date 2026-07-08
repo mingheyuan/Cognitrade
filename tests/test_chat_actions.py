@@ -991,6 +991,7 @@ class ChatActionsTests(unittest.TestCase):
                     "skill_name": None,
                     "snapshot_type": None,
                     "source_id": "eastmoney",
+                    "tool_name": None,
                     "endpoint_path": "/api/market-signal",
                     "http_method": "GET",
                     "openapi_spec_uri": None,
@@ -1009,11 +1010,31 @@ class ChatActionsTests(unittest.TestCase):
                     "skill_name": None,
                     "snapshot_type": None,
                     "source_id": "eastmoney",
+                    "tool_name": None,
                     "endpoint_path": None,
                     "http_method": None,
                     "openapi_spec_uri": "https://example.com/openapi.json",
                     "openapi_operation_id": "getMarketSignal",
                     "timeout_seconds": None,
+                },
+            ),
+            (
+                "activate-subagent-discovery",
+                {
+                    "action": "activate-subagent-discovery",
+                    "ticket_id": "01DISC",
+                    "delegate_subagent_type": None,
+                    "candidate_subagent_type": "candidate_collect_mcp_extension",
+                    "registration_type": "mcp_tool_runner",
+                    "skill_name": None,
+                    "snapshot_type": None,
+                    "source_id": "akshare_mcp",
+                    "tool_name": "market_signal_lookup",
+                    "endpoint_path": None,
+                    "http_method": None,
+                    "openapi_spec_uri": None,
+                    "openapi_operation_id": None,
+                    "timeout_seconds": 7.5,
                 },
             ),
             (
@@ -1028,6 +1049,7 @@ class ChatActionsTests(unittest.TestCase):
                     "skill_name": None,
                     "snapshot_type": None,
                     "source_id": None,
+                    "tool_name": None,
                     "endpoint_path": None,
                     "http_method": None,
                     "openapi_spec_uri": None,
@@ -1069,9 +1091,14 @@ class ChatActionsTests(unittest.TestCase):
         self.assertEqual(calls[5]["openapi_spec_uri"], "https://example.com/openapi.json")
         self.assertEqual(calls[5]["openapi_operation_id"], "getMarketSignal")
         self.assertEqual(calls[6]["command"], "activate-subagent-discovery")
-        self.assertEqual(calls[6]["registration_template_id"], "openapi:getMarketSignal")
-        self.assertEqual(calls[6]["subagent_node_id"], "candidate_collect_http_extension")
-        self.assertEqual(len(rendered), 7)
+        self.assertEqual(calls[6]["registration_type"], "mcp_tool_runner")
+        self.assertEqual(calls[6]["source_id"], "akshare_mcp")
+        self.assertEqual(calls[6]["tool_name"], "market_signal_lookup")
+        self.assertEqual(calls[6]["timeout_seconds"], 7.5)
+        self.assertEqual(calls[7]["command"], "activate-subagent-discovery")
+        self.assertEqual(calls[7]["registration_template_id"], "openapi:getMarketSignal")
+        self.assertEqual(calls[7]["subagent_node_id"], "candidate_collect_http_extension")
+        self.assertEqual(len(rendered), 8)
 
 
 if __name__ == "__main__":

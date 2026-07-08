@@ -23,7 +23,13 @@ class SubagentRuntimeMaterializationTests(unittest.TestCase):
     def test_materialization_types_cover_current_runtime_registration_families(self) -> None:
         self.assertEqual(
             SUPPORTED_RUNTIME_MATERIALIZATION_TYPES,
-            ("snapshot_skill_runner", "skill_runner", "http_json_runner", "openapi_http_runner"),
+            (
+                "snapshot_skill_runner",
+                "skill_runner",
+                "http_json_runner",
+                "openapi_http_runner",
+                "mcp_tool_runner",
+            ),
         )
 
     def test_skill_runner_materialization_returns_runtime_registered_skill_subagent(self) -> None:
@@ -137,6 +143,73 @@ class SubagentRuntimeMaterializationTests(unittest.TestCase):
         self.assertEqual(subagent.endpoint_path, "/api/market-signal")
         self.assertEqual(subagent.http_method, "GET")
         self.assertEqual(subagent.timeout_seconds, 9.5)
+
+    def test_mcp_materialization_returns_runtime_registered_mcp_subagent(self) -> None:
+        from research_system.adapters.vendors.mcp_source_registry import (
+            McpServerSource,
+            McpSourceRegistry,
+            McpToolDefinition,
+        )
+        from research_system.subagents.runtime_registered import RuntimeRegisteredMcpToolSubagent
+
+        support = SubagentRuntimeMaterializationSupport(
+            type(
+                "_Host",
+                (),
+                {
+                    "require_mcp_source_registry": lambda self: McpSourceRegistry(
+                        servers=[
+                            McpServerSource(
+                                id="mock_market_tools",
+                                name="Mock Market Tools",
+                                transport="stdio",
+                                command="python",
+                                tools=(McpToolDefinition(name="market_signal_lookup", read_only=True),),
+                                timeout_seconds=11.5,
+                            )
+                        ]
+                    )
+                },
+            )()
+        )
+        activation_entry = SubagentActivationEntry(
+            ticket_id="ticket-1",
+            subagent_type="candidate_collect_market_signal_mcp_extension",
+            runtime_registration=SubagentRuntimeRegistration(
+                registration_type="mcp_tool_runner",
+                source_id="mock_market_tools",
+                tool_name="market_signal_lookup",
+                timeout_seconds=11.5,
+            ),
+            catalog_entry=SubagentCatalogEntry(
+                subagent_type="candidate_collect_market_signal_mcp_extension",
+                stage="collect",
+                side_effect_level="read_only",
+                capabilities=["market_signal_mcp_extension"],
+                input_json_schema={
+                    "type": "object",
+                    "properties": {"symbol": {"type": "string"}},
+                    "required": ["symbol"],
+                },
+                output_json_schema={
+                    "type": "object",
+                    "properties": {"signal": {"type": "string"}},
+                    "required": ["signal"],
+                },
+            ),
+        )
+
+        subagent = support.materialize_runtime_subagent(
+            activation_entry=activation_entry,
+            skill_runtime=None,
+            runtime_policy=SubagentRuntimePolicy(),
+            catalog_metadata=SubagentCatalogMetadata(summary="runtime mcp"),
+            runtime_models=(dict, dict),
+        )
+
+        self.assertIsInstance(subagent, RuntimeRegisteredMcpToolSubagent)
+        self.assertEqual(subagent.tool_name, "market_signal_lookup")
+        self.assertEqual(subagent.timeout_seconds, 11.5)
 
 
 if __name__ == "__main__":

@@ -197,6 +197,7 @@ class ChatCliTests(unittest.TestCase):
                 "skill_name": None,
                 "snapshot_type": None,
                 "source_id": "eastmoney",
+                "tool_name": None,
                 "endpoint_path": "/api/market-signal",
                 "http_method": "GET",
                 "openapi_spec_uri": None,
@@ -221,11 +222,36 @@ class ChatCliTests(unittest.TestCase):
                 "skill_name": None,
                 "snapshot_type": None,
                 "source_id": "eastmoney",
+                "tool_name": None,
                 "endpoint_path": None,
                 "http_method": None,
                 "openapi_spec_uri": "https://example.com/openapi.json",
                 "openapi_operation_id": "getMarketSignal",
                 "timeout_seconds": None,
+            },
+        )
+        self.assertEqual(
+            parse_chat_input(
+                "/activate-subagent-discovery 01DISC --registration-type mcp_tool_runner "
+                "--candidate candidate_collect_mcp_extension --source-id akshare_mcp "
+                "--tool-name market_signal_lookup --timeout-seconds 7.5"
+            ),
+            {
+                "action": "activate-subagent-discovery",
+                "ticket_id": "01DISC",
+                "delegate_subagent_type": None,
+                "candidate_subagent_type": "candidate_collect_mcp_extension",
+                "registration_template_id": None,
+                "registration_type": "mcp_tool_runner",
+                "skill_name": None,
+                "snapshot_type": None,
+                "source_id": "akshare_mcp",
+                "tool_name": "market_signal_lookup",
+                "endpoint_path": None,
+                "http_method": None,
+                "openapi_spec_uri": None,
+                "openapi_operation_id": None,
+                "timeout_seconds": 7.5,
             },
         )
         self.assertEqual(
@@ -243,6 +269,7 @@ class ChatCliTests(unittest.TestCase):
                 "skill_name": None,
                 "snapshot_type": None,
                 "source_id": None,
+                "tool_name": None,
                 "endpoint_path": None,
                 "http_method": None,
                 "openapi_spec_uri": None,

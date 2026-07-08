@@ -281,6 +281,7 @@ def _parse_activate_subagent_discovery_runtime_form(
         "--skill-name": "skill_name",
         "--snapshot-type": "snapshot_type",
         "--source-id": "source_id",
+        "--tool-name": "tool_name",
         "--endpoint-path": "endpoint_path",
         "--http-method": "http_method",
         "--openapi-spec-uri": "openapi_spec_uri",
@@ -297,6 +298,7 @@ def _parse_activate_subagent_discovery_runtime_form(
         "skill_name": None,
         "snapshot_type": None,
         "source_id": None,
+        "tool_name": None,
         "endpoint_path": None,
         "http_method": None,
         "openapi_spec_uri": None,
@@ -332,7 +334,7 @@ def _activate_subagent_discovery_usage() -> str:
         "[--candidate <candidate_subagent_type>] "
         "or /activate-subagent-discovery <ticket_id> --registration-type <type> "
         "[--candidate <candidate_subagent_type>] [--skill-name <skill>] [--snapshot-type <snapshot>] "
-        "[--source-id <source>] [--endpoint-path <path>] [--http-method <GET|POST>] "
+        "[--source-id <source>] [--tool-name <tool>] [--endpoint-path <path>] [--http-method <GET|POST>] "
         "[--openapi-spec-uri <uri>] [--openapi-operation-id <operation_id>] "
         "[--timeout-seconds <seconds>]"
     )

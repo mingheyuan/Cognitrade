@@ -36,6 +36,10 @@ _RUNTIME_TEMPLATE_HANDLERS = (
         registration_type="openapi_http_runner",
         builder_name="_openapi_template",
     ),
+    _RuntimeTemplateHandler(
+        registration_type="mcp_tool_runner",
+        builder_name="_mcp_template",
+    ),
 )
 
 SUPPORTED_RUNTIME_TEMPLATE_TYPES = tuple(handler.registration_type for handler in _RUNTIME_TEMPLATE_HANDLERS)
@@ -195,6 +199,31 @@ class SubagentRuntimeTemplateSupport:
             summary=f"OpenAPI runtime alias for operation {operation_id}",
             defaults=defaults,
             notes=["generated_from_openapi_hints"],
+        )
+
+    def _mcp_template(
+        self,
+        candidate_entry: SubagentCatalogEntry,
+    ) -> SubagentRuntimeRegistrationTemplate | None:
+        hints = self.runtime_registration_hint(candidate_entry, section="mcp")
+        source_id = str(hints.get("source_id") or "").strip()
+        tool_name = str(hints.get("tool_name") or "").strip()
+        if not source_id or not tool_name:
+            return None
+        template_id = str(hints.get("template_id") or "").strip() or f"mcp:{source_id}:{tool_name}"
+        defaults: dict[str, Any] = {
+            "source_id": source_id,
+            "tool_name": tool_name,
+        }
+        timeout_seconds = hints.get("timeout_seconds")
+        if timeout_seconds is not None:
+            defaults["timeout_seconds"] = timeout_seconds
+        return SubagentRuntimeRegistrationTemplate(
+            template_id=template_id,
+            registration_type="mcp_tool_runner",
+            summary=str(hints.get("summary") or "").strip() or f"MCP tool alias for {tool_name}@{source_id}",
+            defaults=defaults,
+            notes=["generated_from_mcp_hints"],
         )
 
     @staticmethod

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 from typing import Any
 from urllib.parse import urljoin
 
@@ -7,6 +10,7 @@ import requests
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
+from research_system.adapters.vendors.mcp_source_registry import McpServerSource
 from research_system.runtime.platform.skill_runtime import SkillRuntime
 from research_system.subagents.base import SubagentCatalogMetadata, SubagentRuntimePolicy
 
@@ -172,6 +176,50 @@ class RuntimeRegisteredHttpJsonSubagent:
         return f"/{normalized}"
 
 
+class RuntimeRegisteredMcpToolSubagent:
+    runtime_policy = SubagentRuntimePolicy(allow_parallel=True, max_concurrency=1)
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Execute one validated MCP tool as a runtime-registered subagent alias.",
+        capabilities=("mcp_tool_bridge", "runtime_registration"),
+        cost_class="medium",
+        latency_class="medium",
+        side_effect_level="read_only",
+        tags=("runtime_registered", "read_only", "mcp"),
+    )
+
+    def __init__(
+        self,
+        *,
+        subagent_type: str,
+        server_source: McpServerSource,
+        tool_name: str,
+        timeout_seconds: float = 20.0,
+        input_model: type[BaseModel] | None = None,
+        output_model: type[BaseModel] | None = None,
+        runtime_policy: SubagentRuntimePolicy | None = None,
+        catalog_metadata: SubagentCatalogMetadata | None = None,
+    ) -> None:
+        self.subagent_type = subagent_type
+        self.server_source = server_source
+        self.tool_name = tool_name
+        self.timeout_seconds = float(timeout_seconds or server_source.timeout_seconds or 20.0)
+        self.input_model = input_model
+        self.output_model = output_model
+        self.runtime_policy = runtime_policy or type(self).runtime_policy
+        self.catalog_metadata = catalog_metadata or type(self).catalog_metadata
+
+    def run(self, **kwargs: Any) -> dict[str, Any]:
+        payload = _call_mcp_tool(
+            server_source=self.server_source,
+            tool_name=self.tool_name,
+            arguments=kwargs,
+            timeout_seconds=self.timeout_seconds,
+        )
+        if isinstance(payload, dict):
+            return dict(payload)
+        return {"result": payload}
+
+
 def build_runtime_registered_model(
     *,
     model_name: str,
@@ -259,8 +307,149 @@ def _normalize_type_decl(type_decl: Any) -> list[str]:
     return []
 
 
+def _call_mcp_tool(
+    *,
+    server_source: McpServerSource,
+    tool_name: str,
+    arguments: dict[str, Any],
+    timeout_seconds: float,
+) -> dict[str, Any] | Any:
+    request_bytes = b"".join(
+        _encode_mcp_message(message)
+        for message in (
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "cognitrade", "version": "0.0.0"},
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": str(tool_name or "").strip(), "arguments": dict(arguments or {})},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "shutdown",
+                "params": {},
+            },
+            {
+                "jsonrpc": "2.0",
+                "method": "exit",
+                "params": {},
+            },
+        )
+    )
+    process = subprocess.Popen(
+        [server_source.command, *list(server_source.args)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=server_source.cwd or None,
+        env={**os.environ, **dict(server_source.env or {})},
+    )
+    try:
+        stdout, stderr = process.communicate(input=request_bytes, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        process.communicate()
+        raise RuntimeError(
+            f"mcp tool invocation timed out: {server_source.id}/{tool_name}"
+        ) from exc
+    if process.returncode not in {0, None}:
+        stderr_text = stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"mcp tool invocation failed: {server_source.id}/{tool_name}"
+            + (f" stderr={stderr_text}" if stderr_text else "")
+        )
+    responses = {
+        message.get("id"): message
+        for message in _parse_mcp_messages(stdout)
+        if isinstance(message, dict) and "id" in message
+    }
+    response = responses.get(2)
+    if not isinstance(response, dict):
+        raise RuntimeError(f"mcp tool invocation missing tools/call response: {server_source.id}/{tool_name}")
+    error = response.get("error")
+    if isinstance(error, dict):
+        raise RuntimeError(
+            f"mcp tool invocation returned error: {server_source.id}/{tool_name} {error.get('message') or error}"
+        )
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return {"result": result}
+    if bool(result.get("isError")):
+        raise RuntimeError(f"mcp tool invocation returned tool error: {server_source.id}/{tool_name}")
+    structured_content = result.get("structuredContent")
+    if isinstance(structured_content, dict):
+        return dict(structured_content)
+    content = result.get("content")
+    if isinstance(content, list):
+        text_content = [
+            str(item.get("text") or "").strip()
+            for item in content
+            if isinstance(item, dict) and str(item.get("type") or "").strip() == "text"
+        ]
+        if len(text_content) == 1 and text_content[0]:
+            try:
+                parsed = json.loads(text_content[0])
+            except json.JSONDecodeError:
+                return {"text": text_content[0]}
+            if isinstance(parsed, dict):
+                return parsed
+            return {"result": parsed}
+    return dict(result)
+
+
+def _encode_mcp_message(message: dict[str, Any]) -> bytes:
+    payload = json.dumps(message, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    header = f"Content-Length: {len(payload)}\r\nContent-Type: application/json\r\n\r\n".encode("utf-8")
+    return header + payload
+
+
+def _parse_mcp_messages(buffer: bytes) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    offset = 0
+    while offset < len(buffer):
+        header_end = buffer.find(b"\r\n\r\n", offset)
+        if header_end < 0:
+            trailing = buffer[offset:].strip()
+            if trailing:
+                raise RuntimeError("invalid MCP frame: missing header terminator")
+            break
+        header_blob = buffer[offset:header_end].decode("utf-8", errors="replace")
+        headers = {}
+        for line in header_blob.split("\r\n"):
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            headers[key.strip().lower()] = value.strip()
+        content_length = int(headers.get("content-length") or "0")
+        body_start = header_end + 4
+        body_end = body_start + content_length
+        if body_end > len(buffer):
+            raise RuntimeError("invalid MCP frame: truncated body")
+        payload = json.loads(buffer[body_start:body_end].decode("utf-8"))
+        if isinstance(payload, dict):
+            messages.append(payload)
+        offset = body_end
+    return messages
+
+
 __all__ = [
     "RuntimeRegisteredHttpJsonSubagent",
+    "RuntimeRegisteredMcpToolSubagent",
     "RuntimeRegisteredSnapshotSkillInputModel",
     "RuntimeRegisteredSnapshotSkillOutputModel",
     "RuntimeRegisteredSnapshotSkillSubagent",

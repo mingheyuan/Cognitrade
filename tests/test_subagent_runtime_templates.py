@@ -16,7 +16,13 @@ class SubagentRuntimeTemplateTests(unittest.TestCase):
     def test_template_types_cover_current_runtime_registration_families(self) -> None:
         self.assertEqual(
             SUPPORTED_RUNTIME_TEMPLATE_TYPES,
-            ("snapshot_skill_runner", "skill_runner", "http_json_runner", "openapi_http_runner"),
+            (
+                "snapshot_skill_runner",
+                "skill_runner",
+                "http_json_runner",
+                "openapi_http_runner",
+                "mcp_tool_runner",
+            ),
         )
 
     def test_candidate_templates_deduplicate_generated_templates_against_explicit_entries(self) -> None:
@@ -81,6 +87,32 @@ class SubagentRuntimeTemplateTests(unittest.TestCase):
         self.assertEqual(template.template_id, "openapi:getMarketSignal")
         self.assertEqual(template.defaults["openapi_operation_id"], "getMarketSignal")
         self.assertEqual(template.defaults["source_id"], "eastmoney")
+
+    def test_mcp_template_uses_structured_mcp_hints(self) -> None:
+        support = SubagentRuntimeTemplateSupport()
+        candidate = SubagentCatalogEntry(
+            subagent_type="candidate_collect_market_signal_mcp_extension",
+            stage="collect",
+            capabilities=["market_signal_mcp_extension"],
+            runtime_registration_hints={
+                "mcp": {
+                    "source_id": "mock_market_tools",
+                    "tool_name": "market_signal_lookup",
+                    "timeout_seconds": 11.5,
+                }
+            },
+        )
+
+        template = support.build_template(
+            registration_type="mcp_tool_runner",
+            candidate_entry=candidate,
+        )
+
+        self.assertIsNotNone(template)
+        assert template is not None
+        self.assertEqual(template.template_id, "mcp:mock_market_tools:market_signal_lookup")
+        self.assertEqual(template.defaults["source_id"], "mock_market_tools")
+        self.assertEqual(template.defaults["tool_name"], "market_signal_lookup")
 
 
 if __name__ == "__main__":

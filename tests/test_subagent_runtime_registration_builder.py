@@ -17,7 +17,13 @@ class SubagentRuntimeRegistrationBuilderTests(unittest.TestCase):
     def test_builder_types_cover_current_runtime_registration_families(self) -> None:
         self.assertEqual(
             SUPPORTED_RUNTIME_REGISTRATION_BUILDER_TYPES,
-            ("snapshot_skill_runner", "skill_runner", "http_json_runner", "openapi_http_runner"),
+            (
+                "snapshot_skill_runner",
+                "skill_runner",
+                "http_json_runner",
+                "openapi_http_runner",
+                "mcp_tool_runner",
+            ),
         )
 
     def test_snapshot_skill_builder_emits_template_note_and_validation_note(self) -> None:
@@ -112,6 +118,64 @@ class SubagentRuntimeRegistrationBuilderTests(unittest.TestCase):
         self.assertEqual(registration.openapi_operation_id, "getMarketSignal")
         self.assertIn("validated_via_openapi_operation_spec", registration.notes)
         self.assertIn("validated_runtime_contract_schema", registration.notes)
+
+    def test_mcp_builder_resolves_tool_from_registry(self) -> None:
+        from research_system.adapters.vendors.mcp_source_registry import (
+            McpServerSource,
+            McpSourceRegistry,
+            McpToolDefinition,
+        )
+
+        support = SubagentRuntimeRegistrationBuilderSupport(
+            type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_mcp_source_registry": lambda self: McpSourceRegistry(
+                        servers=[
+                            McpServerSource(
+                                id="mock_market_tools",
+                                name="Mock Market Tools",
+                                transport="stdio",
+                                command="python",
+                                tools=(McpToolDefinition(name="market_signal_lookup", read_only=True),),
+                            )
+                        ]
+                    ),
+                },
+            )()
+        )
+        candidate = SubagentCatalogEntry(
+            subagent_type="candidate_collect_market_signal_mcp_extension",
+            stage="collect",
+            side_effect_level="read_only",
+            capabilities=["market_signal_mcp_extension"],
+            input_json_schema={
+                "type": "object",
+                "properties": {"symbol": {"type": "string"}},
+                "required": ["symbol"],
+            },
+            output_json_schema={
+                "type": "object",
+                "properties": {"signal": {"type": "string"}},
+                "required": ["signal"],
+            },
+        )
+
+        registration = support.build_registration(
+            registration_type="mcp_tool_runner",
+            candidate_entry=candidate,
+            template=None,
+            source_id="mock_market_tools",
+            tool_name="market_signal_lookup",
+            timeout_seconds=11.5,
+        )
+
+        self.assertEqual(registration.registration_type, "mcp_tool_runner")
+        self.assertEqual(registration.source_id, "mock_market_tools")
+        self.assertEqual(registration.tool_name, "market_signal_lookup")
+        self.assertIn("validated_via_mcp_source_registry", registration.notes)
 
 
 if __name__ == "__main__":

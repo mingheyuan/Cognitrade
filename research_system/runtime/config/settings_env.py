@@ -46,6 +46,7 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "provider_probe_timeout_seconds": float(env_values.get("PROVIDER_PROBE_TIMEOUT_SECONDS", "1.0")),
         "provider_policy_path": config_root / "provider_policy.yml",
         "data_sources_path": config_root / "data_sources.yml",
+        "mcp_servers_path": config_root / "mcp_servers.yml",
         "provider_policy_overrides": {
             "market": env_values.get("COGNITRADE_PROVIDERS_MARKET", ""),
             "fundamental": env_values.get("COGNITRADE_PROVIDERS_FUNDAMENTAL", ""),

@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
+from research_system.adapters.vendors.mcp_source_registry import McpSourceRegistry
 from research_system.schemas.subagents import SubagentActivationEntry
 from research_system.subagents.base import SubagentCatalogMetadata, SubagentRuntimePolicy
 from research_system.subagents.runtime_registered import (
     RuntimeRegisteredHttpJsonSubagent,
+    RuntimeRegisteredMcpToolSubagent,
     RuntimeRegisteredSkillSubagent,
     RuntimeRegisteredSnapshotSkillSubagent,
 )
@@ -34,6 +36,10 @@ _RUNTIME_MATERIALIZATION_HANDLERS = (
     _RuntimeMaterializationHandler(
         registration_type="openapi_http_runner",
         materializer_name="_materialize_http_json_subagent",
+    ),
+    _RuntimeMaterializationHandler(
+        registration_type="mcp_tool_runner",
+        materializer_name="_materialize_mcp_tool_subagent",
     ),
 )
 
@@ -164,9 +170,49 @@ class SubagentRuntimeMaterializationSupport:
             catalog_metadata=catalog_metadata,
         )
 
+    def _materialize_mcp_tool_subagent(
+        self,
+        *,
+        activation_entry: SubagentActivationEntry,
+        skill_runtime,
+        runtime_policy: SubagentRuntimePolicy,
+        catalog_metadata: SubagentCatalogMetadata,
+        runtime_models: tuple[type | None, type | None],
+    ):
+        del skill_runtime
+        runtime_registration = activation_entry.runtime_registration
+        if runtime_registration is None:
+            return None
+        source_id = str(runtime_registration.source_id or "").strip()
+        tool_name = str(runtime_registration.tool_name or "").strip()
+        registry = self._mcp_registry()
+        server_source = registry.get(source_id)
+        if server_source is None or not tool_name:
+            return None
+        input_model, output_model = runtime_models
+        return RuntimeRegisteredMcpToolSubagent(
+            subagent_type=str(activation_entry.subagent_type).strip(),
+            server_source=server_source,
+            tool_name=tool_name,
+            timeout_seconds=float(runtime_registration.timeout_seconds or server_source.timeout_seconds or 20.0),
+            input_model=input_model,
+            output_model=output_model,
+            runtime_policy=runtime_policy,
+            catalog_metadata=catalog_metadata,
+        )
+
     def _error(self, message: str) -> Exception:
         error_cls = getattr(self.host, "orchestrator_error_cls", ValueError) or ValueError
         return error_cls(message)
+
+    def _mcp_registry(self) -> McpSourceRegistry:
+        factory = getattr(self.host, "require_mcp_source_registry", None)
+        if callable(factory):
+            registry = factory()
+            if isinstance(registry, McpSourceRegistry):
+                return registry
+        settings = getattr(self.host, "settings", None)
+        return McpSourceRegistry(settings=settings)
 
 
 __all__ = [

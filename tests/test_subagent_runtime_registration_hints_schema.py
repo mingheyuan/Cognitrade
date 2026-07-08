@@ -23,6 +23,11 @@ class SubagentRuntimeRegistrationHintsSchemaTests(unittest.TestCase):
                 "http_method": "GET",
                 "timeout_seconds": 12.5,
             },
+            mcp={
+                "source_id": "mock_market_tools",
+                "tool_name": "market_signal_lookup",
+                "timeout_seconds": 11.5,
+            },
         )
         self.assertEqual(
             runtime_registration_hint_payload(hints, section="snapshot_skill")["skill_name"],
@@ -31,6 +36,10 @@ class SubagentRuntimeRegistrationHintsSchemaTests(unittest.TestCase):
         self.assertEqual(
             runtime_registration_hint_payload(hints, section="http_json")["endpoint_path"],
             "/api/market-signal",
+        )
+        self.assertEqual(
+            runtime_registration_hint_payload(hints, section="mcp")["tool_name"],
+            "market_signal_lookup",
         )
 
     def test_structured_runtime_registration_hints_reject_unknown_sections(self) -> None:
@@ -82,7 +91,7 @@ class SubagentRuntimeRegistrationHintsSchemaTests(unittest.TestCase):
     def test_supported_hint_sections_cover_current_runtime_registration_sources(self) -> None:
         self.assertEqual(
             SUPPORTED_RUNTIME_REGISTRATION_HINT_SECTIONS,
-            ("snapshot_skill", "skill", "http_json", "openapi"),
+            ("snapshot_skill", "skill", "http_json", "openapi", "mcp"),
         )
 
 

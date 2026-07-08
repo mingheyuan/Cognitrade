@@ -9,6 +9,7 @@ SUPPORTED_RUNTIME_REGISTRATION_HINT_SECTIONS = (
     "skill",
     "http_json",
     "openapi",
+    "mcp",
 )
 
 
@@ -48,6 +49,12 @@ class OpenApiRuntimeRegistrationHint(_BaseRuntimeRegistrationHint):
         raise ValueError("openapi runtime registration hints require operation_id, spec_uri, or spec")
 
 
+class McpRuntimeRegistrationHint(_BaseRuntimeRegistrationHint):
+    source_id: str
+    tool_name: str
+    timeout_seconds: float | None = Field(default=None, gt=0.0)
+
+
 class SubagentRuntimeRegistrationHints(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -55,6 +62,7 @@ class SubagentRuntimeRegistrationHints(BaseModel):
     skill: SkillRuntimeRegistrationHint | None = None
     http_json: HttpJsonRuntimeRegistrationHint | None = None
     openapi: OpenApiRuntimeRegistrationHint | None = None
+    mcp: McpRuntimeRegistrationHint | None = None
 
 
 def runtime_registration_hint_payload(
@@ -82,6 +90,7 @@ def runtime_registration_hint_payload(
 
 __all__ = [
     "HttpJsonRuntimeRegistrationHint",
+    "McpRuntimeRegistrationHint",
     "OpenApiRuntimeRegistrationHint",
     "SkillRuntimeRegistrationHint",
     "SnapshotSkillRuntimeRegistrationHint",

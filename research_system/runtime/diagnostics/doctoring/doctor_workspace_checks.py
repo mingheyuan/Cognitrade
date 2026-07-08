@@ -16,6 +16,7 @@ def build_config_file_checks(settings: Settings) -> list[dict]:
             "methodology_manifest": settings.methodology_manifest_path,
             "provider_policy": settings.provider_policy_path,
             "data_sources": settings.data_sources_path,
+            "mcp_servers": settings.mcp_servers_path,
             "taxonomy_dimensions": settings.taxonomy_dimensions_path,
             "taxonomy_dimension_aliases": settings.taxonomy_dimension_aliases_path,
             "taxonomy_dimension_patterns": settings.taxonomy_dimension_patterns_path,

@@ -227,6 +227,7 @@ def render_subagent_activation_entry_line(row: dict) -> str:
         skill_name = str(runtime_registration.get("skill_name") or "").strip()
         snapshot_type = str(runtime_registration.get("snapshot_type") or "").strip()
         source_id = str(runtime_registration.get("source_id") or "").strip()
+        tool_name = str(runtime_registration.get("tool_name") or "").strip()
         endpoint_path = str(runtime_registration.get("endpoint_path") or "").strip()
         http_method = str(runtime_registration.get("http_method") or "").strip()
         openapi_spec_uri = str(runtime_registration.get("openapi_spec_uri") or "").strip()
@@ -240,6 +241,8 @@ def render_subagent_activation_entry_line(row: dict) -> str:
             registration_bits.append(f"snapshot={snapshot_type}")
         if source_id:
             registration_bits.append(f"source={source_id}")
+        if tool_name:
+            registration_bits.append(f"tool={tool_name}")
         if http_method:
             registration_bits.append(f"method={http_method}")
         if endpoint_path:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import sys
 import tempfile
+import textwrap
 import threading
 import unittest
 from pathlib import Path
@@ -147,9 +149,89 @@ class _HttpJsonResponseStub:
         return self._payload
 
 
+def _write_fake_mcp_server_script(root: Path) -> Path:
+    script_path = root / "fake_mcp_server.py"
+    script_path.write_text(
+        textwrap.dedent(
+            """
+import json
+import sys
+
+
+def _parse_messages(buffer):
+    messages = []
+    offset = 0
+    while offset < len(buffer):
+        header_end = buffer.find(b"\\r\\n\\r\\n", offset)
+        if header_end < 0:
+            break
+        headers = {}
+        for line in buffer[offset:header_end].decode("utf-8", errors="replace").split("\\r\\n"):
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            headers[key.strip().lower()] = value.strip()
+        content_length = int(headers.get("content-length") or "0")
+        body_start = header_end + 4
+        body_end = body_start + content_length
+        messages.append(json.loads(buffer[body_start:body_end].decode("utf-8")))
+        offset = body_end
+    return messages
+
+
+def _write_message(message):
+    payload = json.dumps(message, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    sys.stdout.buffer.write(
+        f"Content-Length: {len(payload)}\\r\\nContent-Type: application/json\\r\\n\\r\\n".encode("utf-8")
+    )
+    sys.stdout.buffer.write(payload)
+
+
+for message in _parse_messages(sys.stdin.buffer.read()):
+    if message.get("id") == 1 and message.get("method") == "initialize":
+        _write_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "mock-market-tools", "version": "0.0.0"},
+                },
+            }
+        )
+    elif message.get("id") == 2 and message.get("method") == "tools/call":
+        arguments = dict((message.get("params") or {}).get("arguments") or {})
+        _write_message(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "structuredContent": {
+                        "signal": "bullish",
+                        "score": 0.91,
+                        "symbol": arguments.get("symbol"),
+                        "limit": arguments.get("limit"),
+                    }
+                },
+            }
+        )
+    elif message.get("id") == 3 and message.get("method") == "shutdown":
+        _write_message({"jsonrpc": "2.0", "id": 3, "result": {}})
+
+sys.stdout.flush()
+"""
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return script_path
+
+
 class _RuntimeRegisteredService(RuntimeBoundSubagentInvoker):
-    def __init__(self, *, store: SubagentDiscoveryStore, skill_runtime) -> None:
+    def __init__(self, *, store: SubagentDiscoveryStore, skill_runtime, mcp_source_registry=None) -> None:
         self.skill_runtime = skill_runtime
+        self.mcp_source_registry = mcp_source_registry
         self.registry = SubagentRegistry(
             [_TypedSubagent()],
             activation_provider=store.activated_alias_entries,
@@ -890,6 +972,156 @@ class SubagentRegistryTests(unittest.TestCase):
                     params={"symbol": "600036", "limit": 3},
                     timeout=20.0,
                 )
+            finally:
+                temp_dir_runtime.cleanup()
+
+    def test_shared_runtime_registration_factory_supports_mcp_tool_runner(self) -> None:
+        from research_system.adapters.vendors.mcp_source_registry import (
+            McpServerSource,
+            McpSourceRegistry,
+            McpToolDefinition,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = SubagentDiscoveryStore(root / "discovery")
+            server_script = _write_fake_mcp_server_script(root)
+            registry = McpSourceRegistry(
+                servers=[
+                    McpServerSource(
+                        id="mock_market_tools",
+                        name="Mock Market Tools",
+                        transport="stdio",
+                        command=sys.executable,
+                        args=(str(server_script),),
+                        cwd=str(root),
+                        tools=(
+                            McpToolDefinition(
+                                name="market_signal_lookup",
+                                read_only=True,
+                                input_json_schema={
+                                    "type": "object",
+                                    "properties": {
+                                        "symbol": {"type": "string"},
+                                        "limit": {"type": "integer"},
+                                    },
+                                    "required": ["symbol"],
+                                },
+                            ),
+                        ),
+                        timeout_seconds=7.5,
+                    )
+                ]
+            )
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_mcp_extension",
+                preferred_subagent_type="candidate_collect_market_signal_mcp_extension",
+                reason="missing mcp-backed market signal capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_mcp_extension",
+                search_query="stock_check collect market_signal_mcp_extension",
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_mcp_source_registry": lambda self: registry,
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                candidate_catalog_entries=[
+                    {
+                        "subagent_type": "candidate_collect_market_signal_mcp_extension",
+                        "summary": "Approved MCP-backed market signal candidate.",
+                        "capabilities": ["market_signal_mcp_extension"],
+                        "stage": "collect",
+                        "side_effect_level": "read_only",
+                        "suitable_intents": ["stock_check"],
+                        "tags": ["approved_discovery_candidate"],
+                        "input_schema_name": "McpSignalInput",
+                        "output_schema_name": "McpSignalOutput",
+                        "input_json_schema": {
+                            "type": "object",
+                            "properties": {
+                                "symbol": {"type": "string"},
+                                "limit": {"type": "integer"},
+                            },
+                            "required": ["symbol"],
+                        },
+                        "output_json_schema": {
+                            "type": "object",
+                            "properties": {
+                                "signal": {"type": "string"},
+                                "score": {"type": "number"},
+                                "symbol": {"type": "string"},
+                                "limit": {"type": "integer"},
+                            },
+                            "required": ["signal"],
+                        },
+                        "runtime_registration_hints": {
+                            "mcp": {
+                                "source_id": "mock_market_tools",
+                                "tool_name": "market_signal_lookup",
+                                "timeout_seconds": 7.5,
+                            }
+                        },
+                    }
+                ],
+            )
+            admin.activate_request(
+                ticket.ticket_id,
+                registration_template_id="mcp:mock_market_tools:market_signal_lookup",
+                activated_by="tester",
+                reason="activate mcp runtime registration",
+            )
+
+            service = _RuntimeRegisteredService(
+                store=store,
+                skill_runtime=None,
+                mcp_source_registry=registry,
+            )
+            runtime_registry = service.registry
+
+            definition = runtime_registry.definition("candidate_collect_market_signal_mcp_extension")
+            self.assertIsNotNone(definition.input_model)
+            self.assertIsNotNone(definition.output_model)
+            self.assertIn("symbol", (definition.input_model.model_json_schema().get("properties") or {}))
+            self.assertIn("signal", (definition.output_model.model_json_schema().get("properties") or {}))
+
+            temp_dir_runtime, context, request_envelope = self._build_runtime()
+            try:
+                outputs, record = context.agent_control.invoke(
+                    registry=runtime_registry,
+                    invocation=SubagentInvocation(
+                        subagent_type="candidate_collect_market_signal_mcp_extension",
+                        objective="Run mcp runtime-registered alias.",
+                        inputs={"symbol": "600036", "limit": 3},
+                    ),
+                    thread_id=context.thread.thread_id,
+                    turn_id=context.turn.turn_id,
+                    request_id=request_envelope.request_id,
+                    agent="tester",
+                    phase="collect",
+                    execution_policy=context.execution_policy,
+                )
+
+                self.assertEqual(outputs["signal"], "bullish")
+                self.assertEqual(outputs["score"], 0.91)
+                self.assertEqual(outputs["symbol"], "600036")
+                self.assertEqual(outputs["limit"], 3)
+                self.assertEqual(record.subagent_type, "candidate_collect_market_signal_mcp_extension")
             finally:
                 temp_dir_runtime.cleanup()
 

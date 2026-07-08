@@ -736,6 +736,121 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
                 "openapi_http_runner",
             )
 
+    def test_admin_support_can_activate_mcp_tool_runner_from_candidate_hints(self) -> None:
+        from research_system.adapters.vendors.mcp_source_registry import (
+            McpServerSource,
+            McpSourceRegistry,
+            McpToolDefinition,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_mcp_extension",
+                preferred_subagent_type="candidate_collect_market_signal_mcp_extension",
+                reason="missing mcp-backed market signal capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_mcp_extension",
+                search_query="stock_check collect market_signal_mcp_extension",
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            registry = McpSourceRegistry(
+                servers=[
+                    McpServerSource(
+                        id="mock_market_tools",
+                        name="Mock Market Tools",
+                        transport="stdio",
+                        command="python",
+                        tools=(McpToolDefinition(name="market_signal_lookup", read_only=True),),
+                        timeout_seconds=7.5,
+                    )
+                ]
+            )
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_mcp_source_registry": lambda self: registry,
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                candidate_catalog_entries=[
+                    SubagentCatalogEntry(
+                        subagent_type="candidate_collect_market_signal_mcp_extension",
+                        summary="Approved discovery candidate for MCP-backed market signals.",
+                        capabilities=["market_signal_mcp_extension"],
+                        stage="collect",
+                        side_effect_level="read_only",
+                        tags=["approved_discovery_candidate"],
+                        suitable_intents=["stock_check"],
+                        input_json_schema={
+                            "type": "object",
+                            "properties": {
+                                "symbol": {"type": "string"},
+                                "limit": {"type": "integer"},
+                            },
+                            "required": ["symbol"],
+                        },
+                        output_json_schema={
+                            "type": "object",
+                            "properties": {
+                                "signal": {"type": "string"},
+                                "score": {"type": "number"},
+                            },
+                            "required": ["signal"],
+                        },
+                        runtime_registration_hints={
+                            "mcp": {
+                                "source_id": "mock_market_tools",
+                                "tool_name": "market_signal_lookup",
+                                "timeout_seconds": 7.5,
+                            }
+                        },
+                    ).model_dump(mode="json")
+                ],
+            )
+
+            approved_entries = store.approved_catalog_entries()
+            self.assertEqual(
+                approved_entries[0].runtime_registration_templates[0].template_id,
+                "mcp:mock_market_tools:market_signal_lookup",
+            )
+
+            activation = admin.activate_request(
+                ticket.ticket_id,
+                registration_template_id="mcp:mock_market_tools:market_signal_lookup",
+                activated_by="tester",
+                reason="activate hinted mcp runner",
+            )
+
+            self.assertIn("runtime alias", activation["message"])
+            activated_entry = activation["result"]["activated_entries"][0]
+            self.assertEqual(activated_entry["runtime_registration"]["registration_type"], "mcp_tool_runner")
+            self.assertEqual(activated_entry["runtime_registration"]["source_id"], "mock_market_tools")
+            self.assertEqual(activated_entry["runtime_registration"]["tool_name"], "market_signal_lookup")
+            self.assertEqual(activated_entry["runtime_registration"]["timeout_seconds"], 7.5)
+            self.assertEqual(
+                activated_entry["runtime_registration"]["registration_template_id"],
+                "mcp:mock_market_tools:market_signal_lookup",
+            )
+            activated_aliases = store.activated_alias_entries()
+            self.assertEqual(len(activated_aliases), 1)
+            self.assertEqual(
+                activated_aliases[0].runtime_registration.registration_type,
+                "mcp_tool_runner",
+            )
+
     def test_admin_support_rejects_snapshot_skill_activation_for_non_collect_stage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = SubagentDiscoveryStore(Path(temp_dir))
