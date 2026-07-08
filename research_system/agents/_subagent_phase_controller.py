@@ -129,6 +129,7 @@ class SubagentPhaseController:
             discovery_activation_policy=self.discovery_activation_policy,
             discovery_candidate_support=self.discovery_candidate_support,
         )
+        self.discovery_stage_policy_source = self.discovery_decision_source.stage_policy_source
         self.discovery_policy_controller = SubagentDiscoveryPolicyController(
             decision_source=self.discovery_decision_source,
             runtime_packaging=self.discovery_candidate_support.runtime_packaging,

@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from research_system.agents._subagent_discovery_decision_source import (
+    SubagentDiscoveryDecisionSource,
+)
+from research_system.agents._subagent_discovery_stage_decisions import (
     SubagentDiscoveryActivationStageDecision,
     SubagentDiscoveryActivationTarget,
     SubagentDiscoveryCandidateStageResult,
-    SubagentDiscoveryDecisionSource,
     SubagentDiscoveryReviewStageDecision,
 )
 from research_system.schemas.subagents import SubagentDiscoveryTicket

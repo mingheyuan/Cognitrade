@@ -61,6 +61,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             discovery_activation_policy=SubagentDiscoveryActivationPolicyService(settings=getattr(host, "settings", None)),
             discovery_candidate_support=self.discovery_candidates,
         )
+        self.discovery_stage_policy_source = self.discovery_decision_source.stage_policy_source
         self.policy_controller = SubagentDiscoveryPolicyController(
             decision_source=self.discovery_decision_source,
             runtime_packaging=self.runtime_packaging,
