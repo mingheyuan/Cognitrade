@@ -12,6 +12,7 @@ rules:
   - rule_id: collect_skill_auto_activate
     stage: collect
     auto_activate: true
+    allow_recommended_candidate_override: true
     allowed_protocols:
       - skill
     notes:
@@ -19,6 +20,7 @@ rules:
   - rule_id: report_skill_auto_activate
     stage: report
     auto_activate: true
+    allow_recommended_candidate_override: true
     allowed_protocols:
       - skill
     notes:
@@ -26,6 +28,7 @@ rules:
   - rule_id: retrieve_read_only_auto_activate
     stage: retrieve
     auto_activate: true
+    allow_recommended_candidate_override: true
     allowed_protocols:
       - mcp
       - openapi
@@ -35,6 +38,7 @@ rules:
   - rule_id: review_read_only_auto_activate
     stage: review
     auto_activate: true
+    allow_recommended_candidate_override: true
     allowed_protocols:
       - mcp
       - openapi

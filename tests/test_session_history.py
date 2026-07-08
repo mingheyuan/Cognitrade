@@ -448,7 +448,45 @@ class SessionHistoryTests(unittest.TestCase):
 
         self.assertEqual(len(payload["dynamic_trace"]), 1)
         self.assertEqual(payload["dynamic_trace"][0]["event"], "subagent_discovery_llm_applied")
-        self.assertEqual(payload["dynamic_trace"][0]["applied_protocols"], ["mcp", "skill", "openapi"])
+
+    def test_trace_rebuilds_subagent_discovery_candidate_llm_rows_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "01TRACEDISCOVERYCANDIDATELLM"
+            run_root.mkdir(parents=True, exist_ok=True)
+
+            write_json(run_root / "request.json", {"intent": "stock_check", "user_query": "check this stock"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-discovery-candidate-llm-1",
+                    "request_id": "req-discovery-candidate-llm",
+                    "run_id": "01TRACEDISCOVERYCANDIDATELLM",
+                    "intent": "stock_check",
+                    "event_type": "subagent_discovery_candidate_llm_applied",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "subagent_discovery_candidate_llm_applied ranked discovery candidates for capability market_signal_extension",
+                    "payload": {
+                        "stage": "collect",
+                        "capability": "market_signal_extension",
+                        "applied_candidate_subagent_type": "candidate_collect_market_snapshot_skill_b",
+                        "override_rule_candidate": True,
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-09T11:00:00+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(len(payload["dynamic_trace"]), 1)
+        self.assertEqual(payload["dynamic_trace"][0]["event"], "subagent_discovery_candidate_llm_applied")
+        self.assertEqual(
+            payload["dynamic_trace"][0]["applied_candidate_subagent_type"],
+            "candidate_collect_market_snapshot_skill_b",
+        )
 
     def test_trace_rebuilds_subagent_discovery_hybrid_rows_from_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

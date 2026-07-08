@@ -41,6 +41,9 @@ class RuntimeContext:
     subagent_discovery_shadow_suggestions: list[dict]
     subagent_discovery_llm_decisions: list[dict]
     subagent_discovery_hybrid_decisions: list[dict]
+    subagent_discovery_candidate_shadow_suggestions: list[dict]
+    subagent_discovery_candidate_llm_decisions: list[dict]
+    subagent_discovery_candidate_hybrid_decisions: list[dict]
     subagent_phase_shadow_suggestions: list[dict]
     subagent_phase_llm_decisions: list[dict]
     subagent_phase_hybrid_decisions: list[dict]
@@ -124,6 +127,9 @@ def build_runtime_context(
         subagent_discovery_shadow_suggestions=[],
         subagent_discovery_llm_decisions=[],
         subagent_discovery_hybrid_decisions=[],
+        subagent_discovery_candidate_shadow_suggestions=[],
+        subagent_discovery_candidate_llm_decisions=[],
+        subagent_discovery_candidate_hybrid_decisions=[],
         subagent_phase_shadow_suggestions=[],
         subagent_phase_llm_decisions=[],
         subagent_phase_hybrid_decisions=[],

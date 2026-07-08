@@ -113,8 +113,11 @@ class SubagentPhaseController:
         )
         self.discovery_candidate_support = SubagentDiscoveryCandidateSupport(self)
         self.discovery_candidate_policy = SubagentDiscoveryCandidatePolicyService(
-            llm_provider=None,
+            llm_provider=llm_provider,
             settings=settings,
+            runtime_binding_getter=runtime_binding_getter,
+            emit_event=emit_event,
+            service_name=service_name,
         )
         self.discovery_approval_policy = SubagentDiscoveryApprovalPolicyService(settings=settings)
         self.discovery_activation_policy = SubagentDiscoveryActivationPolicyService(settings=settings)

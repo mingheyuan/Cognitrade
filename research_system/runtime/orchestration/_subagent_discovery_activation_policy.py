@@ -20,6 +20,7 @@ class SubagentDiscoveryActivationPolicyRule:
     allowed_protocols: tuple[str, ...] = ()
     allowed_side_effect_levels: tuple[str, ...] = DEFAULT_ALLOWED_SIDE_EFFECT_LEVELS
     max_candidate_count: int | None = 1
+    allow_recommended_candidate_override: bool = False
     require_approved_ticket: bool = True
     require_recommended_candidate: bool = True
     require_single_runtime_registration_template: bool = True
@@ -77,15 +78,22 @@ class SubagentDiscoveryActivationPolicyService:
             effective_rule.max_candidate_count is not None
             and len(candidate_entries) > int(effective_rule.max_candidate_count)
         ):
-            return self._pending_decision(
-                reason=f"discovery_auto_activation_candidate_count>{int(effective_rule.max_candidate_count)}",
-                rule_id=rule_id,
-                notes=effective_rule.notes,
-            )
+            if not bool(effective_rule.allow_recommended_candidate_override):
+                return self._pending_decision(
+                    reason=f"discovery_auto_activation_candidate_count>{int(effective_rule.max_candidate_count)}",
+                    rule_id=rule_id,
+                    notes=effective_rule.notes,
+                )
         candidate_entry = self._recommended_entry(ticket=ticket)
         if candidate_entry is None:
             return self._pending_decision(
                 reason="discovery_auto_activation_recommended_candidate_missing",
+                rule_id=rule_id,
+                notes=effective_rule.notes,
+            )
+        if effective_rule.require_recommended_candidate and ticket.candidate_recommendation is None:
+            return self._pending_decision(
+                reason="discovery_auto_activation_missing_recommendation",
                 rule_id=rule_id,
                 notes=effective_rule.notes,
             )
@@ -132,6 +140,15 @@ class SubagentDiscoveryActivationPolicyService:
                 f"discovery_activation_rule={rule_id}",
                 f"auto_activated_candidate={candidate_entry.subagent_type}",
                 f"auto_activated_template={selected_template.template_id}",
+                *(
+                    [f"recommended_candidate_override_count={len(candidate_entries)}"]
+                    if (
+                        effective_rule.allow_recommended_candidate_override
+                        and effective_rule.max_candidate_count is not None
+                        and len(candidate_entries) > int(effective_rule.max_candidate_count)
+                    )
+                    else []
+                ),
                 *( [f"auto_activated_protocol={selected_protocol}"] if selected_protocol else [] ),
                 *list(effective_rule.notes or ()),
             ],
@@ -268,6 +285,9 @@ class SubagentDiscoveryActivationPolicyService:
                 int(row.get("max_candidate_count"))
                 if row.get("max_candidate_count") is not None
                 else None
+            ),
+            allow_recommended_candidate_override=bool(
+                row.get("allow_recommended_candidate_override", False)
             ),
             require_approved_ticket=bool(row.get("require_approved_ticket", True)),
             require_recommended_candidate=bool(row.get("require_recommended_candidate", True)),

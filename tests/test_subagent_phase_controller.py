@@ -124,6 +124,26 @@ class _DiscoveryPolicyProviderStub:
         )
 
 
+class _DiscoveryCandidateProviderStub:
+    available = True
+
+    def __init__(self, *, selected_candidate_subagent_type: str) -> None:
+        self.selected_candidate_subagent_type = selected_candidate_subagent_type
+        self.calls = 0
+
+    def parse(self, **kwargs):
+        self.calls += 1
+        schema = kwargs["schema"]
+        return schema.model_validate(
+            {
+                "candidate_subagent_type": self.selected_candidate_subagent_type,
+                "reason": "prefer the alternative approved bridge",
+                "confidence": 0.94,
+                "notes": ["llm_select_discovery_candidate"],
+            }
+        )
+
+
 class SubagentPhaseControllerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.registry = SubagentRegistry([_CheapReviewSubagent(), _PreferredReviewSubagent()])
@@ -740,6 +760,129 @@ class SubagentPhaseControllerTests(unittest.TestCase):
             self.assertEqual(
                 runtime_context.dynamic_trace[-1]["event"],
                 "subagent_tool_discovery_auto_activated",
+            )
+
+    def test_capability_gap_can_apply_runtime_candidate_llm_policy_and_auto_continue(self) -> None:
+        runtime_context = SimpleNamespace(
+            subagent_capability_gaps=[],
+            subagent_tool_discovery_requests=[],
+            subagent_discovery_candidate_shadow_suggestions=[],
+            subagent_discovery_candidate_llm_decisions=[],
+            subagent_discovery_candidate_hybrid_decisions=[],
+            dynamic_trace=[],
+        )
+        support = Mock()
+        support.resolve_llm_execution.return_value = SimpleNamespace(can_use_llm=True)
+        support.record_degradation.return_value = None
+        support.emit_event = lambda *_args, **_kwargs: None
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.subagent_discovery_llm_policy_enabled = True
+            settings.subagent_discovery_llm_policy_min_confidence = 0.8
+            settings.max_llm_calls_per_turn = 3
+            settings.skill_sources_path.write_text(
+                "\n".join(
+                    [
+                        "sources:",
+                        "  - skill_name: market_snapshot_skill_a",
+                        "    registration_type: snapshot_skill_runner",
+                        "    summary: Collect market snapshot through runtime A.",
+                        "    snapshot_type: market",
+                        "    capabilities: [market_signal_extension]",
+                        "    suitable_intents: [stock_check]",
+                        "    stage: collect",
+                        "    candidate_subagent_type: candidate_collect_market_snapshot_skill_a",
+                        "  - skill_name: market_snapshot_skill_b",
+                        "    registration_type: snapshot_skill_runner",
+                        "    summary: Collect market snapshot through runtime B.",
+                        "    snapshot_type: market",
+                        "    capabilities: [market_signal_extension]",
+                        "    suitable_intents: [stock_check]",
+                        "    stage: collect",
+                        "    candidate_subagent_type: candidate_collect_market_snapshot_skill_b",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            discovery_store = SubagentDiscoveryStore(Path(temp_dir) / "discovery")
+            provider = _DiscoveryCandidateProviderStub(
+                selected_candidate_subagent_type="candidate_collect_market_snapshot_skill_b"
+            )
+            controller = SubagentPhaseController(
+                registry=SubagentRegistry(
+                    [_CheapReviewSubagent(), _PreferredReviewSubagent()],
+                    activation_provider=discovery_store.activated_alias_entries,
+                    activation_factory_provider=lambda activation_entry: _RuntimeActivatedCandidateSubagent(
+                        activation_entry
+                    ),
+                ),
+                invoke_subagent=lambda invocation: (
+                    {"ok": True},
+                    SubagentExecutionRecord(
+                        subagent_type=invocation.subagent_type,
+                        invocation_id=invocation.invocation_id,
+                        status="completed",
+                        objective=invocation.objective,
+                        inputs=invocation.inputs,
+                        output_keys=["ok"],
+                    ),
+                ),
+                emit_event=None,
+                cache_context_builder=lambda **_: None,
+                start_from_node_id_builder=lambda **_: None,
+                runtime_binding_getter=lambda: {
+                    "context": runtime_context,
+                    "support": support,
+                    "subagent_discovery_store": discovery_store,
+                    "skill_runtime": SimpleNamespace(
+                        backend=SimpleNamespace(
+                            registry={
+                                "market_snapshot_skill_a": object(),
+                                "market_snapshot_skill_b": object(),
+                            }
+                        )
+                    ),
+                    "execution_policy": SimpleNamespace(max_llm_calls_per_turn=3),
+                    "request_id": "req-gap-candidate-llm",
+                    "intent": "stock_check",
+                },
+                llm_provider=provider,
+                settings=settings,
+                service_name="collector",
+            )
+
+            selected = controller.select_catalog_entry(
+                stage="collect",
+                intent="stock_check",
+                capability="market_signal_extension",
+            )
+
+            self.assertGreaterEqual(provider.calls, 2)
+            self.assertEqual(selected.subagent_type, "candidate_collect_market_snapshot_skill_b")
+            approved_tickets = discovery_store.list("approved")
+            self.assertEqual(len(approved_tickets), 1)
+            approved_ticket = approved_tickets[0]
+            self.assertEqual(
+                approved_ticket.candidate_recommendation.candidate_subagent_type,
+                "candidate_collect_market_snapshot_skill_b",
+            )
+            self.assertEqual(approved_ticket.candidate_recommendation.policy_source, "llm")
+            self.assertEqual(len(approved_ticket.activated_entries), 1)
+            self.assertEqual(
+                approved_ticket.activated_entries[0].subagent_type,
+                "candidate_collect_market_snapshot_skill_b",
+            )
+            self.assertEqual(len(runtime_context.subagent_discovery_candidate_shadow_suggestions), 1)
+            self.assertEqual(len(runtime_context.subagent_discovery_candidate_llm_decisions), 1)
+            self.assertEqual(
+                runtime_context.subagent_discovery_candidate_shadow_suggestions[0]["event"],
+                "subagent_discovery_candidate_shadow_suggested",
+            )
+            self.assertEqual(
+                runtime_context.subagent_discovery_candidate_llm_decisions[0]["event"],
+                "subagent_discovery_candidate_llm_applied",
             )
 
     def test_execute_plan_injects_plan_metadata_and_trace(self) -> None:

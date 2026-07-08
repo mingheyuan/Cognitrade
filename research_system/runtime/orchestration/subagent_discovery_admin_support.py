@@ -22,6 +22,9 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         self.candidate_policy = SubagentDiscoveryCandidatePolicyService(
             llm_provider=getattr(host, "llm_provider", None),
             settings=getattr(host, "settings", None),
+            runtime_binding_getter=getattr(host, "runtime_binding_getter", None),
+            emit_event=getattr(host, "emit_event", None),
+            service_name="subagent_discovery_admin",
         )
         self.runtime_packaging = SubagentRuntimePackagingSupport(host)
 

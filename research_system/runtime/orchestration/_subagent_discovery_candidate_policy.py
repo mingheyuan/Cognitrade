@@ -23,9 +23,20 @@ class _SubagentDiscoveryCandidateShadowPayload(BaseModel):
 
 
 class SubagentDiscoveryCandidatePolicyService:
-    def __init__(self, *, llm_provider=None, settings=None) -> None:
+    def __init__(
+        self,
+        *,
+        llm_provider=None,
+        settings=None,
+        runtime_binding_getter=None,
+        emit_event=None,
+        service_name: str | None = None,
+    ) -> None:
         self.llm_provider = llm_provider
         self.settings = settings
+        self.runtime_binding_getter = runtime_binding_getter
+        self.emit_event = emit_event
+        self.service_name = service_name or "subagent_discovery"
 
     def recommend(
         self,
@@ -48,6 +59,8 @@ class SubagentDiscoveryCandidatePolicyService:
                 deep=True,
             )
         actual_recommendation = rule_recommendation
+        applied_event_name: str | None = None
+        applied_policy_source: str | None = None
         if shadow_recommendation is not None and self._llm_enabled():
             actual_llm_recommendation = self._apply_shadow_recommendation(
                 ticket=ticket,
@@ -61,6 +74,25 @@ class SubagentDiscoveryCandidatePolicyService:
             )
             if actual_llm_recommendation is not None:
                 actual_recommendation = actual_llm_recommendation
+                applied_event_name = "subagent_discovery_candidate_llm_applied"
+                applied_policy_source = "llm"
+                self._record_shadow_recommendation(
+                    ticket=ticket,
+                    candidate_entries=entries,
+                    rule_recommendation=rule_recommendation,
+                    shadow_recommendation=shadow_recommendation,
+                    actual_recommendation=actual_recommendation,
+                )
+                self._record_policy_application(
+                    event_name=applied_event_name,
+                    decision_store_name="subagent_discovery_candidate_llm_decisions",
+                    policy_source=applied_policy_source,
+                    ticket=ticket,
+                    candidate_entries=entries,
+                    rule_recommendation=rule_recommendation,
+                    actual_recommendation=actual_recommendation,
+                    shadow_recommendation=shadow_recommendation,
+                )
                 return actual_recommendation, shadow_recommendation
         if shadow_recommendation is not None and self._hybrid_enabled():
             actual_hybrid_recommendation = self._apply_shadow_recommendation(
@@ -78,6 +110,34 @@ class SubagentDiscoveryCandidatePolicyService:
                 and actual_hybrid_recommendation.candidate_subagent_type != rule_recommendation.candidate_subagent_type
             ):
                 actual_recommendation = actual_hybrid_recommendation
+                applied_event_name = "subagent_discovery_candidate_hybrid_applied"
+                applied_policy_source = "hybrid"
+        self._record_shadow_recommendation(
+            ticket=ticket,
+            candidate_entries=entries,
+            rule_recommendation=rule_recommendation,
+            shadow_recommendation=shadow_recommendation,
+            actual_recommendation=actual_recommendation,
+        )
+        if (
+            shadow_recommendation is not None
+            and applied_event_name is not None
+            and applied_policy_source is not None
+        ):
+            self._record_policy_application(
+                event_name=applied_event_name,
+                decision_store_name=(
+                    "subagent_discovery_candidate_hybrid_decisions"
+                    if applied_policy_source == "hybrid"
+                    else "subagent_discovery_candidate_llm_decisions"
+                ),
+                policy_source=applied_policy_source,
+                ticket=ticket,
+                candidate_entries=entries,
+                rule_recommendation=rule_recommendation,
+                actual_recommendation=actual_recommendation,
+                shadow_recommendation=shadow_recommendation,
+            )
         return actual_recommendation, shadow_recommendation
 
     def _rule_recommendation(
@@ -147,6 +207,28 @@ class SubagentDiscoveryCandidatePolicyService:
             return None, None
         if self.llm_provider is None or not bool(getattr(self.llm_provider, "available", True)):
             return None, None
+        binding = dict(self.runtime_binding_getter() or {}) if callable(self.runtime_binding_getter) else {}
+        context = binding.get("context")
+        support = binding.get("support")
+        request_id = str(binding.get("request_id") or "").strip()
+        intent = str(binding.get("intent") or ticket.capability_gap.intent or "").strip()
+        phase = str(binding.get("phase") or ticket.capability_gap.stage or "discovery").strip() or "discovery"
+        agent = str(binding.get("agent") or self.service_name).strip() or self.service_name
+        runtime_managed = context is not None and support is not None and bool(request_id) and bool(intent)
+        if runtime_managed and not self._enabled_for_runtime_suggestion(binding=binding):
+            return None, None
+        if runtime_managed:
+            llm_decision = support.resolve_llm_execution(
+                context,
+                request_id=request_id,
+                agent=agent,
+                phase=phase,
+                strategy="subagent_discovery_candidate_shadow_policy",
+                provider=self.llm_provider,
+                reserve=True,
+            )
+            if not llm_decision.can_use_llm:
+                return None, None
         payload = {
             "intent": ticket.capability_gap.intent,
             "stage": ticket.capability_gap.stage,
@@ -173,8 +255,28 @@ class SubagentDiscoveryCandidatePolicyService:
                 ),
             )
         except LLMProviderError as exc:
+            if runtime_managed:
+                support.record_degradation(
+                    context,
+                    request_id=request_id,
+                    component="subagent_discovery_candidate_shadow_policy",
+                    reason=derive_llm_error_reason(exc),
+                    phase=phase,
+                    agent=agent,
+                    payload={"intent": intent, "stage": ticket.capability_gap.stage, "capability": ticket.capability_gap.capability},
+                )
             return None, f"candidate_shadow_policy_error={derive_llm_error_reason(exc)}"
         except Exception as exc:
+            if runtime_managed:
+                support.record_degradation(
+                    context,
+                    request_id=request_id,
+                    component="subagent_discovery_candidate_shadow_policy",
+                    reason=derive_llm_error_reason(exc),
+                    phase=phase,
+                    agent=agent,
+                    payload={"intent": intent, "stage": ticket.capability_gap.stage, "capability": ticket.capability_gap.capability},
+                )
             return None, f"candidate_shadow_policy_error={derive_llm_error_reason(exc)}"
         selected_entry = self._find_candidate_entry(candidate_entries, suggestion.candidate_subagent_type)
         if selected_entry is None:
@@ -193,6 +295,164 @@ class SubagentDiscoveryCandidatePolicyService:
             ),
             None,
         )
+
+    def _record_shadow_recommendation(
+        self,
+        *,
+        ticket: SubagentDiscoveryTicket,
+        candidate_entries: list[SubagentCatalogEntry],
+        rule_recommendation: SubagentDiscoveryCandidateRecommendation,
+        shadow_recommendation: SubagentDiscoveryCandidateRecommendation | None,
+        actual_recommendation: SubagentDiscoveryCandidateRecommendation,
+    ) -> None:
+        if shadow_recommendation is None:
+            return
+        binding = dict(self.runtime_binding_getter() or {}) if callable(self.runtime_binding_getter) else {}
+        context = binding.get("context")
+        support = binding.get("support")
+        request_id = str(binding.get("request_id") or "").strip()
+        intent = str(binding.get("intent") or ticket.capability_gap.intent or "").strip()
+        phase = str(binding.get("phase") or ticket.capability_gap.stage or "discovery").strip() or "discovery"
+        agent = str(binding.get("agent") or self.service_name).strip() or self.service_name
+        if context is None or support is None or not request_id or not intent:
+            return
+        payload = {
+            "event": "subagent_discovery_candidate_shadow_suggested",
+            "intent": ticket.capability_gap.intent,
+            "stage": ticket.capability_gap.stage,
+            "agent": agent,
+            "capability": ticket.capability_gap.capability,
+            "preferred_subagent_type": ticket.capability_gap.preferred_subagent_type,
+            "selected_candidate_subagent_type": shadow_recommendation.candidate_subagent_type,
+            "selected_protocol": shadow_recommendation.source_protocol,
+            "rule_candidate_subagent_type": rule_recommendation.candidate_subagent_type,
+            "rule_protocol": rule_recommendation.source_protocol,
+            "actual_candidate_subagent_type": actual_recommendation.candidate_subagent_type,
+            "actual_protocol": actual_recommendation.source_protocol,
+            "candidate_subagent_types": [
+                str(entry.subagent_type).strip()
+                for entry in candidate_entries
+                if str(entry.subagent_type or "").strip()
+            ],
+            "candidate_protocols": [
+                self._entry_protocol(entry)
+                for entry in candidate_entries
+            ],
+            "reason": shadow_recommendation.reason,
+            "confidence": shadow_recommendation.confidence,
+            "notes": list(shadow_recommendation.notes or []),
+            "candidate_match": (
+                shadow_recommendation.candidate_subagent_type
+                == actual_recommendation.candidate_subagent_type
+            ),
+        }
+        context.subagent_discovery_candidate_shadow_suggestions.append(dict(payload))
+        context.dynamic_trace.append(dict(payload))
+        if callable(self.emit_event):
+            self.emit_event(
+                event_type="subagent_discovery_candidate_shadow_suggested",
+                message=(
+                    f"Shadow discovery candidate policy evaluated capability "
+                    f"{ticket.capability_gap.capability}"
+                ),
+                payload=dict(payload),
+                phase=phase,
+                agent=agent,
+            )
+        else:
+            support.emit_event(
+                context,
+                request_id=request_id,
+                intent=intent,
+                event_type="subagent_discovery_candidate_shadow_suggested",
+                phase=phase,
+                agent=agent,
+                message=(
+                    f"Shadow discovery candidate policy evaluated capability "
+                    f"{ticket.capability_gap.capability}"
+                ),
+                payload=dict(payload),
+            )
+
+    def _record_policy_application(
+        self,
+        *,
+        event_name: str,
+        decision_store_name: str,
+        policy_source: str,
+        ticket: SubagentDiscoveryTicket,
+        candidate_entries: list[SubagentCatalogEntry],
+        rule_recommendation: SubagentDiscoveryCandidateRecommendation,
+        actual_recommendation: SubagentDiscoveryCandidateRecommendation,
+        shadow_recommendation: SubagentDiscoveryCandidateRecommendation,
+    ) -> None:
+        binding = dict(self.runtime_binding_getter() or {}) if callable(self.runtime_binding_getter) else {}
+        context = binding.get("context")
+        support = binding.get("support")
+        request_id = str(binding.get("request_id") or "").strip()
+        intent = str(binding.get("intent") or ticket.capability_gap.intent or "").strip()
+        phase = str(binding.get("phase") or ticket.capability_gap.stage or "discovery").strip() or "discovery"
+        agent = str(binding.get("agent") or self.service_name).strip() or self.service_name
+        if context is None or support is None or not request_id or not intent:
+            return
+        payload = {
+            "event": event_name,
+            "intent": ticket.capability_gap.intent,
+            "stage": ticket.capability_gap.stage,
+            "agent": agent,
+            "capability": ticket.capability_gap.capability,
+            "preferred_subagent_type": ticket.capability_gap.preferred_subagent_type,
+            "policy_source": policy_source,
+            "selected_candidate_subagent_type": shadow_recommendation.candidate_subagent_type,
+            "selected_protocol": shadow_recommendation.source_protocol,
+            "rule_candidate_subagent_type": rule_recommendation.candidate_subagent_type,
+            "rule_protocol": rule_recommendation.source_protocol,
+            "applied_candidate_subagent_type": actual_recommendation.candidate_subagent_type,
+            "applied_protocol": actual_recommendation.source_protocol,
+            "override_rule_candidate": (
+                actual_recommendation.candidate_subagent_type
+                != rule_recommendation.candidate_subagent_type
+            ),
+            "candidate_subagent_types": [
+                str(entry.subagent_type).strip()
+                for entry in candidate_entries
+                if str(entry.subagent_type or "").strip()
+            ],
+            "candidate_protocols": [
+                self._entry_protocol(entry)
+                for entry in candidate_entries
+            ],
+            "reason": shadow_recommendation.reason,
+            "confidence": shadow_recommendation.confidence,
+            "notes": list(shadow_recommendation.notes or []),
+        }
+        getattr(context, decision_store_name).append(dict(payload))
+        context.dynamic_trace.append(dict(payload))
+        if callable(self.emit_event):
+            self.emit_event(
+                event_type=event_name,
+                message=(
+                    f"{event_name} ranked discovery candidates for capability "
+                    f"{ticket.capability_gap.capability}"
+                ),
+                payload=dict(payload),
+                phase=phase,
+                agent=agent,
+            )
+        else:
+            support.emit_event(
+                context,
+                request_id=request_id,
+                intent=intent,
+                event_type=event_name,
+                phase=phase,
+                agent=agent,
+                message=(
+                    f"{event_name} ranked discovery candidates for capability "
+                    f"{ticket.capability_gap.capability}"
+                ),
+                payload=dict(payload),
+            )
 
     def _apply_shadow_recommendation(
         self,
@@ -232,6 +492,18 @@ class SubagentDiscoveryCandidatePolicyService:
             or getattr(self.settings, "subagent_discovery_llm_policy_enabled", False)
             or getattr(self.settings, "subagent_discovery_hybrid_llm_enabled", False)
         )
+
+    def _enabled_for_runtime_suggestion(self, *, binding: dict[str, Any]) -> bool:
+        execution_policy = binding.get("execution_policy")
+        max_llm_calls_per_turn = int(
+            getattr(
+                execution_policy,
+                "max_llm_calls_per_turn",
+                getattr(self.settings, "max_llm_calls_per_turn", 1),
+            )
+            or 1
+        )
+        return max_llm_calls_per_turn > 1
 
     def _llm_enabled(self) -> bool:
         return bool(getattr(self.settings, "subagent_discovery_llm_policy_enabled", False))

@@ -20,6 +20,7 @@ class SubagentDiscoveryApprovalPolicyRule:
     allowed_protocols: tuple[str, ...] = ()
     allowed_side_effect_levels: tuple[str, ...] = DEFAULT_ALLOWED_SIDE_EFFECT_LEVELS
     max_candidate_count: int | None = 1
+    allow_recommended_candidate_override: bool = False
     require_recommended_candidate: bool = True
     require_runtime_registration_template: bool = True
     notes: tuple[str, ...] = ()
@@ -65,21 +66,22 @@ class SubagentDiscoveryApprovalPolicyService:
             effective_rule.max_candidate_count is not None
             and len(candidate_entries) > int(effective_rule.max_candidate_count)
         ):
+            if not bool(effective_rule.allow_recommended_candidate_override):
+                return self._pending_decision(
+                    reason=f"pending_manual_review_discovery_candidate_count>{int(effective_rule.max_candidate_count)}",
+                    rule_id=rule_id,
+                    notes=effective_rule.notes,
+                )
+        candidate_entry = self._recommended_entry(ticket=ticket)
+        if candidate_entry is None:
             return self._pending_decision(
-                reason=f"pending_manual_review_discovery_candidate_count>{int(effective_rule.max_candidate_count)}",
+                reason="pending_manual_review_discovery_recommended_candidate_missing",
                 rule_id=rule_id,
                 notes=effective_rule.notes,
             )
         if effective_rule.require_recommended_candidate and recommendation is None:
             return self._pending_decision(
                 reason="pending_manual_review_discovery_missing_recommendation",
-                rule_id=rule_id,
-                notes=effective_rule.notes,
-            )
-        candidate_entry = self._recommended_entry(ticket=ticket)
-        if candidate_entry is None:
-            return self._pending_decision(
-                reason="pending_manual_review_discovery_recommended_candidate_missing",
                 rule_id=rule_id,
                 notes=effective_rule.notes,
             )
@@ -121,6 +123,15 @@ class SubagentDiscoveryApprovalPolicyService:
             "notes": [
                 f"discovery_approval_rule={rule_id}",
                 f"approved_candidate={candidate_entry.subagent_type}",
+                *(
+                    [f"recommended_candidate_override_count={len(candidate_entries)}"]
+                    if (
+                        effective_rule.allow_recommended_candidate_override
+                        and effective_rule.max_candidate_count is not None
+                        and len(candidate_entries) > int(effective_rule.max_candidate_count)
+                    )
+                    else []
+                ),
                 *( [f"approved_protocol={selected_protocol}"] if selected_protocol else [] ),
                 *list(effective_rule.notes or ()),
             ],
@@ -261,6 +272,9 @@ class SubagentDiscoveryApprovalPolicyService:
                 int(row.get("max_candidate_count"))
                 if row.get("max_candidate_count") is not None
                 else None
+            ),
+            allow_recommended_candidate_override=bool(
+                row.get("allow_recommended_candidate_override", False)
             ),
             require_recommended_candidate=bool(row.get("require_recommended_candidate", True)),
             require_runtime_registration_template=bool(row.get("require_runtime_registration_template", True)),

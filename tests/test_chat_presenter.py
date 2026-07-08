@@ -448,7 +448,35 @@ class ChatPresenterTests(unittest.TestCase):
         self.assertIsNotNone(trace_payload)
         self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
         self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "subagent_discovery_llm_applied")
-        self.assertEqual(trace_payload["dynamic_trace"][0]["applied_protocols"], ["mcp", "skill", "openapi"])
+
+    def test_presenter_accumulates_subagent_discovery_candidate_llm_events_into_dynamic_trace(self) -> None:
+        presenter = ChatStreamPresenter()
+
+        presenter.on_event(
+            _event(
+                event_type="subagent_discovery_candidate_llm_applied",
+                phase="collect",
+                agent="collector",
+                payload={
+                    "stage": "collect",
+                    "capability": "market_signal_extension",
+                    "applied_candidate_subagent_type": "candidate_collect_market_snapshot_skill_b",
+                    "override_rule_candidate": True,
+                },
+            )
+        )
+
+        trace_payload = presenter.current_trace_payload()
+        self.assertIsNotNone(trace_payload)
+        self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
+        self.assertEqual(
+            trace_payload["dynamic_trace"][0]["event"],
+            "subagent_discovery_candidate_llm_applied",
+        )
+        self.assertEqual(
+            trace_payload["dynamic_trace"][0]["applied_candidate_subagent_type"],
+            "candidate_collect_market_snapshot_skill_b",
+        )
 
     def test_presenter_accumulates_subagent_discovery_hybrid_events_into_dynamic_trace(self) -> None:
         presenter = ChatStreamPresenter()

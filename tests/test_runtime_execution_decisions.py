@@ -414,6 +414,112 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
         finally:
             temp_dir.cleanup()
 
+    def test_debug_payload_includes_subagent_discovery_candidate_shadow_suggestions(self) -> None:
+        temp_dir, _settings, context, request = _build_runtime()
+        try:
+            context.subagent_discovery_candidate_shadow_suggestions.append(
+                {
+                    "event": "subagent_discovery_candidate_shadow_suggested",
+                    "stage": "collect",
+                    "capability": "market_signal_extension",
+                    "selected_candidate_subagent_type": "candidate_collect_market_snapshot_skill_b",
+                }
+            )
+
+            payload = OrchestratorDebugSupport().build_debug_payload(
+                context=context,
+                request=request,
+                plan=ActionPlan(intent="stock_check", actions=[]),
+                plan_intent="stock_check",
+                retrieval_summary=None,
+            )
+
+            self.assertEqual(
+                payload["subagent_discovery_candidate_shadow_suggestions"],
+                [
+                    {
+                        "event": "subagent_discovery_candidate_shadow_suggested",
+                        "stage": "collect",
+                        "capability": "market_signal_extension",
+                        "selected_candidate_subagent_type": "candidate_collect_market_snapshot_skill_b",
+                    }
+                ],
+            )
+        finally:
+            temp_dir.cleanup()
+
+    def test_debug_payload_includes_subagent_discovery_candidate_llm_decisions(self) -> None:
+        temp_dir, _settings, context, request = _build_runtime()
+        try:
+            context.subagent_discovery_candidate_llm_decisions.append(
+                {
+                    "event": "subagent_discovery_candidate_llm_applied",
+                    "stage": "collect",
+                    "capability": "market_signal_extension",
+                    "applied_candidate_subagent_type": "candidate_collect_market_snapshot_skill_b",
+                    "override_rule_candidate": True,
+                }
+            )
+
+            payload = OrchestratorDebugSupport().build_debug_payload(
+                context=context,
+                request=request,
+                plan=ActionPlan(intent="stock_check", actions=[]),
+                plan_intent="stock_check",
+                retrieval_summary=None,
+            )
+
+            self.assertEqual(
+                payload["subagent_discovery_candidate_llm_decisions"],
+                [
+                    {
+                        "event": "subagent_discovery_candidate_llm_applied",
+                        "stage": "collect",
+                        "capability": "market_signal_extension",
+                        "applied_candidate_subagent_type": "candidate_collect_market_snapshot_skill_b",
+                        "override_rule_candidate": True,
+                    }
+                ],
+            )
+        finally:
+            temp_dir.cleanup()
+
+    def test_debug_payload_includes_subagent_discovery_candidate_hybrid_decisions(self) -> None:
+        temp_dir, _settings, context, request = _build_runtime()
+        try:
+            context.subagent_discovery_candidate_hybrid_decisions.append(
+                {
+                    "event": "subagent_discovery_candidate_hybrid_applied",
+                    "stage": "collect",
+                    "capability": "market_signal_extension",
+                    "applied_candidate_subagent_type": "candidate_collect_market_snapshot_skill_b",
+                    "override_rule_candidate": True,
+                }
+            )
+
+            payload = OrchestratorDebugSupport().build_debug_payload(
+                context=context,
+                request=request,
+                plan=ActionPlan(intent="stock_check", actions=[]),
+                plan_intent="stock_check",
+                retrieval_summary=None,
+            )
+
+            self.assertEqual(
+                payload["subagent_discovery_candidate_hybrid_decisions"],
+                [
+                    {
+                        "event": "subagent_discovery_candidate_hybrid_applied",
+                        "stage": "collect",
+                        "capability": "market_signal_extension",
+                        "applied_candidate_subagent_type": "candidate_collect_market_snapshot_skill_b",
+                        "override_rule_candidate": True,
+                    }
+                ],
+            )
+        finally:
+            temp_dir.cleanup()
+
     def test_debug_payload_includes_subagent_phase_hybrid_decisions(self) -> None:
         temp_dir, _settings, context, request = _build_runtime()
         try:

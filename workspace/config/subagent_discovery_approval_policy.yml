@@ -11,6 +11,7 @@ rules:
   - rule_id: collect_skill_preview_auto_approve
     stage: collect
     auto_approve: true
+    allow_recommended_candidate_override: true
     allowed_protocols:
       - skill
     notes:
@@ -18,6 +19,7 @@ rules:
   - rule_id: report_skill_preview_auto_approve
     stage: report
     auto_approve: true
+    allow_recommended_candidate_override: true
     allowed_protocols:
       - skill
     notes:
@@ -25,6 +27,7 @@ rules:
   - rule_id: retrieve_read_only_preview_auto_approve
     stage: retrieve
     auto_approve: true
+    allow_recommended_candidate_override: true
     allowed_protocols:
       - mcp
       - openapi
@@ -34,6 +37,7 @@ rules:
   - rule_id: review_read_only_preview_auto_approve
     stage: review
     auto_approve: true
+    allow_recommended_candidate_override: true
     allowed_protocols:
       - mcp
       - openapi

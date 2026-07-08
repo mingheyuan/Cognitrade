@@ -169,6 +169,91 @@ class SubagentDiscoveryActivationPolicyTests(unittest.TestCase):
             self.assertFalse(decision["activate"])
             self.assertIn("requires_approved_ticket", str(decision["reason"]))
 
+    def test_policy_can_auto_activate_recommended_candidate_when_override_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.subagent_discovery_activation_policy_path.write_text(
+                "\n".join(
+                    [
+                        "defaults:",
+                        "  auto_activate: true",
+                        "  require_approved_ticket: true",
+                        "  allow_recommended_candidate_override: true",
+                        "  require_recommended_candidate: true",
+                        "  require_single_runtime_registration_template: true",
+                        "  max_candidate_count: 1",
+                        "  allowed_side_effect_levels: [none, read_only]",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            service = SubagentDiscoveryActivationPolicyService(settings=settings)
+            ticket = SubagentDiscoveryTicket(
+                ticket_id="01DISC",
+                status="approved",
+                capability_gap=SubagentCapabilityGap(
+                    intent="review_thesis",
+                    stage="review",
+                    capability="review_signal_extension",
+                    preferred_subagent_type="candidate_review_extension__mcp",
+                    reason="missing review extension capability",
+                ),
+                tool_discovery_request=SubagentToolDiscoveryRequest(
+                    intent="review_thesis",
+                    stage="review",
+                    capability="review_signal_extension",
+                    search_query="review_thesis review review_signal_extension",
+                    preferred_protocols=["mcp", "openapi"],
+                    reason="missing review extension capability",
+                ),
+                candidate_catalog_entries=[
+                    SubagentCatalogEntry(
+                        subagent_type="candidate_review_extension__mcp",
+                        capabilities=["review_signal_extension"],
+                        stage="review",
+                        side_effect_level="read_only",
+                        tags=["approved_discovery_candidate", "mcp_source:akshare_mcp"],
+                        suitable_intents=["review_thesis"],
+                        runtime_registration_templates=[
+                            {
+                                "template_id": "mcp:akshare_mcp:review_lookup",
+                                "registration_type": "mcp_tool_runner",
+                            }
+                        ],
+                    ),
+                    SubagentCatalogEntry(
+                        subagent_type="candidate_review_extension__openapi",
+                        capabilities=["review_signal_extension"],
+                        stage="review",
+                        side_effect_level="read_only",
+                        tags=["approved_discovery_candidate", "openapi_source:review_api"],
+                        suitable_intents=["review_thesis"],
+                        runtime_registration_templates=[
+                            {
+                                "template_id": "openapi:getReviewSignal",
+                                "registration_type": "openapi_http_runner",
+                            }
+                        ],
+                    ),
+                ],
+                candidate_recommendation=SubagentDiscoveryCandidateRecommendation(
+                    candidate_subagent_type="candidate_review_extension__mcp",
+                    source_protocol="mcp",
+                    reason="prefer mcp",
+                    policy_source="rule",
+                    confidence=1.0,
+                ),
+            )
+
+            decision = service.evaluate(ticket=ticket)
+
+            self.assertTrue(decision["activate"])
+            self.assertEqual(decision["candidate_subagent_type"], "candidate_review_extension__mcp")
+            self.assertEqual(decision["registration_template_id"], "mcp:akshare_mcp:review_lookup")
+            self.assertIn("recommended_candidate_override_count=2", decision["notes"])
+
 
 if __name__ == "__main__":
     unittest.main()
