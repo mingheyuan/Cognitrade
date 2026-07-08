@@ -28,6 +28,9 @@ class CliCommandRuntime:
         activated_by: str | None = None,
         delegate_subagent_type: str | None = None,
         candidate_subagent_type: str | None = None,
+        registration_type: str | None = None,
+        skill_name: str | None = None,
+        snapshot_type: str | None = None,
     ) -> object:
         if command == "run":
             with self.orchestrator_cls(settings) as orchestrator:
@@ -50,6 +53,9 @@ class CliCommandRuntime:
             activated_by=activated_by,
             delegate_subagent_type=delegate_subagent_type,
             candidate_subagent_type=candidate_subagent_type,
+            registration_type=registration_type,
+            skill_name=skill_name,
+            snapshot_type=snapshot_type,
             orchestrator_cls=self.orchestrator_cls,
             run_checks_fn=self.run_checks_fn,
             build_status_fn=self.build_status_fn,
@@ -89,6 +95,9 @@ def execute_cli_command(
     activated_by: str | None = None,
     delegate_subagent_type: str | None = None,
     candidate_subagent_type: str | None = None,
+    registration_type: str | None = None,
+    skill_name: str | None = None,
+    snapshot_type: str | None = None,
     runtime: CliCommandRuntime,
 ) -> object:
     return runtime.execute(
@@ -103,4 +112,7 @@ def execute_cli_command(
         activated_by=activated_by,
         delegate_subagent_type=delegate_subagent_type,
         candidate_subagent_type=candidate_subagent_type,
+        registration_type=registration_type,
+        skill_name=skill_name,
+        snapshot_type=snapshot_type,
     )

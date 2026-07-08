@@ -105,10 +105,13 @@ class _DispatchOrchestratorStub:
         self,
         ticket_id: str,
         *,
-        delegate_subagent_type: str,
+        delegate_subagent_type: str | None = None,
         candidate_subagent_type: str | None = None,
         activated_by: str = "manual_cli_activation",
         reason: str | None = None,
+        registration_type: str | None = None,
+        skill_name: str | None = None,
+        snapshot_type: str | None = None,
     ) -> dict:
         return {
             "ticket_id": ticket_id,
@@ -120,6 +123,15 @@ class _DispatchOrchestratorStub:
                     {
                         "subagent_type": candidate_subagent_type or "candidate_screening_strategy",
                         "delegate_subagent_type": delegate_subagent_type,
+                        "runtime_registration": (
+                            {
+                                "registration_type": registration_type,
+                                "skill_name": skill_name,
+                                "snapshot_type": snapshot_type,
+                            }
+                            if registration_type
+                            else None
+                        ),
                         "activated_by": activated_by,
                         "activation_reason": reason or "",
                         "status": "active",
@@ -289,11 +301,27 @@ class CliCommandDispatchTests(unittest.TestCase):
             candidate_subagent_type="candidate_screening_strategy",
             orchestrator_cls=_DispatchOrchestratorStub,
         )
+        runtime_activated = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            activated_by="ops_user",
+            status_filter="activate runtime skill",
+            candidate_subagent_type="candidate_screening_strategy",
+            registration_type="snapshot_skill_runner",
+            skill_name="market_snapshot_skill",
+            snapshot_type="market",
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
 
         self.assertEqual(discoveries[0]["ticket_id"], "01DISC")
         self.assertEqual(detail["ticket_id"], "01DISC")
         self.assertEqual(reviewed["reviewer"], "reviewer_2")
         self.assertEqual(activated["result"]["activated_entries"][0]["delegate_subagent_type"], "stock_snapshot_collector")
+        self.assertEqual(
+            runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["registration_type"],
+            "snapshot_skill_runner",
+        )
 
     def test_execute_cli_payload_command_dispatches_run_id_commands(self) -> None:
         replayed = execute_cli_payload_command(

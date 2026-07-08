@@ -32,6 +32,9 @@ def build_cli_command_payload(
     activated_by: str | None = None,
     delegate_subagent_type: str | None = None,
     candidate_subagent_type: str | None = None,
+    registration_type: str | None = None,
+    skill_name: str | None = None,
+    snapshot_type: str | None = None,
     action_node_id: str | None = None,
     dag_id: str | None = None,
     subagent_node_id: str | None = None,
@@ -107,5 +110,8 @@ def build_cli_command_payload(
             "intent": str(activated_by or "").strip() or "manual_cli_activation",
             "status_filter": reason,
             "subagent_node_id": str(candidate_subagent_type or subagent_node_id or "").strip(),
+            "registration_type": str(registration_type or "").strip(),
+            "skill_name": str(skill_name or "").strip(),
+            "snapshot_type": str(snapshot_type or "").strip(),
         }
     raise ValueError(f"unsupported cli command payload: {command}")

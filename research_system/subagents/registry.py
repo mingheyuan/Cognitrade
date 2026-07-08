@@ -39,12 +39,14 @@ class SubagentRegistry:
         *,
         catalog_overlay_provider: Callable[[], Iterable[SubagentCatalogEntry]] | None = None,
         activation_provider: Callable[[], Iterable[SubagentActivationEntry]] | None = None,
+        activation_factory_provider: Callable[[SubagentActivationEntry], SupportsSubagent | None] | None = None,
     ) -> None:
         self._subagents: dict[str, SupportsSubagent] = {}
         self._definitions: dict[str, SubagentDefinition] = {}
         self._observers: list[Callable[..., None]] = []
         self._catalog_overlay_provider = catalog_overlay_provider
         self._activation_provider = activation_provider
+        self._activation_factory_provider = activation_factory_provider
         for subagent in subagents or []:
             self.register(subagent)
 
@@ -62,7 +64,13 @@ class SubagentRegistry:
             activation_entry = self._activation_entry(subagent_type)
             if activation_entry is None:
                 raise KeyError(f"unknown subagent: {subagent_type}") from exc
-            delegate = self.get(activation_entry.delegate_subagent_type)
+            runtime_subagent = self._activation_subagent(activation_entry)
+            if runtime_subagent is not None:
+                return runtime_subagent
+            delegate_subagent_type = str(activation_entry.delegate_subagent_type or "").strip()
+            if not delegate_subagent_type:
+                raise KeyError(f"unknown activated runtime subagent: {subagent_type}") from exc
+            delegate = self.get(delegate_subagent_type)
             definition = self.definition(subagent_type)
             return _ActivatedSubagentProxy(
                 subagent_type=subagent_type,
@@ -77,6 +85,9 @@ class SubagentRegistry:
             activation_entry = self._activation_entry(subagent_type)
             if activation_entry is None:
                 raise KeyError(f"unknown subagent definition: {subagent_type}") from exc
+            runtime_subagent = self._activation_subagent(activation_entry)
+            if runtime_subagent is not None:
+                return build_subagent_definition(runtime_subagent)
             return self._activation_definition(activation_entry)
 
     def definitions(self) -> list[SubagentDefinition]:
@@ -84,6 +95,10 @@ class SubagentRegistry:
         for activation_entry in self._activation_entries():
             alias_type = str(activation_entry.subagent_type).strip()
             if not alias_type or alias_type in self._definitions:
+                continue
+            runtime_subagent = self._activation_subagent(activation_entry)
+            if runtime_subagent is not None:
+                definitions.append(build_subagent_definition(runtime_subagent))
                 continue
             definitions.append(self._activation_definition(activation_entry))
         definitions.sort(key=lambda item: item.subagent_type)
@@ -159,6 +174,8 @@ class SubagentRegistry:
 
     def _activation_definition(self, activation_entry: SubagentActivationEntry) -> SubagentDefinition:
         delegate_definition = self._definitions.get(str(activation_entry.delegate_subagent_type).strip())
+        if delegate_definition is None and not str(activation_entry.delegate_subagent_type or "").strip():
+            raise KeyError(f"unknown activated runtime subagent definition: {activation_entry.subagent_type}")
         if delegate_definition is None:
             raise KeyError(f"unknown delegate subagent definition: {activation_entry.delegate_subagent_type}")
         catalog_entry = activation_entry.catalog_entry
@@ -178,6 +195,18 @@ class SubagentRegistry:
                 tags=tuple(item for item in catalog_entry.tags if str(item).strip()),
             ),
         )
+
+    def _activation_subagent(self, activation_entry: SubagentActivationEntry) -> SupportsSubagent | None:
+        provider = self._activation_factory_provider
+        if not callable(provider):
+            return None
+        try:
+            subagent = provider(activation_entry)
+        except Exception:
+            return None
+        if subagent is None:
+            return None
+        return subagent
 
     def notify_started(self, *, invocation: SubagentInvocation) -> None:
         self._notify(

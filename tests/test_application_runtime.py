@@ -56,6 +56,22 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertEqual(discovery_args.ticket_id, "01DISC")
         self.assertEqual(activate_args.delegate_subagent_type, "stock_snapshot_collector")
         self.assertEqual(activate_args.candidate_subagent_type, "candidate_screening_strategy")
+        runtime_activate_args = parser.parse_args(
+            [
+                "activate-subagent-discovery",
+                "01DISC",
+                "--registration-type",
+                "snapshot_skill_runner",
+                "--skill-name",
+                "market_snapshot_skill",
+                "--snapshot-type",
+                "market",
+            ]
+        )
+        self.assertIsNone(runtime_activate_args.delegate_subagent_type)
+        self.assertEqual(runtime_activate_args.registration_type, "snapshot_skill_runner")
+        self.assertEqual(runtime_activate_args.skill_name, "market_snapshot_skill")
+        self.assertEqual(runtime_activate_args.snapshot_type, "market")
 
     def test_execute_app_main_command_routes_query_from_thread_and_node_arguments(self) -> None:
         calls: list[dict[str, object]] = []
@@ -101,6 +117,21 @@ class ApplicationRuntimeTests(unittest.TestCase):
             candidate_subagent_type="candidate_screening_strategy",
             activated_by="ops_user",
             reason="delegate approved",
+            registration_type=None,
+            skill_name=None,
+            snapshot_type=None,
+            as_json=False,
+        )
+        runtime_activate_discovery_args = argparse.Namespace(
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            delegate_subagent_type=None,
+            candidate_subagent_type="candidate_screening_strategy",
+            activated_by="ops_user",
+            reason="activate runtime skill",
+            registration_type="snapshot_skill_runner",
+            skill_name="market_snapshot_skill",
+            snapshot_type="market",
             as_json=False,
         )
 
@@ -174,6 +205,20 @@ class ApplicationRuntimeTests(unittest.TestCase):
             ),
             0,
         )
+        self.assertEqual(
+            application_execute_app_main_command(
+                settings,
+                runtime_activate_discovery_args,
+                build_chat_entry_runtime_fn=None,
+                run_chat_entry_fn=None,
+                run_chat_tui_fn=None,
+                run_chat_fallback_fn=None,
+                handle_chat_line_fn=None,
+                execute_cli_command_fn=fake_execute_cli_command_fn,
+                print_payload_fn=lambda payload, as_json: 0,
+            ),
+            0,
+        )
 
         self.assertEqual(calls[0]["command"], "run-thread")
         self.assertEqual(calls[0]["query"], "thread-child")
@@ -189,6 +234,10 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertEqual(calls[4]["command"], "activate-subagent-discovery")
         self.assertEqual(calls[4]["delegate_subagent_type"], "stock_snapshot_collector")
         self.assertEqual(calls[4]["candidate_subagent_type"], "candidate_screening_strategy")
+        self.assertEqual(calls[5]["command"], "activate-subagent-discovery")
+        self.assertEqual(calls[5]["registration_type"], "snapshot_skill_runner")
+        self.assertEqual(calls[5]["skill_name"], "market_snapshot_skill")
+        self.assertEqual(calls[5]["snapshot_type"], "market")
 
 
 if __name__ == "__main__":

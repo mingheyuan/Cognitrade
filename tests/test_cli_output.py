@@ -149,6 +149,9 @@ class _AppOrchestratorStub:
         candidate_subagent_type: str | None = None,
         activated_by: str = "manual_cli_activation",
         reason: str | None = None,
+        registration_type: str | None = None,
+        skill_name: str | None = None,
+        snapshot_type: str | None = None,
     ) -> dict:
         return {
             "ticket_id": ticket_id,
@@ -160,6 +163,15 @@ class _AppOrchestratorStub:
                     {
                         "subagent_type": candidate_subagent_type or "candidate_screening_strategy",
                         "delegate_subagent_type": delegate_subagent_type,
+                        "runtime_registration": (
+                            {
+                                "registration_type": registration_type,
+                                "skill_name": skill_name,
+                                "snapshot_type": snapshot_type,
+                            }
+                            if registration_type
+                            else None
+                        ),
                         "status": "active",
                         "activated_by": activated_by,
                         "activation_reason": reason or "",
@@ -437,6 +449,17 @@ class CliOutputTests(unittest.TestCase):
                 status_filter="delegate approved",
                 candidate_subagent_type="candidate_screening_strategy",
             )
+            runtime_activated = _execute_cli_command(
+                Settings.from_env(Path(".")),
+                command="activate-subagent-discovery",
+                ticket_id="01DISC",
+                activated_by="ops_user",
+                status_filter="activate runtime skill",
+                candidate_subagent_type="candidate_screening_strategy",
+                registration_type="snapshot_skill_runner",
+                skill_name="market_snapshot_skill",
+                snapshot_type="market",
+            )
 
         self.assertEqual(rows[0]["ticket_id"], "01DISC")
         self.assertEqual(detail["ticket_id"], "01DISC")
@@ -444,6 +467,10 @@ class CliOutputTests(unittest.TestCase):
         self.assertEqual(
             activated["result"]["activated_entries"][0]["delegate_subagent_type"],
             "stock_snapshot_collector",
+        )
+        self.assertEqual(
+            runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["skill_name"],
+            "market_snapshot_skill",
         )
 
     def test_render_tui_output_uses_ascii_sections(self) -> None:
@@ -971,6 +998,41 @@ class CliOutputTests(unittest.TestCase):
                 "notes": ["approved candidate available"],
             }
         )
+        runtime_detail_output = self._capture_payload_text(
+            {
+                "ticket_id": "01DISC",
+                "status": "approved",
+                "stored_status": "approved",
+                "capability_gap": {
+                    "intent": "stock_screen",
+                    "stage": "collect",
+                    "capability": "screening_strategy",
+                    "preferred_subagent_type": "candidate_screening_strategy",
+                    "requires_llm": False,
+                    "reason": "missing capability",
+                },
+                "tool_discovery_request": {
+                    "search_query": "screening strategy resolver",
+                    "preferred_protocols": ["mcp"],
+                    "reason": "discover resolver",
+                },
+                "candidate_catalog_entries": [],
+                "activated_entries": [
+                    {
+                        "subagent_type": "candidate_screening_strategy",
+                        "delegate_subagent_type": None,
+                        "runtime_registration": {
+                            "registration_type": "snapshot_skill_runner",
+                            "skill_name": "market_snapshot_skill",
+                            "snapshot_type": "market",
+                        },
+                        "status": "active",
+                        "activated_by": "ops_user",
+                    }
+                ],
+                "notes": ["approved candidate available"],
+            }
+        )
 
         self.assertIn("01DISC  [approved]", rows_output)
         self.assertIn("capability=screening_strategy", rows_output)
@@ -979,6 +1041,7 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("candidate_catalog_entries:", detail_output)
         self.assertIn("activated_entries:", detail_output)
         self.assertIn("candidate_screening_strategy -> stock_snapshot_collector", detail_output)
+        self.assertIn("runtime:snapshot_skill_runner skill=market_snapshot_skill snapshot=market", runtime_detail_output)
 
 
 if __name__ == "__main__":

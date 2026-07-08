@@ -247,10 +247,13 @@ class ResearchOrchestrator:
         self,
         ticket_id: str,
         *,
-        delegate_subagent_type: str,
+        delegate_subagent_type: str | None = None,
         candidate_subagent_type: str | None = None,
         activated_by: str = "manual_cli_activation",
         reason: str | None = None,
+        registration_type: str | None = None,
+        skill_name: str | None = None,
+        snapshot_type: str | None = None,
     ) -> dict:
         return self._admin().activate_subagent_discovery_request(
             ticket_id,
@@ -258,6 +261,9 @@ class ResearchOrchestrator:
             candidate_subagent_type=candidate_subagent_type,
             activated_by=activated_by,
             reason=reason,
+            registration_type=registration_type,
+            skill_name=skill_name,
+            snapshot_type=snapshot_type,
         )
 
     def show_proposal(self, proposal_id: str) -> dict:

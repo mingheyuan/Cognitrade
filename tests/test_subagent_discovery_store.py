@@ -4,12 +4,17 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from research_system.runtime.orchestration.subagent_discovery_admin_support import (
     OrchestratorSubagentDiscoveryAdminSupport,
 )
 from research_system.runtime.orchestration.subagent_discovery_store import SubagentDiscoveryStore
-from research_system.schemas.subagents import SubagentCapabilityGap, SubagentToolDiscoveryRequest
+from research_system.schemas.subagents import (
+    SubagentCapabilityGap,
+    SubagentCatalogEntry,
+    SubagentToolDiscoveryRequest,
+)
 
 
 class SubagentDiscoveryStoreTests(unittest.TestCase):
@@ -116,6 +121,76 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
             self.assertEqual(len(activated_aliases), 1)
             self.assertEqual(activated_aliases[0].subagent_type, "candidate_retrieve_news_sentiment_enrichment")
             self.assertIn("activated_runtime_alias", activated_aliases[0].catalog_entry.tags)
+
+    def test_admin_support_can_activate_runtime_registered_skill_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                preferred_subagent_type="candidate_collect_market_signal_extension",
+                reason="missing market signal extension capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                search_query="stock_check collect market_signal_extension",
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_runtime": lambda self: SimpleNamespace(
+                        backend=SimpleNamespace(registry={"market_snapshot_skill": object()})
+                    ),
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                candidate_catalog_entries=[
+                    SubagentCatalogEntry(
+                        subagent_type="candidate_collect_market_signal_extension",
+                        summary="Approved discovery candidate for market signal extension.",
+                        capabilities=["market_signal_extension"],
+                        stage="collect",
+                        tags=["approved_discovery_candidate"],
+                        suitable_intents=["stock_check"],
+                        allow_parallel=True,
+                        max_concurrency=4,
+                    ).model_dump(mode="json")
+                ],
+            )
+
+            activation = admin.activate_request(
+                ticket.ticket_id,
+                registration_type="snapshot_skill_runner",
+                skill_name="market_snapshot_skill",
+                snapshot_type="market",
+                activated_by="tester",
+                reason="activate validated market skill",
+            )
+
+            self.assertIn("runtime alias", activation["message"])
+            self.assertEqual(len(activation["result"]["activated_entries"]), 1)
+            activated_entry = activation["result"]["activated_entries"][0]
+            self.assertIsNone(activated_entry["delegate_subagent_type"])
+            self.assertEqual(activated_entry["runtime_registration"]["registration_type"], "snapshot_skill_runner")
+            self.assertEqual(activated_entry["runtime_registration"]["skill_name"], "market_snapshot_skill")
+            self.assertEqual(store.approved_catalog_entries(), [])
+            activated_aliases = store.activated_alias_entries()
+            self.assertEqual(len(activated_aliases), 1)
+            self.assertEqual(
+                activated_aliases[0].runtime_registration.skill_name,
+                "market_snapshot_skill",
+            )
 
 
 if __name__ == "__main__":

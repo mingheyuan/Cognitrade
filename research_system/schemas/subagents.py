@@ -112,19 +112,37 @@ class SubagentDiscoveryTicket(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class SubagentRuntimeRegistration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    registration_type: Literal["snapshot_skill_runner"]
+    skill_name: str
+    snapshot_type: str
+    notes: list[str] = Field(default_factory=list)
+
+
 class SubagentActivationEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     activation_id: str = Field(default_factory=generate_ulid)
     ticket_id: str
     subagent_type: str
-    delegate_subagent_type: str
+    delegate_subagent_type: str | None = None
+    runtime_registration: SubagentRuntimeRegistration | None = None
     catalog_entry: SubagentCatalogEntry
     status: Literal["active", "inactive"] = "active"
     activated_by: str | None = None
     activation_reason: str | None = None
     activated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     notes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_activation_target(self) -> "SubagentActivationEntry":
+        has_delegate = bool(str(self.delegate_subagent_type or "").strip())
+        has_runtime_registration = self.runtime_registration is not None
+        if has_delegate == has_runtime_registration:
+            raise ValueError("SubagentActivationEntry requires exactly one of delegate_subagent_type or runtime_registration")
+        return self
 
 
 class SubagentPlanNode(BaseModel):

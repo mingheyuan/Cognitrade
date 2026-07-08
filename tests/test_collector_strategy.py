@@ -3,10 +3,20 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from research_system.agents.collector.service import CollectorService
 from research_system.runtime.history.session.session_history import SessionHistory
+from research_system.runtime.orchestration.subagent_discovery_admin_support import (
+    OrchestratorSubagentDiscoveryAdminSupport,
+)
+from research_system.runtime.orchestration.subagent_discovery_store import SubagentDiscoveryStore
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
+from research_system.schemas.subagents import (
+    SubagentCapabilityGap,
+    SubagentCatalogEntry,
+    SubagentToolDiscoveryRequest,
+)
 
 
 class _StrategySkillRuntimeStub:
@@ -204,6 +214,76 @@ class CollectorStrategyTests(unittest.TestCase):
         self.assertEqual(len(hybrid_rows), 1)
         self.assertEqual(hybrid_rows[0]["dag_id"], "collect_stock_check")
         self.assertEqual(hybrid_rows[0]["applied_plan_variant"], "baseline_snapshot_bundle")
+
+    def test_collector_registry_can_materialize_runtime_registered_snapshot_skill_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                preferred_subagent_type="candidate_collect_market_signal_extension",
+                reason="missing market signal extension capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                search_query="stock_check collect market_signal_extension",
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_runtime": lambda self: SimpleNamespace(
+                        backend=SimpleNamespace(registry={"market_snapshot_skill": object()})
+                    ),
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                candidate_catalog_entries=[
+                    SubagentCatalogEntry(
+                        subagent_type="candidate_collect_market_signal_extension",
+                        summary="Runtime-registered market signal extension.",
+                        capabilities=["market_signal_extension"],
+                        stage="collect",
+                        suitable_intents=["stock_check"],
+                        tags=["approved_discovery_candidate"],
+                    ).model_dump(mode="json")
+                ],
+            )
+            admin.activate_request(
+                ticket.ticket_id,
+                registration_type="snapshot_skill_runner",
+                skill_name="market_snapshot_skill",
+                snapshot_type="market",
+                activated_by="tester",
+                reason="activate runtime snapshot skill",
+            )
+
+            runtime = _StrategySkillRuntimeStub()
+            collector = CollectorService(runtime)
+            collector._runtime_binding = {"subagent_discovery_store": store}
+
+            entries = collector.registry.catalog_entries(stage="collect", capability="market_signal_extension")
+            self.assertEqual([entry.subagent_type for entry in entries], ["candidate_collect_market_signal_extension"])
+
+            definition = collector.registry.definition("candidate_collect_market_signal_extension")
+            self.assertEqual(definition.input_model.__name__, "ActivatedSnapshotSkillInputModel")
+            outputs = collector.registry.get("candidate_collect_market_signal_extension").run(
+                query="check extension",
+                symbol="000001",
+            )
+
+            self.assertEqual(outputs["snapshot_type"], "market")
+            self.assertEqual(runtime.calls, [("market_snapshot_skill", {"query": "check extension", "symbol": "000001"})])
 
 
 if __name__ == "__main__":

@@ -35,6 +35,7 @@ from research_system.services.methodologies.planning.planning_context import (
     normalize_planning_context_hints,
 )
 from research_system.subagents.collector import (
+    ActivatedSnapshotSkillSubagent,
     CandidateUniverseBuilderSubagent,
     CollectionStrategyResolverSubagent,
     QueryNormalizerSubagent,
@@ -46,6 +47,8 @@ from research_system.subagents.collector import (
     _extract_sector_query as extract_sector_query,
     _extract_symbol as extract_symbol,
 )
+from research_system.schemas.subagents import SubagentActivationEntry
+from research_system.subagents.base import SubagentCatalogMetadata, SubagentRuntimePolicy
 from research_system.subagents.registry import SubagentRegistry
 
 
@@ -74,6 +77,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             ],
             catalog_overlay_provider=self._approved_catalog_overlay_entries,
             activation_provider=self._activated_discovery_alias_entries,
+            activation_factory_provider=self._activated_discovery_runtime_subagent,
         )
         self.phase_controller = SubagentPhaseController(
             registry=self.registry,
@@ -98,6 +102,40 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         for subagent in self.registry._subagents.values():
             if hasattr(subagent, "skill_runtime"):
                 setattr(subagent, "skill_runtime", value)
+
+    def _activated_discovery_runtime_subagent(
+        self,
+        activation_entry: SubagentActivationEntry,
+    ):
+        runtime_registration = activation_entry.runtime_registration
+        if runtime_registration is None:
+            return None
+        if runtime_registration.registration_type != "snapshot_skill_runner":
+            return None
+        catalog_entry = activation_entry.catalog_entry
+        return ActivatedSnapshotSkillSubagent(
+            subagent_type=str(activation_entry.subagent_type).strip(),
+            snapshot_type=str(runtime_registration.snapshot_type).strip(),
+            skill_name=str(runtime_registration.skill_name).strip(),
+            skill_runtime=self.skill_runtime,
+            runtime_policy=SubagentRuntimePolicy(
+                requires_llm=bool(catalog_entry.requires_llm),
+                fallback_subagent_type=catalog_entry.fallback_subagent_type,
+                error_fallback_subagent_type=catalog_entry.error_fallback_subagent_type,
+                allow_parallel=bool(catalog_entry.allow_parallel),
+                max_concurrency=catalog_entry.max_concurrency,
+            ),
+            catalog_metadata=SubagentCatalogMetadata(
+                summary=catalog_entry.summary,
+                capabilities=tuple(item for item in catalog_entry.capabilities if str(item).strip()),
+                stage=catalog_entry.stage,
+                cost_class=catalog_entry.cost_class,
+                latency_class=catalog_entry.latency_class,
+                side_effect_level=catalog_entry.side_effect_level,
+                suitable_intents=tuple(item for item in catalog_entry.suitable_intents if str(item).strip()),
+                tags=tuple(item for item in catalog_entry.tags if str(item).strip()),
+            ),
+        )
 
     def run(self, *, intent: str, query: str, constraints: dict | None = None) -> dict:
         with self.local_run_scope(

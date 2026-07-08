@@ -140,6 +140,7 @@ class OrchestratorDependenciesTests(unittest.TestCase):
                 self.assertIsInstance(orchestrator.admin, OrchestratorAdminService)
                 self.assertIs(orchestrator.admin.proposal_store, orchestrator.proposal_store)
                 self.assertIs(orchestrator.admin.subagent_discovery_store, orchestrator.subagent_discovery_store)
+                self.assertIs(orchestrator.admin.skill_runtime, orchestrator.skill_runtime)
                 self.assertIs(orchestrator.admin.research_support, orchestrator.research_support)
                 self.assertIsInstance(orchestrator.admin.run_admin, OrchestratorRunAdminSupport)
                 self.assertIsInstance(orchestrator.admin.proposal_admin, OrchestratorProposalAdminSupport)

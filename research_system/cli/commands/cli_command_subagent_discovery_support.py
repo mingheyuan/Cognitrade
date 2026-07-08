@@ -69,6 +69,9 @@ def execute_activate_subagent_discovery_command(
     activated_by: str | None,
     status_filter: str | None,
     subagent_node_id: str | None,
+    registration_type: str | None,
+    skill_name: str | None,
+    snapshot_type: str | None,
     **_: object,
 ) -> object:
     payload = build_cli_command_payload(
@@ -78,12 +81,18 @@ def execute_activate_subagent_discovery_command(
         activated_by=activated_by or intent,
         reason=status_filter,
         candidate_subagent_type=subagent_node_id,
+        registration_type=registration_type,
+        skill_name=skill_name,
+        snapshot_type=snapshot_type,
     )
     with orchestrator_cls(settings) as orchestrator:
         return orchestrator.activate_subagent_discovery_request(
             payload["ticket_id"],
-            delegate_subagent_type=payload["query"],
+            delegate_subagent_type=payload["query"] or None,
             candidate_subagent_type=payload["subagent_node_id"] or None,
             activated_by=payload["intent"],
             reason=payload["status_filter"],
+            registration_type=payload["registration_type"] or None,
+            skill_name=payload["skill_name"] or None,
+            snapshot_type=payload["snapshot_type"] or None,
         )

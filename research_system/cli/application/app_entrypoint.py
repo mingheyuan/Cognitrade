@@ -66,6 +66,9 @@ def execute_cli_command(
     activated_by: str | None = None,
     delegate_subagent_type: str | None = None,
     candidate_subagent_type: str | None = None,
+    registration_type: str | None = None,
+    skill_name: str | None = None,
+    snapshot_type: str | None = None,
     orchestrator_cls=ResearchOrchestrator,
 ) -> object:
     runtime = build_cli_command_runtime(
@@ -88,6 +91,9 @@ def execute_cli_command(
         activated_by=activated_by,
         delegate_subagent_type=delegate_subagent_type,
         candidate_subagent_type=candidate_subagent_type,
+        registration_type=registration_type,
+        skill_name=skill_name,
+        snapshot_type=snapshot_type,
         runtime=runtime,
     )
 

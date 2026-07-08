@@ -35,6 +35,7 @@ class OrchestratorAssemblySupport:
             run_store=run_store,
             retention=retention,
             retriever=self.host.retriever,
+            skill_runtime=getattr(self.host, "skill_runtime", None),
             proposal_store=getattr(self.host, "proposal_store", None),
             subagent_discovery_store=getattr(self.host, "subagent_discovery_store", None),
             research_support=getattr(self.host, "research_support", None),

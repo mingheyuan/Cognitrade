@@ -103,6 +103,24 @@ class _ParallelSubagent:
         return {"result": value * 2, "thread_name": thread_name}
 
 
+class _RegisteredRuntimeSubagent:
+    input_model = _TypedInputModel
+    output_model = _TypedOutputModel
+    runtime_policy = SubagentRuntimePolicy()
+
+    def __init__(self, subagent_type: str) -> None:
+        self.subagent_type = subagent_type
+        self.catalog_metadata = SubagentCatalogMetadata(
+            summary="Runtime-registered typed alias.",
+            capabilities=("sector_signal_enrichment",),
+            stage="analysis",
+            tags=("runtime_registered",),
+        )
+
+    def run(self, *, value: int):
+        return {"doubled": value + 1}
+
+
 class SubagentRegistryTests(unittest.TestCase):
     def _build_runtime(self):
         temp_dir = tempfile.TemporaryDirectory()
@@ -400,6 +418,85 @@ class SubagentRegistryTests(unittest.TestCase):
                 )
 
                 self.assertEqual(outputs["doubled"], 10)
+                self.assertEqual(record.subagent_type, "candidate_analysis_sector_signal_enrichment")
+            finally:
+                temp_dir_runtime.cleanup()
+
+    def test_registry_can_activate_runtime_registered_alias_via_factory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="analysis",
+                capability="sector_signal_enrichment",
+                preferred_subagent_type="candidate_analysis_sector_signal_enrichment",
+                reason="missing sector signal enrichment capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="analysis",
+                capability="sector_signal_enrichment",
+                search_query="stock_check analysis sector_signal_enrichment",
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_runtime": lambda self: type(
+                        "_SkillRuntime",
+                        (),
+                        {"backend": type("_Backend", (), {"registry": {"analysis_skill": object()}})()},
+                    )(),
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            admin.review_request(ticket.ticket_id, decision="approve")
+            admin.activate_request(
+                ticket.ticket_id,
+                registration_type="snapshot_skill_runner",
+                skill_name="analysis_skill",
+                snapshot_type="analysis",
+                activated_by="tester",
+                reason="activate runtime registration",
+            )
+
+            registry = SubagentRegistry(
+                [_TypedSubagent()],
+                activation_provider=store.activated_alias_entries,
+                activation_factory_provider=lambda entry: _RegisteredRuntimeSubagent(entry.subagent_type)
+                if entry.runtime_registration is not None
+                else None,
+            )
+
+            entries = registry.catalog_entries(stage="analysis", capability="sector_signal_enrichment")
+            self.assertEqual([entry.subagent_type for entry in entries], ["candidate_analysis_sector_signal_enrichment"])
+
+            definition = registry.definition("candidate_analysis_sector_signal_enrichment")
+            self.assertIs(definition.input_model, _TypedInputModel)
+            self.assertIs(definition.output_model, _TypedOutputModel)
+
+            temp_dir_runtime, context, request_envelope = self._build_runtime()
+            try:
+                outputs, record = context.agent_control.invoke(
+                    registry=registry,
+                    invocation=SubagentInvocation(
+                        subagent_type="candidate_analysis_sector_signal_enrichment",
+                        objective="Run runtime-registered alias.",
+                        inputs={"value": 5},
+                    ),
+                    thread_id=context.thread.thread_id,
+                    turn_id=context.turn.turn_id,
+                    request_id=request_envelope.request_id,
+                    agent="tester",
+                    phase="test",
+                    execution_policy=context.execution_policy,
+                )
+
+                self.assertEqual(outputs["doubled"], 6)
                 self.assertEqual(record.subagent_type, "candidate_analysis_sector_signal_enrichment")
             finally:
                 temp_dir_runtime.cleanup()

@@ -206,6 +206,15 @@ class CliCommandPayloadsTests(unittest.TestCase):
             reason="delegate approved",
             candidate_subagent_type="candidate_collect_snapshot",
         )
+        runtime_activated = build_cli_command_payload(
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            activated_by="manual_cli_activation",
+            registration_type="snapshot_skill_runner",
+            skill_name="market_snapshot_skill",
+            snapshot_type="market",
+            candidate_subagent_type="candidate_collect_snapshot",
+        )
 
         self.assertEqual(
             listed,
@@ -234,6 +243,23 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "intent": "manual_chat_activation",
                 "status_filter": "delegate approved",
                 "subagent_node_id": "candidate_collect_snapshot",
+                "registration_type": "",
+                "skill_name": "",
+                "snapshot_type": "",
+            },
+        )
+        self.assertEqual(
+            runtime_activated,
+            {
+                "command": "activate-subagent-discovery",
+                "ticket_id": "01DISC",
+                "query": "",
+                "intent": "manual_cli_activation",
+                "status_filter": None,
+                "subagent_node_id": "candidate_collect_snapshot",
+                "registration_type": "snapshot_skill_runner",
+                "skill_name": "market_snapshot_skill",
+                "snapshot_type": "market",
             },
         )
 

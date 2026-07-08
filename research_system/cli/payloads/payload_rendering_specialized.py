@@ -213,6 +213,21 @@ def render_subagent_catalog_entry_line(row: dict) -> str:
 
 
 def render_subagent_activation_entry_line(row: dict) -> str:
+    runtime_registration = row.get("runtime_registration") or {}
+    registration_type = str(runtime_registration.get("registration_type") or "").strip()
+    if registration_type:
+        registration_bits = [registration_type]
+        skill_name = str(runtime_registration.get("skill_name") or "").strip()
+        snapshot_type = str(runtime_registration.get("snapshot_type") or "").strip()
+        if skill_name:
+            registration_bits.append(f"skill={skill_name}")
+        if snapshot_type:
+            registration_bits.append(f"snapshot={snapshot_type}")
+        registration_text = " ".join(registration_bits)
+        return (
+            f"  - {row.get('subagent_type')} -> runtime:{registration_text}  "
+            f"status={row.get('status')}  activated_by={row.get('activated_by') or '-'}"
+        )
     return (
         f"  - {row.get('subagent_type')} -> {row.get('delegate_subagent_type')}  "
         f"status={row.get('status')}  activated_by={row.get('activated_by') or '-'}"

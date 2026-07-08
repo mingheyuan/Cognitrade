@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from research_system.schemas.subagents import SubagentActivationEntry, SubagentCatalogEntry
+from research_system.schemas.subagents import (
+    SubagentActivationEntry,
+    SubagentCatalogEntry,
+    SubagentRuntimeRegistration,
+)
 
 
 class OrchestratorSubagentDiscoveryAdminSupport:
@@ -74,10 +78,13 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         self,
         ticket_id: str,
         *,
-        delegate_subagent_type: str,
+        delegate_subagent_type: str | None = None,
         candidate_subagent_type: str | None = None,
         activated_by: str = "manual_cli_activation",
         reason: str | None = None,
+        registration_type: str | None = None,
+        skill_name: str | None = None,
+        snapshot_type: str | None = None,
     ) -> dict:
         located = self.host.require_subagent_discovery_store().find(ticket_id)
         if located is None:
@@ -91,6 +98,16 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             ticket,
             candidate_subagent_type=candidate_subagent_type,
         )
+        runtime_registration = self._resolve_runtime_registration(
+            registration_type=registration_type,
+            skill_name=skill_name,
+            snapshot_type=snapshot_type,
+        )
+        normalized_delegate_subagent_type = str(delegate_subagent_type or "").strip() or None
+        if bool(normalized_delegate_subagent_type) == bool(runtime_registration):
+            raise self.host.orchestrator_error_cls(
+                "activation requires exactly one of delegate_subagent_type or runtime registration"
+            )
         for existing in ticket.activated_entries:
             if str(existing.subagent_type).strip() == str(candidate_entry.subagent_type).strip():
                 current = self.show_request(ticket.ticket_id)
@@ -104,22 +121,29 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             SubagentActivationEntry(
                 ticket_id=ticket.ticket_id,
                 subagent_type=candidate_entry.subagent_type,
-                delegate_subagent_type=str(delegate_subagent_type).strip(),
+                delegate_subagent_type=normalized_delegate_subagent_type,
+                runtime_registration=runtime_registration,
                 catalog_entry=candidate_entry,
                 activated_by=activated_by,
                 activation_reason=str(reason or f"activate_{candidate_entry.subagent_type}_via_cli"),
                 notes=[
                     "activated_from_approved_discovery_ticket",
-                    f"delegate_subagent_type={delegate_subagent_type}",
+                    *( [f"delegate_subagent_type={normalized_delegate_subagent_type}"] if normalized_delegate_subagent_type else [] ),
+                    *( [f"runtime_registration_type={runtime_registration.registration_type}"] if runtime_registration else [] ),
                 ],
             )
         )
         ticket.updated_at = datetime.now(timezone.utc)
         self.host.require_subagent_discovery_store().save(ticket, previous_status=previous_status)
+        activation_message = (
+            f"activated discovery runtime alias {candidate_entry.subagent_type}"
+            if runtime_registration is not None
+            else f"activated discovery alias {candidate_entry.subagent_type}"
+        )
         return {
             "ticket_id": ticket.ticket_id,
             "status": ticket.status,
-            "message": f"activated discovery alias {candidate_entry.subagent_type}",
+            "message": activation_message,
             "result": self.show_request(ticket.ticket_id),
         }
 
@@ -204,6 +228,40 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         raise self.host.orchestrator_error_cls(
             f"multiple candidate catalog entries available; candidate_subagent_type is required for {ticket.ticket_id}"
         )
+
+    def _resolve_runtime_registration(
+        self,
+        *,
+        registration_type: str | None,
+        skill_name: str | None,
+        snapshot_type: str | None,
+    ) -> SubagentRuntimeRegistration | None:
+        normalized_type = str(registration_type or "").strip()
+        if not normalized_type:
+            return None
+        if normalized_type != "snapshot_skill_runner":
+            raise self.host.orchestrator_error_cls(f"unsupported runtime registration type: {registration_type}")
+        normalized_skill_name = str(skill_name or "").strip()
+        normalized_snapshot_type = str(snapshot_type or "").strip()
+        if not normalized_skill_name:
+            raise self.host.orchestrator_error_cls("skill_name is required for snapshot_skill_runner activation")
+        if not normalized_snapshot_type:
+            raise self.host.orchestrator_error_cls("snapshot_type is required for snapshot_skill_runner activation")
+        self._validate_skill_name(normalized_skill_name)
+        return SubagentRuntimeRegistration(
+            registration_type="snapshot_skill_runner",
+            skill_name=normalized_skill_name,
+            snapshot_type=normalized_snapshot_type,
+            notes=["validated_via_skill_runtime_registry"],
+        )
+
+    def _validate_skill_name(self, skill_name: str) -> None:
+        runtime = self.host.require_skill_runtime()
+        registry = getattr(getattr(runtime, "backend", None), "registry", None)
+        if not isinstance(registry, dict):
+            raise self.host.orchestrator_error_cls("skill_runtime registry is not available for validation")
+        if skill_name not in registry:
+            raise self.host.orchestrator_error_cls(f"unknown skill_name for runtime registration: {skill_name}")
 
 
 __all__ = ["OrchestratorSubagentDiscoveryAdminSupport"]

@@ -52,8 +52,11 @@ def build_app_parser() -> argparse.ArgumentParser:
 
     activate_discovery_parser = subparsers.add_parser("activate-subagent-discovery")
     activate_discovery_parser.add_argument("ticket_id")
-    activate_discovery_parser.add_argument("delegate_subagent_type")
+    activate_discovery_parser.add_argument("delegate_subagent_type", nargs="?")
     activate_discovery_parser.add_argument("--candidate-subagent-type")
+    activate_discovery_parser.add_argument("--registration-type", choices=("snapshot_skill_runner",))
+    activate_discovery_parser.add_argument("--skill-name")
+    activate_discovery_parser.add_argument("--snapshot-type")
     activate_discovery_parser.add_argument("--activated-by", default="manual_cli_activation")
     activate_discovery_parser.add_argument("--reason")
     activate_discovery_parser.add_argument("--json", action="store_true", dest="as_json")

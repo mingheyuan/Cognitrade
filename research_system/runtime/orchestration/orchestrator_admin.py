@@ -28,6 +28,7 @@ class OrchestratorAdminService:
     run_store: RunStore
     retention: RunRetentionService
     retriever: object
+    skill_runtime: object | None = None
     proposal_store: object | None = None
     subagent_discovery_store: object | None = None
     research_support: object | None = None
@@ -103,10 +104,13 @@ class OrchestratorAdminService:
         self,
         ticket_id: str,
         *,
-        delegate_subagent_type: str,
+        delegate_subagent_type: str | None = None,
         candidate_subagent_type: str | None = None,
         activated_by: str = "manual_cli_activation",
         reason: str | None = None,
+        registration_type: str | None = None,
+        skill_name: str | None = None,
+        snapshot_type: str | None = None,
     ) -> dict:
         return self.subagent_discovery_admin.activate_request(
             ticket_id,
@@ -114,6 +118,9 @@ class OrchestratorAdminService:
             candidate_subagent_type=candidate_subagent_type,
             activated_by=activated_by,
             reason=reason,
+            registration_type=registration_type,
+            skill_name=skill_name,
+            snapshot_type=snapshot_type,
         )
 
     def review_proposal(
@@ -164,3 +171,8 @@ class OrchestratorAdminService:
         if self.research_support is None:
             raise self.orchestrator_error_cls("research_support is not configured")
         return self.research_support
+
+    def require_skill_runtime(self):
+        if self.skill_runtime is None:
+            raise self.orchestrator_error_cls("skill_runtime is not configured")
+        return self.skill_runtime
