@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from research_system.adapters.vendors.mcp_source_registry import McpSourceRegistry
+from research_system.adapters.vendors.openapi_source_registry import OpenApiSourceRegistry
 from research_system.runtime.proposals.management.admin_support import (
     OrchestratorProposalAdminSupport,
 )
@@ -34,6 +35,7 @@ class OrchestratorAdminService:
     subagent_discovery_store: object | None = None
     research_support: object | None = None
     mcp_source_registry: object | None = None
+    openapi_source_registry: object | None = None
     orchestrator_error_cls: type[Exception] = Exception
 
     def __post_init__(self) -> None:
@@ -201,4 +203,12 @@ class OrchestratorAdminService:
             return registry
         registry = McpSourceRegistry(settings=self.settings)
         self.mcp_source_registry = registry
+        return registry
+
+    def require_openapi_source_registry(self):
+        registry = self.openapi_source_registry
+        if isinstance(registry, OpenApiSourceRegistry):
+            return registry
+        registry = OpenApiSourceRegistry(settings=self.settings)
+        self.openapi_source_registry = registry
         return registry

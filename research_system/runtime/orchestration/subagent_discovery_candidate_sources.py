@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
 from research_system.adapters.vendors.mcp_source_registry import McpSourceRegistry
+from research_system.adapters.vendors.openapi_source_registry import OpenApiSourceRegistry
 from research_system.runtime.orchestration.subagent_runtime_packaging import (
     SubagentRuntimePackagingSupport,
 )
@@ -20,6 +22,7 @@ class _DiscoveryCandidateSourceHandler:
 
 _DISCOVERY_CANDIDATE_SOURCE_HANDLERS = (
     _DiscoveryCandidateSourceHandler(protocol="mcp", loader_name="_mcp_candidate_entries"),
+    _DiscoveryCandidateSourceHandler(protocol="openapi", loader_name="_openapi_candidate_entries"),
 )
 
 SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES = tuple(
@@ -124,6 +127,85 @@ class SubagentDiscoveryCandidateSupport:
             )
         return entries
 
+    def _openapi_candidate_entries(self, ticket: SubagentDiscoveryTicket) -> list[SubagentCatalogEntry]:
+        registry = self._openapi_registry()
+        gap = ticket.capability_gap
+        matching_rows = []
+        for operation in registry.list_all():
+            if not bool(operation.read_only):
+                continue
+            if not self._matches_stage(gap.stage, operation.stage):
+                continue
+            if not self._matches_intent(gap.intent, operation.suitable_intents):
+                continue
+            if not self._matches_capability(gap.capability, operation.capabilities):
+                continue
+            if not self._is_object_schema(operation.input_json_schema):
+                continue
+            if not self._is_object_schema(operation.output_json_schema):
+                continue
+            if not self._is_discovery_http_source_allowed(operation.source_id):
+                continue
+            normalized_operation_id = str(operation.operation_id or "").strip()
+            if not normalized_operation_id:
+                continue
+            spec_uri = str(operation.spec_uri or "").strip()
+            spec = dict(operation.spec or {}) if isinstance(operation.spec, dict) else None
+            if not spec_uri and not spec:
+                continue
+            if spec and not self._openapi_spec_contains_operation(spec, normalized_operation_id):
+                continue
+            matching_rows.append(operation)
+        total = len(matching_rows)
+        entries: list[SubagentCatalogEntry] = []
+        for index, operation in enumerate(matching_rows):
+            openapi_hints = {
+                "source_id": str(operation.source_id).strip(),
+                "operation_id": str(operation.operation_id).strip(),
+                "summary": str(operation.summary or "").strip()
+                or f"OpenAPI operation alias for {operation.operation_id}@{operation.source_id}",
+            }
+            if str(operation.spec_uri or "").strip():
+                openapi_hints["spec_uri"] = str(operation.spec_uri).strip()
+            if isinstance(operation.spec, dict):
+                openapi_hints["spec"] = dict(operation.spec)
+            entries.append(
+                SubagentCatalogEntry(
+                    subagent_type=self._candidate_subagent_type(
+                        ticket,
+                        source_id=str(operation.source_id).strip(),
+                        tool_name=str(operation.operation_id).strip(),
+                        explicit_subagent_type=operation.candidate_subagent_type,
+                        total=total,
+                        index=index,
+                    ),
+                    summary=str(operation.summary or "").strip()
+                    or f"Approved OpenAPI candidate for {operation.operation_id}@{operation.source_id}",
+                    capabilities=list(operation.capabilities or [str(gap.capability).strip()]),
+                    stage=str(operation.stage or gap.stage or "").strip() or None,
+                    cost_class="medium",
+                    latency_class="medium",
+                    side_effect_level="read_only",
+                    suitable_intents=list(
+                        operation.suitable_intents
+                        or ([str(gap.intent).strip()] if str(gap.intent or "").strip() else [])
+                    ),
+                    tags=[
+                        "approved_discovery_candidate",
+                        "configured_openapi_operation",
+                        "pending_runtime_registration",
+                        f"openapi_source:{operation.source_id}",
+                    ],
+                    requires_llm=bool(gap.requires_llm),
+                    allow_parallel=False,
+                    max_concurrency=1,
+                    input_json_schema=dict(operation.input_json_schema or {}),
+                    output_json_schema=dict(operation.output_json_schema or {}),
+                    runtime_registration_hints={"openapi": openapi_hints},
+                )
+            )
+        return entries
+
     @staticmethod
     def _matches_stage(gap_stage: str | None, tool_stage: str | None) -> bool:
         normalized_gap_stage = str(gap_stage or "").strip().lower()
@@ -203,6 +285,33 @@ class SubagentDiscoveryCandidateSupport:
             .replace("\\", "_")
         )
 
+    @staticmethod
+    def _is_discovery_http_source_allowed(source_id: str) -> bool:
+        source = DataSourceRegistry().get(str(source_id or "").strip())
+        if source is None:
+            return False
+        if str(source.access or "").strip().lower() != "http":
+            return False
+        if bool(source.requires_key):
+            return False
+        return True
+
+    @staticmethod
+    def _openapi_spec_contains_operation(spec: dict, operation_id: str) -> bool:
+        normalized_operation_id = str(operation_id or "").strip()
+        if not normalized_operation_id:
+            return False
+        for path_item in dict(spec.get("paths") or {}).values():
+            if not isinstance(path_item, dict):
+                continue
+            for method_name, operation in path_item.items():
+                normalized_method = str(method_name or "").strip().upper()
+                if normalized_method not in {"GET", "POST"} or not isinstance(operation, dict):
+                    continue
+                if str(operation.get("operationId") or "").strip() == normalized_operation_id:
+                    return True
+        return False
+
     def _mcp_registry(self) -> McpSourceRegistry:
         factory = getattr(self.host, "require_mcp_source_registry", None)
         if callable(factory):
@@ -211,6 +320,15 @@ class SubagentDiscoveryCandidateSupport:
                 return registry
         settings = getattr(self.host, "settings", None)
         return McpSourceRegistry(settings=settings)
+
+    def _openapi_registry(self) -> OpenApiSourceRegistry:
+        factory = getattr(self.host, "require_openapi_source_registry", None)
+        if callable(factory):
+            registry = factory()
+            if isinstance(registry, OpenApiSourceRegistry):
+                return registry
+        settings = getattr(self.host, "settings", None)
+        return OpenApiSourceRegistry(settings=settings)
 
 
 __all__ = [

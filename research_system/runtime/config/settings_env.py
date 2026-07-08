@@ -47,6 +47,7 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "provider_policy_path": config_root / "provider_policy.yml",
         "data_sources_path": config_root / "data_sources.yml",
         "mcp_servers_path": config_root / "mcp_servers.yml",
+        "openapi_sources_path": config_root / "openapi_sources.yml",
         "provider_policy_overrides": {
             "market": env_values.get("COGNITRADE_PROVIDERS_MARKET", ""),
             "fundamental": env_values.get("COGNITRADE_PROVIDERS_FUNDAMENTAL", ""),
