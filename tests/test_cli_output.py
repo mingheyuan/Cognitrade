@@ -1057,6 +1057,22 @@ class CliOutputTests(unittest.TestCase):
                     "preferred_protocols": ["mcp"],
                     "reason": "discover resolver",
                 },
+                "candidate_recommendation": {
+                    "candidate_subagent_type": "candidate_screening_strategy",
+                    "source_protocol": "mcp",
+                    "policy_source": "rule",
+                    "confidence": 1.0,
+                    "reason": "preferred protocol mcp, intent-compatible, stage-compatible",
+                    "notes": ["candidate_recommendation_rule_selected"],
+                },
+                "candidate_shadow_recommendation": {
+                    "candidate_subagent_type": "candidate_screening_strategy",
+                    "source_protocol": "mcp",
+                    "policy_source": "llm_shadow",
+                    "confidence": 0.91,
+                    "reason": "keep the same candidate recommendation",
+                    "notes": ["candidate_recommendation_shadow_suggested"],
+                },
                 "candidate_catalog_entries": [
                     {
                         "subagent_type": "candidate_screening_strategy",
@@ -1239,6 +1255,9 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("capability=screening_strategy", rows_output)
         self.assertIn("ticket_id: 01DISC", detail_output)
         self.assertIn("search_query: screening strategy resolver", detail_output)
+        self.assertIn("recommended_candidate: candidate_screening_strategy", detail_output)
+        self.assertIn("candidate_recommendation_policy: rule", detail_output)
+        self.assertIn("shadow_candidate_policy: llm_shadow", detail_output)
         self.assertIn("candidate_catalog_entries:", detail_output)
         self.assertIn("activated_entries:", detail_output)
         self.assertIn("candidate_screening_strategy -> stock_snapshot_collector", detail_output)

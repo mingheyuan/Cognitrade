@@ -121,6 +121,17 @@ class SubagentToolDiscoveryRequest(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class SubagentDiscoveryCandidateRecommendation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidate_subagent_type: str
+    source_protocol: str | None = None
+    reason: str
+    policy_source: Literal["rule", "llm", "hybrid", "explicit", "llm_shadow"] = "rule"
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    notes: list[str] = Field(default_factory=list)
+
+
 class SubagentDiscoveryTicket(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -134,6 +145,8 @@ class SubagentDiscoveryTicket(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     candidate_catalog_entries: list[SubagentCatalogEntry] = Field(default_factory=list)
+    candidate_recommendation: SubagentDiscoveryCandidateRecommendation | None = None
+    candidate_shadow_recommendation: SubagentDiscoveryCandidateRecommendation | None = None
     activated_entries: list["SubagentActivationEntry"] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 

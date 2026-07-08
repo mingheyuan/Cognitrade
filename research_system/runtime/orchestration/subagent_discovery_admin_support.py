@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from research_system.runtime.orchestration._subagent_discovery_candidate_policy import (
+    SubagentDiscoveryCandidatePolicyService,
+)
 from research_system.schemas.subagents import (
     SubagentActivationEntry,
     SubagentCatalogEntry,
@@ -15,6 +18,10 @@ class OrchestratorSubagentDiscoveryAdminSupport:
     def __init__(self, host) -> None:
         self.host = host
         self.discovery_candidates = SubagentDiscoveryCandidateSupport(host)
+        self.candidate_policy = SubagentDiscoveryCandidatePolicyService(
+            llm_provider=getattr(host, "llm_provider", None),
+            settings=getattr(host, "settings", None),
+        )
         self.runtime_packaging = SubagentRuntimePackagingSupport(host)
 
     def list_requests(self, *, status: str | None = None, limit: int = 50) -> list[dict]:
@@ -69,6 +76,13 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             ticket.candidate_catalog_entries = self._resolve_candidate_catalog_entries(
                 ticket,
                 candidate_catalog_entries=candidate_catalog_entries,
+            )
+            (
+                ticket.candidate_recommendation,
+                ticket.candidate_shadow_recommendation,
+            ) = self.candidate_policy.recommend(
+                ticket=ticket,
+                candidate_entries=ticket.candidate_catalog_entries,
             )
         self.host.require_subagent_discovery_store().save(ticket, previous_status=previous_status)
         return {
@@ -180,6 +194,11 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             "search_query": ticket.tool_discovery_request.search_query,
             "candidate_entry_count": len(ticket.candidate_catalog_entries),
             "activation_entry_count": len(ticket.activated_entries),
+            "recommended_candidate_subagent_type": (
+                ticket.candidate_recommendation.candidate_subagent_type
+                if ticket.candidate_recommendation is not None
+                else None
+            ),
             "updated_at": ticket.updated_at.isoformat(),
         }
 
@@ -250,6 +269,14 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             )
         if len(entries) == 1:
             return entries[0]
+        recommended = ticket.candidate_recommendation
+        if recommended is not None:
+            recommended_entry = self._find_candidate_entry(
+                entries,
+                recommended.candidate_subagent_type,
+            )
+            if recommended_entry is not None:
+                return recommended_entry
         raise self.host.orchestrator_error_cls(
             f"multiple candidate catalog entries available; candidate_subagent_type is required for {ticket.ticket_id}"
         )
@@ -306,6 +333,17 @@ class OrchestratorSubagentDiscoveryAdminSupport:
     ) -> SubagentCatalogEntry:
         support = SubagentRuntimePackagingSupport()
         return support.normalize_candidate_entry(candidate_entry)
+
+    @staticmethod
+    def _find_candidate_entry(
+        entries: list[SubagentCatalogEntry],
+        candidate_subagent_type: str,
+    ) -> SubagentCatalogEntry | None:
+        requested = str(candidate_subagent_type or "").strip()
+        for entry in entries:
+            if str(entry.subagent_type).strip() == requested:
+                return entry
+        return None
 
 
 __all__ = ["OrchestratorSubagentDiscoveryAdminSupport"]

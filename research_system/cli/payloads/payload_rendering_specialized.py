@@ -169,19 +169,23 @@ def render_subagent_discovery_row_text(row: dict) -> str:
     stage = str(row.get("stage") or "-")
     capability = str(row.get("capability") or "-")
     query = str(row.get("search_query") or "-")
+    recommended_candidate = str(row.get("recommended_candidate_subagent_type") or "").strip()
     counts = (
         f"candidates={int(row.get('candidate_entry_count') or 0)} "
         f"activations={int(row.get('activation_entry_count') or 0)}"
     )
+    recommendation = f"  recommended={recommended_candidate}" if recommended_candidate else ""
     return (
         f"{ticket_id}  [{status}]  intent={intent}  stage={stage}  "
-        f"capability={capability}  query={query}  {counts}"
+        f"capability={capability}  query={query}  {counts}{recommendation}"
     )
 
 
 def subagent_discovery_detail_fields(payload: dict) -> list[tuple[str, str]]:
     gap = payload.get("capability_gap") or {}
     request = payload.get("tool_discovery_request") or {}
+    recommendation = payload.get("candidate_recommendation") or {}
+    shadow_recommendation = payload.get("candidate_shadow_recommendation") or {}
     preferred_protocols = request.get("preferred_protocols") or []
     return [
         ("ticket_id", str(payload.get("ticket_id") or "")),
@@ -196,6 +200,20 @@ def subagent_discovery_detail_fields(payload: dict) -> list[tuple[str, str]]:
         ("search_query", str(request.get("search_query") or "")),
         ("preferred_protocols", ", ".join(str(item) for item in preferred_protocols) or "-"),
         ("request_reason", str(request.get("reason") or "")),
+        ("recommended_candidate", str(recommendation.get("candidate_subagent_type") or "")),
+        ("candidate_recommendation_protocol", str(recommendation.get("source_protocol") or "")),
+        ("candidate_recommendation_policy", str(recommendation.get("policy_source") or "")),
+        ("candidate_recommendation_confidence", str(recommendation.get("confidence"))),
+        ("candidate_recommendation_reason", str(recommendation.get("reason") or "")),
+        (
+            "candidate_recommendation_notes",
+            ", ".join(str(item) for item in recommendation.get("notes") or []) or "-",
+        ),
+        ("shadow_candidate", str(shadow_recommendation.get("candidate_subagent_type") or "")),
+        ("shadow_candidate_protocol", str(shadow_recommendation.get("source_protocol") or "")),
+        ("shadow_candidate_policy", str(shadow_recommendation.get("policy_source") or "")),
+        ("shadow_candidate_confidence", str(shadow_recommendation.get("confidence"))),
+        ("shadow_candidate_reason", str(shadow_recommendation.get("reason") or "")),
         ("reviewer", str(payload.get("reviewer") or "")),
         ("review_reason", str(payload.get("review_reason") or "")),
     ]
