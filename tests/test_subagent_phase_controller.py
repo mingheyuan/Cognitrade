@@ -4,6 +4,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from research_system.agents._subagent_phase_controller import SubagentCapabilityGapError, SubagentPhaseController
 from research_system.runtime.orchestration.subagent_discovery_admin_support import (
@@ -77,6 +78,26 @@ class _HybridShadowProvider:
                 "reason": "keep the base review strategy plan",
                 "confidence": 0.93,
                 "notes": ["hybrid_keep_current_plan"],
+            }
+        )
+
+
+class _DiscoveryPolicyProviderStub:
+    available = True
+
+    def __init__(self, *, selected_protocols: list[str]) -> None:
+        self.selected_protocols = list(selected_protocols)
+        self.calls = 0
+
+    def parse(self, **kwargs):
+        self.calls += 1
+        schema = kwargs["schema"]
+        return schema.model_validate(
+            {
+                "selected_protocols": list(self.selected_protocols),
+                "reason": "prefer alternative discovery routing order",
+                "confidence": 0.92,
+                "notes": ["llm_select_discovery_protocols"],
             }
         )
 
@@ -180,6 +201,9 @@ class SubagentPhaseControllerTests(unittest.TestCase):
         runtime_context = SimpleNamespace(
             subagent_capability_gaps=[],
             subagent_tool_discovery_requests=[],
+            subagent_discovery_shadow_suggestions=[],
+            subagent_discovery_llm_decisions=[],
+            subagent_discovery_hybrid_decisions=[],
             dynamic_trace=[],
         )
         support = SimpleNamespace(emit_event=lambda *_args, **_kwargs: None)
@@ -242,6 +266,204 @@ class SubagentPhaseControllerTests(unittest.TestCase):
             self.assertIn(
                 "discovery_policy_rule=review_skill_first",
                 exc_info.exception.tool_discovery_request.notes,
+            )
+
+    def test_capability_gap_request_records_discovery_shadow_suggestion(self) -> None:
+        runtime_context = SimpleNamespace(
+            subagent_capability_gaps=[],
+            subagent_tool_discovery_requests=[],
+            subagent_discovery_shadow_suggestions=[],
+            subagent_discovery_llm_decisions=[],
+            subagent_discovery_hybrid_decisions=[],
+            dynamic_trace=[],
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.subagent_discovery_shadow_llm_enabled = True
+            settings.max_llm_calls_per_turn = 3
+            provider = _DiscoveryPolicyProviderStub(selected_protocols=["skill", "mcp", "openapi"])
+            support = Mock()
+            support.resolve_llm_execution.return_value = SimpleNamespace(can_use_llm=True)
+            controller = SubagentPhaseController(
+                registry=self.registry,
+                invoke_subagent=lambda invocation: (
+                    {"ok": True},
+                    SubagentExecutionRecord(
+                        subagent_type=invocation.subagent_type,
+                        invocation_id=invocation.invocation_id,
+                        status="completed",
+                        objective=invocation.objective,
+                        inputs=invocation.inputs,
+                        output_keys=["ok"],
+                    ),
+                ),
+                emit_event=None,
+                cache_context_builder=lambda **_: None,
+                start_from_node_id_builder=lambda **_: None,
+                runtime_binding_getter=lambda: {
+                    "context": runtime_context,
+                    "support": support,
+                    "request_id": "req-gap-shadow",
+                    "intent": "review_thesis",
+                    "execution_policy": SimpleNamespace(max_llm_calls_per_turn=3),
+                },
+                llm_provider=provider,
+                settings=settings,
+                service_name="reviewer",
+            )
+
+            with self.assertRaises(SubagentCapabilityGapError):
+                controller.select_catalog_entry(
+                    stage="review",
+                    intent="review_thesis",
+                    capability="missing_capability",
+                )
+
+            self.assertEqual(provider.calls, 1)
+            self.assertEqual(len(runtime_context.subagent_discovery_shadow_suggestions), 1)
+            self.assertEqual(
+                runtime_context.subagent_discovery_shadow_suggestions[0]["event"],
+                "subagent_discovery_shadow_suggested",
+            )
+            self.assertEqual(
+                runtime_context.subagent_discovery_shadow_suggestions[0]["selected_protocols"],
+                ["skill", "mcp", "openapi"],
+            )
+
+    def test_capability_gap_request_can_apply_discovery_llm_protocol_selection(self) -> None:
+        runtime_context = SimpleNamespace(
+            subagent_capability_gaps=[],
+            subagent_tool_discovery_requests=[],
+            subagent_discovery_shadow_suggestions=[],
+            subagent_discovery_llm_decisions=[],
+            subagent_discovery_hybrid_decisions=[],
+            dynamic_trace=[],
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.subagent_discovery_llm_policy_enabled = True
+            settings.subagent_discovery_llm_policy_min_confidence = 0.8
+            settings.max_llm_calls_per_turn = 3
+            provider = _DiscoveryPolicyProviderStub(selected_protocols=["mcp", "skill", "openapi"])
+            support = Mock()
+            support.resolve_llm_execution.return_value = SimpleNamespace(can_use_llm=True)
+            controller = SubagentPhaseController(
+                registry=self.registry,
+                invoke_subagent=lambda invocation: (
+                    {"ok": True},
+                    SubagentExecutionRecord(
+                        subagent_type=invocation.subagent_type,
+                        invocation_id=invocation.invocation_id,
+                        status="completed",
+                        objective=invocation.objective,
+                        inputs=invocation.inputs,
+                        output_keys=["ok"],
+                    ),
+                ),
+                emit_event=None,
+                cache_context_builder=lambda **_: None,
+                start_from_node_id_builder=lambda **_: None,
+                runtime_binding_getter=lambda: {
+                    "context": runtime_context,
+                    "support": support,
+                    "request_id": "req-gap-llm",
+                    "intent": "review_thesis",
+                    "execution_policy": SimpleNamespace(max_llm_calls_per_turn=3),
+                },
+                llm_provider=provider,
+                settings=settings,
+                service_name="reviewer",
+            )
+
+            with self.assertRaises(SubagentCapabilityGapError) as exc_info:
+                controller.select_catalog_entry(
+                    stage="review",
+                    intent="review_thesis",
+                    capability="missing_capability",
+                )
+
+            self.assertEqual(provider.calls, 1)
+            self.assertEqual(
+                exc_info.exception.tool_discovery_request.preferred_protocols,
+                ["mcp", "skill", "openapi"],
+            )
+            self.assertIn(
+                "apply_subagent_discovery_llm_protocols",
+                exc_info.exception.tool_discovery_request.notes,
+            )
+            self.assertEqual(len(runtime_context.subagent_discovery_llm_decisions), 1)
+            self.assertEqual(
+                runtime_context.subagent_discovery_llm_decisions[0]["event"],
+                "subagent_discovery_llm_applied",
+            )
+
+    def test_capability_gap_request_can_apply_discovery_hybrid_protocol_selection(self) -> None:
+        runtime_context = SimpleNamespace(
+            subagent_capability_gaps=[],
+            subagent_tool_discovery_requests=[],
+            subagent_discovery_shadow_suggestions=[],
+            subagent_discovery_llm_decisions=[],
+            subagent_discovery_hybrid_decisions=[],
+            dynamic_trace=[],
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.subagent_discovery_hybrid_llm_enabled = True
+            settings.subagent_discovery_hybrid_llm_min_confidence = 0.8
+            settings.max_llm_calls_per_turn = 3
+            provider = _DiscoveryPolicyProviderStub(selected_protocols=["mcp", "skill", "openapi"])
+            support = Mock()
+            support.resolve_llm_execution.return_value = SimpleNamespace(can_use_llm=True)
+            controller = SubagentPhaseController(
+                registry=self.registry,
+                invoke_subagent=lambda invocation: (
+                    {"ok": True},
+                    SubagentExecutionRecord(
+                        subagent_type=invocation.subagent_type,
+                        invocation_id=invocation.invocation_id,
+                        status="completed",
+                        objective=invocation.objective,
+                        inputs=invocation.inputs,
+                        output_keys=["ok"],
+                    ),
+                ),
+                emit_event=None,
+                cache_context_builder=lambda **_: None,
+                start_from_node_id_builder=lambda **_: None,
+                runtime_binding_getter=lambda: {
+                    "context": runtime_context,
+                    "support": support,
+                    "request_id": "req-gap-hybrid",
+                    "intent": "review_thesis",
+                    "execution_policy": SimpleNamespace(max_llm_calls_per_turn=3),
+                },
+                llm_provider=provider,
+                settings=settings,
+                service_name="reviewer",
+            )
+
+            with self.assertRaises(SubagentCapabilityGapError) as exc_info:
+                controller.select_catalog_entry(
+                    stage="review",
+                    intent="review_thesis",
+                    capability="missing_capability",
+                )
+
+            self.assertEqual(
+                exc_info.exception.tool_discovery_request.preferred_protocols,
+                ["mcp", "skill", "openapi"],
+            )
+            self.assertIn(
+                "apply_subagent_discovery_hybrid_protocols",
+                exc_info.exception.tool_discovery_request.notes,
+            )
+            self.assertEqual(len(runtime_context.subagent_discovery_hybrid_decisions), 1)
+            self.assertEqual(
+                runtime_context.subagent_discovery_hybrid_decisions[0]["event"],
+                "subagent_discovery_hybrid_applied",
             )
 
     def test_capability_gap_surfaces_approved_candidate_catalog_entries(self) -> None:

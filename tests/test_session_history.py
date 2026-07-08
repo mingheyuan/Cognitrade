@@ -378,6 +378,114 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["dynamic_trace"][1]["event"], "subagent_tool_discovery_requested")
         self.assertEqual(payload["dynamic_trace"][1]["search_query"], "review_thesis review peer_review")
 
+    def test_trace_rebuilds_subagent_discovery_shadow_rows_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "01TRACEDISCOVERYSHADOW"
+            run_root.mkdir(parents=True, exist_ok=True)
+
+            write_json(run_root / "request.json", {"intent": "review_thesis", "user_query": "review this thesis"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-discovery-shadow-1",
+                    "request_id": "req-discovery-shadow",
+                    "run_id": "01TRACEDISCOVERYSHADOW",
+                    "intent": "review_thesis",
+                    "event_type": "subagent_discovery_shadow_suggested",
+                    "phase": "review",
+                    "agent": "reviewer",
+                    "message": "Shadow discovery policy evaluated capability peer_review",
+                    "payload": {
+                        "stage": "review",
+                        "capability": "peer_review",
+                        "selected_protocols": ["skill", "mcp", "openapi"],
+                        "actual_protocols": ["skill", "mcp", "openapi"],
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-09T10:00:00+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(len(payload["dynamic_trace"]), 1)
+        self.assertEqual(payload["dynamic_trace"][0]["event"], "subagent_discovery_shadow_suggested")
+        self.assertEqual(payload["dynamic_trace"][0]["selected_protocols"], ["skill", "mcp", "openapi"])
+
+    def test_trace_rebuilds_subagent_discovery_llm_rows_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "01TRACEDISCOVERYLLM"
+            run_root.mkdir(parents=True, exist_ok=True)
+
+            write_json(run_root / "request.json", {"intent": "review_thesis", "user_query": "review this thesis"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-discovery-llm-1",
+                    "request_id": "req-discovery-llm",
+                    "run_id": "01TRACEDISCOVERYLLM",
+                    "intent": "review_thesis",
+                    "event_type": "subagent_discovery_llm_applied",
+                    "phase": "review",
+                    "agent": "reviewer",
+                    "message": "subagent_discovery_llm_applied selected protocols for capability peer_review",
+                    "payload": {
+                        "stage": "review",
+                        "capability": "peer_review",
+                        "applied_protocols": ["mcp", "skill", "openapi"],
+                        "override_rule_protocols": True,
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-09T10:30:00+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(len(payload["dynamic_trace"]), 1)
+        self.assertEqual(payload["dynamic_trace"][0]["event"], "subagent_discovery_llm_applied")
+        self.assertEqual(payload["dynamic_trace"][0]["applied_protocols"], ["mcp", "skill", "openapi"])
+
+    def test_trace_rebuilds_subagent_discovery_hybrid_rows_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "01TRACEDISCOVERYHYBRID"
+            run_root.mkdir(parents=True, exist_ok=True)
+
+            write_json(run_root / "request.json", {"intent": "review_thesis", "user_query": "review this thesis"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-discovery-hybrid-1",
+                    "request_id": "req-discovery-hybrid",
+                    "run_id": "01TRACEDISCOVERYHYBRID",
+                    "intent": "review_thesis",
+                    "event_type": "subagent_discovery_hybrid_applied",
+                    "phase": "review",
+                    "agent": "reviewer",
+                    "message": "subagent_discovery_hybrid_applied selected protocols for capability peer_review",
+                    "payload": {
+                        "stage": "review",
+                        "capability": "peer_review",
+                        "applied_protocols": ["mcp", "skill", "openapi"],
+                        "override_rule_protocols": True,
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-09T11:00:00+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(len(payload["dynamic_trace"]), 1)
+        self.assertEqual(payload["dynamic_trace"][0]["event"], "subagent_discovery_hybrid_applied")
+        self.assertEqual(payload["dynamic_trace"][0]["applied_protocols"], ["mcp", "skill", "openapi"])
+
     def test_trace_rebuilds_subagent_phase_hybrid_rows_from_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "01TRACESUBHYBRID"

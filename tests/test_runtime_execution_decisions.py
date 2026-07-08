@@ -308,6 +308,112 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
         finally:
             temp_dir.cleanup()
 
+    def test_debug_payload_includes_subagent_discovery_shadow_suggestions(self) -> None:
+        temp_dir, _settings, context, request = _build_runtime()
+        try:
+            context.subagent_discovery_shadow_suggestions.append(
+                {
+                    "event": "subagent_discovery_shadow_suggested",
+                    "stage": "review",
+                    "capability": "peer_review",
+                    "selected_protocols": ["skill", "mcp", "openapi"],
+                }
+            )
+
+            payload = OrchestratorDebugSupport().build_debug_payload(
+                context=context,
+                request=request,
+                plan=ActionPlan(intent="review_thesis", actions=[]),
+                plan_intent="review_thesis",
+                retrieval_summary=None,
+            )
+
+            self.assertEqual(
+                payload["subagent_discovery_shadow_suggestions"],
+                [
+                    {
+                        "event": "subagent_discovery_shadow_suggested",
+                        "stage": "review",
+                        "capability": "peer_review",
+                        "selected_protocols": ["skill", "mcp", "openapi"],
+                    }
+                ],
+            )
+        finally:
+            temp_dir.cleanup()
+
+    def test_debug_payload_includes_subagent_discovery_llm_decisions(self) -> None:
+        temp_dir, _settings, context, request = _build_runtime()
+        try:
+            context.subagent_discovery_llm_decisions.append(
+                {
+                    "event": "subagent_discovery_llm_applied",
+                    "stage": "review",
+                    "capability": "peer_review",
+                    "applied_protocols": ["mcp", "skill", "openapi"],
+                    "override_rule_protocols": True,
+                }
+            )
+
+            payload = OrchestratorDebugSupport().build_debug_payload(
+                context=context,
+                request=request,
+                plan=ActionPlan(intent="review_thesis", actions=[]),
+                plan_intent="review_thesis",
+                retrieval_summary=None,
+            )
+
+            self.assertEqual(
+                payload["subagent_discovery_llm_decisions"],
+                [
+                    {
+                        "event": "subagent_discovery_llm_applied",
+                        "stage": "review",
+                        "capability": "peer_review",
+                        "applied_protocols": ["mcp", "skill", "openapi"],
+                        "override_rule_protocols": True,
+                    }
+                ],
+            )
+        finally:
+            temp_dir.cleanup()
+
+    def test_debug_payload_includes_subagent_discovery_hybrid_decisions(self) -> None:
+        temp_dir, _settings, context, request = _build_runtime()
+        try:
+            context.subagent_discovery_hybrid_decisions.append(
+                {
+                    "event": "subagent_discovery_hybrid_applied",
+                    "stage": "review",
+                    "capability": "peer_review",
+                    "applied_protocols": ["mcp", "skill", "openapi"],
+                    "override_rule_protocols": True,
+                }
+            )
+
+            payload = OrchestratorDebugSupport().build_debug_payload(
+                context=context,
+                request=request,
+                plan=ActionPlan(intent="review_thesis", actions=[]),
+                plan_intent="review_thesis",
+                retrieval_summary=None,
+            )
+
+            self.assertEqual(
+                payload["subagent_discovery_hybrid_decisions"],
+                [
+                    {
+                        "event": "subagent_discovery_hybrid_applied",
+                        "stage": "review",
+                        "capability": "peer_review",
+                        "applied_protocols": ["mcp", "skill", "openapi"],
+                        "override_rule_protocols": True,
+                    }
+                ],
+            )
+        finally:
+            temp_dir.cleanup()
+
     def test_debug_payload_includes_subagent_phase_hybrid_decisions(self) -> None:
         temp_dir, _settings, context, request = _build_runtime()
         try:

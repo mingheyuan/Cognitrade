@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from research_system.agents._subagent_discovery_policy import SubagentDiscoveryPolicyService
+from research_system.agents._subagent_discovery_policy_source import SubagentDiscoveryLLMPolicySource
 from research_system.agents._subagent_dag import (
     SubagentDagExecutor,
     SubagentDagNodeResult,
@@ -11,6 +12,7 @@ from research_system.agents._subagent_dag import (
 )
 from research_system.agents._subagent_phase_policy_source import SubagentPhaseLLMPolicySource
 from research_system.agents._subagent_phase_shadow_policy import SubagentPhaseLLMShadowPolicy
+from research_system.agents._subagent_discovery_shadow_policy import SubagentDiscoveryLLMShadowPolicy
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
     SubagentCapabilityGap,
@@ -70,6 +72,19 @@ class SubagentPhaseController:
             emit_event=emit_event,
         )
         self.discovery_policy = SubagentDiscoveryPolicyService(settings=settings)
+        self.discovery_shadow_policy = SubagentDiscoveryLLMShadowPolicy(
+            llm_provider=llm_provider,
+            settings=settings,
+            runtime_binding_getter=runtime_binding_getter,
+            emit_event=emit_event,
+            service_name=service_name,
+        )
+        self.discovery_llm_policy_source = SubagentDiscoveryLLMPolicySource(
+            shadow_policy=self.discovery_shadow_policy,
+            settings=settings,
+            runtime_binding_getter=runtime_binding_getter,
+            emit_event=emit_event,
+        )
 
     def select_catalog_entry(
         self,
@@ -478,6 +493,12 @@ class SubagentPhaseController:
             capability=gap.capability,
             preferred_subagent_type=gap.preferred_subagent_type,
             requires_llm=gap.requires_llm,
+        )
+        preferred_protocols, policy_notes, _ = self.discovery_llm_policy_source.apply(
+            gap=gap,
+            candidate_protocols=list(self.discovery_policy.default_preferred_protocols),
+            rule_preferred_protocols=preferred_protocols,
+            rule_notes=policy_notes,
         )
         return SubagentToolDiscoveryRequest(
             intent=gap.intent,

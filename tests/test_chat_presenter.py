@@ -405,6 +405,74 @@ class ChatPresenterTests(unittest.TestCase):
         self.assertEqual(trace_payload["dynamic_trace"][1]["event"], "subagent_tool_discovery_requested")
         self.assertEqual(trace_payload["dynamic_trace"][1]["search_query"], "review_thesis review peer_review")
 
+    def test_presenter_accumulates_subagent_discovery_shadow_events_into_dynamic_trace(self) -> None:
+        presenter = ChatStreamPresenter()
+
+        presenter.on_event(
+            _event(
+                event_type="subagent_discovery_shadow_suggested",
+                phase="review",
+                agent="reviewer",
+                payload={
+                    "stage": "review",
+                    "capability": "peer_review",
+                    "selected_protocols": ["skill", "mcp", "openapi"],
+                },
+            )
+        )
+
+        trace_payload = presenter.current_trace_payload()
+        self.assertIsNotNone(trace_payload)
+        self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "subagent_discovery_shadow_suggested")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["selected_protocols"], ["skill", "mcp", "openapi"])
+
+    def test_presenter_accumulates_subagent_discovery_llm_events_into_dynamic_trace(self) -> None:
+        presenter = ChatStreamPresenter()
+
+        presenter.on_event(
+            _event(
+                event_type="subagent_discovery_llm_applied",
+                phase="review",
+                agent="reviewer",
+                payload={
+                    "stage": "review",
+                    "capability": "peer_review",
+                    "applied_protocols": ["mcp", "skill", "openapi"],
+                    "override_rule_protocols": True,
+                },
+            )
+        )
+
+        trace_payload = presenter.current_trace_payload()
+        self.assertIsNotNone(trace_payload)
+        self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "subagent_discovery_llm_applied")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["applied_protocols"], ["mcp", "skill", "openapi"])
+
+    def test_presenter_accumulates_subagent_discovery_hybrid_events_into_dynamic_trace(self) -> None:
+        presenter = ChatStreamPresenter()
+
+        presenter.on_event(
+            _event(
+                event_type="subagent_discovery_hybrid_applied",
+                phase="review",
+                agent="reviewer",
+                payload={
+                    "stage": "review",
+                    "capability": "peer_review",
+                    "applied_protocols": ["mcp", "skill", "openapi"],
+                    "override_rule_protocols": True,
+                },
+            )
+        )
+
+        trace_payload = presenter.current_trace_payload()
+        self.assertIsNotNone(trace_payload)
+        self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "subagent_discovery_hybrid_applied")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["applied_protocols"], ["mcp", "skill", "openapi"])
+
     def test_presenter_accumulates_subagent_phase_hybrid_events_into_dynamic_trace(self) -> None:
         presenter = ChatStreamPresenter()
 

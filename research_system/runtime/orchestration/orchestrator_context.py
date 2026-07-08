@@ -38,6 +38,9 @@ class RuntimeContext:
     subagent_plan_patches: list[dict]
     subagent_capability_gaps: list[dict]
     subagent_tool_discovery_requests: list[dict]
+    subagent_discovery_shadow_suggestions: list[dict]
+    subagent_discovery_llm_decisions: list[dict]
+    subagent_discovery_hybrid_decisions: list[dict]
     subagent_phase_shadow_suggestions: list[dict]
     subagent_phase_llm_decisions: list[dict]
     subagent_phase_hybrid_decisions: list[dict]
@@ -118,6 +121,9 @@ def build_runtime_context(
         subagent_plan_patches=[],
         subagent_capability_gaps=[],
         subagent_tool_discovery_requests=[],
+        subagent_discovery_shadow_suggestions=[],
+        subagent_discovery_llm_decisions=[],
+        subagent_discovery_hybrid_decisions=[],
         subagent_phase_shadow_suggestions=[],
         subagent_phase_llm_decisions=[],
         subagent_phase_hybrid_decisions=[],
