@@ -1,8 +1,41 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from research_system.agents.reviewer.service import ReviewerService
+from research_system.runtime.history.session.session_history import SessionHistory
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
+
+
+class ReviewerHybridProviderStub:
+    available = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def parse(self, **kwargs):
+        schema = kwargs["schema"]
+        if schema.__name__ == "SubagentPhaseShadowSuggestionPayload":
+            self.calls += 1
+            return schema.model_validate(
+                {
+                    "selected_plan_variant": "summary_only",
+                    "selected_node_ids": [
+                        "review_strategy_resolver",
+                        "review_claim_extractor",
+                        "review_context_resolver",
+                        "review_focus_validator",
+                        "review_summary_builder",
+                    ],
+                    "request_replan": True,
+                    "reason": "prefer summary-only review to skip candidate verdict fanout",
+                    "confidence": 0.92,
+                    "notes": ["hybrid_select_review_summary_only"],
+                }
+            )
+        raise AssertionError(f"Unexpected schema for reviewer hybrid stub: {schema.__name__}")
 
 
 class ReviewerServiceTests(unittest.TestCase):
@@ -335,6 +368,53 @@ class ReviewerServiceTests(unittest.TestCase):
         self.assertIn("review_focus=cashflow_resilience", result["summary"]["notes"])
         self.assertIn("review_focus_source=methodology_memory", result["summary"]["notes"])
         self.assertIn("missing_fundamental_snapshot_for_review_focus", result["summary"]["notes"])
+
+    def test_reviewer_hybrid_can_switch_to_summary_only_variant(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.subagent_phase_shadow_llm_enabled = True
+            settings.subagent_phase_hybrid_llm_enabled = True
+            settings.subagent_phase_hybrid_llm_min_confidence = 0.8
+            settings.max_llm_calls_per_turn = 3
+            provider = ReviewerHybridProviderStub()
+            reviewer = ReviewerService(
+                {"benchmark_resolution": "sector", "default_broad_index": "HS300"},
+                settings.runs_root,
+                llm_provider=provider,
+                settings=settings,
+            )
+            result = reviewer.run(
+                source_run_id="01SOURCE",
+                query="review thesis for innovation drug",
+                source_entries=[
+                    {
+                        "entry_id": "report-1",
+                        "kind": "report_fragment",
+                        "payload": {
+                            "conclusion": "Near-term relative performance may stay weak.",
+                            "risk": "Catalysts may fail to materialize in time.",
+                        },
+                    }
+                ],
+                latest_sector_snapshot=self.snapshot,
+            )
+            run_root = next(settings.runs_root.iterdir())
+            trace_payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(provider.calls, 1)
+        review_plan = list(result.get("subagent_plans") or [])[0]
+        review_node_ids = [str(node.get("node_id") or "") for node in list(review_plan.get("nodes") or [])]
+        self.assertIn("review_summary_builder", review_node_ids)
+        self.assertFalse(any(node_id.startswith("review_candidate_") for node_id in review_node_ids))
+        self.assertEqual(result["findings"], [])
+        hybrid_rows = [
+            row
+            for row in list(trace_payload.get("dynamic_trace") or [])
+            if str(row.get("event") or "") == "subagent_phase_hybrid_applied"
+        ]
+        self.assertEqual(len(hybrid_rows), 1)
+        self.assertEqual(hybrid_rows[0]["applied_plan_variant"], "summary_only")
 
 
 if __name__ == "__main__":

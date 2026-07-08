@@ -11,6 +11,8 @@ from research_system.agents.reviewer.reviewer_candidate_support import ReviewerC
 from research_system.agents.reviewer.reviewer_strategy_support import ReviewerStrategySupport
 from research_system.agents.reviewer.reviewer_summary_support import ReviewerSummarySupport
 from research_system.agents.reviewer.reviewer_verdict_support import ReviewerVerdictSupport
+from research_system.runtime.platform.settings import Settings
+from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.schemas.review import ClaimVerdictBreakdown, ReviewFinding
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
@@ -33,8 +35,16 @@ from research_system.subagents.reviewing import (
 class ReviewerService(RuntimeBoundSubagentInvoker):
     agent_name = "reviewer"
 
-    def __init__(self, review_policy: dict | None = None, runs_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        review_policy: dict | None = None,
+        runs_root: Path | None = None,
+        llm_provider: OpenAIProvider | None = None,
+        settings: Settings | None = None,
+    ) -> None:
         self.review_policy = review_policy or {}
+        self.llm_provider = llm_provider
+        self.settings = settings
         self.runs_root = runs_root
         self.strategy_support = ReviewerStrategySupport(self.review_policy)
         self.candidate_support = ReviewerCandidateSupport()
@@ -71,6 +81,10 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
             emit_event=self._emit_runtime_event,
             cache_context_builder=self._subagent_dag_cache_context,
             start_from_node_id_builder=self._subagent_dag_start_from_node_id,
+            runtime_binding_getter=self._runtime_binding_for_events,
+            llm_provider=self.llm_provider,
+            settings=self.settings,
+            service_name=self.agent_name,
         )
         self.phase_policy = ReviewerPhasePolicy()
 
@@ -136,6 +150,11 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
             patch_builder=lambda base_results: self._build_review_subagent_replan_patch(base_results=base_results),
             replan_builder=lambda current_plan, _patch, base_results: self._rebuild_review_subagent_plan(
                 plan=current_plan,
+                source_run_id=source_run_id,
+                base_results=base_results,
+            ),
+            candidate_plan_variants_builder=lambda rule_final_plan, _patch, base_results: self._build_review_candidate_plan_variants(
+                rule_final_plan=rule_final_plan,
                 source_run_id=source_run_id,
                 base_results=base_results,
             ),
@@ -296,6 +315,7 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
         plan: SubagentPlan,
         source_run_id: str,
         base_results: dict[str, SubagentDagNodeResult],
+        include_candidate_nodes: bool | None = None,
     ) -> SubagentPlan:
         candidates = list(((base_results["review_claim_extractor"].outputs or {}).get("candidates") or []))
         claim_type_counts = dict(((base_results["review_claim_extractor"].outputs or {}).get("claim_type_counts") or {}))
@@ -310,7 +330,12 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
             preferred_subagent_type="review_summary_builder",
         )
         candidate_nodes: list[SubagentPlanNode] = []
-        if sector_snapshot_available and not review_required:
+        should_include_candidate_nodes = (
+            bool(include_candidate_nodes)
+            if include_candidate_nodes is not None
+            else sector_snapshot_available and not review_required
+        )
+        if should_include_candidate_nodes:
             for index, candidate in enumerate(candidates, start=1):
                 node_id = f"review_candidate_{index}"
                 candidate_nodes.append(
@@ -350,6 +375,7 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
                 "review_graph_replanned_from_preprocess",
                 f"review_candidate_count={len(candidates)}",
                 f"review_required={str(review_required).lower()}",
+                f"review_candidate_execution_enabled={str(bool(candidate_nodes)).lower()}",
             ]
         )
         replanned.catalog_trace = {
@@ -358,6 +384,53 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
             "candidate_execution_enabled": bool(candidate_nodes),
         }
         return replanned
+
+    def _build_review_candidate_plan_variants(
+        self,
+        *,
+        rule_final_plan: SubagentPlan,
+        source_run_id: str,
+        base_results: dict[str, SubagentDagNodeResult],
+    ) -> dict[str, SubagentPlan]:
+        candidates = list(((base_results["review_claim_extractor"].outputs or {}).get("candidates") or []))
+        sector_snapshot_available = bool(((base_results["review_context_resolver"].outputs or {}).get("sector_snapshot_available") or False))
+        review_required = self._review_required_from_results(results=base_results)
+        rule_variant_id = (
+            "candidate_fanout"
+            if any(node.node_id.startswith("review_candidate_") for node in rule_final_plan.nodes)
+            else "summary_only"
+        )
+        variants: dict[str, SubagentPlan] = {rule_variant_id: rule_final_plan}
+        if not candidates:
+            return variants
+        variants["summary_only"] = variants.get("summary_only") or self._rebuild_review_subagent_plan(
+            plan=self._build_review_subagent_plan(),
+            source_run_id=source_run_id,
+            base_results=base_results,
+            include_candidate_nodes=False,
+        )
+        variants["summary_only"].notes = self._unique_notes(
+            [
+                *list(variants["summary_only"].notes or []),
+                "review_candidate_variant",
+                "review_variant=summary_only",
+            ]
+        )
+        if sector_snapshot_available and not review_required:
+            variants["candidate_fanout"] = variants.get("candidate_fanout") or self._rebuild_review_subagent_plan(
+                plan=self._build_review_subagent_plan(),
+                source_run_id=source_run_id,
+                base_results=base_results,
+                include_candidate_nodes=True,
+            )
+            variants["candidate_fanout"].notes = self._unique_notes(
+                [
+                    *list(variants["candidate_fanout"].notes or []),
+                    "review_candidate_variant",
+                    "review_variant=candidate_fanout",
+                ]
+            )
+        return variants
 
     def _review_required_from_results(
         self,

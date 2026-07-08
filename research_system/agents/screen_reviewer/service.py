@@ -10,6 +10,8 @@ from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.agents.screen_reviewer.screen_reviewer_finding_support import ScreenReviewerFindingSupport
 from research_system.agents.screen_reviewer.screen_reviewer_strategy_support import ScreenReviewerStrategySupport
 from research_system.agents.screen_reviewer.screen_reviewer_summary_support import ScreenReviewerSummarySupport
+from research_system.runtime.platform.settings import Settings
+from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.schemas.review import ReviewFinding
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
@@ -29,7 +31,14 @@ from research_system.subagents.reviewing import (
 class ScreenReviewerService(RuntimeBoundSubagentInvoker):
     agent_name = "screen_reviewer"
 
-    def __init__(self, runs_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        runs_root: Path | None = None,
+        llm_provider: OpenAIProvider | None = None,
+        settings: Settings | None = None,
+    ) -> None:
+        self.llm_provider = llm_provider
+        self.settings = settings
         self.strategy_support = ScreenReviewerStrategySupport()
         self.finding_support = ScreenReviewerFindingSupport()
         self.summary_support = ScreenReviewerSummarySupport()
@@ -54,6 +63,10 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
             emit_event=self._emit_runtime_event,
             cache_context_builder=self._subagent_dag_cache_context,
             start_from_node_id_builder=self._subagent_dag_start_from_node_id,
+            runtime_binding_getter=self._runtime_binding_for_events,
+            llm_provider=self.llm_provider,
+            settings=self.settings,
+            service_name=self.agent_name,
         )
         self.phase_policy = ScreenReviewerPhasePolicy()
 
@@ -105,6 +118,11 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
             ),
             replan_builder=lambda current_plan, _patch, _base_results: self._rebuild_screen_review_subagent_plan(
                 plan=current_plan,
+                source_run_id=source_run_id,
+                candidates=candidates,
+            ),
+            candidate_plan_variants_builder=lambda rule_final_plan, _patch, _base_results: self._build_screen_review_candidate_plan_variants(
+                rule_final_plan=rule_final_plan,
                 source_run_id=source_run_id,
                 candidates=candidates,
             ),
@@ -213,6 +231,7 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
         plan: SubagentPlan,
         source_run_id: str,
         candidates: list[dict],
+        include_candidate_nodes: bool | None = None,
     ) -> SubagentPlan:
         candidate_entry = self._select_screen_review_catalog_entry(
             capability="screen_review_candidate",
@@ -223,22 +242,24 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
             preferred_subagent_type="screen_review_summary_builder",
         )
         candidate_nodes: list[SubagentPlanNode] = []
-        for index, candidate in enumerate(candidates, start=1):
-            node_id = f"screen_review_candidate_{index}"
-            candidate_nodes.append(
-                self._build_catalog_plan_node(
-                    node_id=node_id,
-                    subagent_type=candidate_entry.subagent_type,
-                    objective=f"Review screened candidate {index}.",
-                    inputs={
-                        "source_run_id": source_run_id,
-                        "candidate": candidate,
-                    },
-                    tags=["catalog_selected", "parallel_candidate"],
-                    cache_key=node_id,
-                    notes=["phase=review_execution", f"symbol={candidate.get('symbol') or ''}"],
+        should_include_candidate_nodes = bool(include_candidate_nodes) if include_candidate_nodes is not None else bool(candidates)
+        if should_include_candidate_nodes:
+            for index, candidate in enumerate(candidates, start=1):
+                node_id = f"screen_review_candidate_{index}"
+                candidate_nodes.append(
+                    self._build_catalog_plan_node(
+                        node_id=node_id,
+                        subagent_type=candidate_entry.subagent_type,
+                        objective=f"Review screened candidate {index}.",
+                        inputs={
+                            "source_run_id": source_run_id,
+                            "candidate": candidate,
+                        },
+                        tags=["catalog_selected", "parallel_candidate"],
+                        cache_key=node_id,
+                        notes=["phase=review_execution", f"symbol={candidate.get('symbol') or ''}"],
+                    )
                 )
-            )
         summary_node = self._build_catalog_plan_node(
             node_id="screen_review_summary_builder",
             subagent_type=summary_entry.subagent_type,
@@ -255,6 +276,7 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
                 *list(replanned.notes or []),
                 "screen_review_graph_replanned_from_strategy",
                 f"screen_review_candidate_count={len(candidates)}",
+                f"screen_review_candidate_execution_enabled={str(bool(candidate_nodes)).lower()}",
             ]
         )
         replanned.catalog_trace = {
@@ -263,6 +285,48 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
             "candidate_execution_enabled": bool(candidate_nodes),
         }
         return replanned
+
+    def _build_screen_review_candidate_plan_variants(
+        self,
+        *,
+        rule_final_plan: SubagentPlan,
+        source_run_id: str,
+        candidates: list[dict],
+    ) -> dict[str, SubagentPlan]:
+        rule_variant_id = (
+            "candidate_fanout"
+            if any(node.node_id.startswith("screen_review_candidate_") for node in rule_final_plan.nodes)
+            else "summary_only"
+        )
+        variants: dict[str, SubagentPlan] = {rule_variant_id: rule_final_plan}
+        variants["summary_only"] = variants.get("summary_only") or self._rebuild_screen_review_subagent_plan(
+            plan=self._build_screen_review_subagent_plan(),
+            source_run_id=source_run_id,
+            candidates=candidates,
+            include_candidate_nodes=False,
+        )
+        variants["summary_only"].notes = self._unique_notes(
+            [
+                *list(variants["summary_only"].notes or []),
+                "screen_review_candidate_variant",
+                "screen_review_variant=summary_only",
+            ]
+        )
+        if candidates:
+            variants["candidate_fanout"] = variants.get("candidate_fanout") or self._rebuild_screen_review_subagent_plan(
+                plan=self._build_screen_review_subagent_plan(),
+                source_run_id=source_run_id,
+                candidates=candidates,
+                include_candidate_nodes=True,
+            )
+            variants["candidate_fanout"].notes = self._unique_notes(
+                [
+                    *list(variants["candidate_fanout"].notes or []),
+                    "screen_review_candidate_variant",
+                    "screen_review_variant=candidate_fanout",
+                ]
+            )
+        return variants
 
     @staticmethod
     def _unique_notes(notes: list[str]) -> list[str]:
