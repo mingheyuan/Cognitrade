@@ -7,12 +7,19 @@ from research_system.cli.commands.cli_command_payloads import (
     RUN_ID_QUERY_COMMANDS,
     RUN_ID_SELECTOR_COMMANDS,
     STATUS_FILTER_COMMANDS,
+    SUBAGENT_DISCOVERY_COMMANDS,
     SUBAGENT_COMMANDS,
 )
 from research_system.cli.commands.cli_command_proposal_support import (
     execute_proposal_detail_command,
     execute_proposals_command,
     execute_review_proposal_command,
+)
+from research_system.cli.commands.cli_command_subagent_discovery_support import (
+    execute_activate_subagent_discovery_command,
+    execute_review_subagent_discovery_command,
+    execute_subagent_discovery_detail_command,
+    execute_subagent_discoveries_command,
 )
 from research_system.cli.commands.cli_command_run_support import execute_run_id_command, execute_run_query_command
 from research_system.cli.commands.cli_command_system_support import (
@@ -30,6 +37,10 @@ def build_cli_command_executors() -> dict[str, object]:
         "proposals": execute_proposals_command,
         "proposal": execute_proposal_detail_command,
         "review-proposal": execute_review_proposal_command,
+        "subagent-discoveries": execute_subagent_discoveries_command,
+        "subagent-discovery": execute_subagent_discovery_detail_command,
+        "review-subagent-discovery": execute_review_subagent_discovery_command,
+        "activate-subagent-discovery": execute_activate_subagent_discovery_command,
         "replay": execute_run_id_command,
         "events": execute_run_id_command,
         "run-steps": execute_run_id_command,
@@ -66,6 +77,8 @@ def resolve_cli_command_executor(command: str, *, executors: dict[str, object] |
         raise ValueError(f"missing subagent command executor: {command}")
     if command in PROPOSAL_COMMANDS and command not in resolved_executors:
         raise ValueError(f"missing proposal command executor: {command}")
+    if command in SUBAGENT_DISCOVERY_COMMANDS and command not in resolved_executors:
+        raise ValueError(f"missing subagent discovery command executor: {command}")
     executor = resolved_executors.get(command)
     if executor is None:
         raise ValueError(f"unsupported command: {command}")

@@ -16,6 +16,12 @@ from research_system.cli.commands.cli_command_proposal_support import (
     execute_proposals_command,
     execute_review_proposal_command,
 )
+from research_system.cli.commands.cli_command_subagent_discovery_support import (
+    execute_activate_subagent_discovery_command,
+    execute_review_subagent_discovery_command,
+    execute_subagent_discovery_detail_command,
+    execute_subagent_discoveries_command,
+)
 from research_system.cli.commands.cli_command_run_support import execute_run_id_command, execute_run_query_command
 from research_system.cli.commands.cli_command_system_support import (
     execute_check_command,
@@ -37,6 +43,16 @@ class CliCommandDispatchRuntimeTests(unittest.TestCase):
         self.assertIs(CLI_COMMAND_EXECUTORS["proposals"], execute_proposals_command)
         self.assertIs(CLI_COMMAND_EXECUTORS["proposal"], execute_proposal_detail_command)
         self.assertIs(CLI_COMMAND_EXECUTORS["review-proposal"], execute_review_proposal_command)
+        self.assertIs(CLI_COMMAND_EXECUTORS["subagent-discoveries"], execute_subagent_discoveries_command)
+        self.assertIs(CLI_COMMAND_EXECUTORS["subagent-discovery"], execute_subagent_discovery_detail_command)
+        self.assertIs(
+            CLI_COMMAND_EXECUTORS["review-subagent-discovery"],
+            execute_review_subagent_discovery_command,
+        )
+        self.assertIs(
+            CLI_COMMAND_EXECUTORS["activate-subagent-discovery"],
+            execute_activate_subagent_discovery_command,
+        )
         self.assertIs(CLI_COMMAND_EXECUTORS["trace"], execute_run_id_command)
         self.assertIs(CLI_COMMAND_EXECUTORS["metrics"], execute_run_id_command)
         self.assertIs(CLI_COMMAND_EXECUTORS["subagent-read"], execute_run_query_command)

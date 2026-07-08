@@ -36,6 +36,10 @@ CHAT_COMMANDS = [
     "/proposals",
     "/proposal",
     "/review-proposal",
+    "/subagent-discoveries",
+    "/subagent-discovery",
+    "/review-subagent-discovery",
+    "/activate-subagent-discovery",
     "/status",
     "/doctor",
     "/check",
@@ -130,6 +134,20 @@ def chat_completion_candidates(text_before_cursor: str, state) -> list[str]:
             return []
         if len(parts) == 3:
             return ["approve", "reject"]
+        return []
+    if command == "/subagent-discoveries":
+        return ["10", "20", "50", "pending", "approved", "rejected"]
+    if command == "/subagent-discovery":
+        return []
+    if command == "/review-subagent-discovery":
+        if len(parts) == 2 and text_before_cursor.endswith(" "):
+            return ["approve", "reject"]
+        if len(parts) <= 2:
+            return []
+        if len(parts) == 3:
+            return ["approve", "reject"]
+        return []
+    if command == "/activate-subagent-discovery":
         return []
     if command == "/thread":
         return []

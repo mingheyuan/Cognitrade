@@ -40,6 +40,19 @@ def print_proposal_rows(rows: list[object], *, emit_text, output_writer=None) ->
     return True
 
 
+def print_subagent_discovery_rows(rows: list[object], *, emit_text, output_writer=None) -> bool:
+    if not rows:
+        return False
+    normalized_rows = [row for row in rows if isinstance(row, dict)]
+    if len(normalized_rows) != len(rows):
+        return False
+    if not all("ticket_id" in row and "search_query" in row for row in normalized_rows):
+        return False
+    for row in normalized_rows:
+        emit_text(output_writer, meta_update(render_subagent_discovery_row_text(row)))
+    return True
+
+
 def print_proposal_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
     if "proposal_id" not in payload or "proposal_type" not in payload:
         return False
@@ -54,6 +67,31 @@ def print_proposal_payload(payload: dict, *, emit_text, output_writer=None) -> b
             emit_text(output_writer, meta_update(render_proposal_review_history_line(row)))
     for section in proposal_result_sections(payload):
         emit_text(output_writer, meta_update(json.dumps(section, ensure_ascii=True, indent=2)))
+    return True
+
+
+def print_subagent_discovery_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
+    if "ticket_id" not in payload or "capability_gap" not in payload or "tool_discovery_request" not in payload:
+        return False
+    for label, value in subagent_discovery_detail_fields(payload):
+        emit_text(output_writer, meta_update(render_labeled_field_line(label, value)))
+    candidate_entries = payload.get("candidate_catalog_entries") or []
+    if isinstance(candidate_entries, list) and candidate_entries:
+        emit_text(output_writer, meta_update("candidate_catalog_entries:"))
+        for row in candidate_entries:
+            if isinstance(row, dict):
+                emit_text(output_writer, meta_update(render_subagent_catalog_entry_line(row)))
+    activated_entries = payload.get("activated_entries") or []
+    if isinstance(activated_entries, list) and activated_entries:
+        emit_text(output_writer, meta_update("activated_entries:"))
+        for row in activated_entries:
+            if isinstance(row, dict):
+                emit_text(output_writer, meta_update(render_subagent_activation_entry_line(row)))
+    notes = payload.get("notes") or []
+    if isinstance(notes, list) and notes:
+        emit_text(output_writer, meta_update("notes:"))
+        for note in notes:
+            emit_text(output_writer, meta_update(f"  - {note}"))
     return True
 
 
@@ -122,3 +160,60 @@ def print_doctor_payload(payload: dict, *, emit_text, output_writer=None) -> boo
 
 def render_labeled_field_line(label: str, value, indent: str = "") -> str:
     return f"{indent}{label}: {value}"
+
+
+def render_subagent_discovery_row_text(row: dict) -> str:
+    ticket_id = str(row.get("ticket_id") or "unknown")
+    status = str(row.get("status") or "pending")
+    intent = str(row.get("intent") or "-")
+    stage = str(row.get("stage") or "-")
+    capability = str(row.get("capability") or "-")
+    query = str(row.get("search_query") or "-")
+    counts = (
+        f"candidates={int(row.get('candidate_entry_count') or 0)} "
+        f"activations={int(row.get('activation_entry_count') or 0)}"
+    )
+    return (
+        f"{ticket_id}  [{status}]  intent={intent}  stage={stage}  "
+        f"capability={capability}  query={query}  {counts}"
+    )
+
+
+def subagent_discovery_detail_fields(payload: dict) -> list[tuple[str, str]]:
+    gap = payload.get("capability_gap") or {}
+    request = payload.get("tool_discovery_request") or {}
+    preferred_protocols = request.get("preferred_protocols") or []
+    return [
+        ("ticket_id", str(payload.get("ticket_id") or "")),
+        ("status", str(payload.get("status") or "")),
+        ("stored_status", str(payload.get("stored_status") or "")),
+        ("intent", str(gap.get("intent") or "")),
+        ("stage", str(gap.get("stage") or "")),
+        ("capability", str(gap.get("capability") or "")),
+        ("preferred_subagent_type", str(gap.get("preferred_subagent_type") or "")),
+        ("requires_llm", str(gap.get("requires_llm"))),
+        ("gap_reason", str(gap.get("reason") or "")),
+        ("search_query", str(request.get("search_query") or "")),
+        ("preferred_protocols", ", ".join(str(item) for item in preferred_protocols) or "-"),
+        ("request_reason", str(request.get("reason") or "")),
+        ("reviewer", str(payload.get("reviewer") or "")),
+        ("review_reason", str(payload.get("review_reason") or "")),
+    ]
+
+
+def render_subagent_catalog_entry_line(row: dict) -> str:
+    capabilities = ", ".join(str(item) for item in row.get("capabilities") or []) or "-"
+    tags = ", ".join(str(item) for item in row.get("tags") or []) or "-"
+    stage = str(row.get("stage") or "-")
+    summary = str(row.get("summary") or "").strip()
+    summary_part = f"  summary={summary}" if summary else ""
+    return (
+        f"  - {row.get('subagent_type')}  stage={stage}  capabilities={capabilities}  tags={tags}{summary_part}"
+    )
+
+
+def render_subagent_activation_entry_line(row: dict) -> str:
+    return (
+        f"  - {row.get('subagent_type')} -> {row.get('delegate_subagent_type')}  "
+        f"status={row.get('status')}  activated_by={row.get('activated_by') or '-'}"
+    )

@@ -155,6 +155,32 @@ class ChatCliTests(unittest.TestCase):
             parse_chat_input("/review-proposal 01PROP approve looks good"),
             {"action": "review-proposal", "proposal_id": "01PROP", "decision": "approve", "reason": "looks good"},
         )
+        self.assertEqual(
+            parse_chat_input("/subagent-discoveries 10 approved"),
+            {"action": "subagent-discoveries", "limit": 10, "status": "approved"},
+        )
+        self.assertEqual(
+            parse_chat_input("/subagent-discovery 01DISC"),
+            {"action": "subagent-discovery", "ticket_id": "01DISC"},
+        )
+        self.assertEqual(
+            parse_chat_input("/review-subagent-discovery 01DISC approve validated"),
+            {
+                "action": "review-subagent-discovery",
+                "ticket_id": "01DISC",
+                "decision": "approve",
+                "reason": "validated",
+            },
+        )
+        self.assertEqual(
+            parse_chat_input("/activate-subagent-discovery 01DISC stock_snapshot_collector candidate_screening_strategy"),
+            {
+                "action": "activate-subagent-discovery",
+                "ticket_id": "01DISC",
+                "delegate_subagent_type": "stock_snapshot_collector",
+                "candidate_subagent_type": "candidate_screening_strategy",
+            },
+        )
 
     def test_pending_clarification_can_resume_plain_follow_up(self) -> None:
         state = ChatSessionState(
@@ -215,6 +241,14 @@ class ChatCliTests(unittest.TestCase):
     def test_completion_candidates_for_proposal_commands(self) -> None:
         self.assertEqual(chat_completion_candidates("/proposals ", ChatSessionState()), ["10", "20", "50", "pending", "approved", "rejected"])
         self.assertEqual(chat_completion_candidates("/review-proposal 01PROP ", ChatSessionState()), ["approve", "reject"])
+        self.assertEqual(
+            chat_completion_candidates("/subagent-discoveries ", ChatSessionState()),
+            ["10", "20", "50", "pending", "approved", "rejected"],
+        )
+        self.assertEqual(
+            chat_completion_candidates("/review-subagent-discovery 01DISC ", ChatSessionState()),
+            ["approve", "reject"],
+        )
         self.assertEqual(chat_completion_candidates("/threads ", ChatSessionState()), ["5", "10", "20", "active", "all", "archived"])
 
     def test_store_pending_clarification_returns_session_patch(self) -> None:

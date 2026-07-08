@@ -21,6 +21,14 @@ class ChatCommandCatalogTests(unittest.TestCase):
         self.assertTrue(any("/proposals" in line for line in CHAT_COMMAND_SUMMARY_LINES))
         self.assertTrue(any("/proposal" in line for line in CHAT_COMMAND_SUMMARY_LINES))
         self.assertTrue(any("/review-proposal" in line for line in CHAT_COMMAND_SUMMARY_LINES))
+        self.assertTrue(any("/subagent-discoveries" in line for line in CHAT_HELP_LINES))
+        self.assertTrue(any("/subagent-discovery" in line for line in CHAT_HELP_LINES))
+        self.assertTrue(any("/review-subagent-discovery" in line for line in CHAT_HELP_LINES))
+        self.assertTrue(any("/activate-subagent-discovery" in line for line in CHAT_HELP_LINES))
+        self.assertTrue(any("/subagent-discoveries" in line for line in CHAT_COMMAND_SUMMARY_LINES))
+        self.assertTrue(any("/subagent-discovery" in line for line in CHAT_COMMAND_SUMMARY_LINES))
+        self.assertTrue(any("/review-subagent-discovery" in line for line in CHAT_COMMAND_SUMMARY_LINES))
+        self.assertTrue(any("/activate-subagent-discovery" in line for line in CHAT_COMMAND_SUMMARY_LINES))
 
     def test_help_and_popup_command_catalog_cover_fork_command(self) -> None:
         self.assertTrue(any("/fork" in line for line in CHAT_HELP_LINES))

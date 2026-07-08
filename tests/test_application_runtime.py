@@ -32,6 +32,16 @@ class ApplicationRuntimeTests(unittest.TestCase):
         rerun_subagent_args = parser.parse_args(
             ["rerun-subagent", "01RUN", "retrieve", "phase_two", "retrieval_decider"]
         )
+        discovery_args = parser.parse_args(["subagent-discovery", "01DISC"])
+        activate_args = parser.parse_args(
+            [
+                "activate-subagent-discovery",
+                "01DISC",
+                "stock_snapshot_collector",
+                "--candidate-subagent-type",
+                "candidate_screening_strategy",
+            ]
+        )
 
         self.assertEqual(metrics_args.command, "metrics")
         self.assertEqual(metrics_args.run_id, "01RUN")
@@ -43,6 +53,9 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertEqual(rerun_subagent_args.action_node_id, "retrieve")
         self.assertEqual(rerun_subagent_args.dag_id, "phase_two")
         self.assertEqual(rerun_subagent_args.subagent_node_id, "retrieval_decider")
+        self.assertEqual(discovery_args.ticket_id, "01DISC")
+        self.assertEqual(activate_args.delegate_subagent_type, "stock_snapshot_collector")
+        self.assertEqual(activate_args.candidate_subagent_type, "candidate_screening_strategy")
 
     def test_execute_app_main_command_routes_query_from_thread_and_node_arguments(self) -> None:
         calls: list[dict[str, object]] = []
@@ -71,6 +84,23 @@ class ApplicationRuntimeTests(unittest.TestCase):
             action_node_id="retrieve",
             dag_id="phase_two",
             subagent_node_id="retrieval_decider",
+            as_json=False,
+        )
+        review_discovery_args = argparse.Namespace(
+            command="review-subagent-discovery",
+            ticket_id="01DISC",
+            decision="approve",
+            reviewer="manual_cli_review",
+            reason="validated",
+            as_json=False,
+        )
+        activate_discovery_args = argparse.Namespace(
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            delegate_subagent_type="stock_snapshot_collector",
+            candidate_subagent_type="candidate_screening_strategy",
+            activated_by="ops_user",
+            reason="delegate approved",
             as_json=False,
         )
 
@@ -116,6 +146,34 @@ class ApplicationRuntimeTests(unittest.TestCase):
             ),
             0,
         )
+        self.assertEqual(
+            application_execute_app_main_command(
+                settings,
+                review_discovery_args,
+                build_chat_entry_runtime_fn=None,
+                run_chat_entry_fn=None,
+                run_chat_tui_fn=None,
+                run_chat_fallback_fn=None,
+                handle_chat_line_fn=None,
+                execute_cli_command_fn=fake_execute_cli_command_fn,
+                print_payload_fn=lambda payload, as_json: 0,
+            ),
+            0,
+        )
+        self.assertEqual(
+            application_execute_app_main_command(
+                settings,
+                activate_discovery_args,
+                build_chat_entry_runtime_fn=None,
+                run_chat_entry_fn=None,
+                run_chat_tui_fn=None,
+                run_chat_fallback_fn=None,
+                handle_chat_line_fn=None,
+                execute_cli_command_fn=fake_execute_cli_command_fn,
+                print_payload_fn=lambda payload, as_json: 0,
+            ),
+            0,
+        )
 
         self.assertEqual(calls[0]["command"], "run-thread")
         self.assertEqual(calls[0]["query"], "thread-child")
@@ -125,6 +183,12 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertEqual(calls[2]["action_node_id"], "retrieve")
         self.assertEqual(calls[2]["dag_id"], "phase_two")
         self.assertEqual(calls[2]["subagent_node_id"], "retrieval_decider")
+        self.assertEqual(calls[3]["command"], "review-subagent-discovery")
+        self.assertEqual(calls[3]["query"], "approve")
+        self.assertEqual(calls[3]["ticket_id"], "01DISC")
+        self.assertEqual(calls[4]["command"], "activate-subagent-discovery")
+        self.assertEqual(calls[4]["delegate_subagent_type"], "stock_snapshot_collector")
+        self.assertEqual(calls[4]["candidate_subagent_type"], "candidate_screening_strategy")
 
 
 if __name__ == "__main__":

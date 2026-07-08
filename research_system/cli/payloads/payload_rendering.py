@@ -22,6 +22,8 @@ from research_system.cli.payloads.payload_rendering_specialized import (
     print_proposal_rows as specialized_print_proposal_rows,
     print_replay_payload as specialized_print_replay_payload,
     print_status_payload as specialized_print_status_payload,
+    print_subagent_discovery_payload as specialized_print_subagent_discovery_payload,
+    print_subagent_discovery_rows as specialized_print_subagent_discovery_rows,
 )
 from research_system.services.payloads.runs.run_payloads import run_payload_fields
 
@@ -50,11 +52,15 @@ def print_payload(payload: object, *, as_json: bool, emit_text, output_writer=No
         emit_text(output_writer, meta_update(json.dumps(payload, ensure_ascii=True, indent=2)))
         return 0
     if isinstance(payload, list):
+        if print_subagent_discovery_rows(payload, emit_text=emit_text, output_writer=output_writer):
+            return 0
         if print_proposal_rows(payload, emit_text=emit_text, output_writer=output_writer):
             return 0
         print_rows(payload, emit_text=emit_text, output_writer=output_writer)
         return 0
     if isinstance(payload, dict):
+        if print_subagent_discovery_payload(payload, emit_text=emit_text, output_writer=output_writer):
+            return 0
         if print_proposal_payload(payload, emit_text=emit_text, output_writer=output_writer):
             return 0
         if print_status_payload(payload, emit_text=emit_text, output_writer=output_writer):
@@ -100,8 +106,16 @@ def print_proposal_rows(rows: list[object], *, emit_text, output_writer=None) ->
     return specialized_print_proposal_rows(rows, emit_text=emit_text, output_writer=output_writer)
 
 
+def print_subagent_discovery_rows(rows: list[object], *, emit_text, output_writer=None) -> bool:
+    return specialized_print_subagent_discovery_rows(rows, emit_text=emit_text, output_writer=output_writer)
+
+
 def print_proposal_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
     return specialized_print_proposal_payload(payload, emit_text=emit_text, output_writer=output_writer)
+
+
+def print_subagent_discovery_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
+    return specialized_print_subagent_discovery_payload(payload, emit_text=emit_text, output_writer=output_writer)
 
 
 def print_status_payload(payload: dict, *, emit_text, output_writer=None) -> bool:

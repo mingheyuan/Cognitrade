@@ -139,6 +139,45 @@ def parse_chat_input(line: str) -> dict[str, object]:
             "decision": decision,
             "reason": " ".join(parts[3:]).strip() or None,
         }
+    if command == "/subagent-discoveries":
+        return _parse_subagent_discoveries_command(parts)
+    if command == "/subagent-discovery":
+        if len(parts) != 2:
+            return {"action": "error", "message": "usage: /subagent-discovery <ticket_id>"}
+        return {"action": "subagent-discovery", "ticket_id": parts[1].strip()}
+    if command == "/review-subagent-discovery":
+        if len(parts) < 3:
+            return {
+                "action": "error",
+                "message": "usage: /review-subagent-discovery <ticket_id> <approve|reject> [reason]",
+            }
+        decision = parts[2].strip().lower()
+        if decision not in {"approve", "reject"}:
+            return {
+                "action": "error",
+                "message": "usage: /review-subagent-discovery <ticket_id> <approve|reject> [reason]",
+            }
+        return {
+            "action": "review-subagent-discovery",
+            "ticket_id": parts[1].strip(),
+            "decision": decision,
+            "reason": " ".join(parts[3:]).strip() or None,
+        }
+    if command == "/activate-subagent-discovery":
+        if len(parts) < 3 or len(parts) > 4:
+            return {
+                "action": "error",
+                "message": (
+                    "usage: /activate-subagent-discovery <ticket_id> <delegate_subagent_type> "
+                    "[candidate_subagent_type]"
+                ),
+            }
+        return {
+            "action": "activate-subagent-discovery",
+            "ticket_id": parts[1].strip(),
+            "delegate_subagent_type": parts[2].strip(),
+            "candidate_subagent_type": parts[3].strip() if len(parts) == 4 else None,
+        }
     if command in {"/status", "/doctor", "/check", "/cleanup"}:
         return {"action": command.removeprefix("/")}
     if command in {"/reindex", "/reindex-qdrant"}:
@@ -204,3 +243,20 @@ def _parse_proposals_command(parts: list[str]) -> dict[str, object]:
             continue
         return {"action": "error", "message": "usage: /proposals [limit] [pending|approved|rejected]"}
     return {"action": "proposals", "limit": limit, "status": status}
+
+
+def _parse_subagent_discoveries_command(parts: list[str]) -> dict[str, object]:
+    limit = 50
+    status = None
+    for token in parts[1:]:
+        if token.isdigit() and limit == 50:
+            limit = int(token)
+            continue
+        if status is None and token in {"pending", "approved", "rejected"}:
+            status = token
+            continue
+        return {
+            "action": "error",
+            "message": "usage: /subagent-discoveries [limit] [pending|approved|rejected]",
+        }
+    return {"action": "subagent-discoveries", "limit": limit, "status": status}

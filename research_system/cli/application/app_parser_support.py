@@ -34,6 +34,30 @@ def build_app_parser() -> argparse.ArgumentParser:
     review_proposal_parser.add_argument("--reviewer", default="manual_cli_review")
     review_proposal_parser.add_argument("--json", action="store_true", dest="as_json")
 
+    discoveries_parser = subparsers.add_parser("subagent-discoveries")
+    discoveries_parser.add_argument("--status", choices=("pending", "approved", "rejected"))
+    discoveries_parser.add_argument("--limit", type=int, default=50)
+    discoveries_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    discovery_parser = subparsers.add_parser("subagent-discovery")
+    discovery_parser.add_argument("ticket_id")
+    discovery_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    review_discovery_parser = subparsers.add_parser("review-subagent-discovery")
+    review_discovery_parser.add_argument("ticket_id")
+    review_discovery_parser.add_argument("decision", choices=("approve", "reject"))
+    review_discovery_parser.add_argument("--reason")
+    review_discovery_parser.add_argument("--reviewer", default="manual_cli_review")
+    review_discovery_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    activate_discovery_parser = subparsers.add_parser("activate-subagent-discovery")
+    activate_discovery_parser.add_argument("ticket_id")
+    activate_discovery_parser.add_argument("delegate_subagent_type")
+    activate_discovery_parser.add_argument("--candidate-subagent-type")
+    activate_discovery_parser.add_argument("--activated-by", default="manual_cli_activation")
+    activate_discovery_parser.add_argument("--reason")
+    activate_discovery_parser.add_argument("--json", action="store_true", dest="as_json")
+
     replay_parser = subparsers.add_parser("replay")
     replay_parser.add_argument("run_id")
     replay_parser.add_argument("--json", action="store_true", dest="as_json")

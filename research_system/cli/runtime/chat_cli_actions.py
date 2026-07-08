@@ -10,6 +10,7 @@ from research_system.cli.commands.cli_command_payloads import (
     RUN_ID_QUERY_COMMANDS,
     RUN_ID_SELECTOR_COMMANDS,
     STATUS_FILTER_COMMANDS,
+    SUBAGENT_DISCOVERY_COMMANDS,
     SUBAGENT_COMMANDS,
     build_cli_command_payload,
 )
@@ -199,6 +200,57 @@ def _handle_review_proposal_cli_action(runtime: ChatActionRuntime) -> bool:
     return True
 
 
+def _handle_subagent_discoveries_cli_action(runtime: ChatActionRuntime) -> bool:
+    payload = runtime.run_cli_command(
+        **build_cli_command_payload(
+            command="subagent-discoveries",
+            limit=int(runtime.parsed.get("limit") or 50),
+            status=runtime.parsed.get("status"),
+        ),
+    )
+    runtime.print_payload(payload)
+    return True
+
+
+def _handle_subagent_discovery_detail_cli_action(runtime: ChatActionRuntime) -> bool:
+    payload = runtime.run_cli_command(
+        **build_cli_command_payload(
+            command="subagent-discovery",
+            ticket_id=str(runtime.parsed.get("ticket_id") or "").strip(),
+        ),
+    )
+    runtime.print_payload(payload)
+    return True
+
+
+def _handle_review_subagent_discovery_cli_action(runtime: ChatActionRuntime) -> bool:
+    payload = runtime.run_cli_command(
+        **build_cli_command_payload(
+            command="review-subagent-discovery",
+            ticket_id=str(runtime.parsed.get("ticket_id") or "").strip(),
+            decision=str(runtime.parsed.get("decision") or "").strip(),
+            reviewer="manual_chat_review",
+            reason=runtime.parsed.get("reason"),
+        ),
+    )
+    runtime.print_payload(payload)
+    return True
+
+
+def _handle_activate_subagent_discovery_cli_action(runtime: ChatActionRuntime) -> bool:
+    payload = runtime.run_cli_command(
+        **build_cli_command_payload(
+            command="activate-subagent-discovery",
+            ticket_id=str(runtime.parsed.get("ticket_id") or "").strip(),
+            delegate_subagent_type=str(runtime.parsed.get("delegate_subagent_type") or "").strip(),
+            candidate_subagent_type=str(runtime.parsed.get("candidate_subagent_type") or "").strip() or None,
+            activated_by="manual_chat_activation",
+        ),
+    )
+    runtime.print_payload(payload)
+    return True
+
+
 _CLI_ACTION_HANDLERS = {
     "threads": _handle_threads_cli_action,
     "subagent-read": _handle_subagent_cli_action,
@@ -209,6 +261,10 @@ _CLI_ACTION_HANDLERS = {
     "proposals": _handle_proposals_cli_action,
     "proposal": _handle_proposal_detail_cli_action,
     "review-proposal": _handle_review_proposal_cli_action,
+    "subagent-discoveries": _handle_subagent_discoveries_cli_action,
+    "subagent-discovery": _handle_subagent_discovery_detail_cli_action,
+    "review-subagent-discovery": _handle_review_subagent_discovery_cli_action,
+    "activate-subagent-discovery": _handle_activate_subagent_discovery_cli_action,
 }
 
 
@@ -235,6 +291,11 @@ def handle_chat_cli_action(runtime: ChatActionRuntime) -> bool:
         return _handle_status_like_cli_action(runtime)
 
     if runtime.action in PROPOSAL_COMMANDS:
+        handler = _CLI_ACTION_HANDLERS.get(runtime.action or "")
+        if handler is not None:
+            return handler(runtime)
+
+    if runtime.action in SUBAGENT_DISCOVERY_COMMANDS:
         handler = _CLI_ACTION_HANDLERS.get(runtime.action or "")
         if handler is not None:
             return handler(runtime)

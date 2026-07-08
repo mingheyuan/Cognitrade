@@ -60,8 +60,12 @@ def execute_cli_command(
     query: str | None = None,
     intent: str | None = None,
     run_id: str | None = None,
+    ticket_id: str | None = None,
     limit: int = 20,
     status_filter: str | None = None,
+    activated_by: str | None = None,
+    delegate_subagent_type: str | None = None,
+    candidate_subagent_type: str | None = None,
     orchestrator_cls=ResearchOrchestrator,
 ) -> object:
     runtime = build_cli_command_runtime(
@@ -78,8 +82,12 @@ def execute_cli_command(
         query=query,
         intent=intent,
         run_id=run_id,
+        ticket_id=ticket_id,
         limit=limit,
         status_filter=status_filter,
+        activated_by=activated_by,
+        delegate_subagent_type=delegate_subagent_type,
+        candidate_subagent_type=candidate_subagent_type,
         runtime=runtime,
     )
 

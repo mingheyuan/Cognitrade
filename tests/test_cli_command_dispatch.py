@@ -40,6 +40,94 @@ class _DispatchOrchestratorStub:
     def review_proposal(self, proposal_id: str, *, decision: str, reviewer: str, reason: str | None = None) -> dict:
         return {"proposal_id": proposal_id, "status": "approved", "reviewer": reviewer, "review_reason": reason or "", "decision": decision}
 
+    def list_subagent_discovery_requests(self, *, status=None, limit=50) -> list[dict]:
+        return [
+            {
+                "ticket_id": "01DISC",
+                "status": status or "pending",
+                "intent": "stock_screen",
+                "stage": "collect",
+                "capability": "screening_strategy",
+                "search_query": "screening strategy resolver",
+                "candidate_entry_count": 1,
+                "activation_entry_count": 0,
+                "updated_at": "2026-07-08T00:00:00+00:00",
+            }
+        ]
+
+    def show_subagent_discovery_request(self, ticket_id: str) -> dict:
+        return {
+            "ticket_id": ticket_id,
+            "status": "approved",
+            "stored_status": "approved",
+            "capability_gap": {
+                "intent": "stock_screen",
+                "stage": "collect",
+                "capability": "screening_strategy",
+                "preferred_subagent_type": "candidate_screening_strategy",
+                "requires_llm": False,
+                "reason": "missing capability",
+            },
+            "tool_discovery_request": {
+                "search_query": "screening strategy resolver",
+                "preferred_protocols": ["mcp"],
+                "reason": "discover resolver",
+            },
+            "candidate_catalog_entries": [
+                {
+                    "subagent_type": "candidate_screening_strategy",
+                    "stage": "collect",
+                    "capabilities": ["screening_strategy"],
+                    "tags": ["approved_discovery_candidate"],
+                }
+            ],
+            "activated_entries": [],
+            "notes": ["approved candidate available"],
+        }
+
+    def review_subagent_discovery_request(
+        self,
+        ticket_id: str,
+        *,
+        decision: str,
+        reviewer: str,
+        reason: str | None = None,
+    ) -> dict:
+        return {
+            "ticket_id": ticket_id,
+            "status": "approved" if decision == "approve" else "rejected",
+            "reviewer": reviewer,
+            "review_reason": reason or "",
+            "decision": decision,
+        }
+
+    def activate_subagent_discovery_request(
+        self,
+        ticket_id: str,
+        *,
+        delegate_subagent_type: str,
+        candidate_subagent_type: str | None = None,
+        activated_by: str = "manual_cli_activation",
+        reason: str | None = None,
+    ) -> dict:
+        return {
+            "ticket_id": ticket_id,
+            "status": "approved",
+            "message": f"activated discovery alias {candidate_subagent_type or 'candidate_screening_strategy'}",
+            "result": {
+                "ticket_id": ticket_id,
+                "activated_entries": [
+                    {
+                        "subagent_type": candidate_subagent_type or "candidate_screening_strategy",
+                        "delegate_subagent_type": delegate_subagent_type,
+                        "activated_by": activated_by,
+                        "activation_reason": reason or "",
+                        "status": "active",
+                    }
+                ],
+            },
+        }
+
     def replay(self, run_id: str) -> dict:
         return {"run_id": run_id, "status": "completed"}
 
@@ -167,6 +255,45 @@ class CliCommandDispatchTests(unittest.TestCase):
         self.assertEqual(detail["proposal_id"], "01PROP")
         self.assertEqual(reviewed["reviewer"], "reviewer_1")
         self.assertEqual(reviewed["review_reason"], "looks good")
+
+    def test_execute_cli_payload_command_dispatches_subagent_discovery_commands(self) -> None:
+        discoveries = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="subagent-discoveries",
+            limit=5,
+            status_filter="approved",
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
+        detail = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="subagent-discovery",
+            ticket_id="01DISC",
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
+        reviewed = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="review-subagent-discovery",
+            ticket_id="01DISC",
+            query="approve",
+            intent="reviewer_2",
+            status_filter="validated",
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
+        activated = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            query="stock_snapshot_collector",
+            activated_by="ops_user",
+            status_filter="delegate approved",
+            candidate_subagent_type="candidate_screening_strategy",
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
+
+        self.assertEqual(discoveries[0]["ticket_id"], "01DISC")
+        self.assertEqual(detail["ticket_id"], "01DISC")
+        self.assertEqual(reviewed["reviewer"], "reviewer_2")
+        self.assertEqual(activated["result"]["activated_entries"][0]["delegate_subagent_type"], "stock_snapshot_collector")
 
     def test_execute_cli_payload_command_dispatches_run_id_commands(self) -> None:
         replayed = execute_cli_payload_command(

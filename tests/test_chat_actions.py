@@ -918,6 +918,93 @@ class ChatActionsTests(unittest.TestCase):
         self.assertEqual(calls[2]["status_filter"], "looks good")
         self.assertEqual(len(rendered), 3)
 
+    def test_handle_chat_cli_action_supports_subagent_discovery_commands(self) -> None:
+        session = TuiSession(
+            settings=Settings.from_env(Path(".")),
+            state=ChatSessionState(),
+            llm_provider=ProviderUnavailableStub(),  # type: ignore[arg-type]
+            task_router=TaskRouter(),
+            output_lines=[],
+        )
+        calls: list[dict] = []
+
+        def fake_cli_command_runner(settings, *, command, **kwargs):
+            calls.append({"command": command, **kwargs})
+            if command == "subagent-discoveries":
+                return [
+                    {
+                        "ticket_id": "01DISC",
+                        "status": "approved",
+                        "intent": "stock_screen",
+                        "stage": "collect",
+                        "capability": "screening_strategy",
+                        "search_query": "screening strategy resolver",
+                        "candidate_entry_count": 1,
+                        "activation_entry_count": 0,
+                        "updated_at": "2026-07-08T00:00:00+00:00",
+                    }
+                ]
+            if command == "subagent-discovery":
+                return {
+                    "ticket_id": "01DISC",
+                    "status": "approved",
+                    "capability_gap": {"capability": "screening_strategy"},
+                    "tool_discovery_request": {"search_query": "screening strategy resolver"},
+                }
+            if command == "review-subagent-discovery":
+                return {"ticket_id": "01DISC", "status": "approved"}
+            if command == "activate-subagent-discovery":
+                return {"ticket_id": "01DISC", "status": "approved", "result": {"activated_entries": []}}
+            raise AssertionError(command)
+
+        rendered: list[object] = []
+
+        for action, parsed in [
+            ("subagent-discoveries", {"action": "subagent-discoveries", "limit": 10, "status": "approved"}),
+            ("subagent-discovery", {"action": "subagent-discovery", "ticket_id": "01DISC"}),
+            (
+                "review-subagent-discovery",
+                {
+                    "action": "review-subagent-discovery",
+                    "ticket_id": "01DISC",
+                    "decision": "approve",
+                    "reason": "validated",
+                },
+            ),
+            (
+                "activate-subagent-discovery",
+                {
+                    "action": "activate-subagent-discovery",
+                    "ticket_id": "01DISC",
+                    "delegate_subagent_type": "stock_snapshot_collector",
+                    "candidate_subagent_type": "candidate_screening_strategy",
+                },
+            ),
+        ]:
+            handled = handle_chat_cli_action(
+                action=action,
+                parsed=parsed,
+                state=session.state,
+                settings=session.settings,
+                emit_text=lambda output_writer, update: apply_tui_update(session, update),
+                cli_command_runner=fake_cli_command_runner,
+                payload_printer=lambda payload, as_json=False, output_writer=None: rendered.append(payload),
+                output_writer=None,
+            )
+            self.assertTrue(handled)
+
+        self.assertEqual(calls[0]["command"], "subagent-discoveries")
+        self.assertEqual(calls[0]["status_filter"], "approved")
+        self.assertEqual(calls[1]["command"], "subagent-discovery")
+        self.assertEqual(calls[1]["ticket_id"], "01DISC")
+        self.assertEqual(calls[2]["command"], "review-subagent-discovery")
+        self.assertEqual(calls[2]["query"], "approve")
+        self.assertEqual(calls[2]["ticket_id"], "01DISC")
+        self.assertEqual(calls[3]["command"], "activate-subagent-discovery")
+        self.assertEqual(calls[3]["query"], "stock_snapshot_collector")
+        self.assertEqual(calls[3]["subagent_node_id"], "candidate_screening_strategy")
+        self.assertEqual(len(rendered), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,8 +22,12 @@ class CliCommandRuntime:
         query: str | None = None,
         intent: str | None = None,
         run_id: str | None = None,
+        ticket_id: str | None = None,
         limit: int = 20,
         status_filter: str | None = None,
+        activated_by: str | None = None,
+        delegate_subagent_type: str | None = None,
+        candidate_subagent_type: str | None = None,
     ) -> object:
         if command == "run":
             with self.orchestrator_cls(settings) as orchestrator:
@@ -40,8 +44,12 @@ class CliCommandRuntime:
             query=query,
             intent=intent,
             run_id=run_id,
+            ticket_id=ticket_id,
             limit=limit,
             status_filter=status_filter,
+            activated_by=activated_by,
+            delegate_subagent_type=delegate_subagent_type,
+            candidate_subagent_type=candidate_subagent_type,
             orchestrator_cls=self.orchestrator_cls,
             run_checks_fn=self.run_checks_fn,
             build_status_fn=self.build_status_fn,
@@ -75,8 +83,12 @@ def execute_cli_command(
     query: str | None = None,
     intent: str | None = None,
     run_id: str | None = None,
+    ticket_id: str | None = None,
     limit: int = 20,
     status_filter: str | None = None,
+    activated_by: str | None = None,
+    delegate_subagent_type: str | None = None,
+    candidate_subagent_type: str | None = None,
     runtime: CliCommandRuntime,
 ) -> object:
     return runtime.execute(
@@ -85,6 +97,10 @@ def execute_cli_command(
         query=query,
         intent=intent,
         run_id=run_id,
+        ticket_id=ticket_id,
         limit=limit,
         status_filter=status_filter,
+        activated_by=activated_by,
+        delegate_subagent_type=delegate_subagent_type,
+        candidate_subagent_type=candidate_subagent_type,
     )

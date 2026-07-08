@@ -8,6 +8,7 @@ from research_system.cli.commands.cli_command_payloads import (
     RUN_ID_QUERY_COMMANDS,
     RUN_ID_SELECTOR_COMMANDS,
     STATUS_FILTER_COMMANDS,
+    SUBAGENT_DISCOVERY_COMMANDS,
     SUBAGENT_COMMANDS,
     build_cli_command_payload,
 )
@@ -21,6 +22,17 @@ class CliCommandPayloadsTests(unittest.TestCase):
         self.assertEqual(RUN_ID_SELECTOR_COMMANDS, frozenset({"rerun-subagent"}))
         self.assertEqual(SUBAGENT_COMMANDS, frozenset({"subagent-read"}))
         self.assertEqual(PROPOSAL_COMMANDS, frozenset({"proposals", "proposal", "review-proposal"}))
+        self.assertEqual(
+            SUBAGENT_DISCOVERY_COMMANDS,
+            frozenset(
+                {
+                    "subagent-discoveries",
+                    "subagent-discovery",
+                    "review-subagent-discovery",
+                    "activate-subagent-discovery",
+                }
+            ),
+        )
 
     def test_build_history_command_payload(self) -> None:
         payload = build_cli_command_payload(command="history", limit=10, status_filter="completed")
@@ -173,6 +185,55 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "query": "approve",
                 "intent": "manual_chat_review",
                 "status_filter": "looks good",
+            },
+        )
+
+    def test_build_subagent_discovery_commands_payloads(self) -> None:
+        listed = build_cli_command_payload(command="subagent-discoveries", limit=10, status="approved")
+        detail = build_cli_command_payload(command="subagent-discovery", ticket_id="01DISC")
+        reviewed = build_cli_command_payload(
+            command="review-subagent-discovery",
+            ticket_id="01DISC",
+            decision="approve",
+            reviewer="manual_chat_review",
+            reason="validated",
+        )
+        activated = build_cli_command_payload(
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            delegate_subagent_type="stock_snapshot_collector",
+            activated_by="manual_chat_activation",
+            reason="delegate approved",
+            candidate_subagent_type="candidate_collect_snapshot",
+        )
+
+        self.assertEqual(
+            listed,
+            {"command": "subagent-discoveries", "limit": 10, "status_filter": "approved"},
+        )
+        self.assertEqual(
+            detail,
+            {"command": "subagent-discovery", "ticket_id": "01DISC"},
+        )
+        self.assertEqual(
+            reviewed,
+            {
+                "command": "review-subagent-discovery",
+                "ticket_id": "01DISC",
+                "query": "approve",
+                "intent": "manual_chat_review",
+                "status_filter": "validated",
+            },
+        )
+        self.assertEqual(
+            activated,
+            {
+                "command": "activate-subagent-discovery",
+                "ticket_id": "01DISC",
+                "query": "stock_snapshot_collector",
+                "intent": "manual_chat_activation",
+                "status_filter": "delegate approved",
+                "subagent_node_id": "candidate_collect_snapshot",
             },
         )
 

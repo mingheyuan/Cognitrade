@@ -71,6 +71,103 @@ class _AppOrchestratorStub:
             "review_reason": "pending_manual_review_dimension_sample_size<2",
         }
 
+    def list_subagent_discovery_requests(self, *, status=None, limit=50) -> list[dict]:
+        return [
+            {
+                "ticket_id": "01DISC",
+                "status": status or "approved",
+                "intent": "stock_screen",
+                "stage": "collect",
+                "capability": "screening_strategy",
+                "search_query": "screening strategy resolver",
+                "candidate_entry_count": 1,
+                "activation_entry_count": 0,
+                "updated_at": "2026-07-08T00:00:00+00:00",
+            }
+        ]
+
+    def show_subagent_discovery_request(self, ticket_id: str) -> dict:
+        return {
+            "ticket_id": ticket_id,
+            "status": "approved",
+            "stored_status": "approved",
+            "capability_gap": {
+                "intent": "stock_screen",
+                "stage": "collect",
+                "capability": "screening_strategy",
+                "preferred_subagent_type": "candidate_screening_strategy",
+                "requires_llm": False,
+                "reason": "missing capability",
+            },
+            "tool_discovery_request": {
+                "search_query": "screening strategy resolver",
+                "preferred_protocols": ["mcp"],
+                "reason": "discover resolver",
+            },
+            "candidate_catalog_entries": [
+                {
+                    "subagent_type": "candidate_screening_strategy",
+                    "stage": "collect",
+                    "capabilities": ["screening_strategy"],
+                    "tags": ["approved_discovery_candidate"],
+                    "summary": "Approved discovery candidate",
+                }
+            ],
+            "activated_entries": [
+                {
+                    "subagent_type": "candidate_screening_strategy",
+                    "delegate_subagent_type": "stock_snapshot_collector",
+                    "status": "active",
+                    "activated_by": "ops_user",
+                }
+            ],
+            "notes": ["approved candidate available"],
+        }
+
+    def review_subagent_discovery_request(
+        self,
+        ticket_id: str,
+        *,
+        decision: str,
+        reviewer: str,
+        reason: str | None = None,
+    ) -> dict:
+        return {
+            "ticket_id": ticket_id,
+            "status": "approved" if decision == "approve" else "rejected",
+            "message": "discovery ticket approved" if decision == "approve" else "discovery ticket rejected",
+            "result": self.show_subagent_discovery_request(ticket_id),
+            "reviewer": reviewer,
+            "review_reason": reason or "",
+        }
+
+    def activate_subagent_discovery_request(
+        self,
+        ticket_id: str,
+        *,
+        delegate_subagent_type: str,
+        candidate_subagent_type: str | None = None,
+        activated_by: str = "manual_cli_activation",
+        reason: str | None = None,
+    ) -> dict:
+        return {
+            "ticket_id": ticket_id,
+            "status": "approved",
+            "message": f"activated discovery alias {candidate_subagent_type or 'candidate_screening_strategy'}",
+            "result": {
+                **self.show_subagent_discovery_request(ticket_id),
+                "activated_entries": [
+                    {
+                        "subagent_type": candidate_subagent_type or "candidate_screening_strategy",
+                        "delegate_subagent_type": delegate_subagent_type,
+                        "status": "active",
+                        "activated_by": activated_by,
+                        "activation_reason": reason or "",
+                    }
+                ],
+            },
+        }
+
     def review_proposal(
         self,
         proposal_id: str,
@@ -264,6 +361,8 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("/metrics <run_id|last>", output)
         self.assertIn("/rerun-from <run_id|last> <node_id>", output)
         self.assertIn("/rerun-subagent <run_id|last> <action_node_id> <dag_id> <subagent_node_id>", output)
+        self.assertIn("/subagent-discoveries [limit] [status]", output)
+        self.assertIn("/activate-subagent-discovery <id> <delegate> [candidate]", output)
         self.assertIn("show checkpoint resumability", output)
 
     def test_execute_cli_command_closes_orchestrator_for_history(self) -> None:
@@ -306,6 +405,46 @@ class CliOutputTests(unittest.TestCase):
         self.assertEqual(detail["proposal_id"], "01PROP")
         self.assertEqual(reviewed["status"], "approved")
         self.assertEqual(reviewed["result"]["retrieval_policy"]["approved_proposal_ids"], ["01PROP"])
+
+    def test_execute_cli_command_supports_subagent_discovery_commands(self) -> None:
+        _AppOrchestratorStub.instances.clear()
+        with patch("research_system.cli.app.ResearchOrchestrator", _AppOrchestratorStub):
+            rows = _execute_cli_command(
+                Settings.from_env(Path(".")),
+                command="subagent-discoveries",
+                limit=10,
+                status_filter="approved",
+            )
+            detail = _execute_cli_command(
+                Settings.from_env(Path(".")),
+                command="subagent-discovery",
+                ticket_id="01DISC",
+            )
+            reviewed = _execute_cli_command(
+                Settings.from_env(Path(".")),
+                command="review-subagent-discovery",
+                ticket_id="01DISC",
+                query="approve",
+                intent="ops_reviewer",
+                status_filter="validated",
+            )
+            activated = _execute_cli_command(
+                Settings.from_env(Path(".")),
+                command="activate-subagent-discovery",
+                ticket_id="01DISC",
+                query="stock_snapshot_collector",
+                activated_by="ops_user",
+                status_filter="delegate approved",
+                candidate_subagent_type="candidate_screening_strategy",
+            )
+
+        self.assertEqual(rows[0]["ticket_id"], "01DISC")
+        self.assertEqual(detail["ticket_id"], "01DISC")
+        self.assertEqual(reviewed["status"], "approved")
+        self.assertEqual(
+            activated["result"]["activated_entries"][0]["delegate_subagent_type"],
+            "stock_snapshot_collector",
+        )
 
     def test_render_tui_output_uses_ascii_sections(self) -> None:
         output = render_tui_output(
@@ -379,6 +518,7 @@ class CliOutputTests(unittest.TestCase):
         self.assertEqual(popup.lines[0], "Commands")
         self.assertIn("/stop                     stop the current run", popup.lines)
         self.assertIn("/proposal <proposal_id>   show proposal detail", popup.lines)
+        self.assertIn("/subagent-discoveries [limit] [status] list subagent discovery tickets", popup.lines)
         self.assertIn("F6      cycle trace/events/threads panel", popup.lines)
         self.assertIn("F12     toggle child detail expansion", popup.lines)
         self.assertIn("Ctrl+F8  focus next thread tree node", popup.lines)
@@ -777,6 +917,68 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("benchmark_scope: event_driven", detail_output)
         self.assertIn("review_history:", detail_output)
         self.assertIn("[pending] reviewer=system_threshold_gate source=auto_gate", detail_output)
+
+    def test_print_payload_renders_subagent_discovery_rows_and_detail(self) -> None:
+        rows_output = self._capture_payload_text(
+            [
+                {
+                    "ticket_id": "01DISC",
+                    "status": "approved",
+                    "intent": "stock_screen",
+                    "stage": "collect",
+                    "capability": "screening_strategy",
+                    "search_query": "screening strategy resolver",
+                    "candidate_entry_count": 1,
+                    "activation_entry_count": 0,
+                    "updated_at": "2026-07-08T00:00:00+00:00",
+                }
+            ]
+        )
+        detail_output = self._capture_payload_text(
+            {
+                "ticket_id": "01DISC",
+                "status": "approved",
+                "stored_status": "approved",
+                "capability_gap": {
+                    "intent": "stock_screen",
+                    "stage": "collect",
+                    "capability": "screening_strategy",
+                    "preferred_subagent_type": "candidate_screening_strategy",
+                    "requires_llm": False,
+                    "reason": "missing capability",
+                },
+                "tool_discovery_request": {
+                    "search_query": "screening strategy resolver",
+                    "preferred_protocols": ["mcp"],
+                    "reason": "discover resolver",
+                },
+                "candidate_catalog_entries": [
+                    {
+                        "subagent_type": "candidate_screening_strategy",
+                        "stage": "collect",
+                        "capabilities": ["screening_strategy"],
+                        "tags": ["approved_discovery_candidate"],
+                    }
+                ],
+                "activated_entries": [
+                    {
+                        "subagent_type": "candidate_screening_strategy",
+                        "delegate_subagent_type": "stock_snapshot_collector",
+                        "status": "active",
+                        "activated_by": "ops_user",
+                    }
+                ],
+                "notes": ["approved candidate available"],
+            }
+        )
+
+        self.assertIn("01DISC  [approved]", rows_output)
+        self.assertIn("capability=screening_strategy", rows_output)
+        self.assertIn("ticket_id: 01DISC", detail_output)
+        self.assertIn("search_query: screening strategy resolver", detail_output)
+        self.assertIn("candidate_catalog_entries:", detail_output)
+        self.assertIn("activated_entries:", detail_output)
+        self.assertIn("candidate_screening_strategy -> stock_snapshot_collector", detail_output)
 
 
 if __name__ == "__main__":
