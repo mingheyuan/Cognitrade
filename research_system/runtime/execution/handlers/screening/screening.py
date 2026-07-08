@@ -230,6 +230,9 @@ def _extend_screening_trace(
     objective: str,
     payload: dict,
 ) -> None:
+    if any((payload or {}).get(key) for key in ("subagent_trace", "subagent_plans", "subagent_plan_patches")):
+        support.extend_subagent_trace(context, agent="screener", phase=phase, payload=payload)
+        return
     support.extend_subagent_trace(
         context,
         agent="screener",

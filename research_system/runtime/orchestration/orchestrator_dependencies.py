@@ -106,7 +106,11 @@ def build_orchestrator_dependencies(settings: Settings) -> OrchestratorDependenc
         ),
         retriever=RetrieverService(llm_provider, settings, yaml_configs.get("retrieval_policy"), settings.runs_root),
         reporter=ReporterService(llm_provider, runs_root=settings.runs_root, settings=settings),
-        screener=ScreenerService(runs_root=settings.runs_root),
+        screener=ScreenerService(
+            runs_root=settings.runs_root,
+            llm_provider=llm_provider,
+            settings=settings,
+        ),
         screen_reviewer=ScreenReviewerService(
             settings.runs_root,
             llm_provider=llm_provider,

@@ -8,6 +8,7 @@ from unittest.mock import patch
 from research_system.agents.collector.service import CollectorService
 from research_system.agents.screen_reviewer.service import ScreenReviewerService
 from research_system.agents.screener.service import ScreenerService
+from research_system.runtime.history.session.session_history import SessionHistory
 from research_system.runtime.storage.jsonl import read_json, read_jsonl
 from research_system.runtime.orchestrator import ResearchOrchestrator
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
@@ -81,6 +82,27 @@ def spot_table():
             ]
 
     return Table()
+
+
+class ScreenerHybridProviderStub:
+    available = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def parse(self, **kwargs):
+        schema = kwargs["schema"]
+        self.calls += 1
+        return schema.model_validate(
+            {
+                "selected_plan_variant": "methodology_disabled_variant",
+                "selected_node_ids": ["screening_strategy_resolver", "screening_executor"],
+                "request_replan": True,
+                "reason": "prefer raw ranking without comps overlay for this run",
+                "confidence": 0.92,
+                "notes": ["hybrid_select_methodology_disabled_variant"],
+            }
+        )
 
 
 class TaskRouterStockScreenTests(unittest.TestCase):
@@ -175,6 +197,29 @@ class StockScreenFlowTests(unittest.TestCase):
         self.assertEqual(payload["scorecard"]["preferred_methodology"], "comps")
         self.assertIn("comps", payload["screened_candidates"][0]["methodology"])
         self.assertEqual(payload["enrichment_targets"], [])
+        subagent_plans = list(payload.get("subagent_plans") or [])
+        self.assertEqual(len(subagent_plans), 1)
+        plan_node_types = {
+            str(node.get("node_id") or ""): str(node.get("subagent_type") or "")
+            for node in list(subagent_plans[0].get("nodes") or [])
+        }
+        self.assertEqual(plan_node_types.get("screening_strategy_resolver"), "screening_strategy_resolver")
+        self.assertEqual(plan_node_types.get("screening_executor"), "screening_execution")
+        execution_node = next(
+            node for node in list(subagent_plans[0].get("nodes") or [])
+            if str(node.get("node_id") or "") == "screening_executor"
+        )
+        self.assertTrue(bool((execution_node.get("inputs") or {}).get("methodology_enabled")))
+        patch_op_types = [
+            str(operation.get("op_type") or "")
+            for patch in list(payload.get("subagent_plan_patches") or [])
+            for operation in list((patch or {}).get("operations") or [])
+        ]
+        self.assertEqual(patch_op_types, ["request_replan"])
+        self.assertEqual(
+            [str(item.get("subagent_type") or "") for item in list(payload.get("subagent_trace") or [])],
+            ["screening_strategy_resolver", "screening_execution"],
+        )
 
     def test_screener_uses_planning_hints_for_cycle_and_methodology_source(self) -> None:
         screener = ScreenerService()
@@ -211,6 +256,86 @@ class StockScreenFlowTests(unittest.TestCase):
         self.assertEqual(payload["scorecard"]["investment_cycle_assumption"], "planning_context")
         self.assertEqual(payload["scorecard"]["preferred_methodology"], "comps")
         self.assertEqual(payload["scorecard"]["screening_strategy"]["methodology_source"], "planning_context")
+
+    def test_screener_hybrid_can_switch_to_methodology_disabled_variant(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.subagent_phase_shadow_llm_enabled = True
+            settings.subagent_phase_hybrid_llm_enabled = True
+            settings.subagent_phase_hybrid_llm_min_confidence = 0.8
+            settings.max_llm_calls_per_turn = 3
+            provider = ScreenerHybridProviderStub()
+            screener = ScreenerService(
+                runs_root=settings.runs_root,
+                llm_provider=provider,
+                settings=settings,
+            )
+
+            payload = screener.run(
+                query="screen growth stocks",
+                source_payloads=[
+                    {
+                        "candidate_universe": [
+                            {"symbol": "300363", "name": "Alpha", "sector": "AI", "theme": "concept"},
+                            {"symbol": "300347", "name": "Beta", "sector": "AI", "theme": "concept"},
+                        ],
+                        "sector_context": {"sector": "AI", "theme": "concept"},
+                        "investment_cycle": "mid_term",
+                    }
+                ],
+                snapshot_payloads=[
+                    {
+                        "snapshot_type": "market",
+                        "symbol": "300363",
+                        "facts": {"market_overview": {"spot": {"latest_price": 12.3, "pct_change": 2.1, "amount": 1800000000}}},
+                    },
+                    {
+                        "snapshot_type": "fundamental",
+                        "symbol": "300363",
+                        "facts": {"financial_abstract": {"revenue": 100}},
+                    },
+                    {
+                        "snapshot_type": "notice",
+                        "symbol": "300363",
+                        "facts": {"notice_count": 3},
+                    },
+                    {
+                        "snapshot_type": "market",
+                        "symbol": "300347",
+                        "facts": {"market_overview": {"spot": {"latest_price": 45.6, "pct_change": 0.8, "amount": 1100000000}}},
+                    },
+                    {
+                        "snapshot_type": "fundamental",
+                        "symbol": "300347",
+                        "facts": {"financial_abstract": {"revenue": 80}},
+                    },
+                    {
+                        "snapshot_type": "notice",
+                        "symbol": "300347",
+                        "facts": {"notice_count": 1},
+                    },
+                ],
+                constraints={"top_k": 2},
+            )
+            run_root = next(settings.runs_root.iterdir())
+            trace_payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(payload["scorecard"]["preferred_methodology"], "comps")
+        execution_node = next(
+            node for node in list((payload.get("subagent_plans") or [])[0].get("nodes") or [])
+            if str(node.get("node_id") or "") == "screening_executor"
+        )
+        self.assertFalse(bool((execution_node.get("inputs") or {}).get("methodology_enabled")))
+        self.assertEqual(payload["screened_candidates"][0]["methodology"], {})
+        hybrid_rows = [
+            row
+            for row in list(trace_payload.get("dynamic_trace") or [])
+            if str(row.get("event") or "") == "subagent_phase_hybrid_applied"
+        ]
+        self.assertEqual(len(hybrid_rows), 1)
+        self.assertEqual(hybrid_rows[0]["applied_plan_variant"], "methodology_disabled_variant")
 
     def test_screen_reviewer_uses_methodology_memory_focus_hint(self) -> None:
         payload = ScreenReviewerService().run(
@@ -354,7 +479,7 @@ class StockScreenFlowTests(unittest.TestCase):
                 self.assertTrue(debug.get("subagent_plan_patches"))
                 self.assertTrue(debug.get("action_plan_patches"))
                 self.assertTrue(
-                    {"collect", "retrieve", "review", "report"}.issubset(
+                    {"collect", "screen", "retrieve", "review", "report"}.issubset(
                         {str(item.get("phase") or "") for item in list(debug.get("subagent_plans") or [])}
                     )
                 )

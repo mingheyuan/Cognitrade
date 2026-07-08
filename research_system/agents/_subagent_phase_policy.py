@@ -335,6 +335,33 @@ class CollectorPhasePolicy(SubagentPhaseRulePolicy):
         )
 
 
+class ScreenerPhasePolicy(SubagentPhaseRulePolicy):
+    def build_screening_replan_patch(
+        self,
+        *,
+        preferred_methodology: str,
+        resolved_investment_cycle: str,
+        methodology_enabled: bool,
+    ) -> SubagentGraphPatch:
+        variant_id = "comps_screening_variant" if methodology_enabled else "methodology_disabled_variant"
+        return self.build_replan_patch(
+            reason="screening_strategy_resolved",
+            notes=[
+                "replan_screening_graph_from_strategy",
+                f"preferred_methodology={preferred_methodology}",
+                f"resolved_investment_cycle={resolved_investment_cycle}",
+                f"methodology_enabled={str(bool(methodology_enabled)).lower()}",
+                f"variant_id={variant_id}",
+            ],
+            metadata={
+                "preferred_methodology": preferred_methodology,
+                "resolved_investment_cycle": resolved_investment_cycle,
+                "methodology_enabled": str(bool(methodology_enabled)).lower(),
+                "selected_plan_variant": variant_id,
+            },
+        )
+
+
 class DistillerPhasePolicy(SubagentPhaseRulePolicy):
     def build_chunk_execution_replan_patch(
         self,
@@ -495,6 +522,7 @@ __all__ = [
     "CriticPhasePolicy",
     "DistillerPhasePolicy",
     "ReporterPhasePolicy",
+    "ScreenerPhasePolicy",
     "ReviewerPhasePolicy",
     "RetrieverPhasePolicy",
     "ScreenReviewerPhasePolicy",

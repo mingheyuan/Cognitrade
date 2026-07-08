@@ -112,19 +112,19 @@ def run_screening_enrichment(
         snapshot_payloads=refreshed_snapshot_payloads,
         constraints=enriched_constraints,
     )
+    rerank_payload = dict(payload)
+    rerank_trace = [dict(item) for item in list(rerank_payload.get("subagent_trace") or []) if isinstance(item, dict)]
+    if rerank_trace:
+        for item in rerank_trace:
+            notes = [str(note) for note in list(item.get("notes") or []) if str(note).strip()]
+            if "post_enrichment=true" not in notes:
+                notes.append("post_enrichment=true")
+            item["notes"] = notes
+        rerank_payload["subagent_trace"] = rerank_trace
     support.extend_subagent_trace(
         context,
         agent="screener",
         phase=phase,
-        payload={
-            "subagent_trace": [
-                {
-                    "subagent_type": "screening_decider",
-                    "status": "completed",
-                    "objective": "Re-rank candidates after enrichment.",
-                    "notes": list(payload.get("screening_notes") or []) + ["post_enrichment=true"],
-                }
-            ]
-        },
+        payload=rerank_payload,
     )
     return payload

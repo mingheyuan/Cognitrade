@@ -8,6 +8,7 @@ from research_system.agents._subagent_phase_policy import (
     ReporterPhasePolicy,
     ReviewerPhasePolicy,
     RetrieverPhasePolicy,
+    ScreenerPhasePolicy,
     ScreenReviewerPhasePolicy,
 )
 from research_system.schemas.subagents import SubagentPlanNode
@@ -30,6 +31,23 @@ def _node(*, node_id: str, subagent_type: str) -> SubagentPlanNode:
 
 
 class SubagentPhasePolicyTests(unittest.TestCase):
+    def test_screener_replan_patch_tracks_methodology_variant(self) -> None:
+        patch = ScreenerPhasePolicy().build_screening_replan_patch(
+            preferred_methodology="comps",
+            resolved_investment_cycle="mid_term",
+            methodology_enabled=False,
+        )
+
+        self.assertEqual(str(patch.decision_type), "replan")
+        self.assertEqual(str(patch.operations[0].op_type), "request_replan")
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("preferred_methodology") or ""), "comps")
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("resolved_investment_cycle") or ""), "mid_term")
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("methodology_enabled") or ""), "false")
+        self.assertEqual(
+            str((patch.operations[0].metadata or {}).get("selected_plan_variant") or ""),
+            "methodology_disabled_variant",
+        )
+
     def test_collector_stock_compare_replan_patch_tracks_compare_bundle(self) -> None:
         patch = CollectorPhasePolicy().build_stock_compare_replan_patch(
             snapshot_types=["market", "fundamental", "notice", "capital_flow"],

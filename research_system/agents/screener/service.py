@@ -1,9 +1,21 @@
 from __future__ import annotations
 
-from typing import Any
 from pathlib import Path
+from typing import Any
 
+from research_system.agents._subagent_dag import SubagentDagNodeResult
+from research_system.agents._subagent_phase_controller import SubagentPhaseController
+from research_system.agents._subagent_phase_policy import ScreenerPhasePolicy
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
+from research_system.runtime.platform.settings import Settings
+from research_system.runtime.providers.provider_registry import OpenAIProvider
+from research_system.schemas.subagents import (
+    SubagentCatalogEntry,
+    SubagentGraphPatch,
+    SubagentInvocation,
+    SubagentPlan,
+    SubagentPlanNode,
+)
 from research_system.services.methodologies.valuation.comps_service import CompsService
 from research_system.services.methodologies.planning.planning_context import (
     build_planning_context_view,
@@ -13,14 +25,49 @@ from research_system.services.methodologies.planning.planning_context import (
     has_momentum_focus,
     normalize_planning_context_hints,
 )
+from research_system.subagents.registry import SubagentRegistry
+from research_system.subagents.screening import (
+    ScreeningExecutionSubagent,
+    ScreeningStrategyResolverSubagent,
+)
 
 
 class ScreenerService(RuntimeBoundSubagentInvoker):
     agent_name = "screener"
 
-    def __init__(self, comps_service: CompsService | None = None, runs_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        comps_service: CompsService | None = None,
+        runs_root: Path | None = None,
+        llm_provider: OpenAIProvider | None = None,
+        settings: Settings | None = None,
+    ) -> None:
         self.comps_service = comps_service or CompsService()
         self.runs_root = runs_root
+        self.llm_provider = llm_provider
+        self.settings = settings
+        self.registry = SubagentRegistry(
+            [
+                ScreeningStrategyResolverSubagent(
+                    derive_screening_strategy=self._derive_screening_strategy,
+                ),
+                ScreeningExecutionSubagent(
+                    execute_screening_pipeline=self._execute_screening_pipeline,
+                ),
+            ]
+        )
+        self.phase_controller = SubagentPhaseController(
+            registry=self.registry,
+            invoke_subagent=self._invoke_subagent,
+            emit_event=self._emit_runtime_event,
+            cache_context_builder=self._subagent_dag_cache_context,
+            start_from_node_id_builder=self._subagent_dag_start_from_node_id,
+            runtime_binding_getter=self._runtime_binding_for_events,
+            llm_provider=self.llm_provider,
+            settings=self.settings,
+            service_name=self.agent_name,
+        )
+        self.phase_policy = ScreenerPhasePolicy()
 
     def run(
         self,
@@ -54,13 +101,505 @@ class ScreenerService(RuntimeBoundSubagentInvoker):
     ) -> dict:
         constraints = constraints or {}
         source_payload = source_payloads[0] if source_payloads else {}
+        planning_context_hints = self._normalize_planning_context_hints(
+            constraints.get("planning_context_hints")
+            or source_payload.get("planning_context_hints")
+        )
+        rerun_start_node = self._subagent_dag_start_from_node_id(dag_id="screen")
+        requires_direct_plan = bool(
+            rerun_start_node and rerun_start_node != "screening_strategy_resolver"
+        )
+        if requires_direct_plan:
+            strategy = self._derive_screening_strategy(
+                query=query,
+                source_payload=source_payload,
+                planning_context_hints=planning_context_hints,
+                explicit_cycle=constraints.get("investment_cycle"),
+                explicit_methodology=constraints.get("prefer_methodology"),
+            )
+            final_plan = self._build_screening_subagent_plan(
+                query=query,
+                source_payload=source_payload,
+                planning_context_hints=planning_context_hints,
+                explicit_cycle=constraints.get("investment_cycle"),
+                explicit_methodology=constraints.get("prefer_methodology"),
+                methodology_enabled=self._screening_strategy_methodology_enabled(strategy),
+            )
+            patch_rows: list[dict[str, Any]] = []
+            final_results = self._execute_subagent_plan(
+                plan=final_plan,
+                max_workers=1,
+                dag_id="screen",
+                build_invocation=self._build_screening_plan_invocations(
+                    plan=final_plan,
+                    query=query,
+                    source_payload=source_payload,
+                    snapshot_payloads=snapshot_payloads,
+                    constraints=constraints,
+                    planning_context_hints=planning_context_hints,
+                ),
+            )
+        else:
+            base_plan = self._build_screening_subagent_plan(
+                query=query,
+                source_payload=source_payload,
+                planning_context_hints=planning_context_hints,
+                explicit_cycle=constraints.get("investment_cycle"),
+                explicit_methodology=constraints.get("prefer_methodology"),
+                methodology_enabled=None,
+            )
+            final_plan, _base_results, patch_rows, final_results = self.phase_controller.execute_patch_cycle(
+                plan=base_plan,
+                dag_id="screen",
+                base_max_workers=1,
+                final_max_workers=1,
+                build_invocation_factory=lambda current_plan: self._build_screening_plan_invocations(
+                    plan=current_plan,
+                    query=query,
+                    source_payload=source_payload,
+                    snapshot_payloads=snapshot_payloads,
+                    constraints=constraints,
+                    planning_context_hints=planning_context_hints,
+                ),
+                patch_builder=lambda base_results: self._build_screening_replan_patch(base_results=base_results),
+                replan_builder=lambda current_plan, patch, base_results: self._rebuild_screening_subagent_plan(
+                    plan=current_plan,
+                    query=query,
+                    source_payload=source_payload,
+                    planning_context_hints=planning_context_hints,
+                    constraints=constraints,
+                    patch=patch,
+                    base_results=base_results,
+                ),
+                candidate_plan_variants_builder=lambda rule_final_plan, patch, base_results: self._build_screening_candidate_plan_variants(
+                    rule_final_plan=rule_final_plan,
+                    query=query,
+                    source_payload=source_payload,
+                    planning_context_hints=planning_context_hints,
+                    constraints=constraints,
+                    patch=patch,
+                    base_results=base_results,
+                ),
+            )
+        execution_outputs = dict((final_results.get("screening_executor").outputs or {}) if final_results.get("screening_executor") else {})
+        return {
+            **execution_outputs,
+            "subagent_trace": self.phase_controller.trace_from_results(results=final_results),
+            "subagent_plans": [final_plan.model_dump(mode="json")],
+            "subagent_plan_patches": patch_rows,
+        }
+
+    def _execute_subagent_plan(
+        self,
+        *,
+        plan: SubagentPlan,
+        max_workers: int | None,
+        dag_id: str,
+        build_invocation,
+    ) -> dict[str, SubagentDagNodeResult]:
+        return self.phase_controller.execute_plan(
+            plan=plan,
+            build_invocation=build_invocation,
+            dag_id=dag_id,
+            max_workers=max_workers,
+        )
+
+    def _select_screen_catalog_entry(
+        self,
+        *,
+        capability: str,
+        preferred_subagent_type: str | None = None,
+    ) -> SubagentCatalogEntry:
+        return self.phase_controller.select_catalog_entry(
+            stage="screen",
+            intent="stock_screen",
+            capability=capability,
+            preferred_subagent_type=preferred_subagent_type,
+        )
+
+    def _build_catalog_plan_node(
+        self,
+        *,
+        node_id: str,
+        subagent_type: str,
+        objective: str,
+        inputs: dict[str, Any],
+        depends_on: list[str] | None = None,
+        tags: list[str] | None = None,
+        max_attempts: int = 1,
+        cache_scope: str | None = "run",
+        cache_key: str | None = None,
+        notes: list[str] | None = None,
+    ) -> SubagentPlanNode:
+        return self.phase_controller.build_catalog_plan_node(
+            node_id=node_id,
+            subagent_type=subagent_type,
+            objective=objective,
+            inputs=inputs,
+            depends_on=depends_on,
+            tags=tags,
+            max_attempts=max_attempts,
+            cache_scope=cache_scope,
+            cache_key=cache_key,
+            notes=notes,
+        )
+
+    def _build_screening_subagent_plan(
+        self,
+        *,
+        query: str,
+        source_payload: dict,
+        planning_context_hints: dict[str, str],
+        explicit_cycle,
+        explicit_methodology,
+        methodology_enabled: bool | None,
+    ) -> SubagentPlan:
+        strategy_entry = self._select_screen_catalog_entry(
+            capability="screening_strategy",
+            preferred_subagent_type="screening_strategy_resolver",
+        )
+        nodes = [
+            self._build_catalog_plan_node(
+                node_id="screening_strategy_resolver",
+                subagent_type=strategy_entry.subagent_type,
+                objective="Resolve screening cycle and methodology strategy.",
+                inputs={
+                    "query": query,
+                    "planning_context_hints": dict(planning_context_hints or {}),
+                    "explicit_cycle": explicit_cycle,
+                    "explicit_methodology": explicit_methodology,
+                    "candidate_count": len(list(source_payload.get("candidate_universe") or [])),
+                },
+                cache_key="screening_strategy_resolver",
+                notes=["screen_phase=strategy"],
+            )
+        ]
+        selected_subagent_types = {
+            "screening_strategy_resolver": strategy_entry.subagent_type,
+        }
+        if methodology_enabled is not None:
+            execution_entry = self._select_screen_catalog_entry(
+                capability="screening_execution",
+                preferred_subagent_type="screening_execution",
+            )
+            nodes.append(
+                self._build_catalog_plan_node(
+                    node_id="screening_executor",
+                    subagent_type=execution_entry.subagent_type,
+                    objective="Score candidates, attach methodology outputs, and decide enrichment targets.",
+                    inputs={"methodology_enabled": bool(methodology_enabled)},
+                    depends_on=["screening_strategy_resolver"],
+                    cache_key="screening_executor",
+                    notes=[
+                        "screen_phase=execution",
+                        f"methodology_enabled={str(bool(methodology_enabled)).lower()}",
+                    ],
+                )
+            )
+            selected_subagent_types["screening_executor"] = execution_entry.subagent_type
+        return SubagentPlan(
+            intent="stock_screen",
+            phase="screen",
+            strategy="catalog",
+            nodes=nodes,
+            notes=["screening_catalog_plan"] if methodology_enabled is not None else ["screening_strategy_base_plan"],
+            catalog_trace={
+                "stage": "screen",
+                "selection_mode": "catalog",
+                "selected_subagent_types": selected_subagent_types,
+            },
+        )
+
+    def _build_screening_replan_patch(
+        self,
+        *,
+        base_results: dict[str, SubagentDagNodeResult],
+    ) -> SubagentGraphPatch:
+        strategy = dict(
+            (base_results["screening_strategy_resolver"].outputs or {}).get("screening_strategy") or {}
+        )
+        preferred_methodology = str(strategy.get("preferred_methodology") or "comps").strip() or "comps"
+        resolved_investment_cycle = str(strategy.get("resolved_investment_cycle") or "mid_term").strip() or "mid_term"
+        methodology_enabled = self._screening_strategy_methodology_enabled(strategy)
+        return self.phase_policy.build_screening_replan_patch(
+            preferred_methodology=preferred_methodology,
+            resolved_investment_cycle=resolved_investment_cycle,
+            methodology_enabled=methodology_enabled,
+        )
+
+    def _rebuild_screening_subagent_plan(
+        self,
+        *,
+        plan: SubagentPlan,
+        query: str,
+        source_payload: dict,
+        planning_context_hints: dict[str, str],
+        constraints: dict[str, Any],
+        patch: SubagentGraphPatch,
+        base_results: dict[str, SubagentDagNodeResult],
+        methodology_enabled_override: bool | None = None,
+    ) -> SubagentPlan:
+        strategy = dict(
+            (base_results["screening_strategy_resolver"].outputs or {}).get("screening_strategy") or {}
+        )
+        methodology_enabled = (
+            bool(methodology_enabled_override)
+            if methodology_enabled_override is not None
+            else self._screening_patch_methodology_enabled(patch=patch, strategy=strategy)
+        )
+        replanned = self._build_screening_subagent_plan(
+            query=query,
+            source_payload=source_payload,
+            planning_context_hints=planning_context_hints,
+            explicit_cycle=constraints.get("investment_cycle"),
+            explicit_methodology=constraints.get("prefer_methodology"),
+            methodology_enabled=methodology_enabled,
+        )
+        replanned.notes = self._unique_notes(
+            [
+                *list(replanned.notes or []),
+                "screening_graph_replanned_from_strategy",
+                f"preferred_methodology={str(strategy.get('preferred_methodology') or 'comps')}",
+                f"resolved_investment_cycle={str(strategy.get('resolved_investment_cycle') or 'mid_term')}",
+                f"methodology_enabled={str(bool(methodology_enabled)).lower()}",
+            ]
+        )
+        replanned.catalog_trace = {
+            **dict(replanned.catalog_trace or {}),
+            "replanned_from_strategy": True,
+            "methodology_enabled": bool(methodology_enabled),
+            "resolved_investment_cycle": str(strategy.get("resolved_investment_cycle") or "mid_term"),
+        }
+        return replanned
+
+    def _build_screening_candidate_plan_variants(
+        self,
+        *,
+        rule_final_plan: SubagentPlan,
+        query: str,
+        source_payload: dict,
+        planning_context_hints: dict[str, str],
+        constraints: dict[str, Any],
+        patch: SubagentGraphPatch,
+        base_results: dict[str, SubagentDagNodeResult],
+    ) -> dict[str, SubagentPlan]:
+        strategy = dict(
+            (base_results["screening_strategy_resolver"].outputs or {}).get("screening_strategy") or {}
+        )
+        rule_methodology_enabled = self._screening_plan_methodology_enabled(rule_final_plan)
+        variants: dict[str, SubagentPlan] = {}
+        if rule_methodology_enabled:
+            comps_variant = rule_final_plan
+            methodology_disabled_variant = self._rebuild_screening_subagent_plan(
+                plan=self._build_screening_subagent_plan(
+                    query=query,
+                    source_payload=source_payload,
+                    planning_context_hints=planning_context_hints,
+                    explicit_cycle=constraints.get("investment_cycle"),
+                    explicit_methodology=constraints.get("prefer_methodology"),
+                    methodology_enabled=None,
+                ),
+                query=query,
+                source_payload=source_payload,
+                planning_context_hints=planning_context_hints,
+                constraints=constraints,
+                patch=patch,
+                base_results=base_results,
+                methodology_enabled_override=False,
+            )
+        else:
+            methodology_disabled_variant = rule_final_plan
+            comps_variant = self._rebuild_screening_subagent_plan(
+                plan=self._build_screening_subagent_plan(
+                    query=query,
+                    source_payload=source_payload,
+                    planning_context_hints=planning_context_hints,
+                    explicit_cycle=constraints.get("investment_cycle"),
+                    explicit_methodology=constraints.get("prefer_methodology"),
+                    methodology_enabled=None,
+                ),
+                query=query,
+                source_payload=source_payload,
+                planning_context_hints=planning_context_hints,
+                constraints=constraints,
+                patch=patch,
+                base_results=base_results,
+                methodology_enabled_override=True,
+            )
+        comps_variant.notes = self._unique_notes(
+            [
+                *list(comps_variant.notes or []),
+                "screening_candidate_variant",
+                "screening_variant=comps_screening_variant",
+                f"preferred_methodology={str(strategy.get('preferred_methodology') or 'comps')}",
+            ]
+        )
+        methodology_disabled_variant.notes = self._unique_notes(
+            [
+                *list(methodology_disabled_variant.notes or []),
+                "screening_candidate_variant",
+                "screening_variant=methodology_disabled_variant",
+                f"preferred_methodology={str(strategy.get('preferred_methodology') or 'comps')}",
+            ]
+        )
+        variants["comps_screening_variant"] = comps_variant
+        variants["methodology_disabled_variant"] = methodology_disabled_variant
+        return variants
+
+    def _build_screening_plan_invocations(
+        self,
+        *,
+        plan: SubagentPlan,
+        query: str,
+        source_payload: dict,
+        snapshot_payloads: list[dict],
+        constraints: dict[str, Any],
+        planning_context_hints: dict[str, str],
+    ) -> dict[str, dict[str, Any]]:
+        runtime_nodes: dict[str, dict[str, Any]] = {
+            "screening_strategy_resolver": {
+                "builder": lambda _results: self._build_subagent_invocation(
+                    subagent_type="screening_strategy_resolver",
+                    objective="Resolve screening cycle and methodology strategy.",
+                    inputs={
+                        "query": query,
+                        "source_payload": source_payload,
+                        "planning_context_hints": dict(planning_context_hints or {}),
+                        "explicit_cycle": constraints.get("investment_cycle"),
+                        "explicit_methodology": constraints.get("prefer_methodology"),
+                    },
+                    task_name="screen:strategy:screening_strategy_resolver",
+                    agent_path="screener/strategy/screening_strategy_resolver",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="screen:strategy:screening_strategy_resolver",
+                    agent_path="screener/strategy/screening_strategy_resolver",
+                    objective="Resolve screening cycle and methodology strategy.",
+                ),
+            }
+        }
+        plan_node_map = {node.node_id: node for node in plan.nodes}
+        execution_node = plan_node_map.get("screening_executor")
+        if execution_node is not None:
+            runtime_nodes["screening_executor"] = {
+                "builder": lambda results, *, methodology_enabled=bool(execution_node.inputs.get("methodology_enabled", True)): self._build_subagent_invocation(
+                    subagent_type=execution_node.subagent_type,
+                    objective="Score candidates, attach methodology outputs, and decide enrichment targets.",
+                    inputs={
+                        "query": query,
+                        "source_payload": source_payload,
+                        "snapshot_payloads": snapshot_payloads,
+                        "constraints": dict(constraints or {}),
+                        "screening_strategy": dict(
+                            (results["screening_strategy_resolver"].outputs or {}).get("screening_strategy") or {}
+                        ),
+                        "methodology_enabled": methodology_enabled,
+                    },
+                    task_name="screen:execution:screening_execution",
+                    agent_path="screener/execution/screening_execution",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="screen:execution:screening_execution",
+                    agent_path="screener/execution/screening_execution",
+                    objective="Score candidates, attach methodology outputs, and decide enrichment targets.",
+                ),
+            }
+        return {
+            node_id: runtime_nodes[node_id]
+            for node_id in [node.node_id for node in plan.nodes]
+            if node_id in runtime_nodes
+        }
+
+    def _build_subagent_invocation(
+        self,
+        *,
+        subagent_type: str,
+        objective: str | None,
+        inputs: dict[str, Any],
+        task_name: str,
+        agent_path: str,
+    ) -> SubagentInvocation:
+        return self.phase_controller.build_invocation(
+            subagent_type=subagent_type,
+            objective=objective,
+            inputs=inputs,
+            task_name=task_name,
+            agent_path=agent_path,
+            phase="screen",
+        )
+
+    def _dag_metadata(
+        self,
+        *,
+        task_name: str,
+        agent_path: str,
+        objective: str | None,
+    ) -> dict[str, Any]:
+        return self.phase_controller.build_metadata(
+            task_name=task_name,
+            agent_path=agent_path,
+            objective=objective,
+            phase="screen",
+        )
+
+    @staticmethod
+    def _screening_strategy_methodology_enabled(strategy: dict[str, Any]) -> bool:
+        preferred_methodology = str(strategy.get("preferred_methodology") or "comps").strip().lower()
+        return preferred_methodology == "comps"
+
+    def _screening_patch_methodology_enabled(
+        self,
+        *,
+        patch: SubagentGraphPatch,
+        strategy: dict[str, Any],
+    ) -> bool:
+        for operation in list(patch.operations or []):
+            metadata = dict(operation.metadata or {})
+            raw_flag = str(metadata.get("methodology_enabled") or "").strip().lower()
+            if raw_flag in {"true", "false"}:
+                return raw_flag == "true"
+            selected_plan_variant = str(metadata.get("selected_plan_variant") or "").strip()
+            if selected_plan_variant == "comps_screening_variant":
+                return True
+            if selected_plan_variant == "methodology_disabled_variant":
+                return False
+        return self._screening_strategy_methodology_enabled(strategy)
+
+    @staticmethod
+    def _screening_plan_methodology_enabled(plan: SubagentPlan) -> bool:
+        for node in list(plan.nodes or []):
+            if node.node_id == "screening_executor":
+                return bool(node.inputs.get("methodology_enabled", True))
+        return True
+
+    @staticmethod
+    def _unique_notes(notes: list[str]) -> list[str]:
+        unique: list[str] = []
+        for note in notes:
+            normalized = str(note or "").strip()
+            if not normalized or normalized in unique:
+                continue
+            unique.append(normalized)
+        return unique
+
+    def _execute_screening_pipeline(
+        self,
+        *,
+        query: str,
+        source_payload: dict,
+        snapshot_payloads: list[dict],
+        constraints: dict | None = None,
+        screening_strategy: dict[str, Any] | None = None,
+        methodology_enabled: bool = True,
+    ) -> dict:
+        constraints = constraints or {}
         universe = list(source_payload.get("candidate_universe") or [])
         sector_context = source_payload.get("sector_context")
         planning_context_hints = self._normalize_planning_context_hints(
             constraints.get("planning_context_hints")
             or source_payload.get("planning_context_hints")
         )
-        strategy = self._derive_screening_strategy(
+        strategy = dict(screening_strategy or {}) or self._derive_screening_strategy(
             query=query,
             source_payload=source_payload,
             planning_context_hints=planning_context_hints,
@@ -213,7 +752,7 @@ class ScreenerService(RuntimeBoundSubagentInvoker):
             peer_universe=candidates,
             cycle=cycle,
             sector_context=sector_context,
-            enabled=prefer_methodology == "comps",
+            enabled=bool(methodology_enabled and prefer_methodology == "comps"),
         )
         enrichment_targets = []
         if not skip_enrichment:
