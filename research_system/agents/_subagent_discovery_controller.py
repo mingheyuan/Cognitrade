@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any
 
 from research_system.runtime.orchestration.subagent_discovery_admin_support import (
@@ -9,7 +8,6 @@ from research_system.runtime.orchestration.subagent_discovery_admin_support impo
 )
 from research_system.schemas.subagents import (
     SubagentCapabilityGap,
-    SubagentDiscoveryReviewEvent,
     SubagentToolDiscoveryRequest,
 )
 
@@ -94,22 +92,18 @@ class SubagentDiscoveryController:
             ticket=ticket,
             candidate_entries=candidate_entries,
         )
-        ticket.candidate_catalog_entries = list(candidate_result.candidate_entries)
-        ticket.candidate_recommendation = candidate_result.recommendation
-        ticket.candidate_shadow_recommendation = candidate_result.shadow_recommendation
+        self.discovery_decision_source.apply_candidate_selection(
+            ticket=ticket,
+            candidate_result=candidate_result,
+        )
         self._record_stage_decision(
             event_name="subagent_tool_discovery_candidate_decided",
             payload=candidate_result.decision.event_payload(),
         )
-        ticket.notes = list(candidate_result.preview_notes)
         approval_decision = self.discovery_decision_source.evaluate_review(ticket=ticket)
-        self.apply_review_decision(
+        previous_status = self.discovery_decision_source.apply_review(
             ticket=ticket,
-            decision=approval_decision.decision,
-            reviewer=approval_decision.reviewer,
-            reason=approval_decision.reason,
-            source=approval_decision.source,
-            extra_notes=list(approval_decision.notes),
+            review_decision=approval_decision,
         )
         self._record_stage_decision(
             event_name="subagent_tool_discovery_review_decided",
@@ -118,7 +112,7 @@ class SubagentDiscoveryController:
         save = getattr(store, "save", None)
         if callable(save):
             try:
-                save(ticket, previous_status="pending")
+                save(ticket, previous_status=previous_status)
             except Exception:
                 return ticket
         if str(ticket.status or "").strip().lower() == "approved":
@@ -164,47 +158,6 @@ class SubagentDiscoveryController:
         if isinstance(located, tuple) and located and located[0] is not None:
             return located[0]
         return ticket
-
-    @staticmethod
-    def apply_review_decision(
-        *,
-        ticket,
-        decision: str,
-        reviewer: str,
-        reason: str,
-        source: str,
-        extra_notes: list[str] | None = None,
-    ) -> None:
-        previous_status = str(ticket.status or "pending").strip() or "pending"
-        reviewed_at = datetime.now(timezone.utc)
-        normalized_decision = str(decision or "").strip().lower()
-        if normalized_decision == "approved":
-            ticket.status = "approved"
-        elif normalized_decision == "rejected":
-            ticket.status = "rejected"
-        else:
-            ticket.status = "pending"
-        ticket.reviewer = reviewer
-        ticket.review_reason = reason
-        ticket.reviewed_at = reviewed_at
-        ticket.updated_at = reviewed_at
-        review_history = list(ticket.review_history or [])
-        review_history.append(
-            SubagentDiscoveryReviewEvent(
-                decision=ticket.status,  # type: ignore[arg-type]
-                reviewer=reviewer,
-                reason=reason,
-                reviewed_at=reviewed_at,
-                previous_status=previous_status,  # type: ignore[arg-type]
-                source=source,
-            )
-        )
-        ticket.review_history = review_history
-        notes = list(ticket.notes or [])
-        for note in list(extra_notes or []):
-            if note and note not in notes:
-                notes.append(note)
-        ticket.notes = notes
 
     def _record_stage_decision(
         self,

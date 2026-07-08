@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Literal
 
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
     SubagentCapabilityGap,
     SubagentDiscoveryCandidateRecommendation,
+    SubagentDiscoveryReviewEvent,
     SubagentDiscoveryTicket,
     SubagentToolDiscoveryRequest,
 )
@@ -116,7 +118,7 @@ class SubagentDiscoveryReviewStageDecision:
     intent: str | None
     stage: str | None
     capability: str
-    policy_source: Literal["rule"] = "rule"
+    policy_source: Literal["rule", "explicit"] = "rule"
     decision: Literal["pending", "approved", "rejected"] = "pending"
     approved: bool = False
     reviewer: str = "system_auto_gate"
@@ -336,6 +338,53 @@ class SubagentDiscoveryDecisionSource:
             ],
         )
 
+    def build_manual_review(
+        self,
+        *,
+        ticket: SubagentDiscoveryTicket,
+        decision: str,
+        reviewer: str,
+        reason: str | None = None,
+        source: str = "manual_cli_review",
+        notes: list[str] | None = None,
+    ) -> SubagentDiscoveryReviewStageDecision:
+        normalized_decision = str(decision or "").strip().lower()
+        final_decision: Literal["pending", "approved", "rejected"]
+        if normalized_decision == "approve":
+            final_decision = "approved"
+        elif normalized_decision == "reject":
+            final_decision = "rejected"
+        elif normalized_decision in {"approved", "rejected", "pending"}:
+            final_decision = normalized_decision  # type: ignore[assignment]
+        else:
+            final_decision = "pending"
+        return SubagentDiscoveryReviewStageDecision(
+            ticket_id=ticket.ticket_id,
+            intent=ticket.capability_gap.intent,
+            stage=ticket.capability_gap.stage,
+            capability=ticket.capability_gap.capability,
+            policy_source="explicit",
+            decision=final_decision,
+            approved=final_decision == "approved",
+            reviewer=str(reviewer or "manual_cli_review").strip() or "manual_cli_review",
+            source=str(source or "manual_cli_review").strip() or "manual_cli_review",
+            selected_candidate_subagent_type=(
+                ticket.candidate_recommendation.candidate_subagent_type
+                if ticket.candidate_recommendation is not None
+                else None
+            ),
+            selected_protocol=self._selected_protocol(ticket=ticket),
+            reason=str(
+                reason
+                or f"manual_{final_decision}_discovery_ticket"
+            ),
+            notes=[
+                str(item).strip()
+                for item in list(notes or [])
+                if str(item).strip()
+            ],
+        )
+
     def evaluate_activation(
         self,
         *,
@@ -364,6 +413,49 @@ class SubagentDiscoveryDecisionSource:
                 if str(item).strip()
             ],
         )
+
+    @staticmethod
+    def apply_candidate_selection(
+        *,
+        ticket: SubagentDiscoveryTicket,
+        candidate_result: SubagentDiscoveryCandidateStageResult,
+    ) -> None:
+        ticket.candidate_catalog_entries = list(candidate_result.candidate_entries)
+        ticket.candidate_recommendation = candidate_result.recommendation
+        ticket.candidate_shadow_recommendation = candidate_result.shadow_recommendation
+        ticket.notes = list(candidate_result.preview_notes)
+
+    @staticmethod
+    def apply_review(
+        *,
+        ticket: SubagentDiscoveryTicket,
+        review_decision: SubagentDiscoveryReviewStageDecision,
+    ) -> str:
+        previous_status = str(ticket.status or "pending").strip() or "pending"
+        reviewed_at = datetime.now(timezone.utc)
+        ticket.status = review_decision.decision
+        ticket.reviewer = review_decision.reviewer
+        ticket.review_reason = review_decision.reason
+        ticket.reviewed_at = reviewed_at
+        ticket.updated_at = reviewed_at
+        review_history = list(ticket.review_history or [])
+        review_history.append(
+            SubagentDiscoveryReviewEvent(
+                decision=ticket.status,
+                reviewer=review_decision.reviewer,
+                reason=review_decision.reason,
+                reviewed_at=reviewed_at,
+                previous_status=previous_status,  # type: ignore[arg-type]
+                source=review_decision.source,
+            )
+        )
+        ticket.review_history = review_history
+        notes = list(ticket.notes or [])
+        for note in list(review_decision.notes or []):
+            if note and note not in notes:
+                notes.append(note)
+        ticket.notes = notes
+        return previous_status
 
     @classmethod
     def _selected_protocol(cls, *, ticket: SubagentDiscoveryTicket) -> str | None:

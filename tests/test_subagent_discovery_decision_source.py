@@ -135,6 +135,97 @@ class SubagentDiscoveryDecisionSourceTests(unittest.TestCase):
                 "snapshot:market:market_snapshot_skill",
             )
 
+    def test_decision_source_can_apply_explicit_manual_review_to_ticket(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = Settings.from_env(root)
+            ensure_workspace_layout(settings)
+            settings.skill_sources_path.write_text(
+                "\n".join(
+                    [
+                        "sources:",
+                        "  - skill_name: market_snapshot_skill",
+                        "    registration_type: snapshot_skill_runner",
+                        "    summary: Collect market snapshot through local runtime.",
+                        "    snapshot_type: market",
+                        "    capabilities: [market_signal_extension]",
+                        "    suitable_intents: [stock_check]",
+                        "    stage: collect",
+                        "    candidate_subagent_type: candidate_collect_market_snapshot_skill",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            store = SubagentDiscoveryStore(root / "discovery")
+            host = type(
+                "_Host",
+                (),
+                {
+                    "settings": settings,
+                    "llm_provider": None,
+                    "emit_event": None,
+                    "runtime_binding_getter": lambda self: {},
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_source_registry": lambda self: SkillSourceRegistry(settings=settings),
+                    "require_skill_runtime": lambda self: SimpleNamespace(
+                        backend=SimpleNamespace(registry={"market_snapshot_skill": object()})
+                    ),
+                },
+            )()
+            decision_source = SubagentDiscoveryDecisionSource(
+                discovery_policy=SubagentDiscoveryPolicyService(settings=settings),
+                discovery_llm_policy_source=SubagentDiscoveryLLMPolicySource(
+                    shadow_policy=SubagentDiscoveryLLMShadowPolicy(settings=settings),
+                    settings=settings,
+                ),
+                discovery_candidate_policy=SubagentDiscoveryCandidatePolicyService(settings=settings),
+                discovery_approval_policy=SubagentDiscoveryApprovalPolicyService(settings=settings),
+                discovery_activation_policy=SubagentDiscoveryActivationPolicyService(settings=settings),
+            )
+            candidate_support = SubagentDiscoveryCandidateSupport(host)
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                preferred_subagent_type="candidate_collect_market_snapshot_skill",
+                reason="missing market signal extension capability",
+            )
+
+            protocol_decision = decision_source.resolve_protocols(gap=gap)
+            ticket = store.create_request(gap=gap, request=protocol_decision.request)
+            candidate_result = decision_source.select_candidate(
+                ticket=ticket,
+                candidate_entries=candidate_support.candidate_entries(ticket),
+            )
+            decision_source.apply_candidate_selection(
+                ticket=ticket,
+                candidate_result=candidate_result,
+            )
+            review_decision = decision_source.build_manual_review(
+                ticket=ticket,
+                decision="approve",
+                reviewer="tester",
+                reason="manual approval for controlled alias",
+            )
+            previous_status = decision_source.apply_review(
+                ticket=ticket,
+                review_decision=review_decision,
+            )
+
+            self.assertEqual(previous_status, "pending")
+            self.assertEqual(review_decision.policy_source, "explicit")
+            self.assertEqual(ticket.status, "approved")
+            self.assertEqual(ticket.reviewer, "tester")
+            self.assertEqual(ticket.review_reason, "manual approval for controlled alias")
+            self.assertEqual(len(ticket.review_history), 1)
+            self.assertEqual(ticket.review_history[0].source, "manual_cli_review")
+            self.assertEqual(
+                ticket.candidate_recommendation.candidate_subagent_type,
+                "candidate_collect_market_snapshot_skill",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
