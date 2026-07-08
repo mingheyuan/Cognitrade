@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 from research_system.agents.retriever.service import RetrievalDecision, RetrieverService
 from research_system.runtime.history.session.session_history import SessionHistory
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.subagents.registry import SubagentRegistry
 from research_system.subagents.retrieval import (
     BlackboardEvidenceIndexerSubagent,
@@ -22,6 +23,26 @@ from research_system.subagents.retrieval import (
 class _StubLLMProvider:
     def parse(self, **kwargs):
         raise AssertionError("LLM parse should not be called in deterministic retriever tests")
+
+
+class _ShadowRetrieverProvider:
+    available = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def parse(self, **kwargs):
+        self.calls += 1
+        schema = kwargs["schema"]
+        return schema.model_validate(
+            {
+                "selected_node_ids": ["retrieval_decider"],
+                "request_replan": True,
+                "reason": "rebuild retrieval branch after deterministic preprocessing",
+                "confidence": 0.72,
+                "notes": ["shadow_replan_retrieval_phase"],
+            }
+        )
 
 
 class RetrieverServiceTests(unittest.TestCase):
@@ -1052,6 +1073,48 @@ class RetrieverServiceTests(unittest.TestCase):
             for operation in list((patch or {}).get("operations") or [])
         ]
         self.assertEqual(patch_op_types, ["request_replan", "request_replan"])
+
+    def test_run_emits_subagent_phase_shadow_suggestions_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.subagent_phase_shadow_llm_enabled = True
+            settings.max_llm_calls_per_turn = 3
+            provider = _ShadowRetrieverProvider()
+            service = RetrieverService(provider, settings, runs_root=settings.runs_root)
+            service.disable_qdrant_for_test("disabled_for_test")
+            try:
+                service.run(
+                    intent="stock_screen",
+                    query="screen growth stocks",
+                    blackboard_entries=[
+                        {
+                            "entry_id": "screen-src-1",
+                            "run_id": "01SCREEN",
+                            "kind": "source_record",
+                            "phase": "collect",
+                            "agent": "collector",
+                            "payload": {"title": "screen request", "content": "screen", "source_type": "screen_request"},
+                            "source_refs": [],
+                        }
+                    ],
+                    allow_llm_decision=False,
+                    runtime_degraded_reason="runtime_policy_fallback",
+                )
+
+                run_root = next(settings.runs_root.iterdir())
+                trace_payload = SessionHistory(run_root).trace()
+                shadow_rows = [
+                    row
+                    for row in list(trace_payload.get("dynamic_trace") or [])
+                    if str(row.get("event") or "") == "subagent_phase_shadow_suggested"
+                ]
+                self.assertEqual(provider.calls, 2)
+                self.assertEqual(len(shadow_rows), 2)
+                self.assertTrue(all(bool(row.get("request_replan")) for row in shadow_rows))
+                self.assertTrue(all(str(row.get("dag_id") or "") in {"phase_one", "phase_two"} for row in shadow_rows))
+            finally:
+                service.close()
 
     def test_retriever_persists_subagent_dag_trace_and_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

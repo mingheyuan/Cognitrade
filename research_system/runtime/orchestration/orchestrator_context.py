@@ -36,6 +36,7 @@ class RuntimeContext:
     subagent_trace: list[dict]
     subagent_plans: list[dict]
     subagent_plan_patches: list[dict]
+    subagent_phase_shadow_suggestions: list[dict]
     action_plan_patches: list[dict]
     action_phase_shadow_suggestions: list[dict]
     dynamic_trace: list[dict]
@@ -109,6 +110,7 @@ def build_runtime_context(
         subagent_trace=[],
         subagent_plans=[],
         subagent_plan_patches=[],
+        subagent_phase_shadow_suggestions=[],
         action_plan_patches=[],
         action_phase_shadow_suggestions=[],
         dynamic_trace=[],

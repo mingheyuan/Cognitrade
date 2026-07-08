@@ -91,7 +91,7 @@ def build_orchestrator_dependencies(settings: Settings) -> OrchestratorDependenc
         critic=CriticService(settings.runs_root),
         reviewer=ReviewerService(yaml_configs.get("review_policy"), settings.runs_root),
         retriever=RetrieverService(llm_provider, settings, yaml_configs.get("retrieval_policy"), settings.runs_root),
-        reporter=ReporterService(llm_provider, settings.runs_root),
+        reporter=ReporterService(llm_provider, runs_root=settings.runs_root, settings=settings),
         screener=ScreenerService(runs_root=settings.runs_root),
         screen_reviewer=ScreenReviewerService(settings.runs_root),
         comps_service=CompsService(),

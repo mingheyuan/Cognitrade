@@ -11,6 +11,7 @@ from research_system.agents._subagent_phase_controller import SubagentPhaseContr
 from research_system.agents._subagent_phase_policy import ReporterPhasePolicy
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.runtime.core.execution_policy import RuntimeDegradeReason
+from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.services.methodologies.planning.planning_context import (
     build_planning_context_view,
@@ -60,8 +61,14 @@ REPORT_EXECUTION_FALLBACK = "fallback"
 class ReporterService(RuntimeBoundSubagentInvoker):
     agent_name = "reporter"
 
-    def __init__(self, llm_provider: OpenAIProvider, runs_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        llm_provider: OpenAIProvider,
+        runs_root: Path | None = None,
+        settings: Settings | None = None,
+    ) -> None:
         self.llm_provider = llm_provider
+        self.settings = settings
         self.runs_root = runs_root
         self.registry = SubagentRegistry(
             [
@@ -101,6 +108,10 @@ class ReporterService(RuntimeBoundSubagentInvoker):
             emit_event=self._emit_runtime_event,
             cache_context_builder=self._subagent_dag_cache_context,
             start_from_node_id_builder=self._subagent_dag_start_from_node_id,
+            runtime_binding_getter=self._runtime_binding_for_events,
+            llm_provider=self.llm_provider,
+            settings=self.settings,
+            service_name=self.agent_name,
         )
         self.phase_policy = ReporterPhasePolicy()
 

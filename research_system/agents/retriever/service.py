@@ -138,6 +138,10 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             emit_event=self._emit_runtime_event,
             cache_context_builder=self._subagent_dag_cache_context,
             start_from_node_id_builder=self._subagent_dag_start_from_node_id,
+            runtime_binding_getter=self._runtime_binding_for_events,
+            llm_provider=self.llm_provider,
+            settings=self.settings,
+            service_name=self.agent_name,
         )
         self.phase_policy = RetrieverPhasePolicy()
 
@@ -150,6 +154,10 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 emit_event=self._emit_runtime_event,
                 cache_context_builder=self._subagent_dag_cache_context,
                 start_from_node_id_builder=self._subagent_dag_start_from_node_id,
+                runtime_binding_getter=self._runtime_binding_for_events,
+                llm_provider=getattr(self, "llm_provider", None),
+                settings=getattr(self, "settings", None),
+                service_name=self.agent_name,
             )
             self.phase_controller = controller
         return controller

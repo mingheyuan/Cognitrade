@@ -8,6 +8,7 @@ from research_system.agents._subagent_dag import (
     SubagentDagNodeResult,
     SubagentDagNodeSpec,
 )
+from research_system.agents._subagent_phase_shadow_policy import SubagentPhaseLLMShadowPolicy
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
     SubagentGraphPatch,
@@ -28,12 +29,23 @@ class SubagentPhaseController:
         emit_event: Callable[..., None] | None,
         cache_context_builder: Callable[..., Any],
         start_from_node_id_builder: Callable[..., str | None],
+        runtime_binding_getter: Callable[[], dict[str, Any]] | None = None,
+        llm_provider=None,
+        settings=None,
+        service_name: str | None = None,
     ) -> None:
         self.registry = registry
         self.invoke_subagent = invoke_subagent
         self.emit_event = emit_event
         self.cache_context_builder = cache_context_builder
         self.start_from_node_id_builder = start_from_node_id_builder
+        self.shadow_policy = SubagentPhaseLLMShadowPolicy(
+            llm_provider=llm_provider,
+            settings=settings,
+            runtime_binding_getter=runtime_binding_getter,
+            emit_event=emit_event,
+            service_name=service_name,
+        )
 
     def select_catalog_entry(
         self,
@@ -189,15 +201,36 @@ class SubagentPhaseController:
                 dag_id=dag_id,
                 max_workers=final_max_workers,
             )
+            self.shadow_policy.observe(
+                dag_id=dag_id,
+                plan=plan,
+                final_plan=replanned_plan,
+                patch=patch,
+                base_results=base_results,
+            )
             return replanned_plan, base_results, patch_rows, final_results
         final_plan, patch_rows = self.apply_patch(plan=plan, patch=patch)
         if not patch_rows:
+            self.shadow_policy.observe(
+                dag_id=dag_id,
+                plan=plan,
+                final_plan=final_plan,
+                patch=patch,
+                base_results=base_results,
+            )
             return final_plan, base_results, patch_rows, base_results
         final_results = self.execute_plan(
             plan=final_plan,
             build_invocation=build_invocation_factory(final_plan),
             dag_id=dag_id,
             max_workers=final_max_workers,
+        )
+        self.shadow_policy.observe(
+            dag_id=dag_id,
+            plan=plan,
+            final_plan=final_plan,
+            patch=patch,
+            base_results=base_results,
         )
         return final_plan, base_results, patch_rows, final_results
 

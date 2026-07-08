@@ -60,6 +60,7 @@ class DistillerService(RuntimeBoundSubagentInvoker):
 
     def __init__(self, llm_provider: OpenAIProvider, settings: Settings | None = None, runs_root: Path | None = None) -> None:
         self.llm_provider = llm_provider
+        self.settings = settings
         self.runs_root = runs_root
         taxonomy_config = {}
         if settings is not None:
@@ -113,6 +114,10 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             emit_event=self._emit_runtime_event,
             cache_context_builder=self._subagent_dag_cache_context,
             start_from_node_id_builder=self._subagent_dag_start_from_node_id,
+            runtime_binding_getter=self._runtime_binding_for_events,
+            llm_provider=self.llm_provider,
+            settings=self.settings,
+            service_name=self.agent_name,
         )
         self.phase_policy = DistillerPhasePolicy()
 

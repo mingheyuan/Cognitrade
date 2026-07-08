@@ -37,6 +37,7 @@ class ChatPresenterLiveAccumulator:
         elif (
             event.event_type == "dynamic_action_inserted"
             or event.event_type.startswith("subagent_dag_")
+            or event.event_type.startswith("subagent_phase_shadow_")
             or event.event_type.startswith("action_phase_shadow_")
         ):
             trace_payload.setdefault("dynamic_trace", []).append(self._dynamic_trace_row(event))

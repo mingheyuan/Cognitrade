@@ -217,6 +217,40 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
         finally:
             temp_dir.cleanup()
 
+    def test_debug_payload_includes_subagent_phase_shadow_suggestions(self) -> None:
+        temp_dir, _settings, context, request = _build_runtime()
+        try:
+            context.subagent_phase_shadow_suggestions.append(
+                {
+                    "event": "subagent_phase_shadow_suggested",
+                    "dag_id": "phase_two",
+                    "selected_node_ids": ["retrieval_decider"],
+                    "request_replan": True,
+                }
+            )
+
+            payload = OrchestratorDebugSupport().build_debug_payload(
+                context=context,
+                request=request,
+                plan=ActionPlan(intent="stock_check", actions=[]),
+                plan_intent="stock_check",
+                retrieval_summary=None,
+            )
+
+            self.assertEqual(
+                payload["subagent_phase_shadow_suggestions"],
+                [
+                    {
+                        "event": "subagent_phase_shadow_suggested",
+                        "dag_id": "phase_two",
+                        "selected_node_ids": ["retrieval_decider"],
+                        "request_replan": True,
+                    }
+                ],
+            )
+        finally:
+            temp_dir.cleanup()
+
 
 if __name__ == "__main__":
     unittest.main()

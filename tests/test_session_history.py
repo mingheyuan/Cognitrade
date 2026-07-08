@@ -282,6 +282,43 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["dynamic_trace"][0]["selected_action_node_id"], "screen_review")
         self.assertEqual(payload["dynamic_trace"][0]["actual_action_node_id"], "screen_review")
 
+    def test_trace_rebuilds_subagent_phase_shadow_rows_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "01TRACESUBSHADOW"
+            run_root.mkdir(parents=True, exist_ok=True)
+
+            write_json(run_root / "request.json", {"intent": "stock_check", "user_query": "check bank resilience"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-subshadow-1",
+                    "request_id": "req-subshadow",
+                    "run_id": "01TRACESUBSHADOW",
+                    "intent": "stock_check",
+                    "event_type": "subagent_phase_shadow_suggested",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                    "message": "Shadow subagent-phase policy evaluated DAG phase_two",
+                    "payload": {
+                        "dag_id": "phase_two",
+                        "selected_node_ids": ["retrieval_decider"],
+                        "request_replan": True,
+                        "actual_final_node_ids": ["retrieval_decider"],
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-08T12:00:00+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(len(payload["dynamic_trace"]), 1)
+        self.assertEqual(payload["dynamic_trace"][0]["event"], "subagent_phase_shadow_suggested")
+        self.assertEqual(payload["dynamic_trace"][0]["dag_id"], "phase_two")
+        self.assertEqual(payload["dynamic_trace"][0]["selected_node_ids"], ["retrieval_decider"])
+
     def test_trace_rebuilds_action_plan_patches_from_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "01TRACEPATCH"

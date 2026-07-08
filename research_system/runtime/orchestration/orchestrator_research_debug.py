@@ -32,6 +32,7 @@ class OrchestratorDebugSupport:
             "subagent_trace": context.subagent_trace[:],
             "subagent_plans": context.subagent_plans[:],
             "subagent_plan_patches": context.subagent_plan_patches[:],
+            "subagent_phase_shadow_suggestions": context.subagent_phase_shadow_suggestions[:],
             "action_plan_patches": context.action_plan_patches[:],
             "action_phase_shadow_suggestions": context.action_phase_shadow_suggestions[:],
             "dynamic_trace": context.dynamic_trace[:],
