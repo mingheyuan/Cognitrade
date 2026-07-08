@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from research_system.agents._subagent_discovery_policy_controller import (
+    SubagentDiscoveryActivationResolution,
+    SubagentDiscoveryPolicyController,
+)
 from research_system.schemas.subagents import (
     SubagentCapabilityGap,
     SubagentToolDiscoveryRequest,
@@ -22,6 +26,7 @@ class SubagentDiscoveryController:
         discovery_candidate_support,
         discovery_decision_source,
         activation_host,
+        discovery_policy_controller=None,
         runtime_binding_getter=None,
         emit_event=None,
         service_name: str | None = None,
@@ -29,6 +34,15 @@ class SubagentDiscoveryController:
         self.discovery_candidate_support = discovery_candidate_support
         self.discovery_decision_source = discovery_decision_source
         self.activation_host = activation_host
+        self.discovery_policy_controller = (
+            discovery_policy_controller
+            if discovery_policy_controller is not None
+            else SubagentDiscoveryPolicyController(
+                decision_source=discovery_decision_source,
+                runtime_packaging=getattr(discovery_candidate_support, "runtime_packaging", None),
+                error_factory=getattr(activation_host, "orchestrator_error_cls", RuntimeError),
+            )
+        )
         self.runtime_binding_getter = runtime_binding_getter
         self.emit_event = emit_event
         self.service_name = service_name or "subagent_discovery"
@@ -79,9 +93,10 @@ class SubagentDiscoveryController:
         return self.preview_ticket(ticket=ticket, store=store)
 
     def preview_ticket(self, *, ticket, store):
-        candidate_result = self.discovery_decision_source.select_candidate(
+        preview_resolution = self.discovery_policy_controller.resolve_runtime_preview(
             ticket=ticket,
         )
+        candidate_result = preview_resolution.candidate_result
         self.discovery_decision_source.apply_candidate_selection(
             ticket=ticket,
             candidate_result=candidate_result,
@@ -90,7 +105,7 @@ class SubagentDiscoveryController:
             event_name="subagent_tool_discovery_candidate_decided",
             payload=candidate_result.decision.event_payload(),
         )
-        approval_decision = self.discovery_decision_source.evaluate_review(ticket=ticket)
+        approval_decision = preview_resolution.review_decision
         previous_status = self.discovery_decision_source.apply_review(
             ticket=ticket,
             review_decision=approval_decision,
@@ -105,46 +120,36 @@ class SubagentDiscoveryController:
                 save(ticket, previous_status=previous_status)
             except Exception:
                 return ticket
-        if str(ticket.status or "").strip().lower() == "approved":
-            return self.maybe_auto_activate_ticket(ticket=ticket, store=store)
+        if preview_resolution.activation_resolution is not None:
+            return self.maybe_auto_activate_ticket(
+                ticket=ticket,
+                store=store,
+                activation_resolution=preview_resolution.activation_resolution,
+            )
         return ticket
 
-    def maybe_auto_activate_ticket(self, *, ticket, store):
-        activation_decision = self.discovery_decision_source.evaluate_activation(ticket=ticket)
+    def maybe_auto_activate_ticket(self, *, ticket, store, activation_resolution: SubagentDiscoveryActivationResolution | None = None):
+        activation_resolution = activation_resolution or self.discovery_policy_controller.resolve_runtime_activation(
+            ticket=ticket,
+        )
+        activation_decision = activation_resolution.activation_decision
         if not activation_decision.activate:
             self._record_stage_decision(
                 event_name="subagent_tool_discovery_activation_decided",
                 payload=activation_decision.event_payload(activation_outcome="skipped"),
             )
             return ticket
+        activation_target = activation_resolution.activation_target
+        if activation_target is None:
+            self._record_stage_decision(
+                event_name="subagent_tool_discovery_activation_decided",
+                payload=activation_decision.event_payload(activation_outcome="failed"),
+            )
+            return ticket
         try:
-            activation_target = self.discovery_decision_source.resolve_activation_target(
-                ticket=ticket,
-                candidate_subagent_type=activation_decision.candidate_subagent_type,
-                delegate_subagent_type=None,
-                registration_template_id=activation_decision.registration_template_id,
-                registration_type=None,
-                skill_name=None,
-                snapshot_type=None,
-                source_id=None,
-                tool_name=None,
-                endpoint_path=None,
-                http_method=None,
-                openapi_spec_uri=None,
-                openapi_operation_id=None,
-                timeout_seconds=None,
-                runtime_packaging=self.discovery_candidate_support.runtime_packaging,
-                error_factory=getattr(self.activation_host, "orchestrator_error_cls", RuntimeError),
-            )
-            bound_activation_decision = self.discovery_decision_source.materialize_activation_decision(
-                activation_decision=activation_decision,
-                activation_target=activation_target,
-                activated_by="system_auto_activate",
-                reason=activation_decision.reason,
-            )
             _activation_entry, created = self.discovery_decision_source.apply_activation(
                 ticket=ticket,
-                activation_decision=bound_activation_decision,
+                activation_decision=activation_decision,
                 candidate_entry=activation_target.candidate_entry,
             )
         except Exception:
@@ -160,18 +165,18 @@ class SubagentDiscoveryController:
             except Exception:
                 self._record_stage_decision(
                     event_name="subagent_tool_discovery_activation_decided",
-                    payload=bound_activation_decision.event_payload(activation_outcome="failed"),
+                    payload=activation_decision.event_payload(activation_outcome="failed"),
                 )
                 return ticket
         if not created:
             self._record_stage_decision(
                 event_name="subagent_tool_discovery_activation_decided",
-                payload=bound_activation_decision.event_payload(activation_outcome="activated"),
+                payload=activation_decision.event_payload(activation_outcome="activated"),
             )
             return ticket
         self._record_stage_decision(
             event_name="subagent_tool_discovery_activation_decided",
-            payload=bound_activation_decision.event_payload(activation_outcome="activated"),
+            payload=activation_decision.event_payload(activation_outcome="activated"),
         )
         return ticket
 

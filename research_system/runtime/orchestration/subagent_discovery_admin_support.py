@@ -6,6 +6,9 @@ from research_system.agents._subagent_discovery_decision_source import (
 from research_system.agents._subagent_discovery_policy import (
     SubagentDiscoveryPolicyService,
 )
+from research_system.agents._subagent_discovery_policy_controller import (
+    SubagentDiscoveryPolicyController,
+)
 from research_system.agents._subagent_discovery_policy_source import (
     SubagentDiscoveryLLMPolicySource,
 )
@@ -31,6 +34,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
     def __init__(self, host) -> None:
         self.host = host
         self.discovery_candidates = SubagentDiscoveryCandidateSupport(host)
+        self.runtime_packaging = SubagentRuntimePackagingSupport(host)
         self.candidate_policy = SubagentDiscoveryCandidatePolicyService(
             llm_provider=getattr(host, "llm_provider", None),
             settings=getattr(host, "settings", None),
@@ -57,7 +61,11 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             discovery_activation_policy=SubagentDiscoveryActivationPolicyService(settings=getattr(host, "settings", None)),
             discovery_candidate_support=self.discovery_candidates,
         )
-        self.runtime_packaging = SubagentRuntimePackagingSupport(host)
+        self.policy_controller = SubagentDiscoveryPolicyController(
+            decision_source=self.discovery_decision_source,
+            runtime_packaging=self.runtime_packaging,
+            error_factory=self.host.orchestrator_error_cls,
+        )
 
     def list_requests(self, *, status: str | None = None, limit: int = 50) -> list[dict]:
         store = self.host.require_subagent_discovery_store()
@@ -102,25 +110,22 @@ class OrchestratorSubagentDiscoveryAdminSupport:
                 "result": current,
             }
         previous_status = str(ticket.status or "pending").strip() or "pending"
-        if normalized_decision == "approve":
-            candidate_result = self.discovery_decision_source.select_candidate(
-                ticket=ticket,
-                candidate_entries=candidate_catalog_entries,
-            )
-            self.discovery_decision_source.apply_candidate_selection(
-                ticket=ticket,
-                candidate_result=candidate_result,
-            )
-        review_decision = self.discovery_decision_source.build_manual_review(
+        review_resolution = self.policy_controller.resolve_manual_review(
             ticket=ticket,
             decision=normalized_decision,
             reviewer=reviewer,
             reason=str(reason or ""),
             source="manual_cli_review",
+            candidate_catalog_entries=candidate_catalog_entries,
         )
+        if review_resolution.candidate_result is not None:
+            self.discovery_decision_source.apply_candidate_selection(
+                ticket=ticket,
+                candidate_result=review_resolution.candidate_result,
+            )
         previous_status = self.discovery_decision_source.apply_review(
             ticket=ticket,
-            review_decision=review_decision,
+            review_decision=review_resolution.review_decision,
         )
         self.host.require_subagent_discovery_store().save(ticket, previous_status=previous_status)
         return {
@@ -158,11 +163,13 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             raise self.host.orchestrator_error_cls(
                 f"subagent discovery ticket must be approved before activation: {ticket.status}"
             )
-        activation_target = self.discovery_decision_source.resolve_activation_target(
+        activation_resolution = self.policy_controller.resolve_manual_activation(
             ticket=ticket,
-            candidate_subagent_type=candidate_subagent_type,
             delegate_subagent_type=delegate_subagent_type,
+            candidate_subagent_type=candidate_subagent_type,
             registration_template_id=registration_template_id,
+            activated_by=activated_by,
+            reason=reason,
             registration_type=registration_type,
             skill_name=skill_name,
             snapshot_type=snapshot_type,
@@ -173,18 +180,15 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             openapi_spec_uri=openapi_spec_uri,
             openapi_operation_id=openapi_operation_id,
             timeout_seconds=timeout_seconds,
-            runtime_packaging=self.runtime_packaging,
-            error_factory=self.host.orchestrator_error_cls,
         )
-        activation_decision = self.discovery_decision_source.build_manual_activation(
-            ticket=ticket,
-            activation_target=activation_target,
-            activated_by=activated_by,
-            reason=reason,
-        )
+        activation_target = activation_resolution.activation_target
+        if activation_target is None:
+            raise self.host.orchestrator_error_cls(
+                f"activation target could not be resolved for discovery ticket: {ticket.ticket_id}"
+            )
         _activation_entry, created = self.discovery_decision_source.apply_activation(
             ticket=ticket,
-            activation_decision=activation_decision,
+            activation_decision=activation_resolution.activation_decision,
             candidate_entry=activation_target.candidate_entry,
         )
         if not created:
