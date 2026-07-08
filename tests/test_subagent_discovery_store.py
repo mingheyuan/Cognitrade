@@ -192,6 +192,82 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
                 "market_snapshot_skill",
             )
 
+    def test_admin_support_can_activate_snapshot_skill_runner_from_candidate_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                preferred_subagent_type="candidate_collect_market_signal_extension",
+                reason="missing market signal extension capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                search_query="stock_check collect market_signal_extension",
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_runtime": lambda self: SimpleNamespace(
+                        backend=SimpleNamespace(registry={"market_snapshot_skill": object()})
+                    ),
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                candidate_catalog_entries=[
+                    SubagentCatalogEntry(
+                        subagent_type="candidate_collect_market_signal_extension",
+                        summary="Approved discovery candidate for market signal extension.",
+                        capabilities=["market_signal_extension"],
+                        stage="collect",
+                        tags=["approved_discovery_candidate"],
+                        suitable_intents=["stock_check"],
+                        allow_parallel=True,
+                        max_concurrency=4,
+                        runtime_registration_hints={
+                            "snapshot_skill": {
+                                "skill_name": "market_snapshot_skill",
+                                "snapshot_type": "market",
+                            }
+                        },
+                    ).model_dump(mode="json")
+                ],
+            )
+
+            approved_entries = store.approved_catalog_entries()
+            self.assertEqual(
+                approved_entries[0].runtime_registration_templates[0].template_id,
+                "snapshot:market:market_snapshot_skill",
+            )
+
+            activation = admin.activate_request(
+                ticket.ticket_id,
+                registration_template_id="snapshot:market:market_snapshot_skill",
+                activated_by="tester",
+                reason="activate hinted market skill",
+            )
+
+            self.assertIn("runtime alias", activation["message"])
+            activated_entry = activation["result"]["activated_entries"][0]
+            self.assertEqual(activated_entry["runtime_registration"]["registration_type"], "snapshot_skill_runner")
+            self.assertEqual(activated_entry["runtime_registration"]["skill_name"], "market_snapshot_skill")
+            self.assertEqual(activated_entry["runtime_registration"]["snapshot_type"], "market")
+            self.assertEqual(
+                activated_entry["runtime_registration"]["registration_template_id"],
+                "snapshot:market:market_snapshot_skill",
+            )
+
     def test_admin_support_can_activate_generic_skill_runner_with_validated_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = SubagentDiscoveryStore(Path(temp_dir))
@@ -273,6 +349,96 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
             self.assertEqual(len(activated_aliases), 1)
             self.assertEqual(activated_aliases[0].subagent_type, "candidate_report_signal_extension")
             self.assertEqual(activated_aliases[0].runtime_registration.registration_type, "skill_runner")
+
+    def test_admin_support_can_activate_skill_runner_from_candidate_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="review_thesis",
+                stage="report",
+                capability="report_signal_extension",
+                preferred_subagent_type="candidate_report_signal_extension",
+                reason="missing report signal extension capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="review_thesis",
+                stage="report",
+                capability="report_signal_extension",
+                search_query="review_thesis report report_signal_extension",
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_runtime": lambda self: SimpleNamespace(
+                        backend=SimpleNamespace(registry={"analysis_skill": object()})
+                    ),
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                candidate_catalog_entries=[
+                    SubagentCatalogEntry(
+                        subagent_type="candidate_report_signal_extension",
+                        summary="Approved discovery candidate for report-stage analysis skill.",
+                        capabilities=["report_signal_extension"],
+                        stage="report",
+                        tags=["approved_discovery_candidate"],
+                        suitable_intents=["review_thesis"],
+                        input_schema_name="ReportSignalInput",
+                        output_schema_name="ReportSignalOutput",
+                        input_json_schema={
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string"},
+                                "focus": {"type": "string"},
+                            },
+                            "required": ["query"],
+                        },
+                        output_json_schema={
+                            "type": "object",
+                            "properties": {
+                                "summary": {"type": "string"},
+                                "score": {"type": "number"},
+                            },
+                            "required": ["summary"],
+                        },
+                        runtime_registration_hints={
+                            "skill": {
+                                "skill_name": "analysis_skill",
+                            }
+                        },
+                    ).model_dump(mode="json")
+                ],
+            )
+
+            approved_entries = store.approved_catalog_entries()
+            self.assertEqual(
+                approved_entries[0].runtime_registration_templates[0].template_id,
+                "skill:analysis_skill",
+            )
+
+            activation = admin.activate_request(
+                ticket.ticket_id,
+                registration_template_id="skill:analysis_skill",
+                activated_by="tester",
+                reason="activate hinted generic skill runner",
+            )
+
+            self.assertIn("runtime alias", activation["message"])
+            activated_entry = activation["result"]["activated_entries"][0]
+            self.assertEqual(activated_entry["runtime_registration"]["registration_type"], "skill_runner")
+            self.assertEqual(activated_entry["runtime_registration"]["skill_name"], "analysis_skill")
+            self.assertEqual(
+                activated_entry["runtime_registration"]["registration_template_id"],
+                "skill:analysis_skill",
+            )
 
     def test_admin_support_can_activate_http_json_runner_with_validated_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -362,6 +528,104 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
             self.assertEqual(
                 activated_aliases[0].runtime_registration.registration_type,
                 "http_json_runner",
+            )
+
+    def test_admin_support_can_activate_http_json_runner_from_candidate_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_http_extension",
+                preferred_subagent_type="candidate_collect_market_signal_http_extension",
+                reason="missing http-backed market signal extension capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_http_extension",
+                search_query="stock_check collect market_signal_http_extension",
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_runtime": lambda self: SimpleNamespace(
+                        backend=SimpleNamespace(registry={"analysis_skill": object()})
+                    ),
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                candidate_catalog_entries=[
+                    SubagentCatalogEntry(
+                        subagent_type="candidate_collect_market_signal_http_extension",
+                        summary="Approved discovery candidate for HTTP-backed market signals.",
+                        capabilities=["market_signal_http_extension"],
+                        stage="collect",
+                        side_effect_level="read_only",
+                        tags=["approved_discovery_candidate"],
+                        suitable_intents=["stock_check"],
+                        allow_parallel=True,
+                        input_schema_name="HttpSignalInput",
+                        output_schema_name="HttpSignalOutput",
+                        input_json_schema={
+                            "type": "object",
+                            "properties": {
+                                "symbol": {"type": "string"},
+                                "limit": {"type": "integer"},
+                            },
+                            "required": ["symbol"],
+                        },
+                        output_json_schema={
+                            "type": "object",
+                            "properties": {
+                                "signal": {"type": "string"},
+                                "score": {"type": "number"},
+                            },
+                            "required": ["signal"],
+                        },
+                        runtime_registration_hints={
+                            "http_json": {
+                                "source_id": "eastmoney",
+                                "endpoint_path": "/api/market-signal",
+                                "http_method": "GET",
+                                "timeout_seconds": 12.5,
+                            }
+                        },
+                    ).model_dump(mode="json")
+                ],
+            )
+
+            approved_entries = store.approved_catalog_entries()
+            self.assertEqual(
+                approved_entries[0].runtime_registration_templates[0].template_id,
+                "http:eastmoney:get:api_market_signal",
+            )
+
+            activation = admin.activate_request(
+                ticket.ticket_id,
+                registration_template_id="http:eastmoney:get:api_market_signal",
+                activated_by="tester",
+                reason="activate hinted http json runner",
+            )
+
+            self.assertIn("runtime alias", activation["message"])
+            activated_entry = activation["result"]["activated_entries"][0]
+            self.assertEqual(activated_entry["runtime_registration"]["registration_type"], "http_json_runner")
+            self.assertEqual(activated_entry["runtime_registration"]["source_id"], "eastmoney")
+            self.assertEqual(activated_entry["runtime_registration"]["endpoint_path"], "/api/market-signal")
+            self.assertEqual(activated_entry["runtime_registration"]["http_method"], "GET")
+            self.assertEqual(activated_entry["runtime_registration"]["timeout_seconds"], 12.5)
+            self.assertEqual(
+                activated_entry["runtime_registration"]["registration_template_id"],
+                "http:eastmoney:get:api_market_signal",
             )
 
     def test_admin_support_can_activate_openapi_http_runner_from_candidate_hints(self) -> None:
