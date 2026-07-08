@@ -1263,6 +1263,66 @@ class RetrieverServiceTests(unittest.TestCase):
             finally:
                 service.close()
 
+    def test_run_phase_two_llm_policy_can_switch_to_fallback_variant_without_shadow_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.subagent_phase_shadow_llm_enabled = False
+            settings.subagent_phase_llm_policy_enabled = True
+            settings.subagent_phase_llm_policy_min_confidence = 0.8
+            settings.subagent_phase_hybrid_llm_enabled = False
+            settings.max_llm_calls_per_turn = 3
+            provider = _HybridRetrieverProvider()
+            service = RetrieverService(provider, settings, runs_root=settings.runs_root)
+            service.disable_qdrant_for_test("disabled_for_test")
+            try:
+                outputs = service.run(
+                    intent="stock_screen",
+                    query="screen growth stocks",
+                    blackboard_entries=[
+                        {
+                            "entry_id": "screen-src-1",
+                            "run_id": "01SCREEN",
+                            "kind": "source_record",
+                            "phase": "collect",
+                            "agent": "collector",
+                            "payload": {"title": "screen request", "content": "screen", "source_type": "screen_request"},
+                            "source_refs": [],
+                        }
+                    ],
+                    allow_llm_decision=True,
+                    runtime_degraded_reason=None,
+                )
+
+                run_root = next(settings.runs_root.iterdir())
+                trace_payload = SessionHistory(run_root).trace()
+                llm_rows = [
+                    row
+                    for row in list(trace_payload.get("dynamic_trace") or [])
+                    if str(row.get("event") or "") == "subagent_phase_llm_applied"
+                ]
+                patch_op_types = [
+                    str(operation.get("op_type") or "")
+                    for patch in list(outputs.get("subagent_plan_patches") or [])
+                    for operation in list((patch or {}).get("operations") or [])
+                ]
+                self.assertEqual(provider.calls, 2)
+                self.assertEqual(patch_op_types, ["request_replan"])
+                self.assertEqual(len(llm_rows), 2)
+                phase_one_llm = next(row for row in llm_rows if row["dag_id"] == "phase_one")
+                phase_two_llm = next(row for row in llm_rows if row["dag_id"] == "phase_two")
+                self.assertEqual(phase_one_llm["applied_plan_variant"], "current")
+                self.assertEqual(phase_two_llm["applied_plan_variant"], "fallback_retrieval_decider")
+                phase_two_plan = list(outputs.get("subagent_plans") or [])[1]
+                decision_node = next(
+                    node
+                    for node in list(phase_two_plan.get("nodes") or [])
+                    if str(node.get("node_id") or "") == "retrieval_decider"
+                )
+                self.assertEqual(str(decision_node.get("subagent_type") or ""), "fallback_retrieval_decider")
+            finally:
+                service.close()
+
     def test_retriever_persists_subagent_dag_trace_and_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             service = self.service

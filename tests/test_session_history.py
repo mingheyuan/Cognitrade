@@ -354,6 +354,41 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["dynamic_trace"][0]["event"], "subagent_phase_hybrid_applied")
         self.assertEqual(payload["dynamic_trace"][0]["applied_plan_variant"], "current")
 
+    def test_trace_rebuilds_subagent_phase_llm_rows_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "01TRACESUBLLM"
+            run_root.mkdir(parents=True, exist_ok=True)
+
+            write_json(run_root / "request.json", {"intent": "stock_screen", "user_query": "screen growth stocks"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-subllm-1",
+                    "request_id": "req-subllm",
+                    "run_id": "01TRACESUBLLM",
+                    "intent": "stock_screen",
+                    "event_type": "subagent_phase_llm_applied",
+                    "phase": "retrieve",
+                    "agent": "retriever",
+                    "message": "subagent_phase_llm_applied selected variant fallback_retrieval_decider for DAG phase_two",
+                    "payload": {
+                        "dag_id": "phase_two",
+                        "applied_plan_variant": "fallback_retrieval_decider",
+                        "override_rule_variant": True,
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-08T14:30:00+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(len(payload["dynamic_trace"]), 1)
+        self.assertEqual(payload["dynamic_trace"][0]["event"], "subagent_phase_llm_applied")
+        self.assertEqual(payload["dynamic_trace"][0]["applied_plan_variant"], "fallback_retrieval_decider")
+
     def test_trace_rebuilds_action_phase_hybrid_rows_from_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "01TRACEHYBRID"

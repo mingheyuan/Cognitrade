@@ -389,6 +389,28 @@ class ChatPresenterTests(unittest.TestCase):
         self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "subagent_phase_hybrid_applied")
         self.assertEqual(trace_payload["dynamic_trace"][0]["applied_plan_variant"], "current")
 
+    def test_presenter_accumulates_subagent_phase_llm_events_into_dynamic_trace(self) -> None:
+        presenter = ChatStreamPresenter()
+
+        presenter.on_event(
+            _event(
+                event_type="subagent_phase_llm_applied",
+                phase="retrieve",
+                agent="retriever",
+                payload={
+                    "dag_id": "phase_two",
+                    "applied_plan_variant": "fallback_retrieval_decider",
+                    "override_rule_variant": True,
+                },
+            )
+        )
+
+        trace_payload = presenter.current_trace_payload()
+        self.assertIsNotNone(trace_payload)
+        self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "subagent_phase_llm_applied")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["applied_plan_variant"], "fallback_retrieval_decider")
+
     def test_presenter_accumulates_action_phase_hybrid_events_into_dynamic_trace(self) -> None:
         presenter = ChatStreamPresenter()
 

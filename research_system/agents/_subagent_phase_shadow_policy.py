@@ -227,6 +227,7 @@ class SubagentPhaseLLMShadowPolicy:
             return False
         if not (
             bool(getattr(self.settings, "subagent_phase_shadow_llm_enabled", False))
+            or bool(getattr(self.settings, "subagent_phase_llm_policy_enabled", False))
             or bool(getattr(self.settings, "subagent_phase_hybrid_llm_enabled", False))
         ):
             return False

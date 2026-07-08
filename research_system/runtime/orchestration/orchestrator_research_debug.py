@@ -33,6 +33,7 @@ class OrchestratorDebugSupport:
             "subagent_plans": context.subagent_plans[:],
             "subagent_plan_patches": context.subagent_plan_patches[:],
             "subagent_phase_shadow_suggestions": context.subagent_phase_shadow_suggestions[:],
+            "subagent_phase_llm_decisions": context.subagent_phase_llm_decisions[:],
             "subagent_phase_hybrid_decisions": context.subagent_phase_hybrid_decisions[:],
             "action_plan_patches": context.action_plan_patches[:],
             "action_phase_shadow_suggestions": context.action_phase_shadow_suggestions[:],
