@@ -67,6 +67,13 @@ class OrchestratorDependenciesTests(unittest.TestCase):
             try:
                 self.assertIs(dependencies.provider_registry.default(), dependencies.llm_provider)
                 self.assertIs(dependencies.collector.skill_runtime, dependencies.skill_runtime)
+                self.assertIs(dependencies.critic.skill_runtime, dependencies.skill_runtime)
+                self.assertIs(dependencies.distiller.skill_runtime, dependencies.skill_runtime)
+                self.assertIs(dependencies.retriever.skill_runtime, dependencies.skill_runtime)
+                self.assertIs(dependencies.reporter.skill_runtime, dependencies.skill_runtime)
+                self.assertIs(dependencies.reviewer.skill_runtime, dependencies.skill_runtime)
+                self.assertIs(dependencies.screener.skill_runtime, dependencies.skill_runtime)
+                self.assertIs(dependencies.screen_reviewer.skill_runtime, dependencies.skill_runtime)
                 self.assertIs(dependencies.reporter.llm_provider, dependencies.llm_provider)
                 self.assertIs(dependencies.reporter.settings, settings)
                 self.assertIs(dependencies.distiller.llm_provider, dependencies.llm_provider)

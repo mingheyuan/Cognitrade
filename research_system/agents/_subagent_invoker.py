@@ -10,8 +10,10 @@ from research_system.runtime.local_runtime import start_local_runtime
 from research_system.runtime.storage.jsonl import write_json
 from research_system.schemas.runtime import RuntimeItemRecord
 from research_system.schemas.protocol import RequestEnvelope
-from research_system.schemas.subagents import SubagentExecutionRecord, SubagentInvocation
+from research_system.schemas.subagents import SubagentActivationEntry, SubagentExecutionRecord, SubagentInvocation
+from research_system.subagents.base import SubagentCatalogMetadata, SubagentRuntimePolicy
 from research_system.subagents.registry import SubagentRegistry
+from research_system.subagents.runtime_registered import RuntimeRegisteredSnapshotSkillSubagent
 
 
 class RuntimeBoundSubagentInvoker:
@@ -112,6 +114,7 @@ class RuntimeBoundSubagentInvoker:
         context=None,
         support=None,
         subagent_discovery_store=None,
+        skill_runtime=None,
         intent: str | None = None,
         thread_id: str,
         turn_id: str,
@@ -125,6 +128,7 @@ class RuntimeBoundSubagentInvoker:
             "context": context,
             "support": support,
             "subagent_discovery_store": subagent_discovery_store,
+            "skill_runtime": skill_runtime,
             "intent": intent,
             "thread_id": thread_id,
             "turn_id": turn_id,
@@ -196,6 +200,52 @@ class RuntimeBoundSubagentInvoker:
     def _runtime_execution_policy(self):
         binding = self._runtime_binding_for_events()
         return binding.get("execution_policy")
+
+    def _runtime_skill_runtime(self):
+        binding = self._runtime_binding_for_events()
+        runtime = binding.get("skill_runtime")
+        if runtime is not None:
+            return runtime
+        return getattr(self, "skill_runtime", None)
+
+    def _activated_discovery_runtime_subagent(
+        self,
+        activation_entry: SubagentActivationEntry,
+    ):
+        runtime_registration = activation_entry.runtime_registration
+        if runtime_registration is None:
+            return None
+        if runtime_registration.registration_type != "snapshot_skill_runner":
+            return None
+        skill_runtime = self._runtime_skill_runtime()
+        if skill_runtime is None:
+            return None
+        catalog_entry = activation_entry.catalog_entry
+        if str(catalog_entry.stage or "").strip().lower() not in {"", "collect"}:
+            return None
+        return RuntimeRegisteredSnapshotSkillSubagent(
+            subagent_type=str(activation_entry.subagent_type).strip(),
+            snapshot_type=str(runtime_registration.snapshot_type).strip(),
+            skill_name=str(runtime_registration.skill_name).strip(),
+            skill_runtime=skill_runtime,
+            runtime_policy=SubagentRuntimePolicy(
+                requires_llm=bool(catalog_entry.requires_llm),
+                fallback_subagent_type=catalog_entry.fallback_subagent_type,
+                error_fallback_subagent_type=catalog_entry.error_fallback_subagent_type,
+                allow_parallel=bool(catalog_entry.allow_parallel),
+                max_concurrency=catalog_entry.max_concurrency,
+            ),
+            catalog_metadata=SubagentCatalogMetadata(
+                summary=catalog_entry.summary,
+                capabilities=tuple(item for item in catalog_entry.capabilities if str(item).strip()),
+                stage=catalog_entry.stage,
+                cost_class=catalog_entry.cost_class,
+                latency_class=catalog_entry.latency_class,
+                side_effect_level=catalog_entry.side_effect_level,
+                suitable_intents=tuple(item for item in catalog_entry.suitable_intents if str(item).strip()),
+                tags=tuple(item for item in catalog_entry.tags if str(item).strip()),
+            ),
+        )
 
     def _approved_catalog_overlay_entries(self):
         binding = self._runtime_binding_for_events()
@@ -394,6 +444,7 @@ class RuntimeBoundSubagentInvoker:
             "execution_policy": runtime.context.execution_policy,
             "context": runtime.context,
             "support": runtime.support,
+            "skill_runtime": self._runtime_skill_runtime(),
             "intent": runtime.intent,
             "thread_id": runtime.context.thread.thread_id,
             "turn_id": runtime.context.turn.turn_id,

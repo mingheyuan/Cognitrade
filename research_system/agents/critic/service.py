@@ -8,6 +8,7 @@ from research_system.agents._subagent_dag import SubagentDagNodeResult
 from research_system.agents._subagent_phase_controller import SubagentPhaseController
 from research_system.agents._subagent_phase_policy import CriticPhasePolicy
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
+from research_system.runtime.platform.skill_runtime import SkillRuntime
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.schemas.review import CriticReviewFinding, CriticReviewSummary
@@ -36,10 +37,12 @@ class CriticService(RuntimeBoundSubagentInvoker):
         runs_root: Path | None = None,
         llm_provider: OpenAIProvider | None = None,
         settings: Settings | None = None,
+        skill_runtime: SkillRuntime | None = None,
     ) -> None:
         self.llm_provider = llm_provider
         self.settings = settings
         self.runs_root = runs_root
+        self.skill_runtime = skill_runtime
         self.registry = SubagentRegistry(
             [
                 CriticStrategyResolverSubagent(),
@@ -50,6 +53,7 @@ class CriticService(RuntimeBoundSubagentInvoker):
             ],
             catalog_overlay_provider=self._approved_catalog_overlay_entries,
             activation_provider=self._activated_discovery_alias_entries,
+            activation_factory_provider=self._activated_discovery_runtime_subagent,
         )
         self.phase_controller = SubagentPhaseController(
             registry=self.registry,

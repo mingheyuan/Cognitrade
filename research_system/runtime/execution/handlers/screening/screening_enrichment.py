@@ -32,6 +32,7 @@ def run_screening_enrichment(
             execution_policy=context.execution_policy,
             context=context,
             support=support,
+            skill_runtime=getattr(host, "skill_runtime", None),
             intent=intent,
             thread_id=context.thread.thread_id,
             turn_id=context.turn.turn_id,

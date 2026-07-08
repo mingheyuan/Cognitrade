@@ -109,6 +109,7 @@ class OrchestratorActionRunner:
             context=context,
             support=self.support,
             subagent_discovery_store=getattr(self.host, "subagent_discovery_store", None),
+            skill_runtime=getattr(self.host, "skill_runtime", None),
             intent=context.state.intent,
             thread_id=context.thread.thread_id,
             turn_id=context.turn.turn_id,

@@ -12,6 +12,7 @@ from research_system.agents._subagent_phase_controller import SubagentPhaseContr
 from research_system.agents._subagent_phase_policy import DistillerPhasePolicy
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.runtime.core.execution_policy import RuntimeDegradeReason
+from research_system.runtime.platform.skill_runtime import SkillRuntime
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.schemas.distillation import (
@@ -58,10 +59,17 @@ DISTILL_EXECUTION_FALLBACK = "fallback"
 class DistillerService(RuntimeBoundSubagentInvoker):
     agent_name = "distiller"
 
-    def __init__(self, llm_provider: OpenAIProvider, settings: Settings | None = None, runs_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        llm_provider: OpenAIProvider,
+        settings: Settings | None = None,
+        runs_root: Path | None = None,
+        skill_runtime: SkillRuntime | None = None,
+    ) -> None:
         self.llm_provider = llm_provider
         self.settings = settings
         self.runs_root = runs_root
+        self.skill_runtime = skill_runtime
         taxonomy_config = {}
         if settings is not None:
             yaml_configs = settings.load_yaml_configs()
@@ -109,6 +117,7 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             ],
             catalog_overlay_provider=self._approved_catalog_overlay_entries,
             activation_provider=self._activated_discovery_alias_entries,
+            activation_factory_provider=self._activated_discovery_runtime_subagent,
         )
         self.phase_controller = SubagentPhaseController(
             registry=self.registry,

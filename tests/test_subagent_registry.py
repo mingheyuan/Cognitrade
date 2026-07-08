@@ -113,7 +113,8 @@ class _RegisteredRuntimeSubagent:
         self.catalog_metadata = SubagentCatalogMetadata(
             summary="Runtime-registered typed alias.",
             capabilities=("sector_signal_enrichment",),
-            stage="analysis",
+            stage="collect",
+            suitable_intents=("stock_check",),
             tags=("runtime_registered",),
         )
 
@@ -427,16 +428,16 @@ class SubagentRegistryTests(unittest.TestCase):
             store = SubagentDiscoveryStore(Path(temp_dir))
             gap = SubagentCapabilityGap(
                 intent="stock_check",
-                stage="analysis",
+                stage="collect",
                 capability="sector_signal_enrichment",
-                preferred_subagent_type="candidate_analysis_sector_signal_enrichment",
+                preferred_subagent_type="candidate_collect_sector_signal_enrichment",
                 reason="missing sector signal enrichment capability",
             )
             request = SubagentToolDiscoveryRequest(
                 intent="stock_check",
-                stage="analysis",
+                stage="collect",
                 capability="sector_signal_enrichment",
-                search_query="stock_check analysis sector_signal_enrichment",
+                search_query="stock_check collect sector_signal_enrichment",
                 reason=gap.reason,
             )
             ticket = store.create_request(gap=gap, request=request)
@@ -472,10 +473,10 @@ class SubagentRegistryTests(unittest.TestCase):
                 else None,
             )
 
-            entries = registry.catalog_entries(stage="analysis", capability="sector_signal_enrichment")
-            self.assertEqual([entry.subagent_type for entry in entries], ["candidate_analysis_sector_signal_enrichment"])
+            entries = registry.catalog_entries(stage="collect", capability="sector_signal_enrichment")
+            self.assertEqual([entry.subagent_type for entry in entries], ["candidate_collect_sector_signal_enrichment"])
 
-            definition = registry.definition("candidate_analysis_sector_signal_enrichment")
+            definition = registry.definition("candidate_collect_sector_signal_enrichment")
             self.assertIs(definition.input_model, _TypedInputModel)
             self.assertIs(definition.output_model, _TypedOutputModel)
 
@@ -484,7 +485,7 @@ class SubagentRegistryTests(unittest.TestCase):
                 outputs, record = context.agent_control.invoke(
                     registry=registry,
                     invocation=SubagentInvocation(
-                        subagent_type="candidate_analysis_sector_signal_enrichment",
+                        subagent_type="candidate_collect_sector_signal_enrichment",
                         objective="Run runtime-registered alias.",
                         inputs={"value": 5},
                     ),
@@ -497,7 +498,7 @@ class SubagentRegistryTests(unittest.TestCase):
                 )
 
                 self.assertEqual(outputs["doubled"], 6)
-                self.assertEqual(record.subagent_type, "candidate_analysis_sector_signal_enrichment")
+                self.assertEqual(record.subagent_type, "candidate_collect_sector_signal_enrichment")
             finally:
                 temp_dir_runtime.cleanup()
 

@@ -192,6 +192,48 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
                 "market_snapshot_skill",
             )
 
+    def test_admin_support_rejects_snapshot_skill_activation_for_non_collect_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="review_thesis",
+                stage="report",
+                capability="report_signal_extension",
+                preferred_subagent_type="candidate_report_report_signal_extension",
+                reason="missing report-stage signal extension capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="review_thesis",
+                stage="report",
+                capability="report_signal_extension",
+                search_query="review_thesis report report_signal_extension",
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_runtime": lambda self: SimpleNamespace(
+                        backend=SimpleNamespace(registry={"market_snapshot_skill": object()})
+                    ),
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            admin.review_request(ticket.ticket_id, decision="approve")
+
+            with self.assertRaisesRegex(RuntimeError, "collect-stage candidates"):
+                admin.activate_request(
+                    ticket.ticket_id,
+                    registration_type="snapshot_skill_runner",
+                    skill_name="market_snapshot_skill",
+                    snapshot_type="market",
+                    activated_by="tester",
+                    reason="invalid stage activation",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

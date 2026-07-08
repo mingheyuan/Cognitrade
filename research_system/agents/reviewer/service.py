@@ -11,6 +11,7 @@ from research_system.agents.reviewer.reviewer_candidate_support import ReviewerC
 from research_system.agents.reviewer.reviewer_strategy_support import ReviewerStrategySupport
 from research_system.agents.reviewer.reviewer_summary_support import ReviewerSummarySupport
 from research_system.agents.reviewer.reviewer_verdict_support import ReviewerVerdictSupport
+from research_system.runtime.platform.skill_runtime import SkillRuntime
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.schemas.review import ClaimVerdictBreakdown, ReviewFinding
@@ -41,11 +42,13 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
         runs_root: Path | None = None,
         llm_provider: OpenAIProvider | None = None,
         settings: Settings | None = None,
+        skill_runtime: SkillRuntime | None = None,
     ) -> None:
         self.review_policy = review_policy or {}
         self.llm_provider = llm_provider
         self.settings = settings
         self.runs_root = runs_root
+        self.skill_runtime = skill_runtime
         self.strategy_support = ReviewerStrategySupport(self.review_policy)
         self.candidate_support = ReviewerCandidateSupport()
         self.verdict_support = ReviewerVerdictSupport(strategy_support=self.strategy_support)
@@ -76,6 +79,7 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
             ],
             catalog_overlay_provider=self._approved_catalog_overlay_entries,
             activation_provider=self._activated_discovery_alias_entries,
+            activation_factory_provider=self._activated_discovery_runtime_subagent,
         )
         self.phase_controller = SubagentPhaseController(
             registry=self.registry,

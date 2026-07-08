@@ -10,6 +10,7 @@ from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.agents.screen_reviewer.screen_reviewer_finding_support import ScreenReviewerFindingSupport
 from research_system.agents.screen_reviewer.screen_reviewer_strategy_support import ScreenReviewerStrategySupport
 from research_system.agents.screen_reviewer.screen_reviewer_summary_support import ScreenReviewerSummarySupport
+from research_system.runtime.platform.skill_runtime import SkillRuntime
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.schemas.review import ReviewFinding
@@ -36,9 +37,11 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
         runs_root: Path | None = None,
         llm_provider: OpenAIProvider | None = None,
         settings: Settings | None = None,
+        skill_runtime: SkillRuntime | None = None,
     ) -> None:
         self.llm_provider = llm_provider
         self.settings = settings
+        self.skill_runtime = skill_runtime
         self.strategy_support = ScreenReviewerStrategySupport()
         self.finding_support = ScreenReviewerFindingSupport()
         self.summary_support = ScreenReviewerSummarySupport()
@@ -58,6 +61,7 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
             ],
             catalog_overlay_provider=self._approved_catalog_overlay_entries,
             activation_provider=self._activated_discovery_alias_entries,
+            activation_factory_provider=self._activated_discovery_runtime_subagent,
         )
         self.phase_controller = SubagentPhaseController(
             registry=self.registry,

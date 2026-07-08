@@ -99,6 +99,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             candidate_subagent_type=candidate_subagent_type,
         )
         runtime_registration = self._resolve_runtime_registration(
+            candidate_entry=candidate_entry,
             registration_type=registration_type,
             skill_name=skill_name,
             snapshot_type=snapshot_type,
@@ -232,6 +233,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
     def _resolve_runtime_registration(
         self,
         *,
+        candidate_entry: SubagentCatalogEntry,
         registration_type: str | None,
         skill_name: str | None,
         snapshot_type: str | None,
@@ -243,6 +245,11 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             raise self.host.orchestrator_error_cls(f"unsupported runtime registration type: {registration_type}")
         normalized_skill_name = str(skill_name or "").strip()
         normalized_snapshot_type = str(snapshot_type or "").strip()
+        normalized_stage = str(candidate_entry.stage or "").strip().lower()
+        if normalized_stage not in {"", "collect"}:
+            raise self.host.orchestrator_error_cls(
+                f"snapshot_skill_runner activation is only supported for collect-stage candidates: {candidate_entry.subagent_type}"
+            )
         if not normalized_skill_name:
             raise self.host.orchestrator_error_cls("skill_name is required for snapshot_skill_runner activation")
         if not normalized_snapshot_type:
