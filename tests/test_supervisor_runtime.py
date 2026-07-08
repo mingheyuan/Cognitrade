@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from research_system.runtime.supervision import RuntimeSupervisor
+from research_system.runtime.supervision._action_phase_controller import ActionPhaseController
 from research_system.runtime.supervision.review_thesis_support import (
     SupervisorReviewThesisSupport,
 )
@@ -23,6 +24,7 @@ class SupervisorRuntimeTests(unittest.TestCase):
         self.assertIsInstance(supervisor.stock_check, SupervisorStockCheckSupport)
         self.assertIsInstance(supervisor.sector_research, SupervisorSectorResearchSupport)
         self.assertIsInstance(supervisor.review_thesis, SupervisorReviewThesisSupport)
+        self.assertIsInstance(supervisor.phase_controller, ActionPhaseController)
 
 
 if __name__ == "__main__":

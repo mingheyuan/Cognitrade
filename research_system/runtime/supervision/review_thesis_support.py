@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+from research_system.runtime.supervision._action_phase_policy import ActionPhaseRulePolicy
 from research_system.schemas.planning import ActionPlan, ActionSpec, SupervisorDecision
 from research_system.schemas.runtime import BlackboardEntry
 
 
-class SupervisorReviewThesisSupport:
-    def __init__(self, *, blackboard_view, decision_factory) -> None:
-        self.blackboard_view = blackboard_view
-        self.decision_factory = decision_factory
+class SupervisorReviewThesisSupport(ActionPhaseRulePolicy):
+    intent = "review_thesis"
 
     def decide(
         self,
@@ -17,7 +16,7 @@ class SupervisorReviewThesisSupport:
         pending_actions: list[ActionSpec],
         blackboard_entries: list[BlackboardEntry],
     ) -> SupervisorDecision:
-        pending_by_id = self.decision_factory.pending_by_id(pending_actions)
+        pending_by_id = self.pending_by_id(pending_actions)
         view = self.blackboard_view.review_thesis_view(blackboard_entries)
 
         if "collect" not in completed_actions and "collect" in pending_by_id:

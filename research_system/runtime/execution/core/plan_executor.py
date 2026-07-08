@@ -619,6 +619,12 @@ class OrchestratorPlanExecutor:
             for operation in plan_patch.operations
             if operation.op_type == "insert_action" and operation.action is not None
         }
+        patch_record = plan_patch.model_dump(mode="json")
+        patch_record.setdefault("plan_id", plan.plan_id)
+        patch_record.setdefault("intent", plan.intent)
+        patch_record.setdefault("thread_id", context.thread.thread_id)
+        patch_record.setdefault("turn_id", context.turn.turn_id)
+        context.action_plan_patches.append(dict(patch_record))
         plan.actions = [action.model_copy(deep=True) for action in updated_plan.actions]
         plan.notes = list(updated_plan.notes or [])
         plan.dispatch_trace = dict(updated_plan.dispatch_trace or {})
@@ -629,6 +635,16 @@ class OrchestratorPlanExecutor:
             if action.node_id in pending_node_ids or action.node_id in inserted_node_ids
         ]
         write_json(context.paths.task_plan, plan.model_dump(mode="json"))
+        self.host._emit_event(
+            context,
+            request_id=request.request_id,
+            intent=plan.intent,
+            event_type="action_plan_patch_applied",
+            phase="supervisor",
+            agent="supervisor",
+            message=f"Applied action plan patch: {plan_patch.patch_id}",
+            payload=patch_record,
+        )
         for action in plan.actions:
             if action.node_id not in inserted_node_ids:
                 continue
@@ -638,7 +654,7 @@ class OrchestratorPlanExecutor:
                 plan=plan,
                 action=action,
             )
-        return [plan_patch.model_dump(mode="json")]
+        return [patch_record]
 
     def _emit_dynamic_action_inserted(
         self,

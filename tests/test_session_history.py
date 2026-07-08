@@ -116,6 +116,25 @@ class SessionHistoryTests(unittest.TestCase):
                                     "objective": "Review screened candidates.",
                                 }
                             ],
+                            "action_plan_patches": [
+                                {
+                                    "patch_id": "patch-screen-enrich",
+                                    "plan_id": "plan-screen",
+                                    "intent": "stock_screen",
+                                    "decision_type": "continue",
+                                    "thread_id": "thread-root",
+                                    "turn_id": "turn-root",
+                                    "operations": [
+                                        {
+                                            "op_type": "rewire_dependency",
+                                            "target_node_id": "retrieve",
+                                            "new_depends_on": ["screen_enrich"],
+                                        }
+                                    ],
+                                    "notes": ["rewire_retrieve_to_screen_enrich"],
+                                    "policy_source": "rule",
+                                }
+                            ],
                         }
                     }
                 },
@@ -156,11 +175,14 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["subagent_trace"][0]["invocation_id"], "01INVOCATION")
         self.assertEqual(len(payload["dynamic_trace"]), 1)
         self.assertEqual(payload["dynamic_trace"][0]["node_id"], "screen_review")
+        self.assertEqual(len(payload["action_plan_patches"]), 1)
+        self.assertEqual(payload["action_plan_patches"][0]["patch_id"], "patch-screen-enrich")
         self.assertEqual(len(payload["wait_trace"]), 1)
         self.assertEqual(payload["wait_trace"][0]["event"], "waiting_external_started")
         self.assertEqual(payload["wait_trace"][0]["node_id"], "collect")
         self.assertEqual(payload["event_counts"]["subagent_trace"], 1)
         self.assertEqual(payload["event_counts"]["dynamic_trace"], 1)
+        self.assertEqual(payload["event_counts"]["action_plan_patches"], 1)
         self.assertEqual(payload["event_counts"]["wait_trace"], 1)
 
     def test_trace_rebuilds_subagent_dag_dynamic_rows_from_events(self) -> None:
@@ -223,6 +245,53 @@ class SessionHistoryTests(unittest.TestCase):
             payload["dynamic_trace"][1]["task_name"],
             "distill:preprocess:source_normalizer",
         )
+
+    def test_trace_rebuilds_action_plan_patches_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "01TRACEPATCH"
+            run_root.mkdir(parents=True, exist_ok=True)
+
+            write_json(run_root / "request.json", {"intent": "stock_screen", "user_query": "screen growth stocks"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-patch-1",
+                    "request_id": "req-patch",
+                    "run_id": "01TRACEPATCH",
+                    "intent": "stock_screen",
+                    "event_type": "action_plan_patch_applied",
+                    "phase": "supervisor",
+                    "agent": "supervisor",
+                    "message": "Applied action plan patch: patch-screen-enrich",
+                    "payload": {
+                        "patch_id": "patch-screen-enrich",
+                        "plan_id": "plan-screen",
+                        "intent": "stock_screen",
+                        "thread_id": "thread-root",
+                        "turn_id": "turn-root",
+                        "operations": [
+                            {
+                                "op_type": "rewire_dependency",
+                                "target_node_id": "retrieve",
+                                "new_depends_on": ["screen_enrich"],
+                            }
+                        ],
+                        "notes": ["rewire_retrieve_to_screen_enrich"],
+                        "policy_source": "rule",
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-07T10:00:00+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(len(payload["action_plan_patches"]), 1)
+        self.assertEqual(payload["action_plan_patches"][0]["patch_id"], "patch-screen-enrich")
+        self.assertEqual(payload["action_plan_patches"][0]["thread_id"], "thread-root")
+        self.assertEqual(payload["event_counts"]["action_plan_patches"], 1)
 
     def test_subagent_builds_call_scoped_payload(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

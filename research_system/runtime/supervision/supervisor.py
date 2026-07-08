@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from research_system.runtime.supervision._action_phase_controller import ActionPhaseController
 from research_system.runtime.supervision.blackboard_view import SupervisorBlackboardView
 from research_system.runtime.supervision.decision_factory import SupervisorDecisionFactory
 from research_system.runtime.supervision.review_thesis_support import SupervisorReviewThesisSupport
@@ -30,6 +31,15 @@ class RuntimeSupervisor:
             blackboard_view=self.blackboard_view,
             decision_factory=self.decision_factory,
         )
+        self.phase_controller = ActionPhaseController(
+            policies_by_intent={
+                "stock_screen": self.stock_screen,
+                "stock_check": self.stock_check,
+                "sector_research": self.sector_research,
+                "review_thesis": self.review_thesis,
+            },
+            decision_factory=self.decision_factory,
+        )
 
     def decide(
         self,
@@ -39,32 +49,7 @@ class RuntimeSupervisor:
         pending_actions: list[ActionSpec],
         blackboard_entries: list[BlackboardEntry],
     ) -> SupervisorDecision:
-        if plan.intent == "stock_check":
-            return self.stock_check.decide(
-                completed_actions=completed_actions,
-                pending_actions=pending_actions,
-                blackboard_entries=blackboard_entries,
-            )
-        if plan.intent == "sector_research":
-            return self.sector_research.decide(
-                completed_actions=completed_actions,
-                pending_actions=pending_actions,
-                blackboard_entries=blackboard_entries,
-            )
-        if plan.intent == "review_thesis":
-            return self.review_thesis.decide(
-                plan=plan,
-                completed_actions=completed_actions,
-                pending_actions=pending_actions,
-                blackboard_entries=blackboard_entries,
-            )
-        if plan.intent != "stock_screen":
-            return SupervisorDecision(
-                decision_type="continue" if pending_actions else "stop",
-                next_actions=pending_actions[:1],
-                completed_action_ids=completed_actions,
-            )
-        return self.stock_screen.decide(
+        return self.phase_controller.decide(
             plan=plan,
             completed_actions=completed_actions,
             pending_actions=pending_actions,

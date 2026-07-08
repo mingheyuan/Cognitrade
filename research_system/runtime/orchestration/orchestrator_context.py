@@ -36,6 +36,7 @@ class RuntimeContext:
     subagent_trace: list[dict]
     subagent_plans: list[dict]
     subagent_plan_patches: list[dict]
+    action_plan_patches: list[dict]
     dynamic_trace: list[dict]
     cache_restore_run_root: Path | None = None
     cache_restore_thread_id: str | None = None
@@ -107,6 +108,7 @@ def build_runtime_context(
         subagent_trace=[],
         subagent_plans=[],
         subagent_plan_patches=[],
+        action_plan_patches=[],
         dynamic_trace=[],
     )
     context.blackboard.bind_thread(thread.thread_id)

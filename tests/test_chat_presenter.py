@@ -108,6 +108,38 @@ class ChatPresenterTests(unittest.TestCase):
         self.assertEqual(chunks[0].kind, "event")
         self.assertIn("next: retrieve / retriever / retrieve", chunks[0].text)
 
+    def test_action_plan_patch_event_is_captured_in_live_trace_payload(self) -> None:
+        presenter = ChatStreamPresenter()
+
+        presenter.on_event(
+            _event(
+                event_type="action_plan_patch_applied",
+                phase="supervisor",
+                agent="supervisor",
+                payload={
+                    "patch_id": "patch-screen-enrich",
+                    "plan_id": "plan-screen",
+                    "intent": "stock_screen",
+                    "thread_id": "thread-root",
+                    "turn_id": "turn-root",
+                    "operations": [
+                        {
+                            "op_type": "rewire_dependency",
+                            "target_node_id": "retrieve",
+                            "new_depends_on": ["screen_enrich"],
+                        }
+                    ],
+                    "notes": ["rewire_retrieve_to_screen_enrich"],
+                },
+            )
+        )
+
+        trace_payload = presenter.current_trace_payload()
+        self.assertIsNotNone(trace_payload)
+        self.assertEqual(len(trace_payload["action_plan_patches"]), 1)
+        self.assertEqual(trace_payload["action_plan_patches"][0]["patch_id"], "patch-screen-enrich")
+        self.assertEqual(trace_payload["event_counts"]["action_plan_patches"], 1)
+
     def test_subagent_trace_event_is_exposed_as_event_text(self) -> None:
         presenter = ChatStreamPresenter()
         chunks = presenter.on_event(

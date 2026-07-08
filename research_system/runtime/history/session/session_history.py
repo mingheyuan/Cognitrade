@@ -42,6 +42,7 @@ class SessionHistory:
         debug_payload = self.trace_rebuilder.debug_payload(result_payload)
         subagent_trace = self.trace_rebuilder.subagent_trace(debug_payload, events)
         dynamic_trace = self.trace_rebuilder.dynamic_trace(debug_payload, events)
+        action_plan_patches = self.trace_rebuilder.action_plan_patches(debug_payload, events)
         wait_trace = self.trace_rebuilder.wait_trace(events)
         return {
             "run_id": self.run_root.name,
@@ -53,6 +54,7 @@ class SessionHistory:
             ),
             "subagent_trace": subagent_trace,
             "dynamic_trace": dynamic_trace,
+            "action_plan_patches": action_plan_patches,
             "wait_trace": wait_trace,
             "threads": self.thread_states(),
             "thread_tree": self.thread_tree(),
@@ -60,6 +62,7 @@ class SessionHistory:
                 "events": len(events),
                 "subagent_trace": len(subagent_trace),
                 "dynamic_trace": len(dynamic_trace),
+                "action_plan_patches": len(action_plan_patches),
                 "wait_trace": len(wait_trace),
             },
         }
@@ -326,6 +329,7 @@ class SessionHistory:
         event_timeline = self.trace_rebuilder.event_timeline(filtered_events)
         subagent_trace = self.trace_rebuilder.subagent_trace({}, filtered_events)
         dynamic_trace = self.trace_rebuilder.dynamic_trace({}, filtered_events)
+        action_plan_patches = self.trace_rebuilder.action_plan_patches({}, filtered_events)
         wait_trace = self.trace_rebuilder.wait_trace(filtered_events)
         items = self._filter_items_for_threads(scope_thread_ids)
         blackboard = self._filter_blackboard_for_threads(scope_thread_ids)
@@ -351,6 +355,7 @@ class SessionHistory:
             "blackboard": blackboard,
             "subagent_trace": subagent_trace,
             "dynamic_trace": dynamic_trace,
+            "action_plan_patches": action_plan_patches,
             "wait_trace": wait_trace,
             "items": items,
             "metrics": metrics,
@@ -358,6 +363,7 @@ class SessionHistory:
                 "events": len(event_timeline),
                 "subagent_trace": len(subagent_trace),
                 "dynamic_trace": len(dynamic_trace),
+                "action_plan_patches": len(action_plan_patches),
                 "wait_trace": len(wait_trace),
                 "items": len(items),
                 "blackboard": len(blackboard),

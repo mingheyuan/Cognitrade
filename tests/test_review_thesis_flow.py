@@ -311,6 +311,7 @@ class ReviewThesisFlowTests(unittest.TestCase):
             self.assertIn("subagent_trace", debug)
             self.assertIn("dynamic_trace", debug)
             self.assertTrue(debug.get("subagent_plans"))
+            self.assertTrue(debug.get("action_plan_patches"))
             self.assertTrue(any(item.get("subagent_type") == "review_target_loader" for item in debug["subagent_trace"]))
             self.assertTrue(any(item.get("subagent_type") == "review_summary_builder" for item in debug["subagent_trace"]))
             self.assertTrue(

@@ -352,6 +352,7 @@ class StockScreenFlowTests(unittest.TestCase):
                 self.assertEqual(debug.get("intent"), "stock_screen")
                 self.assertTrue(debug.get("subagent_plans"))
                 self.assertTrue(debug.get("subagent_plan_patches"))
+                self.assertTrue(debug.get("action_plan_patches"))
                 self.assertTrue(
                     {"collect", "retrieve", "review", "report"}.issubset(
                         {str(item.get("phase") or "") for item in list(debug.get("subagent_plans") or [])}

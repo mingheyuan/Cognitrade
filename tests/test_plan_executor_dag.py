@@ -8,7 +8,13 @@ from types import SimpleNamespace
 from research_system.runtime.execution.core.plan_executor import OrchestratorPlanExecutor
 from research_system.runtime.orchestration.orchestrator_context import build_runtime_context
 from research_system.runtime.storage.runs.run_store import RunStore
-from research_system.schemas.planning import ActionPlan, ActionSpec, SupervisorDecision
+from research_system.schemas.planning import (
+    ActionPlan,
+    ActionPlanPatch,
+    ActionPlanPatchOperation,
+    ActionSpec,
+    SupervisorDecision,
+)
 from research_system.schemas.protocol import RequestEnvelope
 from research_system.schemas.runtime import BlackboardEntry
 
@@ -23,11 +29,46 @@ class _Supervisor:
         )
 
 
+class _PatchSupervisor:
+    def decide(self, *, plan, completed_actions, pending_actions, blackboard_entries):
+        if "collect" in completed_actions and not any(action.node_id == "review" for action in plan.actions):
+            review_action = ActionSpec(node_id="review", phase="review", agent="reviewer", depends_on=["collect"])
+            return SupervisorDecision(
+                decision_type="continue",
+                next_actions=[review_action],
+                completed_action_ids=completed_actions,
+                notes=["insert review"],
+                plan_patch=ActionPlanPatch(
+                    operations=[
+                        ActionPlanPatchOperation(
+                            op_type="insert_action",
+                            action=review_action,
+                            reason="insert review after collect",
+                        ),
+                        ActionPlanPatchOperation(
+                            op_type="rewire_dependency",
+                            target_node_id="retrieve",
+                            new_depends_on=["review"],
+                            remove_depends_on=["collect"],
+                            reason="route retrieve through review",
+                        ),
+                    ],
+                    notes=["insert_review_after_collect"],
+                ),
+            )
+        return SupervisorDecision(
+            decision_type="continue" if pending_actions else "stop",
+            next_actions=pending_actions[:1],
+            completed_action_ids=completed_actions,
+            notes=[],
+        )
+
+
 class _Host:
     orchestrator_error_cls = RuntimeError
 
-    def __init__(self) -> None:
-        self.supervisor = _Supervisor()
+    def __init__(self, supervisor=None) -> None:
+        self.supervisor = supervisor or _Supervisor()
         self.events: list[dict] = []
         self.run_attempts: list[str] = []
         self.fail_once_nodes: set[str] = set()
@@ -253,6 +294,33 @@ class PlanExecutorDagTests(unittest.TestCase):
 
             self.assertEqual(rerun_host.run_attempts, ["retrieve"])
             self.assertEqual(rerun_host.blackboard_counts_by_node["retrieve"], 1)
+        finally:
+            temp_dir.cleanup()
+
+    def test_executor_applies_action_plan_patch_and_records_trace(self) -> None:
+        temp_dir, request, context = self._build_context()
+        try:
+            host = _Host(supervisor=_PatchSupervisor())
+            executor = OrchestratorPlanExecutor(host)
+            plan = ActionPlan(
+                intent="review_thesis",
+                strategy="dynamic",
+                actions=[
+                    ActionSpec(node_id="collect", phase="collect", agent="collector"),
+                    ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever", depends_on=["collect"]),
+                    ActionSpec(node_id="report", phase="report", agent="reporter", depends_on=["retrieve"]),
+                ],
+            )
+
+            executor.execute_plan(context=context, request=request, plan=plan)
+
+            self.assertEqual(host.run_attempts, ["collect", "review", "retrieve", "report"])
+            self.assertEqual(context.state.completed_nodes, ["collect", "review", "retrieve", "report"])
+            self.assertEqual(len(context.action_plan_patches), 1)
+            self.assertEqual(context.action_plan_patches[0]["notes"], ["insert_review_after_collect"])
+            retrieve_action = next(action for action in plan.actions if action.node_id == "retrieve")
+            self.assertEqual(retrieve_action.depends_on, ["review"])
+            self.assertTrue(any(event["event_type"] == "action_plan_patch_applied" for event in host.events))
         finally:
             temp_dir.cleanup()
 

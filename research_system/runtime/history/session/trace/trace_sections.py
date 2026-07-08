@@ -61,6 +61,28 @@ class SessionHistoryTraceSections:
             )
         return rows
 
+    def action_plan_patches(self, debug_payload: dict[str, Any], events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if isinstance(debug_payload.get("action_plan_patches"), list):
+            return [dict(item) for item in debug_payload["action_plan_patches"] if isinstance(item, dict)]
+        rows: list[dict[str, Any]] = []
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            event_type = str(event.get("event_type") or "")
+            if event_type != "action_plan_patch_applied":
+                continue
+            rows.append(
+                self.row_builder.action_plan_patch_row(
+                    event_type=event_type,
+                    phase=event.get("phase"),
+                    agent=event.get("agent"),
+                    payload=event.get("payload") or {},
+                    created_at=event.get("created_at"),
+                    default_context=False,
+                )
+            )
+        return rows
+
     def wait_trace(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for event in events:
