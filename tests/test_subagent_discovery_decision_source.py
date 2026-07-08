@@ -311,7 +311,7 @@ class SubagentDiscoveryDecisionSourceTests(unittest.TestCase):
                 review_decision=review_decision,
             )
             candidate_entry = ticket.candidate_catalog_entries[0]
-            activation_target = decision_source.resolve_manual_activation_target(
+            activation_target = decision_source.resolve_activation_target(
                 ticket=ticket,
                 candidate_subagent_type=str(candidate_entry.subagent_type),
                 delegate_subagent_type="collector_delegate",
@@ -428,7 +428,7 @@ class SubagentDiscoveryDecisionSourceTests(unittest.TestCase):
                 candidate_result=candidate_result,
             )
 
-            activation_target = decision_source.resolve_manual_activation_target(
+            activation_target = decision_source.resolve_activation_target(
                 ticket=ticket,
                 candidate_subagent_type=None,
                 delegate_subagent_type=None,

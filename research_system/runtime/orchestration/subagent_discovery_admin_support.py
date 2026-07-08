@@ -158,7 +158,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             raise self.host.orchestrator_error_cls(
                 f"subagent discovery ticket must be approved before activation: {ticket.status}"
             )
-        activation_target = self.discovery_decision_source.resolve_manual_activation_target(
+        activation_target = self.discovery_decision_source.resolve_activation_target(
             ticket=ticket,
             candidate_subagent_type=candidate_subagent_type,
             delegate_subagent_type=delegate_subagent_type,

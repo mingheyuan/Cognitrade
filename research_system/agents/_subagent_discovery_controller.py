@@ -3,9 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from research_system.runtime.orchestration.subagent_discovery_admin_support import (
-    OrchestratorSubagentDiscoveryAdminSupport,
-)
 from research_system.schemas.subagents import (
     SubagentCapabilityGap,
     SubagentToolDiscoveryRequest,
@@ -120,15 +117,35 @@ class SubagentDiscoveryController:
                 payload=activation_decision.event_payload(activation_outcome="skipped"),
             )
             return ticket
-        candidate_subagent_type = activation_decision.candidate_subagent_type
-        registration_template_id = activation_decision.registration_template_id
         try:
-            OrchestratorSubagentDiscoveryAdminSupport(self.activation_host).activate_request(
-                ticket.ticket_id,
-                candidate_subagent_type=candidate_subagent_type,
-                registration_template_id=registration_template_id,
+            activation_target = self.discovery_decision_source.resolve_activation_target(
+                ticket=ticket,
+                candidate_subagent_type=activation_decision.candidate_subagent_type,
+                delegate_subagent_type=None,
+                registration_template_id=activation_decision.registration_template_id,
+                registration_type=None,
+                skill_name=None,
+                snapshot_type=None,
+                source_id=None,
+                tool_name=None,
+                endpoint_path=None,
+                http_method=None,
+                openapi_spec_uri=None,
+                openapi_operation_id=None,
+                timeout_seconds=None,
+                runtime_packaging=self.discovery_candidate_support.runtime_packaging,
+                error_factory=getattr(self.activation_host, "orchestrator_error_cls", RuntimeError),
+            )
+            bound_activation_decision = self.discovery_decision_source.materialize_activation_decision(
+                activation_decision=activation_decision,
+                activation_target=activation_target,
                 activated_by="system_auto_activate",
                 reason=activation_decision.reason,
+            )
+            _activation_entry, created = self.discovery_decision_source.apply_activation(
+                ticket=ticket,
+                activation_decision=bound_activation_decision,
+                candidate_entry=activation_target.candidate_entry,
             )
         except Exception:
             self._record_stage_decision(
@@ -136,20 +153,26 @@ class SubagentDiscoveryController:
                 payload=activation_decision.event_payload(activation_outcome="failed"),
             )
             return ticket
-        find = getattr(store, "find", None)
-        if not callable(find):
+        save = getattr(store, "save", None)
+        if created and callable(save):
+            try:
+                save(ticket, previous_status="approved")
+            except Exception:
+                self._record_stage_decision(
+                    event_name="subagent_tool_discovery_activation_decided",
+                    payload=bound_activation_decision.event_payload(activation_outcome="failed"),
+                )
+                return ticket
+        if not created:
             self._record_stage_decision(
                 event_name="subagent_tool_discovery_activation_decided",
-                payload=activation_decision.event_payload(activation_outcome="activated"),
+                payload=bound_activation_decision.event_payload(activation_outcome="activated"),
             )
             return ticket
-        located = find(ticket.ticket_id)
         self._record_stage_decision(
             event_name="subagent_tool_discovery_activation_decided",
-            payload=activation_decision.event_payload(activation_outcome="activated"),
+            payload=bound_activation_decision.event_payload(activation_outcome="activated"),
         )
-        if isinstance(located, tuple) and located and located[0] is not None:
-            return located[0]
         return ticket
 
     def _record_stage_decision(

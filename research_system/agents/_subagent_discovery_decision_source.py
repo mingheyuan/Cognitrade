@@ -510,7 +510,7 @@ class SubagentDiscoveryDecisionSource:
             ],
         )
 
-    def resolve_manual_activation_target(
+    def resolve_activation_target(
         self,
         *,
         ticket: SubagentDiscoveryTicket,
@@ -558,6 +558,37 @@ class SubagentDiscoveryDecisionSource:
             candidate_entry=candidate_entry,
             delegate_subagent_type=normalized_delegate_subagent_type,
             runtime_registration=runtime_registration,
+        )
+
+    @staticmethod
+    def materialize_activation_decision(
+        *,
+        activation_decision: SubagentDiscoveryActivationStageDecision,
+        activation_target: SubagentDiscoveryActivationTarget,
+        activated_by: str | None = None,
+        reason: str | None = None,
+    ) -> SubagentDiscoveryActivationStageDecision:
+        return SubagentDiscoveryActivationStageDecision(
+            ticket_id=activation_decision.ticket_id,
+            intent=activation_decision.intent,
+            stage=activation_decision.stage,
+            capability=activation_decision.capability,
+            policy_source=activation_decision.policy_source,
+            activate=activation_decision.activate,
+            candidate_subagent_type=str(activation_target.candidate_entry.subagent_type or "").strip() or None,
+            registration_template_id=(
+                str(activation_target.runtime_registration.registration_template_id or "").strip() or None
+                if activation_target.runtime_registration is not None
+                else activation_decision.registration_template_id
+            ),
+            delegate_subagent_type=activation_target.delegate_subagent_type,
+            runtime_registration=activation_target.runtime_registration,
+            activated_by=(
+                str(activated_by or "").strip()
+                or activation_decision.activated_by
+            ),
+            reason=str(reason or "").strip() or activation_decision.reason,
+            notes=list(activation_decision.notes or []),
         )
 
     @staticmethod
