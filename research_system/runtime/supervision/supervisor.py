@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 from research_system.runtime.supervision._action_phase_controller import ActionPhaseController
+from research_system.runtime.supervision._action_phase_escalation import (
+    ReviewThesisEscalationPolicy,
+    SectorResearchEscalationPolicy,
+    StockCheckEscalationPolicy,
+    StockScreenEscalationPolicy,
+)
 from research_system.runtime.supervision.blackboard_view import SupervisorBlackboardView
 from research_system.runtime.supervision.decision_factory import SupervisorDecisionFactory
 from research_system.runtime.supervision.review_thesis_support import SupervisorReviewThesisSupport
@@ -31,12 +37,34 @@ class RuntimeSupervisor:
             blackboard_view=self.blackboard_view,
             decision_factory=self.decision_factory,
         )
+        self.stock_screen_escalation = StockScreenEscalationPolicy(
+            blackboard_view=self.blackboard_view,
+            decision_factory=self.decision_factory,
+        )
+        self.stock_check_escalation = StockCheckEscalationPolicy(
+            blackboard_view=self.blackboard_view,
+            decision_factory=self.decision_factory,
+        )
+        self.sector_research_escalation = SectorResearchEscalationPolicy(
+            blackboard_view=self.blackboard_view,
+            decision_factory=self.decision_factory,
+        )
+        self.review_thesis_escalation = ReviewThesisEscalationPolicy(
+            blackboard_view=self.blackboard_view,
+            decision_factory=self.decision_factory,
+        )
         self.phase_controller = ActionPhaseController(
             policies_by_intent={
                 "stock_screen": self.stock_screen,
                 "stock_check": self.stock_check,
                 "sector_research": self.sector_research,
                 "review_thesis": self.review_thesis,
+            },
+            escalation_policies_by_intent={
+                "stock_screen": self.stock_screen_escalation,
+                "stock_check": self.stock_check_escalation,
+                "sector_research": self.sector_research_escalation,
+                "review_thesis": self.review_thesis_escalation,
             },
             decision_factory=self.decision_factory,
         )

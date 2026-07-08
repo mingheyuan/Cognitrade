@@ -17,8 +17,7 @@ class SupervisorSectorResearchSupport(ActionPhaseRulePolicy):
         blackboard_entries: list[BlackboardEntry],
     ) -> SupervisorDecision:
         pending_by_id = self.pending_by_id(pending_actions)
-        view = self.blackboard_view.sector_research_view(blackboard_entries)
-        plan_node_ids = {action.node_id for action in plan.actions}
+        _ = (plan, blackboard_entries)
 
         if "collect" not in completed_actions and "collect" in pending_by_id:
             return self.decision_factory.continue_with(
@@ -26,30 +25,6 @@ class SupervisorSectorResearchSupport(ActionPhaseRulePolicy):
                 completed_actions=completed_actions,
                 notes=["collect sector snapshot first"],
             )
-
-        if "collect" in completed_actions and view.missing_sector_evidence and view.request_query:
-            replenish_action = self.decision_factory.sector_replenish_action(
-                query=view.request_query,
-                missing_sector_evidence=view.missing_sector_evidence,
-            )
-            if replenish_action.node_id not in completed_actions:
-                if replenish_action.node_id not in plan_node_ids:
-                    return self.continue_with_replan(
-                        action=replenish_action,
-                        completed_actions=completed_actions,
-                        reason="sector_research action graph should be rebuilt for missing sector evidence",
-                        notes=["replan_sector_research_action_graph_for_missing_sector_evidence"],
-                        metadata={
-                            "trigger": "collect_completed",
-                            "missing_sector_evidence": ",".join(view.missing_sector_evidence),
-                        },
-                    )
-                if replenish_action.node_id not in pending_by_id:
-                    return self.decision_factory.continue_with(
-                        action=replenish_action,
-                        completed_actions=completed_actions,
-                        notes=[f"replenish missing sector evidence: {','.join(view.missing_sector_evidence)}"],
-                    )
 
         if "retrieve" not in completed_actions and "retrieve" in pending_by_id:
             return self.decision_factory.continue_with(
