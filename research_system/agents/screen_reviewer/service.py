@@ -8,6 +8,7 @@ from research_system.agents._subagent_dag import (
     SubagentDagNodeResult,
     SubagentDagNodeSpec,
 )
+from research_system.agents._subagent_phase_controller import SubagentPhaseController
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.agents.screen_reviewer.screen_reviewer_finding_support import ScreenReviewerFindingSupport
 from research_system.agents.screen_reviewer.screen_reviewer_strategy_support import ScreenReviewerStrategySupport
@@ -51,6 +52,13 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
                     build_review_summary=self.summary_support.build_review_summary,
                 ),
             ]
+        )
+        self.phase_controller = SubagentPhaseController(
+            registry=self.registry,
+            invoke_subagent=self._invoke_subagent,
+            emit_event=self._emit_runtime_event,
+            cache_context_builder=self._subagent_dag_cache_context,
+            start_from_node_id_builder=self._subagent_dag_start_from_node_id,
         )
 
     def run(
@@ -136,33 +144,18 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
         capability: str,
         preferred_subagent_type: str | None = None,
     ) -> SubagentCatalogEntry:
-        candidates = self.registry.catalog_entries(
+        return self.phase_controller.select_catalog_entry(
             stage="review",
             intent="stock_screen_review",
             capability=capability,
+            preferred_subagent_type=preferred_subagent_type,
         )
-        if not candidates:
-            candidates = self.registry.catalog_entries(stage="review", capability=capability)
-        if not candidates:
-            raise KeyError(f"no screen reviewer catalog entry for capability={capability!r}")
-        if preferred_subagent_type:
-            for candidate in candidates:
-                if candidate.subagent_type == preferred_subagent_type:
-                    return candidate
-        return sorted(
-            candidates,
-            key=lambda candidate: (
-                self._cost_rank(candidate.cost_class),
-                self._latency_rank(candidate.latency_class),
-                candidate.subagent_type,
-            ),
-        )[0]
 
     def _cost_rank(self, cost_class: str | None) -> int:
-        return {"low": 0, "medium": 1, "high": 2}.get(str(cost_class or "").strip().lower(), 3)
+        return self.phase_controller._cost_rank(cost_class)
 
     def _latency_rank(self, latency_class: str | None) -> int:
-        return {"low": 0, "medium": 1, "high": 2}.get(str(latency_class or "").strip().lower(), 3)
+        return self.phase_controller._latency_rank(latency_class)
 
     def _build_catalog_plan_node(
         self,
@@ -178,18 +171,17 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
         cache_key: str | None = None,
         notes: list[str] | None = None,
     ) -> SubagentPlanNode:
-        return SubagentPlanNode(
+        return self.phase_controller.build_catalog_plan_node(
             node_id=node_id,
             subagent_type=subagent_type,
             objective=objective,
-            inputs=dict(inputs),
-            depends_on=list(depends_on or []),
-            tags=list(tags or ["catalog_selected"]),
+            inputs=inputs,
+            depends_on=depends_on,
+            tags=tags,
             max_attempts=max_attempts,
-            replayable=True,
-            cache_scope=cache_scope,  # type: ignore[arg-type]
+            cache_scope=cache_scope,
             cache_key=cache_key,
-            notes=list(notes or []),
+            notes=notes,
         )
 
     def _build_screen_review_subagent_plan(self) -> SubagentPlan:
@@ -288,32 +280,11 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
         dag_id: str,
         build_invocation,
     ) -> dict[str, SubagentDagNodeResult]:
-        dag_nodes: list[SubagentDagNodeSpec] = []
-        for plan_node in plan.nodes:
-            runtime_node = build_invocation[plan_node.node_id]
-            dag_nodes.append(
-                SubagentDagNodeSpec(
-                    node_id=plan_node.node_id,
-                    build_invocation=lambda results, *, builder=runtime_node["builder"]: builder(results),
-                    depends_on=tuple(plan_node.depends_on),
-                    failure_mode=plan_node.failure_mode,
-                    allow_partial_dependencies=plan_node.allow_partial_dependencies,
-                    max_attempts=plan_node.max_attempts,
-                    replayable=plan_node.replayable,
-                    cache_scope=plan_node.cache_scope,
-                    cache_key=plan_node.cache_key,
-                    metadata={
-                        **dict(runtime_node["metadata"]),
-                        "plan_id": plan.plan_id,
-                        "plan_node_id": plan_node.node_id,
-                        "subagent_plan_strategy": plan.strategy,
-                    },
-                )
-            )
-        return self._execute_subagent_dag(
-            dag_nodes,
-            max_workers=max_workers,
+        return self.phase_controller.execute_plan(
+            plan=plan,
+            build_invocation=build_invocation,
             dag_id=dag_id,
+            max_workers=max_workers,
         )
 
     def _build_screen_review_plan_invocations(
@@ -411,6 +382,7 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
         dag_id: str,
         start_from_node_id: str | None = None,
     ) -> dict[str, SubagentDagNodeResult]:
+        _ = start_from_node_id
         executor = SubagentDagExecutor(
             invoke_subagent=self._invoke_subagent,
             emit_event=self._emit_runtime_event,
@@ -432,12 +404,12 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
         agent_path: str,
         objective: str | None,
     ) -> dict[str, Any]:
-        return {
-            "task_name": task_name,
-            "agent_path": agent_path,
-            "objective": objective,
-            "phase": "review",
-        }
+        return self.phase_controller.build_metadata(
+            task_name=task_name,
+            agent_path=agent_path,
+            objective=objective,
+            phase="review",
+        )
 
     def _build_subagent_invocation(
         self,
@@ -448,38 +420,17 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
         task_name: str,
         agent_path: str,
     ) -> SubagentInvocation:
-        return SubagentInvocation(
+        return self.phase_controller.build_invocation(
             subagent_type=subagent_type,
             objective=objective,
             inputs=inputs,
-            context={
-                "task_name": task_name,
-                "agent_path": agent_path,
-                "phase": "review",
-            },
+            task_name=task_name,
+            agent_path=agent_path,
+            phase="review",
         )
 
     def _screen_review_trace(self, *, results: dict[str, SubagentDagNodeResult]) -> list[dict[str, Any]]:
-        trace: list[dict[str, Any]] = []
-        for node_id, result in results.items():
-            metadata = dict(result.metadata or {})
-            record = {
-                "node_id": node_id,
-                "subagent_type": str((result.record.subagent_type if result.record is not None else metadata.get("subagent_type")) or node_id),
-                "status": result.status,
-                "objective": str((result.record.objective if result.record is not None else metadata.get("objective")) or ""),
-                "invocation_id": result.invocation_id,
-                "task_name": metadata.get("task_name"),
-                "agent_path": metadata.get("agent_path"),
-                "cache_hit": bool(result.cache_hit),
-                "attempts": result.attempts,
-            }
-            if metadata.get("plan_node_id"):
-                record["plan_node_id"] = metadata["plan_node_id"]
-            if metadata.get("subagent_plan_strategy"):
-                record["subagent_plan_strategy"] = metadata["subagent_plan_strategy"]
-            trace.append(record)
-        return trace
+        return self.phase_controller.trace_from_results(results=results)
 
     def _normalize_planning_context_hints(self, raw_hints) -> dict[str, str]:
         return self.strategy_support.normalize_planning_context_hints(raw_hints)
