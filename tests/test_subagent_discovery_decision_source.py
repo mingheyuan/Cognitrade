@@ -31,6 +31,9 @@ from research_system.runtime.orchestration.subagent_discovery_candidate_sources 
 from research_system.runtime.orchestration.subagent_discovery_store import (
     SubagentDiscoveryStore,
 )
+from research_system.runtime.orchestration.subagent_runtime_packaging import (
+    SubagentRuntimePackagingSupport,
+)
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.schemas.subagents import SubagentCapabilityGap
 
@@ -305,11 +308,27 @@ class SubagentDiscoveryDecisionSourceTests(unittest.TestCase):
                 review_decision=review_decision,
             )
             candidate_entry = ticket.candidate_catalog_entries[0]
+            activation_target = decision_source.resolve_manual_activation_target(
+                ticket=ticket,
+                candidate_subagent_type=str(candidate_entry.subagent_type),
+                delegate_subagent_type="collector_delegate",
+                registration_template_id=None,
+                registration_type=None,
+                skill_name=None,
+                snapshot_type=None,
+                source_id=None,
+                tool_name=None,
+                endpoint_path=None,
+                http_method=None,
+                openapi_spec_uri=None,
+                openapi_operation_id=None,
+                timeout_seconds=None,
+                runtime_packaging=SubagentRuntimePackagingSupport(host),
+                error_factory=RuntimeError,
+            )
             activation_decision = decision_source.build_manual_activation(
                 ticket=ticket,
-                candidate_entry=candidate_entry,
-                delegate_subagent_type="collector_delegate",
-                runtime_registration=None,
+                activation_target=activation_target,
                 activated_by="tester",
                 reason="activate explicit delegate alias",
             )
@@ -334,6 +353,114 @@ class SubagentDiscoveryDecisionSourceTests(unittest.TestCase):
             self.assertEqual(len(ticket.activated_entries), 1)
             self.assertFalse(duplicate_created)
             self.assertEqual(duplicate_entry.activation_id, activation_entry.activation_id)
+
+    def test_decision_source_can_resolve_manual_activation_target_from_templates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = Settings.from_env(root)
+            ensure_workspace_layout(settings)
+            settings.skill_sources_path.write_text(
+                "\n".join(
+                    [
+                        "sources:",
+                        "  - skill_name: market_snapshot_skill",
+                        "    registration_type: snapshot_skill_runner",
+                        "    summary: Collect market snapshot through local runtime.",
+                        "    snapshot_type: market",
+                        "    capabilities: [market_signal_extension]",
+                        "    suitable_intents: [stock_check]",
+                        "    stage: collect",
+                        "    candidate_subagent_type: candidate_collect_market_snapshot_skill",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            store = SubagentDiscoveryStore(root / "discovery")
+            host = type(
+                "_Host",
+                (),
+                {
+                    "settings": settings,
+                    "llm_provider": None,
+                    "emit_event": None,
+                    "runtime_binding_getter": lambda self: {},
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_source_registry": lambda self: SkillSourceRegistry(settings=settings),
+                    "require_skill_runtime": lambda self: SimpleNamespace(
+                        backend=SimpleNamespace(registry={"market_snapshot_skill": object()})
+                    ),
+                },
+            )()
+            decision_source = SubagentDiscoveryDecisionSource(
+                discovery_policy=SubagentDiscoveryPolicyService(settings=settings),
+                discovery_llm_policy_source=SubagentDiscoveryLLMPolicySource(
+                    shadow_policy=SubagentDiscoveryLLMShadowPolicy(settings=settings),
+                    settings=settings,
+                ),
+                discovery_candidate_policy=SubagentDiscoveryCandidatePolicyService(settings=settings),
+                discovery_approval_policy=SubagentDiscoveryApprovalPolicyService(settings=settings),
+                discovery_activation_policy=SubagentDiscoveryActivationPolicyService(settings=settings),
+            )
+            candidate_support = SubagentDiscoveryCandidateSupport(host)
+            packaging = SubagentRuntimePackagingSupport(host)
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                preferred_subagent_type="candidate_collect_market_snapshot_skill",
+                reason="missing market signal extension capability",
+            )
+
+            protocol_decision = decision_source.resolve_protocols(gap=gap)
+            ticket = store.create_request(gap=gap, request=protocol_decision.request)
+            candidate_result = decision_source.select_candidate(
+                ticket=ticket,
+                candidate_entries=candidate_support.candidate_entries(ticket),
+            )
+            decision_source.apply_candidate_selection(
+                ticket=ticket,
+                candidate_result=candidate_result,
+            )
+
+            activation_target = decision_source.resolve_manual_activation_target(
+                ticket=ticket,
+                candidate_subagent_type=None,
+                delegate_subagent_type=None,
+                registration_template_id="snapshot:market:market_snapshot_skill",
+                registration_type=None,
+                skill_name=None,
+                snapshot_type=None,
+                source_id=None,
+                tool_name=None,
+                endpoint_path=None,
+                http_method=None,
+                openapi_spec_uri=None,
+                openapi_operation_id=None,
+                timeout_seconds=None,
+                runtime_packaging=packaging,
+                error_factory=RuntimeError,
+            )
+
+            self.assertEqual(
+                activation_target.candidate_entry.subagent_type,
+                "candidate_collect_market_snapshot_skill",
+            )
+            self.assertIsNone(activation_target.delegate_subagent_type)
+            self.assertIsNotNone(activation_target.runtime_registration)
+            self.assertEqual(
+                activation_target.runtime_registration.registration_type,
+                "snapshot_skill_runner",
+            )
+            self.assertEqual(
+                activation_target.runtime_registration.skill_name,
+                "market_snapshot_skill",
+            )
+            self.assertEqual(
+                activation_target.runtime_registration.registration_template_id,
+                "snapshot:market:market_snapshot_skill",
+            )
 
 
 if __name__ == "__main__":

@@ -115,6 +115,13 @@ class SubagentDiscoveryCandidateStageResult:
 
 
 @dataclass(frozen=True)
+class SubagentDiscoveryActivationTarget:
+    candidate_entry: SubagentCatalogEntry
+    delegate_subagent_type: str | None
+    runtime_registration: SubagentRuntimeRegistration | None
+
+
+@dataclass(frozen=True)
 class SubagentDiscoveryReviewStageDecision:
     ticket_id: str
     intent: str | None
@@ -425,9 +432,7 @@ class SubagentDiscoveryDecisionSource:
         self,
         *,
         ticket: SubagentDiscoveryTicket,
-        candidate_entry: SubagentCatalogEntry,
-        delegate_subagent_type: str | None,
-        runtime_registration: SubagentRuntimeRegistration | None,
+        activation_target: SubagentDiscoveryActivationTarget,
         activated_by: str,
         reason: str | None = None,
     ) -> SubagentDiscoveryActivationStageDecision:
@@ -438,37 +443,87 @@ class SubagentDiscoveryDecisionSource:
             capability=ticket.capability_gap.capability,
             policy_source="explicit",
             activate=True,
-            candidate_subagent_type=str(candidate_entry.subagent_type or "").strip() or None,
+            candidate_subagent_type=str(activation_target.candidate_entry.subagent_type or "").strip() or None,
             registration_template_id=(
-                str(runtime_registration.registration_template_id or "").strip() or None
-                if runtime_registration is not None
+                str(activation_target.runtime_registration.registration_template_id or "").strip() or None
+                if activation_target.runtime_registration is not None
                 else None
             ),
-            delegate_subagent_type=str(delegate_subagent_type or "").strip() or None,
-            runtime_registration=runtime_registration,
+            delegate_subagent_type=activation_target.delegate_subagent_type,
+            runtime_registration=activation_target.runtime_registration,
             activated_by=str(activated_by or "manual_cli_activation").strip() or "manual_cli_activation",
             reason=str(
                 reason
-                or f"activate_{str(candidate_entry.subagent_type or '').strip()}_via_cli"
+                or f"activate_{str(activation_target.candidate_entry.subagent_type or '').strip()}_via_cli"
             ),
             notes=[
                 "activated_from_approved_discovery_ticket",
                 *(
-                    [f"delegate_subagent_type={str(delegate_subagent_type).strip()}"]
-                    if str(delegate_subagent_type or "").strip()
+                    [f"delegate_subagent_type={str(activation_target.delegate_subagent_type).strip()}"]
+                    if str(activation_target.delegate_subagent_type or "").strip()
                     else []
                 ),
                 *(
-                    [f"runtime_registration_type={runtime_registration.registration_type}"]
-                    if runtime_registration is not None
+                    [f"runtime_registration_type={activation_target.runtime_registration.registration_type}"]
+                    if activation_target.runtime_registration is not None
                     else []
                 ),
                 *(
-                    [f"runtime_registration_template_id={runtime_registration.registration_template_id}"]
-                    if runtime_registration is not None and runtime_registration.registration_template_id
+                    [f"runtime_registration_template_id={activation_target.runtime_registration.registration_template_id}"]
+                    if activation_target.runtime_registration is not None and activation_target.runtime_registration.registration_template_id
                     else []
                 ),
             ],
+        )
+
+    def resolve_manual_activation_target(
+        self,
+        *,
+        ticket: SubagentDiscoveryTicket,
+        candidate_subagent_type: str | None,
+        delegate_subagent_type: str | None,
+        registration_template_id: str | None,
+        registration_type: str | None,
+        skill_name: str | None,
+        snapshot_type: str | None,
+        source_id: str | None,
+        tool_name: str | None,
+        endpoint_path: str | None,
+        http_method: str | None,
+        openapi_spec_uri: str | None,
+        openapi_operation_id: str | None,
+        timeout_seconds: float | None,
+        runtime_packaging,
+        error_factory,
+    ) -> SubagentDiscoveryActivationTarget:
+        candidate_entry = self.select_activation_candidate_entry(
+            ticket=ticket,
+            candidate_subagent_type=candidate_subagent_type,
+            error_factory=error_factory,
+        )
+        runtime_registration = runtime_packaging.resolve_runtime_registration(
+            candidate_entry=candidate_entry,
+            registration_template_id=registration_template_id,
+            registration_type=registration_type,
+            skill_name=skill_name,
+            snapshot_type=snapshot_type,
+            source_id=source_id,
+            tool_name=tool_name,
+            endpoint_path=endpoint_path,
+            http_method=http_method,
+            openapi_spec_uri=openapi_spec_uri,
+            openapi_operation_id=openapi_operation_id,
+            timeout_seconds=timeout_seconds,
+        )
+        normalized_delegate_subagent_type = str(delegate_subagent_type or "").strip() or None
+        if bool(normalized_delegate_subagent_type) == bool(runtime_registration):
+            raise error_factory(
+                "activation requires exactly one of delegate_subagent_type or runtime registration"
+            )
+        return SubagentDiscoveryActivationTarget(
+            candidate_entry=candidate_entry,
+            delegate_subagent_type=normalized_delegate_subagent_type,
+            runtime_registration=runtime_registration,
         )
 
     @staticmethod
@@ -563,6 +618,36 @@ class SubagentDiscoveryDecisionSource:
             return entries[0]
         return None
 
+    @classmethod
+    def select_activation_candidate_entry(
+        cls,
+        *,
+        ticket: SubagentDiscoveryTicket,
+        candidate_subagent_type: str | None,
+        error_factory,
+    ) -> SubagentCatalogEntry:
+        entries = list(ticket.candidate_catalog_entries or [])
+        if not entries:
+            raise error_factory(
+                f"subagent discovery ticket has no candidate catalog entries: {ticket.ticket_id}"
+            )
+        requested = str(candidate_subagent_type or "").strip()
+        if requested:
+            for entry in entries:
+                if str(entry.subagent_type).strip() == requested:
+                    return entry
+            raise error_factory(
+                f"candidate catalog entry not found for activation: {requested}"
+            )
+        if len(entries) == 1:
+            return entries[0]
+        recommended_entry = cls._recommended_entry(ticket=ticket)
+        if recommended_entry is not None:
+            return recommended_entry
+        raise error_factory(
+            f"multiple candidate catalog entries available; candidate_subagent_type is required for {ticket.ticket_id}"
+        )
+
     @staticmethod
     def _entry_protocol(entry: SubagentCatalogEntry) -> str | None:
         tags = [str(tag).strip() for tag in list(entry.tags or []) if str(tag).strip()]
@@ -579,6 +664,7 @@ class SubagentDiscoveryDecisionSource:
 
 
 __all__ = [
+    "SubagentDiscoveryActivationTarget",
     "SubagentDiscoveryActivationStageDecision",
     "SubagentDiscoveryCandidateStageDecision",
     "SubagentDiscoveryCandidateStageResult",

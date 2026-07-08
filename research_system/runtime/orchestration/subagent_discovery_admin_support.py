@@ -164,12 +164,10 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             raise self.host.orchestrator_error_cls(
                 f"subagent discovery ticket must be approved before activation: {ticket.status}"
             )
-        candidate_entry = self._select_candidate_catalog_entry(
-            ticket,
+        activation_target = self.discovery_decision_source.resolve_manual_activation_target(
+            ticket=ticket,
             candidate_subagent_type=candidate_subagent_type,
-        )
-        runtime_registration = self._resolve_runtime_registration(
-            candidate_entry=candidate_entry,
+            delegate_subagent_type=delegate_subagent_type,
             registration_template_id=registration_template_id,
             registration_type=registration_type,
             skill_name=skill_name,
@@ -181,38 +179,33 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             openapi_spec_uri=openapi_spec_uri,
             openapi_operation_id=openapi_operation_id,
             timeout_seconds=timeout_seconds,
+            runtime_packaging=self.runtime_packaging,
+            error_factory=self.host.orchestrator_error_cls,
         )
-        normalized_delegate_subagent_type = str(delegate_subagent_type or "").strip() or None
-        if bool(normalized_delegate_subagent_type) == bool(runtime_registration):
-            raise self.host.orchestrator_error_cls(
-                "activation requires exactly one of delegate_subagent_type or runtime registration"
-            )
         activation_decision = self.discovery_decision_source.build_manual_activation(
             ticket=ticket,
-            candidate_entry=candidate_entry,
-            delegate_subagent_type=normalized_delegate_subagent_type,
-            runtime_registration=runtime_registration,
+            activation_target=activation_target,
             activated_by=activated_by,
             reason=reason,
         )
         _activation_entry, created = self.discovery_decision_source.apply_activation(
             ticket=ticket,
             activation_decision=activation_decision,
-            candidate_entry=candidate_entry,
+            candidate_entry=activation_target.candidate_entry,
         )
         if not created:
             current = self.show_request(ticket.ticket_id)
             return {
                 "ticket_id": ticket.ticket_id,
                 "status": ticket.status,
-                "message": f"activation already exists for {candidate_entry.subagent_type}",
+                "message": f"activation already exists for {activation_target.candidate_entry.subagent_type}",
                 "result": current,
             }
         self.host.require_subagent_discovery_store().save(ticket, previous_status=previous_status)
         activation_message = (
-            f"activated discovery runtime alias {candidate_entry.subagent_type}"
-            if runtime_registration is not None
-            else f"activated discovery alias {candidate_entry.subagent_type}"
+            f"activated discovery runtime alias {activation_target.candidate_entry.subagent_type}"
+            if activation_target.runtime_registration is not None
+            else f"activated discovery alias {activation_target.candidate_entry.subagent_type}"
         )
         return {
             "ticket_id": ticket.ticket_id,
@@ -292,70 +285,6 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             ))
         ]
 
-    def _select_candidate_catalog_entry(
-        self,
-        ticket,
-        *,
-        candidate_subagent_type: str | None,
-    ) -> SubagentCatalogEntry:
-        entries = list(ticket.candidate_catalog_entries or [])
-        if not entries:
-            raise self.host.orchestrator_error_cls(
-                f"subagent discovery ticket has no candidate catalog entries: {ticket.ticket_id}"
-            )
-        requested = str(candidate_subagent_type or "").strip()
-        if requested:
-            for entry in entries:
-                if str(entry.subagent_type).strip() == requested:
-                    return entry
-            raise self.host.orchestrator_error_cls(
-                f"candidate catalog entry not found for activation: {requested}"
-            )
-        if len(entries) == 1:
-            return entries[0]
-        recommended = ticket.candidate_recommendation
-        if recommended is not None:
-            recommended_entry = self._find_candidate_entry(
-                entries,
-                recommended.candidate_subagent_type,
-            )
-            if recommended_entry is not None:
-                return recommended_entry
-        raise self.host.orchestrator_error_cls(
-            f"multiple candidate catalog entries available; candidate_subagent_type is required for {ticket.ticket_id}"
-        )
-
-    def _resolve_runtime_registration(
-        self,
-        *,
-        candidate_entry: SubagentCatalogEntry,
-        registration_template_id: str | None,
-        registration_type: str | None,
-        skill_name: str | None,
-        snapshot_type: str | None,
-        source_id: str | None,
-        tool_name: str | None,
-        endpoint_path: str | None,
-        http_method: str | None,
-        openapi_spec_uri: str | None,
-        openapi_operation_id: str | None,
-        timeout_seconds: float | None,
-    ):
-        return self.runtime_packaging.resolve_runtime_registration(
-            candidate_entry=candidate_entry,
-            registration_template_id=registration_template_id,
-            registration_type=registration_type,
-            skill_name=skill_name,
-            snapshot_type=snapshot_type,
-            source_id=source_id,
-            tool_name=tool_name,
-            endpoint_path=endpoint_path,
-            http_method=http_method,
-            openapi_spec_uri=openapi_spec_uri,
-            openapi_operation_id=openapi_operation_id,
-            timeout_seconds=timeout_seconds,
-        )
-
     def _select_runtime_registration_template(
         self,
         candidate_entry: SubagentCatalogEntry,
@@ -377,17 +306,5 @@ class OrchestratorSubagentDiscoveryAdminSupport:
     ) -> SubagentCatalogEntry:
         support = SubagentRuntimePackagingSupport()
         return support.normalize_candidate_entry(candidate_entry)
-
-    @staticmethod
-    def _find_candidate_entry(
-        entries: list[SubagentCatalogEntry],
-        candidate_subagent_type: str,
-    ) -> SubagentCatalogEntry | None:
-        requested = str(candidate_subagent_type or "").strip()
-        for entry in entries:
-            if str(entry.subagent_type).strip() == requested:
-                return entry
-        return None
-
 
 __all__ = ["OrchestratorSubagentDiscoveryAdminSupport"]
