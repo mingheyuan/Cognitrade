@@ -6,13 +6,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from research_system.runtime.core.id_utils import generate_ulid
-
-RuntimeRegistrationType = Literal[
-    "snapshot_skill_runner",
-    "skill_runner",
-    "http_json_runner",
-    "openapi_http_runner",
-]
+from research_system.schemas.subagent_runtime_registration import (
+    RuntimeRegistrationType,
+    validate_runtime_registration_shape,
+    validate_runtime_registration_template_defaults,
+)
 
 
 class SubagentInvocation(BaseModel):
@@ -59,25 +57,10 @@ class SubagentRuntimeRegistrationTemplate(BaseModel):
 
     @model_validator(mode="after")
     def validate_template_defaults(self) -> "SubagentRuntimeRegistrationTemplate":
-        allowed_keys = {
-            "skill_name",
-            "snapshot_type",
-            "source_id",
-            "endpoint_path",
-            "http_method",
-            "openapi_spec_uri",
-            "openapi_operation_id",
-            "timeout_seconds",
-        }
-        unknown_keys = sorted(str(key) for key in self.defaults if str(key) not in allowed_keys)
-        if unknown_keys:
-            raise ValueError(f"unsupported runtime registration template defaults: {', '.join(unknown_keys)}")
-        default_http_method = str(self.defaults.get("http_method") or "").strip().upper()
-        if default_http_method and default_http_method not in {"GET", "POST"}:
-            raise ValueError("runtime registration template http_method must be GET or POST")
-        default_timeout_seconds = self.defaults.get("timeout_seconds")
-        if default_timeout_seconds is not None and float(default_timeout_seconds) <= 0.0:
-            raise ValueError("runtime registration template timeout_seconds must be > 0")
+        validate_runtime_registration_template_defaults(
+            registration_type=str(self.registration_type or "").strip(),
+            defaults=dict(self.defaults or {}),
+        )
         return self
 
 
@@ -179,59 +162,17 @@ class SubagentRuntimeRegistration(BaseModel):
         normalized_http_method = str(self.http_method or "").strip().upper()
         normalized_openapi_spec_uri = str(self.openapi_spec_uri or "").strip()
         normalized_openapi_operation_id = str(self.openapi_operation_id or "").strip()
-        has_timeout_seconds = self.timeout_seconds is not None
-        if registration_type == "snapshot_skill_runner":
-            if not normalized_skill_name:
-                raise ValueError("snapshot_skill_runner requires skill_name")
-            if not normalized_snapshot_type:
-                raise ValueError("snapshot_skill_runner requires snapshot_type")
-            if (
-                normalized_source_id
-                or normalized_endpoint_path
-                or normalized_http_method
-                or normalized_openapi_spec_uri
-                or normalized_openapi_operation_id
-            ):
-                raise ValueError("snapshot_skill_runner does not support http source settings")
-            if has_timeout_seconds:
-                raise ValueError("snapshot_skill_runner does not support timeout_seconds")
-        if registration_type == "skill_runner":
-            if not normalized_skill_name:
-                raise ValueError("skill_runner requires skill_name")
-            if normalized_snapshot_type:
-                raise ValueError("skill_runner does not support snapshot_type")
-            if (
-                normalized_source_id
-                or normalized_endpoint_path
-                or normalized_http_method
-                or normalized_openapi_spec_uri
-                or normalized_openapi_operation_id
-            ):
-                raise ValueError("skill_runner does not support http source settings")
-            if has_timeout_seconds:
-                raise ValueError("skill_runner does not support timeout_seconds")
-        if registration_type == "http_json_runner":
-            if normalized_skill_name or normalized_snapshot_type:
-                raise ValueError("http_json_runner does not support skill_name or snapshot_type")
-            if not normalized_source_id:
-                raise ValueError("http_json_runner requires source_id")
-            if not normalized_endpoint_path:
-                raise ValueError("http_json_runner requires endpoint_path")
-            if not normalized_http_method:
-                raise ValueError("http_json_runner requires http_method")
-            if normalized_openapi_spec_uri or normalized_openapi_operation_id:
-                raise ValueError("http_json_runner does not support openapi provenance fields")
-        if registration_type == "openapi_http_runner":
-            if normalized_skill_name or normalized_snapshot_type:
-                raise ValueError("openapi_http_runner does not support skill_name or snapshot_type")
-            if not normalized_source_id:
-                raise ValueError("openapi_http_runner requires source_id")
-            if not normalized_endpoint_path:
-                raise ValueError("openapi_http_runner requires endpoint_path")
-            if not normalized_http_method:
-                raise ValueError("openapi_http_runner requires http_method")
-            if not normalized_openapi_operation_id:
-                raise ValueError("openapi_http_runner requires openapi_operation_id")
+        validate_runtime_registration_shape(
+            registration_type=registration_type,
+            skill_name=normalized_skill_name,
+            snapshot_type=normalized_snapshot_type,
+            source_id=normalized_source_id,
+            endpoint_path=normalized_endpoint_path,
+            http_method=normalized_http_method,
+            openapi_spec_uri=normalized_openapi_spec_uri,
+            openapi_operation_id=normalized_openapi_operation_id,
+            has_timeout_seconds=self.timeout_seconds is not None,
+        )
         return self
 
 

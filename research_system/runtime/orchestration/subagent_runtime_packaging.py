@@ -9,6 +9,7 @@ import requests
 import yaml
 
 from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
+from research_system.schemas.subagent_runtime_registration import SUPPORTED_RUNTIME_REGISTRATION_TYPES
 from research_system.schemas.subagents import (
     SubagentActivationEntry,
     SubagentCatalogEntry,
@@ -58,9 +59,6 @@ _RUNTIME_REGISTRATION_HANDLERS = (
         materializer_name="_materialize_http_json_subagent",
     ),
 )
-
-
-SUPPORTED_RUNTIME_REGISTRATION_TYPES = tuple(handler.registration_type for handler in _RUNTIME_REGISTRATION_HANDLERS)
 
 
 class SubagentRuntimePackagingSupport:

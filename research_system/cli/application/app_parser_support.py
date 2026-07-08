@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 
-from research_system.runtime.orchestration.subagent_runtime_packaging import SUPPORTED_RUNTIME_REGISTRATION_TYPES
+from research_system.schemas.subagent_runtime_registration import SUPPORTED_RUNTIME_REGISTRATION_TYPES
 
 
 def build_app_parser() -> argparse.ArgumentParser:
