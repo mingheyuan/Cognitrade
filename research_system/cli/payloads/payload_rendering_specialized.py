@@ -75,6 +75,12 @@ def print_subagent_discovery_payload(payload: dict, *, emit_text, output_writer=
         return False
     for label, value in subagent_discovery_detail_fields(payload):
         emit_text(output_writer, meta_update(render_labeled_field_line(label, value)))
+    review_history = payload.get("review_history") or []
+    if isinstance(review_history, list) and review_history:
+        emit_text(output_writer, meta_update("review_history:"))
+        for row in review_history:
+            if isinstance(row, dict):
+                emit_text(output_writer, meta_update(render_subagent_discovery_review_history_line(row)))
     candidate_entries = payload.get("candidate_catalog_entries") or []
     if isinstance(candidate_entries, list) and candidate_entries:
         emit_text(output_writer, meta_update("candidate_catalog_entries:"))
@@ -278,3 +284,13 @@ def render_subagent_activation_entry_line(row: dict) -> str:
         f"  - {row.get('subagent_type')} -> {row.get('delegate_subagent_type')}  "
         f"status={row.get('status')}  activated_by={row.get('activated_by') or '-'}"
     )
+
+
+def render_subagent_discovery_review_history_line(row: dict) -> str:
+    decision = str(row.get("decision") or "pending")
+    reviewer = str(row.get("reviewer") or "-")
+    source = str(row.get("source") or "manual")
+    reason = str(row.get("reason") or "")
+    previous_status = str(row.get("previous_status") or "").strip()
+    previous_part = f" previous={previous_status}" if previous_status else ""
+    return f"  - [{decision}] reviewer={reviewer} source={source}{previous_part} reason={reason}"

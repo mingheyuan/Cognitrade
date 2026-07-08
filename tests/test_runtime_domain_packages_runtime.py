@@ -30,6 +30,7 @@ from research_system.runtime.history import (
 )
 from research_system.runtime.orchestration import (
     OrchestratorSubagentDiscoveryAdminSupport,
+    SubagentDiscoveryApprovalPolicyService,
     SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES,
     SUPPORTED_RUNTIME_MATERIALIZATION_TYPES,
     SUPPORTED_RUNTIME_REGISTRATION_TYPES,
@@ -87,6 +88,9 @@ from research_system.runtime.orchestration.subagent_discovery_candidate_sources 
 )
 from research_system.runtime.orchestration.subagent_discovery_candidate_sources import (
     SubagentDiscoveryCandidateSupport as DiscoveryCandidateSupportImpl,
+)
+from research_system.runtime.orchestration._subagent_discovery_approval_policy import (
+    SubagentDiscoveryApprovalPolicyService as DiscoveryApprovalPolicySupportImpl,
 )
 from research_system.runtime.planning.action_factory import PlannerActionFactory
 from research_system.runtime.planning.context_hints import PlannerContextHints
@@ -195,6 +199,10 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
             OrchestratorSubagentDiscoveryAdminSupport,
         )
         self.assertIs(
+            orchestration_package.SubagentDiscoveryApprovalPolicyService,
+            SubagentDiscoveryApprovalPolicyService,
+        )
+        self.assertIs(
             orchestration_package.SubagentRuntimeMaterializationSupport,
             SubagentRuntimeMaterializationSupport,
         )
@@ -221,6 +229,10 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
         self.assertIs(
             orchestration_package.SubagentDiscoveryStore,
             SubagentDiscoveryStore,
+        )
+        self.assertIs(
+            SubagentDiscoveryApprovalPolicyService,
+            DiscoveryApprovalPolicySupportImpl,
         )
         self.assertIs(
             orchestration_package.SubagentDiscoveryCandidateSupport,

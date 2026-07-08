@@ -58,6 +58,10 @@ def workspace_template_candidates(settings: "Settings", template_root: Path) -> 
             settings.subagent_discovery_policy_path,
         ),
         (
+            [template_root / "workspace" / "config" / "subagent_discovery_approval_policy.yml"],
+            settings.subagent_discovery_approval_policy_path,
+        ),
+        (
             [template_root / "workspace" / "config" / "provider_policy.yml"],
             settings.provider_policy_path,
         ),

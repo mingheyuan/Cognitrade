@@ -29,6 +29,7 @@ class SettingsRuntimeTests(unittest.TestCase):
                     "methodology_manifest",
                     "router_defaults",
                     "subagent_discovery_policy",
+                    "subagent_discovery_approval_policy",
                     "provider_policy",
                     "data_sources",
                     "http_json_sources",
@@ -52,6 +53,7 @@ class SettingsRuntimeTests(unittest.TestCase):
                 "workspace/config/review_policy.yml": "review: seeded\n",
                 "workspace/config/router_defaults.yml": "router: seeded\n",
                 "workspace/config/subagent_discovery_policy.yml": "defaults: seeded-discovery\n",
+                "workspace/config/subagent_discovery_approval_policy.yml": "defaults: seeded-discovery-approval\n",
                 "workspace/config/provider_policy.yml": "provider: seeded\n",
                 "workspace/config/data_sources.yml": "sources: seeded\n",
                 "workspace/config/http_json_sources.yml": "sources: seeded-http-json\n",
@@ -76,6 +78,10 @@ class SettingsRuntimeTests(unittest.TestCase):
             self.assertEqual(
                 settings.subagent_discovery_policy_path.read_text(encoding="utf-8"),
                 "defaults: seeded-discovery\n",
+            )
+            self.assertEqual(
+                settings.subagent_discovery_approval_policy_path.read_text(encoding="utf-8"),
+                "defaults: seeded-discovery-approval\n",
             )
             self.assertEqual(settings.mcp_servers_path.read_text(encoding="utf-8"), "servers: seeded\n")
             self.assertEqual(settings.http_json_sources_path.read_text(encoding="utf-8"), "sources: seeded-http-json\n")

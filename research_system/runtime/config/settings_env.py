@@ -90,6 +90,7 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "methodology_manifest_path": config_root / "methodology_manifest.yml",
         "router_defaults_path": config_root / "router_defaults.yml",
         "subagent_discovery_policy_path": config_root / "subagent_discovery_policy.yml",
+        "subagent_discovery_approval_policy_path": config_root / "subagent_discovery_approval_policy.yml",
         "taxonomy_dimensions_path": taxonomy_root / "dimensions.yml",
         "taxonomy_dimension_aliases_path": taxonomy_root / "dimension_aliases.yml",
         "taxonomy_dimension_patterns_path": taxonomy_root / "dimension_patterns.yml",

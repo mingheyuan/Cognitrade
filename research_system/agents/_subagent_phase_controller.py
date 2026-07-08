@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 
 from research_system.adapters.vendors.http_json_source_registry import HttpJsonSourceRegistry
@@ -20,6 +21,9 @@ from research_system.agents._subagent_discovery_shadow_policy import SubagentDis
 from research_system.runtime.orchestration._subagent_discovery_candidate_policy import (
     SubagentDiscoveryCandidatePolicyService,
 )
+from research_system.runtime.orchestration._subagent_discovery_approval_policy import (
+    SubagentDiscoveryApprovalPolicyService,
+)
 from research_system.runtime.orchestration.subagent_discovery_candidate_sources import (
     SubagentDiscoveryCandidateSupport,
 )
@@ -27,6 +31,7 @@ from research_system.runtime.platform.skill_runtime import SkillRuntime
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
     SubagentCapabilityGap,
+    SubagentDiscoveryReviewEvent,
     SubagentGraphPatch,
     SubagentInvocation,
     SubagentPlan,
@@ -103,6 +108,7 @@ class SubagentPhaseController:
             llm_provider=None,
             settings=settings,
         )
+        self.discovery_approval_policy = SubagentDiscoveryApprovalPolicyService(settings=settings)
         self._mcp_source_registry = None
         self._http_json_source_registry = None
         self._openapi_source_registry = None
@@ -642,12 +648,66 @@ class SubagentPhaseController:
             if recommendation_note not in preview_notes:
                 preview_notes.append(recommendation_note)
         ticket.notes = preview_notes
+        approval_decision = self.discovery_approval_policy.evaluate(ticket=ticket)
+        self._apply_discovery_review_decision(
+            ticket=ticket,
+            decision=str(approval_decision.get("decision") or "pending"),
+            reviewer=str(approval_decision.get("reviewer") or "system_auto_gate"),
+            reason=str(approval_decision.get("reason") or "pending_manual_review_discovery_preview"),
+            source=str(approval_decision.get("source") or "auto_discovery_policy"),
+            extra_notes=[
+                str(item).strip()
+                for item in list(approval_decision.get("notes") or [])
+                if str(item).strip()
+            ],
+        )
         save = getattr(store, "save", None)
         if callable(save):
             try:
                 save(ticket, previous_status="pending")
             except Exception:
                 return
+
+    @staticmethod
+    def _apply_discovery_review_decision(
+        *,
+        ticket,
+        decision: str,
+        reviewer: str,
+        reason: str,
+        source: str,
+        extra_notes: list[str] | None = None,
+    ) -> None:
+        previous_status = str(ticket.status or "pending").strip() or "pending"
+        reviewed_at = datetime.now(timezone.utc)
+        normalized_decision = str(decision or "").strip().lower()
+        if normalized_decision == "approved":
+            ticket.status = "approved"
+        elif normalized_decision == "rejected":
+            ticket.status = "rejected"
+        else:
+            ticket.status = "pending"
+        ticket.reviewer = reviewer
+        ticket.review_reason = reason
+        ticket.reviewed_at = reviewed_at
+        ticket.updated_at = reviewed_at
+        review_history = list(ticket.review_history or [])
+        review_history.append(
+            SubagentDiscoveryReviewEvent(
+                decision=ticket.status,  # type: ignore[arg-type]
+                reviewer=reviewer,
+                reason=reason,
+                reviewed_at=reviewed_at,
+                previous_status=previous_status,  # type: ignore[arg-type]
+                source=source,
+            )
+        )
+        ticket.review_history = review_history
+        notes = list(ticket.notes or [])
+        for note in list(extra_notes or []):
+            if note and note not in notes:
+                notes.append(note)
+        ticket.notes = notes
 
     def require_mcp_source_registry(self):
         if isinstance(self._mcp_source_registry, McpSourceRegistry):

@@ -23,6 +23,7 @@ __all__ = [
     "OrchestratorRunTerminalSupport",
     "OrchestratorRuntimeIoSupport",
     "OrchestratorSubagentDiscoveryAdminSupport",
+    "SubagentDiscoveryApprovalPolicyService",
     "SubagentDiscoveryCandidateSupport",
     "SubagentRuntimeMaterializationSupport",
     "SubagentRuntimePackagingSupport",
@@ -92,6 +93,10 @@ _EXPORTS = {
     "OrchestratorSubagentDiscoveryAdminSupport": (
         "research_system.runtime.orchestration.subagent_discovery_admin_support",
         "OrchestratorSubagentDiscoveryAdminSupport",
+    ),
+    "SubagentDiscoveryApprovalPolicyService": (
+        "research_system.runtime.orchestration._subagent_discovery_approval_policy",
+        "SubagentDiscoveryApprovalPolicyService",
     ),
     "SubagentDiscoveryCandidateSupport": (
         "research_system.runtime.orchestration.subagent_discovery_candidate_sources",

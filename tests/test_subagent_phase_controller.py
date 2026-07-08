@@ -544,7 +544,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
                 exc_info.exception.gap.notes,
             )
 
-    def test_capability_gap_request_previews_pending_discovery_candidates(self) -> None:
+    def test_capability_gap_request_previews_and_auto_approves_discovery_candidates(self) -> None:
         runtime_context = SimpleNamespace(
             subagent_capability_gaps=[],
             subagent_tool_discovery_requests=[],
@@ -605,22 +605,31 @@ class SubagentPhaseControllerTests(unittest.TestCase):
                     capability="market_signal_extension",
                 )
 
-            pending_tickets = discovery_store.list("pending")
-            self.assertEqual(len(pending_tickets), 1)
-            pending_ticket = pending_tickets[0]
-            self.assertEqual(len(pending_ticket.candidate_catalog_entries), 1)
+            approved_tickets = discovery_store.list("approved")
+            self.assertEqual(len(approved_tickets), 1)
+            approved_ticket = approved_tickets[0]
+            self.assertEqual(len(approved_ticket.candidate_catalog_entries), 1)
             self.assertEqual(
-                pending_ticket.candidate_catalog_entries[0].subagent_type,
+                approved_ticket.candidate_catalog_entries[0].subagent_type,
                 "candidate_collect_market_snapshot_skill",
             )
-            self.assertIsNotNone(pending_ticket.candidate_recommendation)
+            self.assertIsNotNone(approved_ticket.candidate_recommendation)
             self.assertEqual(
-                pending_ticket.candidate_recommendation.candidate_subagent_type,
+                approved_ticket.candidate_recommendation.candidate_subagent_type,
                 "candidate_collect_market_snapshot_skill",
             )
             self.assertIn(
                 "candidate_preview_generated_from_runtime_discovery_request",
-                pending_ticket.notes,
+                approved_ticket.notes,
+            )
+            self.assertEqual(approved_ticket.status, "approved")
+            self.assertEqual(approved_ticket.reviewer, "system_auto_approve")
+            self.assertEqual(len(approved_ticket.review_history), 1)
+            self.assertEqual(approved_ticket.review_history[0].decision, "approved")
+            self.assertEqual(approved_ticket.review_history[0].source, "auto_discovery_policy")
+            self.assertIn(
+                "auto_approve_safe_collect_skill_preview",
+                approved_ticket.notes,
             )
 
     def test_execute_plan_injects_plan_metadata_and_trace(self) -> None:

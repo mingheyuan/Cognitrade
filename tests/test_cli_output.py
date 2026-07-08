@@ -1095,6 +1095,15 @@ class CliOutputTests(unittest.TestCase):
                         "activated_by": "ops_user",
                     }
                 ],
+                "review_history": [
+                    {
+                        "decision": "approved",
+                        "reviewer": "system_auto_approve",
+                        "source": "auto_discovery_policy",
+                        "reason": "auto_approve_discovery_candidate_preview_rule=collect_skill_preview_auto_approve",
+                        "previous_status": "pending",
+                    }
+                ],
                 "notes": ["approved candidate available"],
             }
         )
@@ -1258,6 +1267,8 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("recommended_candidate: candidate_screening_strategy", detail_output)
         self.assertIn("candidate_recommendation_policy: rule", detail_output)
         self.assertIn("shadow_candidate_policy: llm_shadow", detail_output)
+        self.assertIn("review_history:", detail_output)
+        self.assertIn("[approved] reviewer=system_auto_approve source=auto_discovery_policy previous=pending", detail_output)
         self.assertIn("candidate_catalog_entries:", detail_output)
         self.assertIn("activated_entries:", detail_output)
         self.assertIn("candidate_screening_strategy -> stock_snapshot_collector", detail_output)

@@ -7,6 +7,7 @@ from research_system.runtime.orchestration._subagent_discovery_candidate_policy 
 from research_system.schemas.subagents import (
     SubagentActivationEntry,
     SubagentCatalogEntry,
+    SubagentDiscoveryReviewEvent,
 )
 from research_system.runtime.orchestration.subagent_discovery_candidate_sources import (
     SubagentDiscoveryCandidateSupport,
@@ -67,11 +68,24 @@ class OrchestratorSubagentDiscoveryAdminSupport:
                 "result": current,
             }
         reviewed_at = datetime.now(timezone.utc)
+        previous_status = str(ticket.status or "pending").strip() or "pending"
         ticket.status = "approved" if normalized_decision == "approve" else "rejected"
         ticket.reviewer = reviewer
         ticket.review_reason = str(reason or f"manual_{ticket.status}_via_cli")
         ticket.reviewed_at = reviewed_at
         ticket.updated_at = reviewed_at
+        history = list(ticket.review_history or [])
+        history.append(
+            SubagentDiscoveryReviewEvent(
+                decision=ticket.status,
+                reviewer=reviewer,
+                reason=ticket.review_reason,
+                reviewed_at=reviewed_at,
+                previous_status=previous_status,  # type: ignore[arg-type]
+                source="manual_cli_review",
+            )
+        )
+        ticket.review_history = history
         if ticket.status == "approved":
             ticket.candidate_catalog_entries = self._resolve_candidate_catalog_entries(
                 ticket,

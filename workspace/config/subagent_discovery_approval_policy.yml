@@ -1,0 +1,41 @@
+defaults:
+  auto_approve: false
+  require_recommended_candidate: true
+  require_runtime_registration_template: true
+  max_candidate_count: 1
+  allowed_side_effect_levels:
+    - none
+    - read_only
+
+rules:
+  - rule_id: collect_skill_preview_auto_approve
+    stage: collect
+    auto_approve: true
+    allowed_protocols:
+      - skill
+    notes:
+      - auto_approve_safe_collect_skill_preview
+  - rule_id: report_skill_preview_auto_approve
+    stage: report
+    auto_approve: true
+    allowed_protocols:
+      - skill
+    notes:
+      - auto_approve_safe_report_skill_preview
+  - rule_id: retrieve_read_only_preview_auto_approve
+    stage: retrieve
+    auto_approve: true
+    allowed_protocols:
+      - mcp
+      - openapi
+      - http_json
+    notes:
+      - auto_approve_safe_retrieve_read_only_preview
+  - rule_id: review_read_only_preview_auto_approve
+    stage: review
+    auto_approve: true
+    allowed_protocols:
+      - mcp
+      - openapi
+    notes:
+      - auto_approve_safe_review_read_only_preview

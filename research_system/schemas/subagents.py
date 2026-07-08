@@ -132,6 +132,17 @@ class SubagentDiscoveryCandidateRecommendation(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class SubagentDiscoveryReviewEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["pending", "approved", "rejected"]
+    reviewer: str
+    reason: str
+    reviewed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    previous_status: Literal["pending", "approved", "rejected"] | None = None
+    source: str = "manual"
+
+
 class SubagentDiscoveryTicket(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -148,6 +159,7 @@ class SubagentDiscoveryTicket(BaseModel):
     candidate_recommendation: SubagentDiscoveryCandidateRecommendation | None = None
     candidate_shadow_recommendation: SubagentDiscoveryCandidateRecommendation | None = None
     activated_entries: list["SubagentActivationEntry"] = Field(default_factory=list)
+    review_history: list[SubagentDiscoveryReviewEvent] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
 

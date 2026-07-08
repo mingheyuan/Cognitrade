@@ -95,6 +95,9 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
             )
             self.assertEqual(result["status"], "approved")
             self.assertEqual(result["result"]["review_reason"], "approved for follow-up packaging")
+            self.assertEqual(len(result["result"]["review_history"]), 1)
+            self.assertEqual(result["result"]["review_history"][0]["decision"], "approved")
+            self.assertEqual(result["result"]["review_history"][0]["source"], "manual_cli_review")
             self.assertEqual(len(result["result"]["candidate_catalog_entries"]), 1)
             self.assertEqual(
                 result["result"]["candidate_catalog_entries"][0]["capabilities"],
