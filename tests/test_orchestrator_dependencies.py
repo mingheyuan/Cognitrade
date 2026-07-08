@@ -147,6 +147,7 @@ class OrchestratorDependenciesTests(unittest.TestCase):
                     orchestrator.admin.subagent_discovery_admin,
                     OrchestratorSubagentDiscoveryAdminSupport,
                 )
+                self.assertTrue(callable(orchestrator.activate_subagent_discovery_request))
                 self.assertIsInstance(orchestrator.admin.qdrant_admin, OrchestratorQdrantAdminSupport)
                 self.assertIsInstance(orchestrator.subagent_bridge, OrchestratorSubagentBridge)
                 self.assertIs(orchestrator.subagent_bridge.host, orchestrator)

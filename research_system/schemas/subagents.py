@@ -108,6 +108,22 @@ class SubagentDiscoveryTicket(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     candidate_catalog_entries: list[SubagentCatalogEntry] = Field(default_factory=list)
+    activated_entries: list["SubagentActivationEntry"] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class SubagentActivationEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    activation_id: str = Field(default_factory=generate_ulid)
+    ticket_id: str
+    subagent_type: str
+    delegate_subagent_type: str
+    catalog_entry: SubagentCatalogEntry
+    status: Literal["active", "inactive"] = "active"
+    activated_by: str | None = None
+    activation_reason: str | None = None
+    activated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     notes: list[str] = Field(default_factory=list)
 
 

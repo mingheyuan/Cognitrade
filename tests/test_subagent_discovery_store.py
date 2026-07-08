@@ -99,6 +99,24 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
             self.assertEqual(len(approved_entries), 1)
             self.assertIn("approved_discovery_candidate", approved_entries[0].tags)
 
+            activation = admin.activate_request(
+                ticket.ticket_id,
+                delegate_subagent_type="retrieval_decider",
+                activated_by="tester",
+                reason="delegate to retrieval decider for controlled execution",
+            )
+            self.assertIn("activated discovery alias", activation["message"])
+            self.assertEqual(len(activation["result"]["activated_entries"]), 1)
+            self.assertEqual(
+                activation["result"]["activated_entries"][0]["delegate_subagent_type"],
+                "retrieval_decider",
+            )
+            self.assertEqual(store.approved_catalog_entries(), [])
+            activated_aliases = store.activated_alias_entries()
+            self.assertEqual(len(activated_aliases), 1)
+            self.assertEqual(activated_aliases[0].subagent_type, "candidate_retrieve_news_sentiment_enrichment")
+            self.assertIn("activated_runtime_alias", activated_aliases[0].catalog_entry.tags)
+
 
 if __name__ == "__main__":
     unittest.main()

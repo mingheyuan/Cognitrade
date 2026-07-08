@@ -132,6 +132,7 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 ),
             ],
             catalog_overlay_provider=self._approved_catalog_overlay_entries,
+            activation_provider=self._activated_discovery_alias_entries,
         )
         self.phase_controller = SubagentPhaseController(
             registry=self.registry,

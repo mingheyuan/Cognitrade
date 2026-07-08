@@ -6,11 +6,30 @@ from typing import Any, Iterable
 from pydantic import BaseModel
 
 from research_system.schemas.subagents import (
+    SubagentActivationEntry,
     SubagentCatalogEntry,
     SubagentExecutionRecord,
     SubagentInvocation,
 )
-from research_system.subagents.base import SubagentDefinition, SupportsSubagent, build_subagent_definition
+from research_system.subagents.base import (
+    SubagentCatalogMetadata,
+    SubagentDefinition,
+    SupportsSubagent,
+    build_subagent_definition,
+)
+
+
+class _ActivatedSubagentProxy:
+    def __init__(self, *, subagent_type: str, delegate: SupportsSubagent, definition: SubagentDefinition) -> None:
+        self.subagent_type = subagent_type
+        self.input_model = definition.input_model
+        self.output_model = definition.output_model
+        self.runtime_policy = definition.runtime_policy
+        self.catalog_metadata = definition.catalog_metadata
+        self._delegate = delegate
+
+    def run(self, **kwargs: Any) -> dict[str, Any]:
+        return self._delegate.run(**kwargs)
 
 
 class SubagentRegistry:
@@ -19,11 +38,13 @@ class SubagentRegistry:
         subagents: Iterable[SupportsSubagent] | None = None,
         *,
         catalog_overlay_provider: Callable[[], Iterable[SubagentCatalogEntry]] | None = None,
+        activation_provider: Callable[[], Iterable[SubagentActivationEntry]] | None = None,
     ) -> None:
         self._subagents: dict[str, SupportsSubagent] = {}
         self._definitions: dict[str, SubagentDefinition] = {}
         self._observers: list[Callable[..., None]] = []
         self._catalog_overlay_provider = catalog_overlay_provider
+        self._activation_provider = activation_provider
         for subagent in subagents or []:
             self.register(subagent)
 
@@ -38,16 +59,35 @@ class SubagentRegistry:
         try:
             return self._subagents[subagent_type]
         except KeyError as exc:
-            raise KeyError(f"unknown subagent: {subagent_type}") from exc
+            activation_entry = self._activation_entry(subagent_type)
+            if activation_entry is None:
+                raise KeyError(f"unknown subagent: {subagent_type}") from exc
+            delegate = self.get(activation_entry.delegate_subagent_type)
+            definition = self.definition(subagent_type)
+            return _ActivatedSubagentProxy(
+                subagent_type=subagent_type,
+                delegate=delegate,
+                definition=definition,
+            )
 
     def definition(self, subagent_type: str) -> SubagentDefinition:
         try:
             return self._definitions[subagent_type]
         except KeyError as exc:
-            raise KeyError(f"unknown subagent definition: {subagent_type}") from exc
+            activation_entry = self._activation_entry(subagent_type)
+            if activation_entry is None:
+                raise KeyError(f"unknown subagent definition: {subagent_type}") from exc
+            return self._activation_definition(activation_entry)
 
     def definitions(self) -> list[SubagentDefinition]:
-        return [self._definitions[subagent_type] for subagent_type in sorted(self._definitions)]
+        definitions = [self._definitions[subagent_type] for subagent_type in sorted(self._definitions)]
+        for activation_entry in self._activation_entries():
+            alias_type = str(activation_entry.subagent_type).strip()
+            if not alias_type or alias_type in self._definitions:
+                continue
+            definitions.append(self._activation_definition(activation_entry))
+        definitions.sort(key=lambda item: item.subagent_type)
+        return definitions
 
     def catalog_entries(
         self,
@@ -93,6 +133,51 @@ class SubagentRegistry:
             if isinstance(entry, SubagentCatalogEntry):
                 normalized.append(entry)
         return normalized
+
+    def _activation_entries(self) -> list[SubagentActivationEntry]:
+        provider = self._activation_provider
+        if not callable(provider):
+            return []
+        try:
+            entries = provider()
+        except Exception:
+            return []
+        normalized: list[SubagentActivationEntry] = []
+        for entry in entries or []:
+            if isinstance(entry, SubagentActivationEntry):
+                normalized.append(entry)
+        return normalized
+
+    def _activation_entry(self, subagent_type: str) -> SubagentActivationEntry | None:
+        normalized_type = str(subagent_type or "").strip()
+        if not normalized_type:
+            return None
+        for entry in self._activation_entries():
+            if str(entry.subagent_type).strip() == normalized_type:
+                return entry
+        return None
+
+    def _activation_definition(self, activation_entry: SubagentActivationEntry) -> SubagentDefinition:
+        delegate_definition = self._definitions.get(str(activation_entry.delegate_subagent_type).strip())
+        if delegate_definition is None:
+            raise KeyError(f"unknown delegate subagent definition: {activation_entry.delegate_subagent_type}")
+        catalog_entry = activation_entry.catalog_entry
+        return SubagentDefinition(
+            subagent_type=activation_entry.subagent_type,
+            input_model=delegate_definition.input_model,
+            output_model=delegate_definition.output_model,
+            runtime_policy=delegate_definition.runtime_policy,
+            catalog_metadata=SubagentCatalogMetadata(
+                summary=catalog_entry.summary,
+                capabilities=tuple(item for item in catalog_entry.capabilities if str(item).strip()),
+                stage=catalog_entry.stage,
+                cost_class=catalog_entry.cost_class,
+                latency_class=catalog_entry.latency_class,
+                side_effect_level=catalog_entry.side_effect_level,
+                suitable_intents=tuple(item for item in catalog_entry.suitable_intents if str(item).strip()),
+                tags=tuple(item for item in catalog_entry.tags if str(item).strip()),
+            ),
+        )
 
     def notify_started(self, *, invocation: SubagentInvocation) -> None:
         self._notify(

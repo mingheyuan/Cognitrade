@@ -208,6 +208,17 @@ class RuntimeBoundSubagentInvoker:
         except Exception:
             return []
 
+    def _activated_discovery_alias_entries(self):
+        binding = self._runtime_binding_for_events()
+        store = binding.get("subagent_discovery_store")
+        activated_alias_entries = getattr(store, "activated_alias_entries", None)
+        if not callable(activated_alias_entries):
+            return []
+        try:
+            return list(activated_alias_entries() or [])
+        except Exception:
+            return []
+
     def _subagent_dag_cache_context(self, *, dag_id: str) -> SubagentDagCacheContext | None:
         binding = self._runtime_binding_for_events()
         context = binding.get("context")

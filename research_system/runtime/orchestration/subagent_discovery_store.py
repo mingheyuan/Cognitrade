@@ -4,6 +4,7 @@ from pathlib import Path
 
 from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.schemas.subagents import (
+    SubagentActivationEntry,
     SubagentCatalogEntry,
     SubagentCapabilityGap,
     SubagentDiscoveryTicket,
@@ -74,9 +75,25 @@ class SubagentDiscoveryStore:
     def approved_catalog_entries(self) -> list[SubagentCatalogEntry]:
         entries: list[SubagentCatalogEntry] = []
         for ticket in self.list("approved"):
+            activated_types = {
+                str(item.subagent_type).strip()
+                for item in ticket.activated_entries
+                if str(item.status or "").strip().lower() == "active"
+            }
             for entry in ticket.candidate_catalog_entries:
+                if str(entry.subagent_type).strip() in activated_types:
+                    continue
                 entries.append(self._normalize_candidate_entry(ticket, entry))
         return entries
+
+    def activated_alias_entries(self) -> list[SubagentActivationEntry]:
+        rows: list[SubagentActivationEntry] = []
+        for ticket in self.list("approved"):
+            for entry in ticket.activated_entries:
+                if str(entry.status or "").strip().lower() != "active":
+                    continue
+                rows.append(self._normalize_activation_entry(ticket, entry))
+        return rows
 
     def save(self, ticket: SubagentDiscoveryTicket, *, previous_status: str | None = None) -> SubagentDiscoveryTicket:
         old_status = previous_status or ticket.status
@@ -101,6 +118,27 @@ class SubagentDiscoveryStore:
         return entry.model_copy(
             update={
                 "tags": tags,
+            },
+            deep=True,
+        )
+
+    @staticmethod
+    def _normalize_activation_entry(
+        ticket: SubagentDiscoveryTicket,
+        entry: SubagentActivationEntry,
+    ) -> SubagentActivationEntry:
+        tags = list(entry.catalog_entry.tags or [])
+        if "activated_runtime_alias" not in tags:
+            tags.append("activated_runtime_alias")
+        ticket_tag = f"discovery_ticket:{ticket.ticket_id}"
+        if ticket_tag not in tags:
+            tags.append(ticket_tag)
+        return entry.model_copy(
+            update={
+                "catalog_entry": entry.catalog_entry.model_copy(
+                    update={"tags": tags},
+                    deep=True,
+                )
             },
             deep=True,
         )

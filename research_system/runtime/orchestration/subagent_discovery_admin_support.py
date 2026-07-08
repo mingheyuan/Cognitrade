@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from research_system.schemas.subagents import SubagentCatalogEntry
+from research_system.schemas.subagents import SubagentActivationEntry, SubagentCatalogEntry
 
 
 class OrchestratorSubagentDiscoveryAdminSupport:
@@ -70,6 +70,59 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             "result": self.show_request(ticket.ticket_id),
         }
 
+    def activate_request(
+        self,
+        ticket_id: str,
+        *,
+        delegate_subagent_type: str,
+        candidate_subagent_type: str | None = None,
+        activated_by: str = "manual_cli_activation",
+        reason: str | None = None,
+    ) -> dict:
+        located = self.host.require_subagent_discovery_store().find(ticket_id)
+        if located is None:
+            raise self.host.orchestrator_error_cls(f"subagent discovery ticket not found: {ticket_id}")
+        ticket, previous_status = located
+        if ticket.status != "approved":
+            raise self.host.orchestrator_error_cls(
+                f"subagent discovery ticket must be approved before activation: {ticket.status}"
+            )
+        candidate_entry = self._select_candidate_catalog_entry(
+            ticket,
+            candidate_subagent_type=candidate_subagent_type,
+        )
+        for existing in ticket.activated_entries:
+            if str(existing.subagent_type).strip() == str(candidate_entry.subagent_type).strip():
+                current = self.show_request(ticket.ticket_id)
+                return {
+                    "ticket_id": ticket.ticket_id,
+                    "status": ticket.status,
+                    "message": f"activation already exists for {candidate_entry.subagent_type}",
+                    "result": current,
+                }
+        ticket.activated_entries.append(
+            SubagentActivationEntry(
+                ticket_id=ticket.ticket_id,
+                subagent_type=candidate_entry.subagent_type,
+                delegate_subagent_type=str(delegate_subagent_type).strip(),
+                catalog_entry=candidate_entry,
+                activated_by=activated_by,
+                activation_reason=str(reason or f"activate_{candidate_entry.subagent_type}_via_cli"),
+                notes=[
+                    "activated_from_approved_discovery_ticket",
+                    f"delegate_subagent_type={delegate_subagent_type}",
+                ],
+            )
+        )
+        ticket.updated_at = datetime.now(timezone.utc)
+        self.host.require_subagent_discovery_store().save(ticket, previous_status=previous_status)
+        return {
+            "ticket_id": ticket.ticket_id,
+            "status": ticket.status,
+            "message": f"activated discovery alias {candidate_entry.subagent_type}",
+            "result": self.show_request(ticket.ticket_id),
+        }
+
     @staticmethod
     def _summary_row(ticket) -> dict:
         return {
@@ -80,6 +133,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             "capability": ticket.capability_gap.capability,
             "search_query": ticket.tool_discovery_request.search_query,
             "candidate_entry_count": len(ticket.candidate_catalog_entries),
+            "activation_entry_count": len(ticket.activated_entries),
             "updated_at": ticket.updated_at.isoformat(),
         }
 
@@ -125,6 +179,31 @@ class OrchestratorSubagentDiscoveryAdminSupport:
                 output_json_schema=None,
             )
         ]
+
+    def _select_candidate_catalog_entry(
+        self,
+        ticket,
+        *,
+        candidate_subagent_type: str | None,
+    ) -> SubagentCatalogEntry:
+        entries = list(ticket.candidate_catalog_entries or [])
+        if not entries:
+            raise self.host.orchestrator_error_cls(
+                f"subagent discovery ticket has no candidate catalog entries: {ticket.ticket_id}"
+            )
+        requested = str(candidate_subagent_type or "").strip()
+        if requested:
+            for entry in entries:
+                if str(entry.subagent_type).strip() == requested:
+                    return entry
+            raise self.host.orchestrator_error_cls(
+                f"candidate catalog entry not found for activation: {requested}"
+            )
+        if len(entries) == 1:
+            return entries[0]
+        raise self.host.orchestrator_error_cls(
+            f"multiple candidate catalog entries available; candidate_subagent_type is required for {ticket.ticket_id}"
+        )
 
 
 __all__ = ["OrchestratorSubagentDiscoveryAdminSupport"]
