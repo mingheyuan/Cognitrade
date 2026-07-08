@@ -1,0 +1,26 @@
+defaults:
+  preferred_protocols:
+    - mcp
+    - openapi
+    - skill
+    - http_json
+
+rules:
+  - rule_id: collect_skill_first
+    stage: collect
+    preferred_protocols:
+      - skill
+      - mcp
+      - openapi
+      - http_json
+    notes:
+      - prefer_local_skill_bridges_for_collect_stage
+  - rule_id: report_skill_first
+    stage: report
+    preferred_protocols:
+      - skill
+      - mcp
+      - openapi
+      - http_json
+    notes:
+      - prefer_local_skill_bridges_for_report_stage

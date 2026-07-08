@@ -10,6 +10,7 @@ from research_system.runtime.orchestration.subagent_discovery_admin_support impo
     OrchestratorSubagentDiscoveryAdminSupport,
 )
 from research_system.runtime.orchestration.subagent_discovery_store import SubagentDiscoveryStore
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.schemas.subagents import (
     SubagentCapabilityGap,
     SubagentExecutionRecord,
@@ -173,6 +174,74 @@ class SubagentPhaseControllerTests(unittest.TestCase):
             self.assertEqual(
                 pending_tickets[0].tool_discovery_request.search_query,
                 "review_thesis review missing_capability",
+            )
+
+    def test_capability_gap_request_uses_discovery_policy_protocol_order(self) -> None:
+        runtime_context = SimpleNamespace(
+            subagent_capability_gaps=[],
+            subagent_tool_discovery_requests=[],
+            dynamic_trace=[],
+        )
+        support = SimpleNamespace(emit_event=lambda *_args, **_kwargs: None)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.subagent_discovery_policy_path.write_text(
+                "\n".join(
+                    [
+                        "defaults:",
+                        "  preferred_protocols: [mcp, openapi, skill, http_json]",
+                        "rules:",
+                        "  - rule_id: review_skill_first",
+                        "    stage: review",
+                        "    preferred_protocols: [skill, mcp, openapi]",
+                        "    notes: [prefer_local_skill_bridges_for_review_stage]",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            discovery_store = SubagentDiscoveryStore(Path(temp_dir) / "discovery")
+            controller = SubagentPhaseController(
+                registry=self.registry,
+                invoke_subagent=lambda invocation: (
+                    {"ok": True},
+                    SubagentExecutionRecord(
+                        subagent_type=invocation.subagent_type,
+                        invocation_id=invocation.invocation_id,
+                        status="completed",
+                        objective=invocation.objective,
+                        inputs=invocation.inputs,
+                        output_keys=["ok"],
+                    ),
+                ),
+                emit_event=None,
+                cache_context_builder=lambda **_: None,
+                start_from_node_id_builder=lambda **_: None,
+                runtime_binding_getter=lambda: {
+                    "context": runtime_context,
+                    "support": support,
+                    "subagent_discovery_store": discovery_store,
+                    "request_id": "req-gap-policy",
+                    "intent": "review_thesis",
+                },
+                settings=settings,
+            )
+
+            with self.assertRaises(SubagentCapabilityGapError) as exc_info:
+                controller.select_catalog_entry(
+                    stage="review",
+                    intent="review_thesis",
+                    capability="missing_capability",
+                )
+
+            self.assertEqual(
+                exc_info.exception.tool_discovery_request.preferred_protocols,
+                ["skill", "mcp", "openapi"],
+            )
+            self.assertIn(
+                "discovery_policy_rule=review_skill_first",
+                exc_info.exception.tool_discovery_request.notes,
             )
 
     def test_capability_gap_surfaces_approved_candidate_catalog_entries(self) -> None:

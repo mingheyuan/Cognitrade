@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from research_system.agents._subagent_discovery_policy import SubagentDiscoveryPolicyService
 from research_system.agents._subagent_dag import (
     SubagentDagExecutor,
     SubagentDagNodeResult,
@@ -68,6 +69,7 @@ class SubagentPhaseController:
             runtime_binding_getter=runtime_binding_getter,
             emit_event=emit_event,
         )
+        self.discovery_policy = SubagentDiscoveryPolicyService(settings=settings)
 
     def select_catalog_entry(
         self,
@@ -459,8 +461,8 @@ class SubagentPhaseController:
             notes=notes,
         )
 
-    @staticmethod
     def _build_tool_discovery_request(
+        self,
         *,
         gap: SubagentCapabilityGap,
     ) -> SubagentToolDiscoveryRequest:
@@ -470,16 +472,25 @@ class SubagentPhaseController:
             str(gap.capability or "").strip(),
             str(gap.preferred_subagent_type or "").strip(),
         ]
+        preferred_protocols, policy_notes = self.discovery_policy.resolve(
+            intent=gap.intent,
+            stage=gap.stage,
+            capability=gap.capability,
+            preferred_subagent_type=gap.preferred_subagent_type,
+            requires_llm=gap.requires_llm,
+        )
         return SubagentToolDiscoveryRequest(
             intent=gap.intent,
             stage=gap.stage,
             capability=gap.capability,
             search_query=" ".join(token for token in search_terms if token),
+            preferred_protocols=preferred_protocols,
             reason=gap.reason,
             policy_source=gap.policy_source,
             notes=[
                 "tool_discovery_requested_from_capability_gap",
                 f"gap_id={gap.gap_id}",
+                *policy_notes,
             ],
         )
 

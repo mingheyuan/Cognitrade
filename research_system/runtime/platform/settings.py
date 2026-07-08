@@ -65,6 +65,7 @@ class Settings(BaseModel):
     retrieval_policy_path: Path
     methodology_manifest_path: Path
     router_defaults_path: Path
+    subagent_discovery_policy_path: Path
     taxonomy_dimensions_path: Path
     taxonomy_dimension_aliases_path: Path
     taxonomy_dimension_patterns_path: Path
@@ -88,6 +89,7 @@ class Settings(BaseModel):
             "retrieval_policy": self.retrieval_policy_path,
             "methodology_manifest": self.methodology_manifest_path,
             "router_defaults": self.router_defaults_path,
+            "subagent_discovery_policy": self.subagent_discovery_policy_path,
             "provider_policy": self.provider_policy_path,
             "data_sources": self.data_sources_path,
             "http_json_sources": self.http_json_sources_path,
