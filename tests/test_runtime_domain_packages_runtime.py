@@ -167,6 +167,13 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
             PackagingRuntimeRegistrationTypes,
         )
 
+    def test_runtime_packaging_support_reports_complete_handler_registry(self) -> None:
+        support = SubagentRuntimePackagingSupport()
+        self.assertEqual(
+            support.registration_types(),
+            SUPPORTED_RUNTIME_REGISTRATION_TYPES,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

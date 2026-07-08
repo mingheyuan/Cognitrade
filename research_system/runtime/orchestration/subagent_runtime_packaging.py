@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 from pathlib import Path
 from typing import Any
@@ -23,23 +24,58 @@ from research_system.subagents.runtime_registered import (
 )
 
 
-SUPPORTED_RUNTIME_REGISTRATION_TYPES = (
-    "snapshot_skill_runner",
-    "skill_runner",
-    "http_json_runner",
-    "openapi_http_runner",
+@dataclass(frozen=True)
+class _RuntimeRegistrationHandler:
+    registration_type: str
+    template_builder_name: str
+    registration_builder_name: str
+    materializer_name: str
+
+
+_RUNTIME_REGISTRATION_HANDLERS = (
+    _RuntimeRegistrationHandler(
+        registration_type="snapshot_skill_runner",
+        template_builder_name="_snapshot_skill_template",
+        registration_builder_name="_build_snapshot_skill_registration",
+        materializer_name="_materialize_snapshot_skill_subagent",
+    ),
+    _RuntimeRegistrationHandler(
+        registration_type="skill_runner",
+        template_builder_name="_skill_template",
+        registration_builder_name="_build_skill_registration",
+        materializer_name="_materialize_skill_subagent",
+    ),
+    _RuntimeRegistrationHandler(
+        registration_type="http_json_runner",
+        template_builder_name="_http_json_template",
+        registration_builder_name="_build_http_json_registration",
+        materializer_name="_materialize_http_json_subagent",
+    ),
+    _RuntimeRegistrationHandler(
+        registration_type="openapi_http_runner",
+        template_builder_name="_openapi_template",
+        registration_builder_name="_build_openapi_http_registration",
+        materializer_name="_materialize_http_json_subagent",
+    ),
 )
+
+
+SUPPORTED_RUNTIME_REGISTRATION_TYPES = tuple(handler.registration_type for handler in _RUNTIME_REGISTRATION_HANDLERS)
 
 
 class SubagentRuntimePackagingSupport:
     def __init__(self, host=None) -> None:
         self.host = host
+        self._handlers = {handler.registration_type: handler for handler in _RUNTIME_REGISTRATION_HANDLERS}
 
     def normalize_candidate_entry(self, candidate_entry: SubagentCatalogEntry) -> SubagentCatalogEntry:
         return candidate_entry.model_copy(
             update={"runtime_registration_templates": self.candidate_templates(candidate_entry)},
             deep=True,
         )
+
+    def registration_types(self) -> tuple[str, ...]:
+        return tuple(self._handlers)
 
     def materialize_runtime_subagent(
         self,
@@ -50,56 +86,20 @@ class SubagentRuntimePackagingSupport:
         runtime_registration = activation_entry.runtime_registration
         if runtime_registration is None:
             return None
+        handler = self._handler(runtime_registration.registration_type, allow_missing=True)
+        if handler is None:
+            return None
         catalog_entry = activation_entry.catalog_entry
-        runtime_policy = self.runtime_policy(catalog_entry)
-        catalog_metadata = self.catalog_metadata(catalog_entry)
-        input_model, output_model = self.runtime_models(
+        return getattr(self, handler.materializer_name)(
             activation_entry=activation_entry,
-            catalog_entry=catalog_entry,
+            skill_runtime=skill_runtime,
+            runtime_policy=self.runtime_policy(catalog_entry),
+            catalog_metadata=self.catalog_metadata(catalog_entry),
+            runtime_models=self.runtime_models(
+                activation_entry=activation_entry,
+                catalog_entry=catalog_entry,
+            ),
         )
-        if runtime_registration.registration_type == "snapshot_skill_runner":
-            if skill_runtime is None:
-                return None
-            if str(catalog_entry.stage or "").strip().lower() not in {"", "collect"}:
-                return None
-            return RuntimeRegisteredSnapshotSkillSubagent(
-                subagent_type=str(activation_entry.subagent_type).strip(),
-                snapshot_type=str(runtime_registration.snapshot_type or "").strip(),
-                skill_name=str(runtime_registration.skill_name).strip(),
-                skill_runtime=skill_runtime,
-                runtime_policy=runtime_policy,
-                catalog_metadata=catalog_metadata,
-            )
-        if runtime_registration.registration_type == "skill_runner":
-            if skill_runtime is None:
-                return None
-            return RuntimeRegisteredSkillSubagent(
-                subagent_type=str(activation_entry.subagent_type).strip(),
-                skill_name=str(runtime_registration.skill_name).strip(),
-                skill_runtime=skill_runtime,
-                input_model=input_model,
-                output_model=output_model,
-                runtime_policy=runtime_policy,
-                catalog_metadata=catalog_metadata,
-            )
-        if runtime_registration.registration_type in {"http_json_runner", "openapi_http_runner"}:
-            source_id = str(runtime_registration.source_id or "").strip()
-            data_source = DataSourceRegistry().get(source_id)
-            if data_source is None or str(data_source.access).strip().lower() != "http":
-                return None
-            return RuntimeRegisteredHttpJsonSubagent(
-                subagent_type=str(activation_entry.subagent_type).strip(),
-                source_id=source_id,
-                base_url=str(data_source.base_url).strip(),
-                endpoint_path=str(runtime_registration.endpoint_path or "").strip(),
-                http_method=str(runtime_registration.http_method or "").strip().upper() or "GET",
-                timeout_seconds=float(runtime_registration.timeout_seconds or 20.0),
-                input_model=input_model,
-                output_model=output_model,
-                runtime_policy=runtime_policy,
-                catalog_metadata=catalog_metadata,
-            )
-        return None
 
     @staticmethod
     def runtime_policy(catalog_entry: SubagentCatalogEntry) -> SubagentRuntimePolicy:
@@ -151,12 +151,8 @@ class SubagentRuntimePackagingSupport:
                 continue
             templates.append(template)
             seen_ids.add(normalized_id)
-        for template in (
-            self._snapshot_skill_template(candidate_entry),
-            self._skill_template(candidate_entry),
-            self._http_json_template(candidate_entry),
-            self._openapi_template(candidate_entry),
-        ):
+        for handler in self._handlers.values():
+            template = getattr(self, handler.template_builder_name)(candidate_entry)
             if template is None:
                 continue
             normalized_id = str(template.template_id).strip()
@@ -202,8 +198,7 @@ class SubagentRuntimePackagingSupport:
         normalized_type = str(registration_type or getattr(template, "registration_type", "") or "").strip()
         if not normalized_type:
             return None
-        if normalized_type not in SUPPORTED_RUNTIME_REGISTRATION_TYPES:
-            raise self.host.orchestrator_error_cls(f"unsupported runtime registration type: {registration_type}")
+        handler = self._handler(normalized_type)
         if template is not None and str(template.registration_type).strip() != normalized_type:
             raise self.host.orchestrator_error_cls(
                 f"runtime registration template type mismatch: {template.template_id}"
@@ -221,36 +216,101 @@ class SubagentRuntimePackagingSupport:
         resolved_timeout_seconds = (
             timeout_seconds if timeout_seconds is not None else template_defaults.get("timeout_seconds")
         )
-
-        if normalized_type == "snapshot_skill_runner":
-            return self._build_snapshot_skill_registration(
-                candidate_entry=candidate_entry,
-                template=template,
-                skill_name=normalized_skill_name,
-                snapshot_type=normalized_snapshot_type,
-            )
-        if normalized_type == "skill_runner":
-            return self._build_skill_registration(
-                candidate_entry=candidate_entry,
-                template=template,
-                skill_name=normalized_skill_name,
-            )
-        if normalized_type == "http_json_runner":
-            return self._build_http_json_registration(
-                candidate_entry=candidate_entry,
-                template=template,
-                source_id=normalized_source_id,
-                endpoint_path=normalized_endpoint_path,
-                http_method=normalized_http_method,
-                timeout_seconds=resolved_timeout_seconds,
-            )
-        return self._build_openapi_http_registration(
+        return getattr(self, handler.registration_builder_name)(
             candidate_entry=candidate_entry,
             template=template,
+            skill_name=normalized_skill_name,
+            snapshot_type=normalized_snapshot_type,
             source_id=normalized_source_id or None,
+            endpoint_path=normalized_endpoint_path,
+            http_method=normalized_http_method,
             openapi_spec_uri=normalized_openapi_spec_uri or None,
             openapi_operation_id=normalized_openapi_operation_id or None,
             timeout_seconds=resolved_timeout_seconds,
+        )
+
+    def _handler(self, registration_type: str, *, allow_missing: bool = False) -> _RuntimeRegistrationHandler | None:
+        normalized_type = str(registration_type or "").strip()
+        handler = self._handlers.get(normalized_type)
+        if handler is not None or allow_missing:
+            return handler
+        raise self.host.orchestrator_error_cls(f"unsupported runtime registration type: {registration_type}")
+
+    def _materialize_snapshot_skill_subagent(
+        self,
+        *,
+        activation_entry: SubagentActivationEntry,
+        skill_runtime,
+        runtime_policy: SubagentRuntimePolicy,
+        catalog_metadata: SubagentCatalogMetadata,
+        runtime_models: tuple[type | None, type | None],
+    ):
+        runtime_registration = activation_entry.runtime_registration
+        if runtime_registration is None or skill_runtime is None:
+            return None
+        catalog_entry = activation_entry.catalog_entry
+        if str(catalog_entry.stage or "").strip().lower() not in {"", "collect"}:
+            return None
+        return RuntimeRegisteredSnapshotSkillSubagent(
+            subagent_type=str(activation_entry.subagent_type).strip(),
+            snapshot_type=str(runtime_registration.snapshot_type or "").strip(),
+            skill_name=str(runtime_registration.skill_name).strip(),
+            skill_runtime=skill_runtime,
+            runtime_policy=runtime_policy,
+            catalog_metadata=catalog_metadata,
+        )
+
+    def _materialize_skill_subagent(
+        self,
+        *,
+        activation_entry: SubagentActivationEntry,
+        skill_runtime,
+        runtime_policy: SubagentRuntimePolicy,
+        catalog_metadata: SubagentCatalogMetadata,
+        runtime_models: tuple[type | None, type | None],
+    ):
+        runtime_registration = activation_entry.runtime_registration
+        if runtime_registration is None or skill_runtime is None:
+            return None
+        input_model, output_model = runtime_models
+        return RuntimeRegisteredSkillSubagent(
+            subagent_type=str(activation_entry.subagent_type).strip(),
+            skill_name=str(runtime_registration.skill_name).strip(),
+            skill_runtime=skill_runtime,
+            input_model=input_model,
+            output_model=output_model,
+            runtime_policy=runtime_policy,
+            catalog_metadata=catalog_metadata,
+        )
+
+    def _materialize_http_json_subagent(
+        self,
+        *,
+        activation_entry: SubagentActivationEntry,
+        skill_runtime,
+        runtime_policy: SubagentRuntimePolicy,
+        catalog_metadata: SubagentCatalogMetadata,
+        runtime_models: tuple[type | None, type | None],
+    ):
+        runtime_registration = activation_entry.runtime_registration
+        if runtime_registration is None:
+            return None
+        source_id = str(runtime_registration.source_id or "").strip()
+        data_source = DataSourceRegistry().get(source_id)
+        if data_source is None or str(data_source.access).strip().lower() != "http":
+            return None
+        input_model, output_model = runtime_models
+        return RuntimeRegisteredHttpJsonSubagent(
+            subagent_type=str(activation_entry.subagent_type).strip(),
+            source_id=source_id,
+            base_url=str(data_source.base_url).strip(),
+            endpoint_path=str(runtime_registration.endpoint_path or "").strip(),
+            http_method=str(runtime_registration.http_method or "").strip().upper() or "GET",
+            timeout_seconds=float(runtime_registration.timeout_seconds or 20.0),
+            input_model=input_model,
+            output_model=output_model,
+            runtime_policy=runtime_policy,
+            catalog_metadata=catalog_metadata,
         )
 
     def _build_snapshot_skill_registration(
@@ -260,6 +320,7 @@ class SubagentRuntimePackagingSupport:
         template: SubagentRuntimeRegistrationTemplate | None,
         skill_name: str,
         snapshot_type: str,
+        **_ignored: Any,
     ) -> SubagentRuntimeRegistration:
         normalized_stage = str(candidate_entry.stage or "").strip().lower()
         if normalized_stage not in {"", "collect"}:
@@ -288,6 +349,7 @@ class SubagentRuntimePackagingSupport:
         candidate_entry: SubagentCatalogEntry,
         template: SubagentRuntimeRegistrationTemplate | None,
         skill_name: str,
+        **_ignored: Any,
     ) -> SubagentRuntimeRegistration:
         if not skill_name:
             raise self.host.orchestrator_error_cls("skill_name is required for skill_runner activation")
@@ -313,6 +375,7 @@ class SubagentRuntimePackagingSupport:
         endpoint_path: str,
         http_method: str,
         timeout_seconds: float | None,
+        **_ignored: Any,
     ) -> SubagentRuntimeRegistration:
         self._validate_http_runtime_registration(
             candidate_entry,
@@ -344,6 +407,7 @@ class SubagentRuntimePackagingSupport:
         openapi_spec_uri: str | None,
         openapi_operation_id: str | None,
         timeout_seconds: float | None,
+        **_ignored: Any,
     ) -> SubagentRuntimeRegistration:
         resolved_openapi = self._resolve_openapi_runtime_registration(
             candidate_entry,
