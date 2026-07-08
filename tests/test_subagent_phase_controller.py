@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 
-from research_system.agents._subagent_phase_controller import SubagentPhaseController
+from research_system.agents._subagent_phase_controller import SubagentCapabilityGapError, SubagentPhaseController
 from research_system.schemas.subagents import (
     SubagentExecutionRecord,
     SubagentGraphPatch,
@@ -108,6 +108,54 @@ class SubagentPhaseControllerTests(unittest.TestCase):
         )
 
         self.assertEqual(selected.subagent_type, "preferred_review")
+
+    def test_select_catalog_entry_records_capability_gap_when_missing(self) -> None:
+        runtime_context = SimpleNamespace(
+            subagent_capability_gaps=[],
+            subagent_tool_discovery_requests=[],
+            dynamic_trace=[],
+        )
+        support = SimpleNamespace(emit_event=lambda *_args, **_kwargs: None)
+        controller = SubagentPhaseController(
+            registry=self.registry,
+            invoke_subagent=lambda invocation: (
+                {"ok": True},
+                SubagentExecutionRecord(
+                    subagent_type=invocation.subagent_type,
+                    invocation_id=invocation.invocation_id,
+                    status="completed",
+                    objective=invocation.objective,
+                    inputs=invocation.inputs,
+                    output_keys=["ok"],
+                ),
+            ),
+            emit_event=None,
+            cache_context_builder=lambda **_: None,
+            start_from_node_id_builder=lambda **_: None,
+            runtime_binding_getter=lambda: {
+                "context": runtime_context,
+                "support": support,
+                "request_id": "req-gap",
+                "intent": "review_thesis",
+            },
+        )
+
+        with self.assertRaises(SubagentCapabilityGapError) as exc_info:
+            controller.select_catalog_entry(
+                stage="review",
+                intent="review_thesis",
+                capability="missing_capability",
+            )
+
+        self.assertEqual(exc_info.exception.gap.capability, "missing_capability")
+        self.assertEqual(len(runtime_context.subagent_capability_gaps), 1)
+        self.assertEqual(len(runtime_context.subagent_tool_discovery_requests), 1)
+        self.assertEqual(runtime_context.subagent_capability_gaps[0]["event"], "subagent_capability_gap_detected")
+        self.assertEqual(
+            runtime_context.subagent_tool_discovery_requests[0]["event"],
+            "subagent_tool_discovery_requested",
+        )
+        self.assertEqual(len(runtime_context.dynamic_trace), 2)
 
     def test_execute_plan_injects_plan_metadata_and_trace(self) -> None:
         plan = SubagentPlan(

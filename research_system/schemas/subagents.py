@@ -63,6 +63,37 @@ class SubagentCatalogEntry(BaseModel):
     output_json_schema: dict[str, Any] | None = None
 
 
+class SubagentCapabilityGap(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    gap_id: str = Field(default_factory=generate_ulid)
+    intent: str | None = None
+    stage: str | None = None
+    capability: str
+    preferred_subagent_type: str | None = None
+    requires_llm: bool | None = None
+    reason: str
+    candidate_subagent_types: list[str] = Field(default_factory=list)
+    available_stage_capabilities: list[str] = Field(default_factory=list)
+    available_intents: list[str] = Field(default_factory=list)
+    policy_source: Literal["rule", "llm", "hybrid", "explicit"] = "rule"
+    notes: list[str] = Field(default_factory=list)
+
+
+class SubagentToolDiscoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    discovery_request_id: str = Field(default_factory=generate_ulid)
+    intent: str | None = None
+    stage: str | None = None
+    capability: str
+    search_query: str
+    preferred_protocols: list[str] = Field(default_factory=lambda: ["mcp", "openapi"])
+    reason: str
+    policy_source: Literal["rule", "llm", "hybrid", "explicit"] = "rule"
+    notes: list[str] = Field(default_factory=list)
+
+
 class SubagentPlanNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -12,13 +12,27 @@ from research_system.agents._subagent_phase_policy_source import SubagentPhaseLL
 from research_system.agents._subagent_phase_shadow_policy import SubagentPhaseLLMShadowPolicy
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
+    SubagentCapabilityGap,
     SubagentGraphPatch,
     SubagentInvocation,
     SubagentPlan,
     SubagentPlanNode,
+    SubagentToolDiscoveryRequest,
 )
 from research_system.subagents.planning import apply_subagent_graph_patch
 from research_system.subagents.registry import SubagentRegistry
+
+
+class SubagentCapabilityGapError(KeyError):
+    def __init__(
+        self,
+        *,
+        gap: SubagentCapabilityGap,
+        tool_discovery_request: SubagentToolDiscoveryRequest | None = None,
+    ) -> None:
+        self.gap = gap
+        self.tool_discovery_request = tool_discovery_request
+        super().__init__(gap.reason)
 
 
 class SubagentPhaseController:
@@ -40,6 +54,7 @@ class SubagentPhaseController:
         self.emit_event = emit_event
         self.cache_context_builder = cache_context_builder
         self.start_from_node_id_builder = start_from_node_id_builder
+        self.runtime_binding_getter = runtime_binding_getter
         self.shadow_policy = SubagentPhaseLLMShadowPolicy(
             llm_provider=llm_provider,
             settings=settings,
@@ -76,8 +91,19 @@ class SubagentPhaseController:
                 requires_llm=requires_llm,
             )
         if not candidates:
-            raise KeyError(
-                f"no catalog entry for stage={stage!r} intent={intent!r} capability={capability!r}"
+            gap = self._build_capability_gap(
+                stage=stage,
+                intent=intent,
+                capability=capability,
+                preferred_subagent_type=preferred_subagent_type,
+                requires_llm=requires_llm,
+            )
+            discovery_request = self._build_tool_discovery_request(gap=gap)
+            self._record_capability_gap(gap=gap)
+            self._record_tool_discovery_request(request=discovery_request)
+            raise SubagentCapabilityGapError(
+                gap=gap,
+                tool_discovery_request=discovery_request,
             )
         if preferred_subagent_type:
             for candidate in candidates:
@@ -375,4 +401,138 @@ class SubagentPhaseController:
         return {"low": 0, "medium": 1, "high": 2}.get(str(latency_class or "").strip().lower(), 3)
 
 
-__all__ = ["SubagentPhaseController"]
+    def _build_capability_gap(
+        self,
+        *,
+        stage: str,
+        intent: str,
+        capability: str,
+        preferred_subagent_type: str | None,
+        requires_llm: bool | None,
+    ) -> SubagentCapabilityGap:
+        stage_entries = self.registry.catalog_entries(stage=stage)
+        candidate_entries = self.registry.catalog_entries(stage=stage, capability=capability)
+        return SubagentCapabilityGap(
+            intent=intent,
+            stage=stage,
+            capability=capability,
+            preferred_subagent_type=preferred_subagent_type,
+            requires_llm=requires_llm,
+            reason=f"no catalog entry for stage={stage!r} intent={intent!r} capability={capability!r}",
+            candidate_subagent_types=[
+                str(entry.subagent_type)
+                for entry in candidate_entries
+                if str(entry.subagent_type or "").strip()
+            ],
+            available_stage_capabilities=sorted(
+                {
+                    str(item).strip()
+                    for entry in stage_entries
+                    for item in list(entry.capabilities or [])
+                    if str(item).strip()
+                }
+            ),
+            available_intents=sorted(
+                {
+                    str(item).strip()
+                    for entry in stage_entries
+                    for item in list(entry.suitable_intents or [])
+                    if str(item).strip()
+                }
+            ),
+            notes=[
+                "catalog_capability_gap",
+                f"stage={stage}",
+                f"intent={intent}",
+                f"capability={capability}",
+            ],
+        )
+
+    @staticmethod
+    def _build_tool_discovery_request(
+        *,
+        gap: SubagentCapabilityGap,
+    ) -> SubagentToolDiscoveryRequest:
+        search_terms = [
+            str(gap.intent or "").strip(),
+            str(gap.stage or "").strip(),
+            str(gap.capability or "").strip(),
+            str(gap.preferred_subagent_type or "").strip(),
+        ]
+        return SubagentToolDiscoveryRequest(
+            intent=gap.intent,
+            stage=gap.stage,
+            capability=gap.capability,
+            search_query=" ".join(token for token in search_terms if token),
+            reason=gap.reason,
+            policy_source=gap.policy_source,
+            notes=[
+                "tool_discovery_requested_from_capability_gap",
+                f"gap_id={gap.gap_id}",
+            ],
+        )
+
+    def _record_capability_gap(self, *, gap: SubagentCapabilityGap) -> None:
+        binding = dict(self.runtime_binding_getter() or {}) if callable(self.runtime_binding_getter) else {}
+        context = binding.get("context")
+        support = binding.get("support")
+        request_id = str(binding.get("request_id") or "").strip()
+        intent = str(binding.get("intent") or gap.intent or "").strip()
+        if context is None or support is None or not request_id or not intent:
+            return
+        payload = {"event": "subagent_capability_gap_detected", **gap.model_dump(mode="json")}
+        context.subagent_capability_gaps.append(dict(payload))
+        context.dynamic_trace.append(dict(payload))
+        if callable(self.emit_event):
+            self.emit_event(
+                event_type="subagent_capability_gap_detected",
+                message=f"Detected capability gap for {gap.capability} in stage {gap.stage}",
+                payload=dict(payload),
+                phase=str(gap.stage or "").strip() or None,
+                agent=None,
+            )
+        else:
+            support.emit_event(
+                context,
+                request_id=request_id,
+                intent=intent,
+                event_type="subagent_capability_gap_detected",
+                phase=str(gap.stage or "").strip() or None,
+                agent=None,
+                message=f"Detected capability gap for {gap.capability} in stage {gap.stage}",
+                payload=dict(payload),
+            )
+
+    def _record_tool_discovery_request(self, *, request: SubagentToolDiscoveryRequest) -> None:
+        binding = dict(self.runtime_binding_getter() or {}) if callable(self.runtime_binding_getter) else {}
+        context = binding.get("context")
+        support = binding.get("support")
+        request_id = str(binding.get("request_id") or "").strip()
+        intent = str(binding.get("intent") or request.intent or "").strip()
+        if context is None or support is None or not request_id or not intent:
+            return
+        payload = {"event": "subagent_tool_discovery_requested", **request.model_dump(mode="json")}
+        context.subagent_tool_discovery_requests.append(dict(payload))
+        context.dynamic_trace.append(dict(payload))
+        if callable(self.emit_event):
+            self.emit_event(
+                event_type="subagent_tool_discovery_requested",
+                message=f"Requested tool discovery for capability {request.capability}",
+                payload=dict(payload),
+                phase=str(request.stage or "").strip() or None,
+                agent=None,
+            )
+        else:
+            support.emit_event(
+                context,
+                request_id=request_id,
+                intent=intent,
+                event_type="subagent_tool_discovery_requested",
+                phase=str(request.stage or "").strip() or None,
+                agent=None,
+                message=f"Requested tool discovery for capability {request.capability}",
+                payload=dict(payload),
+            )
+
+
+__all__ = ["SubagentCapabilityGapError", "SubagentPhaseController"]

@@ -251,6 +251,63 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
         finally:
             temp_dir.cleanup()
 
+    def test_debug_payload_includes_subagent_capability_gap_requests(self) -> None:
+        temp_dir, _settings, context, request = _build_runtime()
+        try:
+            context.subagent_capability_gaps.append(
+                {
+                    "event": "subagent_capability_gap_detected",
+                    "stage": "review",
+                    "intent": "review_thesis",
+                    "capability": "peer_review",
+                    "reason": "no catalog entry for stage='review' intent='review_thesis' capability='peer_review'",
+                }
+            )
+            context.subagent_tool_discovery_requests.append(
+                {
+                    "event": "subagent_tool_discovery_requested",
+                    "stage": "review",
+                    "intent": "review_thesis",
+                    "capability": "peer_review",
+                    "search_query": "review_thesis review peer_review",
+                }
+            )
+
+            payload = OrchestratorDebugSupport().build_debug_payload(
+                context=context,
+                request=request,
+                plan=ActionPlan(intent="review_thesis", actions=[]),
+                plan_intent="review_thesis",
+                retrieval_summary=None,
+            )
+
+            self.assertEqual(
+                payload["subagent_capability_gaps"],
+                [
+                    {
+                        "event": "subagent_capability_gap_detected",
+                        "stage": "review",
+                        "intent": "review_thesis",
+                        "capability": "peer_review",
+                        "reason": "no catalog entry for stage='review' intent='review_thesis' capability='peer_review'",
+                    }
+                ],
+            )
+            self.assertEqual(
+                payload["subagent_tool_discovery_requests"],
+                [
+                    {
+                        "event": "subagent_tool_discovery_requested",
+                        "stage": "review",
+                        "intent": "review_thesis",
+                        "capability": "peer_review",
+                        "search_query": "review_thesis review peer_review",
+                    }
+                ],
+            )
+        finally:
+            temp_dir.cleanup()
+
     def test_debug_payload_includes_subagent_phase_hybrid_decisions(self) -> None:
         temp_dir, _settings, context, request = _build_runtime()
         try:

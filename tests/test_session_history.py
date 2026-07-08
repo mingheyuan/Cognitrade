@@ -319,6 +319,65 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["dynamic_trace"][0]["dag_id"], "phase_two")
         self.assertEqual(payload["dynamic_trace"][0]["selected_node_ids"], ["retrieval_decider"])
 
+    def test_trace_rebuilds_subagent_capability_gap_rows_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "01TRACECAPGAP"
+            run_root.mkdir(parents=True, exist_ok=True)
+
+            write_json(run_root / "request.json", {"intent": "review_thesis", "user_query": "review this thesis"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-gap-1",
+                    "request_id": "req-gap",
+                    "run_id": "01TRACECAPGAP",
+                    "intent": "review_thesis",
+                    "event_type": "subagent_capability_gap_detected",
+                    "phase": "review",
+                    "agent": "reviewer",
+                    "message": "Detected capability gap for peer_review in stage review",
+                    "payload": {
+                        "stage": "review",
+                        "intent": "review_thesis",
+                        "capability": "peer_review",
+                        "reason": "no catalog entry for stage='review' intent='review_thesis' capability='peer_review'",
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-08T15:00:00+00:00",
+                },
+            )
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-gap-2",
+                    "request_id": "req-gap",
+                    "run_id": "01TRACECAPGAP",
+                    "intent": "review_thesis",
+                    "event_type": "subagent_tool_discovery_requested",
+                    "phase": "review",
+                    "agent": "reviewer",
+                    "message": "Requested tool discovery for capability peer_review",
+                    "payload": {
+                        "stage": "review",
+                        "intent": "review_thesis",
+                        "capability": "peer_review",
+                        "search_query": "review_thesis review peer_review",
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-08T15:00:01+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(len(payload["dynamic_trace"]), 2)
+        self.assertEqual(payload["dynamic_trace"][0]["event"], "subagent_capability_gap_detected")
+        self.assertEqual(payload["dynamic_trace"][0]["capability"], "peer_review")
+        self.assertEqual(payload["dynamic_trace"][1]["event"], "subagent_tool_discovery_requested")
+        self.assertEqual(payload["dynamic_trace"][1]["search_query"], "review_thesis review peer_review")
+
     def test_trace_rebuilds_subagent_phase_hybrid_rows_from_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "01TRACESUBHYBRID"
