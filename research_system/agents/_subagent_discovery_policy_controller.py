@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from research_system.agents._subagent_discovery_decision_source import (
     SubagentDiscoveryDecisionSource,
 )
+from research_system.agents._subagent_discovery_stage_policy_source import (
+    SubagentDiscoveryStagePolicySource,
+)
 from research_system.agents._subagent_discovery_stage_decisions import (
     SubagentDiscoveryActivationStageDecision,
     SubagentDiscoveryActivationTarget,
@@ -39,10 +42,16 @@ class SubagentDiscoveryPolicyController:
         self,
         *,
         decision_source: SubagentDiscoveryDecisionSource,
+        stage_policy_source: SubagentDiscoveryStagePolicySource | None = None,
         runtime_packaging,
         error_factory,
     ) -> None:
         self.decision_source = decision_source
+        self.stage_policy_source = (
+            stage_policy_source
+            if stage_policy_source is not None
+            else decision_source.stage_policy_source
+        )
         self.runtime_packaging = runtime_packaging
         self.error_factory = error_factory
 
@@ -52,12 +61,12 @@ class SubagentDiscoveryPolicyController:
         ticket: SubagentDiscoveryTicket,
     ) -> SubagentDiscoveryPreviewResolution:
         preview_ticket = ticket.model_copy(deep=True)
-        candidate_result = self.decision_source.select_candidate(ticket=preview_ticket)
+        candidate_result = self.stage_policy_source.select_candidate(ticket=preview_ticket)
         self.decision_source.apply_candidate_selection(
             ticket=preview_ticket,
             candidate_result=candidate_result,
         )
-        review_decision = self.decision_source.evaluate_review(ticket=preview_ticket)
+        review_decision = self.stage_policy_source.evaluate_review(ticket=preview_ticket)
         self.decision_source.apply_review(
             ticket=preview_ticket,
             review_decision=review_decision,
@@ -76,7 +85,7 @@ class SubagentDiscoveryPolicyController:
         *,
         ticket: SubagentDiscoveryTicket,
     ) -> SubagentDiscoveryActivationResolution:
-        activation_decision = self.decision_source.evaluate_activation(ticket=ticket)
+        activation_decision = self.stage_policy_source.evaluate_activation(ticket=ticket)
         if not activation_decision.activate:
             return SubagentDiscoveryActivationResolution(
                 activation_decision=activation_decision,
@@ -131,7 +140,7 @@ class SubagentDiscoveryPolicyController:
         review_ticket = ticket.model_copy(deep=True)
         candidate_result = None
         if str(decision or "").strip().lower() == "approve":
-            candidate_result = self.decision_source.select_candidate(
+            candidate_result = self.stage_policy_source.select_candidate(
                 ticket=review_ticket,
                 candidate_entries=candidate_catalog_entries,
             )
@@ -139,7 +148,7 @@ class SubagentDiscoveryPolicyController:
                 ticket=review_ticket,
                 candidate_result=candidate_result,
             )
-        review_decision = self.decision_source.build_manual_review(
+        review_decision = self.stage_policy_source.build_manual_review(
             ticket=review_ticket,
             decision=decision,
             reviewer=reviewer,
@@ -189,7 +198,7 @@ class SubagentDiscoveryPolicyController:
             runtime_packaging=self.runtime_packaging,
             error_factory=self.error_factory,
         )
-        activation_decision = self.decision_source.build_manual_activation(
+        activation_decision = self.stage_policy_source.build_manual_activation(
             ticket=ticket,
             activation_target=activation_target,
             activated_by=activated_by,

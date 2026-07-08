@@ -95,6 +95,7 @@ class SubagentDiscoveryPolicyControllerTests(unittest.TestCase):
             )
             policy_controller = SubagentDiscoveryPolicyController(
                 decision_source=decision_source,
+                stage_policy_source=decision_source.stage_policy_source,
                 runtime_packaging=SubagentRuntimePackagingSupport(host),
                 error_factory=RuntimeError,
             )
@@ -182,6 +183,7 @@ class SubagentDiscoveryPolicyControllerTests(unittest.TestCase):
             )
             policy_controller = SubagentDiscoveryPolicyController(
                 decision_source=decision_source,
+                stage_policy_source=decision_source.stage_policy_source,
                 runtime_packaging=SubagentRuntimePackagingSupport(host),
                 error_factory=RuntimeError,
             )

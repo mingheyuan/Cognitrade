@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
-from typing import Literal
 
 from research_system.agents._subagent_discovery_stage_decisions import (
     SubagentDiscoveryActivationStageDecision,
@@ -27,14 +26,25 @@ class SubagentDiscoveryDecisionSource:
         self,
         *,
         stage_policy_source: SubagentDiscoveryStagePolicySource | None = None,
-        discovery_policy,
-        discovery_llm_policy_source,
-        discovery_candidate_policy,
-        discovery_approval_policy,
-        discovery_activation_policy,
+        discovery_policy=None,
+        discovery_llm_policy_source=None,
+        discovery_candidate_policy=None,
+        discovery_approval_policy=None,
+        discovery_activation_policy=None,
         discovery_candidate_support=None,
     ) -> None:
         self.discovery_candidate_support = discovery_candidate_support
+        if stage_policy_source is None:
+            if (
+                discovery_policy is None
+                or discovery_llm_policy_source is None
+                or discovery_candidate_policy is None
+                or discovery_approval_policy is None
+                or discovery_activation_policy is None
+            ):
+                raise ValueError(
+                    "stage_policy_source or full discovery stage policy dependencies are required"
+                )
         self.stage_policy_source = (
             stage_policy_source
             if stage_policy_source is not None
@@ -119,41 +129,13 @@ class SubagentDiscoveryDecisionSource:
         source: str = "manual_cli_review",
         notes: list[str] | None = None,
     ) -> SubagentDiscoveryReviewStageDecision:
-        normalized_decision = str(decision or "").strip().lower()
-        final_decision: Literal["pending", "approved", "rejected"]
-        if normalized_decision == "approve":
-            final_decision = "approved"
-        elif normalized_decision == "reject":
-            final_decision = "rejected"
-        elif normalized_decision in {"approved", "rejected", "pending"}:
-            final_decision = normalized_decision  # type: ignore[assignment]
-        else:
-            final_decision = "pending"
-        return SubagentDiscoveryReviewStageDecision(
-            ticket_id=ticket.ticket_id,
-            intent=ticket.capability_gap.intent,
-            stage=ticket.capability_gap.stage,
-            capability=ticket.capability_gap.capability,
-            policy_source="explicit",
-            decision=final_decision,
-            approved=final_decision == "approved",
-            reviewer=str(reviewer or "manual_cli_review").strip() or "manual_cli_review",
-            source=str(source or "manual_cli_review").strip() or "manual_cli_review",
-            selected_candidate_subagent_type=(
-                ticket.candidate_recommendation.candidate_subagent_type
-                if ticket.candidate_recommendation is not None
-                else None
-            ),
-            selected_protocol=self._selected_protocol(ticket=ticket),
-            reason=str(
-                reason
-                or f"manual_{final_decision}_discovery_ticket"
-            ),
-            notes=[
-                str(item).strip()
-                for item in list(notes or [])
-                if str(item).strip()
-            ],
+        return self.stage_policy_source.build_manual_review(
+            ticket=ticket,
+            decision=decision,
+            reviewer=reviewer,
+            reason=reason,
+            source=source,
+            notes=notes,
         )
 
     def evaluate_activation(
@@ -171,44 +153,11 @@ class SubagentDiscoveryDecisionSource:
         activated_by: str,
         reason: str | None = None,
     ) -> SubagentDiscoveryActivationStageDecision:
-        return SubagentDiscoveryActivationStageDecision(
-            ticket_id=ticket.ticket_id,
-            intent=ticket.capability_gap.intent,
-            stage=ticket.capability_gap.stage,
-            capability=ticket.capability_gap.capability,
-            policy_source="explicit",
-            activate=True,
-            candidate_subagent_type=str(activation_target.candidate_entry.subagent_type or "").strip() or None,
-            registration_template_id=(
-                str(activation_target.runtime_registration.registration_template_id or "").strip() or None
-                if activation_target.runtime_registration is not None
-                else None
-            ),
-            delegate_subagent_type=activation_target.delegate_subagent_type,
-            runtime_registration=activation_target.runtime_registration,
-            activated_by=str(activated_by or "manual_cli_activation").strip() or "manual_cli_activation",
-            reason=str(
-                reason
-                or f"activate_{str(activation_target.candidate_entry.subagent_type or '').strip()}_via_cli"
-            ),
-            notes=[
-                "activated_from_approved_discovery_ticket",
-                *(
-                    [f"delegate_subagent_type={str(activation_target.delegate_subagent_type).strip()}"]
-                    if str(activation_target.delegate_subagent_type or "").strip()
-                    else []
-                ),
-                *(
-                    [f"runtime_registration_type={activation_target.runtime_registration.registration_type}"]
-                    if activation_target.runtime_registration is not None
-                    else []
-                ),
-                *(
-                    [f"runtime_registration_template_id={activation_target.runtime_registration.registration_template_id}"]
-                    if activation_target.runtime_registration is not None and activation_target.runtime_registration.registration_template_id
-                    else []
-                ),
-            ],
+        return self.stage_policy_source.build_manual_activation(
+            ticket=ticket,
+            activation_target=activation_target,
+            activated_by=activated_by,
+            reason=reason,
         )
 
     def resolve_activation_target(

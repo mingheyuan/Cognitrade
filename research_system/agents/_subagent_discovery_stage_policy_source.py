@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
 
 from research_system.agents._subagent_discovery_stage_decisions import (
     SubagentDiscoveryActivationStageDecision,
+    SubagentDiscoveryActivationTarget,
     SubagentDiscoveryCandidateStageDecision,
     SubagentDiscoveryCandidateStageResult,
     SubagentDiscoveryProtocolStageDecision,
@@ -180,6 +180,50 @@ class SubagentDiscoveryStagePolicySource:
             ],
         )
 
+    def build_manual_review(
+        self,
+        *,
+        ticket: SubagentDiscoveryTicket,
+        decision: str,
+        reviewer: str,
+        reason: str | None = None,
+        source: str = "manual_cli_review",
+        notes: list[str] | None = None,
+    ) -> SubagentDiscoveryReviewStageDecision:
+        normalized_decision = str(decision or "").strip().lower()
+        final_decision: str
+        if normalized_decision == "approve":
+            final_decision = "approved"
+        elif normalized_decision == "reject":
+            final_decision = "rejected"
+        elif normalized_decision in {"approved", "rejected", "pending"}:
+            final_decision = normalized_decision
+        else:
+            final_decision = "pending"
+        return SubagentDiscoveryReviewStageDecision(
+            ticket_id=ticket.ticket_id,
+            intent=ticket.capability_gap.intent,
+            stage=ticket.capability_gap.stage,
+            capability=ticket.capability_gap.capability,
+            policy_source="explicit",
+            decision=final_decision,  # type: ignore[arg-type]
+            approved=final_decision == "approved",
+            reviewer=str(reviewer or "manual_cli_review").strip() or "manual_cli_review",
+            source=str(source or "manual_cli_review").strip() or "manual_cli_review",
+            selected_candidate_subagent_type=(
+                ticket.candidate_recommendation.candidate_subagent_type
+                if ticket.candidate_recommendation is not None
+                else None
+            ),
+            selected_protocol=self._selected_protocol(ticket=ticket),
+            reason=str(reason or f"manual_{final_decision}_discovery_ticket"),
+            notes=[
+                str(item).strip()
+                for item in list(notes or [])
+                if str(item).strip()
+            ],
+        )
+
     def evaluate_activation(
         self,
         *,
@@ -206,6 +250,54 @@ class SubagentDiscoveryStagePolicySource:
                 str(item).strip()
                 for item in list(activation_decision.get("notes") or [])
                 if str(item).strip()
+            ],
+        )
+
+    def build_manual_activation(
+        self,
+        *,
+        ticket: SubagentDiscoveryTicket,
+        activation_target: SubagentDiscoveryActivationTarget,
+        activated_by: str,
+        reason: str | None = None,
+    ) -> SubagentDiscoveryActivationStageDecision:
+        return SubagentDiscoveryActivationStageDecision(
+            ticket_id=ticket.ticket_id,
+            intent=ticket.capability_gap.intent,
+            stage=ticket.capability_gap.stage,
+            capability=ticket.capability_gap.capability,
+            policy_source="explicit",
+            activate=True,
+            candidate_subagent_type=str(activation_target.candidate_entry.subagent_type or "").strip() or None,
+            registration_template_id=(
+                str(activation_target.runtime_registration.registration_template_id or "").strip() or None
+                if activation_target.runtime_registration is not None
+                else None
+            ),
+            delegate_subagent_type=activation_target.delegate_subagent_type,
+            runtime_registration=activation_target.runtime_registration,
+            activated_by=str(activated_by or "manual_cli_activation").strip() or "manual_cli_activation",
+            reason=str(
+                reason
+                or f"activate_{str(activation_target.candidate_entry.subagent_type or '').strip()}_via_cli"
+            ),
+            notes=[
+                "activated_from_approved_discovery_ticket",
+                *(
+                    [f"delegate_subagent_type={str(activation_target.delegate_subagent_type).strip()}"]
+                    if str(activation_target.delegate_subagent_type or "").strip()
+                    else []
+                ),
+                *(
+                    [f"runtime_registration_type={activation_target.runtime_registration.registration_type}"]
+                    if activation_target.runtime_registration is not None
+                    else []
+                ),
+                *(
+                    [f"runtime_registration_template_id={activation_target.runtime_registration.registration_template_id}"]
+                    if activation_target.runtime_registration is not None and activation_target.runtime_registration.registration_template_id
+                    else []
+                ),
             ],
         )
 

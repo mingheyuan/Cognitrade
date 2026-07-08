@@ -64,6 +64,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         self.discovery_stage_policy_source = self.discovery_decision_source.stage_policy_source
         self.policy_controller = SubagentDiscoveryPolicyController(
             decision_source=self.discovery_decision_source,
+            stage_policy_source=self.discovery_stage_policy_source,
             runtime_packaging=self.runtime_packaging,
             error_factory=self.host.orchestrator_error_cls,
         )
