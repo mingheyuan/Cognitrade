@@ -85,6 +85,32 @@ class SubagentPhaseRulePolicy:
 
 
 class RetrieverPhasePolicy(SubagentPhaseRulePolicy):
+    def build_phase_one_replan_patch(
+        self,
+        *,
+        include_qdrant: bool,
+        include_methodology_memory: bool,
+        indexed_evidence_count: int,
+    ) -> SubagentGraphPatch:
+        notes = ["replan_retrieval_phase_one_from_indexing"]
+        if include_qdrant:
+            notes.append("include_qdrant_branch")
+        else:
+            notes.append("skip_qdrant_branch")
+        if include_methodology_memory:
+            notes.append("include_methodology_memory_branch")
+        else:
+            notes.append("skip_methodology_memory_branch")
+        return self.build_replan_patch(
+            reason="retrieval_phase_one_indexing_completed",
+            notes=notes,
+            metadata={
+                "include_qdrant": str(bool(include_qdrant)).lower(),
+                "include_methodology_memory": str(bool(include_methodology_memory)).lower(),
+                "indexed_evidence_count": str(indexed_evidence_count),
+            },
+        )
+
     def build_phase_one_patch(
         self,
         *,
@@ -128,6 +154,28 @@ class RetrieverPhasePolicy(SubagentPhaseRulePolicy):
                     reason="llm decision disabled by runtime policy",
                 )
             ],
+        )
+
+    def build_phase_two_replan_patch(
+        self,
+        *,
+        decision_subagent_type: str,
+        evidence_count: int,
+        allow_llm_decision: bool,
+    ) -> SubagentGraphPatch:
+        notes = ["replan_retrieval_phase_two_from_deduper", f"decision_subagent_type={decision_subagent_type}"]
+        if evidence_count <= 0:
+            notes.append("empty_evidence_candidates_after_dedup")
+        if not allow_llm_decision:
+            notes.append("llm_decision_disabled_by_runtime_policy")
+        return self.build_replan_patch(
+            reason="retrieval_phase_two_dedup_completed",
+            notes=notes,
+            metadata={
+                "decision_subagent_type": decision_subagent_type,
+                "evidence_count": str(evidence_count),
+                "allow_llm_decision": str(bool(allow_llm_decision)).lower(),
+            },
         )
 
 

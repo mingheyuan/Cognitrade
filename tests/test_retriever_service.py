@@ -1009,7 +1009,7 @@ class RetrieverServiceTests(unittest.TestCase):
             ],
         )
 
-    def test_run_emits_catalog_subagent_plans_and_rule_patches(self) -> None:
+    def test_run_emits_catalog_subagent_plans_and_replan_patches(self) -> None:
         service = self.service
         service.disable_qdrant_for_test("disabled_for_test")
 
@@ -1051,8 +1051,7 @@ class RetrieverServiceTests(unittest.TestCase):
             for patch in subagent_plan_patches
             for operation in list((patch or {}).get("operations") or [])
         ]
-        self.assertIn("remove_node", patch_op_types)
-        self.assertIn("replace_subgraph", patch_op_types)
+        self.assertEqual(patch_op_types, ["request_replan", "request_replan"])
 
     def test_retriever_persists_subagent_dag_trace_and_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -29,6 +29,27 @@ def _node(*, node_id: str, subagent_type: str) -> SubagentPlanNode:
 
 
 class SubagentPhasePolicyTests(unittest.TestCase):
+    def test_retriever_phase_one_replan_patch_tracks_selected_branches(self) -> None:
+        patch = RetrieverPhasePolicy().build_phase_one_replan_patch(
+            include_qdrant=False,
+            include_methodology_memory=True,
+            indexed_evidence_count=3,
+        )
+
+        self.assertEqual(str(patch.decision_type), "replan")
+        self.assertEqual(str(patch.operations[0].op_type), "request_replan")
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("include_qdrant") or ""), "false")
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("include_methodology_memory") or ""), "true")
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("indexed_evidence_count") or ""), "3")
+        self.assertEqual(
+            list(patch.notes or []),
+            [
+                "replan_retrieval_phase_one_from_indexing",
+                "skip_qdrant_branch",
+                "include_methodology_memory_branch",
+            ],
+        )
+
     def test_retriever_phase_one_patch_removes_expected_nodes(self) -> None:
         patch = RetrieverPhasePolicy().build_phase_one_patch(
             should_skip_qdrant=True,
@@ -43,6 +64,31 @@ class SubagentPhasePolicyTests(unittest.TestCase):
         self.assertEqual(
             list(patch.notes or []),
             ["removed_qdrant_for_stock_screen", "removed_methodology_memory_for_intent"],
+        )
+
+    def test_retriever_phase_two_replan_patch_tracks_decider_selection(self) -> None:
+        patch = RetrieverPhasePolicy().build_phase_two_replan_patch(
+            decision_subagent_type="fallback_retrieval_decider",
+            evidence_count=0,
+            allow_llm_decision=False,
+        )
+
+        self.assertEqual(str(patch.decision_type), "replan")
+        self.assertEqual(str(patch.operations[0].op_type), "request_replan")
+        self.assertEqual(
+            str((patch.operations[0].metadata or {}).get("decision_subagent_type") or ""),
+            "fallback_retrieval_decider",
+        )
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("evidence_count") or ""), "0")
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("allow_llm_decision") or ""), "false")
+        self.assertEqual(
+            list(patch.notes or []),
+            [
+                "replan_retrieval_phase_two_from_deduper",
+                "decision_subagent_type=fallback_retrieval_decider",
+                "empty_evidence_candidates_after_dedup",
+                "llm_decision_disabled_by_runtime_policy",
+            ],
         )
 
     def test_reporter_terminal_patch_replaces_terminal_node(self) -> None:
