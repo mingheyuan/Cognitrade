@@ -3,6 +3,9 @@ from __future__ import annotations
 from importlib import import_module
 
 __all__ = [
+    "SubagentCatalogMetadata",
+    "SubagentDefinition",
+    "SubagentRuntimePolicy",
     "SupportsSubagent",
     "SubagentRegistry",
     "base",
@@ -14,6 +17,9 @@ __all__ = [
 ]
 
 _EXPORTS = {
+    "SubagentCatalogMetadata": ("research_system.subagents.base", "SubagentCatalogMetadata"),
+    "SubagentDefinition": ("research_system.subagents.base", "SubagentDefinition"),
+    "SubagentRuntimePolicy": ("research_system.subagents.base", "SubagentRuntimePolicy"),
     "SupportsSubagent": ("research_system.subagents.base", "SupportsSubagent"),
     "SubagentRegistry": ("research_system.subagents.registry", "SubagentRegistry"),
     "base": "research_system.subagents.base",

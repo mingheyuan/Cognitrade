@@ -13,7 +13,7 @@ from research_system.runtime.orchestration.orchestrator_context import build_run
 from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.schemas.protocol import RequestEnvelope
 from research_system.schemas.subagents import SubagentInvocation
-from research_system.subagents.base import SubagentRuntimePolicy
+from research_system.subagents.base import SubagentCatalogMetadata, SubagentRuntimePolicy
 from research_system.subagents.registry import SubagentRegistry
 
 
@@ -59,6 +59,16 @@ class _TypedSubagent:
     input_model = _TypedInputModel
     output_model = _TypedOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Double an integer input.",
+        capabilities=("transform", "math"),
+        stage="analysis",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("stock_check", "stock_screen"),
+        tags=("deterministic",),
+    )
 
     def run(self, *, value: int):
         return {"doubled": value * 2}
@@ -243,6 +253,38 @@ class SubagentRegistryTests(unittest.TestCase):
         self.assertIs(definition.input_model, _TypedInputModel)
         self.assertIs(definition.output_model, _TypedOutputModel)
         self.assertFalse(definition.runtime_policy.allow_parallel)
+        self.assertEqual(definition.catalog_metadata.stage, "analysis")
+        self.assertEqual(definition.catalog_metadata.capabilities, ("transform", "math"))
+
+    def test_registry_catalog_entries_include_metadata_and_schema(self) -> None:
+        registry = SubagentRegistry([_TypedSubagent()])
+
+        entries = registry.catalog_entries()
+
+        self.assertEqual(len(entries), 1)
+        entry = entries[0]
+        self.assertEqual(entry.subagent_type, "typed_subagent")
+        self.assertEqual(entry.summary, "Double an integer input.")
+        self.assertEqual(entry.capabilities, ["transform", "math"])
+        self.assertEqual(entry.stage, "analysis")
+        self.assertEqual(entry.suitable_intents, ["stock_check", "stock_screen"])
+        self.assertEqual(entry.input_schema_name, "_TypedInputModel")
+        self.assertEqual(entry.output_schema_name, "_TypedOutputModel")
+        self.assertIn("properties", entry.input_json_schema or {})
+        self.assertIn("value", (entry.input_json_schema or {}).get("properties", {}))
+
+    def test_registry_catalog_entries_support_filters(self) -> None:
+        registry = SubagentRegistry([_TypedSubagent(), _ParallelSubagent()])
+
+        analysis_entries = registry.catalog_entries(stage="analysis")
+        stock_screen_entries = registry.catalog_entries(intent="stock_screen")
+        transform_entries = registry.catalog_entries(capability="transform")
+        llm_entries = registry.catalog_entries(requires_llm=True)
+
+        self.assertEqual([entry.subagent_type for entry in analysis_entries], ["typed_subagent"])
+        self.assertEqual([entry.subagent_type for entry in stock_screen_entries], ["typed_subagent"])
+        self.assertEqual([entry.subagent_type for entry in transform_entries], ["typed_subagent"])
+        self.assertEqual(llm_entries, [])
 
     def test_agent_control_validates_typed_subagent_inputs_and_outputs(self) -> None:
         temp_dir, context, request = self._build_runtime()

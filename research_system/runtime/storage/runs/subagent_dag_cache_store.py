@@ -97,19 +97,24 @@ class SubagentDagCacheStore:
         thread_id: str,
     ) -> Path:
         scope = str(cache_scope or "").strip() or "run"
-        normalized_dag = self._safe_token(dag_id)
+        normalized_dag = self._safe_bucket_name(dag_id)
         normalized_key = self._safe_cache_name(f"{node_id}:{str(cache_key or node_id).strip() or node_id}")
         if scope == "run":
             base = Path(run_root) / "artifacts" / "subagent_dag_cache" / "run" / normalized_dag
         elif scope == "thread":
-            normalized_thread = self._safe_token(thread_id or "thread")
+            normalized_thread = self._safe_bucket_name(thread_id or "thread")
             base = self.runs_root / "_subagent_dag_cache" / "thread" / normalized_thread / normalized_dag
         else:
             base = self.runs_root / "_subagent_dag_cache" / "global" / normalized_dag
         return base / f"{normalized_key}.json"
 
+    def _safe_bucket_name(self, value: str) -> str:
+        readable = self._safe_token(value)[:48] or "cache"
+        digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:12]
+        return f"{readable}-{digest}"
+
     def _safe_cache_name(self, value: str) -> str:
-        readable = self._safe_token(value)[:64] or "node"
+        readable = self._safe_token(value)[:40] or "node"
         digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:12]
         return f"{readable}-{digest}"
 

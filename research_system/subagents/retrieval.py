@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from research_system.runtime.core.execution_policy import RuntimeDegradeReason
 from research_system.runtime.providers.provider_registry import OpenAIProvider
-from research_system.subagents.base import SubagentRuntimePolicy
+from research_system.subagents.base import SubagentCatalogMetadata, SubagentRuntimePolicy
 
 
 def _normalize_evidence_rows(evidences: list[Any]) -> list[dict[str, Any]]:
@@ -151,6 +151,16 @@ class BlackboardEvidenceIndexerSubagent:
     input_model = BlackboardEvidenceIndexerInputModel
     output_model = BlackboardEvidenceIndexerOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Index blackboard entries into structured evidence candidates for downstream retrieval.",
+        capabilities=("evidence_indexing", "blackboard_projection"),
+        stage="retrieve",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("stock_check", "stock_compare", "stock_screen", "sector_research", "distill_kol_logic", "review_thesis", "methodology_evolution"),
+        tags=("deterministic", "preprocess"),
+    )
 
     def __init__(self, *, index_blackboard_evidences: Callable[..., dict[str, Any]]) -> None:
         self.index_blackboard_evidences = index_blackboard_evidences
@@ -174,6 +184,16 @@ class QdrantEvidenceSearchSubagent:
     input_model = QdrantEvidenceSearchInputModel
     output_model = QdrantEvidenceSearchOutputModel
     runtime_policy = SubagentRuntimePolicy(allow_parallel=True, max_concurrency=2)
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Search indexed evidence in Qdrant using the current retrieval intent and filters.",
+        capabilities=("vector_search", "evidence_recall"),
+        stage="retrieve",
+        cost_class="medium",
+        latency_class="medium",
+        side_effect_level="read_only",
+        suitable_intents=("stock_check", "stock_compare", "sector_research", "review_thesis", "methodology_evolution"),
+        tags=("parallel_fanout", "read_only"),
+    )
 
     def __init__(self, *, search_qdrant_evidences: Callable[..., dict[str, Any]]) -> None:
         self.search_qdrant_evidences = search_qdrant_evidences
@@ -229,6 +249,16 @@ class MethodologyMemoryRecallSubagent:
     input_model = MethodologyMemoryRecallInputModel
     output_model = MethodologyMemoryRecallOutputModel
     runtime_policy = SubagentRuntimePolicy(allow_parallel=True, max_concurrency=2)
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Recall methodology memory rows to bias evidence ranking and summarization.",
+        capabilities=("memory_recall", "methodology_context"),
+        stage="retrieve",
+        cost_class="medium",
+        latency_class="medium",
+        side_effect_level="read_only",
+        suitable_intents=("stock_check", "stock_compare", "stock_screen", "review_thesis"),
+        tags=("parallel_fanout", "memory"),
+    )
 
     def __init__(self, *, recall_methodology_memory: Callable[..., dict[str, Any]]) -> None:
         self.recall_methodology_memory = recall_methodology_memory
@@ -275,6 +305,16 @@ class EvidenceCandidateDeduperSubagent:
     input_model = EvidenceCandidateDeduperInputModel
     output_model = EvidenceCandidateDeduperOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Deduplicate and normalize evidence candidates before final retrieval selection.",
+        capabilities=("evidence_deduplication", "evidence_normalization"),
+        stage="retrieve",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("stock_check", "stock_compare", "stock_screen", "sector_research", "distill_kol_logic", "review_thesis", "methodology_evolution"),
+        tags=("deterministic",),
+    )
 
     def __init__(self, *, dedupe_evidence_candidates: Callable[..., dict[str, Any]]) -> None:
         self.dedupe_evidence_candidates = dedupe_evidence_candidates
@@ -304,6 +344,16 @@ class RetrievalDecisionSubagent:
         requires_llm=True,
         fallback_subagent_type="fallback_retrieval_decider",
         error_fallback_subagent_type="fallback_retrieval_decider",
+    )
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Use an LLM to select the best evidence set when deterministic retrieval is insufficient.",
+        capabilities=("evidence_selection", "llm_reasoning"),
+        stage="retrieve",
+        cost_class="high",
+        latency_class="high",
+        side_effect_level="none",
+        suitable_intents=("sector_research",),
+        tags=("llm", "selector"),
     )
 
     def __init__(
@@ -515,6 +565,16 @@ class FallbackRetrievalDecisionSubagent:
     input_model = FallbackRetrievalDecisionInputModel
     output_model = RetrievalDecisionOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Fallback retrieval selector that deterministically chooses evidence when LLM retrieval is unavailable.",
+        capabilities=("evidence_selection", "fallback_retrieval"),
+        stage="retrieve",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("stock_check", "stock_compare", "stock_screen", "sector_research", "distill_kol_logic", "review_thesis", "methodology_evolution"),
+        tags=("deterministic", "fallback"),
+    )
 
     def __init__(
         self,

@@ -13,7 +13,7 @@ from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.schemas.subagents import SubagentInvocation
 from research_system.runtime.storage.jsonl import read_json, read_jsonl
 from research_system.runtime.platform.skill_runtime import SkillRuntime
-from research_system.subagents.base import SubagentRuntimePolicy
+from research_system.subagents.base import SubagentCatalogMetadata, SubagentRuntimePolicy
 from research_system.subagents.registry import SubagentRegistry
 
 
@@ -169,6 +169,16 @@ class QueryNormalizerSubagent:
     input_model = QueryNormalizerInputModel
     output_model = QueryNormalizerOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Normalize a user query into structured stock, sector, and source targets.",
+        capabilities=("query_normalization", "target_extraction"),
+        stage="collect",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("stock_check", "stock_compare", "stock_screen", "sector_research", "distill_kol_logic", "review_thesis"),
+        tags=("deterministic", "preprocess"),
+    )
 
     def __init__(self, *, normalize_query: Callable[..., dict[str, Any]]) -> None:
         self.normalize_query = normalize_query
@@ -188,6 +198,16 @@ class SnapshotSkillRunnerSubagent:
     input_model = SnapshotSkillRunnerInputModel
     output_model = SnapshotSkillRunnerOutputModel
     runtime_policy = SubagentRuntimePolicy(allow_parallel=True, max_concurrency=8)
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Run a single snapshot skill and normalize the result into a typed snapshot payload.",
+        capabilities=("snapshot_collection", "skill_bridge"),
+        stage="collect",
+        cost_class="medium",
+        latency_class="medium",
+        side_effect_level="read_only",
+        suitable_intents=("stock_check", "stock_compare", "review_thesis"),
+        tags=("parallel_fanout", "read_only"),
+    )
 
     def __init__(self, *, snapshot_type: str, skill_name: str, skill_runtime: SkillRuntime) -> None:
         self.subagent_type = f"{snapshot_type}_snapshot_skill_runner"
@@ -218,6 +238,16 @@ class StockSnapshotCollectorSubagent(RuntimeBoundSubagentInvoker):
     input_model = StockSnapshotCollectorInputModel
     output_model = StockSnapshotCollectorOutputModel
     runtime_policy = SubagentRuntimePolicy(allow_parallel=True, max_concurrency=8)
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Collect verified stock-level snapshots by fan-out over market, notice, and fundamental sources.",
+        capabilities=("stock_snapshot_bundle", "snapshot_collection"),
+        stage="collect",
+        cost_class="medium",
+        latency_class="medium",
+        side_effect_level="read_only",
+        suitable_intents=("stock_check", "stock_compare", "review_thesis"),
+        tags=("parallel_fanout", "bundle"),
+    )
 
     def __init__(self, skill_runtime: SkillRuntime) -> None:
         self.optional_snapshot_types = {"lhb", "capital_flow", "sentiment", "events"}
@@ -313,6 +343,16 @@ class SectorSnapshotCollectorSubagent:
     input_model = SectorSnapshotCollectorInputModel
     output_model = SectorSnapshotCollectorOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Collect a verified sector snapshot with optional policy overlay.",
+        capabilities=("sector_snapshot", "policy_snapshot"),
+        stage="collect",
+        cost_class="medium",
+        latency_class="medium",
+        side_effect_level="read_only",
+        suitable_intents=("sector_research", "review_thesis"),
+        tags=("read_only",),
+    )
 
     def __init__(self, skill_runtime: SkillRuntime) -> None:
         self.skill_runtime = skill_runtime
@@ -340,6 +380,16 @@ class CandidateUniverseBuilderSubagent:
     input_model = CandidateUniverseBuilderInputModel
     output_model = CandidateUniverseBuilderOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Build a screening candidate universe from a sector or liquid A-share market slice.",
+        capabilities=("candidate_universe", "screening_seed"),
+        stage="collect",
+        cost_class="medium",
+        latency_class="medium",
+        side_effect_level="read_only",
+        suitable_intents=("stock_screen",),
+        tags=("screening", "read_only"),
+    )
 
     def __init__(self, skill_runtime: SkillRuntime) -> None:
         self.skill_runtime = skill_runtime
@@ -436,6 +486,16 @@ class ReviewTargetLoaderSubagent:
     input_model = ReviewTargetLoaderInputModel
     output_model = ReviewTargetLoaderOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Load a prior run and extract the evidence context needed for posterior review.",
+        capabilities=("review_target_loading", "run_context_restore"),
+        stage="collect",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="read_only",
+        suitable_intents=("review_thesis",),
+        tags=("history", "read_only"),
+    )
 
     def __init__(self, runs_root: Path | None = None) -> None:
         self.runs_root = runs_root
