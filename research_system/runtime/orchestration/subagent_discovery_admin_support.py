@@ -214,6 +214,12 @@ class OrchestratorSubagentDiscoveryAdminSupport:
                 for item in candidate_catalog_entries
                 if isinstance(item, dict)
             ]
+        if ticket.candidate_catalog_entries:
+            return [
+                self._normalize_runtime_registration_templates(entry)
+                for entry in list(ticket.candidate_catalog_entries or [])
+                if isinstance(entry, SubagentCatalogEntry)
+            ]
         generated_entries = self.discovery_candidates.candidate_entries(ticket)
         if generated_entries:
             return generated_entries

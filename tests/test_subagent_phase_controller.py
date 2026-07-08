@@ -544,6 +544,85 @@ class SubagentPhaseControllerTests(unittest.TestCase):
                 exc_info.exception.gap.notes,
             )
 
+    def test_capability_gap_request_previews_pending_discovery_candidates(self) -> None:
+        runtime_context = SimpleNamespace(
+            subagent_capability_gaps=[],
+            subagent_tool_discovery_requests=[],
+            dynamic_trace=[],
+        )
+        support = SimpleNamespace(emit_event=lambda *_args, **_kwargs: None)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.skill_sources_path.write_text(
+                "\n".join(
+                    [
+                        "sources:",
+                        "  - skill_name: market_snapshot_skill",
+                        "    registration_type: snapshot_skill_runner",
+                        "    summary: Collect market snapshot through local runtime.",
+                        "    snapshot_type: market",
+                        "    capabilities: [market_signal_extension]",
+                        "    suitable_intents: [stock_check]",
+                        "    stage: collect",
+                        "    candidate_subagent_type: candidate_collect_market_snapshot_skill",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            discovery_store = SubagentDiscoveryStore(Path(temp_dir) / "discovery")
+            controller = SubagentPhaseController(
+                registry=self.registry,
+                invoke_subagent=lambda invocation: (
+                    {"ok": True},
+                    SubagentExecutionRecord(
+                        subagent_type=invocation.subagent_type,
+                        invocation_id=invocation.invocation_id,
+                        status="completed",
+                        objective=invocation.objective,
+                        inputs=invocation.inputs,
+                        output_keys=["ok"],
+                    ),
+                ),
+                emit_event=None,
+                cache_context_builder=lambda **_: None,
+                start_from_node_id_builder=lambda **_: None,
+                runtime_binding_getter=lambda: {
+                    "context": runtime_context,
+                    "support": support,
+                    "subagent_discovery_store": discovery_store,
+                    "request_id": "req-gap-preview",
+                    "intent": "stock_check",
+                },
+                settings=settings,
+            )
+
+            with self.assertRaises(SubagentCapabilityGapError):
+                controller.select_catalog_entry(
+                    stage="collect",
+                    intent="stock_check",
+                    capability="market_signal_extension",
+                )
+
+            pending_tickets = discovery_store.list("pending")
+            self.assertEqual(len(pending_tickets), 1)
+            pending_ticket = pending_tickets[0]
+            self.assertEqual(len(pending_ticket.candidate_catalog_entries), 1)
+            self.assertEqual(
+                pending_ticket.candidate_catalog_entries[0].subagent_type,
+                "candidate_collect_market_snapshot_skill",
+            )
+            self.assertIsNotNone(pending_ticket.candidate_recommendation)
+            self.assertEqual(
+                pending_ticket.candidate_recommendation.candidate_subagent_type,
+                "candidate_collect_market_snapshot_skill",
+            )
+            self.assertIn(
+                "candidate_preview_generated_from_runtime_discovery_request",
+                pending_ticket.notes,
+            )
+
     def test_execute_plan_injects_plan_metadata_and_trace(self) -> None:
         plan = SubagentPlan(
             intent="review_thesis",

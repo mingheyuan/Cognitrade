@@ -122,6 +122,75 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
             self.assertEqual(activated_aliases[0].subagent_type, "candidate_retrieve_news_sentiment_enrichment")
             self.assertIn("activated_runtime_alias", activated_aliases[0].catalog_entry.tags)
 
+    def test_review_request_reuses_pending_candidate_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                preferred_subagent_type="candidate_collect_market_snapshot_skill",
+                reason="missing market signal extension capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                search_query="stock_check collect market_signal_extension",
+                preferred_protocols=["skill", "mcp"],
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            ticket.candidate_catalog_entries = [
+                SubagentCatalogEntry(
+                    subagent_type="candidate_collect_market_snapshot_skill",
+                    summary="Collect market snapshot through local runtime.",
+                    capabilities=["market_signal_extension"],
+                    stage="collect",
+                    tags=["approved_discovery_candidate", "skill_registration:snapshot_skill_runner"],
+                    suitable_intents=["stock_check"],
+                    input_json_schema={
+                        "type": "object",
+                        "properties": {"symbol": {"type": "string"}},
+                        "required": ["symbol"],
+                    },
+                    output_json_schema={
+                        "type": "object",
+                        "properties": {"snapshot": {"type": "object"}},
+                        "required": ["snapshot"],
+                    },
+                )
+            ]
+            ticket.notes.append("candidate_preview_generated_from_runtime_discovery_request")
+            store.save(ticket, previous_status="pending")
+            host = type(
+                "_Host",
+                (),
+                {
+                    "settings": SimpleNamespace(),
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+
+            result = admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                reviewer="tester",
+                reason="approve previewed discovery candidate",
+            )
+
+            self.assertEqual(len(result["result"]["candidate_catalog_entries"]), 1)
+            self.assertEqual(
+                result["result"]["candidate_catalog_entries"][0]["subagent_type"],
+                "candidate_collect_market_snapshot_skill",
+            )
+            self.assertEqual(
+                result["result"]["candidate_recommendation"]["candidate_subagent_type"],
+                "candidate_collect_market_snapshot_skill",
+            )
+
     def test_admin_support_can_activate_runtime_registered_skill_alias(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = SubagentDiscoveryStore(Path(temp_dir))

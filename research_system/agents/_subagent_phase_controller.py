@@ -3,6 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from research_system.adapters.vendors.http_json_source_registry import HttpJsonSourceRegistry
+from research_system.adapters.vendors.mcp_source_registry import McpSourceRegistry
+from research_system.adapters.vendors.openapi_source_registry import OpenApiSourceRegistry
+from research_system.adapters.vendors.skill_source_registry import SkillSourceRegistry
 from research_system.agents._subagent_discovery_policy import SubagentDiscoveryPolicyService
 from research_system.agents._subagent_discovery_policy_source import SubagentDiscoveryLLMPolicySource
 from research_system.agents._subagent_dag import (
@@ -13,6 +17,13 @@ from research_system.agents._subagent_dag import (
 from research_system.agents._subagent_phase_policy_source import SubagentPhaseLLMPolicySource
 from research_system.agents._subagent_phase_shadow_policy import SubagentPhaseLLMShadowPolicy
 from research_system.agents._subagent_discovery_shadow_policy import SubagentDiscoveryLLMShadowPolicy
+from research_system.runtime.orchestration._subagent_discovery_candidate_policy import (
+    SubagentDiscoveryCandidatePolicyService,
+)
+from research_system.runtime.orchestration.subagent_discovery_candidate_sources import (
+    SubagentDiscoveryCandidateSupport,
+)
+from research_system.runtime.platform.skill_runtime import SkillRuntime
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
     SubagentCapabilityGap,
@@ -58,6 +69,8 @@ class SubagentPhaseController:
         self.cache_context_builder = cache_context_builder
         self.start_from_node_id_builder = start_from_node_id_builder
         self.runtime_binding_getter = runtime_binding_getter
+        self.settings = settings
+        self.llm_provider = llm_provider
         self.shadow_policy = SubagentPhaseLLMShadowPolicy(
             llm_provider=llm_provider,
             settings=settings,
@@ -85,6 +98,16 @@ class SubagentPhaseController:
             runtime_binding_getter=runtime_binding_getter,
             emit_event=emit_event,
         )
+        self.discovery_candidate_support = SubagentDiscoveryCandidateSupport(self)
+        self.discovery_candidate_policy = SubagentDiscoveryCandidatePolicyService(
+            llm_provider=None,
+            settings=settings,
+        )
+        self._mcp_source_registry = None
+        self._http_json_source_registry = None
+        self._openapi_source_registry = None
+        self._skill_source_registry = None
+        self._skill_runtime = None
 
     def select_catalog_entry(
         self,
@@ -589,12 +612,104 @@ class SubagentPhaseController:
         if not callable(create_request):
             return
         try:
-            create_request(
+            ticket = create_request(
                 gap=gap,
                 request=request,
             )
+            self._preview_discovery_ticket(ticket=ticket, store=store)
         except Exception:
             return
+
+    def _preview_discovery_ticket(self, *, ticket, store) -> None:
+        try:
+            candidate_entries = self.discovery_candidate_support.candidate_entries(ticket)
+        except Exception:
+            return
+        if not candidate_entries:
+            return
+        ticket.candidate_catalog_entries = list(candidate_entries)
+        recommendation, shadow_recommendation = self.discovery_candidate_policy.recommend(
+            ticket=ticket,
+            candidate_entries=ticket.candidate_catalog_entries,
+        )
+        ticket.candidate_recommendation = recommendation
+        ticket.candidate_shadow_recommendation = shadow_recommendation
+        preview_notes = list(ticket.notes or [])
+        if "candidate_preview_generated_from_runtime_discovery_request" not in preview_notes:
+            preview_notes.append("candidate_preview_generated_from_runtime_discovery_request")
+        if recommendation is not None:
+            recommendation_note = f"recommended_candidate={recommendation.candidate_subagent_type}"
+            if recommendation_note not in preview_notes:
+                preview_notes.append(recommendation_note)
+        ticket.notes = preview_notes
+        save = getattr(store, "save", None)
+        if callable(save):
+            try:
+                save(ticket, previous_status="pending")
+            except Exception:
+                return
+
+    def require_mcp_source_registry(self):
+        if isinstance(self._mcp_source_registry, McpSourceRegistry):
+            return self._mcp_source_registry
+        self._mcp_source_registry = self._binding_value("mcp_source_registry")
+        if isinstance(self._mcp_source_registry, McpSourceRegistry):
+            return self._mcp_source_registry
+        self._mcp_source_registry = McpSourceRegistry(settings=self.settings)
+        return self._mcp_source_registry
+
+    def require_http_json_source_registry(self):
+        if isinstance(self._http_json_source_registry, HttpJsonSourceRegistry):
+            return self._http_json_source_registry
+        self._http_json_source_registry = self._binding_value("http_json_source_registry")
+        if isinstance(self._http_json_source_registry, HttpJsonSourceRegistry):
+            return self._http_json_source_registry
+        self._http_json_source_registry = HttpJsonSourceRegistry(settings=self.settings)
+        return self._http_json_source_registry
+
+    def require_openapi_source_registry(self):
+        if isinstance(self._openapi_source_registry, OpenApiSourceRegistry):
+            return self._openapi_source_registry
+        self._openapi_source_registry = self._binding_value("openapi_source_registry")
+        if isinstance(self._openapi_source_registry, OpenApiSourceRegistry):
+            return self._openapi_source_registry
+        self._openapi_source_registry = OpenApiSourceRegistry(settings=self.settings)
+        return self._openapi_source_registry
+
+    def require_skill_source_registry(self):
+        if isinstance(self._skill_source_registry, SkillSourceRegistry):
+            return self._skill_source_registry
+        self._skill_source_registry = self._binding_value("skill_source_registry")
+        if isinstance(self._skill_source_registry, SkillSourceRegistry):
+            return self._skill_source_registry
+        self._skill_source_registry = SkillSourceRegistry(settings=self.settings)
+        return self._skill_source_registry
+
+    def require_skill_runtime(self):
+        runtime = self._skill_runtime
+        if runtime is not None:
+            return runtime
+        runtime = self._binding_value("skill_runtime")
+        if runtime is not None:
+            self._skill_runtime = runtime
+            return runtime
+        runtime = SkillRuntime(self.settings) if self.settings is not None else SkillRuntime()
+        self._skill_runtime = runtime
+        return runtime
+
+    def _binding_value(self, key: str):
+        binding = dict(self.runtime_binding_getter() or {}) if callable(self.runtime_binding_getter) else {}
+        value = binding.get(key)
+        if value is not None:
+            return value
+        factory_name = f"require_{key}"
+        factory = binding.get(factory_name)
+        if callable(factory):
+            try:
+                return factory()
+            except Exception:
+                return None
+        return None
 
 
 __all__ = ["SubagentCapabilityGapError", "SubagentPhaseController"]
