@@ -31,6 +31,7 @@ from research_system.schemas.subagents import (
     SubagentPlanNode,
 )
 from research_system.subagents.distillation import (
+    ChunkExecutionStrategyResolverSubagent,
     ChunkResultMergerSubagent,
     DistillChunkBuilderSubagent,
     DistillRecordTrimmerSubagent,
@@ -74,6 +75,9 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                 DistillSourceNormalizerSubagent(extract_source_path=self._extract_source_path),
                 DistillRecordTrimmerSubagent(record_rank=self._record_rank),
                 DistillChunkBuilderSubagent(),
+                ChunkExecutionStrategyResolverSubagent(
+                    derive_chunk_execution_strategy=self._derive_chunk_execution_strategy,
+                ),
                 LLMChunkDistillerSubagent(
                     llm_provider=self.llm_provider,
                     schema=DistillationResultPayload,
@@ -202,42 +206,96 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                 )
             return merged
 
-        chunk_plan = self._build_chunk_execution_subagent_plan(
-            query=query,
-            chunks=chunks,
+        chunk_rerun_start_node = self._subagent_dag_start_from_node_id(dag_id="chunk_execution")
+        direct_chunk_plan_required = bool(
+            chunk_rerun_start_node
+            and chunk_rerun_start_node != "chunk_execution_strategy_resolver"
         )
-        chunk_plan_patch = self._build_chunk_execution_subagent_plan_patch(
-            chunks=chunks,
-            force_fallback=force_fallback,
-            runtime_degraded_reason=runtime_degraded_reason,
-        )
-        chunk_plan, chunk_patch_rows = self.phase_controller.apply_patch(
-            plan=chunk_plan,
-            patch=chunk_plan_patch,
-        )
+        if direct_chunk_plan_required:
+            chunk_strategy = self._derive_chunk_execution_strategy(
+                query=query,
+                chunk_count=len(chunks),
+                force_fallback=force_fallback,
+                runtime_degraded_reason=runtime_degraded_reason,
+            )
+            chunk_plan = self._build_chunk_execution_subagent_plan(
+                query=query,
+                chunks=chunks,
+                force_fallback=force_fallback,
+                runtime_degraded_reason=runtime_degraded_reason,
+                chunk_subagent_type=str(chunk_strategy.get("chunk_subagent_type") or "llm_chunk_distiller"),
+            )
+            chunk_patch_rows = []
+            chunk_dag_results = self._execute_subagent_plan(
+                plan=chunk_plan,
+                max_workers=max(
+                    len(
+                        [
+                            node
+                            for node in chunk_plan.nodes
+                            if node.subagent_type in {"llm_chunk_distiller", "fallback_chunk_distiller"}
+                        ]
+                    ),
+                    1,
+                ),
+                dag_id="chunk_execution",
+                build_invocation=self._build_chunk_plan_invocations(
+                    plan=chunk_plan,
+                    query=query,
+                    records=records,
+                    chunks=chunks,
+                    force_fallback=force_fallback,
+                    runtime_degraded_reason=runtime_degraded_reason,
+                ),
+            )
+        else:
+            chunk_plan = self._build_chunk_strategy_subagent_plan(
+                query=query,
+                chunks=chunks,
+                force_fallback=force_fallback,
+                runtime_degraded_reason=runtime_degraded_reason,
+            )
+            chunk_plan, _chunk_base_results, chunk_patch_rows, chunk_dag_results = self.phase_controller.execute_patch_cycle(
+                plan=chunk_plan,
+                dag_id="chunk_execution",
+                base_max_workers=1,
+                final_max_workers=max(len(chunks), 1),
+                build_invocation_factory=lambda current_plan: self._build_chunk_plan_invocations(
+                    plan=current_plan,
+                    query=query,
+                    records=records,
+                    chunks=chunks,
+                    force_fallback=force_fallback,
+                    runtime_degraded_reason=runtime_degraded_reason,
+                ),
+                patch_builder=lambda base_results: self._build_chunk_execution_subagent_replan_patch(
+                    chunks=chunks,
+                    force_fallback=force_fallback,
+                    runtime_degraded_reason=runtime_degraded_reason,
+                    base_results=base_results,
+                ),
+                replan_builder=lambda current_plan, patch, base_results: self._rebuild_chunk_execution_subagent_plan(
+                    plan=current_plan,
+                    query=query,
+                    chunks=chunks,
+                    force_fallback=force_fallback,
+                    runtime_degraded_reason=runtime_degraded_reason,
+                    patch=patch,
+                    base_results=base_results,
+                ),
+            )
         subagent_plan_patches.extend(chunk_patch_rows)
         subagent_plans.append(chunk_plan.model_dump(mode="json"))
 
         chunk_node_ids = [
             node.node_id
             for node in chunk_plan.nodes
-            if node.node_id != "chunk_result_merger"
+            if node.subagent_type in {"llm_chunk_distiller", "fallback_chunk_distiller"}
         ]
         chunk_results: list[dict] = []
         llm_successes = 0
         fallback_chunks = 0
         llm_timeout_seen = False
-        chunk_dag_results = self._execute_subagent_plan(
-            plan=chunk_plan,
-            max_workers=max(len(chunk_node_ids), 1),
-            dag_id="chunk_execution",
-            build_invocation=self._build_chunk_plan_invocations(
-                plan=chunk_plan,
-                query=query,
-                records=records,
-                chunks=chunks,
-            ),
-        )
 
         for index, dag_node_id in enumerate(chunk_node_ids, start=1):
             dag_result = chunk_dag_results[dag_node_id]
@@ -446,44 +504,151 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             },
         )
 
+    def _derive_chunk_execution_strategy(
+        self,
+        *,
+        query: str,
+        chunk_count: int,
+        force_fallback: bool,
+        runtime_degraded_reason: str | None,
+    ) -> dict[str, Any]:
+        _ = query
+        chunk_subagent_type = "fallback_chunk_distiller" if force_fallback else "llm_chunk_distiller"
+        return {
+            "chunk_subagent_type": chunk_subagent_type,
+            "chunk_count": chunk_count,
+            "force_fallback": force_fallback,
+            "runtime_degraded_reason": (
+                runtime_degraded_reason or RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value
+                if force_fallback
+                else runtime_degraded_reason
+            ),
+        }
+
+    def _build_chunk_strategy_subagent_plan(
+        self,
+        *,
+        query: str,
+        chunks: list[list[DistillSourceRecord]],
+        force_fallback: bool,
+        runtime_degraded_reason: str | None,
+    ) -> SubagentPlan:
+        strategy_entry = self._select_distill_catalog_entry(
+            capability="chunk_execution_strategy",
+            preferred_subagent_type="chunk_execution_strategy_resolver",
+            requires_llm=False,
+        )
+        return SubagentPlan(
+            intent="distill_kol_logic",
+            phase="distill",
+            strategy="catalog",
+            nodes=[
+                self._build_catalog_plan_node(
+                    node_id="chunk_execution_strategy_resolver",
+                    subagent_type=strategy_entry.subagent_type,
+                    objective="Resolve whether chunk distillation should use the LLM or fallback branch.",
+                    inputs={
+                        "query": query,
+                        "chunk_count": len(chunks),
+                        "force_fallback": force_fallback,
+                        "runtime_degraded_reason": runtime_degraded_reason,
+                    },
+                    cache_key="chunk_execution_strategy_resolver",
+                    notes=["phase=strategy"],
+                )
+            ],
+            notes=["distillation_chunk_strategy_base_plan"],
+            catalog_trace={
+                "stage": "distill",
+                "selection_mode": "catalog",
+                "phase": "chunk_execution",
+                "chunk_count": len(chunks),
+                "selected_subagent_types": {
+                    "chunk_execution_strategy_resolver": strategy_entry.subagent_type,
+                },
+            },
+        )
+
     def _build_chunk_execution_subagent_plan(
         self,
         *,
         query: str,
         chunks: list[list[DistillSourceRecord]],
+        force_fallback: bool,
+        runtime_degraded_reason: str | None,
+        chunk_subagent_type: str,
     ) -> SubagentPlan:
-        llm_entry = self._select_distill_catalog_entry(
-            capability="chunk_distillation",
-            preferred_subagent_type="llm_chunk_distiller",
-            requires_llm=True,
+        strategy_entry = self._select_distill_catalog_entry(
+            capability="chunk_execution_strategy",
+            preferred_subagent_type="chunk_execution_strategy_resolver",
+            requires_llm=False,
         )
+        if chunk_subagent_type == "fallback_chunk_distiller":
+            chunk_entry = self._select_distill_catalog_entry(
+                capability="fallback_distillation",
+                preferred_subagent_type="fallback_chunk_distiller",
+                requires_llm=False,
+            )
+        else:
+            chunk_entry = self._select_distill_catalog_entry(
+                capability="chunk_distillation",
+                preferred_subagent_type="llm_chunk_distiller",
+                requires_llm=True,
+            )
         merger_entry = self._select_distill_catalog_entry(
             capability="distillation_merge",
             preferred_subagent_type="chunk_result_merger",
         )
-        nodes: list[SubagentPlanNode] = []
-        selected_subagent_types: dict[str, str] = {}
+        nodes: list[SubagentPlanNode] = [
+            self._build_catalog_plan_node(
+                node_id="chunk_execution_strategy_resolver",
+                subagent_type=strategy_entry.subagent_type,
+                objective="Resolve whether chunk distillation should use the LLM or fallback branch.",
+                inputs={
+                    "query": query,
+                    "chunk_count": len(chunks),
+                    "force_fallback": force_fallback,
+                    "runtime_degraded_reason": runtime_degraded_reason,
+                },
+                cache_key="chunk_execution_strategy_resolver",
+                notes=["phase=strategy"],
+            )
+        ]
+        selected_subagent_types: dict[str, str] = {
+            "chunk_execution_strategy_resolver": strategy_entry.subagent_type,
+        }
         for index, chunk_records in enumerate(chunks, start=1):
             chunk_label = f"chunk_{index}_of_{len(chunks)}"
             node_id = f"chunk_{index}"
+            chunk_objective = (
+                f"Fallback-distill {chunk_label}."
+                if chunk_entry.subagent_type == "fallback_chunk_distiller"
+                else f"Distill {chunk_label} with LLM."
+            )
+            chunk_notes = ["phase=chunk_execution", f"candidate={chunk_entry.subagent_type}"]
+            chunk_tags = ["catalog_selected", "parallel_candidate"]
+            if chunk_entry.subagent_type == "fallback_chunk_distiller":
+                chunk_tags.append("fallback_selected")
             nodes.append(
                 self._build_catalog_plan_node(
                     node_id=node_id,
-                    subagent_type=llm_entry.subagent_type,
-                    objective=f"Distill {chunk_label} with LLM.",
+                    subagent_type=chunk_entry.subagent_type,
+                    objective=chunk_objective,
                     inputs={
                         "query": query,
                         "chunk_label": chunk_label,
                         "record_count": len(chunk_records),
+                        "runtime_degraded_reason": runtime_degraded_reason,
                     },
-                    tags=["catalog_selected", "parallel_candidate"],
+                    depends_on=["chunk_execution_strategy_resolver"],
+                    tags=chunk_tags,
                     failure_mode="isolate",
                     max_attempts=2,
                     cache_key=f"chunk:{chunk_label}",
-                    notes=["phase=chunk_execution", "candidate=llm_chunk_distiller"],
+                    notes=chunk_notes,
                 )
             )
-            selected_subagent_types[node_id] = llm_entry.subagent_type
+            selected_subagent_types[node_id] = chunk_entry.subagent_type
         nodes.append(
             self._build_catalog_plan_node(
                 node_id="chunk_result_merger",
@@ -502,7 +667,10 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             phase="distill",
             strategy="catalog",
             nodes=nodes,
-            notes=["distillation_chunk_execution_catalog_plan"],
+            notes=[
+                "distillation_chunk_execution_catalog_plan",
+                f"chunk_subagent_type={chunk_entry.subagent_type}",
+            ],
             catalog_trace={
                 "stage": "distill",
                 "selection_mode": "catalog",
@@ -512,47 +680,58 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             },
         )
 
-    def _build_chunk_execution_subagent_plan_patch(
+    def _build_chunk_execution_subagent_replan_patch(
         self,
         *,
         chunks: list[list[DistillSourceRecord]],
         force_fallback: bool,
         runtime_degraded_reason: str | None,
-    ) -> SubagentGraphPatch | None:
-        if not force_fallback:
-            return None
-        fallback_entry = self._select_distill_catalog_entry(
-            capability="fallback_distillation",
-            preferred_subagent_type="fallback_chunk_distiller",
-            requires_llm=False,
+        base_results: dict[str, SubagentDagNodeResult],
+    ) -> SubagentGraphPatch:
+        strategy_outputs = dict(
+            ((base_results["chunk_execution_strategy_resolver"].outputs or {}).get("execution_strategy") or {})
         )
-        replacement_nodes: list[tuple[str, SubagentPlanNode]] = []
-        for index, chunk_records in enumerate(chunks, start=1):
-            chunk_label = f"chunk_{index}_of_{len(chunks)}"
-            replacement_nodes.append(
-                (
-                    f"chunk_{index}",
-                    self._build_catalog_plan_node(
-                        node_id=f"chunk_{index}",
-                        subagent_type=fallback_entry.subagent_type,
-                        objective=f"Fallback-distill {chunk_label}.",
-                        inputs={
-                            "chunk_label": chunk_label,
-                            "record_count": len(chunk_records),
-                            "degrade_reason": runtime_degraded_reason
-                            or RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value,
-                        },
-                        tags=["catalog_selected", "parallel_candidate", "fallback_selected"],
-                        failure_mode="isolate",
-                        max_attempts=2,
-                        cache_key=f"chunk:{chunk_label}",
-                        notes=["phase=chunk_execution", "candidate=fallback_chunk_distiller"],
-                    ),
-                )
-            )
-        return self.phase_policy.build_chunk_execution_patch(
+        chunk_subagent_type = str(strategy_outputs.get("chunk_subagent_type") or "llm_chunk_distiller").strip()
+        return self.phase_policy.build_chunk_execution_replan_patch(
+            chunk_subagent_type=chunk_subagent_type,
+            chunk_count=len(chunks),
             force_fallback=force_fallback,
-            replacement_nodes=replacement_nodes,
+            runtime_degraded_reason=str(strategy_outputs.get("runtime_degraded_reason") or runtime_degraded_reason or "").strip() or None,
+        )
+
+    def _rebuild_chunk_execution_subagent_plan(
+        self,
+        *,
+        plan: SubagentPlan,
+        query: str,
+        chunks: list[list[DistillSourceRecord]],
+        force_fallback: bool,
+        runtime_degraded_reason: str | None,
+        patch: SubagentGraphPatch,
+        base_results: dict[str, SubagentDagNodeResult],
+    ) -> SubagentPlan:
+        _ = plan
+        metadata = dict((patch.operations[0].metadata or {}) if patch.operations else {})
+        strategy_outputs = dict(
+            ((base_results["chunk_execution_strategy_resolver"].outputs or {}).get("execution_strategy") or {})
+        )
+        chunk_subagent_type = str(
+            metadata.get("chunk_subagent_type")
+            or strategy_outputs.get("chunk_subagent_type")
+            or "llm_chunk_distiller"
+        ).strip()
+        return self._build_chunk_execution_subagent_plan(
+            query=query,
+            chunks=chunks,
+            force_fallback=force_fallback,
+            runtime_degraded_reason=str(
+                metadata.get("runtime_degraded_reason")
+                or strategy_outputs.get("runtime_degraded_reason")
+                or runtime_degraded_reason
+                or ""
+            ).strip()
+            or None,
+            chunk_subagent_type=chunk_subagent_type,
         )
 
     def _execute_subagent_plan(
@@ -638,9 +817,32 @@ class DistillerService(RuntimeBoundSubagentInvoker):
         query: str,
         records: list[DistillSourceRecord],
         chunks: list[list[DistillSourceRecord]],
+        force_fallback: bool,
+        runtime_degraded_reason: str | None,
     ) -> dict[str, dict[str, Any]]:
         plan_node_map = {node.node_id: node for node in plan.nodes}
         runtime_nodes: dict[str, dict[str, Any]] = {}
+
+        if "chunk_execution_strategy_resolver" in plan_node_map:
+            runtime_nodes["chunk_execution_strategy_resolver"] = {
+                "builder": lambda _results: self._build_subagent_invocation(
+                    subagent_type="chunk_execution_strategy_resolver",
+                    objective="Resolve whether chunk distillation should use the LLM or fallback branch.",
+                    inputs={
+                        "query": query,
+                        "chunk_count": len(chunks),
+                        "force_fallback": force_fallback,
+                        "runtime_degraded_reason": runtime_degraded_reason,
+                    },
+                    task_name="distill:strategy:chunk_execution_strategy_resolver",
+                    agent_path="distiller/strategy/chunk_execution_strategy_resolver",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="distill:strategy:chunk_execution_strategy_resolver",
+                    agent_path="distiller/strategy/chunk_execution_strategy_resolver",
+                    objective="Resolve whether chunk distillation should use the LLM or fallback branch.",
+                ),
+            }
 
         for index, chunk_records in enumerate(chunks, start=1):
             node_id = f"chunk_{index}"
@@ -709,7 +911,7 @@ class DistillerService(RuntimeBoundSubagentInvoker):
         chunk_node_ids = [
             node.node_id
             for node in plan.nodes
-            if node.node_id != "chunk_result_merger"
+            if node.subagent_type in {"llm_chunk_distiller", "fallback_chunk_distiller"}
         ]
         runtime_nodes["chunk_result_merger"] = {
             "builder": lambda results: self._build_subagent_invocation(

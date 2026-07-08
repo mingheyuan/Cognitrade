@@ -105,20 +105,26 @@ class SubagentPhasePolicyTests(unittest.TestCase):
             "fallback_report_composer",
         )
 
-    def test_distiller_chunk_patch_replaces_each_chunk_node(self) -> None:
-        patch = DistillerPhasePolicy().build_chunk_execution_patch(
+    def test_distiller_chunk_replan_patch_tracks_selected_execution_branch(self) -> None:
+        patch = DistillerPhasePolicy().build_chunk_execution_replan_patch(
+            chunk_subagent_type="fallback_chunk_distiller",
+            chunk_count=2,
             force_fallback=True,
-            replacement_nodes=[
-                ("chunk_1", _node(node_id="chunk_1", subagent_type="fallback_chunk_distiller")),
-                ("chunk_2", _node(node_id="chunk_2", subagent_type="fallback_chunk_distiller")),
-            ],
+            runtime_degraded_reason="turn_llm_budget_exhausted",
         )
 
-        self.assertIsNotNone(patch)
-        self.assertEqual(len(list(patch.operations or [])), 2)
+        self.assertEqual(str(patch.decision_type), "replan")
+        self.assertEqual(len(list(patch.operations or [])), 1)
+        self.assertEqual(str(patch.operations[0].op_type), "request_replan")
         self.assertEqual(
-            [str(op.target_node_id) for op in list(patch.operations or [])],
-            ["chunk_1", "chunk_2"],
+            str((patch.operations[0].metadata or {}).get("chunk_subagent_type") or ""),
+            "fallback_chunk_distiller",
+        )
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("chunk_count") or ""), "2")
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("force_fallback") or ""), "true")
+        self.assertEqual(
+            str((patch.operations[0].metadata or {}).get("runtime_degraded_reason") or ""),
+            "turn_llm_budget_exhausted",
         )
 
     def test_reviewer_patch_inserts_candidate_and_summary_nodes(self) -> None:

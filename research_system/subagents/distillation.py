@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -58,6 +58,22 @@ class DistillChunkBuilderOutputModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     chunks: list[list[DistillSourceRecord]] = Field(default_factory=list)
+
+
+class ChunkExecutionStrategyResolverInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    chunk_count: int
+    force_fallback: bool = False
+    runtime_degraded_reason: str | None = None
+
+
+class ChunkExecutionStrategyResolverOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    execution_strategy: dict[str, Any] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
 
 
 class LLMChunkDistillerInputModel(BaseModel):
@@ -315,6 +331,51 @@ class LLMChunkDistillerSubagent:
             reasoning_effort="medium",
         )
         return self.distillation_model.model_validate(payload.model_dump(mode="json")).model_dump(mode="json")
+
+
+class ChunkExecutionStrategyResolverSubagent:
+    subagent_type = "chunk_execution_strategy_resolver"
+    input_model = ChunkExecutionStrategyResolverInputModel
+    output_model = ChunkExecutionStrategyResolverOutputModel
+    runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Resolve whether chunk distillation should use the LLM branch or deterministic fallback branch.",
+        capabilities=("chunk_execution_strategy", "distillation_planning"),
+        stage="distill",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("distill_kol_logic",),
+        tags=("deterministic", "strategy"),
+    )
+
+    def __init__(self, *, derive_chunk_execution_strategy: Callable[..., dict[str, Any]]) -> None:
+        self.derive_chunk_execution_strategy = derive_chunk_execution_strategy
+
+    def run(
+        self,
+        *,
+        query: str,
+        chunk_count: int,
+        force_fallback: bool = False,
+        runtime_degraded_reason: str | None = None,
+    ) -> dict[str, Any]:
+        execution_strategy = self.derive_chunk_execution_strategy(
+            query=query,
+            chunk_count=chunk_count,
+            force_fallback=force_fallback,
+            runtime_degraded_reason=runtime_degraded_reason,
+        )
+        notes = [f"chunk_count={chunk_count}"]
+        if force_fallback:
+            notes.append("force_fallback_requested")
+        selected_subagent_type = str(execution_strategy.get("chunk_subagent_type") or "").strip()
+        if selected_subagent_type:
+            notes.append(f"chunk_subagent_type={selected_subagent_type}")
+        return {
+            "execution_strategy": execution_strategy,
+            "notes": notes,
+        }
 
 
 class FallbackChunkDistillerSubagent:

@@ -228,25 +228,32 @@ class ReporterPhasePolicy(SubagentPhaseRulePolicy):
 
 
 class DistillerPhasePolicy(SubagentPhaseRulePolicy):
-    def build_chunk_execution_patch(
+    def build_chunk_execution_replan_patch(
         self,
         *,
+        chunk_subagent_type: str,
+        chunk_count: int,
         force_fallback: bool,
-        replacement_nodes: list[tuple[str, SubagentPlanNode]],
-    ) -> SubagentGraphPatch | None:
-        if not force_fallback or not replacement_nodes:
-            return None
-        operations = [
-            self.replace_subgraph(
-                target_node_id=target_node_id,
-                replacement_nodes=[replacement_node],
-                reason="llm chunk distillation disabled by runtime policy",
-            )
-            for target_node_id, replacement_node in replacement_nodes
+        runtime_degraded_reason: str | None,
+    ) -> SubagentGraphPatch:
+        notes = [
+            "replan_distillation_chunk_graph_from_strategy",
+            f"chunk_subagent_type={chunk_subagent_type}",
+            f"chunk_count={chunk_count}",
         ]
-        return self.build_patch(
-            notes=["replace_llm_chunk_distillers_with_fallback"],
-            operations=operations,
+        if force_fallback:
+            notes.append("force_fallback_requested")
+        if runtime_degraded_reason:
+            notes.append(f"runtime_degraded_reason={runtime_degraded_reason}")
+        return self.build_replan_patch(
+            reason="distillation_chunk_strategy_resolved",
+            notes=notes,
+            metadata={
+                "chunk_subagent_type": chunk_subagent_type,
+                "chunk_count": str(chunk_count),
+                "force_fallback": str(bool(force_fallback)).lower(),
+                "runtime_degraded_reason": runtime_degraded_reason or "",
+            },
         )
 
 

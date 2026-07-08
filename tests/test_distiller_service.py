@@ -272,7 +272,12 @@ class DistillerServiceTests(unittest.TestCase):
         self.assertEqual(chunk_node_types.get("chunk_1"), "llm_chunk_distiller")
         self.assertEqual(chunk_node_types.get("chunk_2"), "llm_chunk_distiller")
         self.assertEqual(chunk_node_types.get("chunk_result_merger"), "chunk_result_merger")
-        self.assertEqual(len(list(result.get("subagent_plan_patches") or [])), 0)
+        patch_op_types = [
+            str(operation.get("op_type") or "")
+            for patch in list(result.get("subagent_plan_patches") or [])
+            for operation in list((patch or {}).get("operations") or [])
+        ]
+        self.assertEqual(patch_op_types, ["request_replan"])
 
     def test_forced_fallback_rewrites_chunk_plan_without_llm_calls(self) -> None:
         provider = DistillerChunkProviderStub()
@@ -326,8 +331,7 @@ class DistillerServiceTests(unittest.TestCase):
             for patch in list(result.get("subagent_plan_patches") or [])
             for operation in list((patch or {}).get("operations") or [])
         ]
-        self.assertTrue(patch_op_types)
-        self.assertTrue(all(op_type == "replace_subgraph" for op_type in patch_op_types))
+        self.assertEqual(patch_op_types, ["request_replan"])
 
     def test_distiller_invocations_emit_nested_trace_context(self) -> None:
         provider = DistillerChunkProviderStub()
