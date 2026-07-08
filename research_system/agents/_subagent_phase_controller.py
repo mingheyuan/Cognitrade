@@ -24,6 +24,12 @@ from research_system.runtime.orchestration._subagent_discovery_candidate_policy 
 from research_system.runtime.orchestration._subagent_discovery_approval_policy import (
     SubagentDiscoveryApprovalPolicyService,
 )
+from research_system.runtime.orchestration._subagent_discovery_activation_policy import (
+    SubagentDiscoveryActivationPolicyService,
+)
+from research_system.runtime.orchestration.subagent_discovery_admin_support import (
+    OrchestratorSubagentDiscoveryAdminSupport,
+)
 from research_system.runtime.orchestration.subagent_discovery_candidate_sources import (
     SubagentDiscoveryCandidateSupport,
 )
@@ -55,6 +61,8 @@ class SubagentCapabilityGapError(KeyError):
 
 
 class SubagentPhaseController:
+    orchestrator_error_cls = RuntimeError
+
     def __init__(
         self,
         *,
@@ -109,6 +117,7 @@ class SubagentPhaseController:
             settings=settings,
         )
         self.discovery_approval_policy = SubagentDiscoveryApprovalPolicyService(settings=settings)
+        self.discovery_activation_policy = SubagentDiscoveryActivationPolicyService(settings=settings)
         self._mcp_source_registry = None
         self._http_json_source_registry = None
         self._openapi_source_registry = None
@@ -124,18 +133,12 @@ class SubagentPhaseController:
         preferred_subagent_type: str | None = None,
         requires_llm: bool | None = None,
     ) -> SubagentCatalogEntry:
-        candidates = self.registry.catalog_entries(
+        candidates = self._catalog_candidates(
             stage=stage,
             intent=intent,
             capability=capability,
             requires_llm=requires_llm,
         )
-        if not candidates:
-            candidates = self.registry.catalog_entries(
-                stage=stage,
-                capability=capability,
-                requires_llm=requires_llm,
-            )
         if not candidates:
             gap = self._build_capability_gap(
                 stage=stage,
@@ -145,29 +148,32 @@ class SubagentPhaseController:
                 requires_llm=requires_llm,
             )
             discovery_request = self._build_tool_discovery_request(gap=gap)
-            self._persist_tool_discovery_request(
+            ticket = self._persist_tool_discovery_request(
                 gap=gap,
                 request=discovery_request,
             )
             self._record_capability_gap(gap=gap)
             self._record_tool_discovery_request(request=discovery_request)
+            self._record_tool_discovery_auto_activation(ticket=ticket)
+            candidates = self._catalog_candidates(
+                stage=stage,
+                intent=intent,
+                capability=capability,
+                requires_llm=requires_llm,
+            )
+            if candidates:
+                return self._choose_catalog_entry(
+                    candidates,
+                    preferred_subagent_type=preferred_subagent_type,
+                )
             raise SubagentCapabilityGapError(
                 gap=gap,
                 tool_discovery_request=discovery_request,
             )
-        if preferred_subagent_type:
-            for candidate in candidates:
-                if candidate.subagent_type == preferred_subagent_type:
-                    return candidate
-        return sorted(
+        return self._choose_catalog_entry(
             candidates,
-            key=lambda candidate: (
-                bool(candidate.requires_llm),
-                self._cost_rank(candidate.cost_class),
-                self._latency_rank(candidate.latency_class),
-                candidate.subagent_type,
-            ),
-        )[0]
+            preferred_subagent_type=preferred_subagent_type,
+        )
 
     def build_catalog_plan_node(
         self,
@@ -611,28 +617,28 @@ class SubagentPhaseController:
         *,
         gap: SubagentCapabilityGap,
         request: SubagentToolDiscoveryRequest,
-    ) -> None:
+    ):
         binding = dict(self.runtime_binding_getter() or {}) if callable(self.runtime_binding_getter) else {}
         store = binding.get("subagent_discovery_store")
         create_request = getattr(store, "create_request", None)
         if not callable(create_request):
-            return
+            return None
         try:
             ticket = create_request(
                 gap=gap,
                 request=request,
             )
-            self._preview_discovery_ticket(ticket=ticket, store=store)
+            return self._preview_discovery_ticket(ticket=ticket, store=store)
         except Exception:
-            return
+            return None
 
-    def _preview_discovery_ticket(self, *, ticket, store) -> None:
+    def _preview_discovery_ticket(self, *, ticket, store):
         try:
             candidate_entries = self.discovery_candidate_support.candidate_entries(ticket)
         except Exception:
-            return
+            return ticket
         if not candidate_entries:
-            return
+            return ticket
         ticket.candidate_catalog_entries = list(candidate_entries)
         recommendation, shadow_recommendation = self.discovery_candidate_policy.recommend(
             ticket=ticket,
@@ -666,7 +672,41 @@ class SubagentPhaseController:
             try:
                 save(ticket, previous_status="pending")
             except Exception:
-                return
+                return ticket
+        if str(ticket.status or "").strip().lower() == "approved":
+            return self._maybe_auto_activate_discovery_ticket(ticket=ticket, store=store)
+        return ticket
+
+    def _maybe_auto_activate_discovery_ticket(self, *, ticket, store):
+        activation_decision = self.discovery_activation_policy.evaluate(ticket=ticket)
+        if not bool(activation_decision.get("activate")):
+            return ticket
+        try:
+            OrchestratorSubagentDiscoveryAdminSupport(self).activate_request(
+                ticket.ticket_id,
+                candidate_subagent_type=str(
+                    activation_decision.get("candidate_subagent_type") or ""
+                ).strip()
+                or None,
+                registration_template_id=str(
+                    activation_decision.get("registration_template_id") or ""
+                ).strip()
+                or None,
+                activated_by="system_auto_activate",
+                reason=str(
+                    activation_decision.get("reason")
+                    or "auto_activate_discovery_candidate_preview"
+                ),
+            )
+        except Exception:
+            return ticket
+        find = getattr(store, "find", None)
+        if not callable(find):
+            return ticket
+        located = find(ticket.ticket_id)
+        if isinstance(located, tuple) and located and located[0] is not None:
+            return located[0]
+        return ticket
 
     @staticmethod
     def _apply_discovery_review_decision(
@@ -756,6 +796,116 @@ class SubagentPhaseController:
         runtime = SkillRuntime(self.settings) if self.settings is not None else SkillRuntime()
         self._skill_runtime = runtime
         return runtime
+
+    def require_subagent_discovery_store(self):
+        store = self._binding_value("subagent_discovery_store")
+        if store is None:
+            raise self.orchestrator_error_cls("subagent discovery store is not available")
+        return store
+
+    def _catalog_candidates(
+        self,
+        *,
+        stage: str,
+        intent: str,
+        capability: str,
+        requires_llm: bool | None,
+    ) -> list[SubagentCatalogEntry]:
+        candidates = self.registry.catalog_entries(
+            stage=stage,
+            intent=intent,
+            capability=capability,
+            requires_llm=requires_llm,
+        )
+        if candidates:
+            return candidates
+        return self.registry.catalog_entries(
+            stage=stage,
+            capability=capability,
+            requires_llm=requires_llm,
+        )
+
+    def _choose_catalog_entry(
+        self,
+        candidates: list[SubagentCatalogEntry],
+        *,
+        preferred_subagent_type: str | None,
+    ) -> SubagentCatalogEntry:
+        if preferred_subagent_type:
+            for candidate in candidates:
+                if candidate.subagent_type == preferred_subagent_type:
+                    return candidate
+        return sorted(
+            candidates,
+            key=lambda candidate: (
+                bool(candidate.requires_llm),
+                self._cost_rank(candidate.cost_class),
+                self._latency_rank(candidate.latency_class),
+                candidate.subagent_type,
+            ),
+        )[0]
+
+    def _record_tool_discovery_auto_activation(self, *, ticket) -> None:
+        if ticket is None:
+            return
+        activation_entry = self._system_auto_activation_entry(ticket)
+        if activation_entry is None:
+            return
+        binding = dict(self.runtime_binding_getter() or {}) if callable(self.runtime_binding_getter) else {}
+        context = binding.get("context")
+        support = binding.get("support")
+        request_id = str(binding.get("request_id") or "").strip()
+        intent = str(
+            binding.get("intent")
+            or getattr(getattr(ticket, "capability_gap", None), "intent", None)
+            or ""
+        ).strip()
+        if context is None or support is None or not request_id or not intent:
+            return
+        runtime_registration = getattr(activation_entry, "runtime_registration", None)
+        payload = {
+            "event": "subagent_tool_discovery_auto_activated",
+            "ticket_id": ticket.ticket_id,
+            "stage": ticket.capability_gap.stage,
+            "intent": ticket.capability_gap.intent,
+            "capability": ticket.capability_gap.capability,
+            "candidate_subagent_type": activation_entry.subagent_type,
+            "registration_type": (
+                runtime_registration.registration_type if runtime_registration is not None else None
+            ),
+            "registration_template_id": (
+                runtime_registration.registration_template_id if runtime_registration is not None else None
+            ),
+            "activated_by": activation_entry.activated_by,
+            "activation_reason": activation_entry.activation_reason,
+        }
+        context.dynamic_trace.append(dict(payload))
+        if callable(self.emit_event):
+            self.emit_event(
+                event_type="subagent_tool_discovery_auto_activated",
+                message=f"Auto-activated discovery alias {activation_entry.subagent_type}",
+                payload=dict(payload),
+                phase=str(ticket.capability_gap.stage or "").strip() or None,
+                agent=None,
+            )
+            return
+        support.emit_event(
+            context,
+            request_id=request_id,
+            intent=intent,
+            event_type="subagent_tool_discovery_auto_activated",
+            phase=str(ticket.capability_gap.stage or "").strip() or None,
+            agent=None,
+            message=f"Auto-activated discovery alias {activation_entry.subagent_type}",
+            payload=dict(payload),
+        )
+
+    @staticmethod
+    def _system_auto_activation_entry(ticket):
+        for entry in list(getattr(ticket, "activated_entries", []) or []):
+            if str(getattr(entry, "activated_by", "") or "").strip() == "system_auto_activate":
+                return entry
+        return None
 
     def _binding_value(self, key: str):
         binding = dict(self.runtime_binding_getter() or {}) if callable(self.runtime_binding_getter) else {}

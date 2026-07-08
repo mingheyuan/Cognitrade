@@ -60,6 +60,28 @@ class _PreferredReviewSubagent:
         return kwargs
 
 
+class _RuntimeActivatedCandidateSubagent:
+    def __init__(self, activation_entry) -> None:
+        catalog_entry = activation_entry.catalog_entry
+        self.subagent_type = activation_entry.subagent_type
+        self.input_model = None
+        self.output_model = None
+        self.runtime_policy = SubagentRuntimePolicy()
+        self.catalog_metadata = SubagentCatalogMetadata(
+            summary=catalog_entry.summary,
+            capabilities=tuple(item for item in catalog_entry.capabilities if str(item).strip()),
+            stage=catalog_entry.stage,
+            cost_class=catalog_entry.cost_class,
+            latency_class=catalog_entry.latency_class,
+            side_effect_level=catalog_entry.side_effect_level,
+            suitable_intents=tuple(item for item in catalog_entry.suitable_intents if str(item).strip()),
+            tags=tuple(item for item in catalog_entry.tags if str(item).strip()),
+        )
+
+    def run(self, **kwargs):
+        return kwargs
+
+
 class _HybridShadowProvider:
     available = True
 
@@ -630,6 +652,94 @@ class SubagentPhaseControllerTests(unittest.TestCase):
             self.assertIn(
                 "auto_approve_safe_collect_skill_preview",
                 approved_ticket.notes,
+            )
+
+    def test_capability_gap_can_auto_activate_preview_and_continue(self) -> None:
+        runtime_context = SimpleNamespace(
+            subagent_capability_gaps=[],
+            subagent_tool_discovery_requests=[],
+            dynamic_trace=[],
+        )
+        support = SimpleNamespace(emit_event=lambda *_args, **_kwargs: None)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.skill_sources_path.write_text(
+                "\n".join(
+                    [
+                        "sources:",
+                        "  - skill_name: market_snapshot_skill",
+                        "    registration_type: snapshot_skill_runner",
+                        "    summary: Collect market snapshot through local runtime.",
+                        "    snapshot_type: market",
+                        "    capabilities: [market_signal_extension]",
+                        "    suitable_intents: [stock_check]",
+                        "    stage: collect",
+                        "    candidate_subagent_type: candidate_collect_market_snapshot_skill",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            discovery_store = SubagentDiscoveryStore(Path(temp_dir) / "discovery")
+            controller = SubagentPhaseController(
+                registry=SubagentRegistry(
+                    [_CheapReviewSubagent(), _PreferredReviewSubagent()],
+                    activation_provider=discovery_store.activated_alias_entries,
+                    activation_factory_provider=lambda activation_entry: _RuntimeActivatedCandidateSubagent(
+                        activation_entry
+                    ),
+                ),
+                invoke_subagent=lambda invocation: (
+                    {"ok": True},
+                    SubagentExecutionRecord(
+                        subagent_type=invocation.subagent_type,
+                        invocation_id=invocation.invocation_id,
+                        status="completed",
+                        objective=invocation.objective,
+                        inputs=invocation.inputs,
+                        output_keys=["ok"],
+                    ),
+                ),
+                emit_event=None,
+                cache_context_builder=lambda **_: None,
+                start_from_node_id_builder=lambda **_: None,
+                runtime_binding_getter=lambda: {
+                    "context": runtime_context,
+                    "support": support,
+                    "subagent_discovery_store": discovery_store,
+                    "skill_runtime": SimpleNamespace(
+                        backend=SimpleNamespace(registry={"market_snapshot_skill": object()})
+                    ),
+                    "request_id": "req-gap-auto-activate",
+                    "intent": "stock_check",
+                },
+                settings=settings,
+            )
+
+            selected = controller.select_catalog_entry(
+                stage="collect",
+                intent="stock_check",
+                capability="market_signal_extension",
+            )
+
+            self.assertEqual(selected.subagent_type, "candidate_collect_market_snapshot_skill")
+            approved_tickets = discovery_store.list("approved")
+            self.assertEqual(len(approved_tickets), 1)
+            approved_ticket = approved_tickets[0]
+            self.assertEqual(len(approved_ticket.activated_entries), 1)
+            self.assertEqual(
+                approved_ticket.activated_entries[0].activated_by,
+                "system_auto_activate",
+            )
+            self.assertEqual(
+                approved_ticket.activated_entries[0].runtime_registration.registration_template_id,
+                "snapshot:market:market_snapshot_skill",
+            )
+            self.assertEqual(len(runtime_context.dynamic_trace), 3)
+            self.assertEqual(
+                runtime_context.dynamic_trace[-1]["event"],
+                "subagent_tool_discovery_auto_activated",
             )
 
     def test_execute_plan_injects_plan_metadata_and_trace(self) -> None:
