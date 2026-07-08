@@ -18,6 +18,7 @@ class SupervisorStockCheckSupport(ActionPhaseRulePolicy):
     ) -> SupervisorDecision:
         pending_by_id = self.pending_by_id(pending_actions)
         view = self.blackboard_view.stock_check_view(blackboard_entries)
+        plan_node_ids = {action.node_id for action in plan.actions}
 
         if "collect" not in completed_actions and "collect" in pending_by_id:
             return self.decision_factory.continue_with(
@@ -32,24 +33,24 @@ class SupervisorStockCheckSupport(ActionPhaseRulePolicy):
                 symbol=view.symbol,
                 missing_snapshot_types=view.missing_snapshot_types,
             )
-            if replenish_action.node_id not in completed_actions and replenish_action.node_id not in pending_by_id:
-                plan_patch = None
-                if replenish_action.node_id not in {action.node_id for action in pending_actions}:
-                    plan_patch = self.decision_factory.build_patch(
-                        notes=["insert_stock_check_replenish_action"],
-                        operations=[
-                            self.decision_factory.insert_action(
-                                action=replenish_action,
-                                reason="insert replenishment collect action for missing stock snapshots",
-                            )
-                        ],
+            if replenish_action.node_id not in completed_actions:
+                if replenish_action.node_id not in plan_node_ids:
+                    return self.continue_with_replan(
+                        action=replenish_action,
+                        completed_actions=completed_actions,
+                        reason="stock_check action graph should be rebuilt for missing stock snapshots",
+                        notes=["replan_stock_check_action_graph_for_missing_snapshots"],
+                        metadata={
+                            "trigger": "collect_completed",
+                            "missing_snapshot_types": ",".join(view.missing_snapshot_types),
+                        },
                     )
-                return self.decision_factory.continue_with(
-                    action=replenish_action,
-                    completed_actions=completed_actions,
-                    notes=[f"replenish missing stock snapshots: {','.join(view.missing_snapshot_types)}"],
-                    plan_patch=plan_patch,
-                )
+                if replenish_action.node_id not in pending_by_id:
+                    return self.decision_factory.continue_with(
+                        action=replenish_action,
+                        completed_actions=completed_actions,
+                        notes=[f"replenish missing stock snapshots: {','.join(view.missing_snapshot_types)}"],
+                    )
 
         if "retrieve" not in completed_actions and "retrieve" in pending_by_id:
             return self.decision_factory.continue_with(

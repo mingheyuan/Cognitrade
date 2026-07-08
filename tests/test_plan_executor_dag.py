@@ -398,6 +398,13 @@ class PlanExecutorDagTests(unittest.TestCase):
             self.assertEqual(context.action_plan_patches[0]["decision_type"], "replan")
             self.assertTrue(any(event["event_type"] == "action_plan_replan_requested" for event in host.events))
             self.assertTrue(any(event["event_type"] == "action_plan_replanned" for event in host.events))
+            self.assertTrue(
+                any(
+                    event["event_type"] == "dynamic_action_inserted"
+                    and str((event.get("payload") or {}).get("node_id") or "") == "review"
+                    for event in host.events
+                )
+            )
         finally:
             temp_dir.cleanup()
 

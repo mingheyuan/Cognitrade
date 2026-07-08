@@ -270,6 +270,364 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertIn("request_action_plan_replan", replanned.notes)
         self.assertIn("replanned_from:plan_current", replanned.notes)
 
+    def test_replan_action_plan_uses_runtime_blackboard_to_rebuild_stock_screen_follow_up(self) -> None:
+        planner = RuntimePlanner()
+        current_plan = ActionPlan(
+            plan_id="plan_current",
+            intent="stock_screen",
+            strategy="dynamic",
+            actions=[
+                ActionSpec(node_id="collect", phase="collect", agent="collector"),
+                ActionSpec(node_id="screen", phase="screen", agent="screener", depends_on=["collect"]),
+                ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever", depends_on=["screen"]),
+                ActionSpec(node_id="report", phase="report", agent="reporter", depends_on=["retrieve"]),
+            ],
+            entry_strategy="rule",
+            dispatch_trace={"source": "route_table"},
+        )
+        plan_patch = ActionPlanPatch(
+            decision_type="replan",
+            operations=[
+                ActionPlanPatchOperation(
+                    op_type="request_replan",
+                    reason="screen follow-up should be rebuilt",
+                    metadata={"trigger": "screen_completed"},
+                )
+            ],
+            notes=["request_action_plan_replan"],
+            policy_source="rule",
+            termination_reason="screen follow-up should be rebuilt",
+        )
+        scorecard_entry = _blackboard_entry(
+            kind="source_record",
+            agent="screener",
+            phase="screen",
+            payload={
+                "title": "screening_scorecard",
+                "content": "{}",
+                "source_type": "screening_scorecard",
+                "scorecard": {
+                    "top_candidate_count": 2,
+                    "watchlist_candidate_count": 1,
+                    "enrichment_target_count": 2,
+                    "enrichment_pending": True,
+                },
+            },
+        )
+
+        class _Blackboard:
+            def __init__(self, entries) -> None:
+                self._entries = entries
+
+            def list_entries(self, *, thread_id=None):
+                return list(self._entries)
+
+        class _Thread:
+            def __init__(self, thread_id: str) -> None:
+                self.thread_id = thread_id
+
+        class _Context:
+            def __init__(self, entries) -> None:
+                self.thread = _Thread("thread_01")
+                self.blackboard = _Blackboard(entries)
+
+        planner.bind_runtime(context=_Context([scorecard_entry]), support=None, request_id="req_1", intent="stock_screen")
+        try:
+            replanned = planner.replan_action_plan(
+                intent="stock_screen",
+                request=RequestEnvelope(user_query="screen growth stocks"),
+                current_plan=current_plan,
+                plan_patch=plan_patch,
+            )
+        finally:
+            planner.clear_runtime()
+
+        self.assertEqual(
+            [action.node_id for action in replanned.actions],
+            ["collect", "screen", "screen_enrich", "screen_review", "retrieve", "report"],
+        )
+        self.assertEqual(replanned.actions[2].depends_on, ["screen"])
+        self.assertEqual(replanned.actions[3].depends_on, ["screen_enrich"])
+        self.assertEqual(replanned.actions[4].depends_on, ["screen_review"])
+
+    def test_replan_action_plan_uses_runtime_blackboard_to_insert_review_phase(self) -> None:
+        planner = RuntimePlanner()
+        current_plan = ActionPlan(
+            plan_id="plan_current",
+            intent="review_thesis",
+            strategy="dynamic",
+            actions=[
+                ActionSpec(node_id="collect", phase="collect", agent="collector"),
+                ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever", depends_on=["collect"]),
+                ActionSpec(node_id="report", phase="report", agent="reporter", depends_on=["retrieve"]),
+            ],
+            entry_strategy="explicit_intent",
+            dispatch_trace={"source": "explicit_intent"},
+        )
+        plan_patch = ActionPlanPatch(
+            decision_type="replan",
+            operations=[
+                ActionPlanPatchOperation(
+                    op_type="request_replan",
+                    reason="review path should be rebuilt",
+                    metadata={"trigger": "collect_completed"},
+                )
+            ],
+            notes=["request_action_plan_replan"],
+            policy_source="rule",
+            termination_reason="review path should be rebuilt",
+        )
+        review_request_entry = _blackboard_entry(
+            kind="source_record",
+            payload={
+                "title": "review_thesis input request",
+                "content": "review thesis for innovation drug",
+                "source_type": "review_request",
+                "review_target_run_id": "01TARGET",
+                "review_source_entries": [{"kind": "report_fragment", "payload": {"conclusion": "test"}}],
+            },
+        )
+        sector_snapshot_entry = _blackboard_entry(
+            kind="verified_snapshot",
+            payload={
+                "snapshot_type": "sector",
+                "sector": "innovation_drug",
+                "snapshot_date": "2026-06-28",
+                "facts": {},
+                "source": {"skill": "sector_snapshot_skill"},
+            },
+        )
+
+        class _Blackboard:
+            def __init__(self, entries) -> None:
+                self._entries = entries
+
+            def list_entries(self, *, thread_id=None):
+                return list(self._entries)
+
+        class _Thread:
+            def __init__(self, thread_id: str) -> None:
+                self.thread_id = thread_id
+
+        class _Context:
+            def __init__(self, entries) -> None:
+                self.thread = _Thread("thread_01")
+                self.blackboard = _Blackboard(entries)
+
+        planner.bind_runtime(
+            context=_Context([review_request_entry, sector_snapshot_entry]),
+            support=None,
+            request_id="req_1",
+            intent="review_thesis",
+        )
+        try:
+            replanned = planner.replan_action_plan(
+                intent="review_thesis",
+                request=RequestEnvelope(user_query="review thesis for innovation drug"),
+                current_plan=current_plan,
+                plan_patch=plan_patch,
+            )
+        finally:
+            planner.clear_runtime()
+
+        self.assertEqual(
+            [action.node_id for action in replanned.actions],
+            ["collect", "review", "retrieve", "report"],
+        )
+        self.assertEqual(replanned.actions[1].depends_on, ["collect"])
+        self.assertEqual(replanned.actions[2].depends_on, ["review"])
+
+    def test_replan_action_plan_uses_runtime_blackboard_to_insert_stock_check_replenish(self) -> None:
+        planner = RuntimePlanner()
+        current_plan = ActionPlan(
+            plan_id="plan_current",
+            intent="stock_check",
+            strategy="dynamic",
+            actions=[
+                ActionSpec(node_id="collect", phase="collect", agent="collector"),
+                ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever", depends_on=["collect"]),
+                ActionSpec(node_id="report", phase="report", agent="reporter", depends_on=["retrieve"]),
+            ],
+            entry_strategy="explicit_intent",
+            dispatch_trace={"source": "explicit_intent"},
+        )
+        plan_patch = ActionPlanPatch(
+            decision_type="replan",
+            operations=[
+                ActionPlanPatchOperation(
+                    op_type="request_replan",
+                    reason="stock snapshots should be replenished before retrieval",
+                    metadata={"trigger": "collect_completed"},
+                )
+            ],
+            notes=["request_action_plan_replan"],
+            policy_source="rule",
+            termination_reason="stock snapshots should be replenished before retrieval",
+        )
+        request_entry = _blackboard_entry(
+            kind="source_record",
+            payload={
+                "title": "stock_check input query",
+                "content": "check 000001",
+                "source_type": "user_query",
+                "symbol": "000001",
+            },
+        )
+        market_snapshot_entry = _blackboard_entry(
+            kind="verified_snapshot",
+            payload={
+                "snapshot_type": "market",
+                "symbol": "000001",
+                "snapshot_date": "2026-06-28",
+                "facts": {},
+                "source": {"skill": "market_snapshot_skill"},
+            },
+        )
+        fundamental_snapshot_entry = _blackboard_entry(
+            kind="verified_snapshot",
+            payload={
+                "snapshot_type": "fundamental",
+                "symbol": "000001",
+                "snapshot_date": "2026-06-28",
+                "facts": {},
+                "source": {"skill": "fundamental_snapshot_skill"},
+            },
+        )
+
+        class _Blackboard:
+            def __init__(self, entries) -> None:
+                self._entries = entries
+
+            def list_entries(self, *, thread_id=None):
+                return list(self._entries)
+
+        class _Thread:
+            def __init__(self, thread_id: str) -> None:
+                self.thread_id = thread_id
+
+        class _Context:
+            def __init__(self, entries) -> None:
+                self.thread = _Thread("thread_01")
+                self.blackboard = _Blackboard(entries)
+
+        planner.bind_runtime(
+            context=_Context([request_entry, market_snapshot_entry, fundamental_snapshot_entry]),
+            support=None,
+            request_id="req_1",
+            intent="stock_check",
+        )
+        try:
+            replanned = planner.replan_action_plan(
+                intent="stock_check",
+                request=RequestEnvelope(user_query="check 000001"),
+                current_plan=current_plan,
+                plan_patch=plan_patch,
+            )
+        finally:
+            planner.clear_runtime()
+
+        self.assertEqual(
+            [action.node_id for action in replanned.actions],
+            ["collect", "collect_replenish_notice", "retrieve", "report"],
+        )
+        self.assertEqual(replanned.actions[1].depends_on, ["collect"])
+        self.assertEqual(replanned.actions[2].depends_on, ["collect_replenish_notice"])
+
+    def test_replan_action_plan_uses_runtime_blackboard_to_insert_sector_replenish(self) -> None:
+        planner = RuntimePlanner()
+        current_plan = ActionPlan(
+            plan_id="plan_current",
+            intent="sector_research",
+            strategy="dynamic",
+            actions=[
+                ActionSpec(node_id="collect", phase="collect", agent="collector"),
+                ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever", depends_on=["collect"]),
+                ActionSpec(node_id="report", phase="report", agent="reporter", depends_on=["retrieve"]),
+            ],
+            entry_strategy="rule",
+            dispatch_trace={"source": "route_table"},
+        )
+        plan_patch = ActionPlanPatch(
+            decision_type="replan",
+            operations=[
+                ActionPlanPatchOperation(
+                    op_type="request_replan",
+                    reason="sector evidence should be replenished before retrieval",
+                    metadata={"trigger": "collect_completed"},
+                )
+            ],
+            notes=["request_action_plan_replan"],
+            policy_source="rule",
+            termination_reason="sector evidence should be replenished before retrieval",
+        )
+        request_entry = _blackboard_entry(
+            kind="source_record",
+            payload={
+                "title": "sector_research input query",
+                "content": "innovation drug sector",
+                "source_type": "user_query",
+            },
+        )
+        sector_snapshot_entry = _blackboard_entry(
+            kind="verified_snapshot",
+            payload={
+                "snapshot_type": "sector",
+                "sector": "innovation_drug",
+                "query": "innovation drug sector",
+                "snapshot_date": "2026-06-28",
+                "facts": {
+                    "benchmark": {"benchmark_name": "HS300"},
+                },
+                "source": {"skill": "sector_snapshot_skill"},
+            },
+        )
+
+        class _Blackboard:
+            def __init__(self, entries) -> None:
+                self._entries = entries
+
+            def list_entries(self, *, thread_id=None):
+                return list(self._entries)
+
+        class _Thread:
+            def __init__(self, thread_id: str) -> None:
+                self.thread_id = thread_id
+
+        class _Context:
+            def __init__(self, entries) -> None:
+                self.thread = _Thread("thread_01")
+                self.blackboard = _Blackboard(entries)
+
+        planner.bind_runtime(
+            context=_Context([request_entry, sector_snapshot_entry]),
+            support=None,
+            request_id="req_1",
+            intent="sector_research",
+        )
+        try:
+            replanned = planner.replan_action_plan(
+                intent="sector_research",
+                request=RequestEnvelope(user_query="innovation drug sector"),
+                current_plan=current_plan,
+                plan_patch=plan_patch,
+            )
+        finally:
+            planner.clear_runtime()
+
+        self.assertEqual(
+            [action.node_id for action in replanned.actions],
+            [
+                "collect",
+                "collect_replenish_sector_policy_signals_regulatory_signals_relative_strength",
+                "retrieve",
+                "report",
+            ],
+        )
+        self.assertEqual(
+            replanned.actions[2].depends_on,
+            ["collect_replenish_sector_policy_signals_regulatory_signals_relative_strength"],
+        )
+
     def test_stock_screen_initial_plan_is_dynamic_and_excludes_screen_review(self) -> None:
         planner = RuntimePlanner()
 
@@ -350,7 +708,7 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertIsNotNone(decision.plan_patch)
         self.assertEqual(
             [operation.op_type for operation in list(decision.plan_patch.operations if decision.plan_patch else [])],
-            ["insert_action"],
+            ["request_replan"],
         )
 
     def test_supervisor_inserts_screen_enrich_before_review_and_retrieval_when_scorecard_pending(self) -> None:
@@ -394,11 +752,12 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertIsNotNone(decision.plan_patch)
         self.assertEqual(
             [operation.op_type for operation in list(decision.plan_patch.operations if decision.plan_patch else [])],
-            ["insert_action", "rewire_dependency"],
+            ["request_replan"],
         )
-        rewire_operation = list(decision.plan_patch.operations if decision.plan_patch else [])[1]
-        self.assertEqual(rewire_operation.target_node_id, "retrieve")
-        self.assertEqual(rewire_operation.new_depends_on, ["screen_enrich"])
+        self.assertEqual(
+            str((decision.plan_patch.operations[0].metadata or {}).get("include_screen_review") or ""),
+            "true",
+        )
 
     def test_screen_review_action_depends_on_screen_enrich_when_present(self) -> None:
         planner = RuntimePlanner()
@@ -446,7 +805,7 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertIsNotNone(decision.plan_patch)
         self.assertEqual(
             [operation.op_type for operation in list(decision.plan_patch.operations if decision.plan_patch else [])],
-            ["insert_action"],
+            ["request_replan"],
         )
 
     def test_supervisor_passes_context_hints_into_dynamic_screen_review_action(self) -> None:
@@ -540,7 +899,7 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertIsNotNone(decision.plan_patch)
         self.assertEqual(
             [operation.op_type for operation in list(decision.plan_patch.operations if decision.plan_patch else [])],
-            ["insert_action"],
+            ["request_replan"],
         )
 
     def test_supervisor_inserts_stock_check_replenish_when_notice_missing(self) -> None:
@@ -598,7 +957,7 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertIsNotNone(decision.plan_patch)
         self.assertEqual(
             [operation.op_type for operation in list(decision.plan_patch.operations if decision.plan_patch else [])],
-            ["insert_action"],
+            ["request_replan"],
         )
 
     def test_supervisor_inserts_sector_replenish_when_critical_sector_evidence_missing(self) -> None:
@@ -651,7 +1010,7 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertIsNotNone(decision.plan_patch)
         self.assertEqual(
             [operation.op_type for operation in list(decision.plan_patch.operations if decision.plan_patch else [])],
-            ["insert_action"],
+            ["request_replan"],
         )
 
 

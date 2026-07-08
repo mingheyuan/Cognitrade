@@ -704,6 +704,7 @@ class OrchestratorPlanExecutor:
             plan_patch=plan_patch,
         )
         previous_plan_id = plan.plan_id
+        previous_node_ids = {action.node_id for action in plan.actions}
         self._replace_plan(plan=plan, replacement_plan=replanned_plan)
         pending_actions[:] = [
             action.model_copy(deep=True)
@@ -744,6 +745,15 @@ class OrchestratorPlanExecutor:
                 ],
             },
         )
+        for action in plan.actions:
+            if action.node_id in previous_node_ids:
+                continue
+            self._emit_dynamic_action_inserted(
+                context=context,
+                request=request,
+                plan=plan,
+                action=action,
+            )
         return [patch_record]
 
     def _emit_dynamic_action_inserted(

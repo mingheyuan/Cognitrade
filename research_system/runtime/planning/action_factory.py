@@ -10,15 +10,20 @@ class PlannerActionFactory:
         return ["collect", "retrieve", "report"]
 
     def normalize_initial_actions(self, *, intent: str, actions: list[str]) -> list[str]:
-        allowed = {"collect", "screen", "retrieve", "report"}
+        allowed_order = {
+            "stock_screen": ["collect", "screen", "screen_enrich", "screen_review", "retrieve", "report"],
+            "review_thesis": ["collect", "review", "retrieve", "report"],
+        }.get(intent, ["collect", "retrieve", "report"])
+        allowed = set(allowed_order)
         normalized = [action for action in actions if action in allowed]
         if not normalized:
             return self.default_initial_actions(intent)
-        if intent != "stock_screen":
-            normalized = [action for action in normalized if action != "screen"]
-        if "report" not in normalized:
-            normalized.append("report")
-        return normalized
+        ordered = [action for action in allowed_order if action in normalized]
+        if "collect" not in ordered:
+            ordered.insert(0, "collect")
+        if "report" not in ordered:
+            ordered.append("report")
+        return ordered
 
     def build_entry_actions(
         self,
@@ -28,6 +33,7 @@ class PlannerActionFactory:
         planning_context_hints: dict[str, str] | None = None,
     ) -> list[ActionSpec]:
         action_specs: list[ActionSpec] = []
+        action_ids = self.normalize_initial_actions(intent=intent, actions=action_ids)
         inputs = {"planning_context_hints": planning_context_hints} if planning_context_hints else {}
         dependency_chain: list[str] = []
         for action_id in action_ids:
@@ -37,6 +43,7 @@ class PlannerActionFactory:
                     "stock_compare": "Collect comparison stock snapshots.",
                     "stock_screen": "Build candidate universe and snapshots.",
                     "sector_research": "Collect sector snapshots.",
+                    "review_thesis": "Collect posterior review inputs.",
                 }[intent]
                 action_specs.append(
                     ActionSpec(
@@ -65,12 +72,59 @@ class PlannerActionFactory:
                         cache_key=f"{intent}:screen",
                     )
                 )
+            elif action_id == "screen_enrich" and intent == "stock_screen":
+                action_specs.append(
+                    ActionSpec(
+                        node_id="screen_enrich",
+                        phase="screen",
+                        agent="screener",
+                        objective="Enrich top screening candidates and rerank screening outputs.",
+                        inputs=inputs,
+                        tags=["dynamic_inserted", "enrichment"],
+                        depends_on=dependency_chain[:],
+                        max_retries=1,
+                        failure_mode="isolate",
+                        cache_scope="run",
+                        cache_key="stock_screen:screen_enrich",
+                    )
+                )
+            elif action_id == "screen_review" and intent == "stock_screen":
+                action_specs.append(
+                    ActionSpec(
+                        node_id="screen_review",
+                        phase="review",
+                        agent="screen_reviewer",
+                        objective="Review screened candidates before retrieval/reporting.",
+                        inputs=inputs,
+                        tags=["dynamic_inserted"],
+                        depends_on=dependency_chain[:],
+                        max_retries=1,
+                        cache_scope="run",
+                        cache_key="stock_screen:screen_review",
+                    )
+                )
+            elif action_id == "review" and intent == "review_thesis":
+                action_specs.append(
+                    ActionSpec(
+                        node_id="review",
+                        phase="review",
+                        agent="reviewer",
+                        objective="Run posterior review after verifying source context and snapshots.",
+                        inputs=inputs,
+                        tags=["dynamic_inserted"],
+                        depends_on=dependency_chain[:],
+                        max_retries=1,
+                        cache_scope="run",
+                        cache_key="review_thesis:review",
+                    )
+                )
             elif action_id == "retrieve":
                 objective = {
                     "stock_check": "Retrieve relevant evidence.",
                     "stock_compare": "Retrieve comparison evidence.",
                     "stock_screen": "Retrieve screening evidence.",
                     "sector_research": "Retrieve relevant evidence.",
+                    "review_thesis": "Retrieve review evidence.",
                 }[intent]
                 action_specs.append(
                     ActionSpec(
@@ -91,6 +145,7 @@ class PlannerActionFactory:
                     "stock_compare": "Compose comparison report.",
                     "stock_screen": "Compose watchlist-style screening report.",
                     "sector_research": "Compose final report.",
+                    "review_thesis": "Compose final review report.",
                 }[intent]
                 action_specs.append(
                     ActionSpec(

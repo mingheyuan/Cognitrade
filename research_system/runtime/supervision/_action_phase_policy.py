@@ -59,5 +59,27 @@ class ActionPhaseRulePolicy(ABC):
             metadata=metadata,
         )
 
+    def continue_with_replan(
+        self,
+        *,
+        action: ActionSpec,
+        completed_actions: list[str],
+        reason: str,
+        notes: list[str] | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> SupervisorDecision:
+        replan_decision = self.request_replan(
+            completed_actions=completed_actions,
+            reason=reason,
+            notes=notes,
+            metadata=metadata,
+        )
+        return self.decision_factory.continue_with(
+            action=action,
+            completed_actions=completed_actions,
+            notes=list(notes or [reason]),
+            plan_patch=replan_decision.plan_patch,
+        )
+
 
 __all__ = ["ActionPhaseRulePolicy"]
