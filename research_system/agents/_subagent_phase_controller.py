@@ -481,6 +481,12 @@ class SubagentPhaseController:
                 record["plan_node_id"] = metadata["plan_node_id"]
             if metadata.get("subagent_plan_strategy"):
                 record["subagent_plan_strategy"] = metadata["subagent_plan_strategy"]
+            child_thread_id = str(metadata.get("child_thread_id") or "").strip()
+            child_turn_id = str(metadata.get("child_turn_id") or "").strip()
+            if child_thread_id:
+                record["child_thread_id"] = child_thread_id
+            if child_turn_id:
+                record["child_turn_id"] = child_turn_id
             if result.record is not None and result.record.degrade_reason:
                 record["degrade_reason"] = result.record.degrade_reason
             if result.blocked_by:

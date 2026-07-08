@@ -247,6 +247,28 @@ class CollectorPhasePolicy(SubagentPhaseRulePolicy):
             },
         )
 
+    def build_stock_compare_replan_patch(
+        self,
+        *,
+        snapshot_types: list[str],
+        allow_partial: bool,
+        symbols: list[str],
+    ) -> SubagentGraphPatch:
+        return self.build_replan_patch(
+            reason="collector_stock_compare_strategy_resolved",
+            notes=[
+                "replan_collect_stock_compare_from_strategy",
+                f"snapshot_types={','.join(snapshot_types)}",
+                f"allow_partial={str(bool(allow_partial)).lower()}",
+                f"compare_symbol_count={len(symbols)}",
+            ],
+            metadata={
+                "snapshot_types": ",".join(snapshot_types),
+                "allow_partial": str(bool(allow_partial)).lower(),
+                "symbols": ",".join(str(item).strip() for item in symbols if str(item).strip()),
+            },
+        )
+
     def build_sector_research_replan_patch(
         self,
         *,
@@ -281,6 +303,34 @@ class CollectorPhasePolicy(SubagentPhaseRulePolicy):
                 "sector_query": str(sector_query or ""),
                 "top_n": str(int(top_n)),
                 "universe_mode": universe_mode,
+            },
+        )
+
+    def build_review_thesis_replan_patch(
+        self,
+        *,
+        followup_mode: str,
+        sector: str | None,
+        symbol: str | None,
+        snapshot_types: list[str],
+        allow_partial: bool,
+        include_policy_snapshot: bool,
+    ) -> SubagentGraphPatch:
+        return self.build_replan_patch(
+            reason="collector_review_thesis_strategy_resolved",
+            notes=[
+                "replan_collect_review_thesis_from_strategy",
+                f"followup_mode={followup_mode}",
+                f"include_policy_snapshot={str(bool(include_policy_snapshot)).lower()}",
+                f"allow_partial={str(bool(allow_partial)).lower()}",
+            ],
+            metadata={
+                "followup_mode": followup_mode,
+                "sector": str(sector or ""),
+                "symbol": str(symbol or ""),
+                "snapshot_types": ",".join(snapshot_types),
+                "allow_partial": str(bool(allow_partial)).lower(),
+                "include_policy_snapshot": str(bool(include_policy_snapshot)).lower(),
             },
         )
 

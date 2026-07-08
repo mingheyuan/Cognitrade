@@ -332,11 +332,26 @@ class StockCompareFlowTests(unittest.TestCase):
             self.assertGreaterEqual(len(source["symbols"]), 2)
             self.assertEqual(len(source["compare_targets"]), len(source["symbols"]))
             self.assertEqual(len(payload["snapshots"]), len(source["symbols"]) * 3)
+            subagent_plans = list(payload.get("subagent_plans") or [])
+            self.assertEqual(len(subagent_plans), 1)
+            plan_node_ids = [str(node.get("node_id") or "") for node in list(subagent_plans[0].get("nodes") or [])]
+            self.assertEqual(plan_node_ids[:2], ["query_normalizer", "collection_strategy_resolver"])
+            self.assertTrue(all(node_id.startswith("compare_stock_snapshot_collector:") for node_id in plan_node_ids[2:]))
+            patch_op_types = [
+                str(operation.get("op_type") or "")
+                for patch in list(payload.get("subagent_plan_patches") or [])
+                for operation in list((patch or {}).get("operations") or [])
+            ]
+            self.assertEqual(patch_op_types, ["request_replan"])
             trace_notes = [note for row in payload["subagent_trace"] for note in list(row.get("notes") or [])]
             child_thread_notes = [str(note) for note in trace_notes if str(note).startswith("child_thread=")]
             self.assertEqual(len(child_thread_notes), len(source["symbols"]))
             self.assertEqual(
-                [row["subagent_type"] for row in payload["subagent_trace"][1:]],
+                [row["subagent_type"] for row in payload["subagent_trace"][:2]],
+                ["query_normalizer", "collection_strategy_resolver"],
+            )
+            self.assertEqual(
+                [row["subagent_type"] for row in payload["subagent_trace"][2:]],
                 ["stock_snapshot_collector"] * len(source["symbols"]),
             )
             self.assertTrue(source.get("child_thread_ids"))

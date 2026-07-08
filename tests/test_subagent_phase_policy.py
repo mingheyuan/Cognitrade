@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from research_system.agents._subagent_phase_policy import (
+    CollectorPhasePolicy,
     DistillerPhasePolicy,
     ReporterPhasePolicy,
     ReviewerPhasePolicy,
@@ -29,6 +30,42 @@ def _node(*, node_id: str, subagent_type: str) -> SubagentPlanNode:
 
 
 class SubagentPhasePolicyTests(unittest.TestCase):
+    def test_collector_stock_compare_replan_patch_tracks_compare_bundle(self) -> None:
+        patch = CollectorPhasePolicy().build_stock_compare_replan_patch(
+            snapshot_types=["market", "fundamental", "notice", "capital_flow"],
+            allow_partial=True,
+            symbols=["000001", "600036"],
+        )
+
+        self.assertEqual(str(patch.decision_type), "replan")
+        self.assertEqual(str(patch.operations[0].op_type), "request_replan")
+        self.assertEqual(
+            str((patch.operations[0].metadata or {}).get("snapshot_types") or ""),
+            "market,fundamental,notice,capital_flow",
+        )
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("allow_partial") or ""), "true")
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("symbols") or ""), "000001,600036")
+
+    def test_collector_review_thesis_replan_patch_tracks_followup_mode(self) -> None:
+        patch = CollectorPhasePolicy().build_review_thesis_replan_patch(
+            followup_mode="combined_review_followup",
+            sector="innovation_drug",
+            symbol="300363",
+            snapshot_types=["market", "fundamental", "notice"],
+            allow_partial=False,
+            include_policy_snapshot=True,
+        )
+
+        self.assertEqual(str(patch.decision_type), "replan")
+        self.assertEqual(str(patch.operations[0].op_type), "request_replan")
+        self.assertEqual(
+            str((patch.operations[0].metadata or {}).get("followup_mode") or ""),
+            "combined_review_followup",
+        )
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("sector") or ""), "innovation_drug")
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("symbol") or ""), "300363")
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("include_policy_snapshot") or ""), "true")
+
     def test_retriever_phase_one_replan_patch_tracks_selected_branches(self) -> None:
         patch = RetrieverPhasePolicy().build_phase_one_replan_patch(
             include_qdrant=False,

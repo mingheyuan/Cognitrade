@@ -117,7 +117,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                 "subagent_trace": [],
                 "subagent_plans": [],
             }
-        if intent in {"stock_check", "sector_research", "stock_screen"}:
+        if intent in {"stock_check", "stock_compare", "sector_research", "stock_screen", "review_thesis"}:
             return self._run_strategy_controlled_collect(
                 intent=intent,
                 query=query,
@@ -521,12 +521,17 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             query=query,
             planning_context_hints=planning_context_hints,
             investment_cycle=constraints.get("investment_cycle"),
+            constraints=constraints,
         )
         final_plan, _base_results, patch_rows, final_results = self.phase_controller.execute_patch_cycle(
             plan=preprocess_plan,
             dag_id=f"collect_{intent}",
             base_max_workers=1,
-            final_max_workers=1,
+            final_max_workers=self._collect_strategy_final_max_workers(
+                intent=intent,
+                query=query,
+                constraints=constraints,
+            ),
             build_invocation_factory=lambda current_plan: self._build_collect_phase_invocations(plan=current_plan),
             patch_builder=lambda base_results: self._build_collect_replan_patch(
                 intent=intent,
@@ -569,6 +574,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         query: str,
         planning_context_hints: dict[str, str],
         investment_cycle: str | None,
+        constraints: dict[str, Any] | None = None,
     ) -> SubagentPlan:
         query_node = self._build_collect_plan_node_with_inputs(
             intent=intent,
@@ -594,19 +600,33 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             cache_key="collection_strategy_resolver",
             notes=["phase=preprocess"],
         )
+        nodes = [query_node, strategy_node]
+        selected_subagent_types = {
+            "query_normalizer": query_node.subagent_type,
+            "collection_strategy_resolver": strategy_node.subagent_type,
+        }
+        if intent == "review_thesis":
+            review_loader_node = self._build_collect_plan_node_with_inputs(
+                intent=intent,
+                capability="review_target_loading",
+                node_id="review_target_loader",
+                objective="Load prior run as review target.",
+                inputs={"constraints": dict(constraints or {}), "query": query},
+                cache_key="review_target_loader",
+                notes=["phase=preprocess"],
+            )
+            nodes.append(review_loader_node)
+            selected_subagent_types["review_target_loader"] = review_loader_node.subagent_type
         return SubagentPlan(
             intent=intent,
             phase="collect",
             strategy="catalog",
-            nodes=[query_node, strategy_node],
+            nodes=nodes,
             notes=["collect_preprocess_plan"],
             catalog_trace={
                 "stage": "collect",
                 "selection_mode": "catalog",
-                "selected_subagent_types": {
-                    "query_normalizer": query_node.subagent_type,
-                    "collection_strategy_resolver": strategy_node.subagent_type,
-                },
+                "selected_subagent_types": selected_subagent_types,
             },
         )
 
@@ -632,6 +652,24 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                 snapshot_types=snapshot_types,
                 allow_partial=allow_partial,
             )
+        if intent == "stock_compare":
+            snapshot_types = self._merge_snapshot_types(
+                constraints.get("snapshot_types") or ["market", "fundamental", "notice"],
+                strategy.get("hint_augmented_snapshot_types") or [],
+            )
+            allow_partial = bool(constraints.get("allow_partial_snapshot_types")) or bool(
+                strategy.get("hint_augmented_snapshot_types")
+            )
+            compare_symbols = self._resolved_compare_symbols(
+                query=query,
+                constraints=constraints,
+                normalized=normalized,
+            )
+            return self.phase_policy.build_stock_compare_replan_patch(
+                snapshot_types=snapshot_types,
+                allow_partial=allow_partial,
+                symbols=compare_symbols,
+            )
         if intent == "sector_research":
             include_policy_snapshot = bool(constraints.get("include_policy_snapshot")) or bool(
                 strategy.get("include_policy_snapshot")
@@ -649,6 +687,30 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             return self.phase_policy.build_stock_screen_replan_patch(
                 sector_query=sector_query,
                 top_n=top_n,
+            )
+        if intent == "review_thesis":
+            review_payload = dict((base_results["review_target_loader"].outputs or {}) if base_results.get("review_target_loader") else {})
+            sector = str(review_payload.get("sector") or "").strip() or None
+            resolved_symbol = str(review_payload.get("symbol") or "").strip() or None
+            followup_mode = self._review_followup_mode(
+                sector=sector,
+                symbol=resolved_symbol,
+            )
+            snapshot_types = self._merge_snapshot_types(
+                constraints.get("snapshot_types") or ["market", "fundamental", "notice"],
+                strategy.get("hint_augmented_snapshot_types") or [],
+            )
+            allow_partial = bool(strategy.get("hint_augmented_snapshot_types"))
+            include_policy_snapshot = bool(constraints.get("include_policy_snapshot")) or bool(
+                strategy.get("include_policy_snapshot")
+            )
+            return self.phase_policy.build_review_thesis_replan_patch(
+                followup_mode=followup_mode,
+                sector=sector,
+                symbol=resolved_symbol,
+                snapshot_types=snapshot_types,
+                allow_partial=allow_partial,
+                include_policy_snapshot=include_policy_snapshot,
             )
         raise ValueError(f"unsupported strategy-controlled collector intent: {intent}")
 
@@ -671,6 +733,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             query=query,
             planning_context_hints=planning_context_hints,
             investment_cycle=constraints.get("investment_cycle") or normalized.get("investment_cycle"),
+            constraints=constraints,
         )
         nodes = [node.model_copy(deep=True) for node in preprocess_plan.nodes]
         notes = list(preprocess_plan.notes or [])
@@ -701,6 +764,49 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             notes.extend(
                 [
                     "collect_stock_check_replanned_from_strategy",
+                    f"snapshot_types={','.join(snapshot_types)}",
+                ]
+            )
+        elif intent == "stock_compare":
+            snapshot_types = [
+                item for item in str(metadata.get("snapshot_types") or "").split(",") if str(item).strip()
+            ] or ["market", "fundamental", "notice"]
+            allow_partial = str(metadata.get("allow_partial") or "").lower() == "true"
+            compare_symbols = self._resolved_compare_symbols(
+                query=query,
+                constraints=constraints,
+                normalized=normalized,
+                metadata=metadata,
+            )
+            if not compare_symbols:
+                raise ValueError("stock_compare requires at least one compare symbol for replanned collection")
+            for index, compare_symbol in enumerate(compare_symbols):
+                nodes.append(
+                    self._build_collect_plan_node_with_inputs(
+                        intent=intent,
+                        capability="stock_snapshot_bundle",
+                        node_id=f"compare_stock_snapshot_collector:{index}:{compare_symbol}",
+                        objective="Collect stock-level verified snapshots for comparison targets.",
+                        inputs={
+                            "query": compare_symbol,
+                            "symbol": compare_symbol,
+                            "snapshot_types": snapshot_types,
+                            "allow_partial": allow_partial,
+                        },
+                        depends_on=["collection_strategy_resolver"],
+                        cache_key=f"compare_stock_snapshot_collector:{compare_symbol}",
+                        max_attempts=2,
+                        notes=[
+                            "phase=collect_execution",
+                            f"compare_symbol={compare_symbol}",
+                            f"snapshot_types={','.join(snapshot_types)}",
+                        ],
+                    )
+                )
+            notes.extend(
+                [
+                    "collect_stock_compare_replanned_from_strategy",
+                    f"compare_symbol_count={len(compare_symbols)}",
                     f"snapshot_types={','.join(snapshot_types)}",
                 ]
             )
@@ -757,6 +863,68 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                     f"top_n={top_n}",
                 ]
             )
+        elif intent == "review_thesis":
+            review_payload = dict((base_results["review_target_loader"].outputs or {}) if base_results.get("review_target_loader") else {})
+            followup_mode = str(metadata.get("followup_mode") or "").strip() or self._review_followup_mode(
+                sector=str(review_payload.get("sector") or "").strip() or None,
+                symbol=str(review_payload.get("symbol") or "").strip() or None,
+            )
+            include_policy_snapshot = str(metadata.get("include_policy_snapshot") or "").lower() == "true"
+            sector = str(metadata.get("sector") or review_payload.get("sector") or "").strip() or None
+            resolved_symbol = str(metadata.get("symbol") or review_payload.get("symbol") or "").strip() or None
+            snapshot_types = [
+                item for item in str(metadata.get("snapshot_types") or "").split(",") if str(item).strip()
+            ] or ["market", "fundamental", "notice"]
+            allow_partial = str(metadata.get("allow_partial") or "").lower() == "true"
+            if followup_mode in {"sector_review_followup", "combined_review_followup"} and sector:
+                nodes.append(
+                    self._build_collect_plan_node_with_inputs(
+                        intent=intent,
+                        capability="sector_snapshot",
+                        node_id="review_sector_snapshot_collector",
+                        objective="Collect sector snapshot for posterior review.",
+                        inputs={
+                            "query": sector,
+                            "include_policy_snapshot": include_policy_snapshot,
+                        },
+                        depends_on=["collection_strategy_resolver", "review_target_loader"],
+                        cache_key="review_sector_snapshot_collector",
+                        notes=[
+                            "phase=collect_execution",
+                            "review_followup",
+                            f"include_policy_snapshot={str(include_policy_snapshot).lower()}",
+                        ],
+                    )
+                )
+            if followup_mode in {"stock_review_followup", "combined_review_followup"} and resolved_symbol:
+                nodes.append(
+                    self._build_collect_plan_node_with_inputs(
+                        intent=intent,
+                        capability="stock_snapshot_bundle",
+                        node_id="review_stock_snapshot_collector",
+                        objective="Collect stock snapshots for posterior review.",
+                        inputs={
+                            "query": resolved_symbol,
+                            "symbol": resolved_symbol,
+                            "snapshot_types": snapshot_types,
+                            "allow_partial": allow_partial,
+                        },
+                        depends_on=["collection_strategy_resolver", "review_target_loader"],
+                        cache_key="review_stock_snapshot_collector",
+                        max_attempts=2,
+                        notes=[
+                            "phase=collect_execution",
+                            "review_followup",
+                            f"snapshot_types={','.join(snapshot_types)}",
+                        ],
+                    )
+                )
+            notes.extend(
+                [
+                    "collect_review_thesis_replanned_from_strategy",
+                    f"followup_mode={followup_mode}",
+                ]
+            )
         else:
             raise ValueError(f"unsupported strategy-controlled collector intent: {intent}")
         return SubagentPlan(
@@ -768,7 +936,11 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             catalog_trace={
                 **dict(preprocess_plan.catalog_trace or {}),
                 "replanned_from_strategy": True,
-                "final_node_ids": [node.node_id for node in nodes if node.node_id not in {"query_normalizer", "collection_strategy_resolver"}],
+                "final_node_ids": [
+                    node.node_id
+                    for node in nodes
+                    if node.node_id not in {"query_normalizer", "collection_strategy_resolver", "review_target_loader"}
+                ],
             },
         )
 
@@ -785,6 +957,13 @@ class CollectorService(RuntimeBoundSubagentInvoker):
     ) -> dict[str, SubagentPlan]:
         normalized = dict(base_results["query_normalizer"].outputs or {})
         strategy = dict(((base_results["collection_strategy_resolver"].outputs or {}).get("collection_strategy") or {}))
+        preprocess_plan = self._build_collect_preprocess_plan(
+            intent=intent,
+            query=query,
+            planning_context_hints=planning_context_hints,
+            investment_cycle=constraints.get("investment_cycle") or normalized.get("investment_cycle"),
+            constraints=constraints,
+        )
         variants: dict[str, SubagentPlan] = {}
         if intent == "stock_check":
             base_snapshot_types = self._merge_snapshot_types(
@@ -810,12 +989,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                     if variant_id in variants:
                         continue
                     variants[variant_id] = self._rebuild_collect_plan(
-                        plan=self._build_collect_preprocess_plan(
-                            intent=intent,
-                            query=query,
-                            planning_context_hints=planning_context_hints,
-                            investment_cycle=constraints.get("investment_cycle") or normalized.get("investment_cycle"),
-                        ),
+                        plan=preprocess_plan,
                         intent=intent,
                         query=query,
                         constraints=constraints,
@@ -827,6 +1001,48 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                         base_results=base_results,
                     )
             return variants
+        if intent == "stock_compare":
+            base_snapshot_types = self._merge_snapshot_types(
+                constraints.get("snapshot_types") or ["market", "fundamental", "notice"],
+                [],
+            )
+            augmented_snapshot_types = self._merge_snapshot_types(
+                base_snapshot_types,
+                strategy.get("hint_augmented_snapshot_types") or [],
+            )
+            rule_variant_id = (
+                "augmented_compare_snapshot_bundle"
+                if augmented_snapshot_types != base_snapshot_types
+                and self._stock_compare_plan_snapshot_types(rule_final_plan) == augmented_snapshot_types
+                else "baseline_compare_snapshot_bundle"
+            )
+            variants[rule_variant_id] = rule_final_plan
+            if augmented_snapshot_types != base_snapshot_types:
+                compare_symbols = self._resolved_compare_symbols(
+                    query=query,
+                    constraints=constraints,
+                    normalized=normalized,
+                )
+                for variant_id, snapshot_types in {
+                    "baseline_compare_snapshot_bundle": base_snapshot_types,
+                    "augmented_compare_snapshot_bundle": augmented_snapshot_types,
+                }.items():
+                    if variant_id in variants:
+                        continue
+                    variants[variant_id] = self._rebuild_collect_plan(
+                        plan=preprocess_plan,
+                        intent=intent,
+                        query=query,
+                        constraints=constraints,
+                        planning_context_hints=planning_context_hints,
+                        patch=self.phase_policy.build_stock_compare_replan_patch(
+                            snapshot_types=snapshot_types,
+                            allow_partial=variant_id == "augmented_compare_snapshot_bundle",
+                            symbols=compare_symbols,
+                        ),
+                        base_results=base_results,
+                    )
+            return variants
         if intent == "sector_research":
             include_policy = self._sector_research_plan_includes_policy(rule_final_plan)
             variants["sector_plus_policy" if include_policy else "sector_only"] = rule_final_plan
@@ -834,12 +1050,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                 if variant_id in variants:
                     continue
                 variants[variant_id] = self._rebuild_collect_plan(
-                    plan=self._build_collect_preprocess_plan(
-                        intent=intent,
-                        query=query,
-                        planning_context_hints=planning_context_hints,
-                        investment_cycle=constraints.get("investment_cycle") or normalized.get("investment_cycle"),
-                    ),
+                    plan=preprocess_plan,
                     intent=intent,
                     query=query,
                     constraints=constraints,
@@ -860,12 +1071,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                     if variant_id in variants:
                         continue
                     variants[variant_id] = self._rebuild_collect_plan(
-                        plan=self._build_collect_preprocess_plan(
-                            intent=intent,
-                            query=query,
-                            planning_context_hints=planning_context_hints,
-                            investment_cycle=constraints.get("investment_cycle") or normalized.get("investment_cycle"),
-                        ),
+                        plan=preprocess_plan,
                         intent=intent,
                         query=query,
                         constraints=constraints,
@@ -873,6 +1079,42 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                         patch=self.phase_policy.build_stock_screen_replan_patch(
                             sector_query=current_sector_query,
                             top_n=int(constraints.get("candidate_pool_size") or 8),
+                        ),
+                        base_results=base_results,
+                    )
+            return variants
+        if intent == "review_thesis":
+            review_payload = dict((base_results["review_target_loader"].outputs or {}) if base_results.get("review_target_loader") else {})
+            sector = str(review_payload.get("sector") or "").strip() or None
+            resolved_symbol = str(review_payload.get("symbol") or "").strip() or None
+            followup_mode = self._review_followup_mode_from_plan(rule_final_plan)
+            variants[followup_mode] = rule_final_plan
+            if sector and resolved_symbol:
+                snapshot_types = self._review_stock_snapshot_types_from_plan(rule_final_plan) or self._merge_snapshot_types(
+                    constraints.get("snapshot_types") or ["market", "fundamental", "notice"],
+                    strategy.get("hint_augmented_snapshot_types") or [],
+                )
+                include_policy_snapshot = self._review_plan_includes_policy(rule_final_plan)
+                for variant_id in [
+                    "combined_review_followup",
+                    "sector_review_followup",
+                    "stock_review_followup",
+                ]:
+                    if variant_id in variants:
+                        continue
+                    variants[variant_id] = self._rebuild_collect_plan(
+                        plan=preprocess_plan,
+                        intent=intent,
+                        query=query,
+                        constraints=constraints,
+                        planning_context_hints=planning_context_hints,
+                        patch=self.phase_policy.build_review_thesis_replan_patch(
+                            followup_mode=variant_id,
+                            sector=sector,
+                            symbol=resolved_symbol,
+                            snapshot_types=snapshot_types,
+                            allow_partial=bool(strategy.get("hint_augmented_snapshot_types")),
+                            include_policy_snapshot=include_policy_snapshot,
                         ),
                         base_results=base_results,
                     )
@@ -892,6 +1134,9 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         normalized = dict(final_results["query_normalizer"].outputs or {})
         collection_strategy = dict(((final_results["collection_strategy_resolver"].outputs or {}).get("collection_strategy") or {}))
         planning_context_hints = self._normalize_planning_context_hints(constraints.get("planning_context_hints"))
+        trace_rows = self._annotate_collect_trace_rows(
+            self.phase_controller.trace_from_results(results=final_results)
+        )
         source_type_override = str(constraints.get("source_type") or "").strip() or None
         source_payload = {
             "title": f"{intent} input query",
@@ -908,6 +1153,33 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         snapshots: list[dict] = []
         if intent == "stock_check":
             snapshots = list((final_results["stock_snapshot_collector"].outputs or {}).get("snapshots") or [])
+        elif intent == "stock_compare":
+            compare_symbols = self._stock_compare_plan_symbols(final_plan) or self._resolved_compare_symbols(
+                query=query,
+                constraints=constraints,
+                normalized=normalized,
+            )
+            source_payload.update(
+                {
+                    "title": "stock_compare input request",
+                    "source_type": "compare_request",
+                    "symbols": compare_symbols,
+                    "compare_targets": self._build_compare_targets(query=query, symbols=compare_symbols),
+                }
+            )
+            child_thread_ids: list[str] = []
+            for node in final_plan.nodes:
+                if not node.node_id.startswith("compare_stock_snapshot_collector:"):
+                    continue
+                node_result = final_results.get(node.node_id)
+                if node_result is None:
+                    continue
+                snapshots.extend(list((node_result.outputs or {}).get("snapshots") or []))
+                child_thread_id = str((node_result.metadata or {}).get("child_thread_id") or "").strip()
+                if child_thread_id:
+                    child_thread_ids.append(child_thread_id)
+            if child_thread_ids:
+                source_payload["child_thread_ids"] = sorted(set(child_thread_ids))
         elif intent == "sector_research":
             sector_outputs = dict(final_results["sector_snapshot_collector"].outputs or {})
             sector_snapshot = dict(sector_outputs.get("snapshot") or {})
@@ -938,10 +1210,37 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                 source_payload["sector"] = sector_snapshot.get("sector")
                 source_payload["theme"] = sector_snapshot.get("theme")
                 snapshots.append(sector_snapshot)
+        elif intent == "review_thesis":
+            review_payload = dict((final_results["review_target_loader"].outputs or {}) if final_results.get("review_target_loader") else {})
+            source_payload.update(
+                {
+                    "title": "review_thesis input request",
+                    "source_type": source_type_override or "review_request",
+                    "review_target_run_id": review_payload.get("review_target_run_id"),
+                    "review_source_entries": review_payload.get("review_source_entries"),
+                    "review_source_result": review_payload.get("review_source_result"),
+                    "symbol": review_payload.get("symbol"),
+                }
+            )
+            sector_outputs = dict((final_results.get("review_sector_snapshot_collector").outputs or {}) if final_results.get("review_sector_snapshot_collector") else {})
+            sector_snapshot = dict(sector_outputs.get("snapshot") or {})
+            if sector_snapshot:
+                source_payload["sector"] = sector_snapshot.get("sector") or review_payload.get("sector")
+                source_payload["theme"] = sector_snapshot.get("theme")
+                snapshots.append(sector_snapshot)
+                snapshots.extend(list(sector_outputs.get("related_snapshots") or []))
+                if sector_outputs.get("related_snapshots"):
+                    source_payload["include_policy_snapshot"] = True
+            elif review_payload.get("sector"):
+                source_payload["sector"] = review_payload.get("sector")
+            stock_outputs = dict((final_results.get("review_stock_snapshot_collector").outputs or {}) if final_results.get("review_stock_snapshot_collector") else {})
+            if stock_outputs:
+                source_payload["symbol"] = review_payload.get("symbol")
+                snapshots.extend(list(stock_outputs.get("snapshots") or []))
         return {
             "sources": [source_payload],
             "snapshots": snapshots,
-            "subagent_trace": self.phase_controller.trace_from_results(results=final_results),
+            "subagent_trace": trace_rows,
             "subagent_plans": [final_plan.model_dump(mode="json")],
             "subagent_plan_patches": patch_rows,
         }
@@ -949,15 +1248,8 @@ class CollectorService(RuntimeBoundSubagentInvoker):
     def _build_collect_phase_invocations(self, *, plan: SubagentPlan) -> dict[str, dict[str, Any]]:
         runtime_nodes: dict[str, dict[str, Any]] = {}
         for node in plan.nodes:
-            task_name, agent_path = self._collect_node_path(node_id=node.node_id, subagent_type=node.subagent_type)
-            invocation = self.phase_controller.build_invocation(
-                subagent_type=node.subagent_type,
-                objective=node.objective,
-                inputs=dict(node.inputs or {}),
-                task_name=task_name,
-                agent_path=agent_path,
-                phase="collect",
-            )
+            invocation = self._build_collect_phase_invocation(node=node)
+            invocation_context = dict(invocation.context or {})
             runtime_nodes[node.node_id] = {
                 "builder": lambda results, *, current_invocation=invocation, current_node_id=node.node_id: self._collect_plan_invocation_for_results(
                     node_id=current_node_id,
@@ -965,13 +1257,48 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                     results=results,
                 ),
                 "metadata": self.phase_controller.build_metadata(
-                    task_name=task_name,
-                    agent_path=agent_path,
+                    task_name=str(invocation_context.get("task_name") or node.node_id),
+                    agent_path=str(invocation_context.get("agent_path") or node.subagent_type),
                     objective=node.objective,
-                    phase="collect",
+                    phase=str(invocation_context.get("phase") or "collect"),
+                    extras={
+                        "child_thread_id": str(invocation_context.get("child_thread_id") or "").strip() or None,
+                        "child_turn_id": str(invocation_context.get("child_turn_id") or "").strip() or None,
+                    },
                 ),
-        }
+            }
         return runtime_nodes
+
+    def _build_collect_phase_invocation(self, *, node: SubagentPlanNode) -> SubagentInvocation:
+        task_name, agent_path = self._collect_node_path(node_id=node.node_id, subagent_type=node.subagent_type)
+        if node.node_id.startswith("compare_stock_snapshot_collector:"):
+            symbol = str(node.inputs.get("symbol") or "").strip()
+            child_thread, child_turn = self.spawn_child_thread(
+                intent="collector_compare_target",
+                objective=f"collect:compare:{symbol}",
+                agent=self.agent_name,
+                phase="collect_compare_target",
+            )
+            return self._build_stock_snapshot_invocation(
+                objective=str(node.objective or "Collect stock-level verified snapshots for comparison targets."),
+                query=str(node.inputs.get("query") or symbol),
+                symbol=symbol or None,
+                snapshot_types=[str(item).strip() for item in list(node.inputs.get("snapshot_types") or []) if str(item).strip()],
+                allow_partial=bool(node.inputs.get("allow_partial")),
+                task_name=task_name,
+                agent_path=agent_path,
+                child_thread=child_thread,
+                child_turn=child_turn,
+                phase="collect_compare_target",
+            )
+        return self.phase_controller.build_invocation(
+            subagent_type=node.subagent_type,
+            objective=node.objective,
+            inputs=dict(node.inputs or {}),
+            task_name=task_name,
+            agent_path=agent_path,
+            phase="collect",
+        )
 
     def _collect_plan_invocation_for_results(
         self,
@@ -1000,7 +1327,22 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             "stock_snapshot_collector": ("collect:stock_snapshot_collector", "collector/stock_snapshot_collector"),
             "sector_snapshot_collector": ("collect:sector_snapshot_collector", "collector/sector_snapshot_collector"),
             "candidate_universe_builder": ("collect:candidate_universe_builder", "collector/candidate_universe_builder"),
+            "review_target_loader": ("collect:review_target_loader", "collector/review_target_loader"),
+            "review_sector_snapshot_collector": (
+                "collect:review:sector_snapshot_collector",
+                "collector/review/sector_snapshot_collector",
+            ),
+            "review_stock_snapshot_collector": (
+                "collect:review:stock_snapshot_collector",
+                "collector/review/stock_snapshot_collector",
+            ),
         }
+        if node_id.startswith("compare_stock_snapshot_collector:"):
+            symbol = node_id.rsplit(":", 1)[-1]
+            return (
+                f"collect:compare:{symbol}:stock_snapshot_collector",
+                f"collector/compare/{symbol}/stock_snapshot_collector",
+            )
         return mapping.get(node_id, (f"collect:{node_id}", f"collector/{subagent_type}"))
 
     def _build_collect_plan_node_with_inputs(
@@ -1053,13 +1395,118 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                 return value or None
         return None
 
+    @staticmethod
+    def _stock_compare_plan_snapshot_types(plan: SubagentPlan) -> list[str]:
+        for node in plan.nodes:
+            if node.node_id.startswith("compare_stock_snapshot_collector:"):
+                return [str(item).strip() for item in list(node.inputs.get("snapshot_types") or []) if str(item).strip()]
+        return []
+
+    @staticmethod
+    def _stock_compare_plan_symbols(plan: SubagentPlan) -> list[str]:
+        symbols: list[str] = []
+        for node in plan.nodes:
+            if not node.node_id.startswith("compare_stock_snapshot_collector:"):
+                continue
+            symbol = str(node.inputs.get("symbol") or "").strip()
+            if symbol and symbol not in symbols:
+                symbols.append(symbol)
+        return symbols
+
+    @staticmethod
+    def _review_plan_includes_policy(plan: SubagentPlan) -> bool:
+        for node in plan.nodes:
+            if node.node_id == "review_sector_snapshot_collector":
+                return bool(node.inputs.get("include_policy_snapshot"))
+        return False
+
+    @staticmethod
+    def _review_stock_snapshot_types_from_plan(plan: SubagentPlan) -> list[str]:
+        for node in plan.nodes:
+            if node.node_id == "review_stock_snapshot_collector":
+                return [str(item).strip() for item in list(node.inputs.get("snapshot_types") or []) if str(item).strip()]
+        return []
+
+    @staticmethod
+    def _review_followup_mode(*, sector: str | None, symbol: str | None) -> str:
+        if sector and symbol:
+            return "combined_review_followup"
+        if sector:
+            return "sector_review_followup"
+        if symbol:
+            return "stock_review_followup"
+        return "loader_only_review_context"
+
+    @classmethod
+    def _review_followup_mode_from_plan(cls, plan: SubagentPlan) -> str:
+        has_sector = any(node.node_id == "review_sector_snapshot_collector" for node in plan.nodes)
+        has_stock = any(node.node_id == "review_stock_snapshot_collector" for node in plan.nodes)
+        return cls._review_followup_mode(
+            sector="1" if has_sector else None,
+            symbol="1" if has_stock else None,
+        )
+
+    def _resolved_compare_symbols(
+        self,
+        *,
+        query: str,
+        constraints: dict[str, Any],
+        normalized: dict[str, Any],
+        metadata: dict[str, str] | None = None,
+    ) -> list[str]:
+        metadata = dict(metadata or {})
+        resolved: list[str] = []
+        raw_symbols: list[str] = []
+        if str(metadata.get("symbols") or "").strip():
+            raw_symbols.extend(str(metadata.get("symbols") or "").split(","))
+        raw_symbols.extend(list(constraints.get("symbols") or normalized.get("symbols") or []))
+        symbol = str(metadata.get("symbol") or constraints.get("symbol") or normalized.get("symbol") or "").strip()
+        if symbol:
+            raw_symbols.append(symbol)
+        for item in raw_symbols:
+            candidate = str(item or "").strip()
+            if candidate and candidate not in resolved:
+                resolved.append(candidate)
+        if resolved:
+            return resolved
+        extracted = self._extract_symbols(query)
+        return [item for item in extracted if item]
+
+    def _collect_strategy_final_max_workers(
+        self,
+        *,
+        intent: str,
+        query: str,
+        constraints: dict[str, Any],
+    ) -> int:
+        if intent == "stock_compare":
+            estimated = len(
+                self._resolved_compare_symbols(
+                    query=query,
+                    constraints=constraints,
+                    normalized={},
+                )
+            )
+            return max(estimated, 1)
+        if intent == "review_thesis":
+            return 2
+        return 1
+
     def _resolve_collect_variant_id(self, *, intent: str, plan: SubagentPlan) -> str:
         if intent == "stock_check":
             return "augmented_snapshot_bundle" if len(self._stock_check_plan_snapshot_types(plan)) > 3 else "baseline_snapshot_bundle"
+        if intent == "stock_compare":
+            return (
+                "augmented_compare_snapshot_bundle"
+                if len(self._stock_compare_plan_snapshot_types(plan)) > 3
+                else "baseline_compare_snapshot_bundle"
+            )
         if intent == "sector_research":
             return "sector_plus_policy" if self._sector_research_plan_includes_policy(plan) else "sector_only"
         if intent == "stock_screen":
             return "sector_seeded_universe" if self._stock_screen_plan_sector_query(plan) else "market_slice_universe"
+        if intent == "review_thesis":
+            return self._review_followup_mode_from_plan(plan)
         return "rule_replanned"
 
     def _select_collect_catalog_entry(
@@ -1570,6 +2017,20 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         if not child_thread_ids:
             return []
         return [f"child_threads={','.join(child_thread_ids)}"]
+
+    def _annotate_collect_trace_rows(self, trace_rows: list[dict]) -> list[dict]:
+        annotated: list[dict] = []
+        for row in trace_rows:
+            updated = dict(row)
+            child_thread_id = str(updated.get("child_thread_id") or "").strip()
+            if child_thread_id:
+                notes = [str(item) for item in list(updated.get("notes") or [])]
+                child_thread_note = f"child_thread={child_thread_id}"
+                if child_thread_note not in notes:
+                    notes.append(child_thread_note)
+                updated["notes"] = notes
+            annotated.append(updated)
+        return annotated
 
     @staticmethod
     def _unique_notes(notes: list[str]) -> list[str]:

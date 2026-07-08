@@ -181,10 +181,10 @@ class CollectorStrategyTests(unittest.TestCase):
 
         self.assertEqual(provider.calls, 1)
         self.assertEqual(
-            [name for name, _ in runtime.calls],
+            sorted(name for name, _ in runtime.calls),
             [
-                "market_snapshot_skill",
                 "fundamental_snapshot_skill",
+                "market_snapshot_skill",
                 "notice_snapshot_skill",
             ],
         )

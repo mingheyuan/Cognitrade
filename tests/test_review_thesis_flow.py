@@ -347,6 +347,23 @@ class ReviewThesisFlowTests(unittest.TestCase):
             self.assertEqual(collect_payload["sources"][0]["review_target_run_id"], "01REVIEWTARGET")
             self.assertEqual(collect_payload["sources"][0]["sector"], "innovation_drug")
             self.assertEqual(len(collect_payload["snapshots"]), 1)
+            collect_plan = list(collect_payload.get("subagent_plans") or [])[0]
+            collect_node_ids = [str(node.get("node_id") or "") for node in list(collect_plan.get("nodes") or [])]
+            self.assertEqual(
+                collect_node_ids,
+                [
+                    "query_normalizer",
+                    "collection_strategy_resolver",
+                    "review_target_loader",
+                    "review_sector_snapshot_collector",
+                ],
+            )
+            patch_op_types = [
+                str(operation.get("op_type") or "")
+                for patch in list(collect_payload.get("subagent_plan_patches") or [])
+                for operation in list((patch or {}).get("operations") or [])
+            ]
+            self.assertEqual(patch_op_types, ["request_replan"])
 
             reviewer_payload = reviewer.run(
                 source_run_id="01REVIEWTARGET",
@@ -494,6 +511,23 @@ class ReviewThesisFlowTests(unittest.TestCase):
             self.assertEqual(collect_payload["sources"][0]["symbol"], "000001")
             snapshot_types = [item["snapshot_type"] for item in collect_payload["snapshots"]]
             self.assertEqual(snapshot_types, ["market", "fundamental", "notice"])
+            collect_plan = list(collect_payload.get("subagent_plans") or [])[0]
+            collect_node_ids = [str(node.get("node_id") or "") for node in list(collect_plan.get("nodes") or [])]
+            self.assertEqual(
+                collect_node_ids,
+                [
+                    "query_normalizer",
+                    "collection_strategy_resolver",
+                    "review_target_loader",
+                    "review_stock_snapshot_collector",
+                ],
+            )
+            patch_op_types = [
+                str(operation.get("op_type") or "")
+                for patch in list(collect_payload.get("subagent_plan_patches") or [])
+                for operation in list((patch or {}).get("operations") or [])
+            ]
+            self.assertEqual(patch_op_types, ["request_replan"])
 
             market_snapshot = next(item for item in collect_payload["snapshots"] if item["snapshot_type"] == "market")
             fundamental_snapshot = next(item for item in collect_payload["snapshots"] if item["snapshot_type"] == "fundamental")
