@@ -69,6 +69,7 @@ class OrchestratorDependenciesTests(unittest.TestCase):
                 self.assertIs(dependencies.reporter.llm_provider, dependencies.llm_provider)
                 self.assertIs(dependencies.distiller.llm_provider, dependencies.llm_provider)
                 self.assertIs(dependencies.retriever.llm_provider, dependencies.llm_provider)
+                self.assertIs(dependencies.supervisor.llm_provider, dependencies.llm_provider)
                 self.assertIs(dependencies.methodology_memory_writer.memory_service, dependencies.memory_service)
             finally:
                 dependencies.close()

@@ -42,6 +42,8 @@ class Settings(BaseModel):
     max_llm_calls_per_turn: int = 1
     max_subagent_calls_per_turn: int = 32
     max_child_threads_per_turn: int = 8
+    supervisor_shadow_llm_enabled: bool = False
+    supervisor_shadow_llm_reasoning_effort: str = "low"
     artifacts_retention_days: int = 30
     max_artifacts_size_mb: int = 1024
     run_timeout_seconds: int = 120

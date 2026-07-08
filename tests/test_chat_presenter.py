@@ -321,6 +321,28 @@ class ChatPresenterTests(unittest.TestCase):
             "distill:preprocess:source_normalizer",
         )
 
+    def test_presenter_accumulates_action_phase_shadow_events_into_dynamic_trace(self) -> None:
+        presenter = ChatStreamPresenter()
+
+        presenter.on_event(
+            _event(
+                event_type="action_phase_shadow_suggested",
+                phase="supervision",
+                agent="supervisor",
+                payload={
+                    "selected_action_node_id": "screen_review",
+                    "request_replan": True,
+                    "confidence": 0.74,
+                },
+            )
+        )
+
+        trace_payload = presenter.current_trace_payload()
+        self.assertIsNotNone(trace_payload)
+        self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "action_phase_shadow_suggested")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["selected_action_node_id"], "screen_review")
+
     def test_presenter_accumulates_live_events_payload_from_runtime_events(self) -> None:
         presenter = ChatStreamPresenter()
 

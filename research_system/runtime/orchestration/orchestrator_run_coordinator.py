@@ -61,7 +61,21 @@ class OrchestratorRunCoordinator:
                 request=request,
                 intent=intent,
             )
-            self.host._execute_plan(context=context, request=request, plan=plan)
+            supervisor = self.host.supervisor
+            bind_runtime = getattr(supervisor, "bind_runtime", None)
+            clear_runtime = getattr(supervisor, "clear_runtime", None)
+            if callable(bind_runtime):
+                bind_runtime(
+                    context=context,
+                    support=self.host._execution_support(),
+                    request_id=request.request_id,
+                    intent=intent,
+                )
+            try:
+                self.host._execute_plan(context=context, request=request, plan=plan)
+            finally:
+                if callable(clear_runtime):
+                    clear_runtime()
             return self.terminal_support.finalize_success_path(
                 context=context,
                 request=request,
@@ -161,7 +175,21 @@ class OrchestratorRunCoordinator:
                 pending_nodes=[action.node_id for action in plan.actions if action.node_id in rerun_nodes],
                 completed_nodes=completed_nodes,
             )
-            self.host._execute_plan(context=context, request=request, plan=plan)
+            supervisor = self.host.supervisor
+            bind_runtime = getattr(supervisor, "bind_runtime", None)
+            clear_runtime = getattr(supervisor, "clear_runtime", None)
+            if callable(bind_runtime):
+                bind_runtime(
+                    context=context,
+                    support=self.host._execution_support(),
+                    request_id=request.request_id,
+                    intent=plan.intent,
+                )
+            try:
+                self.host._execute_plan(context=context, request=request, plan=plan)
+            finally:
+                if callable(clear_runtime):
+                    clear_runtime()
             return self.terminal_support.finalize_success_path(
                 context=context,
                 request=request,

@@ -34,7 +34,11 @@ class ChatPresenterLiveAccumulator:
             trace_payload.setdefault("subagent_trace", []).append(self._subagent_trace_row(event))
         elif event.event_type == "action_plan_patch_applied":
             trace_payload.setdefault("action_plan_patches", []).append(self._action_plan_patch_row(event))
-        elif event.event_type == "dynamic_action_inserted" or event.event_type.startswith("subagent_dag_"):
+        elif (
+            event.event_type == "dynamic_action_inserted"
+            or event.event_type.startswith("subagent_dag_")
+            or event.event_type.startswith("action_phase_shadow_")
+        ):
             trace_payload.setdefault("dynamic_trace", []).append(self._dynamic_trace_row(event))
         else:
             wait_row = self._wait_trace_row(event)

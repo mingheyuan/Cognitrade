@@ -246,6 +246,42 @@ class SessionHistoryTests(unittest.TestCase):
             "distill:preprocess:source_normalizer",
         )
 
+    def test_trace_rebuilds_action_phase_shadow_rows_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "01TRACESHADOW"
+            run_root.mkdir(parents=True, exist_ok=True)
+
+            write_json(run_root / "request.json", {"intent": "stock_screen", "user_query": "screen growth stocks"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-shadow-1",
+                    "request_id": "req-shadow",
+                    "run_id": "01TRACESHADOW",
+                    "intent": "stock_screen",
+                    "event_type": "action_phase_shadow_suggested",
+                    "phase": "supervision",
+                    "agent": "supervisor",
+                    "message": "Shadow action-phase policy evaluated the current frontier",
+                    "payload": {
+                        "selected_action_node_id": "screen_review",
+                        "request_replan": True,
+                        "actual_action_node_id": "screen_review",
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-08T10:00:00+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(len(payload["dynamic_trace"]), 1)
+        self.assertEqual(payload["dynamic_trace"][0]["event"], "action_phase_shadow_suggested")
+        self.assertEqual(payload["dynamic_trace"][0]["selected_action_node_id"], "screen_review")
+        self.assertEqual(payload["dynamic_trace"][0]["actual_action_node_id"], "screen_review")
+
     def test_trace_rebuilds_action_plan_patches_from_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "01TRACEPATCH"

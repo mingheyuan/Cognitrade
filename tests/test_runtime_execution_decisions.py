@@ -8,6 +8,7 @@ from unittest.mock import Mock
 from research_system.runtime.execution.handlers.dataflow.data import run_retriever
 from research_system.runtime.execution.handlers.distillation.distillation import run_critic, run_distiller
 from research_system.runtime.execution.handlers.reporting import run_reporter
+from research_system.runtime.orchestration.orchestrator_research_debug import OrchestratorDebugSupport
 from research_system.runtime.orchestration.orchestrator_context import build_runtime_context
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.runtime.storage.runs.run_store import RunStore
@@ -187,6 +188,32 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
             trace_payload = support.extend_subagent_trace.call_args.kwargs["payload"]
             self.assertEqual(trace_payload["subagent_plans"], [{"phase": "review"}])
             self.assertEqual(trace_payload["subagent_plan_patches"], [])
+        finally:
+            temp_dir.cleanup()
+
+    def test_debug_payload_includes_action_phase_shadow_suggestions(self) -> None:
+        temp_dir, _settings, context, request = _build_runtime()
+        try:
+            context.action_phase_shadow_suggestions.append(
+                {
+                    "event": "action_phase_shadow_suggested",
+                    "selected_action_node_id": "screen_review",
+                    "request_replan": True,
+                }
+            )
+
+            payload = OrchestratorDebugSupport().build_debug_payload(
+                context=context,
+                request=request,
+                plan=ActionPlan(intent="stock_screen", actions=[]),
+                plan_intent="stock_screen",
+                retrieval_summary=None,
+            )
+
+            self.assertEqual(
+                payload["action_phase_shadow_suggestions"],
+                [{"event": "action_phase_shadow_suggested", "selected_action_node_id": "screen_review", "request_replan": True}],
+            )
         finally:
             temp_dir.cleanup()
 

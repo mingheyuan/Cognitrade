@@ -107,5 +107,5 @@ def build_orchestrator_dependencies(settings: Settings) -> OrchestratorDependenc
         gates=GateEvaluator(),
         retention=RunRetentionService(settings),
         planner=RuntimePlanner(llm_provider, settings),
-        supervisor=RuntimeSupervisor(),
+        supervisor=RuntimeSupervisor(llm_provider=llm_provider, settings=settings),
     )
