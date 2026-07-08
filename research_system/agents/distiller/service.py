@@ -7,11 +7,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from research_system.agents._subagent_dag import (
-    SubagentDagExecutor,
-    SubagentDagNodeResult,
-    SubagentDagNodeSpec,
-)
+from research_system.agents._subagent_dag import SubagentDagNodeResult
+from research_system.agents._subagent_phase_controller import SubagentPhaseController
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.runtime.core.execution_policy import RuntimeDegradeReason
 from research_system.runtime.platform.settings import Settings
@@ -106,6 +103,13 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                     distillation_result_model=DistillationResult,
                 ),
             ]
+        )
+        self.phase_controller = SubagentPhaseController(
+            registry=self.registry,
+            invoke_subagent=self._invoke_subagent,
+            emit_event=self._emit_runtime_event,
+            cache_context_builder=self._subagent_dag_cache_context,
+            start_from_node_id_builder=self._subagent_dag_start_from_node_id,
         )
 
     def run(
@@ -330,39 +334,19 @@ class DistillerService(RuntimeBoundSubagentInvoker):
         preferred_subagent_type: str | None = None,
         requires_llm: bool | None = None,
     ) -> SubagentCatalogEntry:
-        candidates = self.registry.catalog_entries(
+        return self.phase_controller.select_catalog_entry(
             stage="distill",
             intent="distill_kol_logic",
             capability=capability,
+            preferred_subagent_type=preferred_subagent_type,
             requires_llm=requires_llm,
         )
-        if not candidates:
-            candidates = self.registry.catalog_entries(
-                stage="distill",
-                capability=capability,
-                requires_llm=requires_llm,
-            )
-        if not candidates:
-            raise KeyError(f"no distiller catalog entry for capability={capability!r}")
-        if preferred_subagent_type:
-            for candidate in candidates:
-                if candidate.subagent_type == preferred_subagent_type:
-                    return candidate
-        return sorted(
-            candidates,
-            key=lambda candidate: (
-                bool(candidate.requires_llm),
-                self._cost_rank(candidate.cost_class),
-                self._latency_rank(candidate.latency_class),
-                candidate.subagent_type,
-            ),
-        )[0]
 
     def _cost_rank(self, cost_class: str | None) -> int:
-        return {"low": 0, "medium": 1, "high": 2}.get(str(cost_class or "").strip().lower(), 3)
+        return self.phase_controller._cost_rank(cost_class)
 
     def _latency_rank(self, latency_class: str | None) -> int:
-        return {"low": 0, "medium": 1, "high": 2}.get(str(latency_class or "").strip().lower(), 3)
+        return self.phase_controller._latency_rank(latency_class)
 
     def _build_catalog_plan_node(
         self,
@@ -381,20 +365,20 @@ class DistillerService(RuntimeBoundSubagentInvoker):
         cache_key: str | None = None,
         notes: list[str] | None = None,
     ) -> SubagentPlanNode:
-        return SubagentPlanNode(
+        return self.phase_controller.build_catalog_plan_node(
             node_id=node_id,
             subagent_type=subagent_type,
             objective=objective,
-            inputs=dict(inputs),
-            depends_on=list(depends_on or []),
-            tags=list(tags or ["catalog_selected"]),
-            failure_mode=failure_mode,  # type: ignore[arg-type]
+            inputs=inputs,
+            depends_on=depends_on,
+            tags=tags,
+            failure_mode=failure_mode,
             allow_partial_dependencies=allow_partial_dependencies,
             max_attempts=max_attempts,
             replayable=replayable,
-            cache_scope=cache_scope,  # type: ignore[arg-type]
+            cache_scope=cache_scope,
             cache_key=cache_key,
-            notes=list(notes or []),
+            notes=notes,
         )
 
     def _build_preprocess_subagent_plan(
@@ -583,32 +567,11 @@ class DistillerService(RuntimeBoundSubagentInvoker):
         dag_id: str,
         build_invocation,
     ) -> dict[str, SubagentDagNodeResult]:
-        dag_nodes: list[SubagentDagNodeSpec] = []
-        for plan_node in plan.nodes:
-            runtime_node = build_invocation[plan_node.node_id]
-            dag_nodes.append(
-                SubagentDagNodeSpec(
-                    node_id=plan_node.node_id,
-                    build_invocation=lambda results, *, builder=runtime_node["builder"]: builder(results),
-                    depends_on=tuple(plan_node.depends_on),
-                    failure_mode=plan_node.failure_mode,
-                    allow_partial_dependencies=plan_node.allow_partial_dependencies,
-                    max_attempts=plan_node.max_attempts,
-                    replayable=plan_node.replayable,
-                    cache_scope=plan_node.cache_scope,
-                    cache_key=plan_node.cache_key,
-                    metadata={
-                        **dict(runtime_node["metadata"]),
-                        "plan_id": plan.plan_id,
-                        "plan_node_id": plan_node.node_id,
-                        "subagent_plan_strategy": plan.strategy,
-                    },
-                )
-            )
-        return self._execute_subagent_dag(
-            dag_nodes,
-            max_workers=max_workers,
+        return self.phase_controller.execute_plan(
+            plan=plan,
+            build_invocation=build_invocation,
             dag_id=dag_id,
+            max_workers=max_workers,
         )
 
     def _build_preprocess_plan_invocations(
@@ -775,28 +738,6 @@ class DistillerService(RuntimeBoundSubagentInvoker):
         }
         return runtime_nodes
 
-    def _execute_subagent_dag(
-        self,
-        nodes: list[SubagentDagNodeSpec],
-        *,
-        max_workers: int | None = None,
-        dag_id: str,
-        start_from_node_id: str | None = None,
-    ) -> dict[str, SubagentDagNodeResult]:
-        executor = SubagentDagExecutor(
-            invoke_subagent=self._invoke_subagent,
-            emit_event=self._emit_runtime_event,
-        )
-        resolved_start_from_node_id = start_from_node_id or self._subagent_dag_start_from_node_id(
-            dag_id=dag_id,
-        )
-        return executor.execute(
-            nodes,
-            max_workers=max_workers,
-            cache_context=self._subagent_dag_cache_context(dag_id=dag_id),
-            start_from_node_id=resolved_start_from_node_id,
-        )
-
     def _dag_metadata(
         self,
         *,
@@ -807,12 +748,12 @@ class DistillerService(RuntimeBoundSubagentInvoker):
         child_turn_id: str | None = None,
         phase: str | None = None,
     ) -> dict:
-        payload = {
-            "task_name": task_name,
-            "agent_path": agent_path,
-            "objective": objective,
-            "phase": phase or "distill",
-        }
+        payload = self.phase_controller.build_metadata(
+            task_name=task_name,
+            agent_path=agent_path,
+            objective=objective,
+            phase=phase or "distill",
+        )
         if child_thread_id:
             payload["child_thread_id"] = child_thread_id
         if child_turn_id:
