@@ -28,7 +28,18 @@ from research_system.runtime.history import (
     SessionHistoryStepBuilder,
     SessionHistoryTraceRebuilder,
 )
-from research_system.runtime.orchestration import OrchestratorSubagentDiscoveryAdminSupport, SubagentDiscoveryStore
+from research_system.runtime.orchestration import (
+    OrchestratorSubagentDiscoveryAdminSupport,
+    SUPPORTED_RUNTIME_REGISTRATION_TYPES,
+    SubagentDiscoveryStore,
+    SubagentRuntimePackagingSupport,
+)
+from research_system.runtime.orchestration.subagent_runtime_packaging import (
+    SUPPORTED_RUNTIME_REGISTRATION_TYPES as PackagingRuntimeRegistrationTypes,
+)
+from research_system.runtime.orchestration.subagent_runtime_packaging import (
+    SubagentRuntimePackagingSupport as PackagingSupportImpl,
+)
 from research_system.runtime.planning.action_factory import PlannerActionFactory
 from research_system.runtime.planning.context_hints import PlannerContextHints
 from research_system.runtime.planning.dynamic_plan_support import PlannerDynamicPlanSupport
@@ -136,8 +147,24 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
             OrchestratorSubagentDiscoveryAdminSupport,
         )
         self.assertIs(
+            orchestration_package.SubagentRuntimePackagingSupport,
+            SubagentRuntimePackagingSupport,
+        )
+        self.assertIs(
             orchestration_package.SubagentDiscoveryStore,
             SubagentDiscoveryStore,
+        )
+        self.assertIs(
+            SubagentRuntimePackagingSupport,
+            PackagingSupportImpl,
+        )
+        self.assertIs(
+            orchestration_package.SUPPORTED_RUNTIME_REGISTRATION_TYPES,
+            SUPPORTED_RUNTIME_REGISTRATION_TYPES,
+        )
+        self.assertIs(
+            SUPPORTED_RUNTIME_REGISTRATION_TYPES,
+            PackagingRuntimeRegistrationTypes,
         )
 
 

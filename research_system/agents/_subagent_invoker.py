@@ -5,21 +5,14 @@ from typing import Any
 
 from pathlib import Path
 
-from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
 from research_system.agents._subagent_dag import SubagentDagCacheContext
 from research_system.runtime.local_runtime import start_local_runtime
+from research_system.runtime.orchestration.subagent_runtime_packaging import SubagentRuntimePackagingSupport
 from research_system.runtime.storage.jsonl import write_json
 from research_system.schemas.runtime import RuntimeItemRecord
 from research_system.schemas.protocol import RequestEnvelope
 from research_system.schemas.subagents import SubagentActivationEntry, SubagentExecutionRecord, SubagentInvocation
-from research_system.subagents.base import SubagentCatalogMetadata, SubagentRuntimePolicy
 from research_system.subagents.registry import SubagentRegistry
-from research_system.subagents.runtime_registered import (
-    RuntimeRegisteredHttpJsonSubagent,
-    RuntimeRegisteredSkillSubagent,
-    RuntimeRegisteredSnapshotSkillSubagent,
-    build_runtime_registered_model,
-)
 
 
 class RuntimeBoundSubagentInvoker:
@@ -27,6 +20,7 @@ class RuntimeBoundSubagentInvoker:
     _runtime_binding: dict[str, Any] | None = None
     _local_runtime_binding: dict[str, Any] | None = None
     _local_agent_item_stack: list[RuntimeItemRecord] | None = None
+    _runtime_packaging_support_instance: SubagentRuntimePackagingSupport | None = None
 
     def _invoke_subagent(self, invocation: SubagentInvocation) -> tuple[dict, SubagentExecutionRecord]:
         registry = getattr(self, "registry")
@@ -214,88 +208,21 @@ class RuntimeBoundSubagentInvoker:
             return runtime
         return getattr(self, "skill_runtime", None)
 
+    def _runtime_packaging_support(self) -> SubagentRuntimePackagingSupport:
+        support = getattr(self, "_runtime_packaging_support_instance", None)
+        if support is None:
+            support = SubagentRuntimePackagingSupport()
+            self._runtime_packaging_support_instance = support
+        return support
+
     def _activated_discovery_runtime_subagent(
         self,
         activation_entry: SubagentActivationEntry,
     ):
-        runtime_registration = activation_entry.runtime_registration
-        if runtime_registration is None:
-            return None
-        catalog_entry = activation_entry.catalog_entry
-        runtime_policy = SubagentRuntimePolicy(
-            requires_llm=bool(catalog_entry.requires_llm),
-            fallback_subagent_type=catalog_entry.fallback_subagent_type,
-            error_fallback_subagent_type=catalog_entry.error_fallback_subagent_type,
-            allow_parallel=bool(catalog_entry.allow_parallel),
-            max_concurrency=catalog_entry.max_concurrency,
+        return self._runtime_packaging_support().materialize_runtime_subagent(
+            activation_entry=activation_entry,
+            skill_runtime=self._runtime_skill_runtime(),
         )
-        catalog_metadata = SubagentCatalogMetadata(
-            summary=catalog_entry.summary,
-            capabilities=tuple(item for item in catalog_entry.capabilities if str(item).strip()),
-            stage=catalog_entry.stage,
-            cost_class=catalog_entry.cost_class,
-            latency_class=catalog_entry.latency_class,
-            side_effect_level=catalog_entry.side_effect_level,
-            suitable_intents=tuple(item for item in catalog_entry.suitable_intents if str(item).strip()),
-            tags=tuple(item for item in catalog_entry.tags if str(item).strip()),
-        )
-        if runtime_registration.registration_type == "snapshot_skill_runner":
-            skill_runtime = self._runtime_skill_runtime()
-            if skill_runtime is None:
-                return None
-            if str(catalog_entry.stage or "").strip().lower() not in {"", "collect"}:
-                return None
-            return RuntimeRegisteredSnapshotSkillSubagent(
-                subagent_type=str(activation_entry.subagent_type).strip(),
-                snapshot_type=str(runtime_registration.snapshot_type or "").strip(),
-                skill_name=str(runtime_registration.skill_name).strip(),
-                skill_runtime=skill_runtime,
-                runtime_policy=runtime_policy,
-                catalog_metadata=catalog_metadata,
-            )
-        if runtime_registration.registration_type == "skill_runner":
-            skill_runtime = self._runtime_skill_runtime()
-            if skill_runtime is None:
-                return None
-            return RuntimeRegisteredSkillSubagent(
-                subagent_type=str(activation_entry.subagent_type).strip(),
-                skill_name=str(runtime_registration.skill_name).strip(),
-                skill_runtime=skill_runtime,
-                input_model=build_runtime_registered_model(
-                    model_name=f"{activation_entry.subagent_type}_input",
-                    schema=catalog_entry.input_json_schema,
-                ),
-                output_model=build_runtime_registered_model(
-                    model_name=f"{activation_entry.subagent_type}_output",
-                    schema=catalog_entry.output_json_schema,
-                ),
-                runtime_policy=runtime_policy,
-                catalog_metadata=catalog_metadata,
-            )
-        if runtime_registration.registration_type in {"http_json_runner", "openapi_http_runner"}:
-            source_id = str(runtime_registration.source_id or "").strip()
-            data_source = DataSourceRegistry().get(source_id)
-            if data_source is None or str(data_source.access).strip().lower() != "http":
-                return None
-            return RuntimeRegisteredHttpJsonSubagent(
-                subagent_type=str(activation_entry.subagent_type).strip(),
-                source_id=source_id,
-                base_url=str(data_source.base_url).strip(),
-                endpoint_path=str(runtime_registration.endpoint_path or "").strip(),
-                http_method=str(runtime_registration.http_method or "").strip().upper() or "GET",
-                timeout_seconds=float(runtime_registration.timeout_seconds or 20.0),
-                input_model=build_runtime_registered_model(
-                    model_name=f"{activation_entry.subagent_type}_input",
-                    schema=catalog_entry.input_json_schema,
-                ),
-                output_model=build_runtime_registered_model(
-                    model_name=f"{activation_entry.subagent_type}_output",
-                    schema=catalog_entry.output_json_schema,
-                ),
-                runtime_policy=runtime_policy,
-                catalog_metadata=catalog_metadata,
-            )
-        return None
 
     def _approved_catalog_overlay_entries(self):
         binding = self._runtime_binding_for_events()

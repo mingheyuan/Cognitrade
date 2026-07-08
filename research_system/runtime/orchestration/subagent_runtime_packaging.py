@@ -9,9 +9,17 @@ import yaml
 
 from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
 from research_system.schemas.subagents import (
+    SubagentActivationEntry,
     SubagentCatalogEntry,
     SubagentRuntimeRegistration,
     SubagentRuntimeRegistrationTemplate,
+)
+from research_system.subagents.base import SubagentCatalogMetadata, SubagentRuntimePolicy
+from research_system.subagents.runtime_registered import (
+    RuntimeRegisteredHttpJsonSubagent,
+    RuntimeRegisteredSkillSubagent,
+    RuntimeRegisteredSnapshotSkillSubagent,
+    build_runtime_registered_model,
 )
 
 
@@ -32,6 +40,105 @@ class SubagentRuntimePackagingSupport:
             update={"runtime_registration_templates": self.candidate_templates(candidate_entry)},
             deep=True,
         )
+
+    def materialize_runtime_subagent(
+        self,
+        *,
+        activation_entry: SubagentActivationEntry,
+        skill_runtime=None,
+    ):
+        runtime_registration = activation_entry.runtime_registration
+        if runtime_registration is None:
+            return None
+        catalog_entry = activation_entry.catalog_entry
+        runtime_policy = self.runtime_policy(catalog_entry)
+        catalog_metadata = self.catalog_metadata(catalog_entry)
+        input_model, output_model = self.runtime_models(
+            activation_entry=activation_entry,
+            catalog_entry=catalog_entry,
+        )
+        if runtime_registration.registration_type == "snapshot_skill_runner":
+            if skill_runtime is None:
+                return None
+            if str(catalog_entry.stage or "").strip().lower() not in {"", "collect"}:
+                return None
+            return RuntimeRegisteredSnapshotSkillSubagent(
+                subagent_type=str(activation_entry.subagent_type).strip(),
+                snapshot_type=str(runtime_registration.snapshot_type or "").strip(),
+                skill_name=str(runtime_registration.skill_name).strip(),
+                skill_runtime=skill_runtime,
+                runtime_policy=runtime_policy,
+                catalog_metadata=catalog_metadata,
+            )
+        if runtime_registration.registration_type == "skill_runner":
+            if skill_runtime is None:
+                return None
+            return RuntimeRegisteredSkillSubagent(
+                subagent_type=str(activation_entry.subagent_type).strip(),
+                skill_name=str(runtime_registration.skill_name).strip(),
+                skill_runtime=skill_runtime,
+                input_model=input_model,
+                output_model=output_model,
+                runtime_policy=runtime_policy,
+                catalog_metadata=catalog_metadata,
+            )
+        if runtime_registration.registration_type in {"http_json_runner", "openapi_http_runner"}:
+            source_id = str(runtime_registration.source_id or "").strip()
+            data_source = DataSourceRegistry().get(source_id)
+            if data_source is None or str(data_source.access).strip().lower() != "http":
+                return None
+            return RuntimeRegisteredHttpJsonSubagent(
+                subagent_type=str(activation_entry.subagent_type).strip(),
+                source_id=source_id,
+                base_url=str(data_source.base_url).strip(),
+                endpoint_path=str(runtime_registration.endpoint_path or "").strip(),
+                http_method=str(runtime_registration.http_method or "").strip().upper() or "GET",
+                timeout_seconds=float(runtime_registration.timeout_seconds or 20.0),
+                input_model=input_model,
+                output_model=output_model,
+                runtime_policy=runtime_policy,
+                catalog_metadata=catalog_metadata,
+            )
+        return None
+
+    @staticmethod
+    def runtime_policy(catalog_entry: SubagentCatalogEntry) -> SubagentRuntimePolicy:
+        return SubagentRuntimePolicy(
+            requires_llm=bool(catalog_entry.requires_llm),
+            fallback_subagent_type=catalog_entry.fallback_subagent_type,
+            error_fallback_subagent_type=catalog_entry.error_fallback_subagent_type,
+            allow_parallel=bool(catalog_entry.allow_parallel),
+            max_concurrency=catalog_entry.max_concurrency,
+        )
+
+    @staticmethod
+    def catalog_metadata(catalog_entry: SubagentCatalogEntry) -> SubagentCatalogMetadata:
+        return SubagentCatalogMetadata(
+            summary=catalog_entry.summary,
+            capabilities=tuple(item for item in catalog_entry.capabilities if str(item).strip()),
+            stage=catalog_entry.stage,
+            cost_class=catalog_entry.cost_class,
+            latency_class=catalog_entry.latency_class,
+            side_effect_level=catalog_entry.side_effect_level,
+            suitable_intents=tuple(item for item in catalog_entry.suitable_intents if str(item).strip()),
+            tags=tuple(item for item in catalog_entry.tags if str(item).strip()),
+        )
+
+    @staticmethod
+    def runtime_models(
+        *,
+        activation_entry: SubagentActivationEntry,
+        catalog_entry: SubagentCatalogEntry,
+    ) -> tuple[type | None, type | None]:
+        input_model = build_runtime_registered_model(
+            model_name=f"{activation_entry.subagent_type}_input",
+            schema=catalog_entry.input_json_schema,
+        )
+        output_model = build_runtime_registered_model(
+            model_name=f"{activation_entry.subagent_type}_output",
+            schema=catalog_entry.output_json_schema,
+        )
+        return input_model, output_model
 
     def candidate_templates(self, candidate_entry: SubagentCatalogEntry) -> list[SubagentRuntimeRegistrationTemplate]:
         templates: list[SubagentRuntimeRegistrationTemplate] = []

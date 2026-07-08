@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 
+from research_system.runtime.orchestration.subagent_runtime_packaging import SUPPORTED_RUNTIME_REGISTRATION_TYPES
+
 
 def build_app_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="research-system")
@@ -55,7 +57,7 @@ def build_app_parser() -> argparse.ArgumentParser:
     activate_discovery_parser.add_argument("delegate_subagent_type", nargs="?")
     activate_discovery_parser.add_argument("--candidate-subagent-type")
     activate_discovery_parser.add_argument("--registration-template-id")
-    activate_discovery_parser.add_argument("--registration-type", choices=("snapshot_skill_runner", "skill_runner", "http_json_runner", "openapi_http_runner"))
+    activate_discovery_parser.add_argument("--registration-type", choices=SUPPORTED_RUNTIME_REGISTRATION_TYPES)
     activate_discovery_parser.add_argument("--skill-name")
     activate_discovery_parser.add_argument("--snapshot-type")
     activate_discovery_parser.add_argument("--source-id")
