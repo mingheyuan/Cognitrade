@@ -7,6 +7,9 @@ from research_system.adapters.vendors.http_json_source_registry import HttpJsonS
 from research_system.adapters.vendors.mcp_source_registry import McpSourceRegistry
 from research_system.adapters.vendors.openapi_source_registry import OpenApiSourceRegistry
 from research_system.adapters.vendors.skill_source_registry import SkillSourceRegistry
+from research_system.agents._subagent_capability_gap_controller import (
+    SubagentCapabilityGapController,
+)
 from research_system.agents._subagent_discovery_controller import SubagentDiscoveryController
 from research_system.agents._subagent_discovery_decision_source import SubagentDiscoveryDecisionSource
 from research_system.agents._subagent_discovery_policy import SubagentDiscoveryPolicyService
@@ -145,6 +148,17 @@ class SubagentPhaseController:
             emit_event=emit_event,
             service_name=service_name,
         )
+        self.capability_gap_controller = SubagentCapabilityGapController(
+            candidates_resolver=self._catalog_candidates,
+            entry_selector=self._choose_catalog_entry,
+            capability_gap_builder=self._build_capability_gap,
+            discovery_controller=self.discovery_controller,
+            discovery_store_resolver=lambda: self._binding_value("subagent_discovery_store"),
+            record_capability_gap=self._record_capability_gap,
+            record_tool_discovery_request=self._record_tool_discovery_request,
+            record_tool_discovery_auto_activation=self._record_tool_discovery_auto_activation,
+            error_factory=SubagentCapabilityGapError,
+        )
         self._mcp_source_registry = None
         self._http_json_source_registry = None
         self._openapi_source_registry = None
@@ -160,47 +174,12 @@ class SubagentPhaseController:
         preferred_subagent_type: str | None = None,
         requires_llm: bool | None = None,
     ) -> SubagentCatalogEntry:
-        candidates = self._catalog_candidates(
+        return self.capability_gap_controller.select_catalog_entry(
             stage=stage,
             intent=intent,
             capability=capability,
-            requires_llm=requires_llm,
-        )
-        if not candidates:
-            gap = self._build_capability_gap(
-                stage=stage,
-                intent=intent,
-                capability=capability,
-                preferred_subagent_type=preferred_subagent_type,
-                requires_llm=requires_llm,
-            )
-            resolution = self.discovery_controller.resolve_runtime_gap(
-                gap=gap,
-                store=self._binding_value("subagent_discovery_store"),
-            )
-            discovery_request = resolution.tool_discovery_request
-            ticket = resolution.ticket
-            self._record_capability_gap(gap=gap)
-            self._record_tool_discovery_request(request=discovery_request)
-            self._record_tool_discovery_auto_activation(ticket=ticket)
-            candidates = self._catalog_candidates(
-                stage=stage,
-                intent=intent,
-                capability=capability,
-                requires_llm=requires_llm,
-            )
-            if candidates:
-                return self._choose_catalog_entry(
-                    candidates,
-                    preferred_subagent_type=preferred_subagent_type,
-                )
-            raise SubagentCapabilityGapError(
-                gap=gap,
-                tool_discovery_request=discovery_request,
-            )
-        return self._choose_catalog_entry(
-            candidates,
             preferred_subagent_type=preferred_subagent_type,
+            requires_llm=requires_llm,
         )
 
     def build_catalog_plan_node(
