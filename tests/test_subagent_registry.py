@@ -12,6 +12,7 @@ from research_system.runtime.core.execution_policy import RuntimeDegradeReason
 from research_system.runtime.orchestration.orchestrator_context import build_runtime_context
 from research_system.runtime.orchestration.subagent_discovery_admin_support import OrchestratorSubagentDiscoveryAdminSupport
 from research_system.runtime.orchestration.subagent_discovery_store import SubagentDiscoveryStore
+from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.schemas.subagents import SubagentCapabilityGap, SubagentToolDiscoveryRequest
 from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.schemas.protocol import RequestEnvelope
@@ -120,6 +121,28 @@ class _RegisteredRuntimeSubagent:
 
     def run(self, *, value: int):
         return {"doubled": value + 1}
+
+
+class _GenericSkillRuntimeStub:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def run(self, skill_name: str, **kwargs) -> dict[str, object]:
+        self.calls.append((skill_name, dict(kwargs)))
+        return {
+            "summary": f"{skill_name}:{kwargs.get('query')}",
+            "score": float(kwargs.get("score") or 0.0),
+        }
+
+
+class _RuntimeRegisteredService(RuntimeBoundSubagentInvoker):
+    def __init__(self, *, store: SubagentDiscoveryStore, skill_runtime) -> None:
+        self.skill_runtime = skill_runtime
+        self.registry = SubagentRegistry(
+            [_TypedSubagent()],
+            activation_provider=store.activated_alias_entries,
+            activation_factory_provider=self._activated_discovery_runtime_subagent,
+        )
 
 
 class SubagentRegistryTests(unittest.TestCase):
@@ -499,6 +522,115 @@ class SubagentRegistryTests(unittest.TestCase):
 
                 self.assertEqual(outputs["doubled"], 6)
                 self.assertEqual(record.subagent_type, "candidate_collect_sector_signal_enrichment")
+            finally:
+                temp_dir_runtime.cleanup()
+
+    def test_shared_runtime_registration_factory_supports_generic_skill_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="review_thesis",
+                stage="report",
+                capability="report_signal_extension",
+                preferred_subagent_type="candidate_report_signal_extension",
+                reason="missing report signal extension capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="review_thesis",
+                stage="report",
+                capability="report_signal_extension",
+                search_query="review_thesis report report_signal_extension",
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_runtime": lambda self: type(
+                        "_SkillRuntime",
+                        (),
+                        {"backend": type("_Backend", (), {"registry": {"analysis_skill": object()}})()},
+                    )(),
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                candidate_catalog_entries=[
+                    {
+                        "subagent_type": "candidate_report_signal_extension",
+                        "summary": "Approved report-stage analysis skill candidate.",
+                        "capabilities": ["report_signal_extension"],
+                        "stage": "report",
+                        "suitable_intents": ["review_thesis"],
+                        "tags": ["approved_discovery_candidate"],
+                        "input_schema_name": "ReportSignalInput",
+                        "output_schema_name": "ReportSignalOutput",
+                        "input_json_schema": {
+                            "type": "object",
+                            "properties": {
+                                "query": {"type": "string"},
+                                "score": {"type": "number"},
+                            },
+                            "required": ["query"],
+                        },
+                        "output_json_schema": {
+                            "type": "object",
+                            "properties": {
+                                "summary": {"type": "string"},
+                                "score": {"type": "number"},
+                            },
+                            "required": ["summary"],
+                        },
+                    }
+                ],
+            )
+            admin.activate_request(
+                ticket.ticket_id,
+                registration_type="skill_runner",
+                skill_name="analysis_skill",
+                activated_by="tester",
+                reason="activate generic runtime registration",
+            )
+
+            skill_runtime = _GenericSkillRuntimeStub()
+            service = _RuntimeRegisteredService(store=store, skill_runtime=skill_runtime)
+            registry = service.registry
+
+            entries = registry.catalog_entries(stage="report", capability="report_signal_extension")
+            self.assertEqual([entry.subagent_type for entry in entries], ["candidate_report_signal_extension"])
+
+            definition = registry.definition("candidate_report_signal_extension")
+            self.assertIsNotNone(definition.input_model)
+            self.assertIsNotNone(definition.output_model)
+            self.assertIn("query", (definition.input_model.model_json_schema().get("properties") or {}))
+            self.assertIn("summary", (definition.output_model.model_json_schema().get("properties") or {}))
+
+            temp_dir_runtime, context, request_envelope = self._build_runtime()
+            try:
+                outputs, record = context.agent_control.invoke(
+                    registry=registry,
+                    invocation=SubagentInvocation(
+                        subagent_type="candidate_report_signal_extension",
+                        objective="Run generic runtime-registered alias.",
+                        inputs={"query": "banks", "score": 0.8},
+                    ),
+                    thread_id=context.thread.thread_id,
+                    turn_id=context.turn.turn_id,
+                    request_id=request_envelope.request_id,
+                    agent="tester",
+                    phase="report",
+                    execution_policy=context.execution_policy,
+                )
+
+                self.assertEqual(outputs["summary"], "analysis_skill:banks")
+                self.assertEqual(outputs["score"], 0.8)
+                self.assertEqual(record.subagent_type, "candidate_report_signal_extension")
+                self.assertEqual(skill_runtime.calls, [("analysis_skill", {"query": "banks", "score": 0.8})])
             finally:
                 temp_dir_runtime.cleanup()
 

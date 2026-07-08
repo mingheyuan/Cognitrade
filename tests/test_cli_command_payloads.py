@@ -215,6 +215,14 @@ class CliCommandPayloadsTests(unittest.TestCase):
             snapshot_type="market",
             candidate_subagent_type="candidate_collect_snapshot",
         )
+        generic_runtime_activated = build_cli_command_payload(
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            activated_by="manual_cli_activation",
+            registration_type="skill_runner",
+            skill_name="analysis_skill",
+            candidate_subagent_type="candidate_report_analysis",
+        )
 
         self.assertEqual(
             listed,
@@ -260,6 +268,20 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "registration_type": "snapshot_skill_runner",
                 "skill_name": "market_snapshot_skill",
                 "snapshot_type": "market",
+            },
+        )
+        self.assertEqual(
+            generic_runtime_activated,
+            {
+                "command": "activate-subagent-discovery",
+                "ticket_id": "01DISC",
+                "query": "",
+                "intent": "manual_cli_activation",
+                "status_filter": None,
+                "subagent_node_id": "candidate_report_analysis",
+                "registration_type": "skill_runner",
+                "skill_name": "analysis_skill",
+                "snapshot_type": "",
             },
         )
 

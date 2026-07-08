@@ -115,10 +115,20 @@ class SubagentDiscoveryTicket(BaseModel):
 class SubagentRuntimeRegistration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    registration_type: Literal["snapshot_skill_runner"]
+    registration_type: Literal["snapshot_skill_runner", "skill_runner"]
     skill_name: str
-    snapshot_type: str
+    snapshot_type: str | None = None
     notes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_registration_shape(self) -> "SubagentRuntimeRegistration":
+        registration_type = str(self.registration_type or "").strip()
+        normalized_snapshot_type = str(self.snapshot_type or "").strip()
+        if registration_type == "snapshot_skill_runner" and not normalized_snapshot_type:
+            raise ValueError("snapshot_skill_runner requires snapshot_type")
+        if registration_type == "skill_runner" and normalized_snapshot_type:
+            raise ValueError("skill_runner does not support snapshot_type")
+        return self
 
 
 class SubagentActivationEntry(BaseModel):

@@ -241,25 +241,34 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         normalized_type = str(registration_type or "").strip()
         if not normalized_type:
             return None
-        if normalized_type != "snapshot_skill_runner":
+        if normalized_type not in {"snapshot_skill_runner", "skill_runner"}:
             raise self.host.orchestrator_error_cls(f"unsupported runtime registration type: {registration_type}")
         normalized_skill_name = str(skill_name or "").strip()
         normalized_snapshot_type = str(snapshot_type or "").strip()
         normalized_stage = str(candidate_entry.stage or "").strip().lower()
-        if normalized_stage not in {"", "collect"}:
+        if normalized_type == "snapshot_skill_runner" and normalized_stage not in {"", "collect"}:
             raise self.host.orchestrator_error_cls(
                 f"snapshot_skill_runner activation is only supported for collect-stage candidates: {candidate_entry.subagent_type}"
             )
         if not normalized_skill_name:
-            raise self.host.orchestrator_error_cls("skill_name is required for snapshot_skill_runner activation")
-        if not normalized_snapshot_type:
+            raise self.host.orchestrator_error_cls(f"skill_name is required for {normalized_type} activation")
+        if normalized_type == "snapshot_skill_runner" and not normalized_snapshot_type:
             raise self.host.orchestrator_error_cls("snapshot_type is required for snapshot_skill_runner activation")
+        if normalized_type == "skill_runner":
+            self._validate_runtime_contract(candidate_entry)
         self._validate_skill_name(normalized_skill_name)
         return SubagentRuntimeRegistration(
-            registration_type="snapshot_skill_runner",
+            registration_type=normalized_type,
             skill_name=normalized_skill_name,
-            snapshot_type=normalized_snapshot_type,
-            notes=["validated_via_skill_runtime_registry"],
+            snapshot_type=normalized_snapshot_type or None,
+            notes=[
+                "validated_via_skill_runtime_registry",
+                *(
+                    ["validated_runtime_contract_schema"]
+                    if normalized_type == "skill_runner"
+                    else []
+                ),
+            ],
         )
 
     def _validate_skill_name(self, skill_name: str) -> None:
@@ -269,6 +278,28 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             raise self.host.orchestrator_error_cls("skill_runtime registry is not available for validation")
         if skill_name not in registry:
             raise self.host.orchestrator_error_cls(f"unknown skill_name for runtime registration: {skill_name}")
+
+    def _validate_runtime_contract(self, candidate_entry: SubagentCatalogEntry) -> None:
+        input_schema = candidate_entry.input_json_schema
+        output_schema = candidate_entry.output_json_schema
+        if not self._is_object_contract_schema(input_schema):
+            raise self.host.orchestrator_error_cls(
+                f"skill_runner activation requires input_json_schema on candidate: {candidate_entry.subagent_type}"
+            )
+        if not self._is_object_contract_schema(output_schema):
+            raise self.host.orchestrator_error_cls(
+                f"skill_runner activation requires output_json_schema on candidate: {candidate_entry.subagent_type}"
+            )
+
+    @staticmethod
+    def _is_object_contract_schema(schema: object) -> bool:
+        if not isinstance(schema, dict):
+            return False
+        normalized_type = str(schema.get("type") or "").strip().lower()
+        properties = schema.get("properties")
+        if normalized_type and normalized_type != "object":
+            return False
+        return isinstance(properties, dict)
 
 
 __all__ = ["OrchestratorSubagentDiscoveryAdminSupport"]

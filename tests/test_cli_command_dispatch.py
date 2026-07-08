@@ -313,6 +313,17 @@ class CliCommandDispatchTests(unittest.TestCase):
             snapshot_type="market",
             orchestrator_cls=_DispatchOrchestratorStub,
         )
+        generic_runtime_activated = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            activated_by="ops_user",
+            status_filter="activate generic runtime skill",
+            candidate_subagent_type="candidate_report_analysis",
+            registration_type="skill_runner",
+            skill_name="analysis_skill",
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
 
         self.assertEqual(discoveries[0]["ticket_id"], "01DISC")
         self.assertEqual(detail["ticket_id"], "01DISC")
@@ -321,6 +332,10 @@ class CliCommandDispatchTests(unittest.TestCase):
         self.assertEqual(
             runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["registration_type"],
             "snapshot_skill_runner",
+        )
+        self.assertEqual(
+            generic_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["registration_type"],
+            "skill_runner",
         )
 
     def test_execute_cli_payload_command_dispatches_run_id_commands(self) -> None:
