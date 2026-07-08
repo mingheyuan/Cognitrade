@@ -308,6 +308,44 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
         finally:
             temp_dir.cleanup()
 
+    def test_debug_payload_includes_subagent_discovery_stage_decisions(self) -> None:
+        temp_dir, _settings, context, request = _build_runtime()
+        try:
+            context.subagent_discovery_stage_decisions.append(
+                {
+                    "event": "subagent_tool_discovery_protocol_decided",
+                    "decision_stage": "protocol_selection",
+                    "stage": "collect",
+                    "capability": "market_signal_extension",
+                    "selected_protocols": ["skill", "mcp", "openapi", "http_json"],
+                    "policy_source": "rule",
+                }
+            )
+
+            payload = OrchestratorDebugSupport().build_debug_payload(
+                context=context,
+                request=request,
+                plan=ActionPlan(intent="stock_check", actions=[]),
+                plan_intent="stock_check",
+                retrieval_summary=None,
+            )
+
+            self.assertEqual(
+                payload["subagent_discovery_stage_decisions"],
+                [
+                    {
+                        "event": "subagent_tool_discovery_protocol_decided",
+                        "decision_stage": "protocol_selection",
+                        "stage": "collect",
+                        "capability": "market_signal_extension",
+                        "selected_protocols": ["skill", "mcp", "openapi", "http_json"],
+                        "policy_source": "rule",
+                    }
+                ],
+            )
+        finally:
+            temp_dir.cleanup()
+
     def test_debug_payload_includes_subagent_discovery_shadow_suggestions(self) -> None:
         temp_dir, _settings, context, request = _build_runtime()
         try:

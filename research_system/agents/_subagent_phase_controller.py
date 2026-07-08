@@ -125,6 +125,9 @@ class SubagentPhaseController:
             discovery_approval_policy=self.discovery_approval_policy,
             discovery_activation_policy=self.discovery_activation_policy,
             activation_host=self,
+            runtime_binding_getter=runtime_binding_getter,
+            emit_event=emit_event,
+            service_name=service_name,
         )
         self._mcp_source_registry = None
         self._http_json_source_registry = None

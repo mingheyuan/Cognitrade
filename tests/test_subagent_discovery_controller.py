@@ -51,6 +51,11 @@ class SubagentDiscoveryControllerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             store = SubagentDiscoveryStore(root / "discovery")
+            runtime_context = SimpleNamespace(
+                subagent_discovery_stage_decisions=[],
+                dynamic_trace=[],
+            )
+            support = SimpleNamespace(emit_event=lambda *_args, **_kwargs: None)
             host = type(
                 "_Host",
                 (),
@@ -58,7 +63,12 @@ class SubagentDiscoveryControllerTests(unittest.TestCase):
                     "settings": settings,
                     "llm_provider": None,
                     "emit_event": None,
-                    "runtime_binding_getter": lambda self: {},
+                    "runtime_binding_getter": lambda self: {
+                        "context": runtime_context,
+                        "support": support,
+                        "request_id": "req-discovery-controller",
+                        "intent": "stock_check",
+                    },
                     "orchestrator_error_cls": RuntimeError,
                     "require_subagent_discovery_store": lambda self: store,
                     "require_skill_source_registry": lambda self: SkillSourceRegistry(settings=settings),
@@ -78,6 +88,8 @@ class SubagentDiscoveryControllerTests(unittest.TestCase):
                 discovery_approval_policy=SubagentDiscoveryApprovalPolicyService(settings=settings),
                 discovery_activation_policy=SubagentDiscoveryActivationPolicyService(settings=settings),
                 activation_host=host,
+                runtime_binding_getter=host.runtime_binding_getter,
+                service_name="collector",
             )
 
             resolution = controller.resolve_runtime_gap(
@@ -95,6 +107,7 @@ class SubagentDiscoveryControllerTests(unittest.TestCase):
                 resolution.tool_discovery_request.preferred_protocols,
                 ["skill", "mcp", "openapi", "http_json"],
             )
+            self.assertEqual(resolution.tool_discovery_request.policy_source, "rule")
             self.assertIsNotNone(resolution.ticket)
             self.assertEqual(resolution.ticket.status, "approved")
             self.assertEqual(
@@ -105,6 +118,15 @@ class SubagentDiscoveryControllerTests(unittest.TestCase):
             self.assertEqual(
                 resolution.ticket.activated_entries[0].subagent_type,
                 "candidate_collect_market_snapshot_skill",
+            )
+            self.assertEqual(
+                [row["event"] for row in runtime_context.subagent_discovery_stage_decisions],
+                [
+                    "subagent_tool_discovery_protocol_decided",
+                    "subagent_tool_discovery_candidate_decided",
+                    "subagent_tool_discovery_review_decided",
+                    "subagent_tool_discovery_activation_decided",
+                ],
             )
 
 

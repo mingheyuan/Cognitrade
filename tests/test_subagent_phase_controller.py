@@ -230,7 +230,10 @@ class SubagentPhaseControllerTests(unittest.TestCase):
                 runtime_context.subagent_tool_discovery_requests[0]["event"],
                 "subagent_tool_discovery_requested",
             )
-            self.assertEqual(len(runtime_context.dynamic_trace), 2)
+            dynamic_events = [row["event"] for row in runtime_context.dynamic_trace]
+            self.assertIn("subagent_capability_gap_detected", dynamic_events)
+            self.assertIn("subagent_tool_discovery_requested", dynamic_events)
+            self.assertIn("subagent_tool_discovery_protocol_decided", dynamic_events)
             pending_tickets = discovery_store.list("pending")
             self.assertEqual(len(pending_tickets), 1)
             self.assertEqual(pending_tickets[0].capability_gap.capability, "missing_capability")
@@ -243,6 +246,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
         runtime_context = SimpleNamespace(
             subagent_capability_gaps=[],
             subagent_tool_discovery_requests=[],
+            subagent_discovery_stage_decisions=[],
             subagent_discovery_shadow_suggestions=[],
             subagent_discovery_llm_decisions=[],
             subagent_discovery_hybrid_decisions=[],
@@ -431,6 +435,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
                 exc_info.exception.tool_discovery_request.preferred_protocols,
                 ["mcp", "skill", "openapi"],
             )
+            self.assertEqual(exc_info.exception.tool_discovery_request.policy_source, "llm")
             self.assertIn(
                 "apply_subagent_discovery_llm_protocols",
                 exc_info.exception.tool_discovery_request.notes,
@@ -445,6 +450,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
         runtime_context = SimpleNamespace(
             subagent_capability_gaps=[],
             subagent_tool_discovery_requests=[],
+            subagent_discovery_stage_decisions=[],
             subagent_discovery_shadow_suggestions=[],
             subagent_discovery_llm_decisions=[],
             subagent_discovery_hybrid_decisions=[],
@@ -498,6 +504,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
                 exc_info.exception.tool_discovery_request.preferred_protocols,
                 ["mcp", "skill", "openapi"],
             )
+            self.assertEqual(exc_info.exception.tool_discovery_request.policy_source, "hybrid")
             self.assertIn(
                 "apply_subagent_discovery_hybrid_protocols",
                 exc_info.exception.tool_discovery_request.notes,
@@ -512,6 +519,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
         runtime_context = SimpleNamespace(
             subagent_capability_gaps=[],
             subagent_tool_discovery_requests=[],
+            subagent_discovery_stage_decisions=[],
             dynamic_trace=[],
         )
         support = SimpleNamespace(emit_event=lambda *_args, **_kwargs: None)
@@ -756,16 +764,25 @@ class SubagentPhaseControllerTests(unittest.TestCase):
                 approved_ticket.activated_entries[0].runtime_registration.registration_template_id,
                 "snapshot:market:market_snapshot_skill",
             )
-            self.assertEqual(len(runtime_context.dynamic_trace), 3)
+            dynamic_events = [row["event"] for row in runtime_context.dynamic_trace]
+            self.assertIn("subagent_capability_gap_detected", dynamic_events)
+            self.assertIn("subagent_tool_discovery_requested", dynamic_events)
+            self.assertIn("subagent_tool_discovery_auto_activated", dynamic_events)
             self.assertEqual(
-                runtime_context.dynamic_trace[-1]["event"],
-                "subagent_tool_discovery_auto_activated",
+                [row["event"] for row in runtime_context.subagent_discovery_stage_decisions],
+                [
+                    "subagent_tool_discovery_protocol_decided",
+                    "subagent_tool_discovery_candidate_decided",
+                    "subagent_tool_discovery_review_decided",
+                    "subagent_tool_discovery_activation_decided",
+                ],
             )
 
     def test_capability_gap_can_apply_runtime_candidate_llm_policy_and_auto_continue(self) -> None:
         runtime_context = SimpleNamespace(
             subagent_capability_gaps=[],
             subagent_tool_discovery_requests=[],
+            subagent_discovery_stage_decisions=[],
             subagent_discovery_candidate_shadow_suggestions=[],
             subagent_discovery_candidate_llm_decisions=[],
             subagent_discovery_candidate_hybrid_decisions=[],
@@ -883,6 +900,10 @@ class SubagentPhaseControllerTests(unittest.TestCase):
             self.assertEqual(
                 runtime_context.subagent_discovery_candidate_llm_decisions[0]["event"],
                 "subagent_discovery_candidate_llm_applied",
+            )
+            self.assertEqual(
+                runtime_context.subagent_discovery_stage_decisions[1]["policy_source"],
+                "llm",
             )
 
     def test_execute_plan_injects_plan_metadata_and_trace(self) -> None:

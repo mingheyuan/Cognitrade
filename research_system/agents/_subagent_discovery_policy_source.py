@@ -28,7 +28,7 @@ class SubagentDiscoveryLLMPolicySource:
         candidate_protocols: list[str],
         rule_preferred_protocols: list[str],
         rule_notes: list[str],
-    ) -> tuple[list[str], list[str], dict[str, Any] | None]:
+    ) -> tuple[list[str], list[str], dict[str, Any] | None, str]:
         shadow_payload = self.shadow_policy.suggest(
             gap=gap,
             candidate_protocols=candidate_protocols,
@@ -36,6 +36,7 @@ class SubagentDiscoveryLLMPolicySource:
         )
         final_protocols = list(rule_preferred_protocols)
         final_notes = list(rule_notes)
+        final_policy_source = "rule"
 
         if isinstance(shadow_payload, dict) and self._llm_enabled():
             selected_llm_protocols = self._select_protocols(
@@ -44,6 +45,7 @@ class SubagentDiscoveryLLMPolicySource:
             )
             if selected_llm_protocols is not None:
                 final_protocols = list(selected_llm_protocols)
+                final_policy_source = "llm"
                 final_notes = [
                     *final_notes,
                     "apply_subagent_discovery_llm_protocols",
@@ -66,7 +68,7 @@ class SubagentDiscoveryLLMPolicySource:
                     actual_protocols=final_protocols,
                     shadow_payload=shadow_payload,
                 )
-                return final_protocols, final_notes, shadow_payload
+                return final_protocols, final_notes, shadow_payload, final_policy_source
 
         if isinstance(shadow_payload, dict) and self._hybrid_enabled():
             selected_hybrid_protocols = self._select_protocols(
@@ -75,6 +77,7 @@ class SubagentDiscoveryLLMPolicySource:
             )
             if selected_hybrid_protocols is not None and list(selected_hybrid_protocols) != list(rule_preferred_protocols):
                 final_protocols = list(selected_hybrid_protocols)
+                final_policy_source = "hybrid"
                 final_notes = [
                     *final_notes,
                     "apply_subagent_discovery_hybrid_protocols",
@@ -98,7 +101,7 @@ class SubagentDiscoveryLLMPolicySource:
             actual_protocols=final_protocols,
             shadow_payload=shadow_payload,
         )
-        return final_protocols, final_notes, shadow_payload
+        return final_protocols, final_notes, shadow_payload, final_policy_source
 
     def _llm_enabled(self) -> bool:
         return bool(getattr(self.settings, "subagent_discovery_llm_policy_enabled", False))
