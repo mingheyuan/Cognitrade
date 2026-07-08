@@ -201,6 +201,101 @@ class SupervisorRuntimeTests(unittest.TestCase):
                 self.assertTrue(hybrid["override_action"])
                 self.assertTrue(hybrid["override_replan"])
 
+    def test_supervisor_hybrid_policy_can_run_without_shadow_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.supervisor_shadow_llm_enabled = False
+            settings.supervisor_hybrid_llm_enabled = True
+            settings.supervisor_hybrid_llm_min_confidence = 0.8
+            settings.max_llm_calls_per_turn = 2
+            provider = _HybridProviderStub()
+            supervisor = RuntimeSupervisor(llm_provider=provider, settings=settings)
+            request = RequestEnvelope(user_query="decide next action", request_id="req_hybrid_only")
+            plan = ActionPlan(
+                intent="methodology_evolution",
+                actions=[
+                    ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever"),
+                    ActionSpec(node_id="review", phase="review", agent="reviewer"),
+                ],
+            )
+
+            with bind_local_runtime(
+                supervisor,
+                request=request,
+                intent="methodology_evolution",
+                phase="supervision",
+                runs_root=settings.runs_root,
+                max_llm_calls_per_turn=2,
+            ) as runtime:
+                decision = supervisor.decide(
+                    plan=plan,
+                    completed_actions=[],
+                    pending_actions=[plan.actions[0], plan.actions[1]],
+                    blackboard_entries=[],
+                )
+
+                self.assertEqual(provider.calls, 1)
+                self.assertEqual(decision.next_actions[0].node_id, "review")
+                self.assertEqual(len(runtime.context.action_phase_shadow_suggestions), 1)
+                self.assertEqual(len(runtime.context.action_phase_hybrid_decisions), 1)
+
+    def test_supervisor_shadow_policy_respects_runtime_execution_policy_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.supervisor_shadow_llm_enabled = True
+            settings.max_llm_calls_per_turn = 3
+            provider = _ShadowProviderStub()
+            supervisor = RuntimeSupervisor(llm_provider=provider, settings=settings)
+            request = RequestEnvelope(user_query="screen growth stocks", request_id="req_runtime_budget")
+            plan = ActionPlan(
+                intent="stock_screen",
+                actions=[
+                    ActionSpec(node_id="collect", phase="collect", agent="collector"),
+                    ActionSpec(node_id="screen", phase="screen", agent="screener", depends_on=["collect"]),
+                    ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever", depends_on=["screen"]),
+                    ActionSpec(node_id="report", phase="report", agent="reporter", depends_on=["retrieve"]),
+                ],
+            )
+            scorecard_entry = _blackboard_entry(
+                kind="source_record",
+                agent="screener",
+                phase="screen",
+                request_id="req_runtime_budget",
+                payload={
+                    "title": "screening_scorecard",
+                    "content": "{}",
+                    "source_type": "screening_scorecard",
+                    "scorecard": {
+                        "top_candidate_count": 1,
+                        "watchlist_candidate_count": 0,
+                        "enrichment_target_count": 0,
+                        "enrichment_pending": False,
+                    },
+                },
+            )
+
+            with bind_local_runtime(
+                supervisor,
+                request=request,
+                intent="stock_screen",
+                phase="supervision",
+                runs_root=settings.runs_root,
+                max_llm_calls_per_turn=1,
+            ) as runtime:
+                decision = supervisor.decide(
+                    plan=plan,
+                    completed_actions=["collect", "screen"],
+                    pending_actions=[plan.actions[2], plan.actions[3]],
+                    blackboard_entries=[scorecard_entry],
+                )
+
+                self.assertEqual(decision.next_actions[0].node_id, "screen_review")
+                self.assertEqual(provider.calls, 0)
+                self.assertEqual(len(runtime.context.action_phase_shadow_suggestions), 0)
+                self.assertEqual(len(runtime.context.action_phase_hybrid_decisions), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -33,12 +33,13 @@ class ActionPhaseLLMShadowPolicy:
         self.blackboard_view = blackboard_view
         self._runtime_binding: dict[str, object] | None = None
 
-    def bind_runtime(self, *, context, support, request_id: str, intent: str) -> None:
+    def bind_runtime(self, *, context, support, request_id: str, intent: str, execution_policy=None) -> None:
         self._runtime_binding = {
             "context": context,
             "support": support,
             "request_id": request_id,
             "intent": intent,
+            "execution_policy": execution_policy,
         }
 
     def clear_runtime(self) -> None:
@@ -154,9 +155,21 @@ class ActionPhaseLLMShadowPolicy:
             return False
         if not bool(getattr(self.llm_provider, "available", True)):
             return False
-        if not bool(getattr(self.settings, "supervisor_shadow_llm_enabled", False)):
+        if not (
+            bool(getattr(self.settings, "supervisor_shadow_llm_enabled", False))
+            or bool(getattr(self.settings, "supervisor_hybrid_llm_enabled", False))
+        ):
             return False
-        max_llm_calls_per_turn = int(getattr(self.settings, "max_llm_calls_per_turn", 1) or 1)
+        runtime_binding = dict(self._runtime_binding or {})
+        execution_policy = runtime_binding.get("execution_policy")
+        max_llm_calls_per_turn = int(
+            getattr(
+                execution_policy,
+                "max_llm_calls_per_turn",
+                getattr(self.settings, "max_llm_calls_per_turn", 1),
+            )
+            or 1
+        )
         return max_llm_calls_per_turn > 1
 
     @staticmethod
