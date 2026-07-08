@@ -31,14 +31,22 @@ from research_system.runtime.history import (
 from research_system.runtime.orchestration import (
     OrchestratorSubagentDiscoveryAdminSupport,
     SUPPORTED_RUNTIME_REGISTRATION_TYPES,
+    SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES,
     SubagentDiscoveryStore,
     SubagentRuntimePackagingSupport,
+    SubagentRuntimeSourceResolutionSupport,
 )
 from research_system.runtime.orchestration.subagent_runtime_packaging import (
     SUPPORTED_RUNTIME_REGISTRATION_TYPES as PackagingRuntimeRegistrationTypes,
 )
 from research_system.runtime.orchestration.subagent_runtime_packaging import (
     SubagentRuntimePackagingSupport as PackagingSupportImpl,
+)
+from research_system.runtime.orchestration.subagent_runtime_source_resolution import (
+    SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES as SourceResolutionTypes,
+)
+from research_system.runtime.orchestration.subagent_runtime_source_resolution import (
+    SubagentRuntimeSourceResolutionSupport as SourceResolutionSupportImpl,
 )
 from research_system.runtime.planning.action_factory import PlannerActionFactory
 from research_system.runtime.planning.context_hints import PlannerContextHints
@@ -151,6 +159,10 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
             SubagentRuntimePackagingSupport,
         )
         self.assertIs(
+            orchestration_package.SubagentRuntimeSourceResolutionSupport,
+            SubagentRuntimeSourceResolutionSupport,
+        )
+        self.assertIs(
             orchestration_package.SubagentDiscoveryStore,
             SubagentDiscoveryStore,
         )
@@ -166,12 +178,31 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
             SUPPORTED_RUNTIME_REGISTRATION_TYPES,
             PackagingRuntimeRegistrationTypes,
         )
+        self.assertIs(
+            SubagentRuntimeSourceResolutionSupport,
+            SourceResolutionSupportImpl,
+        )
+        self.assertIs(
+            orchestration_package.SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES,
+            SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES,
+        )
+        self.assertIs(
+            SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES,
+            SourceResolutionTypes,
+        )
 
     def test_runtime_packaging_support_reports_complete_handler_registry(self) -> None:
         support = SubagentRuntimePackagingSupport()
         self.assertEqual(
             support.registration_types(),
             SUPPORTED_RUNTIME_REGISTRATION_TYPES,
+        )
+
+    def test_runtime_source_resolution_support_reports_complete_handler_registry(self) -> None:
+        support = SubagentRuntimeSourceResolutionSupport()
+        self.assertEqual(
+            support.resolution_types(),
+            SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES,
         )
 
 
