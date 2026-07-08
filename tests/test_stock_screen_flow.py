@@ -331,7 +331,15 @@ class StockScreenFlowTests(unittest.TestCase):
                 if report.get("candidates") is not None:
                     self.assertIsInstance(report.get("candidates"), list)
                 self.assertEqual(report.get("degraded_note"), "llm_unavailable")
-                self.assertEqual((report.get("debug") or {}).get("intent"), "stock_screen")
+                debug = report.get("debug") or {}
+                self.assertEqual(debug.get("intent"), "stock_screen")
+                self.assertTrue(debug.get("subagent_plans"))
+                self.assertTrue(debug.get("subagent_plan_patches"))
+                self.assertTrue(
+                    {"collect", "retrieve", "report"}.issubset(
+                        {str(item.get("phase") or "") for item in list(debug.get("subagent_plans") or [])}
+                    )
+                )
             finally:
                 orchestrator.close()
 

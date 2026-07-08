@@ -120,6 +120,16 @@ class ReporterServiceTests(unittest.TestCase):
         self.assertIn("Relative valuation views:", payload["conclusion"])
         self.assertEqual(payload["candidates"][0]["symbol"], "000001")
         self.assertTrue(payload["candidates"][0]["deep_checked"])
+        self.assertEqual(len(list(payload.get("subagent_plans") or [])), 1)
+        report_plan = list(payload.get("subagent_plans") or [])[0]
+        terminal_node = next(node for node in list(report_plan.get("nodes") or []) if str(node.get("node_id") or "") == "report_terminal")
+        self.assertEqual(str(terminal_node.get("subagent_type") or ""), "fallback_report_composer")
+        patch_op_types = [
+            str(operation.get("op_type") or "")
+            for patch in list(payload.get("subagent_plan_patches") or [])
+            for operation in list((patch or {}).get("operations") or [])
+        ]
+        self.assertIn("replace_subgraph", patch_op_types)
         trace_types = [item["subagent_type"] for item in payload["subagent_trace"]]
         self.assertEqual(trace_types, ["report_strategy_resolver", "fallback_report_composer"])
 
@@ -135,6 +145,10 @@ class ReporterServiceTests(unittest.TestCase):
         self.assertEqual(payload["degraded_note"], "llm_error:LLMProviderError")
         self.assertEqual(payload["degrade_reason"], "llm_error:LLMProviderError")
         self.assertEqual(payload["candidates"][0]["symbol"], "000001")
+        self.assertEqual(len(list(payload.get("subagent_plan_patches") or [])), 0)
+        report_plan = list(payload.get("subagent_plans") or [])[0]
+        terminal_node = next(node for node in list(report_plan.get("nodes") or []) if str(node.get("node_id") or "") == "report_terminal")
+        self.assertEqual(str(terminal_node.get("subagent_type") or ""), "llm_report_composer")
         trace = payload["subagent_trace"]
         self.assertEqual(trace[1]["subagent_type"], "llm_report_composer")
         self.assertEqual(trace[1]["status"], "failed")
@@ -152,6 +166,15 @@ class ReporterServiceTests(unittest.TestCase):
         self.assertIn("AAA", payload["conclusion"])
         self.assertIn("BBB", payload["conclusion"])
         self.assertIsNone(payload["degraded_note"])
+        report_plan = list(payload.get("subagent_plans") or [])[0]
+        terminal_node = next(node for node in list(report_plan.get("nodes") or []) if str(node.get("node_id") or "") == "report_terminal")
+        self.assertEqual(str(terminal_node.get("subagent_type") or ""), "bank_compare_report_composer")
+        patch_op_types = [
+            str(operation.get("op_type") or "")
+            for patch in list(payload.get("subagent_plan_patches") or [])
+            for operation in list((patch or {}).get("operations") or [])
+        ]
+        self.assertIn("replace_subgraph", patch_op_types)
         self.assertEqual(
             [item["subagent_type"] for item in payload["subagent_trace"]],
             ["report_strategy_resolver", "bank_compare_report_composer"],

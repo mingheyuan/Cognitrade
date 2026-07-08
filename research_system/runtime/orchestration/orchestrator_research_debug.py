@@ -30,6 +30,8 @@ class OrchestratorDebugSupport:
             "entry_reason": plan.entry_reason,
             "subagent_required": plan.subagent_required,
             "subagent_trace": context.subagent_trace[:],
+            "subagent_plans": context.subagent_plans[:],
+            "subagent_plan_patches": context.subagent_plan_patches[:],
             "dynamic_trace": context.dynamic_trace[:],
             "retrieval_summary": retrieval_summary,
         }

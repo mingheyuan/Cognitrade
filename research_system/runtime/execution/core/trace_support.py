@@ -39,6 +39,26 @@ class OrchestratorExecutionTraceSupport:
                 message=message,
                 payload=record,
             )
+        for item in list((payload or {}).get("subagent_plans") or []):
+            if not isinstance(item, dict):
+                continue
+            record = dict(item)
+            record.setdefault("agent", agent)
+            record.setdefault("phase", phase)
+            record.setdefault("action_id", context.current_action_id)
+            record.setdefault("node_id", context.current_node_id)
+            record.setdefault("action_objective", context.current_action_objective)
+            context.subagent_plans.append(record)
+        for item in list((payload or {}).get("subagent_plan_patches") or []):
+            if not isinstance(item, dict):
+                continue
+            record = dict(item)
+            record.setdefault("agent", agent)
+            record.setdefault("phase", phase)
+            record.setdefault("action_id", context.current_action_id)
+            record.setdefault("node_id", context.current_node_id)
+            record.setdefault("action_objective", context.current_action_objective)
+            context.subagent_plan_patches.append(record)
 
     def trace_task_name(self, payload: dict) -> str:
         node_id = str(payload.get("node_id") or "").strip()

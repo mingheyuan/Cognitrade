@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -24,7 +25,15 @@ from research_system.services.methodologies.planning.planning_context import (
 )
 from research_system.services.reporting.reporting_utils import strategy_follow_up
 from research_system.schemas.review import ClaimVerdictBreakdown, PosteriorReviewSummary
-from research_system.schemas.subagents import SubagentInvocation
+from research_system.schemas.subagents import (
+    SubagentCatalogEntry,
+    SubagentGraphPatch,
+    SubagentGraphPatchOperation,
+    SubagentInvocation,
+    SubagentPlan,
+    SubagentPlanNode,
+)
+from research_system.subagents.planning import apply_subagent_graph_patch
 from research_system.subagents.registry import SubagentRegistry
 from research_system.subagents.reporting import (
     DeterministicBankCompareReportComposerSubagent,
@@ -135,20 +144,38 @@ class ReporterService(RuntimeBoundSubagentInvoker):
             intent=intent,
             evidences=evidences,
             force_fallback=force_fallback,
+            provider_available=bool(getattr(self.llm_provider, "available", True)),
         )
-        results = self._execute_subagent_dag(
-            self._report_nodes(
+        subagent_plan = self._build_report_subagent_plan(
+            intent=intent,
+            query=query,
+            evidences=evidences,
+            retrieval_summary=retrieval_summary,
+            planning_context_hints=planning_context_hints,
+        )
+        subagent_plan_patch = self._build_report_subagent_plan_patch(
+            intent=intent,
+            query=query,
+            evidences=evidences,
+            runtime_degraded_note=runtime_degraded_note,
+            branch_mode=branch_mode,
+        )
+        subagent_plan_patches: list[dict[str, Any]] = []
+        if subagent_plan_patch is not None:
+            subagent_plan = apply_subagent_graph_patch(subagent_plan, subagent_plan_patch)
+            subagent_plan_patches.append(subagent_plan_patch.model_dump(mode="json"))
+        results = self._execute_subagent_plan(
+            plan=subagent_plan,
+            dag_id="report",
+            build_invocation=self._build_report_plan_invocations(
+                plan=subagent_plan,
                 intent=intent,
                 query=query,
                 evidences=evidences,
                 retrieval_summary=retrieval_summary,
                 planning_context_hints=planning_context_hints,
-                execution_mode=execution_mode,
                 runtime_degraded_note=runtime_degraded_note,
-                branch_mode=branch_mode,
             ),
-            max_workers=1,
-            dag_id="report",
         )
         trace = self._report_trace(
             intent=intent,
@@ -165,6 +192,8 @@ class ReporterService(RuntimeBoundSubagentInvoker):
             results=results,
         )
         outputs["subagent_trace"] = trace
+        outputs["subagent_plans"] = [subagent_plan.model_dump(mode="json")]
+        outputs["subagent_plan_patches"] = subagent_plan_patches
         return outputs
 
     def _deterministic_stock_compare_report(
@@ -197,6 +226,404 @@ class ReporterService(RuntimeBoundSubagentInvoker):
             "degraded_note": None,
         }
 
+    def _select_report_catalog_entry(
+        self,
+        *,
+        intent: str,
+        capability: str,
+        preferred_subagent_type: str | None = None,
+        requires_llm: bool | None = None,
+    ) -> SubagentCatalogEntry:
+        candidates = self.registry.catalog_entries(
+            stage="report",
+            intent=intent,
+            capability=capability,
+            requires_llm=requires_llm,
+        )
+        if not candidates:
+            candidates = self.registry.catalog_entries(
+                stage="report",
+                capability=capability,
+                requires_llm=requires_llm,
+            )
+        if not candidates:
+            raise KeyError(f"no reporter catalog entry for capability={capability!r} intent={intent!r}")
+        if preferred_subagent_type:
+            for candidate in candidates:
+                if candidate.subagent_type == preferred_subagent_type:
+                    return candidate
+        return sorted(
+            candidates,
+            key=lambda candidate: (
+                bool(candidate.requires_llm),
+                self._cost_rank(candidate.cost_class),
+                self._latency_rank(candidate.latency_class),
+                candidate.subagent_type,
+            ),
+        )[0]
+
+    def _cost_rank(self, cost_class: str | None) -> int:
+        return {"low": 0, "medium": 1, "high": 2}.get(str(cost_class or "").strip().lower(), 3)
+
+    def _latency_rank(self, latency_class: str | None) -> int:
+        return {"low": 0, "medium": 1, "high": 2}.get(str(latency_class or "").strip().lower(), 3)
+
+    def _build_catalog_plan_node(
+        self,
+        *,
+        node_id: str,
+        subagent_type: str,
+        objective: str,
+        inputs: dict[str, Any],
+        depends_on: list[str] | None = None,
+        tags: list[str] | None = None,
+        max_attempts: int = 1,
+        cache_scope: str | None = "run",
+        cache_key: str | None = None,
+        notes: list[str] | None = None,
+    ) -> SubagentPlanNode:
+        return SubagentPlanNode(
+            node_id=node_id,
+            subagent_type=subagent_type,
+            objective=objective,
+            inputs=dict(inputs),
+            depends_on=list(depends_on or []),
+            tags=list(tags or ["catalog_selected"]),
+            max_attempts=max_attempts,
+            replayable=True,
+            cache_scope=cache_scope,  # type: ignore[arg-type]
+            cache_key=cache_key,
+            notes=list(notes or []),
+        )
+
+    def _build_report_subagent_plan(
+        self,
+        *,
+        intent: str,
+        query: str,
+        evidences: list[dict],
+        retrieval_summary: str | None,
+        planning_context_hints: dict[str, str] | None,
+    ) -> SubagentPlan:
+        resolver_entry = self._select_report_catalog_entry(
+            intent=intent,
+            capability="report_strategy",
+            preferred_subagent_type="report_strategy_resolver",
+        )
+        llm_entry = self._select_report_catalog_entry(
+            intent=intent,
+            capability="report_composition",
+            preferred_subagent_type="llm_report_composer",
+            requires_llm=True,
+        )
+        return SubagentPlan(
+            intent=intent,
+            phase="report",
+            strategy="catalog",
+            nodes=[
+                self._build_catalog_plan_node(
+                    node_id="report_strategy_resolver",
+                    subagent_type=resolver_entry.subagent_type,
+                    objective="Resolve report strategy from retrieval summary and planning context.",
+                    inputs={
+                        "intent": intent,
+                        "query": query,
+                        "retrieval_summary": retrieval_summary,
+                        "planning_context_hints": dict(planning_context_hints or {}),
+                        "evidence_count": len(evidences),
+                    },
+                    cache_key="report_strategy_resolver",
+                    notes=["report_phase=strategy"],
+                ),
+                self._build_catalog_plan_node(
+                    node_id="report_terminal",
+                    subagent_type=llm_entry.subagent_type,
+                    objective="Compose final report via LLM.",
+                    inputs={
+                        "intent": intent,
+                        "query": query,
+                        "retrieval_summary": retrieval_summary,
+                        "evidence_count": len(evidences),
+                    },
+                    depends_on=["report_strategy_resolver"],
+                    cache_key="report_terminal",
+                    notes=["report_phase=terminal", "candidate=llm_report_composer"],
+                ),
+            ],
+            notes=["report_catalog_plan"],
+            catalog_trace={
+                "stage": "report",
+                "selection_mode": "catalog",
+                "selected_subagent_types": {
+                    "report_strategy_resolver": resolver_entry.subagent_type,
+                    "report_terminal": llm_entry.subagent_type,
+                },
+            },
+        )
+
+    def _build_report_subagent_plan_patch(
+        self,
+        *,
+        intent: str,
+        query: str,
+        evidences: list[dict],
+        runtime_degraded_note: str | None,
+        branch_mode: str,
+    ) -> SubagentGraphPatch | None:
+        if branch_mode == "deterministic_bank_compare":
+            deterministic_entry = self._select_report_catalog_entry(
+                intent=intent,
+                capability="deterministic_bank_compare",
+                preferred_subagent_type="bank_compare_report_composer",
+            )
+            return SubagentGraphPatch(
+                policy_source="rule",
+                confidence=1.0,
+                notes=["replace_terminal_with_deterministic_bank_compare"],
+                operations=[
+                    SubagentGraphPatchOperation(
+                        op_type="replace_subgraph",
+                        target_node_id="report_terminal",
+                        replacement_nodes=[
+                            self._build_catalog_plan_node(
+                                node_id="report_terminal",
+                                subagent_type=deterministic_entry.subagent_type,
+                                objective="Compose deterministic bank compare report from same-basis scorecard evidence.",
+                                inputs={"intent": intent, "query": query, "evidence_count": len(evidences)},
+                                depends_on=["report_strategy_resolver"],
+                                cache_key="report_terminal",
+                                notes=["report_phase=terminal", "candidate=bank_compare_report_composer"],
+                            )
+                        ],
+                        reason="deterministic bank compare branch selected",
+                    )
+                ],
+            )
+        if branch_mode == "fallback":
+            fallback_entry = self._select_report_catalog_entry(
+                intent=intent,
+                capability="fallback_reporting",
+                preferred_subagent_type="fallback_report_composer",
+            )
+            return SubagentGraphPatch(
+                policy_source="rule",
+                confidence=1.0,
+                notes=["replace_terminal_with_fallback_report"],
+                operations=[
+                    SubagentGraphPatchOperation(
+                        op_type="replace_subgraph",
+                        target_node_id="report_terminal",
+                        replacement_nodes=[
+                            self._build_catalog_plan_node(
+                                node_id="report_terminal",
+                                subagent_type=fallback_entry.subagent_type,
+                                objective="Compose degraded fallback report.",
+                                inputs={
+                                    "intent": intent,
+                                    "query": query,
+                                    "evidence_count": len(evidences),
+                                    "degraded_note": runtime_degraded_note or RuntimeDegradeReason.LLM_UNAVAILABLE.value,
+                                },
+                                depends_on=["report_strategy_resolver"],
+                                cache_key="report_terminal",
+                                notes=["report_phase=terminal", "candidate=fallback_report_composer"],
+                            )
+                        ],
+                        reason="fallback reporting branch selected",
+                    )
+                ],
+            )
+        return None
+
+    def _execute_subagent_plan(
+        self,
+        *,
+        plan: SubagentPlan,
+        dag_id: str,
+        build_invocation: dict[str, dict[str, Any]],
+    ) -> dict[str, SubagentDagNodeResult]:
+        dag_nodes: list[SubagentDagNodeSpec] = []
+        for plan_node in plan.nodes:
+            runtime_node = build_invocation[plan_node.node_id]
+            dag_nodes.append(
+                SubagentDagNodeSpec(
+                    node_id=plan_node.node_id,
+                    build_invocation=lambda results, *, builder=runtime_node["builder"]: builder(results),
+                    depends_on=tuple(plan_node.depends_on),
+                    failure_mode=plan_node.failure_mode,
+                    allow_partial_dependencies=plan_node.allow_partial_dependencies,
+                    max_attempts=plan_node.max_attempts,
+                    replayable=plan_node.replayable,
+                    cache_scope=plan_node.cache_scope,
+                    cache_key=plan_node.cache_key,
+                    metadata={
+                        **dict(runtime_node["metadata"]),
+                        "plan_id": plan.plan_id,
+                        "plan_node_id": plan_node.node_id,
+                        "subagent_plan_strategy": plan.strategy,
+                    },
+                )
+            )
+        return self._execute_subagent_dag(
+            dag_nodes,
+            max_workers=1,
+            dag_id=dag_id,
+        )
+
+    def _build_report_plan_invocations(
+        self,
+        *,
+        plan: SubagentPlan,
+        intent: str,
+        query: str,
+        evidences: list[dict],
+        retrieval_summary: str | None,
+        planning_context_hints: dict[str, str] | None,
+        runtime_degraded_note: str | None,
+    ) -> dict[str, dict[str, Any]]:
+        runtime_nodes: dict[str, dict[str, Any]] = {
+            "report_strategy_resolver": {
+                "builder": lambda _results: self._build_subagent_invocation(
+                    subagent_type="report_strategy_resolver",
+                    objective="Resolve report strategy from retrieval summary and planning context.",
+                    inputs={
+                        "intent": intent,
+                        "query": query,
+                        "evidences": evidences,
+                        "retrieval_summary": retrieval_summary,
+                        "planning_context_hints": planning_context_hints,
+                    },
+                    task_name="report:strategy:report_strategy_resolver",
+                    agent_path="reporter/strategy/report_strategy_resolver",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="report:strategy:report_strategy_resolver",
+                    agent_path="reporter/strategy/report_strategy_resolver",
+                    objective="Resolve report strategy from retrieval summary and planning context.",
+                ),
+            }
+        }
+
+        plan_node_map = {node.node_id: node for node in plan.nodes}
+        terminal_subagent_type = plan_node_map["report_terminal"].subagent_type
+        if terminal_subagent_type == "bank_compare_report_composer":
+            runtime_nodes["report_terminal"] = {
+                "builder": lambda results: self._build_subagent_invocation(
+                    subagent_type="bank_compare_report_composer",
+                    objective="Compose deterministic bank compare report from same-basis scorecard evidence.",
+                    inputs={
+                        "evidences": evidences,
+                        "methodology_payloads": list((results["report_strategy_resolver"].outputs or {}).get("methodology_payloads") or []),
+                        "report_strategy": dict((results["report_strategy_resolver"].outputs or {}).get("report_strategy") or {}),
+                    },
+                    task_name="report:deterministic:bank_compare_report_composer",
+                    agent_path="reporter/deterministic/bank_compare_report_composer",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="report:deterministic:bank_compare_report_composer",
+                    agent_path="reporter/deterministic/bank_compare_report_composer",
+                    objective="Compose deterministic bank compare report from same-basis scorecard evidence.",
+                ),
+            }
+        elif terminal_subagent_type == "fallback_report_composer":
+            runtime_nodes["report_terminal"] = {
+                "builder": lambda results: self._build_subagent_invocation(
+                    subagent_type="fallback_report_composer",
+                    objective="Compose degraded fallback report.",
+                    inputs={
+                        "intent": intent,
+                        "query": query,
+                        "evidences": evidences,
+                        "review_summary_payload": (results["report_strategy_resolver"].outputs or {}).get("review_summary_payload"),
+                        "scorecard_digest": (results["report_strategy_resolver"].outputs or {}).get("scorecard_digest"),
+                        "scorecard_payload": (results["report_strategy_resolver"].outputs or {}).get("scorecard_payload"),
+                        "screening_scorecard_payload": (results["report_strategy_resolver"].outputs or {}).get("screening_scorecard_payload"),
+                        "screening_candidates_payload": list((results["report_strategy_resolver"].outputs or {}).get("screening_candidates_payload") or []),
+                        "methodology_payloads": list((results["report_strategy_resolver"].outputs or {}).get("methodology_payloads") or []),
+                        "report_strategy": dict((results["report_strategy_resolver"].outputs or {}).get("report_strategy") or {}),
+                        "degraded_note": runtime_degraded_note or RuntimeDegradeReason.LLM_UNAVAILABLE.value,
+                    },
+                    task_name="report:fallback:fallback_report_composer",
+                    agent_path="reporter/fallback/fallback_report_composer",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="report:fallback:fallback_report_composer",
+                    agent_path="reporter/fallback/fallback_report_composer",
+                    objective="Compose degraded fallback report.",
+                ),
+            }
+        else:
+            runtime_nodes["report_terminal"] = {
+                "builder": lambda results: self._build_subagent_invocation(
+                    subagent_type="llm_report_composer",
+                    objective="Compose final report via LLM.",
+                    inputs={
+                        "intent": intent,
+                        "query": query,
+                        "evidences": evidences,
+                        "retrieval_summary": retrieval_summary,
+                        "review_summary_payload": (results["report_strategy_resolver"].outputs or {}).get("review_summary_payload"),
+                        "report_strategy": dict((results["report_strategy_resolver"].outputs or {}).get("report_strategy") or {}),
+                    },
+                    task_name="report:llm:llm_report_composer",
+                    agent_path="reporter/llm/llm_report_composer",
+                    requires_llm=True,
+                    fallback_subagent_type="fallback_report_composer",
+                    fallback_objective="Compose degraded fallback report.",
+                    fallback_inputs={
+                        "intent": intent,
+                        "query": query,
+                        "evidences": evidences,
+                        "review_summary_payload": (results["report_strategy_resolver"].outputs or {}).get("review_summary_payload"),
+                        "scorecard_digest": (results["report_strategy_resolver"].outputs or {}).get("scorecard_digest"),
+                        "scorecard_payload": (results["report_strategy_resolver"].outputs or {}).get("scorecard_payload"),
+                        "screening_scorecard_payload": (results["report_strategy_resolver"].outputs or {}).get("screening_scorecard_payload"),
+                        "screening_candidates_payload": list((results["report_strategy_resolver"].outputs or {}).get("screening_candidates_payload") or []),
+                        "methodology_payloads": list((results["report_strategy_resolver"].outputs or {}).get("methodology_payloads") or []),
+                        "report_strategy": dict((results["report_strategy_resolver"].outputs or {}).get("report_strategy") or {}),
+                        "degraded_note": runtime_degraded_note,
+                    },
+                    fallback_context={
+                        "task_name": "report:fallback:fallback_report_composer",
+                        "agent_path": "reporter/fallback/fallback_report_composer",
+                        "phase": "report",
+                    },
+                    error_fallback_subagent_type="llm_error_report_composer",
+                    error_fallback_objective="Compose degraded report after LLM error.",
+                    error_fallback_inputs={
+                        "intent": intent,
+                        "query": query,
+                        "evidences": evidences,
+                        "review_summary_payload": (results["report_strategy_resolver"].outputs or {}).get("review_summary_payload"),
+                        "scorecard_digest": (results["report_strategy_resolver"].outputs or {}).get("scorecard_digest"),
+                        "scorecard_payload": (results["report_strategy_resolver"].outputs or {}).get("scorecard_payload"),
+                        "screening_scorecard_payload": (results["report_strategy_resolver"].outputs or {}).get("screening_scorecard_payload"),
+                        "screening_candidates_payload": list((results["report_strategy_resolver"].outputs or {}).get("screening_candidates_payload") or []),
+                        "screening_digest": self._screening_digest(
+                            (results["report_strategy_resolver"].outputs or {}).get("screening_scorecard_payload"),
+                            list((results["report_strategy_resolver"].outputs or {}).get("screening_candidates_payload") or []),
+                        ) if intent == "stock_screen" else None,
+                        "methodology_payloads": list((results["report_strategy_resolver"].outputs or {}).get("methodology_payloads") or []),
+                        "report_strategy": dict((results["report_strategy_resolver"].outputs or {}).get("report_strategy") or {}),
+                    },
+                    error_fallback_context={
+                        "task_name": "report:llm:error:llm_error_report_composer",
+                        "agent_path": "reporter/llm/error/llm_error_report_composer",
+                        "phase": "report",
+                    },
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="report:llm:llm_report_composer",
+                    agent_path="reporter/llm/llm_report_composer",
+                    objective="Compose final report via LLM.",
+                ),
+            }
+        return {
+            node_id: runtime_nodes[node_id]
+            for node_id in [node.node_id for node in plan.nodes]
+            if node_id in runtime_nodes
+        }
+
     def _execute_subagent_dag(
         self,
         nodes: list[SubagentDagNodeSpec],
@@ -225,12 +652,13 @@ class ReporterService(RuntimeBoundSubagentInvoker):
         intent: str,
         evidences: list[dict],
         force_fallback: bool,
+        provider_available: bool,
     ) -> str:
         if intent == "stock_compare":
             methodology_payloads = self._methodology_payloads(evidences)
             if self._bank_compare_scorecard_payload(methodology_payloads):
                 return "deterministic_bank_compare"
-        if force_fallback:
+        if force_fallback or not provider_available:
             return "fallback"
         return "llm"
 
@@ -626,7 +1054,7 @@ class ReporterService(RuntimeBoundSubagentInvoker):
         if result.error_summary and f"error={result.error_summary}" not in notes:
             notes.append(f"error={result.error_summary}")
         metadata = dict(result.metadata or {})
-        return self._build_trace_record(
+        trace_record = self._build_trace_record(
             subagent_type=str((record.subagent_type if record is not None else fallback_subagent_type) or fallback_subagent_type),
             objective=str((record.objective if record is not None else fallback_objective) or fallback_objective),
             status=status_override or result.status,
@@ -638,6 +1066,13 @@ class ReporterService(RuntimeBoundSubagentInvoker):
             agent=self.agent_name,
             node_id=str(metadata.get("node_id") or "") or None,
         )
+        if metadata.get("plan_id"):
+            trace_record["plan_id"] = metadata["plan_id"]
+        if metadata.get("plan_node_id"):
+            trace_record["plan_node_id"] = metadata["plan_node_id"]
+        if metadata.get("subagent_plan_strategy"):
+            trace_record["subagent_plan_strategy"] = metadata["subagent_plan_strategy"]
+        return trace_record
 
     def _normalize_planning_context_hints(self, raw_hints) -> dict[str, str]:
         return normalize_planning_context_hints(raw_hints)

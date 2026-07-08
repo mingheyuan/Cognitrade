@@ -9,7 +9,7 @@ from research_system.services.reporting.reporting_utils import (
     strategy_follow_up,
     summarize_proposal_drafts,
 )
-from research_system.subagents.base import SubagentRuntimePolicy
+from research_system.subagents.base import SubagentCatalogMetadata, SubagentRuntimePolicy
 
 
 def _normalize_report_evidences(evidences: list[Any]) -> list[dict[str, Any]]:
@@ -154,6 +154,24 @@ class FallbackReportComposerSubagent:
     input_model = FallbackReportComposerInputModel
     output_model = FallbackReportComposerOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Compose a deterministic degraded report when LLM reporting is unavailable.",
+        capabilities=("report_composition", "fallback_reporting"),
+        stage="report",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=(
+            "stock_check",
+            "stock_compare",
+            "stock_screen",
+            "sector_research",
+            "distill_kol_logic",
+            "review_thesis",
+            "methodology_evolution",
+        ),
+        tags=("deterministic", "fallback"),
+    )
 
     def __init__(
         self,
@@ -334,6 +352,24 @@ class ReportStrategyResolverSubagent:
     input_model = ReportStrategyResolverInputModel
     output_model = ReportStrategyResolverOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Resolve reporting strategy and structured evidence projections before final composition.",
+        capabilities=("report_strategy", "evidence_projection"),
+        stage="report",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=(
+            "stock_check",
+            "stock_compare",
+            "stock_screen",
+            "sector_research",
+            "distill_kol_logic",
+            "review_thesis",
+            "methodology_evolution",
+        ),
+        tags=("deterministic", "planner"),
+    )
 
     def __init__(
         self,
@@ -401,6 +437,16 @@ class DeterministicBankCompareReportComposerSubagent:
     input_model = DeterministicBankCompareReportComposerInputModel
     output_model = DeterministicBankCompareReportComposerOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Compose a same-basis deterministic bank comparison report without using the LLM.",
+        capabilities=("report_composition", "deterministic_bank_compare"),
+        stage="report",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("stock_compare",),
+        tags=("deterministic", "bank_compare"),
+    )
 
     def __init__(
         self,
@@ -442,6 +488,24 @@ class LLMReportComposerSubagent:
         requires_llm=True,
         fallback_subagent_type="fallback_report_composer",
         error_fallback_subagent_type="llm_error_report_composer",
+    )
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Compose the final report with the primary LLM reporter using selected evidence and strategy context.",
+        capabilities=("report_composition", "llm_reasoning"),
+        stage="report",
+        cost_class="high",
+        latency_class="high",
+        side_effect_level="none",
+        suitable_intents=(
+            "stock_check",
+            "stock_compare",
+            "stock_screen",
+            "sector_research",
+            "distill_kol_logic",
+            "review_thesis",
+            "methodology_evolution",
+        ),
+        tags=("llm", "primary"),
     )
 
     def __init__(self, *, llm_provider: OpenAIProvider, schema: type, normalize_review_conclusion: Callable[..., str]) -> None:
@@ -526,6 +590,24 @@ class LLMErrorReportComposerSubagent:
     input_model = LLMErrorReportComposerInputModel
     output_model = FallbackReportComposerOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Compose a degraded report after an LLM reporting error while preserving structured evidence context.",
+        capabilities=("report_composition", "llm_error_fallback"),
+        stage="report",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=(
+            "stock_check",
+            "stock_compare",
+            "stock_screen",
+            "sector_research",
+            "distill_kol_logic",
+            "review_thesis",
+            "methodology_evolution",
+        ),
+        tags=("deterministic", "fallback"),
+    )
 
     def run(
         self,
