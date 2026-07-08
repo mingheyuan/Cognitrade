@@ -37,6 +37,7 @@ class RuntimeContext:
     subagent_plans: list[dict]
     subagent_plan_patches: list[dict]
     subagent_phase_shadow_suggestions: list[dict]
+    subagent_phase_hybrid_decisions: list[dict]
     action_plan_patches: list[dict]
     action_phase_shadow_suggestions: list[dict]
     action_phase_hybrid_decisions: list[dict]
@@ -112,6 +113,7 @@ def build_runtime_context(
         subagent_plans=[],
         subagent_plan_patches=[],
         subagent_phase_shadow_suggestions=[],
+        subagent_phase_hybrid_decisions=[],
         action_plan_patches=[],
         action_phase_shadow_suggestions=[],
         action_phase_hybrid_decisions=[],

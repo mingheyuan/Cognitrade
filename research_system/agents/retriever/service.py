@@ -295,6 +295,7 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 dag_id="phase_one",
                 base_max_workers=1,
                 final_max_workers=3,
+                allow_current_plan_variant=True,
                 build_invocation_factory=lambda current_plan: self._build_phase_one_plan_invocation(
                     plan=current_plan,
                     intent=intent,

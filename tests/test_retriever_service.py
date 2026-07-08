@@ -45,6 +45,39 @@ class _ShadowRetrieverProvider:
         )
 
 
+class _HybridRetrieverProvider:
+    available = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def parse(self, **kwargs):
+        self.calls += 1
+        schema = kwargs["schema"]
+        prompt = str(kwargs.get("user_prompt") or "")
+        if "phase_one" in prompt:
+            return schema.model_validate(
+                {
+                    "selected_plan_variant": "current",
+                    "selected_node_ids": ["blackboard_evidence_indexer"],
+                    "request_replan": False,
+                    "reason": "skip extra retrieval branches for this screen request",
+                    "confidence": 0.92,
+                    "notes": ["hybrid_keep_phase_one_current"],
+                }
+            )
+        return schema.model_validate(
+            {
+                "selected_plan_variant": "rule_replanned",
+                "selected_node_ids": ["evidence_candidate_deduper", "retrieval_decider"],
+                "request_replan": True,
+                "reason": "keep the rule-selected retrieval decision branch",
+                "confidence": 0.88,
+                "notes": ["hybrid_keep_phase_two_rule_variant"],
+            }
+        )
+
+
 class RetrieverServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.service = object.__new__(RetrieverService)
@@ -1113,6 +1146,61 @@ class RetrieverServiceTests(unittest.TestCase):
                 self.assertEqual(len(shadow_rows), 2)
                 self.assertTrue(all(bool(row.get("request_replan")) for row in shadow_rows))
                 self.assertTrue(all(str(row.get("dag_id") or "") in {"phase_one", "phase_two"} for row in shadow_rows))
+            finally:
+                service.close()
+
+    def test_run_phase_one_hybrid_can_suppress_rule_replan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.subagent_phase_shadow_llm_enabled = True
+            settings.subagent_phase_hybrid_llm_enabled = True
+            settings.subagent_phase_hybrid_llm_min_confidence = 0.8
+            settings.max_llm_calls_per_turn = 3
+            provider = _HybridRetrieverProvider()
+            service = RetrieverService(provider, settings, runs_root=settings.runs_root)
+            service.disable_qdrant_for_test("disabled_for_test")
+            try:
+                outputs = service.run(
+                    intent="stock_screen",
+                    query="screen growth stocks",
+                    blackboard_entries=[
+                        {
+                            "entry_id": "screen-src-1",
+                            "run_id": "01SCREEN",
+                            "kind": "source_record",
+                            "phase": "collect",
+                            "agent": "collector",
+                            "payload": {"title": "screen request", "content": "screen", "source_type": "screen_request"},
+                            "source_refs": [],
+                        }
+                    ],
+                    allow_llm_decision=False,
+                    runtime_degraded_reason="runtime_policy_fallback",
+                )
+
+                run_root = next(settings.runs_root.iterdir())
+                trace_payload = SessionHistory(run_root).trace()
+                hybrid_rows = [
+                    row
+                    for row in list(trace_payload.get("dynamic_trace") or [])
+                    if str(row.get("event") or "") == "subagent_phase_hybrid_applied"
+                ]
+                patch_op_types = [
+                    str(operation.get("op_type") or "")
+                    for patch in list(outputs.get("subagent_plan_patches") or [])
+                    for operation in list((patch or {}).get("operations") or [])
+                ]
+                self.assertEqual(provider.calls, 2)
+                self.assertEqual(patch_op_types, ["request_replan"])
+                self.assertEqual(len(hybrid_rows), 1)
+                self.assertEqual(hybrid_rows[0]["dag_id"], "phase_one")
+                self.assertEqual(hybrid_rows[0]["applied_plan_variant"], "current")
+                phase_one_node_ids = [
+                    str(node.get("node_id") or "")
+                    for node in list((outputs.get("subagent_plans") or [])[0].get("nodes") or [])
+                ]
+                self.assertEqual(phase_one_node_ids, ["blackboard_evidence_indexer"])
             finally:
                 service.close()
 

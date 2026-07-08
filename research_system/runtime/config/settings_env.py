@@ -66,6 +66,8 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "supervisor_hybrid_llm_min_confidence": float(env_values.get("SUPERVISOR_HYBRID_LLM_MIN_CONFIDENCE", "0.7")),
         "subagent_phase_shadow_llm_enabled": env_values.get("SUBAGENT_PHASE_SHADOW_LLM_ENABLED", "false").strip().lower() in {"1", "true", "yes"},
         "subagent_phase_shadow_llm_reasoning_effort": env_values.get("SUBAGENT_PHASE_SHADOW_LLM_REASONING_EFFORT", "low"),
+        "subagent_phase_hybrid_llm_enabled": env_values.get("SUBAGENT_PHASE_HYBRID_LLM_ENABLED", "false").strip().lower() in {"1", "true", "yes"},
+        "subagent_phase_hybrid_llm_min_confidence": float(env_values.get("SUBAGENT_PHASE_HYBRID_LLM_MIN_CONFIDENCE", "0.7")),
         "artifacts_retention_days": int(env_values.get("ARTIFACTS_RETENTION_DAYS", "30")),
         "max_artifacts_size_mb": int(env_values.get("MAX_ARTIFACTS_SIZE_MB", "1024")),
         "run_timeout_seconds": int(env_values.get("RUN_TIMEOUT_SECONDS", "120")),

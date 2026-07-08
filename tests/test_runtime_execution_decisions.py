@@ -251,6 +251,40 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
         finally:
             temp_dir.cleanup()
 
+    def test_debug_payload_includes_subagent_phase_hybrid_decisions(self) -> None:
+        temp_dir, _settings, context, request = _build_runtime()
+        try:
+            context.subagent_phase_hybrid_decisions.append(
+                {
+                    "event": "subagent_phase_hybrid_applied",
+                    "dag_id": "phase_one",
+                    "applied_plan_variant": "current",
+                    "override_rule_variant": True,
+                }
+            )
+
+            payload = OrchestratorDebugSupport().build_debug_payload(
+                context=context,
+                request=request,
+                plan=ActionPlan(intent="stock_check", actions=[]),
+                plan_intent="stock_check",
+                retrieval_summary=None,
+            )
+
+            self.assertEqual(
+                payload["subagent_phase_hybrid_decisions"],
+                [
+                    {
+                        "event": "subagent_phase_hybrid_applied",
+                        "dag_id": "phase_one",
+                        "applied_plan_variant": "current",
+                        "override_rule_variant": True,
+                    }
+                ],
+            )
+        finally:
+            temp_dir.cleanup()
+
     def test_debug_payload_includes_action_phase_hybrid_decisions(self) -> None:
         temp_dir, _settings, context, request = _build_runtime()
         try:

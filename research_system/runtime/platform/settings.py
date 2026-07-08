@@ -48,6 +48,8 @@ class Settings(BaseModel):
     supervisor_hybrid_llm_min_confidence: float = 0.7
     subagent_phase_shadow_llm_enabled: bool = False
     subagent_phase_shadow_llm_reasoning_effort: str = "low"
+    subagent_phase_hybrid_llm_enabled: bool = False
+    subagent_phase_hybrid_llm_min_confidence: float = 0.7
     artifacts_retention_days: int = 30
     max_artifacts_size_mb: int = 1024
     run_timeout_seconds: int = 120
@@ -111,6 +113,8 @@ class Settings(BaseModel):
             raise ValueError("max_child_threads_per_turn must be positive")
         if self.supervisor_hybrid_llm_min_confidence < 0 or self.supervisor_hybrid_llm_min_confidence > 1:
             raise ValueError("supervisor_hybrid_llm_min_confidence must be between 0 and 1")
+        if self.subagent_phase_hybrid_llm_min_confidence < 0 or self.subagent_phase_hybrid_llm_min_confidence > 1:
+            raise ValueError("subagent_phase_hybrid_llm_min_confidence must be between 0 and 1")
         if self.router_redis_timeout_seconds <= 0:
             raise ValueError("router_redis_timeout_seconds must be positive")
         if self.router_rules_cache_ttl_seconds < 0:
