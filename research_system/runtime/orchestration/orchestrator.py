@@ -254,6 +254,10 @@ class ResearchOrchestrator:
         registration_type: str | None = None,
         skill_name: str | None = None,
         snapshot_type: str | None = None,
+        source_id: str | None = None,
+        endpoint_path: str | None = None,
+        http_method: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict:
         return self._admin().activate_subagent_discovery_request(
             ticket_id,
@@ -264,6 +268,10 @@ class ResearchOrchestrator:
             registration_type=registration_type,
             skill_name=skill_name,
             snapshot_type=snapshot_type,
+            source_id=source_id,
+            endpoint_path=endpoint_path,
+            http_method=http_method,
+            timeout_seconds=timeout_seconds,
         )
 
     def show_proposal(self, proposal_id: str) -> dict:

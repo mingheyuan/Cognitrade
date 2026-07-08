@@ -86,6 +86,28 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertEqual(generic_runtime_activate_args.registration_type, "skill_runner")
         self.assertEqual(generic_runtime_activate_args.skill_name, "analysis_skill")
         self.assertIsNone(generic_runtime_activate_args.snapshot_type)
+        http_runtime_activate_args = parser.parse_args(
+            [
+                "activate-subagent-discovery",
+                "01DISC",
+                "--registration-type",
+                "http_json_runner",
+                "--source-id",
+                "eastmoney",
+                "--endpoint-path",
+                "/api/market-signal",
+                "--http-method",
+                "GET",
+                "--timeout-seconds",
+                "9.5",
+            ]
+        )
+        self.assertIsNone(http_runtime_activate_args.delegate_subagent_type)
+        self.assertEqual(http_runtime_activate_args.registration_type, "http_json_runner")
+        self.assertEqual(http_runtime_activate_args.source_id, "eastmoney")
+        self.assertEqual(http_runtime_activate_args.endpoint_path, "/api/market-signal")
+        self.assertEqual(http_runtime_activate_args.http_method, "GET")
+        self.assertEqual(http_runtime_activate_args.timeout_seconds, 9.5)
 
     def test_execute_app_main_command_routes_query_from_thread_and_node_arguments(self) -> None:
         calls: list[dict[str, object]] = []
@@ -134,6 +156,10 @@ class ApplicationRuntimeTests(unittest.TestCase):
             registration_type=None,
             skill_name=None,
             snapshot_type=None,
+            source_id=None,
+            endpoint_path=None,
+            http_method=None,
+            timeout_seconds=None,
             as_json=False,
         )
         runtime_activate_discovery_args = argparse.Namespace(
@@ -146,6 +172,10 @@ class ApplicationRuntimeTests(unittest.TestCase):
             registration_type="snapshot_skill_runner",
             skill_name="market_snapshot_skill",
             snapshot_type="market",
+            source_id=None,
+            endpoint_path=None,
+            http_method=None,
+            timeout_seconds=None,
             as_json=False,
         )
         generic_runtime_activate_discovery_args = argparse.Namespace(
@@ -158,6 +188,26 @@ class ApplicationRuntimeTests(unittest.TestCase):
             registration_type="skill_runner",
             skill_name="analysis_skill",
             snapshot_type=None,
+            source_id=None,
+            endpoint_path=None,
+            http_method=None,
+            timeout_seconds=None,
+            as_json=False,
+        )
+        http_runtime_activate_discovery_args = argparse.Namespace(
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            delegate_subagent_type=None,
+            candidate_subagent_type="candidate_collect_http_extension",
+            activated_by="ops_user",
+            reason="activate http runtime skill",
+            registration_type="http_json_runner",
+            skill_name=None,
+            snapshot_type=None,
+            source_id="eastmoney",
+            endpoint_path="/api/market-signal",
+            http_method="GET",
+            timeout_seconds=9.5,
             as_json=False,
         )
 
@@ -193,6 +243,20 @@ class ApplicationRuntimeTests(unittest.TestCase):
             application_execute_app_main_command(
                 settings,
                 rerun_subagent_args,
+                build_chat_entry_runtime_fn=None,
+                run_chat_entry_fn=None,
+                run_chat_tui_fn=None,
+                run_chat_fallback_fn=None,
+                handle_chat_line_fn=None,
+                execute_cli_command_fn=fake_execute_cli_command_fn,
+                print_payload_fn=lambda payload, as_json: 0,
+            ),
+            0,
+        )
+        self.assertEqual(
+            application_execute_app_main_command(
+                settings,
+                http_runtime_activate_discovery_args,
                 build_chat_entry_runtime_fn=None,
                 run_chat_entry_fn=None,
                 run_chat_tui_fn=None,
@@ -268,20 +332,26 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertEqual(calls[2]["action_node_id"], "retrieve")
         self.assertEqual(calls[2]["dag_id"], "phase_two")
         self.assertEqual(calls[2]["subagent_node_id"], "retrieval_decider")
-        self.assertEqual(calls[3]["command"], "review-subagent-discovery")
-        self.assertEqual(calls[3]["query"], "approve")
-        self.assertEqual(calls[3]["ticket_id"], "01DISC")
-        self.assertEqual(calls[4]["command"], "activate-subagent-discovery")
-        self.assertEqual(calls[4]["delegate_subagent_type"], "stock_snapshot_collector")
-        self.assertEqual(calls[4]["candidate_subagent_type"], "candidate_screening_strategy")
+        self.assertEqual(calls[3]["command"], "activate-subagent-discovery")
+        self.assertEqual(calls[3]["registration_type"], "http_json_runner")
+        self.assertEqual(calls[3]["source_id"], "eastmoney")
+        self.assertEqual(calls[3]["endpoint_path"], "/api/market-signal")
+        self.assertEqual(calls[3]["http_method"], "GET")
+        self.assertEqual(calls[3]["timeout_seconds"], 9.5)
+        self.assertEqual(calls[4]["command"], "review-subagent-discovery")
+        self.assertEqual(calls[4]["query"], "approve")
+        self.assertEqual(calls[4]["ticket_id"], "01DISC")
         self.assertEqual(calls[5]["command"], "activate-subagent-discovery")
-        self.assertEqual(calls[5]["registration_type"], "snapshot_skill_runner")
-        self.assertEqual(calls[5]["skill_name"], "market_snapshot_skill")
-        self.assertEqual(calls[5]["snapshot_type"], "market")
+        self.assertEqual(calls[5]["delegate_subagent_type"], "stock_snapshot_collector")
+        self.assertEqual(calls[5]["candidate_subagent_type"], "candidate_screening_strategy")
         self.assertEqual(calls[6]["command"], "activate-subagent-discovery")
-        self.assertEqual(calls[6]["registration_type"], "skill_runner")
-        self.assertEqual(calls[6]["skill_name"], "analysis_skill")
-        self.assertIsNone(calls[6]["snapshot_type"])
+        self.assertEqual(calls[6]["registration_type"], "snapshot_skill_runner")
+        self.assertEqual(calls[6]["skill_name"], "market_snapshot_skill")
+        self.assertEqual(calls[6]["snapshot_type"], "market")
+        self.assertEqual(calls[7]["command"], "activate-subagent-discovery")
+        self.assertEqual(calls[7]["registration_type"], "skill_runner")
+        self.assertEqual(calls[7]["skill_name"], "analysis_skill")
+        self.assertIsNone(calls[7]["snapshot_type"])
 
 
 if __name__ == "__main__":

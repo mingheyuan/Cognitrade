@@ -223,6 +223,17 @@ class CliCommandPayloadsTests(unittest.TestCase):
             skill_name="analysis_skill",
             candidate_subagent_type="candidate_report_analysis",
         )
+        http_runtime_activated = build_cli_command_payload(
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            activated_by="manual_cli_activation",
+            registration_type="http_json_runner",
+            source_id="eastmoney",
+            endpoint_path="/api/market-signal",
+            http_method="GET",
+            timeout_seconds=9.5,
+            candidate_subagent_type="candidate_collect_http_extension",
+        )
 
         self.assertEqual(
             listed,
@@ -254,6 +265,10 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "registration_type": "",
                 "skill_name": "",
                 "snapshot_type": "",
+                "source_id": "",
+                "endpoint_path": "",
+                "http_method": "",
+                "timeout_seconds": None,
             },
         )
         self.assertEqual(
@@ -268,6 +283,10 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "registration_type": "snapshot_skill_runner",
                 "skill_name": "market_snapshot_skill",
                 "snapshot_type": "market",
+                "source_id": "",
+                "endpoint_path": "",
+                "http_method": "",
+                "timeout_seconds": None,
             },
         )
         self.assertEqual(
@@ -282,6 +301,28 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "registration_type": "skill_runner",
                 "skill_name": "analysis_skill",
                 "snapshot_type": "",
+                "source_id": "",
+                "endpoint_path": "",
+                "http_method": "",
+                "timeout_seconds": None,
+            },
+        )
+        self.assertEqual(
+            http_runtime_activated,
+            {
+                "command": "activate-subagent-discovery",
+                "ticket_id": "01DISC",
+                "query": "",
+                "intent": "manual_cli_activation",
+                "status_filter": None,
+                "subagent_node_id": "candidate_collect_http_extension",
+                "registration_type": "http_json_runner",
+                "skill_name": "",
+                "snapshot_type": "",
+                "source_id": "eastmoney",
+                "endpoint_path": "/api/market-signal",
+                "http_method": "GET",
+                "timeout_seconds": 9.5,
             },
         )
 

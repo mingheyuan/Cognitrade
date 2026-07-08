@@ -274,6 +274,96 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
             self.assertEqual(activated_aliases[0].subagent_type, "candidate_report_signal_extension")
             self.assertEqual(activated_aliases[0].runtime_registration.registration_type, "skill_runner")
 
+    def test_admin_support_can_activate_http_json_runner_with_validated_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_http_extension",
+                preferred_subagent_type="candidate_collect_market_signal_http_extension",
+                reason="missing http-backed market signal extension capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_http_extension",
+                search_query="stock_check collect market_signal_http_extension",
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_runtime": lambda self: SimpleNamespace(
+                        backend=SimpleNamespace(registry={"analysis_skill": object()})
+                    ),
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                candidate_catalog_entries=[
+                    SubagentCatalogEntry(
+                        subagent_type="candidate_collect_market_signal_http_extension",
+                        summary="Approved discovery candidate for HTTP-backed market signals.",
+                        capabilities=["market_signal_http_extension"],
+                        stage="collect",
+                        side_effect_level="read_only",
+                        tags=["approved_discovery_candidate"],
+                        suitable_intents=["stock_check"],
+                        allow_parallel=True,
+                        input_schema_name="HttpSignalInput",
+                        output_schema_name="HttpSignalOutput",
+                        input_json_schema={
+                            "type": "object",
+                            "properties": {
+                                "symbol": {"type": "string"},
+                                "limit": {"type": "integer"},
+                            },
+                            "required": ["symbol"],
+                        },
+                        output_json_schema={
+                            "type": "object",
+                            "properties": {
+                                "signal": {"type": "string"},
+                                "score": {"type": "number"},
+                            },
+                            "required": ["signal"],
+                        },
+                    ).model_dump(mode="json")
+                ],
+            )
+
+            activation = admin.activate_request(
+                ticket.ticket_id,
+                registration_type="http_json_runner",
+                source_id="eastmoney",
+                endpoint_path="/api/market-signal",
+                http_method="GET",
+                timeout_seconds=12.5,
+                activated_by="tester",
+                reason="activate validated http json runner",
+            )
+
+            self.assertIn("runtime alias", activation["message"])
+            activated_entry = activation["result"]["activated_entries"][0]
+            self.assertEqual(activated_entry["runtime_registration"]["registration_type"], "http_json_runner")
+            self.assertEqual(activated_entry["runtime_registration"]["source_id"], "eastmoney")
+            self.assertEqual(activated_entry["runtime_registration"]["endpoint_path"], "/api/market-signal")
+            self.assertEqual(activated_entry["runtime_registration"]["http_method"], "GET")
+            self.assertEqual(activated_entry["runtime_registration"]["timeout_seconds"], 12.5)
+            activated_aliases = store.activated_alias_entries()
+            self.assertEqual(len(activated_aliases), 1)
+            self.assertEqual(
+                activated_aliases[0].runtime_registration.registration_type,
+                "http_json_runner",
+            )
+
     def test_admin_support_rejects_snapshot_skill_activation_for_non_collect_stage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = SubagentDiscoveryStore(Path(temp_dir))
@@ -355,6 +445,73 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
                     skill_name="analysis_skill",
                     activated_by="tester",
                     reason="missing contract schema",
+                )
+
+    def test_admin_support_rejects_http_json_runner_for_non_http_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_http_extension",
+                preferred_subagent_type="candidate_collect_market_signal_http_extension",
+                reason="missing http-backed market signal extension capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_http_extension",
+                search_query="stock_check collect market_signal_http_extension",
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_runtime": lambda self: SimpleNamespace(
+                        backend=SimpleNamespace(registry={"analysis_skill": object()})
+                    ),
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                candidate_catalog_entries=[
+                    SubagentCatalogEntry(
+                        subagent_type="candidate_collect_market_signal_http_extension",
+                        summary="Approved discovery candidate for HTTP-backed market signals.",
+                        capabilities=["market_signal_http_extension"],
+                        stage="collect",
+                        side_effect_level="read_only",
+                        tags=["approved_discovery_candidate"],
+                        suitable_intents=["stock_check"],
+                        input_json_schema={
+                            "type": "object",
+                            "properties": {"symbol": {"type": "string"}},
+                            "required": ["symbol"],
+                        },
+                        output_json_schema={
+                            "type": "object",
+                            "properties": {"signal": {"type": "string"}},
+                            "required": ["signal"],
+                        },
+                    ).model_dump(mode="json")
+                ],
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "http-access data source"):
+                admin.activate_request(
+                    ticket.ticket_id,
+                    registration_type="http_json_runner",
+                    source_id="akshare",
+                    endpoint_path="/api/market-signal",
+                    http_method="GET",
+                    activated_by="tester",
+                    reason="invalid source access",
                 )
 
 

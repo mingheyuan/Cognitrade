@@ -68,10 +68,15 @@ def execute_activate_subagent_discovery_command(
     intent: str | None,
     activated_by: str | None,
     status_filter: str | None,
+    candidate_subagent_type: str | None,
     subagent_node_id: str | None,
     registration_type: str | None,
     skill_name: str | None,
     snapshot_type: str | None,
+    source_id: str | None,
+    endpoint_path: str | None,
+    http_method: str | None,
+    timeout_seconds: float | None,
     **_: object,
 ) -> object:
     payload = build_cli_command_payload(
@@ -80,10 +85,14 @@ def execute_activate_subagent_discovery_command(
         delegate_subagent_type=query,
         activated_by=activated_by or intent,
         reason=status_filter,
-        candidate_subagent_type=subagent_node_id,
+        candidate_subagent_type=candidate_subagent_type or subagent_node_id,
         registration_type=registration_type,
         skill_name=skill_name,
         snapshot_type=snapshot_type,
+        source_id=source_id,
+        endpoint_path=endpoint_path,
+        http_method=http_method,
+        timeout_seconds=timeout_seconds,
     )
     with orchestrator_cls(settings) as orchestrator:
         return orchestrator.activate_subagent_discovery_request(
@@ -95,4 +104,8 @@ def execute_activate_subagent_discovery_command(
             registration_type=payload["registration_type"] or None,
             skill_name=payload["skill_name"] or None,
             snapshot_type=payload["snapshot_type"] or None,
+            source_id=payload["source_id"] or None,
+            endpoint_path=payload["endpoint_path"] or None,
+            http_method=payload["http_method"] or None,
+            timeout_seconds=payload["timeout_seconds"],
         )

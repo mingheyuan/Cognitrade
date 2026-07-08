@@ -31,6 +31,10 @@ class CliCommandRuntime:
         registration_type: str | None = None,
         skill_name: str | None = None,
         snapshot_type: str | None = None,
+        source_id: str | None = None,
+        endpoint_path: str | None = None,
+        http_method: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> object:
         if command == "run":
             with self.orchestrator_cls(settings) as orchestrator:
@@ -56,6 +60,10 @@ class CliCommandRuntime:
             registration_type=registration_type,
             skill_name=skill_name,
             snapshot_type=snapshot_type,
+            source_id=source_id,
+            endpoint_path=endpoint_path,
+            http_method=http_method,
+            timeout_seconds=timeout_seconds,
             orchestrator_cls=self.orchestrator_cls,
             run_checks_fn=self.run_checks_fn,
             build_status_fn=self.build_status_fn,
@@ -98,6 +106,10 @@ def execute_cli_command(
     registration_type: str | None = None,
     skill_name: str | None = None,
     snapshot_type: str | None = None,
+    source_id: str | None = None,
+    endpoint_path: str | None = None,
+    http_method: str | None = None,
+    timeout_seconds: float | None = None,
     runtime: CliCommandRuntime,
 ) -> object:
     return runtime.execute(
@@ -115,4 +127,8 @@ def execute_cli_command(
         registration_type=registration_type,
         skill_name=skill_name,
         snapshot_type=snapshot_type,
+        source_id=source_id,
+        endpoint_path=endpoint_path,
+        http_method=http_method,
+        timeout_seconds=timeout_seconds,
     )

@@ -5,6 +5,7 @@ from typing import Any
 
 from pathlib import Path
 
+from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
 from research_system.agents._subagent_dag import SubagentDagCacheContext
 from research_system.runtime.local_runtime import start_local_runtime
 from research_system.runtime.storage.jsonl import write_json
@@ -14,6 +15,7 @@ from research_system.schemas.subagents import SubagentActivationEntry, SubagentE
 from research_system.subagents.base import SubagentCatalogMetadata, SubagentRuntimePolicy
 from research_system.subagents.registry import SubagentRegistry
 from research_system.subagents.runtime_registered import (
+    RuntimeRegisteredHttpJsonSubagent,
     RuntimeRegisteredSkillSubagent,
     RuntimeRegisteredSnapshotSkillSubagent,
     build_runtime_registered_model,
@@ -219,9 +221,6 @@ class RuntimeBoundSubagentInvoker:
         runtime_registration = activation_entry.runtime_registration
         if runtime_registration is None:
             return None
-        skill_runtime = self._runtime_skill_runtime()
-        if skill_runtime is None:
-            return None
         catalog_entry = activation_entry.catalog_entry
         runtime_policy = SubagentRuntimePolicy(
             requires_llm=bool(catalog_entry.requires_llm),
@@ -241,6 +240,9 @@ class RuntimeBoundSubagentInvoker:
             tags=tuple(item for item in catalog_entry.tags if str(item).strip()),
         )
         if runtime_registration.registration_type == "snapshot_skill_runner":
+            skill_runtime = self._runtime_skill_runtime()
+            if skill_runtime is None:
+                return None
             if str(catalog_entry.stage or "").strip().lower() not in {"", "collect"}:
                 return None
             return RuntimeRegisteredSnapshotSkillSubagent(
@@ -252,10 +254,36 @@ class RuntimeBoundSubagentInvoker:
                 catalog_metadata=catalog_metadata,
             )
         if runtime_registration.registration_type == "skill_runner":
+            skill_runtime = self._runtime_skill_runtime()
+            if skill_runtime is None:
+                return None
             return RuntimeRegisteredSkillSubagent(
                 subagent_type=str(activation_entry.subagent_type).strip(),
                 skill_name=str(runtime_registration.skill_name).strip(),
                 skill_runtime=skill_runtime,
+                input_model=build_runtime_registered_model(
+                    model_name=f"{activation_entry.subagent_type}_input",
+                    schema=catalog_entry.input_json_schema,
+                ),
+                output_model=build_runtime_registered_model(
+                    model_name=f"{activation_entry.subagent_type}_output",
+                    schema=catalog_entry.output_json_schema,
+                ),
+                runtime_policy=runtime_policy,
+                catalog_metadata=catalog_metadata,
+            )
+        if runtime_registration.registration_type == "http_json_runner":
+            source_id = str(runtime_registration.source_id or "").strip()
+            data_source = DataSourceRegistry().get(source_id)
+            if data_source is None or str(data_source.access).strip().lower() != "http":
+                return None
+            return RuntimeRegisteredHttpJsonSubagent(
+                subagent_type=str(activation_entry.subagent_type).strip(),
+                source_id=source_id,
+                base_url=str(data_source.base_url).strip(),
+                endpoint_path=str(runtime_registration.endpoint_path or "").strip(),
+                http_method=str(runtime_registration.http_method or "").strip().upper() or "GET",
+                timeout_seconds=float(runtime_registration.timeout_seconds or 20.0),
                 input_model=build_runtime_registered_model(
                     model_name=f"{activation_entry.subagent_type}_input",
                     schema=catalog_entry.input_json_schema,

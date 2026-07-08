@@ -181,6 +181,26 @@ class ChatCliTests(unittest.TestCase):
                 "candidate_subagent_type": "candidate_screening_strategy",
             },
         )
+        self.assertEqual(
+            parse_chat_input(
+                "/activate-subagent-discovery 01DISC --registration-type http_json_runner "
+                "--candidate candidate_collect_http_extension --source-id eastmoney "
+                "--endpoint-path /api/market-signal --http-method GET --timeout-seconds 9.5"
+            ),
+            {
+                "action": "activate-subagent-discovery",
+                "ticket_id": "01DISC",
+                "delegate_subagent_type": None,
+                "candidate_subagent_type": "candidate_collect_http_extension",
+                "registration_type": "http_json_runner",
+                "skill_name": None,
+                "snapshot_type": None,
+                "source_id": "eastmoney",
+                "endpoint_path": "/api/market-signal",
+                "http_method": "GET",
+                "timeout_seconds": 9.5,
+            },
+        )
 
     def test_pending_clarification_can_resume_plain_follow_up(self) -> None:
         state = ChatSessionState(

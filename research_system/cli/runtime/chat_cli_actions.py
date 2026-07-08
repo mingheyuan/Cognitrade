@@ -245,6 +245,13 @@ def _handle_activate_subagent_discovery_cli_action(runtime: ChatActionRuntime) -
             delegate_subagent_type=str(runtime.parsed.get("delegate_subagent_type") or "").strip(),
             candidate_subagent_type=str(runtime.parsed.get("candidate_subagent_type") or "").strip() or None,
             activated_by="manual_chat_activation",
+            registration_type=str(runtime.parsed.get("registration_type") or "").strip() or None,
+            skill_name=str(runtime.parsed.get("skill_name") or "").strip() or None,
+            snapshot_type=str(runtime.parsed.get("snapshot_type") or "").strip() or None,
+            source_id=str(runtime.parsed.get("source_id") or "").strip() or None,
+            endpoint_path=str(runtime.parsed.get("endpoint_path") or "").strip() or None,
+            http_method=str(runtime.parsed.get("http_method") or "").strip() or None,
+            timeout_seconds=runtime.parsed.get("timeout_seconds"),
         ),
     )
     runtime.print_payload(payload)

@@ -35,6 +35,10 @@ def build_cli_command_payload(
     registration_type: str | None = None,
     skill_name: str | None = None,
     snapshot_type: str | None = None,
+    source_id: str | None = None,
+    endpoint_path: str | None = None,
+    http_method: str | None = None,
+    timeout_seconds: float | None = None,
     action_node_id: str | None = None,
     dag_id: str | None = None,
     subagent_node_id: str | None = None,
@@ -113,5 +117,9 @@ def build_cli_command_payload(
             "registration_type": str(registration_type or "").strip(),
             "skill_name": str(skill_name or "").strip(),
             "snapshot_type": str(snapshot_type or "").strip(),
+            "source_id": str(source_id or "").strip(),
+            "endpoint_path": str(endpoint_path or "").strip(),
+            "http_method": str(http_method or "").strip().upper(),
+            "timeout_seconds": float(timeout_seconds) if timeout_seconds is not None else None,
         }
     raise ValueError(f"unsupported cli command payload: {command}")

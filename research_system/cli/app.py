@@ -47,6 +47,10 @@ def _execute_cli_command(
     registration_type: str | None = None,
     skill_name: str | None = None,
     snapshot_type: str | None = None,
+    source_id: str | None = None,
+    endpoint_path: str | None = None,
+    http_method: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> object:
     return package_execute_cli_command(
         settings,
@@ -63,6 +67,10 @@ def _execute_cli_command(
         registration_type=registration_type,
         skill_name=skill_name,
         snapshot_type=snapshot_type,
+        source_id=source_id,
+        endpoint_path=endpoint_path,
+        http_method=http_method,
+        timeout_seconds=timeout_seconds,
         orchestrator_cls=ResearchOrchestrator,
     )
 

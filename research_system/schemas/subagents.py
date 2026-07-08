@@ -115,19 +115,51 @@ class SubagentDiscoveryTicket(BaseModel):
 class SubagentRuntimeRegistration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    registration_type: Literal["snapshot_skill_runner", "skill_runner"]
-    skill_name: str
+    registration_type: Literal["snapshot_skill_runner", "skill_runner", "http_json_runner"]
+    skill_name: str | None = None
     snapshot_type: str | None = None
+    source_id: str | None = None
+    endpoint_path: str | None = None
+    http_method: Literal["GET", "POST"] | None = None
+    timeout_seconds: float | None = Field(default=None, gt=0.0)
     notes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_registration_shape(self) -> "SubagentRuntimeRegistration":
         registration_type = str(self.registration_type or "").strip()
+        normalized_skill_name = str(self.skill_name or "").strip()
         normalized_snapshot_type = str(self.snapshot_type or "").strip()
-        if registration_type == "snapshot_skill_runner" and not normalized_snapshot_type:
-            raise ValueError("snapshot_skill_runner requires snapshot_type")
-        if registration_type == "skill_runner" and normalized_snapshot_type:
-            raise ValueError("skill_runner does not support snapshot_type")
+        normalized_source_id = str(self.source_id or "").strip()
+        normalized_endpoint_path = str(self.endpoint_path or "").strip()
+        normalized_http_method = str(self.http_method or "").strip().upper()
+        has_timeout_seconds = self.timeout_seconds is not None
+        if registration_type == "snapshot_skill_runner":
+            if not normalized_skill_name:
+                raise ValueError("snapshot_skill_runner requires skill_name")
+            if not normalized_snapshot_type:
+                raise ValueError("snapshot_skill_runner requires snapshot_type")
+            if normalized_source_id or normalized_endpoint_path or normalized_http_method:
+                raise ValueError("snapshot_skill_runner does not support http source settings")
+            if has_timeout_seconds:
+                raise ValueError("snapshot_skill_runner does not support timeout_seconds")
+        if registration_type == "skill_runner":
+            if not normalized_skill_name:
+                raise ValueError("skill_runner requires skill_name")
+            if normalized_snapshot_type:
+                raise ValueError("skill_runner does not support snapshot_type")
+            if normalized_source_id or normalized_endpoint_path or normalized_http_method:
+                raise ValueError("skill_runner does not support http source settings")
+            if has_timeout_seconds:
+                raise ValueError("skill_runner does not support timeout_seconds")
+        if registration_type == "http_json_runner":
+            if normalized_skill_name or normalized_snapshot_type:
+                raise ValueError("http_json_runner does not support skill_name or snapshot_type")
+            if not normalized_source_id:
+                raise ValueError("http_json_runner requires source_id")
+            if not normalized_endpoint_path:
+                raise ValueError("http_json_runner requires endpoint_path")
+            if not normalized_http_method:
+                raise ValueError("http_json_runner requires http_method")
         return self
 
 

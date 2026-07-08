@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urljoin
+
+import requests
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
@@ -111,6 +114,64 @@ class RuntimeRegisteredSkillSubagent:
         return {"result": result}
 
 
+class RuntimeRegisteredHttpJsonSubagent:
+    runtime_policy = SubagentRuntimePolicy(allow_parallel=True, max_concurrency=2)
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Execute one validated HTTP JSON endpoint as a runtime-registered subagent alias.",
+        capabilities=("http_adapter_bridge", "runtime_registration"),
+        cost_class="medium",
+        latency_class="medium",
+        side_effect_level="read_only",
+        tags=("runtime_registered", "read_only", "http_json"),
+    )
+
+    def __init__(
+        self,
+        *,
+        subagent_type: str,
+        source_id: str,
+        base_url: str,
+        endpoint_path: str,
+        http_method: str,
+        timeout_seconds: float = 20.0,
+        input_model: type[BaseModel] | None = None,
+        output_model: type[BaseModel] | None = None,
+        runtime_policy: SubagentRuntimePolicy | None = None,
+        catalog_metadata: SubagentCatalogMetadata | None = None,
+    ) -> None:
+        self.subagent_type = subagent_type
+        self.source_id = source_id
+        self.base_url = str(base_url).rstrip("/")
+        self.endpoint_path = self._normalize_endpoint_path(endpoint_path)
+        self.http_method = str(http_method).strip().upper() or "GET"
+        self.timeout_seconds = float(timeout_seconds or 20.0)
+        self.input_model = input_model
+        self.output_model = output_model
+        self.runtime_policy = runtime_policy or type(self).runtime_policy
+        self.catalog_metadata = catalog_metadata or type(self).catalog_metadata
+
+    def run(self, **kwargs: Any) -> dict[str, Any]:
+        url = urljoin(f"{self.base_url}/", self.endpoint_path.lstrip("/"))
+        request_kwargs: dict[str, Any] = {"timeout": self.timeout_seconds}
+        if self.http_method == "GET":
+            request_kwargs["params"] = kwargs
+        else:
+            request_kwargs["json"] = kwargs
+        response = requests.request(self.http_method, url, **request_kwargs)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            return dict(payload)
+        return {"result": payload}
+
+    @staticmethod
+    def _normalize_endpoint_path(endpoint_path: str) -> str:
+        normalized = str(endpoint_path or "").strip()
+        if normalized.startswith("/"):
+            return normalized
+        return f"/{normalized}"
+
+
 def build_runtime_registered_model(
     *,
     model_name: str,
@@ -199,6 +260,7 @@ def _normalize_type_decl(type_decl: Any) -> list[str]:
 
 
 __all__ = [
+    "RuntimeRegisteredHttpJsonSubagent",
     "RuntimeRegisteredSnapshotSkillInputModel",
     "RuntimeRegisteredSnapshotSkillOutputModel",
     "RuntimeRegisteredSnapshotSkillSubagent",

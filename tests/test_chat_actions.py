@@ -980,6 +980,22 @@ class ChatActionsTests(unittest.TestCase):
                     "candidate_subagent_type": "candidate_screening_strategy",
                 },
             ),
+            (
+                "activate-subagent-discovery",
+                {
+                    "action": "activate-subagent-discovery",
+                    "ticket_id": "01DISC",
+                    "delegate_subagent_type": None,
+                    "candidate_subagent_type": "candidate_collect_http_extension",
+                    "registration_type": "http_json_runner",
+                    "skill_name": None,
+                    "snapshot_type": None,
+                    "source_id": "eastmoney",
+                    "endpoint_path": "/api/market-signal",
+                    "http_method": "GET",
+                    "timeout_seconds": 9.5,
+                },
+            ),
         ]:
             handled = handle_chat_cli_action(
                 action=action,
@@ -1003,7 +1019,13 @@ class ChatActionsTests(unittest.TestCase):
         self.assertEqual(calls[3]["command"], "activate-subagent-discovery")
         self.assertEqual(calls[3]["query"], "stock_snapshot_collector")
         self.assertEqual(calls[3]["subagent_node_id"], "candidate_screening_strategy")
-        self.assertEqual(len(rendered), 4)
+        self.assertEqual(calls[4]["command"], "activate-subagent-discovery")
+        self.assertEqual(calls[4]["registration_type"], "http_json_runner")
+        self.assertEqual(calls[4]["source_id"], "eastmoney")
+        self.assertEqual(calls[4]["endpoint_path"], "/api/market-signal")
+        self.assertEqual(calls[4]["http_method"], "GET")
+        self.assertEqual(calls[4]["timeout_seconds"], 9.5)
+        self.assertEqual(len(rendered), 5)
 
 
 if __name__ == "__main__":

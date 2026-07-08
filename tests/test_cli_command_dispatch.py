@@ -112,6 +112,10 @@ class _DispatchOrchestratorStub:
         registration_type: str | None = None,
         skill_name: str | None = None,
         snapshot_type: str | None = None,
+        source_id: str | None = None,
+        endpoint_path: str | None = None,
+        http_method: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict:
         return {
             "ticket_id": ticket_id,
@@ -128,6 +132,10 @@ class _DispatchOrchestratorStub:
                                 "registration_type": registration_type,
                                 "skill_name": skill_name,
                                 "snapshot_type": snapshot_type,
+                                "source_id": source_id,
+                                "endpoint_path": endpoint_path,
+                                "http_method": http_method,
+                                "timeout_seconds": timeout_seconds,
                             }
                             if registration_type
                             else None
@@ -324,6 +332,20 @@ class CliCommandDispatchTests(unittest.TestCase):
             skill_name="analysis_skill",
             orchestrator_cls=_DispatchOrchestratorStub,
         )
+        http_runtime_activated = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            activated_by="ops_user",
+            status_filter="activate http runtime skill",
+            candidate_subagent_type="candidate_collect_http_extension",
+            registration_type="http_json_runner",
+            source_id="eastmoney",
+            endpoint_path="/api/market-signal",
+            http_method="GET",
+            timeout_seconds=9.5,
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
 
         self.assertEqual(discoveries[0]["ticket_id"], "01DISC")
         self.assertEqual(detail["ticket_id"], "01DISC")
@@ -336,6 +358,14 @@ class CliCommandDispatchTests(unittest.TestCase):
         self.assertEqual(
             generic_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["registration_type"],
             "skill_runner",
+        )
+        self.assertEqual(
+            http_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["registration_type"],
+            "http_json_runner",
+        )
+        self.assertEqual(
+            http_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["source_id"],
+            "eastmoney",
         )
 
     def test_execute_cli_payload_command_dispatches_run_id_commands(self) -> None:

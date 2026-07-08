@@ -4,6 +4,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pydantic import BaseModel, ConfigDict
 
@@ -133,6 +134,17 @@ class _GenericSkillRuntimeStub:
             "summary": f"{skill_name}:{kwargs.get('query')}",
             "score": float(kwargs.get("score") or 0.0),
         }
+
+
+class _HttpJsonResponseStub:
+    def __init__(self, payload: object) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> object:
+        return self._payload
 
 
 class _RuntimeRegisteredService(RuntimeBoundSubagentInvoker):
@@ -631,6 +643,124 @@ class SubagentRegistryTests(unittest.TestCase):
                 self.assertEqual(outputs["score"], 0.8)
                 self.assertEqual(record.subagent_type, "candidate_report_signal_extension")
                 self.assertEqual(skill_runtime.calls, [("analysis_skill", {"query": "banks", "score": 0.8})])
+            finally:
+                temp_dir_runtime.cleanup()
+
+    def test_shared_runtime_registration_factory_supports_http_json_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_http_extension",
+                preferred_subagent_type="candidate_collect_market_signal_http_extension",
+                reason="missing http-backed market signal extension capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_http_extension",
+                search_query="stock_check collect market_signal_http_extension",
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_runtime": lambda self: type(
+                        "_SkillRuntime",
+                        (),
+                        {"backend": type("_Backend", (), {"registry": {"analysis_skill": object()}})()},
+                    )(),
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                candidate_catalog_entries=[
+                    {
+                        "subagent_type": "candidate_collect_market_signal_http_extension",
+                        "summary": "Approved HTTP-backed market signal candidate.",
+                        "capabilities": ["market_signal_http_extension"],
+                        "stage": "collect",
+                        "side_effect_level": "read_only",
+                        "suitable_intents": ["stock_check"],
+                        "tags": ["approved_discovery_candidate"],
+                        "input_schema_name": "HttpSignalInput",
+                        "output_schema_name": "HttpSignalOutput",
+                        "input_json_schema": {
+                            "type": "object",
+                            "properties": {
+                                "symbol": {"type": "string"},
+                                "limit": {"type": "integer"},
+                            },
+                            "required": ["symbol"],
+                        },
+                        "output_json_schema": {
+                            "type": "object",
+                            "properties": {
+                                "signal": {"type": "string"},
+                                "score": {"type": "number"},
+                            },
+                            "required": ["signal"],
+                        },
+                    }
+                ],
+            )
+            admin.activate_request(
+                ticket.ticket_id,
+                registration_type="http_json_runner",
+                source_id="eastmoney",
+                endpoint_path="/api/market-signal",
+                http_method="GET",
+                timeout_seconds=9.5,
+                activated_by="tester",
+                reason="activate http runtime registration",
+            )
+
+            service = _RuntimeRegisteredService(store=store, skill_runtime=None)
+            registry = service.registry
+
+            definition = registry.definition("candidate_collect_market_signal_http_extension")
+            self.assertIsNotNone(definition.input_model)
+            self.assertIsNotNone(definition.output_model)
+            self.assertIn("symbol", (definition.input_model.model_json_schema().get("properties") or {}))
+            self.assertIn("signal", (definition.output_model.model_json_schema().get("properties") or {}))
+
+            temp_dir_runtime, context, request_envelope = self._build_runtime()
+            try:
+                with patch(
+                    "research_system.subagents.runtime_registered.requests.request",
+                    return_value=_HttpJsonResponseStub({"signal": "bullish", "score": 0.91}),
+                ) as mock_request:
+                    outputs, record = context.agent_control.invoke(
+                        registry=registry,
+                        invocation=SubagentInvocation(
+                            subagent_type="candidate_collect_market_signal_http_extension",
+                            objective="Run http runtime-registered alias.",
+                            inputs={"symbol": "600036", "limit": 3},
+                        ),
+                        thread_id=context.thread.thread_id,
+                        turn_id=context.turn.turn_id,
+                        request_id=request_envelope.request_id,
+                        agent="tester",
+                        phase="collect",
+                        execution_policy=context.execution_policy,
+                    )
+
+                self.assertEqual(outputs["signal"], "bullish")
+                self.assertEqual(outputs["score"], 0.91)
+                self.assertEqual(record.subagent_type, "candidate_collect_market_signal_http_extension")
+                mock_request.assert_called_once_with(
+                    "GET",
+                    "https://www.eastmoney.com/api/market-signal",
+                    params={"symbol": "600036", "limit": 3},
+                    timeout=9.5,
+                )
             finally:
                 temp_dir_runtime.cleanup()
 

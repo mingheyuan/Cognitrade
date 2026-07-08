@@ -164,20 +164,7 @@ def parse_chat_input(line: str) -> dict[str, object]:
             "reason": " ".join(parts[3:]).strip() or None,
         }
     if command == "/activate-subagent-discovery":
-        if len(parts) < 3 or len(parts) > 4:
-            return {
-                "action": "error",
-                "message": (
-                    "usage: /activate-subagent-discovery <ticket_id> <delegate_subagent_type> "
-                    "[candidate_subagent_type]"
-                ),
-            }
-        return {
-            "action": "activate-subagent-discovery",
-            "ticket_id": parts[1].strip(),
-            "delegate_subagent_type": parts[2].strip(),
-            "candidate_subagent_type": parts[3].strip() if len(parts) == 4 else None,
-        }
+        return _parse_activate_subagent_discovery_command(parts)
     if command in {"/status", "/doctor", "/check", "/cleanup"}:
         return {"action": command.removeprefix("/")}
     if command in {"/reindex", "/reindex-qdrant"}:
@@ -260,3 +247,83 @@ def _parse_subagent_discoveries_command(parts: list[str]) -> dict[str, object]:
             "message": "usage: /subagent-discoveries [limit] [pending|approved|rejected]",
         }
     return {"action": "subagent-discoveries", "limit": limit, "status": status}
+
+
+def _parse_activate_subagent_discovery_command(parts: list[str]) -> dict[str, object]:
+    if len(parts) < 3:
+        return {"action": "error", "message": _activate_subagent_discovery_usage()}
+    ticket_id = parts[1].strip()
+    if not ticket_id:
+        return {"action": "error", "message": _activate_subagent_discovery_usage()}
+    if any(token.startswith("--") for token in parts[2:]):
+        return _parse_activate_subagent_discovery_runtime_form(ticket_id, parts[2:])
+    if len(parts) > 4:
+        return {"action": "error", "message": _activate_subagent_discovery_usage()}
+    return {
+        "action": "activate-subagent-discovery",
+        "ticket_id": ticket_id,
+        "delegate_subagent_type": parts[2].strip(),
+        "candidate_subagent_type": parts[3].strip() if len(parts) == 4 else None,
+    }
+
+
+def _parse_activate_subagent_discovery_runtime_form(
+    ticket_id: str,
+    tokens: list[str],
+) -> dict[str, object]:
+    option_aliases = {
+        "--delegate": "delegate_subagent_type",
+        "--delegate-subagent-type": "delegate_subagent_type",
+        "--candidate": "candidate_subagent_type",
+        "--candidate-subagent-type": "candidate_subagent_type",
+        "--registration-type": "registration_type",
+        "--skill-name": "skill_name",
+        "--snapshot-type": "snapshot_type",
+        "--source-id": "source_id",
+        "--endpoint-path": "endpoint_path",
+        "--http-method": "http_method",
+        "--timeout-seconds": "timeout_seconds",
+    }
+    parsed: dict[str, object] = {
+        "action": "activate-subagent-discovery",
+        "ticket_id": ticket_id,
+        "delegate_subagent_type": None,
+        "candidate_subagent_type": None,
+        "registration_type": None,
+        "skill_name": None,
+        "snapshot_type": None,
+        "source_id": None,
+        "endpoint_path": None,
+        "http_method": None,
+        "timeout_seconds": None,
+    }
+    index = 0
+    while index < len(tokens):
+        token = str(tokens[index]).strip()
+        key = option_aliases.get(token)
+        if key is None or index + 1 >= len(tokens):
+            return {"action": "error", "message": _activate_subagent_discovery_usage()}
+        value = str(tokens[index + 1]).strip()
+        if not value:
+            return {"action": "error", "message": _activate_subagent_discovery_usage()}
+        if key == "timeout_seconds":
+            try:
+                parsed[key] = float(value)
+            except ValueError:
+                return {"action": "error", "message": _activate_subagent_discovery_usage()}
+        else:
+            parsed[key] = value
+        index += 2
+    if not parsed.get("delegate_subagent_type") and not parsed.get("registration_type"):
+        return {"action": "error", "message": _activate_subagent_discovery_usage()}
+    return parsed
+
+
+def _activate_subagent_discovery_usage() -> str:
+    return (
+        "usage: /activate-subagent-discovery <ticket_id> <delegate_subagent_type> [candidate_subagent_type] "
+        "or /activate-subagent-discovery <ticket_id> --registration-type <type> "
+        "[--candidate <candidate_subagent_type>] [--skill-name <skill>] [--snapshot-type <snapshot>] "
+        "[--source-id <source>] [--endpoint-path <path>] [--http-method <GET|POST>] "
+        "[--timeout-seconds <seconds>]"
+    )
