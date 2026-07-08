@@ -133,12 +133,11 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
                 latest_notice_snapshot=latest_notice_snapshot,
                 planning_context_hints=planning_context_hints,
             ),
-            patch_builder=lambda base_results: self._build_review_subagent_plan_patch(
+            patch_builder=lambda base_results: self._build_review_subagent_replan_patch(base_results=base_results),
+            replan_builder=lambda current_plan, _patch, base_results: self._rebuild_review_subagent_plan(
+                plan=current_plan,
                 source_run_id=source_run_id,
-                candidates=list(((base_results["review_claim_extractor"].outputs or {}).get("candidates") or [])),
-                claim_type_counts=dict(((base_results["review_claim_extractor"].outputs or {}).get("claim_type_counts") or {})),
-                review_required=bool(((base_results["review_context_resolver"].outputs or {}).get("review_required") or False)),
-                sector_snapshot_available=bool(((base_results["review_context_resolver"].outputs or {}).get("sector_snapshot_available") or False)),
+                base_results=base_results,
             ),
         )
         summary_outputs = final_results["review_summary_builder"].outputs or {}
@@ -277,15 +276,31 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
             },
         )
 
-    def _build_review_subagent_plan_patch(
+    def _build_review_subagent_replan_patch(
         self,
         *,
-        source_run_id: str,
-        candidates: list[dict],
-        claim_type_counts: dict[str, int],
-        review_required: bool,
-        sector_snapshot_available: bool,
+        base_results: dict[str, SubagentDagNodeResult],
     ) -> SubagentGraphPatch:
+        candidates = list(((base_results["review_claim_extractor"].outputs or {}).get("candidates") or []))
+        review_required = self._review_required_from_results(results=base_results)
+        sector_snapshot_available = bool(((base_results["review_context_resolver"].outputs or {}).get("sector_snapshot_available") or False))
+        return self.phase_policy.build_review_replan_patch(
+            candidate_count=len(candidates),
+            review_required=review_required,
+            sector_snapshot_available=sector_snapshot_available,
+        )
+
+    def _rebuild_review_subagent_plan(
+        self,
+        *,
+        plan: SubagentPlan,
+        source_run_id: str,
+        base_results: dict[str, SubagentDagNodeResult],
+    ) -> SubagentPlan:
+        candidates = list(((base_results["review_claim_extractor"].outputs or {}).get("candidates") or []))
+        claim_type_counts = dict(((base_results["review_claim_extractor"].outputs or {}).get("claim_type_counts") or {}))
+        review_required = self._review_required_from_results(results=base_results)
+        sector_snapshot_available = bool(((base_results["review_context_resolver"].outputs or {}).get("sector_snapshot_available") or False))
         candidate_entry = self._select_review_catalog_entry(
             capability="review_candidate_verdict",
             preferred_subagent_type="review_candidate_verdict",
@@ -295,7 +310,7 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
             preferred_subagent_type="review_summary_builder",
         )
         candidate_nodes: list[SubagentPlanNode] = []
-        if sector_snapshot_available:
+        if sector_snapshot_available and not review_required:
             for index, candidate in enumerate(candidates, start=1):
                 node_id = f"review_candidate_{index}"
                 candidate_nodes.append(
@@ -327,9 +342,30 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
             cache_key="review_summary_builder",
             notes=["phase=postprocess"],
         )
-        return self.phase_policy.build_review_patch(
-            candidate_nodes=candidate_nodes,
-            summary_node=summary_node,
+        replanned = plan.model_copy(deep=True)
+        replanned.nodes = [node.model_copy(deep=True) for node in plan.nodes] + [*candidate_nodes, summary_node]
+        replanned.notes = self._unique_notes(
+            [
+                *list(replanned.notes or []),
+                "review_graph_replanned_from_preprocess",
+                f"review_candidate_count={len(candidates)}",
+                f"review_required={str(review_required).lower()}",
+            ]
+        )
+        replanned.catalog_trace = {
+            **dict(replanned.catalog_trace or {}),
+            "replanned_from_preprocess": True,
+            "candidate_execution_enabled": bool(candidate_nodes),
+        }
+        return replanned
+
+    def _review_required_from_results(
+        self,
+        *,
+        results: dict[str, SubagentDagNodeResult],
+    ) -> bool:
+        return bool(((results["review_context_resolver"].outputs or {}).get("review_required") or False)) or bool(
+            ((results["review_focus_validator"].outputs or {}).get("review_required") or False)
         )
 
     def _execute_subagent_plan(
@@ -854,3 +890,13 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
 
     def _to_float(self, value: Any) -> float | None:
         return self.strategy_support.to_float(value)
+
+    @staticmethod
+    def _unique_notes(notes: list[str]) -> list[str]:
+        unique: list[str] = []
+        for note in notes:
+            normalized = str(note or "").strip()
+            if not normalized or normalized in unique:
+                continue
+            unique.append(normalized)
+        return unique

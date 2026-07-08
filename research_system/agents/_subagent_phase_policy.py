@@ -63,6 +63,26 @@ class SubagentPhaseRulePolicy:
             metadata={str(key): str(value) for key, value in dict(metadata or {}).items()},
         )
 
+    def build_replan_patch(
+        self,
+        *,
+        reason: str,
+        notes: list[str] | None = None,
+        metadata: dict[str, str] | None = None,
+        confidence: float = 1.0,
+        policy_source: str = "rule",
+    ) -> SubagentGraphPatch:
+        patch = self.build_patch(
+            notes=list(notes or [reason]),
+            operations=[self.request_replan(reason=reason, metadata=metadata)],
+            confidence=confidence,
+            policy_source=policy_source,
+        )
+        assert patch is not None
+        patch.decision_type = "replan"
+        patch.termination_reason = reason
+        return patch
+
 
 class RetrieverPhasePolicy(SubagentPhaseRulePolicy):
     def build_phase_one_patch(
@@ -112,6 +132,20 @@ class RetrieverPhasePolicy(SubagentPhaseRulePolicy):
 
 
 class ReporterPhasePolicy(SubagentPhaseRulePolicy):
+    def build_report_replan_patch(
+        self,
+        *,
+        branch_mode: str,
+    ) -> SubagentGraphPatch:
+        return self.build_replan_patch(
+            reason=f"report_terminal_branch={branch_mode}",
+            notes=[
+                "replan_report_terminal_from_strategy",
+                f"report_branch={branch_mode}",
+            ],
+            metadata={"branch_mode": branch_mode},
+        )
+
     def build_terminal_patch(
         self,
         *,
@@ -169,6 +203,30 @@ class DistillerPhasePolicy(SubagentPhaseRulePolicy):
 
 
 class ReviewerPhasePolicy(SubagentPhaseRulePolicy):
+    def build_review_replan_patch(
+        self,
+        *,
+        candidate_count: int,
+        review_required: bool,
+        sector_snapshot_available: bool,
+    ) -> SubagentGraphPatch:
+        notes = ["replan_review_graph_from_preprocess"]
+        if candidate_count <= 0:
+            notes.append("no_reviewable_claims_detected")
+        if not sector_snapshot_available:
+            notes.append("missing_sector_snapshot")
+        if review_required:
+            notes.append("review_required_after_focus_validation")
+        return self.build_replan_patch(
+            reason="review_preprocess_completed",
+            notes=notes,
+            metadata={
+                "candidate_count": str(candidate_count),
+                "review_required": str(bool(review_required)).lower(),
+                "sector_snapshot_available": str(bool(sector_snapshot_available)).lower(),
+            },
+        )
+
     def build_review_patch(
         self,
         *,

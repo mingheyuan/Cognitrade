@@ -144,35 +144,22 @@ class ReporterService(RuntimeBoundSubagentInvoker):
         runtime_degraded_note: str | None = None,
     ) -> dict:
         force_fallback = execution_mode == REPORT_EXECUTION_FALLBACK
-        branch_mode = self._report_branch_mode(
-            intent=intent,
-            evidences=evidences,
-            force_fallback=force_fallback,
-            provider_available=bool(getattr(self.llm_provider, "available", True)),
-        )
+        provider_available = bool(getattr(self.llm_provider, "available", True))
         subagent_plan = self._build_report_subagent_plan(
             intent=intent,
             query=query,
             evidences=evidences,
             retrieval_summary=retrieval_summary,
             planning_context_hints=planning_context_hints,
+            branch_mode=None,
         )
-        subagent_plan_patch = self._build_report_subagent_plan_patch(
-            intent=intent,
-            query=query,
-            evidences=evidences,
-            runtime_degraded_note=runtime_degraded_note,
-            branch_mode=branch_mode,
-        )
-        subagent_plan, subagent_plan_patches = self.phase_controller.apply_patch(
-            plan=subagent_plan,
-            patch=subagent_plan_patch,
-        )
-        results = self._execute_subagent_plan(
+        subagent_plan, _base_results, subagent_plan_patches, results = self.phase_controller.execute_patch_cycle(
             plan=subagent_plan,
             dag_id="report",
-            build_invocation=self._build_report_plan_invocations(
-                plan=subagent_plan,
+            base_max_workers=1,
+            final_max_workers=1,
+            build_invocation_factory=lambda current_plan: self._build_report_plan_invocations(
+                plan=current_plan,
                 intent=intent,
                 query=query,
                 evidences=evidences,
@@ -180,7 +167,25 @@ class ReporterService(RuntimeBoundSubagentInvoker):
                 planning_context_hints=planning_context_hints,
                 runtime_degraded_note=runtime_degraded_note,
             ),
+            patch_builder=lambda base_results: self._build_report_subagent_replan_patch(
+                intent=intent,
+                force_fallback=force_fallback,
+                provider_available=provider_available,
+                base_results=base_results,
+            ),
+            replan_builder=lambda current_plan, patch, base_results: self._rebuild_report_subagent_plan(
+                plan=current_plan,
+                intent=intent,
+                query=query,
+                evidences=evidences,
+                retrieval_summary=retrieval_summary,
+                planning_context_hints=planning_context_hints,
+                runtime_degraded_note=runtime_degraded_note,
+                patch=patch,
+                base_results=base_results,
+            ),
         )
+        branch_mode = self._report_branch_mode_from_plan(subagent_plan)
         trace = self._report_trace(
             intent=intent,
             evidences=evidences,
@@ -287,80 +292,73 @@ class ReporterService(RuntimeBoundSubagentInvoker):
         evidences: list[dict],
         retrieval_summary: str | None,
         planning_context_hints: dict[str, str] | None,
+        branch_mode: str | None,
     ) -> SubagentPlan:
         resolver_entry = self._select_report_catalog_entry(
             intent=intent,
             capability="report_strategy",
             preferred_subagent_type="report_strategy_resolver",
         )
-        llm_entry = self._select_report_catalog_entry(
-            intent=intent,
-            capability="report_composition",
-            preferred_subagent_type="llm_report_composer",
-            requires_llm=True,
-        )
+        nodes = [
+            self._build_catalog_plan_node(
+                node_id="report_strategy_resolver",
+                subagent_type=resolver_entry.subagent_type,
+                objective="Resolve report strategy from retrieval summary and planning context.",
+                inputs={
+                    "intent": intent,
+                    "query": query,
+                    "retrieval_summary": retrieval_summary,
+                    "planning_context_hints": dict(planning_context_hints or {}),
+                    "evidence_count": len(evidences),
+                },
+                cache_key="report_strategy_resolver",
+                notes=["report_phase=strategy"],
+            )
+        ]
+        selected_subagent_types = {
+            "report_strategy_resolver": resolver_entry.subagent_type,
+        }
+        if branch_mode is not None:
+            terminal_node = self._build_report_terminal_plan_node(
+                intent=intent,
+                query=query,
+                evidences=evidences,
+                retrieval_summary=retrieval_summary,
+                runtime_degraded_note=None,
+                branch_mode=branch_mode,
+            )
+            nodes.append(terminal_node)
+            selected_subagent_types["report_terminal"] = terminal_node.subagent_type
         return SubagentPlan(
             intent=intent,
             phase="report",
             strategy="catalog",
-            nodes=[
-                self._build_catalog_plan_node(
-                    node_id="report_strategy_resolver",
-                    subagent_type=resolver_entry.subagent_type,
-                    objective="Resolve report strategy from retrieval summary and planning context.",
-                    inputs={
-                        "intent": intent,
-                        "query": query,
-                        "retrieval_summary": retrieval_summary,
-                        "planning_context_hints": dict(planning_context_hints or {}),
-                        "evidence_count": len(evidences),
-                    },
-                    cache_key="report_strategy_resolver",
-                    notes=["report_phase=strategy"],
-                ),
-                self._build_catalog_plan_node(
-                    node_id="report_terminal",
-                    subagent_type=llm_entry.subagent_type,
-                    objective="Compose final report via LLM.",
-                    inputs={
-                        "intent": intent,
-                        "query": query,
-                        "retrieval_summary": retrieval_summary,
-                        "evidence_count": len(evidences),
-                    },
-                    depends_on=["report_strategy_resolver"],
-                    cache_key="report_terminal",
-                    notes=["report_phase=terminal", "candidate=llm_report_composer"],
-                ),
-            ],
-            notes=["report_catalog_plan"],
+            nodes=nodes,
+            notes=["report_catalog_plan"] if branch_mode is not None else ["report_strategy_base_plan"],
             catalog_trace={
                 "stage": "report",
                 "selection_mode": "catalog",
-                "selected_subagent_types": {
-                    "report_strategy_resolver": resolver_entry.subagent_type,
-                    "report_terminal": llm_entry.subagent_type,
-                },
+                "selected_subagent_types": selected_subagent_types,
             },
         )
 
-    def _build_report_subagent_plan_patch(
+    def _build_report_terminal_plan_node(
         self,
         *,
         intent: str,
         query: str,
         evidences: list[dict],
+        retrieval_summary: str | None,
         runtime_degraded_note: str | None,
         branch_mode: str,
-    ) -> SubagentGraphPatch | None:
-        replacement_node: SubagentPlanNode | None = None
+    ) -> SubagentPlanNode:
         if branch_mode == "deterministic_bank_compare":
             deterministic_entry = self._select_report_catalog_entry(
                 intent=intent,
                 capability="deterministic_bank_compare",
                 preferred_subagent_type="bank_compare_report_composer",
             )
-            replacement_node = self._build_catalog_plan_node(
+            return self._build_catalog_plan_node(
                 node_id="report_terminal",
                 subagent_type=deterministic_entry.subagent_type,
                 objective="Compose deterministic bank compare report from same-basis scorecard evidence.",
@@ -369,13 +367,13 @@ class ReporterService(RuntimeBoundSubagentInvoker):
                 cache_key="report_terminal",
                 notes=["report_phase=terminal", "candidate=bank_compare_report_composer"],
             )
-        elif branch_mode == "fallback":
+        if branch_mode == "fallback":
             fallback_entry = self._select_report_catalog_entry(
                 intent=intent,
                 capability="fallback_reporting",
                 preferred_subagent_type="fallback_report_composer",
             )
-            replacement_node = self._build_catalog_plan_node(
+            return self._build_catalog_plan_node(
                 node_id="report_terminal",
                 subagent_type=fallback_entry.subagent_type,
                 objective="Compose degraded fallback report.",
@@ -389,10 +387,95 @@ class ReporterService(RuntimeBoundSubagentInvoker):
                 cache_key="report_terminal",
                 notes=["report_phase=terminal", "candidate=fallback_report_composer"],
             )
-        return self.phase_policy.build_terminal_patch(
-            branch_mode=branch_mode,
-            replacement_node=replacement_node,
+        llm_entry = self._select_report_catalog_entry(
+            intent=intent,
+            capability="report_composition",
+            preferred_subagent_type="llm_report_composer",
+            requires_llm=True,
         )
+        return self._build_catalog_plan_node(
+            node_id="report_terminal",
+            subagent_type=llm_entry.subagent_type,
+            objective="Compose final report via LLM.",
+            inputs={
+                "intent": intent,
+                "query": query,
+                "retrieval_summary": retrieval_summary,
+                "evidence_count": len(evidences),
+            },
+            depends_on=["report_strategy_resolver"],
+            cache_key="report_terminal",
+            notes=["report_phase=terminal", "candidate=llm_report_composer"],
+        )
+
+    def _build_report_subagent_replan_patch(
+        self,
+        *,
+        intent: str,
+        force_fallback: bool,
+        provider_available: bool,
+        base_results: dict[str, SubagentDagNodeResult],
+    ) -> SubagentGraphPatch:
+        branch_mode = self._report_branch_mode(
+            intent=intent,
+            strategy_outputs=dict((base_results["report_strategy_resolver"].outputs or {}) or {}),
+            force_fallback=force_fallback,
+            provider_available=provider_available,
+        )
+        return self.phase_policy.build_report_replan_patch(branch_mode=branch_mode)
+
+    def _rebuild_report_subagent_plan(
+        self,
+        *,
+        plan: SubagentPlan,
+        intent: str,
+        query: str,
+        evidences: list[dict],
+        retrieval_summary: str | None,
+        planning_context_hints: dict[str, str] | None,
+        runtime_degraded_note: str | None,
+        patch: SubagentGraphPatch,
+        base_results: dict[str, SubagentDagNodeResult],
+    ) -> SubagentPlan:
+        _ = plan
+        branch_mode = self._report_branch_mode(
+            intent=intent,
+            strategy_outputs=dict((base_results["report_strategy_resolver"].outputs or {}) or {}),
+            force_fallback=False,
+            provider_available=True,
+        )
+        requested_branch_mode = branch_mode
+        if patch.operations:
+            requested_branch_mode = (
+                str((patch.operations[0].metadata or {}).get("branch_mode") or "").strip()
+                or requested_branch_mode
+            )
+        replanned = self._build_report_subagent_plan(
+            intent=intent,
+            query=query,
+            evidences=evidences,
+            retrieval_summary=retrieval_summary,
+            planning_context_hints=planning_context_hints,
+            branch_mode=requested_branch_mode,
+        )
+        replanned.notes = self._unique_notes(
+            [
+                *list(replanned.notes or []),
+                "report_terminal_replanned_from_strategy",
+                f"report_branch={requested_branch_mode}",
+            ]
+        )
+        replanned.catalog_trace = {
+            **dict(replanned.catalog_trace or {}),
+            "replanned_from_strategy": True,
+        }
+        if requested_branch_mode == "fallback":
+            report_terminal = next(node for node in replanned.nodes if node.node_id == "report_terminal")
+            report_terminal.inputs = {
+                **dict(report_terminal.inputs or {}),
+                "degraded_note": runtime_degraded_note or RuntimeDegradeReason.LLM_UNAVAILABLE.value,
+            }
+        return replanned
 
     def _execute_subagent_plan(
         self,
@@ -443,6 +526,12 @@ class ReporterService(RuntimeBoundSubagentInvoker):
         }
 
         plan_node_map = {node.node_id: node for node in plan.nodes}
+        if "report_terminal" not in plan_node_map:
+            return {
+                node_id: runtime_nodes[node_id]
+                for node_id in [node.node_id for node in plan.nodes]
+                if node_id in runtime_nodes
+            }
         terminal_subagent_type = plan_node_map["report_terminal"].subagent_type
         if terminal_subagent_type == "bank_compare_report_composer":
             runtime_nodes["report_terminal"] = {
@@ -566,15 +655,22 @@ class ReporterService(RuntimeBoundSubagentInvoker):
         self,
         *,
         intent: str,
-        evidences: list[dict],
+        strategy_outputs: dict[str, Any],
         force_fallback: bool,
         provider_available: bool,
     ) -> str:
-        if intent == "stock_compare":
-            methodology_payloads = self._methodology_payloads(evidences)
-            if self._bank_compare_scorecard_payload(methodology_payloads):
-                return "deterministic_bank_compare"
+        if intent == "stock_compare" and strategy_outputs.get("bank_compare_scorecard_payload"):
+            return "deterministic_bank_compare"
         if force_fallback or not provider_available:
+            return "fallback"
+        return "llm"
+
+    def _report_branch_mode_from_plan(self, plan: SubagentPlan) -> str:
+        terminal_node = next((node for node in plan.nodes if node.node_id == "report_terminal"), None)
+        terminal_subagent_type = str((terminal_node.subagent_type if terminal_node is not None else "") or "").strip()
+        if terminal_subagent_type == "bank_compare_report_composer":
+            return "deterministic_bank_compare"
+        if terminal_subagent_type == "fallback_report_composer":
             return "fallback"
         return "llm"
 
@@ -1107,6 +1203,16 @@ class ReporterService(RuntimeBoundSubagentInvoker):
         if strategy_follow_up.lower() in base_text.lower():
             return base_text
         return f"{base_text} {strategy_follow_up}"
+
+    @staticmethod
+    def _unique_notes(notes: list[str]) -> list[str]:
+        unique: list[str] = []
+        for note in notes:
+            normalized = str(note or "").strip()
+            if not normalized or normalized in unique:
+                continue
+            unique.append(normalized)
+        return unique
 
     def _compare_targets_payload(self, evidences: list[dict]) -> list[dict]:
         for item in evidences:

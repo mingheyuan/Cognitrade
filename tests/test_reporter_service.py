@@ -129,7 +129,7 @@ class ReporterServiceTests(unittest.TestCase):
             for patch in list(payload.get("subagent_plan_patches") or [])
             for operation in list((patch or {}).get("operations") or [])
         ]
-        self.assertIn("replace_subgraph", patch_op_types)
+        self.assertIn("request_replan", patch_op_types)
         trace_types = [item["subagent_type"] for item in payload["subagent_trace"]]
         self.assertEqual(trace_types, ["report_strategy_resolver", "fallback_report_composer"])
 
@@ -145,7 +145,12 @@ class ReporterServiceTests(unittest.TestCase):
         self.assertEqual(payload["degraded_note"], "llm_error:LLMProviderError")
         self.assertEqual(payload["degrade_reason"], "llm_error:LLMProviderError")
         self.assertEqual(payload["candidates"][0]["symbol"], "000001")
-        self.assertEqual(len(list(payload.get("subagent_plan_patches") or [])), 0)
+        patch_op_types = [
+            str(operation.get("op_type") or "")
+            for patch in list(payload.get("subagent_plan_patches") or [])
+            for operation in list((patch or {}).get("operations") or [])
+        ]
+        self.assertIn("request_replan", patch_op_types)
         report_plan = list(payload.get("subagent_plans") or [])[0]
         terminal_node = next(node for node in list(report_plan.get("nodes") or []) if str(node.get("node_id") or "") == "report_terminal")
         self.assertEqual(str(terminal_node.get("subagent_type") or ""), "llm_report_composer")
@@ -174,7 +179,7 @@ class ReporterServiceTests(unittest.TestCase):
             for patch in list(payload.get("subagent_plan_patches") or [])
             for operation in list((patch or {}).get("operations") or [])
         ]
-        self.assertIn("replace_subgraph", patch_op_types)
+        self.assertIn("request_replan", patch_op_types)
         self.assertEqual(
             [item["subagent_type"] for item in payload["subagent_trace"]],
             ["report_strategy_resolver", "bank_compare_report_composer"],

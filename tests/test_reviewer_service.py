@@ -97,7 +97,7 @@ class ReviewerServiceTests(unittest.TestCase):
             for patch in list(result.get("subagent_plan_patches") or [])
             for operation in list((patch or {}).get("operations") or [])
         ]
-        self.assertIn("insert_subagent", patch_op_types)
+        self.assertIn("request_replan", patch_op_types)
         self.assertTrue(any(item.get("subagent_type") == "review_candidate_verdict" for item in list(result.get("subagent_trace") or [])))
 
     def test_reviewer_confirms_catalyst_claim_when_policy_and_regulatory_signals_exist(self) -> None:
@@ -274,6 +274,12 @@ class ReviewerServiceTests(unittest.TestCase):
         review_node_ids = [str(node.get("node_id") or "") for node in list(subagent_plans[0].get("nodes") or [])]
         self.assertIn("review_summary_builder", review_node_ids)
         self.assertFalse(any(node_id.startswith("review_candidate_") for node_id in review_node_ids))
+        patch_op_types = [
+            str(operation.get("op_type") or "")
+            for patch in list(result.get("subagent_plan_patches") or [])
+            for operation in list((patch or {}).get("operations") or [])
+        ]
+        self.assertIn("request_replan", patch_op_types)
 
     def test_reviewer_requires_fundamental_snapshot_when_cashflow_focus_is_requested(self) -> None:
         result = self.service.run(
