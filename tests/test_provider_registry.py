@@ -112,6 +112,22 @@ class ProviderRegistryTests(unittest.TestCase):
         self.assertIsInstance(provider.client_support, OpenAIClientSupport)
         self.assertIsInstance(provider.response_support, OpenAIResponseSupport)
 
+    def test_openai_base_url_normalization_does_not_duplicate_v1(self) -> None:
+        support = OpenAIClientSupport(SimpleNamespace())
+
+        self.assertEqual(
+            support.normalize_base_url("https://example.com/gateway"),
+            "https://example.com/gateway/v1",
+        )
+        self.assertEqual(
+            support.normalize_base_url("https://example.com/v1"),
+            "https://example.com/v1",
+        )
+        self.assertEqual(
+            support.normalize_base_url("https://example.com/v1/"),
+            "https://example.com/v1",
+        )
+
     def test_stream_complete_continues_after_max_output_tokens(self) -> None:
         first_final = SimpleNamespace(
             id="resp_1",

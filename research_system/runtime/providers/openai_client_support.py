@@ -25,5 +25,6 @@ class OpenAIClientSupport:
         if not normalized:
             return None
         if normalized.startswith("http://") or normalized.startswith("https://"):
-            return normalized if normalized.endswith("/v1") else normalized.rstrip("/") + "/v1"
+            normalized = normalized.rstrip("/")
+            return normalized if normalized.endswith("/v1") else normalized + "/v1"
         return normalized

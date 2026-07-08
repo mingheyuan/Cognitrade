@@ -66,7 +66,7 @@ class TaskRouterRuntimeTests(unittest.TestCase):
 
             self.assertEqual(router.bind_calls, 1)
             self.assertEqual(router.clear_calls, 1)
-            self.assertEqual(decision.intent, "stock_check")
+            self.assertEqual(decision.intent, "stock_compare")
 
     def test_router_auto_binds_local_runtime_for_chat_dispatch(self) -> None:
         class TrackingRouter(TaskRouter):
@@ -108,10 +108,20 @@ class TaskRouterRuntimeTests(unittest.TestCase):
             ) as bind_runtime:
                 decision = router.identify(RequestEnvelope(user_query="compare 000001 and 600519"))
 
-            self.assertEqual(decision.intent, "stock_check")
+            self.assertEqual(decision.intent, "stock_compare")
             self.assertEqual(bind_runtime.call_args.kwargs["runs_root"], settings.runs_root)
             self.assertEqual(bind_runtime.call_args.kwargs["max_subagent_calls_per_turn"], 5)
             self.assertEqual(bind_runtime.call_args.kwargs["max_child_threads_per_turn"], 2)
+
+    def test_router_identify_prefers_compare_for_chinese_multi_stock_query(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            router = TaskRouter(settings=settings)
+
+            decision = router.identify(RequestEnvelope(user_query="000001 和 600519 对比"))
+
+            self.assertEqual(decision.intent, "stock_compare")
 
     def test_router_chat_dispatch_local_runtime_uses_settings_limits(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

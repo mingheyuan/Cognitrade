@@ -17,7 +17,7 @@ def build_default_intent_route_table() -> IntentRouteTable:
     return IntentRouteTable(
         version="default-v1",
         rules=[
-            IntentRouteRule(rule_id="stock_code_regex", intent="stock_check", match_type="regex", pattern=r"\b\d{6}\b", priority=10, target="query"),
+            IntentRouteRule(rule_id="stock_code_regex", intent="stock_check", match_type="regex", pattern=r"\b\d{6}\b", priority=18, target="query"),
             IntentRouteRule(
                 rule_id="stock_compare_cn",
                 intent="stock_compare",

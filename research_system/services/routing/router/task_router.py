@@ -134,40 +134,47 @@ class TaskRouter:
         return int(self.settings.max_child_threads_per_turn)
 
     def _looks_like_general_definition_or_chat(self, query: str) -> bool:
-        lowered = query.strip().lower()
-        basic_markers = (
-            "浣犳槸璋?",
-            "浣犺兘鍋氫粈涔?",
-            "鎬庝箞鐢?",
+        query_text = query.strip()
+        lowered = query_text.lower()
+        basic_markers_cn = (
+            "你是谁",
+            "你能做什么",
+            "怎么用",
+            "你好",
+            "嗨",
+            "谢谢",
+        )
+        basic_markers_en = (
             "help",
             "who are you",
             "what can you do",
             "how do i use this",
             "hello",
             "hi",
-            "浣犲ソ",
-            "鍡?",
-            "璋㈣阿",
             "thanks",
         )
-        if any(marker in lowered for marker in basic_markers):
+        if any(marker in query_text for marker in basic_markers_cn) or any(marker in lowered for marker in basic_markers_en):
             return True
 
-        definition_markers = (
-            "鏄粈涔?",
-            "浠€涔堟剰鎬?",
-            "浠嬬粛涓€涓?",
+        definition_markers_cn = (
+            "什么是",
+            "什么意思",
+            "介绍一下",
+        )
+        definition_markers_en = (
             "what is",
             "what's",
             "define ",
             "explain ",
         )
-        if not any(marker in lowered for marker in definition_markers):
+        if not any(marker in query_text for marker in definition_markers_cn) and not any(
+            marker in lowered for marker in definition_markers_en
+        ):
             return False
 
-        time_sensitive_cn = ("鏈€杩?", "浠婂ぉ", "浠婃棩", "鐜板湪", "鏈€鏂?", "杩戞湡", "璧板娍", "琛ㄧ幇", "娑ㄨ穼", "澶氬皯鐐?", "鎬庝箞鐪?")
+        time_sensitive_cn = ("最近", "今天", "今日", "现在", "最新", "近期", "走势", "表现", "涨跌", "多少点", "怎么看")
         time_sensitive_en = ("latest", "today", "recent", "current", "trend", "performance", "price", "level", "move")
-        if any(marker in query for marker in time_sensitive_cn):
+        if any(marker in query_text for marker in time_sensitive_cn):
             return False
         if any(marker in lowered for marker in time_sensitive_en):
             return False

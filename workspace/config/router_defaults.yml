@@ -3,7 +3,7 @@ rules:
   - rule_id: stock_code_regex
     intent: stock_check
     match_type: regex
-    priority: 10
+    priority: 18
     target: query
     pattern: "\\b\\d{6}\\b"
     enabled: true

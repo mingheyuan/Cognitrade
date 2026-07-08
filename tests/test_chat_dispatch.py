@@ -94,6 +94,24 @@ class ChatDispatchTests(unittest.TestCase):
             finally:
                 orchestrator.close()
 
+    def test_chat_dispatch_prefers_direct_answer_for_chinese_definition_question(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            orchestrator = ResearchOrchestrator(settings)
+            try:
+                router = orchestrator.task_router
+                dispatch = decide_chat_dispatch(
+                    settings=settings,
+                    state=object(),
+                    query="什么是上证指数？",
+                    task_router=router,
+                )
+                self.assertEqual(dispatch.mode, "direct_answer")
+                self.assertIsNone(dispatch.intent)
+            finally:
+                orchestrator.close()
+
     def test_chat_dispatch_runtime_finalizes_thread_and_turn_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings.from_env(Path(temp_dir))
