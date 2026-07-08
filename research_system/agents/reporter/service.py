@@ -8,6 +8,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from research_system.agents._subagent_dag import SubagentDagNodeResult, SubagentDagNodeSpec
 from research_system.agents._subagent_phase_controller import SubagentPhaseController
+from research_system.agents._subagent_phase_policy import ReporterPhasePolicy
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.runtime.core.execution_policy import RuntimeDegradeReason
 from research_system.runtime.providers.provider_registry import OpenAIProvider
@@ -25,7 +26,6 @@ from research_system.schemas.review import ClaimVerdictBreakdown, PosteriorRevie
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
     SubagentGraphPatch,
-    SubagentGraphPatchOperation,
     SubagentInvocation,
     SubagentPlan,
     SubagentPlanNode,
@@ -103,6 +103,7 @@ class ReporterService(RuntimeBoundSubagentInvoker):
             cache_context_builder=self._subagent_dag_cache_context,
             start_from_node_id_builder=self._subagent_dag_start_from_node_id,
         )
+        self.phase_policy = ReporterPhasePolicy()
 
     def run(
         self,
@@ -353,70 +354,46 @@ class ReporterService(RuntimeBoundSubagentInvoker):
         runtime_degraded_note: str | None,
         branch_mode: str,
     ) -> SubagentGraphPatch | None:
+        replacement_node: SubagentPlanNode | None = None
         if branch_mode == "deterministic_bank_compare":
             deterministic_entry = self._select_report_catalog_entry(
                 intent=intent,
                 capability="deterministic_bank_compare",
                 preferred_subagent_type="bank_compare_report_composer",
             )
-            return SubagentGraphPatch(
-                policy_source="rule",
-                confidence=1.0,
-                notes=["replace_terminal_with_deterministic_bank_compare"],
-                operations=[
-                    SubagentGraphPatchOperation(
-                        op_type="replace_subgraph",
-                        target_node_id="report_terminal",
-                        replacement_nodes=[
-                            self._build_catalog_plan_node(
-                                node_id="report_terminal",
-                                subagent_type=deterministic_entry.subagent_type,
-                                objective="Compose deterministic bank compare report from same-basis scorecard evidence.",
-                                inputs={"intent": intent, "query": query, "evidence_count": len(evidences)},
-                                depends_on=["report_strategy_resolver"],
-                                cache_key="report_terminal",
-                                notes=["report_phase=terminal", "candidate=bank_compare_report_composer"],
-                            )
-                        ],
-                        reason="deterministic bank compare branch selected",
-                    )
-                ],
+            replacement_node = self._build_catalog_plan_node(
+                node_id="report_terminal",
+                subagent_type=deterministic_entry.subagent_type,
+                objective="Compose deterministic bank compare report from same-basis scorecard evidence.",
+                inputs={"intent": intent, "query": query, "evidence_count": len(evidences)},
+                depends_on=["report_strategy_resolver"],
+                cache_key="report_terminal",
+                notes=["report_phase=terminal", "candidate=bank_compare_report_composer"],
             )
-        if branch_mode == "fallback":
+        elif branch_mode == "fallback":
             fallback_entry = self._select_report_catalog_entry(
                 intent=intent,
                 capability="fallback_reporting",
                 preferred_subagent_type="fallback_report_composer",
             )
-            return SubagentGraphPatch(
-                policy_source="rule",
-                confidence=1.0,
-                notes=["replace_terminal_with_fallback_report"],
-                operations=[
-                    SubagentGraphPatchOperation(
-                        op_type="replace_subgraph",
-                        target_node_id="report_terminal",
-                        replacement_nodes=[
-                            self._build_catalog_plan_node(
-                                node_id="report_terminal",
-                                subagent_type=fallback_entry.subagent_type,
-                                objective="Compose degraded fallback report.",
-                                inputs={
-                                    "intent": intent,
-                                    "query": query,
-                                    "evidence_count": len(evidences),
-                                    "degraded_note": runtime_degraded_note or RuntimeDegradeReason.LLM_UNAVAILABLE.value,
-                                },
-                                depends_on=["report_strategy_resolver"],
-                                cache_key="report_terminal",
-                                notes=["report_phase=terminal", "candidate=fallback_report_composer"],
-                            )
-                        ],
-                        reason="fallback reporting branch selected",
-                    )
-                ],
+            replacement_node = self._build_catalog_plan_node(
+                node_id="report_terminal",
+                subagent_type=fallback_entry.subagent_type,
+                objective="Compose degraded fallback report.",
+                inputs={
+                    "intent": intent,
+                    "query": query,
+                    "evidence_count": len(evidences),
+                    "degraded_note": runtime_degraded_note or RuntimeDegradeReason.LLM_UNAVAILABLE.value,
+                },
+                depends_on=["report_strategy_resolver"],
+                cache_key="report_terminal",
+                notes=["report_phase=terminal", "candidate=fallback_report_composer"],
             )
-        return None
+        return self.phase_policy.build_terminal_patch(
+            branch_mode=branch_mode,
+            replacement_node=replacement_node,
+        )
 
     def _execute_subagent_plan(
         self,

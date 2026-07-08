@@ -12,13 +12,13 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from research_system.adapters.storage.qdrant_adapter import QdrantAdapter, QdrantUnavailableError
 from research_system.agents._subagent_dag import SubagentDagNodeResult, SubagentDagNodeSpec
 from research_system.agents._subagent_phase_controller import SubagentPhaseController
+from research_system.agents._subagent_phase_policy import RetrieverPhasePolicy
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
     SubagentGraphPatch,
-    SubagentGraphPatchOperation,
     SubagentInvocation,
     SubagentPlan,
     SubagentPlanNode,
@@ -140,6 +140,7 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             cache_context_builder=self._subagent_dag_cache_context,
             start_from_node_id_builder=self._subagent_dag_start_from_node_id,
         )
+        self.phase_policy = RetrieverPhasePolicy()
 
     def _get_phase_controller(self) -> SubagentPhaseController:
         controller = getattr(self, "phase_controller", None)
@@ -153,6 +154,13 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             )
             self.phase_controller = controller
         return controller
+
+    def _get_phase_policy(self) -> RetrieverPhasePolicy:
+        policy = getattr(self, "phase_policy", None)
+        if policy is None:
+            policy = RetrieverPhasePolicy()
+            self.phase_policy = policy
+        return policy
 
     def close(self) -> None:
         seen_ids: set[int] = set()
@@ -519,33 +527,9 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
         intent: str,
         should_skip_qdrant: bool,
     ) -> SubagentGraphPatch | None:
-        operations: list[SubagentGraphPatchOperation] = []
-        notes: list[str] = []
-        if should_skip_qdrant:
-            operations.append(
-                SubagentGraphPatchOperation(
-                    op_type="remove_node",
-                    target_node_id="qdrant_evidence_searcher",
-                    reason="skip qdrant retrieval for stock_screen",
-                )
-            )
-            notes.append("removed_qdrant_for_stock_screen")
-        if not self._should_recall_methodology_memory(intent):
-            operations.append(
-                SubagentGraphPatchOperation(
-                    op_type="remove_node",
-                    target_node_id="methodology_memory_recaller",
-                    reason="methodology memory not required for current intent",
-                )
-            )
-            notes.append("removed_methodology_memory_for_intent")
-        if not operations:
-            return None
-        return SubagentGraphPatch(
-            policy_source="rule",
-            confidence=1.0,
-            notes=notes,
-            operations=operations,
+        return self._get_phase_policy().build_phase_one_patch(
+            should_skip_qdrant=should_skip_qdrant,
+            should_recall_methodology_memory=self._should_recall_methodology_memory(intent),
         )
 
     def _build_phase_two_subagent_plan(
@@ -623,28 +607,18 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             preferred_subagent_type="fallback_retrieval_decider",
             requires_llm=False,
         )
-        return SubagentGraphPatch(
-            policy_source="rule",
-            confidence=1.0,
-            notes=["replace_llm_decider_with_fallback"],
-            operations=[
-                SubagentGraphPatchOperation(
-                    op_type="replace_subgraph",
-                    target_node_id="retrieval_decider",
-                    replacement_nodes=[
-                        self._build_catalog_plan_node(
-                            node_id="retrieval_decider",
-                            subagent_type=fallback_entry.subagent_type,
-                            objective="Select final evidence set and summarize retrieval.",
-                            inputs={"fallback": True},
-                            depends_on=["evidence_candidate_deduper"],
-                            cache_key="retrieval_decider",
-                            notes=["phase=two", "candidate=fallback_decider"],
-                        )
-                    ],
-                    reason="llm decision disabled by runtime policy",
-                )
-            ],
+        fallback_node = self._build_catalog_plan_node(
+            node_id="retrieval_decider",
+            subagent_type=fallback_entry.subagent_type,
+            objective="Select final evidence set and summarize retrieval.",
+            inputs={"fallback": True},
+            depends_on=["evidence_candidate_deduper"],
+            cache_key="retrieval_decider",
+            notes=["phase=two", "candidate=fallback_decider"],
+        )
+        return self._get_phase_policy().build_phase_two_patch(
+            allow_llm_decision=allow_llm_decision,
+            fallback_node=fallback_node,
         )
 
     def _execute_subagent_plan(

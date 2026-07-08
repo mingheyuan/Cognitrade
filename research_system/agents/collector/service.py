@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from research_system.agents._subagent_dag import SubagentDagExecutor, SubagentDagNodeSpec
+from research_system.agents._subagent_phase_controller import SubagentPhaseController
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
     SubagentExecutionRecord,
@@ -58,6 +58,13 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                 CandidateUniverseBuilderSubagent(skill_runtime),
                 ReviewTargetLoaderSubagent(runs_root),
             ]
+        )
+        self.phase_controller = SubagentPhaseController(
+            registry=self.registry,
+            invoke_subagent=self._invoke_subagent,
+            emit_event=self._emit_runtime_event,
+            cache_context_builder=self._subagent_dag_cache_context,
+            start_from_node_id_builder=self._subagent_dag_start_from_node_id,
         )
 
     @property
@@ -483,36 +490,20 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         capability: str,
         preferred_subagent_type: str | None = None,
     ) -> SubagentCatalogEntry:
-        candidates = self.registry.catalog_entries(
+        return self.phase_controller.select_catalog_entry(
             stage="collect",
             intent=intent,
             capability=capability,
+            preferred_subagent_type=preferred_subagent_type,
         )
-        if not candidates:
-            candidates = self.registry.catalog_entries(stage="collect", capability=capability)
-        if not candidates:
-            raise ValueError(f"no collect subagent available for capability={capability}")
-        if preferred_subagent_type:
-            for candidate in candidates:
-                if candidate.subagent_type == preferred_subagent_type:
-                    return candidate
-        return sorted(
-            candidates,
-            key=lambda item: (
-                bool(item.requires_llm),
-                self._cost_rank(item.cost_class),
-                self._latency_rank(item.latency_class),
-                item.subagent_type,
-            ),
-        )[0]
 
     @staticmethod
     def _cost_rank(value: str | None) -> int:
-        return {"low": 0, "medium": 1, "high": 2}.get(str(value or "").strip().lower(), 3)
+        return SubagentPhaseController._cost_rank(value)
 
     @staticmethod
     def _latency_rank(value: str | None) -> int:
-        return {"low": 0, "medium": 1, "high": 2}.get(str(value or "").strip().lower(), 3)
+        return SubagentPhaseController._latency_rank(value)
 
     def _build_catalog_plan_node(
         self,
@@ -529,19 +520,20 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         notes: list[str] | None = None,
     ) -> SubagentPlanNode:
         selected = self._select_collect_catalog_entry(intent=intent, capability=capability)
-        return SubagentPlanNode(
+        return self.phase_controller.build_catalog_plan_node(
             node_id=node_id,
             subagent_type=selected.subagent_type,
             objective=objective,
+            inputs={},
             tags=["catalog_selected", capability],
-            depends_on=list(depends_on or []),
+            depends_on=depends_on,
             failure_mode=failure_mode,  # type: ignore[arg-type]
             allow_partial_dependencies=allow_partial_dependencies,
             max_attempts=max_attempts,
             replayable=True,
             cache_scope="run",
             cache_key=cache_key,
-            notes=list(notes or []),
+            notes=notes,
         )
 
     def _build_single_node_collect_plan(
@@ -558,7 +550,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
     ) -> tuple[SubagentPlan, dict[str, SubagentInvocation]]:
         selected = self._select_collect_catalog_entry(intent=intent, capability=capability)
         candidates = self.registry.catalog_entries(stage="collect", intent=intent, capability=capability)
-        node = SubagentPlanNode(
+        node = self.phase_controller.build_catalog_plan_node(
             node_id=node_id,
             subagent_type=selected.subagent_type,
             objective=objective,
@@ -584,14 +576,13 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             },
         )
         invocations = {
-            node_id: SubagentInvocation(
+            node_id: self.phase_controller.build_invocation(
                 subagent_type=selected.subagent_type,
                 objective=objective,
                 inputs=dict(inputs),
-                context={
-                    "task_name": task_name,
-                    "agent_path": agent_path,
-                },
+                task_name=task_name,
+                agent_path=agent_path,
+                phase="collect",
             )
         }
         return plan, invocations
@@ -615,7 +606,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         for index, (symbol, child_thread, invocation) in enumerate(jobs):
             node_id = f"stock_snapshot_collector:{index}:{symbol}"
             nodes.append(
-                SubagentPlanNode(
+                self.phase_controller.build_catalog_plan_node(
                     node_id=node_id,
                     subagent_type=selected.subagent_type,
                     objective=str(invocation.objective or "Collect stock-level verified snapshots."),
@@ -664,39 +655,17 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         plan: SubagentPlan,
         invocations: dict[str, SubagentInvocation],
         max_workers: int | None = None,
+        dag_id: str | None = None,
     ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
-        dag_nodes: list[SubagentDagNodeSpec] = []
-        for plan_node in plan.nodes:
-            invocation = invocations.get(plan_node.node_id)
-            if invocation is None:
-                raise KeyError(f"missing invocation for subagent plan node: {plan_node.node_id}")
-            dag_nodes.append(
-                SubagentDagNodeSpec(
-                    node_id=plan_node.node_id,
-                    build_invocation=lambda _results, *, current_invocation=invocation: current_invocation,
-                    depends_on=tuple(plan_node.depends_on),
-                    failure_mode=plan_node.failure_mode,
-                    allow_partial_dependencies=plan_node.allow_partial_dependencies,
-                    max_attempts=plan_node.max_attempts,
-                    replayable=plan_node.replayable,
-                    cache_scope=plan_node.cache_scope,
-                    cache_key=plan_node.cache_key,
-                    metadata={
-                        "task_name": str((invocation.context or {}).get("task_name") or plan_node.node_id),
-                        "agent_path": str((invocation.context or {}).get("agent_path") or plan_node.subagent_type),
-                        "child_thread_id": str((invocation.context or {}).get("child_thread_id") or "").strip() or None,
-                        "child_turn_id": str((invocation.context or {}).get("child_turn_id") or "").strip() or None,
-                        "phase": str((invocation.context or {}).get("phase") or plan.phase or "collect"),
-                        "plan_id": plan.plan_id,
-                        "plan_node_id": plan_node.node_id,
-                        "subagent_plan_strategy": plan.strategy,
-                    },
-                )
-            )
-        results = self._execute_subagent_dag(
-            dag_nodes,
+        runtime_nodes = self._build_runtime_plan_invocations(
+            plan=plan,
+            invocations=invocations,
+        )
+        results = self.phase_controller.execute_plan(
+            plan=plan,
+            build_invocation=runtime_nodes,
             max_workers=max_workers,
-            dag_id=f"subagent_plan:{plan.plan_id}",
+            dag_id=dag_id or f"subagent_plan:{plan.plan_id}",
         )
         outputs_by_node: dict[str, dict[str, Any]] = {}
         trace_rows: list[dict[str, Any]] = []
@@ -727,27 +696,33 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             trace_rows.append(trace_row)
         return outputs_by_node, trace_rows
 
-    def _execute_subagent_dag(
+    def _build_runtime_plan_invocations(
         self,
-        nodes: list[SubagentDagNodeSpec],
         *,
-        max_workers: int | None = None,
-        dag_id: str,
-        start_from_node_id: str | None = None,
-    ) -> dict:
-        executor = SubagentDagExecutor(
-            invoke_subagent=self._invoke_subagent,
-            emit_event=self._emit_runtime_event,
-        )
-        resolved_start_from_node_id = start_from_node_id or self._subagent_dag_start_from_node_id(
-            dag_id=dag_id,
-        )
-        return executor.execute(
-            nodes,
-            max_workers=max_workers,
-            cache_context=self._subagent_dag_cache_context(dag_id=dag_id),
-            start_from_node_id=resolved_start_from_node_id,
-        )
+        plan: SubagentPlan,
+        invocations: dict[str, SubagentInvocation],
+    ) -> dict[str, dict[str, Any]]:
+        runtime_nodes: dict[str, dict[str, Any]] = {}
+        for plan_node in plan.nodes:
+            invocation = invocations.get(plan_node.node_id)
+            if invocation is None:
+                raise KeyError(f"missing invocation for subagent plan node: {plan_node.node_id}")
+            invocation_context = dict(invocation.context or {})
+            metadata = self.phase_controller.build_metadata(
+                task_name=str(invocation_context.get("task_name") or plan_node.node_id),
+                agent_path=str(invocation_context.get("agent_path") or plan_node.subagent_type),
+                objective=str(invocation.objective or plan_node.objective or ""),
+                phase=str(invocation_context.get("phase") or plan.phase or "collect"),
+                extras={
+                    "child_thread_id": str(invocation_context.get("child_thread_id") or "").strip() or None,
+                    "child_turn_id": str(invocation_context.get("child_turn_id") or "").strip() or None,
+                },
+            )
+            runtime_nodes[plan_node.node_id] = {
+                "builder": lambda _results, *, current_invocation=invocation: current_invocation,
+                "metadata": metadata,
+            }
+        return runtime_nodes
 
     def _execute_single_subagent_node(
         self,
@@ -756,36 +731,29 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         invocation: SubagentInvocation,
         max_attempts: int = 1,
     ) -> tuple[dict, dict]:
-        results = self._execute_subagent_dag(
-            [
-                SubagentDagNodeSpec(
+        single_plan = SubagentPlan(
+            intent="collect",
+            phase=str((invocation.context or {}).get("phase") or "collect"),
+            strategy="rule",
+            nodes=[
+                self.phase_controller.build_catalog_plan_node(
                     node_id=node_id,
-                    replayable=True,
-                    cache_scope="run",
-                    cache_key=node_id,
-                    build_invocation=lambda _results, *, current_invocation=invocation: current_invocation,
+                    subagent_type=invocation.subagent_type,
+                    objective=str(invocation.objective or node_id),
+                    inputs=dict(invocation.inputs or {}),
                     max_attempts=max_attempts,
-                    metadata={
-                        "task_name": str((invocation.context or {}).get("task_name") or node_id),
-                        "agent_path": str((invocation.context or {}).get("agent_path") or node_id),
-                        "phase": str((invocation.context or {}).get("phase") or "collect"),
-                    },
+                    cache_key=node_id,
+                    tags=["single_node"],
                 )
             ],
+            notes=["single_node_execution"],
+        )
+        outputs_by_node, trace_rows = self._execute_subagent_plan(
+            plan=single_plan,
+            invocations={node_id: invocation},
             max_workers=1,
-            dag_id=f"single_node:{node_id}",
         )
-        result = results[node_id]
-        if result.record is None or result.outputs is None:
-            raise RuntimeError(f"collector dag node missing outputs: {node_id}")
-        return dict(result.outputs), self._trace_record_from_dag_result(
-            result=result,
-            fallback_subagent_type=invocation.subagent_type,
-            fallback_objective=str(invocation.objective or ""),
-            fallback_task_name=str((invocation.context or {}).get("task_name") or node_id),
-            fallback_agent_path=str((invocation.context or {}).get("agent_path") or node_id),
-            phase=str((invocation.context or {}).get("phase") or "collect"),
-        )
+        return dict(outputs_by_node[node_id]), dict(trace_rows[0])
 
     def enrich_stock_screen_candidates(
         self,
@@ -829,6 +797,7 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             seen_symbols.add(symbol)
         trace_rows, snapshot_rows, child_thread_ids = self._run_stock_snapshot_jobs(
             enrichment_jobs,
+            intent="stock_screen",
             max_workers=len(enrichment_jobs),
             dag_id="screen_enrichment_stock_snapshot_jobs",
         )
@@ -884,60 +853,32 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         self,
         jobs: list[tuple[str, object | None, SubagentInvocation]],
         *,
+        intent: str,
         max_workers: int | None = None,
         dag_id: str,
     ) -> tuple[list[dict], list[dict], list[str]]:
         if not jobs:
             return [], [], []
-        trace_rows: list[dict] = []
+        plan, invocations = self._build_stock_snapshot_job_plan(
+            intent=intent,
+            jobs=jobs,
+            task_name_prefix="collect",
+            agent_path_prefix="collector",
+        )
+        outputs_by_node, trace_rows = self._execute_subagent_plan(
+            plan=plan,
+            invocations=invocations,
+            max_workers=max_workers,
+            dag_id=dag_id,
+        )
         snapshots: list[dict] = []
         child_thread_ids: list[str] = []
-        executor = SubagentDagExecutor(
-            invoke_subagent=self._invoke_subagent,
-            emit_event=self._emit_runtime_event,
-        )
-        nodes: list[SubagentDagNodeSpec] = []
-        for index, (symbol, child_thread, invocation) in enumerate(jobs):
-            nodes.append(
-                SubagentDagNodeSpec(
-                    node_id=f"stock_snapshot_collector:{index}:{symbol}",
-                    replayable=True,
-                    cache_scope="run",
-                    cache_key=f"stock_snapshot_collector:{symbol}",
-                    build_invocation=lambda _results, *, current_invocation=invocation: current_invocation,
-                    max_attempts=2,
-                    metadata={
-                        "task_name": str((invocation.context or {}).get("task_name") or "collect:stock_snapshot_collector"),
-                        "agent_path": str((invocation.context or {}).get("agent_path") or "collector/stock_snapshot_collector"),
-                        "child_thread_id": getattr(child_thread, "thread_id", None),
-                        "child_turn_id": str((invocation.context or {}).get("child_turn_id") or "").strip() or None,
-                        "phase": str((invocation.context or {}).get("phase") or "collect"),
-                    },
-                )
-            )
-        results = executor.execute(
-            nodes,
-            max_workers=max_workers,
-            cache_context=self._subagent_dag_cache_context(dag_id=dag_id),
-        )
-        for (symbol, child_thread, _), node in zip(jobs, nodes, strict=False):
-            result = results[node.node_id]
-            if result.record is None or result.outputs is None:
-                raise RuntimeError(f"stock snapshot dag node missing outputs: {symbol}")
-            metadata = dict(result.metadata or {})
-            trace_record = self._trace_record_from_dag_result(
-                result=result,
-                fallback_subagent_type="stock_snapshot_collector",
-                fallback_objective="Collect stock-level verified snapshots.",
-                fallback_task_name=str(metadata.get("task_name") or "collect:stock_snapshot_collector"),
-                fallback_agent_path=str(metadata.get("agent_path") or "collector/stock_snapshot_collector"),
-                phase=str(metadata.get("phase") or "collect"),
-            )
-            if child_thread is not None:
-                trace_record.setdefault("notes", []).append(f"child_thread={child_thread.thread_id}")
-                child_thread_ids.append(child_thread.thread_id)
-            trace_rows.append(trace_record)
-            snapshots.extend(list(result.outputs.get("snapshots") or []))
+        for node in plan.nodes:
+            snapshots.extend(list((outputs_by_node.get(node.node_id) or {}).get("snapshots") or []))
+        for trace_record in trace_rows:
+            child_thread_id = str(trace_record.get("child_thread_id") or "").strip()
+            if child_thread_id:
+                child_thread_ids.append(child_thread_id)
         return trace_rows, snapshots, child_thread_ids
 
     def _trace_record_from_dag_result(

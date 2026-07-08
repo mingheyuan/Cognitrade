@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from research_system.agents._subagent_dag import SubagentDagNodeResult
 from research_system.agents._subagent_phase_controller import SubagentPhaseController
+from research_system.agents._subagent_phase_policy import DistillerPhasePolicy
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.runtime.core.execution_policy import RuntimeDegradeReason
 from research_system.runtime.platform.settings import Settings
@@ -25,7 +26,6 @@ from research_system.services.methodologies.dimensions import DimensionNormalize
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
     SubagentGraphPatch,
-    SubagentGraphPatchOperation,
     SubagentInvocation,
     SubagentPlan,
     SubagentPlanNode,
@@ -111,6 +111,7 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             cache_context_builder=self._subagent_dag_cache_context,
             start_from_node_id_builder=self._subagent_dag_start_from_node_id,
         )
+        self.phase_policy = DistillerPhasePolicy()
 
     def run(
         self,
@@ -524,39 +525,33 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             preferred_subagent_type="fallback_chunk_distiller",
             requires_llm=False,
         )
-        operations: list[SubagentGraphPatchOperation] = []
+        replacement_nodes: list[tuple[str, SubagentPlanNode]] = []
         for index, chunk_records in enumerate(chunks, start=1):
             chunk_label = f"chunk_{index}_of_{len(chunks)}"
-            operations.append(
-                SubagentGraphPatchOperation(
-                    op_type="replace_subgraph",
-                    target_node_id=f"chunk_{index}",
-                    replacement_nodes=[
-                        self._build_catalog_plan_node(
-                            node_id=f"chunk_{index}",
-                            subagent_type=fallback_entry.subagent_type,
-                            objective=f"Fallback-distill {chunk_label}.",
-                            inputs={
-                                "chunk_label": chunk_label,
-                                "record_count": len(chunk_records),
-                                "degrade_reason": runtime_degraded_reason
-                                or RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value,
-                            },
-                            tags=["catalog_selected", "parallel_candidate", "fallback_selected"],
-                            failure_mode="isolate",
-                            max_attempts=2,
-                            cache_key=f"chunk:{chunk_label}",
-                            notes=["phase=chunk_execution", "candidate=fallback_chunk_distiller"],
-                        )
-                    ],
-                    reason="llm chunk distillation disabled by runtime policy",
+            replacement_nodes.append(
+                (
+                    f"chunk_{index}",
+                    self._build_catalog_plan_node(
+                        node_id=f"chunk_{index}",
+                        subagent_type=fallback_entry.subagent_type,
+                        objective=f"Fallback-distill {chunk_label}.",
+                        inputs={
+                            "chunk_label": chunk_label,
+                            "record_count": len(chunk_records),
+                            "degrade_reason": runtime_degraded_reason
+                            or RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value,
+                        },
+                        tags=["catalog_selected", "parallel_candidate", "fallback_selected"],
+                        failure_mode="isolate",
+                        max_attempts=2,
+                        cache_key=f"chunk:{chunk_label}",
+                        notes=["phase=chunk_execution", "candidate=fallback_chunk_distiller"],
+                    ),
                 )
             )
-        return SubagentGraphPatch(
-            policy_source="rule",
-            confidence=1.0,
-            notes=["replace_llm_chunk_distillers_with_fallback"],
-            operations=operations,
+        return self.phase_policy.build_chunk_execution_patch(
+            force_fallback=force_fallback,
+            replacement_nodes=replacement_nodes,
         )
 
     def _execute_subagent_plan(
