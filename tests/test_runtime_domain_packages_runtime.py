@@ -31,10 +31,12 @@ from research_system.runtime.history import (
 from research_system.runtime.orchestration import (
     OrchestratorSubagentDiscoveryAdminSupport,
     SUPPORTED_RUNTIME_REGISTRATION_TYPES,
+    SUPPORTED_RUNTIME_TEMPLATE_TYPES,
     SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES,
     SUPPORTED_RUNTIME_VALIDATION_TYPES,
     SubagentDiscoveryStore,
     SubagentRuntimePackagingSupport,
+    SubagentRuntimeTemplateSupport,
     SubagentRuntimeSourceResolutionSupport,
     SubagentRuntimeValidationSupport,
 )
@@ -43,6 +45,12 @@ from research_system.runtime.orchestration.subagent_runtime_packaging import (
 )
 from research_system.runtime.orchestration.subagent_runtime_packaging import (
     SubagentRuntimePackagingSupport as PackagingSupportImpl,
+)
+from research_system.runtime.orchestration.subagent_runtime_templates import (
+    SUPPORTED_RUNTIME_TEMPLATE_TYPES as TemplateTypes,
+)
+from research_system.runtime.orchestration.subagent_runtime_templates import (
+    SubagentRuntimeTemplateSupport as TemplateSupportImpl,
 )
 from research_system.runtime.orchestration.subagent_runtime_source_resolution import (
     SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES as SourceResolutionTypes,
@@ -167,6 +175,10 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
             SubagentRuntimePackagingSupport,
         )
         self.assertIs(
+            orchestration_package.SubagentRuntimeTemplateSupport,
+            SubagentRuntimeTemplateSupport,
+        )
+        self.assertIs(
             orchestration_package.SubagentRuntimeSourceResolutionSupport,
             SubagentRuntimeSourceResolutionSupport,
         )
@@ -183,12 +195,24 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
             PackagingSupportImpl,
         )
         self.assertIs(
+            SubagentRuntimeTemplateSupport,
+            TemplateSupportImpl,
+        )
+        self.assertIs(
             orchestration_package.SUPPORTED_RUNTIME_REGISTRATION_TYPES,
             SUPPORTED_RUNTIME_REGISTRATION_TYPES,
         )
         self.assertIs(
             SUPPORTED_RUNTIME_REGISTRATION_TYPES,
             PackagingRuntimeRegistrationTypes,
+        )
+        self.assertIs(
+            orchestration_package.SUPPORTED_RUNTIME_TEMPLATE_TYPES,
+            SUPPORTED_RUNTIME_TEMPLATE_TYPES,
+        )
+        self.assertIs(
+            SUPPORTED_RUNTIME_TEMPLATE_TYPES,
+            TemplateTypes,
         )
         self.assertIs(
             SubagentRuntimeSourceResolutionSupport,
@@ -220,6 +244,13 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
         self.assertEqual(
             support.registration_types(),
             SUPPORTED_RUNTIME_REGISTRATION_TYPES,
+        )
+
+    def test_runtime_template_support_reports_complete_handler_registry(self) -> None:
+        support = SubagentRuntimeTemplateSupport()
+        self.assertEqual(
+            support.template_types(),
+            SUPPORTED_RUNTIME_TEMPLATE_TYPES,
         )
 
     def test_runtime_source_resolution_support_reports_complete_handler_registry(self) -> None:

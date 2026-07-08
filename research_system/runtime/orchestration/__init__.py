@@ -24,10 +24,12 @@ __all__ = [
     "OrchestratorRuntimeIoSupport",
     "OrchestratorSubagentDiscoveryAdminSupport",
     "SubagentRuntimePackagingSupport",
+    "SubagentRuntimeTemplateSupport",
     "SubagentRuntimeSourceResolutionSupport",
     "SubagentRuntimeValidationSupport",
     "SubagentDiscoveryStore",
     "SUPPORTED_RUNTIME_REGISTRATION_TYPES",
+    "SUPPORTED_RUNTIME_TEMPLATE_TYPES",
     "SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES",
     "SUPPORTED_RUNTIME_VALIDATION_TYPES",
     "OrchestratorSubagentBridge",
@@ -89,6 +91,10 @@ _EXPORTS = {
         "research_system.runtime.orchestration.subagent_runtime_packaging",
         "SubagentRuntimePackagingSupport",
     ),
+    "SubagentRuntimeTemplateSupport": (
+        "research_system.runtime.orchestration.subagent_runtime_templates",
+        "SubagentRuntimeTemplateSupport",
+    ),
     "SubagentRuntimeSourceResolutionSupport": (
         "research_system.runtime.orchestration.subagent_runtime_source_resolution",
         "SubagentRuntimeSourceResolutionSupport",
@@ -101,6 +107,10 @@ _EXPORTS = {
     "SUPPORTED_RUNTIME_REGISTRATION_TYPES": (
         "research_system.runtime.orchestration.subagent_runtime_packaging",
         "SUPPORTED_RUNTIME_REGISTRATION_TYPES",
+    ),
+    "SUPPORTED_RUNTIME_TEMPLATE_TYPES": (
+        "research_system.runtime.orchestration.subagent_runtime_templates",
+        "SUPPORTED_RUNTIME_TEMPLATE_TYPES",
     ),
     "SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES": (
         "research_system.runtime.orchestration.subagent_runtime_source_resolution",
