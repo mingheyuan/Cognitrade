@@ -32,6 +32,7 @@ class SettingsRuntimeTests(unittest.TestCase):
                     "data_sources",
                     "mcp_servers",
                     "openapi_sources",
+                    "skill_sources",
                     "taxonomy_dimensions",
                     "taxonomy_dimension_aliases",
                     "taxonomy_dimension_patterns",
@@ -52,6 +53,7 @@ class SettingsRuntimeTests(unittest.TestCase):
                 "workspace/config/data_sources.yml": "sources: seeded\n",
                 "workspace/config/mcp_servers.yml": "servers: seeded\n",
                 "workspace/config/openapi_sources.yml": "sources: seeded-openapi\n",
+                "workspace/config/skill_sources.yml": "sources: seeded-skill\n",
                 "workspace/taxonomy/dimensions.yml": "dimensions: seeded\n",
                 "workspace/taxonomy/dimension_aliases.yml": "aliases: seeded\n",
                 "workspace/taxonomy/dimension_patterns.yml": "patterns: seeded\n",
@@ -69,6 +71,7 @@ class SettingsRuntimeTests(unittest.TestCase):
             self.assertEqual(settings.retrieval_policy_path.read_text(encoding="utf-8"), "retrieval: seeded\n")
             self.assertEqual(settings.mcp_servers_path.read_text(encoding="utf-8"), "servers: seeded\n")
             self.assertEqual(settings.openapi_sources_path.read_text(encoding="utf-8"), "sources: seeded-openapi\n")
+            self.assertEqual(settings.skill_sources_path.read_text(encoding="utf-8"), "sources: seeded-skill\n")
             self.assertEqual(settings.taxonomy_dimension_patterns_path.read_text(encoding="utf-8"), "patterns: seeded\n")
 
     def test_settings_from_env_preserves_workspace_defaults(self) -> None:

@@ -5,12 +5,18 @@ from dataclasses import dataclass
 from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
 from research_system.adapters.vendors.mcp_source_registry import McpSourceRegistry
 from research_system.adapters.vendors.openapi_source_registry import OpenApiSourceRegistry
+from research_system.adapters.vendors.skill_source_registry import SkillSourceRegistry
 from research_system.runtime.orchestration.subagent_runtime_packaging import (
     SubagentRuntimePackagingSupport,
 )
+from research_system.runtime.platform.skill_runtime import SkillRuntime
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
     SubagentDiscoveryTicket,
+)
+from research_system.subagents.runtime_registered import (
+    RuntimeRegisteredSnapshotSkillInputModel,
+    RuntimeRegisteredSnapshotSkillOutputModel,
 )
 
 
@@ -23,6 +29,7 @@ class _DiscoveryCandidateSourceHandler:
 _DISCOVERY_CANDIDATE_SOURCE_HANDLERS = (
     _DiscoveryCandidateSourceHandler(protocol="mcp", loader_name="_mcp_candidate_entries"),
     _DiscoveryCandidateSourceHandler(protocol="openapi", loader_name="_openapi_candidate_entries"),
+    _DiscoveryCandidateSourceHandler(protocol="skill", loader_name="_skill_candidate_entries"),
 )
 
 SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES = tuple(
@@ -206,6 +213,93 @@ class SubagentDiscoveryCandidateSupport:
             )
         return entries
 
+    def _skill_candidate_entries(self, ticket: SubagentDiscoveryTicket) -> list[SubagentCatalogEntry]:
+        registry = self._skill_source_registry()
+        installed_skill_names = self._installed_skill_names()
+        gap = ticket.capability_gap
+        matching_rows = []
+        for source in registry.list_all():
+            normalized_registration_type = str(source.registration_type or "").strip()
+            if normalized_registration_type not in {"snapshot_skill_runner", "skill_runner"}:
+                continue
+            if str(source.skill_name or "").strip() not in installed_skill_names:
+                continue
+            if not self._matches_stage(gap.stage, source.stage):
+                continue
+            if not self._matches_intent(gap.intent, source.suitable_intents):
+                continue
+            if not self._matches_capability(gap.capability, source.capabilities):
+                continue
+            if normalized_registration_type == "snapshot_skill_runner":
+                if not str(source.snapshot_type or "").strip():
+                    continue
+            else:
+                if not self._is_object_schema(source.input_json_schema):
+                    continue
+                if not self._is_object_schema(source.output_json_schema):
+                    continue
+            matching_rows.append(source)
+        total = len(matching_rows)
+        entries: list[SubagentCatalogEntry] = []
+        for index, source in enumerate(matching_rows):
+            normalized_registration_type = str(source.registration_type or "").strip()
+            input_schema = self._candidate_input_schema_for_skill_source(source)
+            output_schema = self._candidate_output_schema_for_skill_source(source)
+            runtime_hints = (
+                {
+                    "snapshot_skill": {
+                        "skill_name": str(source.skill_name).strip(),
+                        "snapshot_type": str(source.snapshot_type or "").strip(),
+                        "summary": str(source.summary or "").strip()
+                        or f"Snapshot skill alias for {source.snapshot_type}",
+                    }
+                }
+                if normalized_registration_type == "snapshot_skill_runner"
+                else {
+                    "skill": {
+                        "skill_name": str(source.skill_name).strip(),
+                        "summary": str(source.summary or "").strip()
+                        or f"Skill runner alias for {source.skill_name}",
+                    }
+                }
+            )
+            entries.append(
+                SubagentCatalogEntry(
+                    subagent_type=self._candidate_subagent_type(
+                        ticket,
+                        source_id=normalized_registration_type,
+                        tool_name=str(source.skill_name).strip(),
+                        explicit_subagent_type=source.candidate_subagent_type,
+                        total=total,
+                        index=index,
+                    ),
+                    summary=str(source.summary or "").strip()
+                    or f"Approved skill candidate for {source.skill_name}",
+                    capabilities=list(source.capabilities or [str(gap.capability).strip()]),
+                    stage=str(source.stage or gap.stage or "").strip() or None,
+                    cost_class="medium",
+                    latency_class="medium",
+                    side_effect_level="read_only",
+                    suitable_intents=list(
+                        source.suitable_intents
+                        or ([str(gap.intent).strip()] if str(gap.intent or "").strip() else [])
+                    ),
+                    tags=[
+                        "approved_discovery_candidate",
+                        "configured_skill_source",
+                        "pending_runtime_registration",
+                        f"skill_registration:{normalized_registration_type}",
+                    ],
+                    requires_llm=bool(gap.requires_llm),
+                    allow_parallel=True,
+                    max_concurrency=4,
+                    input_json_schema=input_schema,
+                    output_json_schema=output_schema,
+                    runtime_registration_hints=runtime_hints,
+                )
+            )
+        return entries
+
     @staticmethod
     def _matches_stage(gap_stage: str | None, tool_stage: str | None) -> bool:
         normalized_gap_stage = str(gap_stage or "").strip().lower()
@@ -286,6 +380,20 @@ class SubagentDiscoveryCandidateSupport:
         )
 
     @staticmethod
+    def _candidate_input_schema_for_skill_source(source) -> dict:
+        normalized_registration_type = str(source.registration_type or "").strip()
+        if normalized_registration_type == "snapshot_skill_runner":
+            return RuntimeRegisteredSnapshotSkillInputModel.model_json_schema()
+        return dict(source.input_json_schema or {})
+
+    @staticmethod
+    def _candidate_output_schema_for_skill_source(source) -> dict:
+        normalized_registration_type = str(source.registration_type or "").strip()
+        if normalized_registration_type == "snapshot_skill_runner":
+            return RuntimeRegisteredSnapshotSkillOutputModel.model_json_schema()
+        return dict(source.output_json_schema or {})
+
+    @staticmethod
     def _is_discovery_http_source_allowed(source_id: str) -> bool:
         source = DataSourceRegistry().get(str(source_id or "").strip())
         if source is None:
@@ -329,6 +437,28 @@ class SubagentDiscoveryCandidateSupport:
                 return registry
         settings = getattr(self.host, "settings", None)
         return OpenApiSourceRegistry(settings=settings)
+
+    def _skill_source_registry(self) -> SkillSourceRegistry:
+        factory = getattr(self.host, "require_skill_source_registry", None)
+        if callable(factory):
+            registry = factory()
+            if isinstance(registry, SkillSourceRegistry):
+                return registry
+        settings = getattr(self.host, "settings", None)
+        return SkillSourceRegistry(settings=settings)
+
+    def _installed_skill_names(self) -> set[str]:
+        factory = getattr(self.host, "require_skill_runtime", None)
+        if callable(factory):
+            runtime = factory()
+        else:
+            settings = getattr(self.host, "settings", None)
+            runtime = SkillRuntime(settings) if settings is not None else None
+        backend = getattr(runtime, "backend", None)
+        registry = getattr(backend, "registry", None)
+        if not isinstance(registry, dict):
+            return set()
+        return {str(key).strip() for key in registry if str(key).strip()}
 
 
 __all__ = [

@@ -41,6 +41,7 @@ class OrchestratorAssemblySupport:
             research_support=getattr(self.host, "research_support", None),
             mcp_source_registry=getattr(self.host, "mcp_source_registry", None),
             openapi_source_registry=getattr(self.host, "openapi_source_registry", None),
+            skill_source_registry=getattr(self.host, "skill_source_registry", None),
             orchestrator_error_cls=self.host.orchestrator_error_cls,
         )
 

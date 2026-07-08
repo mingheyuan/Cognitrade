@@ -17,7 +17,11 @@ from research_system.schemas.subagents import (
     SubagentRuntimeRegistrationTemplate,
 )
 from research_system.subagents.base import SubagentCatalogMetadata, SubagentRuntimePolicy
-from research_system.subagents.runtime_registered import build_runtime_registered_model
+from research_system.subagents.runtime_registered import (
+    RuntimeRegisteredSnapshotSkillInputModel,
+    RuntimeRegisteredSnapshotSkillOutputModel,
+    build_runtime_registered_model,
+)
 
 
 class SubagentRuntimePackagingSupport:
@@ -83,6 +87,21 @@ class SubagentRuntimePackagingSupport:
         activation_entry: SubagentActivationEntry,
         catalog_entry: SubagentCatalogEntry,
     ) -> tuple[type | None, type | None]:
+        runtime_registration = activation_entry.runtime_registration
+        registration_type = str(getattr(runtime_registration, "registration_type", "") or "").strip()
+        if registration_type == "snapshot_skill_runner":
+            input_schema = dict(catalog_entry.input_json_schema or {}) or RuntimeRegisteredSnapshotSkillInputModel.model_json_schema()
+            output_schema = dict(catalog_entry.output_json_schema or {}) or RuntimeRegisteredSnapshotSkillOutputModel.model_json_schema()
+            return (
+                build_runtime_registered_model(
+                    model_name="ActivatedSnapshotSkillInputModel",
+                    schema=input_schema,
+                ),
+                build_runtime_registered_model(
+                    model_name="ActivatedSnapshotSkillOutputModel",
+                    schema=output_schema,
+                ),
+            )
         input_model = build_runtime_registered_model(
             model_name=f"{activation_entry.subagent_type}_input",
             schema=catalog_entry.input_json_schema,

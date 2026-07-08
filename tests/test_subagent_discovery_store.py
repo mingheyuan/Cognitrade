@@ -1158,6 +1158,201 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
                 "GET",
             )
 
+    def test_admin_support_auto_generates_snapshot_skill_candidate_entries_from_registry(self) -> None:
+        from research_system.adapters.vendors.skill_source_registry import (
+            SkillSourceDefinition,
+            SkillSourceRegistry,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                preferred_subagent_type="candidate_collect_market_signal_extension",
+                reason="missing snapshot-skill market signal capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                search_query="stock_check collect market_signal_extension",
+                preferred_protocols=["skill"],
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            registry = SkillSourceRegistry(
+                sources=[
+                    SkillSourceDefinition(
+                        skill_name="market_snapshot_skill",
+                        registration_type="snapshot_skill_runner",
+                        summary="Collect market snapshot through local runtime.",
+                        snapshot_type="market",
+                        capabilities=("market_signal_extension",),
+                        suitable_intents=("stock_check",),
+                        stage="collect",
+                        candidate_subagent_type="candidate_collect_market_snapshot_skill",
+                    )
+                ]
+            )
+            runtime = SimpleNamespace(
+                backend=SimpleNamespace(registry={"market_snapshot_skill": object()})
+            )
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_source_registry": lambda self: registry,
+                    "require_skill_runtime": lambda self: runtime,
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+
+            result = admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                reviewer="tester",
+                reason="approve generated snapshot skill discovery candidate",
+            )
+
+            self.assertEqual(result["status"], "approved")
+            approved_entries = store.approved_catalog_entries()
+            self.assertEqual(len(approved_entries), 1)
+            approved_entry = approved_entries[0]
+            self.assertEqual(
+                approved_entry.subagent_type,
+                "candidate_collect_market_snapshot_skill",
+            )
+            self.assertEqual(
+                approved_entry.runtime_registration_templates[0].template_id,
+                "snapshot:market:market_snapshot_skill",
+            )
+
+            activation = admin.activate_request(
+                ticket.ticket_id,
+                registration_template_id="snapshot:market:market_snapshot_skill",
+                activated_by="tester",
+                reason="activate auto-generated snapshot skill alias",
+            )
+
+            self.assertIn("runtime alias", activation["message"])
+            activated_entry = activation["result"]["activated_entries"][0]
+            self.assertEqual(
+                activated_entry["runtime_registration"]["registration_type"],
+                "snapshot_skill_runner",
+            )
+            self.assertEqual(
+                activated_entry["runtime_registration"]["skill_name"],
+                "market_snapshot_skill",
+            )
+            self.assertEqual(
+                activated_entry["runtime_registration"]["snapshot_type"],
+                "market",
+            )
+
+    def test_admin_support_auto_generates_generic_skill_candidate_entries_from_registry(self) -> None:
+        from research_system.adapters.vendors.skill_source_registry import (
+            SkillSourceDefinition,
+            SkillSourceRegistry,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="review_thesis",
+                stage="report",
+                capability="report_signal_extension",
+                preferred_subagent_type="candidate_report_signal_extension",
+                reason="missing generic-skill report signal capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="review_thesis",
+                stage="report",
+                capability="report_signal_extension",
+                search_query="review_thesis report report_signal_extension",
+                preferred_protocols=["skill"],
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            registry = SkillSourceRegistry(
+                sources=[
+                    SkillSourceDefinition(
+                        skill_name="analysis_skill",
+                        registration_type="skill_runner",
+                        summary="Run local report analysis skill.",
+                        capabilities=("report_signal_extension",),
+                        suitable_intents=("review_thesis",),
+                        stage="report",
+                        candidate_subagent_type="candidate_report_analysis_skill",
+                        input_json_schema={
+                            "type": "object",
+                            "properties": {"query": {"type": "string"}},
+                            "required": ["query"],
+                        },
+                        output_json_schema={
+                            "type": "object",
+                            "properties": {"summary": {"type": "string"}},
+                            "required": ["summary"],
+                        },
+                    )
+                ]
+            )
+            runtime = SimpleNamespace(
+                backend=SimpleNamespace(registry={"analysis_skill": object()})
+            )
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_source_registry": lambda self: registry,
+                    "require_skill_runtime": lambda self: runtime,
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+
+            result = admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                reviewer="tester",
+                reason="approve generated generic skill discovery candidate",
+            )
+
+            self.assertEqual(result["status"], "approved")
+            approved_entries = store.approved_catalog_entries()
+            self.assertEqual(len(approved_entries), 1)
+            approved_entry = approved_entries[0]
+            self.assertEqual(
+                approved_entry.subagent_type,
+                "candidate_report_analysis_skill",
+            )
+            self.assertEqual(
+                approved_entry.runtime_registration_templates[0].template_id,
+                "skill:analysis_skill",
+            )
+
+            activation = admin.activate_request(
+                ticket.ticket_id,
+                registration_template_id="skill:analysis_skill",
+                activated_by="tester",
+                reason="activate auto-generated generic skill alias",
+            )
+
+            self.assertIn("runtime alias", activation["message"])
+            activated_entry = activation["result"]["activated_entries"][0]
+            self.assertEqual(
+                activated_entry["runtime_registration"]["registration_type"],
+                "skill_runner",
+            )
+            self.assertEqual(
+                activated_entry["runtime_registration"]["skill_name"],
+                "analysis_skill",
+            )
+
     def test_admin_support_rejects_snapshot_skill_activation_for_non_collect_stage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = SubagentDiscoveryStore(Path(temp_dir))

@@ -19,6 +19,7 @@ from research_system.adapters.vendors.mcp_source_registry import McpSourceRegist
 from research_system.adapters.vendors.network_profile import NetworkProfile
 from research_system.adapters.vendors.openapi_source_registry import OpenApiSourceRegistry
 from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
+from research_system.adapters.vendors.skill_source_registry import SkillSourceRegistry
 
 
 class AdaptersPackageRuntimeTests(unittest.TestCase):
@@ -38,6 +39,7 @@ class AdaptersPackageRuntimeTests(unittest.TestCase):
         self.assertIs(vendors_package.McpSourceRegistry, McpSourceRegistry)
         self.assertIs(vendors_package.NetworkProfile, NetworkProfile)
         self.assertIs(vendors_package.OpenApiSourceRegistry, OpenApiSourceRegistry)
+        self.assertIs(vendors_package.SkillSourceRegistry, SkillSourceRegistry)
         self.assertIs(vendors_package.VendorProviderRegistry, VendorProviderRegistry)
         self.assertIs(vendors_package.merge_provider_facts, merge_provider_facts)
 

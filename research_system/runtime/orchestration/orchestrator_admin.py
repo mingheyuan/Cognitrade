@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from research_system.adapters.vendors.mcp_source_registry import McpSourceRegistry
 from research_system.adapters.vendors.openapi_source_registry import OpenApiSourceRegistry
+from research_system.adapters.vendors.skill_source_registry import SkillSourceRegistry
 from research_system.runtime.proposals.management.admin_support import (
     OrchestratorProposalAdminSupport,
 )
@@ -36,6 +37,7 @@ class OrchestratorAdminService:
     research_support: object | None = None
     mcp_source_registry: object | None = None
     openapi_source_registry: object | None = None
+    skill_source_registry: object | None = None
     orchestrator_error_cls: type[Exception] = Exception
 
     def __post_init__(self) -> None:
@@ -211,4 +213,12 @@ class OrchestratorAdminService:
             return registry
         registry = OpenApiSourceRegistry(settings=self.settings)
         self.openapi_source_registry = registry
+        return registry
+
+    def require_skill_source_registry(self):
+        registry = self.skill_source_registry
+        if isinstance(registry, SkillSourceRegistry):
+            return registry
+        registry = SkillSourceRegistry(settings=self.settings)
+        self.skill_source_registry = registry
         return registry

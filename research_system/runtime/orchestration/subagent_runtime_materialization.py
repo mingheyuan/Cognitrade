@@ -100,18 +100,20 @@ class SubagentRuntimeMaterializationSupport:
         catalog_metadata: SubagentCatalogMetadata,
         runtime_models: tuple[type | None, type | None],
     ):
-        del runtime_models
         runtime_registration = activation_entry.runtime_registration
         if runtime_registration is None or skill_runtime is None:
             return None
         catalog_entry = activation_entry.catalog_entry
         if str(catalog_entry.stage or "").strip().lower() not in {"", "collect"}:
             return None
+        input_model, output_model = runtime_models
         return RuntimeRegisteredSnapshotSkillSubagent(
             subagent_type=str(activation_entry.subagent_type).strip(),
             snapshot_type=str(runtime_registration.snapshot_type or "").strip(),
             skill_name=str(runtime_registration.skill_name).strip(),
             skill_runtime=skill_runtime,
+            input_model=input_model,
+            output_model=output_model,
             runtime_policy=runtime_policy,
             catalog_metadata=catalog_metadata,
         )

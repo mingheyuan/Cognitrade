@@ -11,6 +11,10 @@ from research_system.adapters.vendors.openapi_source_registry import (
     OpenApiOperationDefinition,
     OpenApiSourceRegistry,
 )
+from research_system.adapters.vendors.skill_source_registry import (
+    SkillSourceDefinition,
+    SkillSourceRegistry,
+)
 from research_system.runtime.orchestration.subagent_discovery_candidate_sources import (
     SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES,
     SubagentDiscoveryCandidateSupport,
@@ -32,7 +36,7 @@ class SubagentDiscoveryCandidateSourceTests(unittest.TestCase):
             support.source_types(),
             SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES,
         )
-        self.assertEqual(SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES, ("mcp", "openapi"))
+        self.assertEqual(SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES, ("mcp", "openapi", "skill"))
 
     def test_mcp_source_generates_candidates_only_for_matching_tools(self) -> None:
         registry = McpSourceRegistry(
@@ -312,6 +316,152 @@ class SubagentDiscoveryCandidateSourceTests(unittest.TestCase):
                         }
                     },
                 },
+            },
+        )
+
+    def test_skill_source_generates_snapshot_and_generic_skill_candidates(self) -> None:
+        registry = SkillSourceRegistry(
+            sources=[
+                SkillSourceDefinition(
+                    skill_name="market_snapshot_skill",
+                    registration_type="snapshot_skill_runner",
+                    summary="Collect market snapshot through local runtime.",
+                    snapshot_type="market",
+                    capabilities=("market_signal_extension",),
+                    suitable_intents=("stock_check",),
+                    stage="collect",
+                    candidate_subagent_type="candidate_collect_market_snapshot_skill",
+                ),
+                SkillSourceDefinition(
+                    skill_name="analysis_skill",
+                    registration_type="skill_runner",
+                    summary="Run local report analysis skill.",
+                    capabilities=("report_signal_extension",),
+                    suitable_intents=("review_thesis",),
+                    stage="report",
+                    candidate_subagent_type="candidate_report_analysis_skill",
+                    input_json_schema={
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                    output_json_schema={
+                        "type": "object",
+                        "properties": {"summary": {"type": "string"}},
+                        "required": ["summary"],
+                    },
+                ),
+                SkillSourceDefinition(
+                    skill_name="missing_skill",
+                    registration_type="skill_runner",
+                    summary="Configured but not installed skill.",
+                    capabilities=("report_signal_extension",),
+                    suitable_intents=("review_thesis",),
+                    stage="report",
+                    input_json_schema={
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                    },
+                    output_json_schema={
+                        "type": "object",
+                        "properties": {"summary": {"type": "string"}},
+                    },
+                ),
+            ]
+        )
+        host = type(
+            "_Host",
+            (),
+            {
+                "require_skill_source_registry": lambda self: registry,
+                "require_skill_runtime": lambda self: type(
+                    "_Runtime",
+                    (),
+                    {
+                        "backend": type(
+                            "_Backend",
+                            (),
+                            {
+                                "registry": {
+                                    "market_snapshot_skill": object(),
+                                    "analysis_skill": object(),
+                                }
+                            },
+                        )()
+                    },
+                )(),
+            },
+        )()
+        support = SubagentDiscoveryCandidateSupport(host)
+
+        snapshot_ticket = SubagentDiscoveryTicket(
+            ticket_id="ticket_snapshot_skill",
+            capability_gap=SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                preferred_subagent_type="candidate_collect_market_signal_extension",
+                reason="missing snapshot skill extension capability",
+            ),
+            tool_discovery_request=SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                search_query="stock_check collect market_signal_extension",
+                preferred_protocols=["skill"],
+                reason="discover controlled snapshot skill extension",
+            ),
+        )
+        generic_ticket = SubagentDiscoveryTicket(
+            ticket_id="ticket_generic_skill",
+            capability_gap=SubagentCapabilityGap(
+                intent="review_thesis",
+                stage="report",
+                capability="report_signal_extension",
+                preferred_subagent_type="candidate_report_signal_extension",
+                reason="missing generic skill extension capability",
+            ),
+            tool_discovery_request=SubagentToolDiscoveryRequest(
+                intent="review_thesis",
+                stage="report",
+                capability="report_signal_extension",
+                search_query="review_thesis report report_signal_extension",
+                preferred_protocols=["skill"],
+                reason="discover controlled generic skill extension",
+            ),
+        )
+
+        snapshot_entries = support.candidate_entries(snapshot_ticket)
+        generic_entries = support.candidate_entries(generic_ticket)
+
+        self.assertEqual(len(snapshot_entries), 1)
+        snapshot_entry = snapshot_entries[0]
+        self.assertEqual(snapshot_entry.subagent_type, "candidate_collect_market_snapshot_skill")
+        self.assertEqual(
+            snapshot_entry.runtime_registration_templates[0].template_id,
+            "snapshot:market:market_snapshot_skill",
+        )
+        self.assertEqual(
+            runtime_registration_hint_payload(snapshot_entry.runtime_registration_hints, section="snapshot_skill"),
+            {
+                "skill_name": "market_snapshot_skill",
+                "snapshot_type": "market",
+                "summary": "Collect market snapshot through local runtime.",
+            },
+        )
+
+        self.assertEqual(len(generic_entries), 1)
+        generic_entry = generic_entries[0]
+        self.assertEqual(generic_entry.subagent_type, "candidate_report_analysis_skill")
+        self.assertEqual(
+            generic_entry.runtime_registration_templates[0].template_id,
+            "skill:analysis_skill",
+        )
+        self.assertEqual(
+            runtime_registration_hint_payload(generic_entry.runtime_registration_hints, section="skill"),
+            {
+                "skill_name": "analysis_skill",
+                "summary": "Run local report analysis skill.",
             },
         )
 

@@ -53,6 +53,8 @@ class RuntimeRegisteredSnapshotSkillSubagent:
         snapshot_type: str,
         skill_name: str,
         skill_runtime: SkillRuntime,
+        input_model: type[BaseModel] | None = None,
+        output_model: type[BaseModel] | None = None,
         runtime_policy: SubagentRuntimePolicy | None = None,
         catalog_metadata: SubagentCatalogMetadata | None = None,
     ) -> None:
@@ -60,6 +62,8 @@ class RuntimeRegisteredSnapshotSkillSubagent:
         self.snapshot_type = snapshot_type
         self.skill_name = skill_name
         self.skill_runtime = skill_runtime
+        self.input_model = input_model or type(self).input_model
+        self.output_model = output_model or type(self).output_model
         self.runtime_policy = runtime_policy or type(self).runtime_policy
         self.catalog_metadata = catalog_metadata or type(self).catalog_metadata
 

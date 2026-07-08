@@ -37,6 +37,7 @@ class Settings(BaseModel):
     data_sources_path: Path
     mcp_servers_path: Path
     openapi_sources_path: Path
+    skill_sources_path: Path
     provider_policy_overrides: dict[str, str] = Field(default_factory=dict)
     default_timezone: str = "Asia/Shanghai"
     log_level: str = "INFO"
@@ -90,6 +91,7 @@ class Settings(BaseModel):
             "data_sources": self.data_sources_path,
             "mcp_servers": self.mcp_servers_path,
             "openapi_sources": self.openapi_sources_path,
+            "skill_sources": self.skill_sources_path,
             "taxonomy_dimensions": self.taxonomy_dimensions_path,
             "taxonomy_dimension_aliases": self.taxonomy_dimension_aliases_path,
             "taxonomy_dimension_patterns": self.taxonomy_dimension_patterns_path,
