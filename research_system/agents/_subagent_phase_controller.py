@@ -185,6 +185,11 @@ class SubagentPhaseController:
         patch_builder: Callable[[dict[str, SubagentDagNodeResult]], SubagentGraphPatch | None],
         replan_builder: Callable[[SubagentPlan, SubagentGraphPatch, dict[str, SubagentDagNodeResult]], SubagentPlan] | None = None,
         allow_current_plan_variant: bool = False,
+        candidate_plan_variants_builder: Callable[
+            [SubagentPlan, SubagentGraphPatch | None, dict[str, SubagentDagNodeResult]],
+            dict[str, SubagentPlan],
+        ]
+        | None = None,
     ) -> tuple[SubagentPlan, dict[str, SubagentDagNodeResult], list[dict[str, Any]], dict[str, SubagentDagNodeResult]]:
         base_results = self.execute_plan(
             plan=plan,
@@ -211,6 +216,17 @@ class SubagentPhaseController:
             candidate_plans["current"] = plan
         if patch is not None and rule_variant_id != "current":
             candidate_plans[rule_variant_id] = rule_final_plan
+        if candidate_plan_variants_builder is not None:
+            for variant_id, variant_plan in dict(
+                candidate_plan_variants_builder(rule_final_plan, patch, base_results) or {}
+            ).items():
+                if isinstance(variant_plan, SubagentPlan):
+                    candidate_plans[str(variant_id)] = variant_plan
+        rule_variant_id = self._resolve_variant_id(
+            target_plan=rule_final_plan,
+            candidate_plans=candidate_plans,
+            fallback=rule_variant_id,
+        )
         shadow_payload = self.shadow_policy.suggest(
             dag_id=dag_id,
             plan=plan,
@@ -384,6 +400,18 @@ class SubagentPhaseController:
                 message=f"Hybrid subagent-phase policy applied variant {applied_variant_id} for DAG {dag_id}",
                 payload=dict(payload),
             )
+
+    @staticmethod
+    def _resolve_variant_id(
+        *,
+        target_plan: SubagentPlan,
+        candidate_plans: dict[str, SubagentPlan],
+        fallback: str,
+    ) -> str:
+        for variant_id, candidate_plan in candidate_plans.items():
+            if candidate_plan is target_plan:
+                return variant_id
+        return fallback
 
     def build_metadata(
         self,

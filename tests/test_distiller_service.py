@@ -7,6 +7,7 @@ from pathlib import Path
 
 from research_system.agents.distiller.service import DISTILL_EXECUTION_FALLBACK, DistillerService
 from research_system.runtime.history.session.session_history import SessionHistory
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.runtime.storage.jsonl import read_jsonl
 from research_system.runtime.providers.provider_registry import LLMProviderError
 
@@ -83,6 +84,47 @@ class DistillerTimeoutProviderStub:
     def parse(self, **kwargs):
         self.calls += 1
         raise LLMProviderError("llm_request_timeout: 25.0s")
+
+
+class DistillerHybridProviderStub:
+    available = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def parse(self, **kwargs):
+        schema = kwargs["schema"]
+        if schema.__name__ == "SubagentPhaseShadowSuggestionPayload":
+            self.calls += 1
+            return schema.model_validate(
+                {
+                    "selected_plan_variant": "fallback_chunk_distiller",
+                    "selected_node_ids": [
+                        "chunk_execution_strategy_resolver",
+                        "chunk_1",
+                        "chunk_2",
+                        "chunk_result_merger",
+                    ],
+                    "request_replan": True,
+                    "reason": "prefer deterministic fallback chunk distillation",
+                    "confidence": 0.9,
+                    "notes": ["hybrid_select_fallback_chunks"],
+                }
+            )
+        return schema.model_validate(
+            {
+                "source_record_id": "unused-shadow-provider",
+                "summary": {
+                    "content_type": "text_records",
+                    "overall_confidence": 0.55,
+                    "needs_review": False,
+                    "major_risks": [],
+                    "processing_notes": ["should_not_execute_llm_chunk_variant"],
+                },
+                "logic_blocks": [],
+                "distilled_dimensions": [],
+            }
+        )
 
 
 class DistillerAliasProviderStub:
@@ -419,6 +461,64 @@ class DistillerServiceTests(unittest.TestCase):
             ("distill:postprocess:chunk_result_merger", "distiller/postprocess/chunk_result_merger"),
             context_pairs,
         )
+
+    def test_distiller_hybrid_can_switch_chunk_execution_to_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.subagent_phase_shadow_llm_enabled = True
+            settings.subagent_phase_hybrid_llm_enabled = True
+            settings.subagent_phase_hybrid_llm_min_confidence = 0.8
+            settings.max_llm_calls_per_turn = 3
+            provider = DistillerHybridProviderStub()
+            service = DistillerService(provider, settings=settings, runs_root=settings.runs_root)
+
+            result = service.run(
+                query="distill multi chunk records",
+                source_records=[
+                    {
+                        "source_id": "src-1",
+                        "title": "note-1",
+                        "content": "AI " * 150,
+                        "source_type": "inline_text",
+                    },
+                    {
+                        "source_id": "src-2",
+                        "title": "note-2",
+                        "content": "internet " * 150,
+                        "source_type": "inline_text",
+                    },
+                    {
+                        "source_id": "src-3",
+                        "title": "note-3",
+                        "content": "biotech " * 150,
+                        "source_type": "inline_text",
+                    },
+                    {
+                        "source_id": "src-4",
+                        "title": "note-4",
+                        "content": "export " * 150,
+                        "source_type": "inline_text",
+                    },
+                ],
+            )
+            run_root = next(settings.runs_root.iterdir())
+            trace_payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(provider.calls, 1)
+        chunk_node_types = {
+            str(node.get("node_id") or ""): str(node.get("subagent_type") or "")
+            for node in list((list(result.get("subagent_plans") or [])[1]).get("nodes") or [])
+        }
+        self.assertEqual(chunk_node_types.get("chunk_1"), "fallback_chunk_distiller")
+        self.assertEqual(chunk_node_types.get("chunk_2"), "fallback_chunk_distiller")
+        hybrid_rows = [
+            row
+            for row in list(trace_payload.get("dynamic_trace") or [])
+            if str(row.get("event") or "") == "subagent_phase_hybrid_applied"
+        ]
+        self.assertEqual(len(hybrid_rows), 1)
+        self.assertEqual(hybrid_rows[0]["applied_plan_variant"], "fallback_chunk_distiller")
 
     def test_quote_speaker_type_and_risk_flag(self) -> None:
         service = DistillerService(DistillerProviderStub())

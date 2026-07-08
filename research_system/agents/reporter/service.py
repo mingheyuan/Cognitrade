@@ -195,6 +195,19 @@ class ReporterService(RuntimeBoundSubagentInvoker):
                 patch=patch,
                 base_results=base_results,
             ),
+            candidate_plan_variants_builder=lambda rule_final_plan, patch, base_results: self._build_report_candidate_plan_variants(
+                rule_final_plan=rule_final_plan,
+                intent=intent,
+                query=query,
+                evidences=evidences,
+                retrieval_summary=retrieval_summary,
+                planning_context_hints=planning_context_hints,
+                runtime_degraded_note=runtime_degraded_note,
+                force_fallback=force_fallback,
+                provider_available=provider_available,
+                patch=patch,
+                base_results=base_results,
+            ),
         )
         branch_mode = self._report_branch_mode_from_plan(subagent_plan)
         trace = self._report_trace(
@@ -487,6 +500,57 @@ class ReporterService(RuntimeBoundSubagentInvoker):
                 "degraded_note": runtime_degraded_note or RuntimeDegradeReason.LLM_UNAVAILABLE.value,
             }
         return replanned
+
+    def _build_report_candidate_plan_variants(
+        self,
+        *,
+        rule_final_plan: SubagentPlan,
+        intent: str,
+        query: str,
+        evidences: list[dict],
+        retrieval_summary: str | None,
+        planning_context_hints: dict[str, str] | None,
+        runtime_degraded_note: str | None,
+        force_fallback: bool,
+        provider_available: bool,
+        patch: SubagentGraphPatch | None,
+        base_results: dict[str, SubagentDagNodeResult],
+    ) -> dict[str, SubagentPlan]:
+        strategy_outputs = dict((base_results["report_strategy_resolver"].outputs or {}) or {})
+        rule_branch_mode = self._report_branch_mode_from_plan(rule_final_plan)
+        branch_modes: list[str] = []
+        if intent == "stock_compare" and strategy_outputs.get("bank_compare_scorecard_payload"):
+            branch_modes.append("deterministic_bank_compare")
+        if "fallback" not in branch_modes:
+            branch_modes.append("fallback")
+        if provider_available and not force_fallback:
+            branch_modes.append("llm")
+        variants: dict[str, SubagentPlan] = {rule_branch_mode: rule_final_plan}
+        requested_branch_mode = (
+            str((patch.operations[0].metadata or {}).get("branch_mode") or "").strip()
+            if patch is not None and patch.operations
+            else ""
+        )
+        for branch_mode in branch_modes:
+            if branch_mode == rule_branch_mode:
+                continue
+            variants[branch_mode] = self._build_report_subagent_plan(
+                intent=intent,
+                query=query,
+                evidences=evidences,
+                retrieval_summary=retrieval_summary,
+                planning_context_hints=planning_context_hints,
+                branch_mode=branch_mode,
+            )
+            variants[branch_mode].notes = self._unique_notes(
+                [
+                    *list(variants[branch_mode].notes or []),
+                    "report_terminal_candidate_variant",
+                    f"report_branch={branch_mode}",
+                    f"rule_requested_branch={requested_branch_mode or rule_branch_mode}",
+                ]
+            )
+        return variants
 
     def _execute_subagent_plan(
         self,

@@ -101,7 +101,7 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                 ChunkResultMergerSubagent(
                     dedupe_logic_blocks=self._dedupe_logic_blocks,
                     merge_dimensions=self._merge_dimensions,
-                    fallback_runner=self._run_fallback,
+                    fallback_runner=lambda records: self._run_fallback(records=records),
                     logic_block_model=LogicBlock,
                     distilled_dimension_model=DistilledDimension,
                     distillation_result_model=DistillationResult,
@@ -281,6 +281,15 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                 ),
                 replan_builder=lambda current_plan, patch, base_results: self._rebuild_chunk_execution_subagent_plan(
                     plan=current_plan,
+                    query=query,
+                    chunks=chunks,
+                    force_fallback=force_fallback,
+                    runtime_degraded_reason=runtime_degraded_reason,
+                    patch=patch,
+                    base_results=base_results,
+                ),
+                candidate_plan_variants_builder=lambda rule_final_plan, patch, base_results: self._build_chunk_execution_candidate_plan_variants(
+                    rule_final_plan=rule_final_plan,
                     query=query,
                     chunks=chunks,
                     force_fallback=force_fallback,
@@ -738,6 +747,67 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             or None,
             chunk_subagent_type=chunk_subagent_type,
         )
+
+    def _build_chunk_execution_candidate_plan_variants(
+        self,
+        *,
+        rule_final_plan: SubagentPlan,
+        query: str,
+        chunks: list[list[DistillSourceRecord]],
+        force_fallback: bool,
+        runtime_degraded_reason: str | None,
+        patch: SubagentGraphPatch | None,
+        base_results: dict[str, SubagentDagNodeResult],
+    ) -> dict[str, SubagentPlan]:
+        metadata = dict((patch.operations[0].metadata or {}) if patch is not None and patch.operations else {})
+        strategy_outputs = dict(
+            ((base_results["chunk_execution_strategy_resolver"].outputs or {}).get("execution_strategy") or {})
+        )
+        rule_chunk_subagent_type = self._chunk_execution_subagent_type_from_plan(rule_final_plan)
+        runtime_reason = str(
+            metadata.get("runtime_degraded_reason")
+            or strategy_outputs.get("runtime_degraded_reason")
+            or runtime_degraded_reason
+            or ""
+        ).strip() or None
+        variants: dict[str, SubagentPlan] = {rule_chunk_subagent_type: rule_final_plan}
+        candidate_chunk_types = ["fallback_chunk_distiller"]
+        if not force_fallback and not runtime_reason:
+            candidate_chunk_types.append("llm_chunk_distiller")
+        for chunk_subagent_type in candidate_chunk_types:
+            if chunk_subagent_type == rule_chunk_subagent_type:
+                continue
+            variants[chunk_subagent_type] = self._build_chunk_execution_subagent_plan(
+                query=query,
+                chunks=chunks,
+                force_fallback=force_fallback,
+                runtime_degraded_reason=runtime_reason,
+                chunk_subagent_type=chunk_subagent_type,
+            )
+            variants[chunk_subagent_type].notes = self._unique_notes(
+                [
+                    *list(variants[chunk_subagent_type].notes or []),
+                    "distillation_chunk_candidate_variant",
+                    f"chunk_subagent_type={chunk_subagent_type}",
+                ]
+            )
+        return variants
+
+    def _chunk_execution_subagent_type_from_plan(self, plan: SubagentPlan) -> str:
+        for node in plan.nodes:
+            if node.subagent_type in {"llm_chunk_distiller", "fallback_chunk_distiller"}:
+                return node.subagent_type
+        return "llm_chunk_distiller"
+
+    @staticmethod
+    def _unique_notes(notes: list[str]) -> list[str]:
+        unique: list[str] = []
+        for note in notes:
+            normalized = str(note or "").strip()
+            if not normalized or normalized in unique:
+                continue
+            unique.append(normalized)
+        return unique
 
     def _execute_subagent_plan(
         self,

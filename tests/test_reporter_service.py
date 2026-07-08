@@ -6,6 +6,7 @@ from pathlib import Path
 
 from research_system.agents.reporter.service import ReporterService
 from research_system.runtime.history.session.session_history import SessionHistory
+from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.runtime.providers.provider_registry import LLMProviderError
 
 
@@ -25,6 +26,35 @@ class ReporterUnexpectedLLMStub:
 
     def parse(self, **kwargs):
         raise AssertionError("LLM should not be called for deterministic bank compare reporting")
+
+
+class ReporterHybridProviderStub:
+    available = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def parse(self, **kwargs):
+        schema = kwargs["schema"]
+        if schema.__name__ == "SubagentPhaseShadowSuggestionPayload":
+            self.calls += 1
+            return schema.model_validate(
+                {
+                    "selected_plan_variant": "fallback",
+                    "selected_node_ids": ["report_strategy_resolver", "report_terminal"],
+                    "request_replan": True,
+                    "reason": "prefer the fallback report branch for this run",
+                    "confidence": 0.91,
+                    "notes": ["hybrid_select_fallback_report"],
+                }
+            )
+        return schema.model_validate(
+            {
+                "conclusion": "Fallback report chosen by hybrid policy.",
+                "risk": "Limited evidence depth.",
+                "follow_up": "Expand evidence retrieval before final publication.",
+            }
+        )
 
 
 def _screening_evidences() -> list[dict]:
@@ -206,6 +236,38 @@ class ReporterServiceTests(unittest.TestCase):
             metrics_payload["dag_event_counts"].get("subagent_dag_node_completed", 0),
             2,
         )
+
+    def test_reporter_hybrid_can_switch_llm_branch_to_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.subagent_phase_shadow_llm_enabled = True
+            settings.subagent_phase_hybrid_llm_enabled = True
+            settings.subagent_phase_hybrid_llm_min_confidence = 0.8
+            settings.max_llm_calls_per_turn = 3
+            provider = ReporterHybridProviderStub()
+            payload = ReporterService(provider, runs_root=settings.runs_root, settings=settings).run(
+                intent="stock_screen",
+                query="screen stocks",
+                retrieval_summary="Stock screening: candidates=1",
+                evidences=_screening_evidences(),
+            )
+            run_root = next(settings.runs_root.iterdir())
+            trace_payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(provider.calls, 1)
+        self.assertTrue(payload["degraded"])
+        self.assertEqual(payload["degrade_reason"], "llm_unavailable")
+        report_plan = list(payload.get("subagent_plans") or [])[0]
+        terminal_node = next(node for node in list(report_plan.get("nodes") or []) if str(node.get("node_id") or "") == "report_terminal")
+        self.assertEqual(str(terminal_node.get("subagent_type") or ""), "fallback_report_composer")
+        hybrid_rows = [
+            row
+            for row in list(trace_payload.get("dynamic_trace") or [])
+            if str(row.get("event") or "") == "subagent_phase_hybrid_applied"
+        ]
+        self.assertEqual(len(hybrid_rows), 1)
+        self.assertEqual(hybrid_rows[0]["applied_plan_variant"], "fallback")
 
 
 if __name__ == "__main__":
