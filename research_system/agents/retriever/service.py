@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -17,7 +18,14 @@ from research_system.agents._subagent_dag import (
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import OpenAIProvider
-from research_system.schemas.subagents import SubagentInvocation
+from research_system.schemas.subagents import (
+    SubagentCatalogEntry,
+    SubagentGraphPatch,
+    SubagentGraphPatchOperation,
+    SubagentInvocation,
+    SubagentPlan,
+    SubagentPlanNode,
+)
 from research_system.services.memory import MemoryService
 from research_system.services.memory.core.retrieval_priority import (
     QDRANT_BLACKBOARD_MEMORY,
@@ -35,6 +43,7 @@ from research_system.services.methodologies.policy.retrieval_policy_view import 
 )
 from research_system.services.reporting.reporting_utils import summarize_proposal_drafts
 from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
+from research_system.subagents.planning import apply_subagent_graph_patch
 from research_system.subagents.registry import SubagentRegistry
 from research_system.subagents.retrieval import (
     BlackboardEvidenceIndexerSubagent,
@@ -194,25 +203,45 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
         top_k = int(self.retrieval_policy.get("final_top_k", 5))
         use_qdrant_search = search_mode == RETRIEVAL_SEARCH_QDRANT
         should_skip_qdrant = intent == "stock_screen"
+        subagent_plans: list[dict[str, Any]] = []
+        subagent_plan_patches: list[dict[str, Any]] = []
         qdrant_disabled_reason = None
         if not effective_qdrant_available:
             qdrant_disabled_reason = self.qdrant_error or RuntimeDegradeReason.QDRANT_UNAVAILABLE.value
         elif not use_qdrant_search:
             qdrant_disabled_reason = runtime_degraded_reason or RuntimeDegradeReason.RUNTIME_FALLBACK.value
 
-        phase_one_results = self._execute_subagent_dag(
-            self._retrieval_phase_one_nodes(
+        phase_one_plan = self._build_phase_one_subagent_plan(
+            intent=intent,
+            query=query,
+            blackboard_entries=blackboard_entries,
+            planning_context_hints=planning_context_hints,
+            top_k=top_k,
+            qdrant_enabled=effective_qdrant_available and use_qdrant_search,
+            qdrant_disabled_reason=qdrant_disabled_reason,
+        )
+        phase_one_patch = self._build_phase_one_subagent_plan_patch(
+            intent=intent,
+            should_skip_qdrant=should_skip_qdrant,
+        )
+        if phase_one_patch is not None:
+            phase_one_plan = apply_subagent_graph_patch(phase_one_plan, phase_one_patch)
+            subagent_plan_patches.append(phase_one_patch.model_dump(mode="json"))
+        subagent_plans.append(phase_one_plan.model_dump(mode="json"))
+        phase_one_results = self._execute_subagent_plan(
+            plan=phase_one_plan,
+            max_workers=3,
+            dag_id="phase_one",
+            build_invocation=self._build_phase_one_plan_invocation(
+                plan=phase_one_plan,
                 intent=intent,
                 query=query,
                 blackboard_entries=blackboard_entries,
                 planning_context_hints=planning_context_hints,
                 top_k=top_k,
-                should_skip_qdrant=should_skip_qdrant,
                 qdrant_enabled=effective_qdrant_available and use_qdrant_search,
                 qdrant_disabled_reason=qdrant_disabled_reason,
             ),
-            max_workers=3,
-            dag_id="phase_one",
         )
         trace = self._retrieval_phase_one_trace(
             results=phase_one_results,
@@ -238,8 +267,26 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             query=query,
             planning_context_hints=planning_context_hints,
         ):
-            phase_two_results = self._execute_subagent_dag(
-                self._retrieval_phase_two_nodes(
+            phase_two_plan = self._build_phase_two_subagent_plan(
+                intent=intent,
+                query=query,
+                planning_context_hints=planning_context_hints,
+                top_k=top_k,
+                qdrant_degraded_reason=qdrant_degraded_reason,
+            )
+            phase_two_patch = self._build_phase_two_subagent_plan_patch(
+                intent=intent,
+                allow_llm_decision=allow_llm_decision,
+            )
+            if phase_two_patch is not None:
+                phase_two_plan = apply_subagent_graph_patch(phase_two_plan, phase_two_patch)
+                subagent_plan_patches.append(phase_two_patch.model_dump(mode="json"))
+            subagent_plans.append(phase_two_plan.model_dump(mode="json"))
+            phase_two_results = self._execute_subagent_plan(
+                plan=phase_two_plan,
+                max_workers=1,
+                dag_id="phase_two",
+                build_invocation=self._build_phase_two_plan_invocation(
                     intent=intent,
                     query=query,
                     planning_context_hints=planning_context_hints,
@@ -250,8 +297,6 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                     qdrant_degraded_reason=qdrant_degraded_reason,
                     evidence_map=evidence_map,
                 ),
-                max_workers=1,
-                dag_id="phase_two",
             )
         trace.extend(self._retrieval_phase_two_trace(results=phase_two_results))
         decision_outputs = dict((phase_two_results["retrieval_decider"].outputs or {}) or {})
@@ -266,6 +311,8 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             )
         outputs = dict(decision_outputs)
         outputs["subagent_trace"] = trace
+        outputs["subagent_plans"] = subagent_plans
+        outputs["subagent_plan_patches"] = subagent_plan_patches
         return outputs
 
     def _execute_subagent_dag(
@@ -327,6 +374,562 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
         if child_turn_id:
             payload["child_turn_id"] = child_turn_id
         return payload
+
+    def _select_retrieve_catalog_entry(
+        self,
+        *,
+        intent: str,
+        capability: str,
+        preferred_subagent_type: str | None = None,
+        requires_llm: bool | None = None,
+    ) -> SubagentCatalogEntry:
+        candidates = self.registry.catalog_entries(
+            stage="retrieve",
+            intent=intent,
+            capability=capability,
+            requires_llm=requires_llm,
+        )
+        if not candidates:
+            candidates = self.registry.catalog_entries(
+                stage="retrieve",
+                capability=capability,
+                requires_llm=requires_llm,
+            )
+        if not candidates:
+            raise KeyError(f"no retriever catalog entry for capability={capability!r} intent={intent!r}")
+        if preferred_subagent_type:
+            for candidate in candidates:
+                if candidate.subagent_type == preferred_subagent_type:
+                    return candidate
+        return sorted(
+            candidates,
+            key=lambda candidate: (
+                bool(candidate.requires_llm),
+                self._cost_rank(candidate.cost_class),
+                self._latency_rank(candidate.latency_class),
+                candidate.subagent_type,
+            ),
+        )[0]
+
+    def _cost_rank(self, cost_class: str | None) -> int:
+        return {"low": 0, "medium": 1, "high": 2}.get(str(cost_class or "").strip().lower(), 3)
+
+    def _latency_rank(self, latency_class: str | None) -> int:
+        return {"low": 0, "medium": 1, "high": 2}.get(str(latency_class or "").strip().lower(), 3)
+
+    def _build_catalog_plan_node(
+        self,
+        *,
+        node_id: str,
+        subagent_type: str,
+        objective: str,
+        inputs: dict[str, Any],
+        depends_on: list[str] | None = None,
+        tags: list[str] | None = None,
+        failure_mode: str = "raise",
+        allow_partial_dependencies: bool = False,
+        max_attempts: int = 1,
+        replayable: bool = True,
+        cache_scope: str | None = "run",
+        cache_key: str | None = None,
+        notes: list[str] | None = None,
+    ) -> SubagentPlanNode:
+        return SubagentPlanNode(
+            node_id=node_id,
+            subagent_type=subagent_type,
+            objective=objective,
+            inputs=dict(inputs),
+            depends_on=list(depends_on or []),
+            tags=list(tags or ["catalog_selected"]),
+            failure_mode=failure_mode,  # type: ignore[arg-type]
+            allow_partial_dependencies=allow_partial_dependencies,
+            max_attempts=max_attempts,
+            replayable=replayable,
+            cache_scope=cache_scope,  # type: ignore[arg-type]
+            cache_key=cache_key,
+            notes=list(notes or []),
+        )
+
+    def _build_phase_one_subagent_plan(
+        self,
+        *,
+        intent: str,
+        query: str,
+        blackboard_entries: list[dict],
+        planning_context_hints: dict[str, str] | None,
+        top_k: int,
+        qdrant_enabled: bool,
+        qdrant_disabled_reason: str | None,
+    ) -> SubagentPlan:
+        indexer_entry = self._select_retrieve_catalog_entry(
+            intent=intent,
+            capability="evidence_indexing",
+            preferred_subagent_type="blackboard_evidence_indexer",
+        )
+        qdrant_entry = self._select_retrieve_catalog_entry(
+            intent=intent,
+            capability="vector_search",
+            preferred_subagent_type="qdrant_evidence_searcher",
+        )
+        memory_entry = self._select_retrieve_catalog_entry(
+            intent=intent,
+            capability="memory_recall",
+            preferred_subagent_type="methodology_memory_recaller",
+        )
+        return SubagentPlan(
+            intent=intent,
+            phase="retrieve",
+            strategy="catalog",
+            nodes=[
+                self._build_catalog_plan_node(
+                    node_id="blackboard_evidence_indexer",
+                    subagent_type=indexer_entry.subagent_type,
+                    objective="Index blackboard entries and expose evidence candidates.",
+                    inputs={"blackboard_entry_count": len(blackboard_entries)},
+                    cache_key="blackboard_evidence_indexer",
+                    notes=["phase=one", f"blackboard_entries={len(blackboard_entries)}"],
+                ),
+                self._build_catalog_plan_node(
+                    node_id="qdrant_evidence_searcher",
+                    subagent_type=qdrant_entry.subagent_type,
+                    objective="Search indexed evidence candidates via Qdrant.",
+                    inputs={
+                        "intent": intent,
+                        "query": query,
+                        "top_k": top_k,
+                        "enabled": qdrant_enabled,
+                        "disabled_reason": qdrant_disabled_reason,
+                    },
+                    depends_on=["blackboard_evidence_indexer"],
+                    tags=["catalog_selected", "parallel_candidate"],
+                    failure_mode="isolate",
+                    max_attempts=2,
+                    cache_key="qdrant_evidence_searcher",
+                    notes=["phase=one", "candidate=qdrant"],
+                ),
+                self._build_catalog_plan_node(
+                    node_id="methodology_memory_recaller",
+                    subagent_type=memory_entry.subagent_type,
+                    objective="Recall methodology memory rows for retrieval ranking and summarization.",
+                    inputs={
+                        "intent": intent,
+                        "query": query,
+                        "planning_context_hints": dict(planning_context_hints or {}),
+                        "limit": 5,
+                    },
+                    depends_on=["blackboard_evidence_indexer"],
+                    tags=["catalog_selected", "parallel_candidate"],
+                    failure_mode="isolate",
+                    max_attempts=2,
+                    cache_key="methodology_memory_recaller",
+                    notes=["phase=one", "candidate=methodology_memory"],
+                ),
+            ],
+            notes=["retrieval_phase_one_catalog_plan"],
+            catalog_trace={
+                "stage": "retrieve",
+                "selection_mode": "catalog",
+                "phase": "phase_one",
+                "selected_subagent_types": {
+                    "blackboard_evidence_indexer": indexer_entry.subagent_type,
+                    "qdrant_evidence_searcher": qdrant_entry.subagent_type,
+                    "methodology_memory_recaller": memory_entry.subagent_type,
+                },
+            },
+        )
+
+    def _build_phase_one_subagent_plan_patch(
+        self,
+        *,
+        intent: str,
+        should_skip_qdrant: bool,
+    ) -> SubagentGraphPatch | None:
+        operations: list[SubagentGraphPatchOperation] = []
+        notes: list[str] = []
+        if should_skip_qdrant:
+            operations.append(
+                SubagentGraphPatchOperation(
+                    op_type="remove_node",
+                    target_node_id="qdrant_evidence_searcher",
+                    reason="skip qdrant retrieval for stock_screen",
+                )
+            )
+            notes.append("removed_qdrant_for_stock_screen")
+        if not self._should_recall_methodology_memory(intent):
+            operations.append(
+                SubagentGraphPatchOperation(
+                    op_type="remove_node",
+                    target_node_id="methodology_memory_recaller",
+                    reason="methodology memory not required for current intent",
+                )
+            )
+            notes.append("removed_methodology_memory_for_intent")
+        if not operations:
+            return None
+        return SubagentGraphPatch(
+            policy_source="rule",
+            confidence=1.0,
+            notes=notes,
+            operations=operations,
+        )
+
+    def _build_phase_two_subagent_plan(
+        self,
+        *,
+        intent: str,
+        query: str,
+        planning_context_hints: dict[str, str] | None,
+        top_k: int,
+        qdrant_degraded_reason: str | None,
+    ) -> SubagentPlan:
+        deduper_entry = self._select_retrieve_catalog_entry(
+            intent=intent,
+            capability="evidence_deduplication",
+            preferred_subagent_type="evidence_candidate_deduper",
+        )
+        decision_entry = self._select_retrieve_catalog_entry(
+            intent=intent,
+            capability="evidence_selection",
+            preferred_subagent_type="retrieval_decider",
+            requires_llm=True,
+        )
+        return SubagentPlan(
+            intent=intent,
+            phase="retrieve",
+            strategy="catalog",
+            nodes=[
+                self._build_catalog_plan_node(
+                    node_id="evidence_candidate_deduper",
+                    subagent_type=deduper_entry.subagent_type,
+                    objective="Dedupe and rerank retrieval evidence candidates.",
+                    inputs={"intent": intent},
+                    cache_key="evidence_candidate_deduper",
+                    notes=["phase=two"],
+                ),
+                self._build_catalog_plan_node(
+                    node_id="retrieval_decider",
+                    subagent_type=decision_entry.subagent_type,
+                    objective="Select final evidence set and summarize retrieval.",
+                    inputs={
+                        "intent": intent,
+                        "query": query,
+                        "top_k": top_k,
+                        "qdrant_degraded_reason": qdrant_degraded_reason,
+                        "planning_context_hints": dict(planning_context_hints or {}),
+                    },
+                    depends_on=["evidence_candidate_deduper"],
+                    cache_key="retrieval_decider",
+                    notes=["phase=two", "candidate=llm_decider"],
+                ),
+            ],
+            notes=["retrieval_phase_two_catalog_plan"],
+            catalog_trace={
+                "stage": "retrieve",
+                "selection_mode": "catalog",
+                "phase": "phase_two",
+                "selected_subagent_types": {
+                    "evidence_candidate_deduper": deduper_entry.subagent_type,
+                    "retrieval_decider": decision_entry.subagent_type,
+                },
+            },
+        )
+
+    def _build_phase_two_subagent_plan_patch(
+        self,
+        *,
+        intent: str,
+        allow_llm_decision: bool,
+    ) -> SubagentGraphPatch | None:
+        if allow_llm_decision:
+            return None
+        fallback_entry = self._select_retrieve_catalog_entry(
+            intent=intent,
+            capability="evidence_selection",
+            preferred_subagent_type="fallback_retrieval_decider",
+            requires_llm=False,
+        )
+        return SubagentGraphPatch(
+            policy_source="rule",
+            confidence=1.0,
+            notes=["replace_llm_decider_with_fallback"],
+            operations=[
+                SubagentGraphPatchOperation(
+                    op_type="replace_subgraph",
+                    target_node_id="retrieval_decider",
+                    replacement_nodes=[
+                        self._build_catalog_plan_node(
+                            node_id="retrieval_decider",
+                            subagent_type=fallback_entry.subagent_type,
+                            objective="Select final evidence set and summarize retrieval.",
+                            inputs={"fallback": True},
+                            depends_on=["evidence_candidate_deduper"],
+                            cache_key="retrieval_decider",
+                            notes=["phase=two", "candidate=fallback_decider"],
+                        )
+                    ],
+                    reason="llm decision disabled by runtime policy",
+                )
+            ],
+        )
+
+    def _execute_subagent_plan(
+        self,
+        *,
+        plan: SubagentPlan,
+        max_workers: int | None,
+        dag_id: str,
+        build_invocation,
+    ) -> dict[str, SubagentDagNodeResult]:
+        dag_nodes: list[SubagentDagNodeSpec] = []
+        for plan_node in plan.nodes:
+            runtime_node = build_invocation[plan_node.node_id]
+            dag_nodes.append(
+                SubagentDagNodeSpec(
+                    node_id=plan_node.node_id,
+                    build_invocation=lambda results, *, builder=runtime_node["builder"]: builder(results),
+                    depends_on=tuple(plan_node.depends_on),
+                    failure_mode=plan_node.failure_mode,
+                    allow_partial_dependencies=plan_node.allow_partial_dependencies,
+                    max_attempts=plan_node.max_attempts,
+                    replayable=plan_node.replayable,
+                    cache_scope=plan_node.cache_scope,
+                    cache_key=plan_node.cache_key,
+                    metadata={
+                        **dict(runtime_node["metadata"]),
+                        "plan_id": plan.plan_id,
+                        "plan_node_id": plan_node.node_id,
+                        "subagent_plan_strategy": plan.strategy,
+                    },
+                )
+            )
+        return self._execute_subagent_dag(
+            dag_nodes,
+            max_workers=max_workers,
+            dag_id=dag_id,
+        )
+
+    def _build_phase_one_plan_invocation(
+        self,
+        *,
+        plan: SubagentPlan,
+        intent: str,
+        query: str,
+        blackboard_entries: list[dict],
+        planning_context_hints: dict[str, str] | None,
+        top_k: int,
+        qdrant_enabled: bool,
+        qdrant_disabled_reason: str | None,
+    ) -> dict[str, dict[str, Any]]:
+        node_ids = {node.node_id for node in plan.nodes}
+        qdrant_thread = qdrant_turn = None
+        memory_thread = memory_turn = None
+        if "qdrant_evidence_searcher" in node_ids:
+            qdrant_thread, qdrant_turn = self.spawn_child_thread(
+                intent=intent,
+                objective="Search indexed evidence candidates via Qdrant.",
+                agent=self.agent_name,
+                phase="retrieve_search_qdrant",
+            )
+        if "methodology_memory_recaller" in node_ids:
+            memory_thread, memory_turn = self.spawn_child_thread(
+                intent=intent,
+                objective="Recall methodology memory rows for retrieval ranking and summarization.",
+                agent=self.agent_name,
+                phase="retrieve_search_methodology_memory",
+            )
+        runtime_nodes = {
+            "blackboard_evidence_indexer": {
+                "builder": lambda _results: self._build_subagent_invocation(
+                    subagent_type="blackboard_evidence_indexer",
+                    objective="Index blackboard entries and expose evidence candidates.",
+                    inputs={"blackboard_entries": blackboard_entries},
+                    task_name="retrieve:indexing:blackboard_evidence_indexer",
+                    agent_path="retriever/indexing/blackboard_evidence_indexer",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="retrieve:indexing:blackboard_evidence_indexer",
+                    agent_path="retriever/indexing/blackboard_evidence_indexer",
+                    objective="Index blackboard entries and expose evidence candidates.",
+                ),
+            },
+            "qdrant_evidence_searcher": {
+                "builder": lambda results, *, child_thread=qdrant_thread, child_turn=qdrant_turn: self._build_subagent_invocation(
+                    subagent_type="qdrant_evidence_searcher",
+                    objective="Search indexed evidence candidates via Qdrant.",
+                    inputs={
+                        "intent": intent,
+                        "query": query,
+                        "top_k": top_k,
+                        "enabled": qdrant_enabled,
+                        "disabled_reason": qdrant_disabled_reason,
+                        "symbol": (results["blackboard_evidence_indexer"].outputs or {}).get("symbol"),
+                        "sector": (results["blackboard_evidence_indexer"].outputs or {}).get("sector"),
+                        "current_run_id": (results["blackboard_evidence_indexer"].outputs or {}).get("current_run_id"),
+                    },
+                    task_name="retrieve:search:qdrant_evidence_searcher",
+                    agent_path="retriever/search/qdrant_evidence_searcher",
+                    phase="retrieve_search_qdrant",
+                    child_thread_id=getattr(child_thread, "thread_id", None),
+                    child_turn_id=getattr(child_turn, "turn_id", None),
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="retrieve:search:qdrant_evidence_searcher",
+                    agent_path="retriever/search/qdrant_evidence_searcher",
+                    objective="Search indexed evidence candidates via Qdrant.",
+                    child_thread_id=getattr(qdrant_thread, "thread_id", None),
+                    child_turn_id=getattr(qdrant_turn, "turn_id", None),
+                    phase="retrieve_search_qdrant",
+                ),
+            },
+            "methodology_memory_recaller": {
+                "builder": lambda _results, *, child_thread=memory_thread, child_turn=memory_turn: self._build_subagent_invocation(
+                    subagent_type="methodology_memory_recaller",
+                    objective="Recall methodology memory rows for retrieval ranking and summarization.",
+                    inputs={
+                        "intent": intent,
+                        "query": query,
+                        "planning_context_hints": planning_context_hints,
+                        "limit": 5,
+                    },
+                    task_name="retrieve:search:methodology_memory_recaller",
+                    agent_path="retriever/search/methodology_memory_recaller",
+                    phase="retrieve_search_methodology_memory",
+                    child_thread_id=getattr(child_thread, "thread_id", None),
+                    child_turn_id=getattr(child_turn, "turn_id", None),
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="retrieve:search:methodology_memory_recaller",
+                    agent_path="retriever/search/methodology_memory_recaller",
+                    objective="Recall methodology memory rows for retrieval ranking and summarization.",
+                    child_thread_id=getattr(memory_thread, "thread_id", None),
+                    child_turn_id=getattr(memory_turn, "turn_id", None),
+                    phase="retrieve_search_methodology_memory",
+                ),
+            },
+        }
+        return {node_id: runtime_nodes[node_id] for node_id in node_ids if node_id in runtime_nodes}
+
+    def _build_phase_two_plan_invocation(
+        self,
+        *,
+        intent: str,
+        query: str,
+        planning_context_hints: dict[str, str] | None,
+        allow_llm_decision: bool,
+        runtime_degraded_reason: str | None,
+        top_k: int,
+        current_run_id: str | None,
+        qdrant_degraded_reason: str | None,
+        evidence_map: dict[str, dict],
+    ) -> dict[str, dict[str, Any]]:
+        return {
+            "evidence_candidate_deduper": {
+                "builder": lambda _results: self._build_subagent_invocation(
+                    subagent_type="evidence_candidate_deduper",
+                    objective="Dedupe and rerank retrieval evidence candidates.",
+                    inputs={
+                        "evidences": list(evidence_map.values()),
+                        "current_run_id": current_run_id,
+                        "intent": intent,
+                    },
+                    task_name="retrieve:postprocess:evidence_candidate_deduper",
+                    agent_path="retriever/postprocess/evidence_candidate_deduper",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="retrieve:postprocess:evidence_candidate_deduper",
+                    agent_path="retriever/postprocess/evidence_candidate_deduper",
+                    objective="Dedupe and rerank retrieval evidence candidates.",
+                ),
+            },
+            "retrieval_decider": {
+                "builder": lambda results: self._build_subagent_invocation(
+                    subagent_type=(
+                        "fallback_retrieval_decider"
+                        if not allow_llm_decision
+                        else "retrieval_decider"
+                    ),
+                    objective="Select final evidence set and summarize retrieval.",
+                    inputs=(
+                        self._decision_error_fallback_inputs(
+                            intent=intent,
+                            query=query,
+                            evidences=list((results["evidence_candidate_deduper"].outputs or {}).get("evidences") or []),
+                            top_k=top_k,
+                            qdrant_degraded_reason=qdrant_degraded_reason,
+                            planning_context_hints=planning_context_hints,
+                            runtime_degraded_reason=runtime_degraded_reason,
+                        )
+                        if not allow_llm_decision
+                        else self._decision_inputs(
+                            intent=intent,
+                            query=query,
+                            evidences=list((results["evidence_candidate_deduper"].outputs or {}).get("evidences") or []),
+                            top_k=top_k,
+                            qdrant_degraded_reason=qdrant_degraded_reason,
+                            planning_context_hints=planning_context_hints,
+                            allow_llm_decision=allow_llm_decision,
+                            runtime_degraded_reason=runtime_degraded_reason,
+                        )
+                    ),
+                    task_name=(
+                        "retrieve:decision:fallback_retrieval_decider"
+                        if not allow_llm_decision
+                        else "retrieve:decision:retrieval_decider"
+                    ),
+                    agent_path=(
+                        "retriever/decision/fallback_retrieval_decider"
+                        if not allow_llm_decision
+                        else "retriever/decision/retrieval_decider"
+                    ),
+                    requires_llm=allow_llm_decision,
+                    fallback_subagent_type="fallback_retrieval_decider" if allow_llm_decision else None,
+                    fallback_objective="Select fallback evidence set and summarize retrieval." if allow_llm_decision else None,
+                    fallback_inputs=(
+                        self._decision_error_fallback_inputs(
+                            intent=intent,
+                            query=query,
+                            evidences=list((results["evidence_candidate_deduper"].outputs or {}).get("evidences") or []),
+                            top_k=top_k,
+                            qdrant_degraded_reason=qdrant_degraded_reason,
+                            planning_context_hints=planning_context_hints,
+                            runtime_degraded_reason=runtime_degraded_reason,
+                        )
+                        if allow_llm_decision
+                        else None
+                    ),
+                    error_fallback_subagent_type="fallback_retrieval_decider" if allow_llm_decision else None,
+                    error_fallback_objective="Select fallback evidence set and summarize retrieval after LLM error." if allow_llm_decision else None,
+                    error_fallback_inputs=(
+                        self._decision_error_fallback_inputs(
+                            intent=intent,
+                            query=query,
+                            evidences=list((results["evidence_candidate_deduper"].outputs or {}).get("evidences") or []),
+                            top_k=top_k,
+                            qdrant_degraded_reason=qdrant_degraded_reason,
+                            planning_context_hints=planning_context_hints,
+                            runtime_degraded_reason=runtime_degraded_reason,
+                        )
+                        if allow_llm_decision
+                        else None
+                    ),
+                    error_fallback_task_name="retrieve:decision:fallback_retrieval_decider" if allow_llm_decision else None,
+                    error_fallback_agent_path="retriever/decision/fallback_retrieval_decider" if allow_llm_decision else None,
+                ),
+                "metadata": self._dag_metadata(
+                    task_name=(
+                        "retrieve:decision:fallback_retrieval_decider"
+                        if not allow_llm_decision
+                        else "retrieve:decision:retrieval_decider"
+                    ),
+                    agent_path=(
+                        "retriever/decision/fallback_retrieval_decider"
+                        if not allow_llm_decision
+                        else "retriever/decision/retrieval_decider"
+                    ),
+                    objective="Select final evidence set and summarize retrieval.",
+                ),
+            },
+        }
 
     def _retrieval_phase_one_nodes(
         self,
@@ -629,7 +1232,7 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
         if result.error_summary and f"error={result.error_summary}" not in notes:
             notes.append(f"error={result.error_summary}")
         metadata = dict(result.metadata or {})
-        return self._build_trace_record(
+        trace_record = self._build_trace_record(
             subagent_type=str((record.subagent_type if record is not None else fallback_subagent_type) or fallback_subagent_type),
             objective=str((record.objective if record is not None else fallback_objective) or fallback_objective),
             status=result.status,
@@ -643,6 +1246,13 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             child_thread_id=str(metadata.get("child_thread_id") or "") or None,
             child_turn_id=str(metadata.get("child_turn_id") or "") or None,
         )
+        if metadata.get("plan_id"):
+            trace_record["plan_id"] = metadata["plan_id"]
+        if metadata.get("plan_node_id"):
+            trace_record["plan_node_id"] = metadata["plan_node_id"]
+        if metadata.get("subagent_plan_strategy"):
+            trace_record["subagent_plan_strategy"] = metadata["subagent_plan_strategy"]
+        return trace_record
 
     def _dag_metadata(
         self,

@@ -1009,6 +1009,51 @@ class RetrieverServiceTests(unittest.TestCase):
             ],
         )
 
+    def test_run_emits_catalog_subagent_plans_and_rule_patches(self) -> None:
+        service = self.service
+        service.disable_qdrant_for_test("disabled_for_test")
+
+        outputs = service.run(
+            intent="stock_screen",
+            query="screen growth stocks",
+            blackboard_entries=[
+                {
+                    "entry_id": "screen-src-1",
+                    "run_id": "01SCREEN",
+                    "kind": "source_record",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "payload": {"title": "screen request", "content": "screen", "source_type": "screen_request"},
+                    "source_refs": [],
+                }
+            ],
+            allow_llm_decision=False,
+            runtime_degraded_reason="runtime_policy_fallback",
+        )
+
+        subagent_plans = list(outputs.get("subagent_plans") or [])
+        subagent_plan_patches = list(outputs.get("subagent_plan_patches") or [])
+        self.assertEqual(len(subagent_plans), 2)
+        self.assertEqual([plan.get("strategy") for plan in subagent_plans], ["catalog", "catalog"])
+        phase_one_node_ids = [str(node.get("node_id") or "") for node in list(subagent_plans[0].get("nodes") or [])]
+        self.assertNotIn("qdrant_evidence_searcher", phase_one_node_ids)
+        self.assertIn("methodology_memory_recaller", phase_one_node_ids)
+        phase_two_nodes = {
+            str(node.get("node_id") or ""): node
+            for node in list(subagent_plans[1].get("nodes") or [])
+        }
+        self.assertEqual(
+            str((phase_two_nodes["retrieval_decider"] or {}).get("subagent_type") or ""),
+            "fallback_retrieval_decider",
+        )
+        patch_op_types = [
+            str(operation.get("op_type") or "")
+            for patch in subagent_plan_patches
+            for operation in list((patch or {}).get("operations") or [])
+        ]
+        self.assertIn("remove_node", patch_op_types)
+        self.assertIn("replace_subgraph", patch_op_types)
+
     def test_retriever_persists_subagent_dag_trace_and_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             service = self.service
