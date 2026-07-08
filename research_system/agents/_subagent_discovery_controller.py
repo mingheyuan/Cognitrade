@@ -24,23 +24,15 @@ class SubagentDiscoveryController:
     def __init__(
         self,
         *,
-        discovery_policy,
-        discovery_llm_policy_source,
         discovery_candidate_support,
-        discovery_candidate_policy,
-        discovery_approval_policy,
-        discovery_activation_policy,
+        discovery_decision_source,
         activation_host,
         runtime_binding_getter=None,
         emit_event=None,
         service_name: str | None = None,
     ) -> None:
-        self.discovery_policy = discovery_policy
-        self.discovery_llm_policy_source = discovery_llm_policy_source
         self.discovery_candidate_support = discovery_candidate_support
-        self.discovery_candidate_policy = discovery_candidate_policy
-        self.discovery_approval_policy = discovery_approval_policy
-        self.discovery_activation_policy = discovery_activation_policy
+        self.discovery_decision_source = discovery_decision_source
         self.activation_host = activation_host
         self.runtime_binding_getter = runtime_binding_getter
         self.emit_event = emit_event
@@ -64,64 +56,11 @@ class SubagentDiscoveryController:
         *,
         gap: SubagentCapabilityGap,
     ) -> SubagentToolDiscoveryRequest:
-        search_terms = [
-            str(gap.intent or "").strip(),
-            str(gap.stage or "").strip(),
-            str(gap.capability or "").strip(),
-            str(gap.preferred_subagent_type or "").strip(),
-        ]
-        rule_preferred_protocols, policy_notes = self.discovery_policy.resolve(
-            intent=gap.intent,
-            stage=gap.stage,
-            capability=gap.capability,
-            preferred_subagent_type=gap.preferred_subagent_type,
-            requires_llm=gap.requires_llm,
-        )
-        preferred_protocols, policy_notes, shadow_payload, policy_source = self.discovery_llm_policy_source.apply(
-            gap=gap,
-            candidate_protocols=list(self.discovery_policy.default_preferred_protocols),
-            rule_preferred_protocols=rule_preferred_protocols,
-            rule_notes=policy_notes,
-        )
-        request = SubagentToolDiscoveryRequest(
-            intent=gap.intent,
-            stage=gap.stage,
-            capability=gap.capability,
-            search_query=" ".join(token for token in search_terms if token),
-            preferred_protocols=preferred_protocols,
-            reason=gap.reason,
-            policy_source=policy_source,  # type: ignore[arg-type]
-            notes=[
-                "tool_discovery_requested_from_capability_gap",
-                f"gap_id={gap.gap_id}",
-                *policy_notes,
-            ],
-        )
+        protocol_decision = self.discovery_decision_source.resolve_protocols(gap=gap)
+        request = protocol_decision.request
         self._record_stage_decision(
             event_name="subagent_tool_discovery_protocol_decided",
-            payload={
-                "decision_stage": "protocol_selection",
-                "intent": gap.intent,
-                "stage": gap.stage,
-                "capability": gap.capability,
-                "preferred_subagent_type": gap.preferred_subagent_type,
-                "policy_source": policy_source,
-                "candidate_protocols": list(self.discovery_policy.default_preferred_protocols),
-                "rule_preferred_protocols": list(rule_preferred_protocols),
-                "selected_protocols": list(preferred_protocols),
-                "reason": gap.reason,
-                "shadow_reason": (
-                    shadow_payload.get("reason")
-                    if isinstance(shadow_payload, dict)
-                    else None
-                ),
-                "confidence": (
-                    shadow_payload.get("confidence")
-                    if isinstance(shadow_payload, dict)
-                    else None
-                ),
-                "notes": list(policy_notes or []),
-            },
+            payload=protocol_decision.event_payload(),
         )
         return request
 
@@ -151,123 +90,30 @@ class SubagentDiscoveryController:
             return ticket
         if not candidate_entries:
             return ticket
-        ticket.candidate_catalog_entries = list(candidate_entries)
-        recommendation, shadow_recommendation = self.discovery_candidate_policy.recommend(
+        candidate_result = self.discovery_decision_source.select_candidate(
             ticket=ticket,
-            candidate_entries=ticket.candidate_catalog_entries,
+            candidate_entries=candidate_entries,
         )
-        ticket.candidate_recommendation = recommendation
-        ticket.candidate_shadow_recommendation = shadow_recommendation
+        ticket.candidate_catalog_entries = list(candidate_result.candidate_entries)
+        ticket.candidate_recommendation = candidate_result.recommendation
+        ticket.candidate_shadow_recommendation = candidate_result.shadow_recommendation
         self._record_stage_decision(
             event_name="subagent_tool_discovery_candidate_decided",
-            payload={
-                "decision_stage": "candidate_selection",
-                "ticket_id": ticket.ticket_id,
-                "intent": ticket.capability_gap.intent,
-                "stage": ticket.capability_gap.stage,
-                "capability": ticket.capability_gap.capability,
-                "preferred_subagent_type": ticket.capability_gap.preferred_subagent_type,
-                "policy_source": (
-                    recommendation.policy_source
-                    if recommendation is not None
-                    else "rule"
-                ),
-                "candidate_subagent_types": [
-                    str(entry.subagent_type).strip()
-                    for entry in list(ticket.candidate_catalog_entries or [])
-                    if str(entry.subagent_type or "").strip()
-                ],
-                "candidate_protocols": [
-                    self.discovery_candidate_policy._entry_protocol(entry)  # type: ignore[attr-defined]
-                    for entry in list(ticket.candidate_catalog_entries or [])
-                ],
-                "selected_candidate_subagent_type": (
-                    recommendation.candidate_subagent_type
-                    if recommendation is not None
-                    else None
-                ),
-                "selected_protocol": (
-                    recommendation.source_protocol
-                    if recommendation is not None
-                    else None
-                ),
-                "shadow_candidate_subagent_type": (
-                    shadow_recommendation.candidate_subagent_type
-                    if shadow_recommendation is not None
-                    else None
-                ),
-                "shadow_protocol": (
-                    shadow_recommendation.source_protocol
-                    if shadow_recommendation is not None
-                    else None
-                ),
-                "reason": (
-                    recommendation.reason
-                    if recommendation is not None
-                    else ticket.capability_gap.reason
-                ),
-                "confidence": (
-                    recommendation.confidence
-                    if recommendation is not None
-                    else None
-                ),
-                "notes": list((recommendation.notes if recommendation is not None else []) or []),
-            },
+            payload=candidate_result.decision.event_payload(),
         )
-        preview_notes = list(ticket.notes or [])
-        if "candidate_preview_generated_from_runtime_discovery_request" not in preview_notes:
-            preview_notes.append("candidate_preview_generated_from_runtime_discovery_request")
-        if recommendation is not None:
-            recommendation_note = f"recommended_candidate={recommendation.candidate_subagent_type}"
-            if recommendation_note not in preview_notes:
-                preview_notes.append(recommendation_note)
-        ticket.notes = preview_notes
-        approval_decision = self.discovery_approval_policy.evaluate(ticket=ticket)
+        ticket.notes = list(candidate_result.preview_notes)
+        approval_decision = self.discovery_decision_source.evaluate_review(ticket=ticket)
         self.apply_review_decision(
             ticket=ticket,
-            decision=str(approval_decision.get("decision") or "pending"),
-            reviewer=str(approval_decision.get("reviewer") or "system_auto_gate"),
-            reason=str(approval_decision.get("reason") or "pending_manual_review_discovery_preview"),
-            source=str(approval_decision.get("source") or "auto_discovery_policy"),
-            extra_notes=[
-                str(item).strip()
-                for item in list(approval_decision.get("notes") or [])
-                if str(item).strip()
-            ],
+            decision=approval_decision.decision,
+            reviewer=approval_decision.reviewer,
+            reason=approval_decision.reason,
+            source=approval_decision.source,
+            extra_notes=list(approval_decision.notes),
         )
         self._record_stage_decision(
             event_name="subagent_tool_discovery_review_decided",
-            payload={
-                "decision_stage": "approval",
-                "ticket_id": ticket.ticket_id,
-                "intent": ticket.capability_gap.intent,
-                "stage": ticket.capability_gap.stage,
-                "capability": ticket.capability_gap.capability,
-                "policy_source": "rule",
-                "decision": str(approval_decision.get("decision") or "pending"),
-                "approved": bool(approval_decision.get("approved")),
-                "reviewer": str(approval_decision.get("reviewer") or "system_auto_gate"),
-                "source": str(approval_decision.get("source") or "auto_discovery_policy"),
-                "selected_candidate_subagent_type": (
-                    ticket.candidate_recommendation.candidate_subagent_type
-                    if ticket.candidate_recommendation is not None
-                    else None
-                ),
-                "selected_protocol": (
-                    ticket.candidate_recommendation.source_protocol
-                    if ticket.candidate_recommendation is not None
-                    else None
-                ),
-                "reason": str(
-                    approval_decision.get("reason")
-                    or "pending_manual_review_discovery_preview"
-                ),
-                "notes": [
-                    str(item).strip()
-                    for item in list(approval_decision.get("notes") or [])
-                    if str(item).strip()
-                ],
-            },
+            payload=approval_decision.event_payload(),
         )
         save = getattr(store, "save", None)
         if callable(save):
@@ -280,127 +126,40 @@ class SubagentDiscoveryController:
         return ticket
 
     def maybe_auto_activate_ticket(self, *, ticket, store):
-        activation_decision = self.discovery_activation_policy.evaluate(ticket=ticket)
-        if not bool(activation_decision.get("activate")):
+        activation_decision = self.discovery_decision_source.evaluate_activation(ticket=ticket)
+        if not activation_decision.activate:
             self._record_stage_decision(
                 event_name="subagent_tool_discovery_activation_decided",
-                payload={
-                    "decision_stage": "activation",
-                    "ticket_id": ticket.ticket_id,
-                    "intent": ticket.capability_gap.intent,
-                    "stage": ticket.capability_gap.stage,
-                    "capability": ticket.capability_gap.capability,
-                    "policy_source": "rule",
-                    "activate": False,
-                    "activation_outcome": "skipped",
-                    "candidate_subagent_type": None,
-                    "registration_template_id": None,
-                    "reason": str(
-                        activation_decision.get("reason")
-                        or "discovery_auto_activation_disabled"
-                    ),
-                    "notes": [
-                        str(item).strip()
-                        for item in list(activation_decision.get("notes") or [])
-                        if str(item).strip()
-                    ],
-                },
+                payload=activation_decision.event_payload(activation_outcome="skipped"),
             )
             return ticket
-        candidate_subagent_type = str(
-            activation_decision.get("candidate_subagent_type") or ""
-        ).strip() or None
-        registration_template_id = str(
-            activation_decision.get("registration_template_id") or ""
-        ).strip() or None
+        candidate_subagent_type = activation_decision.candidate_subagent_type
+        registration_template_id = activation_decision.registration_template_id
         try:
             OrchestratorSubagentDiscoveryAdminSupport(self.activation_host).activate_request(
                 ticket.ticket_id,
                 candidate_subagent_type=candidate_subagent_type,
                 registration_template_id=registration_template_id,
                 activated_by="system_auto_activate",
-                reason=str(
-                    activation_decision.get("reason")
-                    or "auto_activate_discovery_candidate_preview"
-                ),
+                reason=activation_decision.reason,
             )
         except Exception:
             self._record_stage_decision(
                 event_name="subagent_tool_discovery_activation_decided",
-                payload={
-                    "decision_stage": "activation",
-                    "ticket_id": ticket.ticket_id,
-                    "intent": ticket.capability_gap.intent,
-                    "stage": ticket.capability_gap.stage,
-                    "capability": ticket.capability_gap.capability,
-                    "policy_source": "rule",
-                    "activate": True,
-                    "activation_outcome": "failed",
-                    "candidate_subagent_type": candidate_subagent_type,
-                    "registration_template_id": registration_template_id,
-                    "reason": str(
-                        activation_decision.get("reason")
-                        or "auto_activate_discovery_candidate_preview"
-                    ),
-                    "notes": [
-                        str(item).strip()
-                        for item in list(activation_decision.get("notes") or [])
-                        if str(item).strip()
-                    ],
-                },
+                payload=activation_decision.event_payload(activation_outcome="failed"),
             )
             return ticket
         find = getattr(store, "find", None)
         if not callable(find):
             self._record_stage_decision(
                 event_name="subagent_tool_discovery_activation_decided",
-                payload={
-                    "decision_stage": "activation",
-                    "ticket_id": ticket.ticket_id,
-                    "intent": ticket.capability_gap.intent,
-                    "stage": ticket.capability_gap.stage,
-                    "capability": ticket.capability_gap.capability,
-                    "policy_source": "rule",
-                    "activate": True,
-                    "activation_outcome": "activated",
-                    "candidate_subagent_type": candidate_subagent_type,
-                    "registration_template_id": registration_template_id,
-                    "reason": str(
-                        activation_decision.get("reason")
-                        or "auto_activate_discovery_candidate_preview"
-                    ),
-                    "notes": [
-                        str(item).strip()
-                        for item in list(activation_decision.get("notes") or [])
-                        if str(item).strip()
-                    ],
-                },
+                payload=activation_decision.event_payload(activation_outcome="activated"),
             )
             return ticket
         located = find(ticket.ticket_id)
         self._record_stage_decision(
             event_name="subagent_tool_discovery_activation_decided",
-            payload={
-                "decision_stage": "activation",
-                "ticket_id": ticket.ticket_id,
-                "intent": ticket.capability_gap.intent,
-                "stage": ticket.capability_gap.stage,
-                "capability": ticket.capability_gap.capability,
-                "policy_source": "rule",
-                "activate": True,
-                "activation_outcome": "activated",
-                "candidate_subagent_type": candidate_subagent_type,
-                "registration_template_id": registration_template_id,
-                "reason": str(
-                    activation_decision.get("reason")
-                    or "auto_activate_discovery_candidate_preview"
-                ),
-                "notes": [
-                    str(item).strip()
-                    for item in list(activation_decision.get("notes") or [])
-                    if str(item).strip()
-                ],
-            },
+            payload=activation_decision.event_payload(activation_outcome="activated"),
         )
         if isinstance(located, tuple) and located and located[0] is not None:
             return located[0]

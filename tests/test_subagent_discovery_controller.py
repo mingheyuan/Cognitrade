@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from research_system.adapters.vendors.skill_source_registry import SkillSourceRegistry
 from research_system.agents._subagent_discovery_controller import SubagentDiscoveryController
+from research_system.agents._subagent_discovery_decision_source import SubagentDiscoveryDecisionSource
 from research_system.agents._subagent_discovery_policy import SubagentDiscoveryPolicyService
 from research_system.agents._subagent_discovery_policy_source import SubagentDiscoveryLLMPolicySource
 from research_system.agents._subagent_discovery_shadow_policy import SubagentDiscoveryLLMShadowPolicy
@@ -78,15 +79,17 @@ class SubagentDiscoveryControllerTests(unittest.TestCase):
                 },
             )()
             controller = SubagentDiscoveryController(
-                discovery_policy=SubagentDiscoveryPolicyService(settings=settings),
-                discovery_llm_policy_source=SubagentDiscoveryLLMPolicySource(
-                    shadow_policy=SubagentDiscoveryLLMShadowPolicy(settings=settings),
-                    settings=settings,
-                ),
                 discovery_candidate_support=SubagentDiscoveryCandidateSupport(host),
-                discovery_candidate_policy=SubagentDiscoveryCandidatePolicyService(settings=settings),
-                discovery_approval_policy=SubagentDiscoveryApprovalPolicyService(settings=settings),
-                discovery_activation_policy=SubagentDiscoveryActivationPolicyService(settings=settings),
+                discovery_decision_source=SubagentDiscoveryDecisionSource(
+                    discovery_policy=SubagentDiscoveryPolicyService(settings=settings),
+                    discovery_llm_policy_source=SubagentDiscoveryLLMPolicySource(
+                        shadow_policy=SubagentDiscoveryLLMShadowPolicy(settings=settings),
+                        settings=settings,
+                    ),
+                    discovery_candidate_policy=SubagentDiscoveryCandidatePolicyService(settings=settings),
+                    discovery_approval_policy=SubagentDiscoveryApprovalPolicyService(settings=settings),
+                    discovery_activation_policy=SubagentDiscoveryActivationPolicyService(settings=settings),
+                ),
                 activation_host=host,
                 runtime_binding_getter=host.runtime_binding_getter,
                 service_name="collector",

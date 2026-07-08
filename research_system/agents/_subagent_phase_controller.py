@@ -8,6 +8,7 @@ from research_system.adapters.vendors.mcp_source_registry import McpSourceRegist
 from research_system.adapters.vendors.openapi_source_registry import OpenApiSourceRegistry
 from research_system.adapters.vendors.skill_source_registry import SkillSourceRegistry
 from research_system.agents._subagent_discovery_controller import SubagentDiscoveryController
+from research_system.agents._subagent_discovery_decision_source import SubagentDiscoveryDecisionSource
 from research_system.agents._subagent_discovery_policy import SubagentDiscoveryPolicyService
 from research_system.agents._subagent_discovery_policy_source import SubagentDiscoveryLLMPolicySource
 from research_system.agents._subagent_dag import (
@@ -117,13 +118,16 @@ class SubagentPhaseController:
         )
         self.discovery_approval_policy = SubagentDiscoveryApprovalPolicyService(settings=settings)
         self.discovery_activation_policy = SubagentDiscoveryActivationPolicyService(settings=settings)
-        self.discovery_controller = SubagentDiscoveryController(
+        self.discovery_decision_source = SubagentDiscoveryDecisionSource(
             discovery_policy=self.discovery_policy,
             discovery_llm_policy_source=self.discovery_llm_policy_source,
-            discovery_candidate_support=self.discovery_candidate_support,
             discovery_candidate_policy=self.discovery_candidate_policy,
             discovery_approval_policy=self.discovery_approval_policy,
             discovery_activation_policy=self.discovery_activation_policy,
+        )
+        self.discovery_controller = SubagentDiscoveryController(
+            discovery_candidate_support=self.discovery_candidate_support,
+            discovery_decision_source=self.discovery_decision_source,
             activation_host=self,
             runtime_binding_getter=runtime_binding_getter,
             emit_event=emit_event,
