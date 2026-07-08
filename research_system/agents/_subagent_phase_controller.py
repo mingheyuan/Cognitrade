@@ -233,55 +233,50 @@ class SubagentPhaseController:
             candidate_plans=candidate_plans,
             base_results=base_results,
         )
+        selected_hybrid_variant = None
+        if self._hybrid_enabled() and isinstance(shadow_payload, dict):
+            selected_hybrid_variant = self._select_hybrid_variant(
+                shadow_payload=shadow_payload,
+                candidate_plans=candidate_plans,
+            )
         final_plan = rule_final_plan
         final_patch = patch
         final_patch_rows = list(rule_patch_rows)
         final_plan_variant = rule_variant_id
+        if selected_hybrid_variant is not None and selected_hybrid_variant != final_plan_variant:
+            if selected_hybrid_variant == "current":
+                final_plan = plan
+                final_patch = None
+                final_patch_rows = []
+                final_plan_variant = "current"
+            else:
+                final_plan = candidate_plans[selected_hybrid_variant]
+                final_patch = self._build_hybrid_patch(
+                    variant_id=selected_hybrid_variant,
+                    reason=str(shadow_payload.get("reason") or "hybrid_selected_phase_variant"),
+                    confidence=float(shadow_payload.get("confidence") or 0.0),
+                    notes=[
+                        "apply_subagent_phase_hybrid_variant",
+                        f"variant={selected_hybrid_variant}",
+                        *list(shadow_payload.get("notes") or []),
+                    ],
+                )
+                final_patch_rows = [final_patch.model_dump(mode="json")]
+                final_plan_variant = selected_hybrid_variant
         final_results = base_results if not final_patch_rows and final_plan is plan else self.execute_plan(
             plan=final_plan,
             build_invocation=build_invocation_factory(final_plan),
             dag_id=dag_id,
             max_workers=final_max_workers,
         )
-        if self._hybrid_enabled() and isinstance(shadow_payload, dict):
-            hybrid_variant = self._select_hybrid_variant(
+        if selected_hybrid_variant is not None and selected_hybrid_variant != rule_variant_id:
+            self._record_hybrid_application(
+                dag_id=dag_id,
+                rule_variant_id=rule_variant_id,
+                applied_variant_id=final_plan_variant,
                 shadow_payload=shadow_payload,
-                candidate_plans=candidate_plans,
+                final_patch=final_patch,
             )
-            if hybrid_variant is not None and hybrid_variant != final_plan_variant:
-                if hybrid_variant == "current":
-                    final_plan = plan
-                    final_patch = None
-                    final_patch_rows = []
-                    final_plan_variant = "current"
-                    final_results = base_results
-                else:
-                    final_plan = candidate_plans[hybrid_variant]
-                    final_patch = self._build_hybrid_patch(
-                        variant_id=hybrid_variant,
-                        reason=str(shadow_payload.get("reason") or "hybrid_selected_phase_variant"),
-                        confidence=float(shadow_payload.get("confidence") or 0.0),
-                        notes=[
-                            "apply_subagent_phase_hybrid_variant",
-                            f"variant={hybrid_variant}",
-                            *list(shadow_payload.get("notes") or []),
-                        ],
-                    )
-                    final_patch_rows = [final_patch.model_dump(mode="json")]
-                    final_plan_variant = hybrid_variant
-                    final_results = self.execute_plan(
-                        plan=final_plan,
-                        build_invocation=build_invocation_factory(final_plan),
-                        dag_id=dag_id,
-                        max_workers=final_max_workers,
-                    )
-                self._record_hybrid_application(
-                    dag_id=dag_id,
-                    rule_variant_id=rule_variant_id,
-                    applied_variant_id=final_plan_variant,
-                    shadow_payload=shadow_payload,
-                    final_patch=final_patch,
-                )
         if isinstance(shadow_payload, dict):
             self.shadow_policy.observe(
                 dag_id=dag_id,
@@ -408,10 +403,13 @@ class SubagentPhaseController:
         candidate_plans: dict[str, SubagentPlan],
         fallback: str,
     ) -> str:
+        matched_fallback = fallback
         for variant_id, candidate_plan in candidate_plans.items():
             if candidate_plan is target_plan:
-                return variant_id
-        return fallback
+                if variant_id != fallback:
+                    return variant_id
+                matched_fallback = variant_id
+        return matched_fallback
 
     def build_metadata(
         self,

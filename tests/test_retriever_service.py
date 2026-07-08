@@ -52,8 +52,10 @@ class _HybridRetrieverProvider:
         self.calls = 0
 
     def parse(self, **kwargs):
-        self.calls += 1
         schema = kwargs["schema"]
+        if schema.__name__ != "SubagentPhaseShadowSuggestionPayload":
+            raise AssertionError(f"Unexpected non-shadow parse for hybrid retriever test: {schema.__name__}")
+        self.calls += 1
         prompt = str(kwargs.get("user_prompt") or "")
         if "phase_one" in prompt:
             return schema.model_validate(
@@ -68,12 +70,12 @@ class _HybridRetrieverProvider:
             )
         return schema.model_validate(
             {
-                "selected_plan_variant": "rule_replanned",
+                "selected_plan_variant": "fallback_retrieval_decider",
                 "selected_node_ids": ["evidence_candidate_deduper", "retrieval_decider"],
                 "request_replan": True,
-                "reason": "keep the rule-selected retrieval decision branch",
-                "confidence": 0.88,
-                "notes": ["hybrid_keep_phase_two_rule_variant"],
+                "reason": "prefer deterministic fallback retrieval decision branch",
+                "confidence": 0.9,
+                "notes": ["hybrid_select_phase_two_fallback_variant"],
             }
         )
 
@@ -1201,6 +1203,63 @@ class RetrieverServiceTests(unittest.TestCase):
                     for node in list((outputs.get("subagent_plans") or [])[0].get("nodes") or [])
                 ]
                 self.assertEqual(phase_one_node_ids, ["blackboard_evidence_indexer"])
+            finally:
+                service.close()
+
+    def test_run_phase_two_hybrid_can_switch_to_fallback_variant_without_llm_decider_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.subagent_phase_shadow_llm_enabled = True
+            settings.subagent_phase_hybrid_llm_enabled = True
+            settings.subagent_phase_hybrid_llm_min_confidence = 0.8
+            settings.max_llm_calls_per_turn = 3
+            provider = _HybridRetrieverProvider()
+            service = RetrieverService(provider, settings, runs_root=settings.runs_root)
+            service.disable_qdrant_for_test("disabled_for_test")
+            try:
+                outputs = service.run(
+                    intent="stock_screen",
+                    query="screen growth stocks",
+                    blackboard_entries=[
+                        {
+                            "entry_id": "screen-src-1",
+                            "run_id": "01SCREEN",
+                            "kind": "source_record",
+                            "phase": "collect",
+                            "agent": "collector",
+                            "payload": {"title": "screen request", "content": "screen", "source_type": "screen_request"},
+                            "source_refs": [],
+                        }
+                    ],
+                    allow_llm_decision=True,
+                    runtime_degraded_reason=None,
+                )
+
+                run_root = next(settings.runs_root.iterdir())
+                trace_payload = SessionHistory(run_root).trace()
+                hybrid_rows = [
+                    row
+                    for row in list(trace_payload.get("dynamic_trace") or [])
+                    if str(row.get("event") or "") == "subagent_phase_hybrid_applied"
+                ]
+                patch_op_types = [
+                    str(operation.get("op_type") or "")
+                    for patch in list(outputs.get("subagent_plan_patches") or [])
+                    for operation in list((patch or {}).get("operations") or [])
+                ]
+                self.assertEqual(provider.calls, 2)
+                self.assertEqual(patch_op_types, ["request_replan"])
+                self.assertEqual(len(hybrid_rows), 2)
+                phase_two_hybrid = next(row for row in hybrid_rows if row["dag_id"] == "phase_two")
+                self.assertEqual(phase_two_hybrid["applied_plan_variant"], "fallback_retrieval_decider")
+                phase_two_plan = list(outputs.get("subagent_plans") or [])[1]
+                decision_node = next(
+                    node
+                    for node in list(phase_two_plan.get("nodes") or [])
+                    if str(node.get("node_id") or "") == "retrieval_decider"
+                )
+                self.assertEqual(str(decision_node.get("subagent_type") or ""), "fallback_retrieval_decider")
             finally:
                 service.close()
 

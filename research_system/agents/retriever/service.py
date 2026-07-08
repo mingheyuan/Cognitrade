@@ -423,6 +423,16 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                         qdrant_degraded_reason=qdrant_degraded_reason,
                         patch=patch,
                     ),
+                    candidate_plan_variants_builder=lambda rule_final_plan, patch, _base_results: self._build_phase_two_candidate_plan_variants(
+                        rule_final_plan=rule_final_plan,
+                        intent=intent,
+                        query=query,
+                        planning_context_hints=planning_context_hints,
+                        top_k=top_k,
+                        qdrant_degraded_reason=qdrant_degraded_reason,
+                        allow_llm_decision=allow_llm_decision,
+                        patch=patch,
+                    ),
                 )
             subagent_plan_patches.extend(phase_two_patch_rows)
             subagent_plans.append(phase_two_plan.model_dump(mode="json"))
@@ -793,6 +803,68 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             decision_subagent_type=decision_subagent_type,
         )
 
+    def _build_phase_two_candidate_plan_variants(
+        self,
+        *,
+        rule_final_plan: SubagentPlan,
+        intent: str,
+        query: str,
+        planning_context_hints: dict[str, str] | None,
+        top_k: int,
+        qdrant_degraded_reason: str | None,
+        allow_llm_decision: bool,
+        patch: SubagentGraphPatch | None,
+    ) -> dict[str, SubagentPlan]:
+        rule_decision_subagent_type = self._phase_two_decision_subagent_type_from_plan(rule_final_plan)
+        variants: dict[str, SubagentPlan] = {rule_decision_subagent_type: rule_final_plan}
+        if allow_llm_decision:
+            llm_decision_subagent_type = self._select_retrieve_catalog_entry(
+                intent=intent,
+                capability="evidence_selection",
+                preferred_subagent_type="retrieval_decider",
+                requires_llm=True,
+            ).subagent_type
+            if llm_decision_subagent_type != rule_decision_subagent_type:
+                variants[llm_decision_subagent_type] = self._build_phase_two_subagent_plan(
+                    intent=intent,
+                    query=query,
+                    planning_context_hints=planning_context_hints,
+                    top_k=top_k,
+                    qdrant_degraded_reason=qdrant_degraded_reason,
+                    decision_subagent_type=llm_decision_subagent_type,
+                )
+                variants[llm_decision_subagent_type].notes = self._unique_notes(
+                    [
+                        *list(variants[llm_decision_subagent_type].notes or []),
+                        "retrieval_phase_two_candidate_variant",
+                        f"decision_subagent_type={llm_decision_subagent_type}",
+                    ]
+                )
+        fallback_decision_subagent_type = self._select_retrieve_catalog_entry(
+            intent=intent,
+            capability="evidence_selection",
+            preferred_subagent_type="fallback_retrieval_decider",
+            requires_llm=False,
+        ).subagent_type
+        if fallback_decision_subagent_type != rule_decision_subagent_type:
+            variants[fallback_decision_subagent_type] = self._build_phase_two_subagent_plan(
+                intent=intent,
+                query=query,
+                planning_context_hints=planning_context_hints,
+                top_k=top_k,
+                qdrant_degraded_reason=qdrant_degraded_reason,
+                decision_subagent_type=fallback_decision_subagent_type,
+            )
+            variants[fallback_decision_subagent_type].notes = self._unique_notes(
+                [
+                    *list(variants[fallback_decision_subagent_type].notes or []),
+                    "retrieval_phase_two_candidate_variant",
+                    f"decision_subagent_type={fallback_decision_subagent_type}",
+                    f"rule_requested_decision_subagent_type={self._phase_two_decision_subagent_type_from_patch(patch) or rule_decision_subagent_type}",
+                ]
+            )
+        return variants
+
     def _phase_two_decision_subagent_type(
         self,
         *,
@@ -812,6 +884,20 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
             preferred_subagent_type="fallback_retrieval_decider",
             requires_llm=False,
         ).subagent_type
+
+    @staticmethod
+    def _phase_two_decision_subagent_type_from_plan(plan: SubagentPlan) -> str:
+        for node in plan.nodes:
+            if node.node_id == "retrieval_decider":
+                return str(node.subagent_type or "retrieval_decider").strip() or "retrieval_decider"
+        return "retrieval_decider"
+
+    @staticmethod
+    def _phase_two_decision_subagent_type_from_patch(patch: SubagentGraphPatch | None) -> str | None:
+        if patch is None or not patch.operations:
+            return None
+        value = str((patch.operations[0].metadata or {}).get("decision_subagent_type") or "").strip()
+        return value or None
 
     def _execute_subagent_plan(
         self,
@@ -3363,3 +3449,13 @@ class RetrieverService(RuntimeBoundSubagentInvoker):
                 return date.fromisoformat(raw_value)
             except ValueError:
                 return None
+
+    @staticmethod
+    def _unique_notes(notes: list[str]) -> list[str]:
+        unique: list[str] = []
+        for note in notes:
+            normalized = str(note or "").strip()
+            if not normalized or normalized in unique:
+                continue
+            unique.append(normalized)
+        return unique
