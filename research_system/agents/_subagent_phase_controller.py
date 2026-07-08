@@ -8,12 +8,11 @@ from research_system.agents._subagent_dag import (
     SubagentDagNodeResult,
     SubagentDagNodeSpec,
 )
+from research_system.agents._subagent_phase_policy_source import SubagentPhaseLLMPolicySource
 from research_system.agents._subagent_phase_shadow_policy import SubagentPhaseLLMShadowPolicy
 from research_system.schemas.subagents import (
-    SubagentExecutionRecord,
     SubagentCatalogEntry,
     SubagentGraphPatch,
-    SubagentGraphPatchOperation,
     SubagentInvocation,
     SubagentPlan,
     SubagentPlanNode,
@@ -47,6 +46,12 @@ class SubagentPhaseController:
             runtime_binding_getter=runtime_binding_getter,
             emit_event=emit_event,
             service_name=service_name,
+        )
+        self.llm_policy_source = SubagentPhaseLLMPolicySource(
+            shadow_policy=self.shadow_policy,
+            settings=settings,
+            runtime_binding_getter=runtime_binding_getter,
+            emit_event=emit_event,
         )
 
     def select_catalog_entry(
@@ -227,67 +232,32 @@ class SubagentPhaseController:
             candidate_plans=candidate_plans,
             fallback=rule_variant_id,
         )
-        shadow_payload = self.shadow_policy.suggest(
+        final_plan, final_patch, final_patch_rows, final_plan_variant, shadow_payload = self.llm_policy_source.apply(
             dag_id=dag_id,
             plan=plan,
             candidate_plans=candidate_plans,
             base_results=base_results,
+            rule_final_plan=rule_final_plan,
+            rule_patch=patch,
+            rule_patch_rows=rule_patch_rows,
+            rule_variant_id=rule_variant_id,
         )
-        selected_hybrid_variant = None
-        if self._hybrid_enabled() and isinstance(shadow_payload, dict):
-            selected_hybrid_variant = self._select_hybrid_variant(
-                shadow_payload=shadow_payload,
-                candidate_plans=candidate_plans,
-            )
-        final_plan = rule_final_plan
-        final_patch = patch
-        final_patch_rows = list(rule_patch_rows)
-        final_plan_variant = rule_variant_id
-        if selected_hybrid_variant is not None and selected_hybrid_variant != final_plan_variant:
-            if selected_hybrid_variant == "current":
-                final_plan = plan
-                final_patch = None
-                final_patch_rows = []
-                final_plan_variant = "current"
-            else:
-                final_plan = candidate_plans[selected_hybrid_variant]
-                final_patch = self._build_hybrid_patch(
-                    variant_id=selected_hybrid_variant,
-                    reason=str(shadow_payload.get("reason") or "hybrid_selected_phase_variant"),
-                    confidence=float(shadow_payload.get("confidence") or 0.0),
-                    notes=[
-                        "apply_subagent_phase_hybrid_variant",
-                        f"variant={selected_hybrid_variant}",
-                        *list(shadow_payload.get("notes") or []),
-                    ],
-                )
-                final_patch_rows = [final_patch.model_dump(mode="json")]
-                final_plan_variant = selected_hybrid_variant
         final_results = base_results if not final_patch_rows and final_plan is plan else self.execute_plan(
             plan=final_plan,
             build_invocation=build_invocation_factory(final_plan),
             dag_id=dag_id,
             max_workers=final_max_workers,
         )
-        if selected_hybrid_variant is not None and selected_hybrid_variant != rule_variant_id:
-            self._record_hybrid_application(
-                dag_id=dag_id,
-                rule_variant_id=rule_variant_id,
-                applied_variant_id=final_plan_variant,
-                shadow_payload=shadow_payload,
-                final_patch=final_patch,
-            )
-        if isinstance(shadow_payload, dict):
-            self.shadow_policy.observe(
-                dag_id=dag_id,
-                plan=plan,
-                candidate_plans=candidate_plans,
-                actual_final_plan=final_plan,
-                actual_patch=final_patch,
-                actual_plan_variant=final_plan_variant,
-                base_results=base_results,
-                shadow_payload=shadow_payload,
-            )
+        self.llm_policy_source.observe(
+            dag_id=dag_id,
+            plan=plan,
+            candidate_plans=candidate_plans,
+            actual_final_plan=final_plan,
+            actual_patch=final_patch,
+            actual_plan_variant=final_plan_variant,
+            base_results=base_results,
+            shadow_payload=shadow_payload,
+        )
         return final_plan, base_results, final_patch_rows, final_results
 
     @staticmethod
@@ -295,106 +265,6 @@ class SubagentPhaseController:
         if patch.decision_type == "replan":
             return True
         return any(operation.op_type == "request_replan" for operation in patch.operations)
-
-    def _hybrid_enabled(self) -> bool:
-        settings = getattr(self.shadow_policy, "settings", None)
-        return bool(getattr(settings, "subagent_phase_hybrid_llm_enabled", False))
-
-    def _select_hybrid_variant(
-        self,
-        *,
-        shadow_payload: dict[str, Any],
-        candidate_plans: dict[str, SubagentPlan],
-    ) -> str | None:
-        settings = getattr(self.shadow_policy, "settings", None)
-        confidence = float(shadow_payload.get("confidence") or 0.0)
-        min_confidence = float(getattr(settings, "subagent_phase_hybrid_llm_min_confidence", 0.7) or 0.7)
-        if confidence < min_confidence:
-            return None
-        selected_variant = str(shadow_payload.get("selected_plan_variant") or "").strip()
-        if selected_variant and selected_variant in candidate_plans:
-            return selected_variant
-        return None
-
-    @staticmethod
-    def _build_hybrid_patch(
-        *,
-        variant_id: str,
-        reason: str,
-        confidence: float,
-        notes: list[str],
-    ) -> SubagentGraphPatch:
-        return SubagentGraphPatch(
-            decision_type="replan",
-            policy_source="hybrid",
-            confidence=confidence,
-            notes=list(notes),
-            operations=[
-                SubagentGraphPatchOperation(
-                    op_type="request_replan",
-                    reason=reason,
-                    metadata={"selected_plan_variant": variant_id, "policy_source": "hybrid"},
-                )
-            ],
-            termination_reason=reason,
-        )
-
-    def _record_hybrid_application(
-        self,
-        *,
-        dag_id: str,
-        rule_variant_id: str,
-        applied_variant_id: str,
-        shadow_payload: dict[str, Any],
-        final_patch: SubagentGraphPatch | None,
-    ) -> None:
-        runtime_binding_getter = getattr(self.shadow_policy, "runtime_binding_getter", None)
-        binding = dict(runtime_binding_getter() or {}) if callable(runtime_binding_getter) else {}
-        context = binding.get("context")
-        support = binding.get("support")
-        request_id = str(binding.get("request_id") or "").strip()
-        intent = str(binding.get("intent") or shadow_payload.get("intent") or "").strip()
-        if context is None or support is None or not request_id or not intent:
-            return
-        payload = {
-            "event": "subagent_phase_hybrid_applied",
-            "dag_id": dag_id,
-            "intent": shadow_payload.get("intent"),
-            "phase": shadow_payload.get("phase"),
-            "agent": shadow_payload.get("agent"),
-            "policy_source": "llm_hybrid",
-            "selected_plan_variant": shadow_payload.get("selected_plan_variant"),
-            "selected_node_ids": list(shadow_payload.get("selected_node_ids") or []),
-            "reason": shadow_payload.get("reason"),
-            "confidence": shadow_payload.get("confidence"),
-            "notes": list(shadow_payload.get("notes") or []),
-            "request_replan": bool(shadow_payload.get("request_replan")),
-            "rule_plan_variant": rule_variant_id,
-            "applied_plan_variant": applied_variant_id,
-            "override_rule_variant": rule_variant_id != applied_variant_id,
-            "final_request_replan": self._patch_requests_replan(final_patch) if final_patch is not None else False,
-        }
-        context.subagent_phase_hybrid_decisions.append(dict(payload))
-        context.dynamic_trace.append(dict(payload))
-        if callable(self.emit_event):
-            self.emit_event(
-                event_type="subagent_phase_hybrid_applied",
-                message=f"Hybrid subagent-phase policy applied variant {applied_variant_id} for DAG {dag_id}",
-                payload=dict(payload),
-                phase=str(shadow_payload.get("phase") or "").strip() or None,
-                agent=str(shadow_payload.get("agent") or "").strip() or None,
-            )
-        else:
-            support.emit_event(
-                context,
-                request_id=request_id,
-                intent=intent,
-                event_type="subagent_phase_hybrid_applied",
-                phase=str(shadow_payload.get("phase") or "").strip() or None,
-                agent=str(shadow_payload.get("agent") or "").strip() or None,
-                message=f"Hybrid subagent-phase policy applied variant {applied_variant_id} for DAG {dag_id}",
-                payload=dict(payload),
-            )
 
     @staticmethod
     def _resolve_variant_id(
