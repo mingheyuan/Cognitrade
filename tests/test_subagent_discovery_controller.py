@@ -78,8 +78,9 @@ class SubagentDiscoveryControllerTests(unittest.TestCase):
                     ),
                 },
             )()
+            candidate_support = SubagentDiscoveryCandidateSupport(host)
             controller = SubagentDiscoveryController(
-                discovery_candidate_support=SubagentDiscoveryCandidateSupport(host),
+                discovery_candidate_support=candidate_support,
                 discovery_decision_source=SubagentDiscoveryDecisionSource(
                     discovery_policy=SubagentDiscoveryPolicyService(settings=settings),
                     discovery_llm_policy_source=SubagentDiscoveryLLMPolicySource(
@@ -89,6 +90,7 @@ class SubagentDiscoveryControllerTests(unittest.TestCase):
                     discovery_candidate_policy=SubagentDiscoveryCandidatePolicyService(settings=settings),
                     discovery_approval_policy=SubagentDiscoveryApprovalPolicyService(settings=settings),
                     discovery_activation_policy=SubagentDiscoveryActivationPolicyService(settings=settings),
+                    discovery_candidate_support=candidate_support,
                 ),
                 activation_host=host,
                 runtime_binding_getter=host.runtime_binding_getter,

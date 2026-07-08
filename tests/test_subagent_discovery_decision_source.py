@@ -78,6 +78,7 @@ class SubagentDiscoveryDecisionSourceTests(unittest.TestCase):
                     ),
                 },
             )()
+            candidate_support = SubagentDiscoveryCandidateSupport(host)
             decision_source = SubagentDiscoveryDecisionSource(
                 discovery_policy=SubagentDiscoveryPolicyService(settings=settings),
                 discovery_llm_policy_source=SubagentDiscoveryLLMPolicySource(
@@ -87,8 +88,8 @@ class SubagentDiscoveryDecisionSourceTests(unittest.TestCase):
                 discovery_candidate_policy=SubagentDiscoveryCandidatePolicyService(settings=settings),
                 discovery_approval_policy=SubagentDiscoveryApprovalPolicyService(settings=settings),
                 discovery_activation_policy=SubagentDiscoveryActivationPolicyService(settings=settings),
+                discovery_candidate_support=candidate_support,
             )
-            candidate_support = SubagentDiscoveryCandidateSupport(host)
             gap = SubagentCapabilityGap(
                 intent="stock_check",
                 stage="collect",
@@ -177,6 +178,7 @@ class SubagentDiscoveryDecisionSourceTests(unittest.TestCase):
                     ),
                 },
             )()
+            candidate_support = SubagentDiscoveryCandidateSupport(host)
             decision_source = SubagentDiscoveryDecisionSource(
                 discovery_policy=SubagentDiscoveryPolicyService(settings=settings),
                 discovery_llm_policy_source=SubagentDiscoveryLLMPolicySource(
@@ -186,8 +188,8 @@ class SubagentDiscoveryDecisionSourceTests(unittest.TestCase):
                 discovery_candidate_policy=SubagentDiscoveryCandidatePolicyService(settings=settings),
                 discovery_approval_policy=SubagentDiscoveryApprovalPolicyService(settings=settings),
                 discovery_activation_policy=SubagentDiscoveryActivationPolicyService(settings=settings),
+                discovery_candidate_support=candidate_support,
             )
-            candidate_support = SubagentDiscoveryCandidateSupport(host)
             gap = SubagentCapabilityGap(
                 intent="stock_check",
                 stage="collect",
@@ -268,6 +270,7 @@ class SubagentDiscoveryDecisionSourceTests(unittest.TestCase):
                     ),
                 },
             )()
+            candidate_support = SubagentDiscoveryCandidateSupport(host)
             decision_source = SubagentDiscoveryDecisionSource(
                 discovery_policy=SubagentDiscoveryPolicyService(settings=settings),
                 discovery_llm_policy_source=SubagentDiscoveryLLMPolicySource(
@@ -277,8 +280,8 @@ class SubagentDiscoveryDecisionSourceTests(unittest.TestCase):
                 discovery_candidate_policy=SubagentDiscoveryCandidatePolicyService(settings=settings),
                 discovery_approval_policy=SubagentDiscoveryApprovalPolicyService(settings=settings),
                 discovery_activation_policy=SubagentDiscoveryActivationPolicyService(settings=settings),
+                discovery_candidate_support=candidate_support,
             )
-            candidate_support = SubagentDiscoveryCandidateSupport(host)
             gap = SubagentCapabilityGap(
                 intent="stock_check",
                 stage="collect",
@@ -393,6 +396,7 @@ class SubagentDiscoveryDecisionSourceTests(unittest.TestCase):
                     ),
                 },
             )()
+            candidate_support = SubagentDiscoveryCandidateSupport(host)
             decision_source = SubagentDiscoveryDecisionSource(
                 discovery_policy=SubagentDiscoveryPolicyService(settings=settings),
                 discovery_llm_policy_source=SubagentDiscoveryLLMPolicySource(
@@ -402,8 +406,8 @@ class SubagentDiscoveryDecisionSourceTests(unittest.TestCase):
                 discovery_candidate_policy=SubagentDiscoveryCandidatePolicyService(settings=settings),
                 discovery_approval_policy=SubagentDiscoveryApprovalPolicyService(settings=settings),
                 discovery_activation_policy=SubagentDiscoveryActivationPolicyService(settings=settings),
+                discovery_candidate_support=candidate_support,
             )
-            candidate_support = SubagentDiscoveryCandidateSupport(host)
             packaging = SubagentRuntimePackagingSupport(host)
             gap = SubagentCapabilityGap(
                 intent="stock_check",

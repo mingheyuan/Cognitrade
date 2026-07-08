@@ -82,15 +82,8 @@ class SubagentDiscoveryController:
         return self.preview_ticket(ticket=ticket, store=store)
 
     def preview_ticket(self, *, ticket, store):
-        try:
-            candidate_entries = self.discovery_candidate_support.candidate_entries(ticket)
-        except Exception:
-            return ticket
-        if not candidate_entries:
-            return ticket
         candidate_result = self.discovery_decision_source.select_candidate(
             ticket=ticket,
-            candidate_entries=candidate_entries,
         )
         self.discovery_decision_source.apply_candidate_selection(
             ticket=ticket,

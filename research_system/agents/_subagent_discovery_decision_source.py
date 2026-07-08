@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 from typing import Literal
 
 from research_system.schemas.subagents import (
@@ -200,12 +201,14 @@ class SubagentDiscoveryDecisionSource:
         discovery_candidate_policy,
         discovery_approval_policy,
         discovery_activation_policy,
+        discovery_candidate_support=None,
     ) -> None:
         self.discovery_policy = discovery_policy
         self.discovery_llm_policy_source = discovery_llm_policy_source
         self.discovery_candidate_policy = discovery_candidate_policy
         self.discovery_approval_policy = discovery_approval_policy
         self.discovery_activation_policy = discovery_activation_policy
+        self.discovery_candidate_support = discovery_candidate_support
 
     def resolve_protocols(
         self,
@@ -270,12 +273,12 @@ class SubagentDiscoveryDecisionSource:
         self,
         *,
         ticket: SubagentDiscoveryTicket,
-        candidate_entries: list[SubagentCatalogEntry],
+        candidate_entries: list[SubagentCatalogEntry] | None = None,
     ) -> SubagentDiscoveryCandidateStageResult:
-        entries = [
-            entry for entry in list(candidate_entries or [])
-            if isinstance(entry, SubagentCatalogEntry)
-        ]
+        entries = self.resolve_candidate_entries(
+            ticket=ticket,
+            candidate_catalog_entries=candidate_entries,
+        )
         recommendation, shadow_recommendation = self.discovery_candidate_policy.recommend(
             ticket=ticket,
             candidate_entries=entries,
@@ -319,6 +322,37 @@ class SubagentDiscoveryDecisionSource:
                 notes=list((recommendation.notes if recommendation is not None else []) or []),
             ),
         )
+
+    def resolve_candidate_entries(
+        self,
+        *,
+        ticket: SubagentDiscoveryTicket,
+        candidate_catalog_entries: list[Any] | None = None,
+    ) -> list[SubagentCatalogEntry]:
+        if candidate_catalog_entries:
+            return [
+                self._normalize_candidate_entry(SubagentCatalogEntry.model_validate(item))
+                for item in candidate_catalog_entries
+                if isinstance(item, dict) or isinstance(item, SubagentCatalogEntry)
+            ]
+        if ticket.candidate_catalog_entries:
+            return [
+                self._normalize_candidate_entry(entry)
+                for entry in list(ticket.candidate_catalog_entries or [])
+                if isinstance(entry, SubagentCatalogEntry)
+            ]
+        if self.discovery_candidate_support is not None:
+            try:
+                generated_entries = self.discovery_candidate_support.candidate_entries(ticket)
+            except Exception:
+                generated_entries = []
+            if generated_entries:
+                return [
+                    self._normalize_candidate_entry(entry)
+                    for entry in list(generated_entries or [])
+                    if isinstance(entry, SubagentCatalogEntry)
+                ]
+        return [self._normalize_candidate_entry(self._placeholder_candidate_entry(ticket))]
 
     def evaluate_review(
         self,
@@ -593,6 +627,47 @@ class SubagentDiscoveryDecisionSource:
         ticket.activated_entries.append(activation_entry)
         ticket.updated_at = datetime.now(timezone.utc)
         return activation_entry, True
+
+    def _normalize_candidate_entry(
+        self,
+        candidate_entry: SubagentCatalogEntry,
+    ) -> SubagentCatalogEntry:
+        runtime_packaging = getattr(self.discovery_candidate_support, "runtime_packaging", None)
+        normalize = getattr(runtime_packaging, "normalize_candidate_entry", None)
+        if callable(normalize):
+            return normalize(candidate_entry)
+        return candidate_entry
+
+    @staticmethod
+    def _placeholder_candidate_entry(ticket: SubagentDiscoveryTicket) -> SubagentCatalogEntry:
+        gap = ticket.capability_gap
+        candidate_type = str(gap.preferred_subagent_type or "").strip()
+        if not candidate_type:
+            stage = str(gap.stage or "phase").strip() or "phase"
+            capability = str(gap.capability or "capability").strip() or "capability"
+            candidate_type = f"candidate_{stage}_{capability}".replace("-", "_").replace(" ", "_")
+        summary = f"Approved discovery candidate for capability {gap.capability}"
+        suitable_intents = [str(gap.intent).strip()] if str(gap.intent or "").strip() else []
+        return SubagentCatalogEntry(
+            subagent_type=candidate_type,
+            summary=summary,
+            capabilities=[str(gap.capability).strip()],
+            stage=str(gap.stage or "").strip() or None,
+            cost_class="medium",
+            latency_class="medium",
+            side_effect_level="none",
+            suitable_intents=suitable_intents,
+            tags=["approved_discovery_candidate", "pending_runtime_registration"],
+            requires_llm=bool(gap.requires_llm),
+            allow_parallel=False,
+            max_concurrency=None,
+            fallback_subagent_type=None,
+            error_fallback_subagent_type=None,
+            input_schema_name=None,
+            output_schema_name=None,
+            input_json_schema=None,
+            output_json_schema=None,
+        )
 
     @classmethod
     def _selected_protocol(cls, *, ticket: SubagentDiscoveryTicket) -> str | None:

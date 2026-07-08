@@ -234,12 +234,25 @@ class SubagentPhaseControllerTests(unittest.TestCase):
             self.assertIn("subagent_capability_gap_detected", dynamic_events)
             self.assertIn("subagent_tool_discovery_requested", dynamic_events)
             self.assertIn("subagent_tool_discovery_protocol_decided", dynamic_events)
+            self.assertIn("subagent_tool_discovery_candidate_decided", dynamic_events)
+            self.assertIn("subagent_tool_discovery_review_decided", dynamic_events)
             pending_tickets = discovery_store.list("pending")
             self.assertEqual(len(pending_tickets), 1)
+            self.assertEqual(pending_tickets[0].status, "pending")
             self.assertEqual(pending_tickets[0].capability_gap.capability, "missing_capability")
             self.assertEqual(
                 pending_tickets[0].tool_discovery_request.search_query,
                 "review_thesis review missing_capability",
+            )
+            self.assertEqual(len(pending_tickets[0].candidate_catalog_entries), 1)
+            self.assertEqual(
+                pending_tickets[0].candidate_catalog_entries[0].subagent_type,
+                "candidate_review_missing_capability",
+            )
+            self.assertIsNotNone(pending_tickets[0].candidate_recommendation)
+            self.assertIn(
+                "candidate_preview_generated_from_runtime_discovery_request",
+                pending_tickets[0].notes,
             )
 
     def test_capability_gap_request_uses_discovery_policy_protocol_order(self) -> None:

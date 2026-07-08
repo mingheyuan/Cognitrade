@@ -21,9 +21,6 @@ from research_system.runtime.orchestration._subagent_discovery_approval_policy i
 from research_system.runtime.orchestration._subagent_discovery_candidate_policy import (
     SubagentDiscoveryCandidatePolicyService,
 )
-from research_system.schemas.subagents import (
-    SubagentCatalogEntry,
-)
 from research_system.runtime.orchestration.subagent_discovery_candidate_sources import (
     SubagentDiscoveryCandidateSupport,
 )
@@ -58,6 +55,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             discovery_candidate_policy=self.candidate_policy,
             discovery_approval_policy=SubagentDiscoveryApprovalPolicyService(settings=getattr(host, "settings", None)),
             discovery_activation_policy=SubagentDiscoveryActivationPolicyService(settings=getattr(host, "settings", None)),
+            discovery_candidate_support=self.discovery_candidates,
         )
         self.runtime_packaging = SubagentRuntimePackagingSupport(host)
 
@@ -105,13 +103,9 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             }
         previous_status = str(ticket.status or "pending").strip() or "pending"
         if normalized_decision == "approve":
-            ticket.candidate_catalog_entries = self._resolve_candidate_catalog_entries(
-                ticket,
-                candidate_catalog_entries=candidate_catalog_entries,
-            )
             candidate_result = self.discovery_decision_source.select_candidate(
                 ticket=ticket,
-                candidate_entries=ticket.candidate_catalog_entries,
+                candidate_entries=candidate_catalog_entries,
             )
             self.discovery_decision_source.apply_candidate_selection(
                 ticket=ticket,
@@ -232,79 +226,5 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             ),
             "updated_at": ticket.updated_at.isoformat(),
         }
-
-    def _resolve_candidate_catalog_entries(
-        self,
-        ticket,
-        *,
-        candidate_catalog_entries: list[dict] | None,
-    ) -> list[SubagentCatalogEntry]:
-        if candidate_catalog_entries:
-            return [
-                self._normalize_runtime_registration_templates(SubagentCatalogEntry.model_validate(item))
-                for item in candidate_catalog_entries
-                if isinstance(item, dict)
-            ]
-        if ticket.candidate_catalog_entries:
-            return [
-                self._normalize_runtime_registration_templates(entry)
-                for entry in list(ticket.candidate_catalog_entries or [])
-                if isinstance(entry, SubagentCatalogEntry)
-            ]
-        generated_entries = self.discovery_candidates.candidate_entries(ticket)
-        if generated_entries:
-            return generated_entries
-        gap = ticket.capability_gap
-        candidate_type = str(gap.preferred_subagent_type or "").strip()
-        if not candidate_type:
-            stage = str(gap.stage or "phase").strip() or "phase"
-            capability = str(gap.capability or "capability").strip() or "capability"
-            candidate_type = f"candidate_{stage}_{capability}".replace("-", "_").replace(" ", "_")
-        summary = f"Approved discovery candidate for capability {gap.capability}"
-        suitable_intents = [str(gap.intent).strip()] if str(gap.intent or "").strip() else []
-        return [
-            self._normalize_runtime_registration_templates(SubagentCatalogEntry(
-                subagent_type=candidate_type,
-                summary=summary,
-                capabilities=[str(gap.capability).strip()],
-                stage=str(gap.stage or "").strip() or None,
-                cost_class="medium",
-                latency_class="medium",
-                side_effect_level="none",
-                suitable_intents=suitable_intents,
-                tags=["approved_discovery_candidate", "pending_runtime_registration"],
-                requires_llm=bool(gap.requires_llm),
-                allow_parallel=False,
-                max_concurrency=None,
-                fallback_subagent_type=None,
-                error_fallback_subagent_type=None,
-                input_schema_name=None,
-                output_schema_name=None,
-                input_json_schema=None,
-                output_json_schema=None,
-            ))
-        ]
-
-    def _select_runtime_registration_template(
-        self,
-        candidate_entry: SubagentCatalogEntry,
-        *,
-        template_id: str | None,
-    ):
-        return self.runtime_packaging.select_template(candidate_entry, template_id=template_id)
-
-    @staticmethod
-    def _candidate_runtime_registration_templates(
-        candidate_entry: SubagentCatalogEntry,
-    ):
-        support = SubagentRuntimePackagingSupport()
-        return support.candidate_templates(candidate_entry)
-
-    @staticmethod
-    def _normalize_runtime_registration_templates(
-        candidate_entry: SubagentCatalogEntry,
-    ) -> SubagentCatalogEntry:
-        support = SubagentRuntimePackagingSupport()
-        return support.normalize_candidate_entry(candidate_entry)
 
 __all__ = ["OrchestratorSubagentDiscoveryAdminSupport"]
