@@ -276,6 +276,7 @@ def _parse_activate_subagent_discovery_runtime_form(
         "--delegate-subagent-type": "delegate_subagent_type",
         "--candidate": "candidate_subagent_type",
         "--candidate-subagent-type": "candidate_subagent_type",
+        "--registration-template-id": "registration_template_id",
         "--registration-type": "registration_type",
         "--skill-name": "skill_name",
         "--snapshot-type": "snapshot_type",
@@ -291,6 +292,7 @@ def _parse_activate_subagent_discovery_runtime_form(
         "ticket_id": ticket_id,
         "delegate_subagent_type": None,
         "candidate_subagent_type": None,
+        "registration_template_id": None,
         "registration_type": None,
         "skill_name": None,
         "snapshot_type": None,
@@ -318,7 +320,7 @@ def _parse_activate_subagent_discovery_runtime_form(
         else:
             parsed[key] = value
         index += 2
-    if not parsed.get("delegate_subagent_type") and not parsed.get("registration_type"):
+    if not parsed.get("delegate_subagent_type") and not parsed.get("registration_type") and not parsed.get("registration_template_id"):
         return {"action": "error", "message": _activate_subagent_discovery_usage()}
     return parsed
 
@@ -326,6 +328,8 @@ def _parse_activate_subagent_discovery_runtime_form(
 def _activate_subagent_discovery_usage() -> str:
     return (
         "usage: /activate-subagent-discovery <ticket_id> <delegate_subagent_type> [candidate_subagent_type] "
+        "or /activate-subagent-discovery <ticket_id> --registration-template-id <template_id> "
+        "[--candidate <candidate_subagent_type>] "
         "or /activate-subagent-discovery <ticket_id> --registration-type <type> "
         "[--candidate <candidate_subagent_type>] [--skill-name <skill>] [--snapshot-type <snapshot>] "
         "[--source-id <source>] [--endpoint-path <path>] [--http-method <GET|POST>] "

@@ -207,8 +207,15 @@ def render_subagent_catalog_entry_line(row: dict) -> str:
     stage = str(row.get("stage") or "-")
     summary = str(row.get("summary") or "").strip()
     summary_part = f"  summary={summary}" if summary else ""
+    templates = row.get("runtime_registration_templates") or []
+    template_ids = ", ".join(
+        str(item.get("template_id") or "").strip()
+        for item in templates
+        if isinstance(item, dict) and str(item.get("template_id") or "").strip()
+    )
+    template_part = f"  templates={template_ids}" if template_ids else ""
     return (
-        f"  - {row.get('subagent_type')}  stage={stage}  capabilities={capabilities}  tags={tags}{summary_part}"
+        f"  - {row.get('subagent_type')}  stage={stage}  capabilities={capabilities}  tags={tags}{summary_part}{template_part}"
     )
 
 
@@ -224,6 +231,9 @@ def render_subagent_activation_entry_line(row: dict) -> str:
         http_method = str(runtime_registration.get("http_method") or "").strip()
         openapi_spec_uri = str(runtime_registration.get("openapi_spec_uri") or "").strip()
         openapi_operation_id = str(runtime_registration.get("openapi_operation_id") or "").strip()
+        registration_template_id = str(runtime_registration.get("registration_template_id") or "").strip()
+        if registration_template_id:
+            registration_bits.append(f"template={registration_template_id}")
         if skill_name:
             registration_bits.append(f"skill={skill_name}")
         if snapshot_type:

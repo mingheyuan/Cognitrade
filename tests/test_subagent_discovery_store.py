@@ -443,10 +443,15 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
                     ).model_dump(mode="json")
                 ],
             )
+            approved_entries = store.approved_catalog_entries()
+            self.assertEqual(
+                approved_entries[0].runtime_registration_templates[0].template_id,
+                "openapi:getMarketSignal",
+            )
 
             activation = admin.activate_request(
                 ticket.ticket_id,
-                registration_type="openapi_http_runner",
+                registration_template_id="openapi:getMarketSignal",
                 activated_by="tester",
                 reason="activate validated openapi runner",
             )
@@ -457,6 +462,7 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
             self.assertEqual(activated_entry["runtime_registration"]["source_id"], "eastmoney")
             self.assertEqual(activated_entry["runtime_registration"]["endpoint_path"], "/api/market-signal")
             self.assertEqual(activated_entry["runtime_registration"]["http_method"], "GET")
+            self.assertEqual(activated_entry["runtime_registration"]["registration_template_id"], "openapi:getMarketSignal")
             self.assertIsNone(activated_entry["runtime_registration"]["openapi_spec_uri"])
             self.assertEqual(activated_entry["runtime_registration"]["openapi_operation_id"], "getMarketSignal")
             activated_aliases = store.activated_alias_entries()

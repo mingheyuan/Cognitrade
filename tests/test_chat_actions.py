@@ -1016,6 +1016,25 @@ class ChatActionsTests(unittest.TestCase):
                     "timeout_seconds": None,
                 },
             ),
+            (
+                "activate-subagent-discovery",
+                {
+                    "action": "activate-subagent-discovery",
+                    "ticket_id": "01DISC",
+                    "delegate_subagent_type": None,
+                    "candidate_subagent_type": "candidate_collect_http_extension",
+                    "registration_template_id": "openapi:getMarketSignal",
+                    "registration_type": None,
+                    "skill_name": None,
+                    "snapshot_type": None,
+                    "source_id": None,
+                    "endpoint_path": None,
+                    "http_method": None,
+                    "openapi_spec_uri": None,
+                    "openapi_operation_id": None,
+                    "timeout_seconds": None,
+                },
+            ),
         ]:
             handled = handle_chat_cli_action(
                 action=action,
@@ -1049,7 +1068,10 @@ class ChatActionsTests(unittest.TestCase):
         self.assertEqual(calls[5]["registration_type"], "openapi_http_runner")
         self.assertEqual(calls[5]["openapi_spec_uri"], "https://example.com/openapi.json")
         self.assertEqual(calls[5]["openapi_operation_id"], "getMarketSignal")
-        self.assertEqual(len(rendered), 6)
+        self.assertEqual(calls[6]["command"], "activate-subagent-discovery")
+        self.assertEqual(calls[6]["registration_template_id"], "openapi:getMarketSignal")
+        self.assertEqual(calls[6]["subagent_node_id"], "candidate_collect_http_extension")
+        self.assertEqual(len(rendered), 7)
 
 
 if __name__ == "__main__":

@@ -107,6 +107,7 @@ class _DispatchOrchestratorStub:
         *,
         delegate_subagent_type: str | None = None,
         candidate_subagent_type: str | None = None,
+        registration_template_id: str | None = None,
         activated_by: str = "manual_cli_activation",
         reason: str | None = None,
         registration_type: str | None = None,
@@ -131,7 +132,8 @@ class _DispatchOrchestratorStub:
                         "delegate_subagent_type": delegate_subagent_type,
                         "runtime_registration": (
                             {
-                                "registration_type": registration_type,
+                                "registration_type": registration_type or ("openapi_http_runner" if registration_template_id else None),
+                                "registration_template_id": registration_template_id,
                                 "skill_name": skill_name,
                                 "snapshot_type": snapshot_type,
                                 "source_id": source_id,
@@ -141,7 +143,7 @@ class _DispatchOrchestratorStub:
                                 "openapi_operation_id": openapi_operation_id,
                                 "timeout_seconds": timeout_seconds,
                             }
-                            if registration_type
+                            if registration_type or registration_template_id
                             else None
                         ),
                         "activated_by": activated_by,
@@ -363,6 +365,16 @@ class CliCommandDispatchTests(unittest.TestCase):
             openapi_operation_id="getMarketSignal",
             orchestrator_cls=_DispatchOrchestratorStub,
         )
+        template_runtime_activated = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            activated_by="ops_user",
+            status_filter="activate template runtime skill",
+            candidate_subagent_type="candidate_collect_http_extension",
+            registration_template_id="openapi:getMarketSignal",
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
 
         self.assertEqual(discoveries[0]["ticket_id"], "01DISC")
         self.assertEqual(detail["ticket_id"], "01DISC")
@@ -391,6 +403,10 @@ class CliCommandDispatchTests(unittest.TestCase):
         self.assertEqual(
             openapi_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["openapi_operation_id"],
             "getMarketSignal",
+        )
+        self.assertEqual(
+            template_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["registration_template_id"],
+            "openapi:getMarketSignal",
         )
 
     def test_execute_cli_payload_command_dispatches_run_id_commands(self) -> None:

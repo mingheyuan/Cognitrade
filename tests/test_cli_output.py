@@ -147,6 +147,7 @@ class _AppOrchestratorStub:
         *,
         delegate_subagent_type: str | None = None,
         candidate_subagent_type: str | None = None,
+        registration_template_id: str | None = None,
         activated_by: str = "manual_cli_activation",
         reason: str | None = None,
         registration_type: str | None = None,
@@ -171,7 +172,8 @@ class _AppOrchestratorStub:
                         "delegate_subagent_type": delegate_subagent_type,
                         "runtime_registration": (
                             {
-                                "registration_type": registration_type,
+                                "registration_type": registration_type or ("openapi_http_runner" if registration_template_id else None),
+                                "registration_template_id": registration_template_id,
                                 "skill_name": skill_name,
                                 "snapshot_type": snapshot_type,
                                 "source_id": source_id,
@@ -181,7 +183,7 @@ class _AppOrchestratorStub:
                                 "openapi_operation_id": openapi_operation_id,
                                 "timeout_seconds": timeout_seconds,
                             }
-                            if registration_type
+                            if registration_type or registration_template_id
                             else None
                         ),
                         "status": "active",
@@ -497,6 +499,15 @@ class CliOutputTests(unittest.TestCase):
                 openapi_spec_uri="https://example.com/openapi.json",
                 openapi_operation_id="getMarketSignal",
             )
+            template_runtime_activated = _execute_cli_command(
+                Settings.from_env(Path(".")),
+                command="activate-subagent-discovery",
+                ticket_id="01DISC",
+                activated_by="ops_user",
+                status_filter="activate template runtime skill",
+                candidate_subagent_type="candidate_collect_http_extension",
+                registration_template_id="openapi:getMarketSignal",
+            )
 
         self.assertEqual(rows[0]["ticket_id"], "01DISC")
         self.assertEqual(detail["ticket_id"], "01DISC")
@@ -516,6 +527,10 @@ class CliOutputTests(unittest.TestCase):
         self.assertEqual(
             openapi_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["openapi_operation_id"],
             "getMarketSignal",
+        )
+        self.assertEqual(
+            template_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["registration_template_id"],
+            "openapi:getMarketSignal",
         )
 
     def test_render_tui_output_uses_ascii_sections(self) -> None:
@@ -1030,6 +1045,12 @@ class CliOutputTests(unittest.TestCase):
                         "stage": "collect",
                         "capabilities": ["screening_strategy"],
                         "tags": ["approved_discovery_candidate"],
+                        "runtime_registration_templates": [
+                            {
+                                "template_id": "openapi:getMarketSignal",
+                                "registration_type": "openapi_http_runner",
+                            }
+                        ],
                     }
                 ],
                 "activated_entries": [
@@ -1142,6 +1163,7 @@ class CliOutputTests(unittest.TestCase):
                         "delegate_subagent_type": None,
                         "runtime_registration": {
                             "registration_type": "openapi_http_runner",
+                            "registration_template_id": "openapi:getMarketSignal",
                             "skill_name": None,
                             "snapshot_type": None,
                             "source_id": "eastmoney",
@@ -1166,13 +1188,14 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("candidate_catalog_entries:", detail_output)
         self.assertIn("activated_entries:", detail_output)
         self.assertIn("candidate_screening_strategy -> stock_snapshot_collector", detail_output)
+        self.assertIn("templates=openapi:getMarketSignal", detail_output)
         self.assertIn("runtime:snapshot_skill_runner skill=market_snapshot_skill snapshot=market", runtime_detail_output)
         self.assertIn(
             "runtime:http_json_runner source=eastmoney method=GET path=/api/market-signal",
             http_runtime_detail_output,
         )
         self.assertIn(
-            "runtime:openapi_http_runner source=eastmoney method=GET path=/api/market-signal op=getMarketSignal spec=https://example.com/openapi.json",
+            "runtime:openapi_http_runner template=openapi:getMarketSignal source=eastmoney method=GET path=/api/market-signal op=getMarketSignal spec=https://example.com/openapi.json",
             openapi_runtime_detail_output,
         )
 

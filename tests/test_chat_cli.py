@@ -192,6 +192,7 @@ class ChatCliTests(unittest.TestCase):
                 "ticket_id": "01DISC",
                 "delegate_subagent_type": None,
                 "candidate_subagent_type": "candidate_collect_http_extension",
+                "registration_template_id": None,
                 "registration_type": "http_json_runner",
                 "skill_name": None,
                 "snapshot_type": None,
@@ -215,6 +216,7 @@ class ChatCliTests(unittest.TestCase):
                 "ticket_id": "01DISC",
                 "delegate_subagent_type": None,
                 "candidate_subagent_type": "candidate_collect_http_extension",
+                "registration_template_id": None,
                 "registration_type": "openapi_http_runner",
                 "skill_name": None,
                 "snapshot_type": None,
@@ -223,6 +225,28 @@ class ChatCliTests(unittest.TestCase):
                 "http_method": None,
                 "openapi_spec_uri": "https://example.com/openapi.json",
                 "openapi_operation_id": "getMarketSignal",
+                "timeout_seconds": None,
+            },
+        )
+        self.assertEqual(
+            parse_chat_input(
+                "/activate-subagent-discovery 01DISC --registration-template-id openapi:getMarketSignal "
+                "--candidate candidate_collect_http_extension"
+            ),
+            {
+                "action": "activate-subagent-discovery",
+                "ticket_id": "01DISC",
+                "delegate_subagent_type": None,
+                "candidate_subagent_type": "candidate_collect_http_extension",
+                "registration_template_id": "openapi:getMarketSignal",
+                "registration_type": None,
+                "skill_name": None,
+                "snapshot_type": None,
+                "source_id": None,
+                "endpoint_path": None,
+                "http_method": None,
+                "openapi_spec_uri": None,
+                "openapi_operation_id": None,
                 "timeout_seconds": None,
             },
         )

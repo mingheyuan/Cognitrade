@@ -7,6 +7,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from research_system.runtime.core.id_utils import generate_ulid
 
+RuntimeRegistrationType = Literal[
+    "snapshot_skill_runner",
+    "skill_runner",
+    "http_json_runner",
+    "openapi_http_runner",
+]
+
 
 class SubagentInvocation(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -41,6 +48,39 @@ class SubagentExecutionRecord(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class SubagentRuntimeRegistrationTemplate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    template_id: str
+    registration_type: RuntimeRegistrationType
+    summary: str | None = None
+    defaults: dict[str, Any] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_template_defaults(self) -> "SubagentRuntimeRegistrationTemplate":
+        allowed_keys = {
+            "skill_name",
+            "snapshot_type",
+            "source_id",
+            "endpoint_path",
+            "http_method",
+            "openapi_spec_uri",
+            "openapi_operation_id",
+            "timeout_seconds",
+        }
+        unknown_keys = sorted(str(key) for key in self.defaults if str(key) not in allowed_keys)
+        if unknown_keys:
+            raise ValueError(f"unsupported runtime registration template defaults: {', '.join(unknown_keys)}")
+        default_http_method = str(self.defaults.get("http_method") or "").strip().upper()
+        if default_http_method and default_http_method not in {"GET", "POST"}:
+            raise ValueError("runtime registration template http_method must be GET or POST")
+        default_timeout_seconds = self.defaults.get("timeout_seconds")
+        if default_timeout_seconds is not None and float(default_timeout_seconds) <= 0.0:
+            raise ValueError("runtime registration template timeout_seconds must be > 0")
+        return self
+
+
 class SubagentCatalogEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -63,6 +103,7 @@ class SubagentCatalogEntry(BaseModel):
     input_json_schema: dict[str, Any] | None = None
     output_json_schema: dict[str, Any] | None = None
     runtime_registration_hints: dict[str, Any] = Field(default_factory=dict)
+    runtime_registration_templates: list[SubagentRuntimeRegistrationTemplate] = Field(default_factory=list)
 
 
 class SubagentCapabilityGap(BaseModel):
@@ -116,7 +157,7 @@ class SubagentDiscoveryTicket(BaseModel):
 class SubagentRuntimeRegistration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    registration_type: Literal["snapshot_skill_runner", "skill_runner", "http_json_runner", "openapi_http_runner"]
+    registration_type: RuntimeRegistrationType
     skill_name: str | None = None
     snapshot_type: str | None = None
     source_id: str | None = None
@@ -124,6 +165,7 @@ class SubagentRuntimeRegistration(BaseModel):
     http_method: Literal["GET", "POST"] | None = None
     openapi_spec_uri: str | None = None
     openapi_operation_id: str | None = None
+    registration_template_id: str | None = None
     timeout_seconds: float | None = Field(default=None, gt=0.0)
     notes: list[str] = Field(default_factory=list)
 

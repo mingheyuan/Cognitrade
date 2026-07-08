@@ -244,6 +244,13 @@ class CliCommandPayloadsTests(unittest.TestCase):
             openapi_operation_id="getMarketSignal",
             candidate_subagent_type="candidate_collect_http_extension",
         )
+        template_runtime_activated = build_cli_command_payload(
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            activated_by="manual_cli_activation",
+            registration_template_id="openapi:getMarketSignal",
+            candidate_subagent_type="candidate_collect_http_extension",
+        )
 
         self.assertEqual(
             listed,
@@ -272,6 +279,7 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "intent": "manual_chat_activation",
                 "status_filter": "delegate approved",
                 "subagent_node_id": "candidate_collect_snapshot",
+                "registration_template_id": "",
                 "registration_type": "",
                 "skill_name": "",
                 "snapshot_type": "",
@@ -292,6 +300,7 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "intent": "manual_cli_activation",
                 "status_filter": None,
                 "subagent_node_id": "candidate_collect_snapshot",
+                "registration_template_id": "",
                 "registration_type": "snapshot_skill_runner",
                 "skill_name": "market_snapshot_skill",
                 "snapshot_type": "market",
@@ -312,6 +321,7 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "intent": "manual_cli_activation",
                 "status_filter": None,
                 "subagent_node_id": "candidate_report_analysis",
+                "registration_template_id": "",
                 "registration_type": "skill_runner",
                 "skill_name": "analysis_skill",
                 "snapshot_type": "",
@@ -332,6 +342,7 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "intent": "manual_cli_activation",
                 "status_filter": None,
                 "subagent_node_id": "candidate_collect_http_extension",
+                "registration_template_id": "",
                 "registration_type": "http_json_runner",
                 "skill_name": "",
                 "snapshot_type": "",
@@ -352,6 +363,7 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "intent": "manual_cli_activation",
                 "status_filter": None,
                 "subagent_node_id": "candidate_collect_http_extension",
+                "registration_template_id": "",
                 "registration_type": "openapi_http_runner",
                 "skill_name": "",
                 "snapshot_type": "",
@@ -360,6 +372,27 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "http_method": "",
                 "openapi_spec_uri": "https://example.com/openapi.json",
                 "openapi_operation_id": "getMarketSignal",
+                "timeout_seconds": None,
+            },
+        )
+        self.assertEqual(
+            template_runtime_activated,
+            {
+                "command": "activate-subagent-discovery",
+                "ticket_id": "01DISC",
+                "query": "",
+                "intent": "manual_cli_activation",
+                "status_filter": None,
+                "subagent_node_id": "candidate_collect_http_extension",
+                "registration_template_id": "openapi:getMarketSignal",
+                "registration_type": "",
+                "skill_name": "",
+                "snapshot_type": "",
+                "source_id": "",
+                "endpoint_path": "",
+                "http_method": "",
+                "openapi_spec_uri": "",
+                "openapi_operation_id": "",
                 "timeout_seconds": None,
             },
         )

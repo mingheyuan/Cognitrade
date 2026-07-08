@@ -828,6 +828,7 @@ class SubagentRegistryTests(unittest.TestCase):
                         },
                         "runtime_registration_hints": {
                             "openapi": {
+                                "source_id": "eastmoney",
                                 "spec": {
                                     "openapi": "3.0.0",
                                     "paths": {
@@ -845,9 +846,7 @@ class SubagentRegistryTests(unittest.TestCase):
             )
             admin.activate_request(
                 ticket.ticket_id,
-                registration_type="openapi_http_runner",
-                source_id="eastmoney",
-                openapi_operation_id="getMarketSignal",
+                registration_template_id="openapi:getMarketSignal",
                 activated_by="tester",
                 reason="activate openapi runtime registration",
             )

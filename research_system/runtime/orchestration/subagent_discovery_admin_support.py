@@ -11,6 +11,7 @@ from research_system.adapters.vendors.data_source_registry import DataSourceRegi
 from research_system.schemas.subagents import (
     SubagentActivationEntry,
     SubagentCatalogEntry,
+    SubagentRuntimeRegistrationTemplate,
     SubagentRuntimeRegistration,
 )
 
@@ -86,6 +87,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         *,
         delegate_subagent_type: str | None = None,
         candidate_subagent_type: str | None = None,
+        registration_template_id: str | None = None,
         activated_by: str = "manual_cli_activation",
         reason: str | None = None,
         registration_type: str | None = None,
@@ -112,6 +114,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         )
         runtime_registration = self._resolve_runtime_registration(
             candidate_entry=candidate_entry,
+            registration_template_id=registration_template_id,
             registration_type=registration_type,
             skill_name=skill_name,
             snapshot_type=snapshot_type,
@@ -149,6 +152,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
                     "activated_from_approved_discovery_ticket",
                     *( [f"delegate_subagent_type={normalized_delegate_subagent_type}"] if normalized_delegate_subagent_type else [] ),
                     *( [f"runtime_registration_type={runtime_registration.registration_type}"] if runtime_registration else [] ),
+                    *( [f"runtime_registration_template_id={runtime_registration.registration_template_id}"] if runtime_registration and runtime_registration.registration_template_id else [] ),
                 ],
             )
         )
@@ -188,7 +192,9 @@ class OrchestratorSubagentDiscoveryAdminSupport:
     ) -> list[SubagentCatalogEntry]:
         if candidate_catalog_entries:
             return [
-                SubagentCatalogEntry.model_validate(item)
+                OrchestratorSubagentDiscoveryAdminSupport._normalize_runtime_registration_templates(
+                    SubagentCatalogEntry.model_validate(item)
+                )
                 for item in candidate_catalog_entries
                 if isinstance(item, dict)
             ]
@@ -201,7 +207,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         summary = f"Approved discovery candidate for capability {gap.capability}"
         suitable_intents = [str(gap.intent).strip()] if str(gap.intent or "").strip() else []
         return [
-            SubagentCatalogEntry(
+            OrchestratorSubagentDiscoveryAdminSupport._normalize_runtime_registration_templates(SubagentCatalogEntry(
                 subagent_type=candidate_type,
                 summary=summary,
                 capabilities=[str(gap.capability).strip()],
@@ -220,7 +226,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
                 output_schema_name=None,
                 input_json_schema=None,
                 output_json_schema=None,
-            )
+            ))
         ]
 
     def _select_candidate_catalog_entry(
@@ -252,6 +258,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         self,
         *,
         candidate_entry: SubagentCatalogEntry,
+        registration_template_id: str | None,
         registration_type: str | None,
         skill_name: str | None,
         snapshot_type: str | None,
@@ -262,18 +269,30 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         openapi_operation_id: str | None,
         timeout_seconds: float | None,
     ) -> SubagentRuntimeRegistration | None:
-        normalized_type = str(registration_type or "").strip()
+        template = self._select_runtime_registration_template(
+            candidate_entry,
+            template_id=registration_template_id,
+        )
+        template_defaults = dict(template.defaults or {}) if template is not None else {}
+        normalized_type = str(registration_type or getattr(template, "registration_type", "") or "").strip()
         if not normalized_type:
             return None
         if normalized_type not in {"snapshot_skill_runner", "skill_runner", "http_json_runner", "openapi_http_runner"}:
             raise self.host.orchestrator_error_cls(f"unsupported runtime registration type: {registration_type}")
-        normalized_skill_name = str(skill_name or "").strip()
-        normalized_snapshot_type = str(snapshot_type or "").strip()
-        normalized_source_id = str(source_id or "").strip()
-        normalized_endpoint_path = str(endpoint_path or "").strip()
-        normalized_http_method = str(http_method or "").strip().upper()
-        normalized_openapi_spec_uri = str(openapi_spec_uri or "").strip()
-        normalized_openapi_operation_id = str(openapi_operation_id or "").strip()
+        if template is not None and str(template.registration_type).strip() != normalized_type:
+            raise self.host.orchestrator_error_cls(
+                f"runtime registration template type mismatch: {template.template_id}"
+            )
+        normalized_skill_name = str(skill_name or template_defaults.get("skill_name") or "").strip()
+        normalized_snapshot_type = str(snapshot_type or template_defaults.get("snapshot_type") or "").strip()
+        normalized_source_id = str(source_id or template_defaults.get("source_id") or "").strip()
+        normalized_endpoint_path = str(endpoint_path or template_defaults.get("endpoint_path") or "").strip()
+        normalized_http_method = str(http_method or template_defaults.get("http_method") or "").strip().upper()
+        normalized_openapi_spec_uri = str(openapi_spec_uri or template_defaults.get("openapi_spec_uri") or "").strip()
+        normalized_openapi_operation_id = str(
+            openapi_operation_id or template_defaults.get("openapi_operation_id") or ""
+        ).strip()
+        resolved_timeout_seconds = timeout_seconds if timeout_seconds is not None else template_defaults.get("timeout_seconds")
         normalized_stage = str(candidate_entry.stage or "").strip().lower()
         if normalized_type == "snapshot_skill_runner" and normalized_stage not in {"", "collect"}:
             raise self.host.orchestrator_error_cls(
@@ -315,8 +334,10 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             http_method=normalized_http_method or None,
             openapi_spec_uri=normalized_openapi_spec_uri or None,
             openapi_operation_id=normalized_openapi_operation_id or None,
-            timeout_seconds=float(timeout_seconds) if timeout_seconds is not None else None,
+            registration_template_id=template.template_id if template is not None else None,
+            timeout_seconds=float(resolved_timeout_seconds) if resolved_timeout_seconds is not None else None,
             notes=[
+                *( [f"registration_template_id={template.template_id}"] if template is not None else [] ),
                 *(
                     ["validated_via_skill_runtime_registry"]
                     if normalized_type in {"snapshot_skill_runner", "skill_runner"}
@@ -369,6 +390,94 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         if normalized_type and normalized_type != "object":
             return False
         return isinstance(properties, dict)
+
+    def _select_runtime_registration_template(
+        self,
+        candidate_entry: SubagentCatalogEntry,
+        *,
+        template_id: str | None,
+    ) -> SubagentRuntimeRegistrationTemplate | None:
+        normalized_template_id = str(template_id or "").strip()
+        if not normalized_template_id:
+            return None
+        for template in self._candidate_runtime_registration_templates(candidate_entry):
+            if str(template.template_id).strip() == normalized_template_id:
+                return template
+        raise self.host.orchestrator_error_cls(
+            f"runtime registration template not found for candidate: {normalized_template_id}"
+        )
+
+    @staticmethod
+    def _candidate_runtime_registration_templates(
+        candidate_entry: SubagentCatalogEntry,
+    ) -> list[SubagentRuntimeRegistrationTemplate]:
+        templates: list[SubagentRuntimeRegistrationTemplate] = []
+        seen_ids: set[str] = set()
+        for template in list(candidate_entry.runtime_registration_templates or []):
+            if not isinstance(template, SubagentRuntimeRegistrationTemplate):
+                continue
+            normalized_id = str(template.template_id).strip()
+            if not normalized_id or normalized_id in seen_ids:
+                continue
+            templates.append(template)
+            seen_ids.add(normalized_id)
+        openapi_hints = OrchestratorSubagentDiscoveryAdminSupport._candidate_openapi_hints(candidate_entry)
+        template_id = str(openapi_hints.get("template_id") or "").strip()
+        operation_id = str(openapi_hints.get("operation_id") or "").strip()
+        if not operation_id:
+            operation_id = OrchestratorSubagentDiscoveryAdminSupport._derive_single_openapi_operation_id(
+                openapi_hints.get("spec")
+            )
+        source_id = str(openapi_hints.get("source_id") or "").strip()
+        spec_uri = str(openapi_hints.get("spec_uri") or "").strip()
+        if operation_id:
+            normalized_id = template_id or f"openapi:{operation_id}"
+            if normalized_id not in seen_ids:
+                defaults: dict[str, Any] = {"openapi_operation_id": operation_id}
+                if source_id:
+                    defaults["source_id"] = source_id
+                if spec_uri:
+                    defaults["openapi_spec_uri"] = spec_uri
+                templates.append(
+                    SubagentRuntimeRegistrationTemplate(
+                        template_id=normalized_id,
+                        registration_type="openapi_http_runner",
+                        summary=f"OpenAPI runtime alias for operation {operation_id}",
+                        defaults=defaults,
+                        notes=["generated_from_openapi_hints"],
+                    )
+                )
+        return templates
+
+    @staticmethod
+    def _derive_single_openapi_operation_id(spec: object) -> str:
+        if not isinstance(spec, dict):
+            return ""
+        operation_ids: list[str] = []
+        for path_item in dict(spec.get("paths") or {}).values():
+            if not isinstance(path_item, dict):
+                continue
+            for method_name, operation in path_item.items():
+                normalized_method = str(method_name or "").strip().upper()
+                if normalized_method not in {"GET", "POST"} or not isinstance(operation, dict):
+                    continue
+                operation_id = str(operation.get("operationId") or "").strip()
+                if operation_id:
+                    operation_ids.append(operation_id)
+        unique_ids = sorted({item for item in operation_ids if item})
+        if len(unique_ids) == 1:
+            return unique_ids[0]
+        return ""
+
+    @staticmethod
+    def _normalize_runtime_registration_templates(
+        candidate_entry: SubagentCatalogEntry,
+    ) -> SubagentCatalogEntry:
+        templates = OrchestratorSubagentDiscoveryAdminSupport._candidate_runtime_registration_templates(candidate_entry)
+        return candidate_entry.model_copy(
+            update={"runtime_registration_templates": templates},
+            deep=True,
+        )
 
     def _resolve_openapi_runtime_registration(
         self,

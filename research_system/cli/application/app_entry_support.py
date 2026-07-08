@@ -70,6 +70,7 @@ def execute_app_main_command(
         activated_by=getattr(args, "activated_by", None),
         delegate_subagent_type=getattr(args, "delegate_subagent_type", None),
         candidate_subagent_type=getattr(args, "candidate_subagent_type", None),
+        registration_template_id=getattr(args, "registration_template_id", None),
         registration_type=getattr(args, "registration_type", None),
         skill_name=getattr(args, "skill_name", None),
         snapshot_type=getattr(args, "snapshot_type", None),
