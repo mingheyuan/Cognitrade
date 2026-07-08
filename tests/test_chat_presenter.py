@@ -434,6 +434,29 @@ class ChatPresenterTests(unittest.TestCase):
         self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "action_phase_hybrid_applied")
         self.assertEqual(trace_payload["dynamic_trace"][0]["final_action_node_id"], "review")
 
+    def test_presenter_accumulates_action_phase_llm_events_into_dynamic_trace(self) -> None:
+        presenter = ChatStreamPresenter()
+
+        presenter.on_event(
+            _event(
+                event_type="action_phase_llm_applied",
+                phase="supervision",
+                agent="supervisor",
+                payload={
+                    "rule_action_node_id": "screen_review",
+                    "final_action_node_id": "retrieve",
+                    "override_action": True,
+                    "request_replan": False,
+                },
+            )
+        )
+
+        trace_payload = presenter.current_trace_payload()
+        self.assertIsNotNone(trace_payload)
+        self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "action_phase_llm_applied")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["final_action_node_id"], "retrieve")
+
     def test_presenter_accumulates_live_events_payload_from_runtime_events(self) -> None:
         presenter = ChatStreamPresenter()
 

@@ -45,7 +45,7 @@ class ActionPhaseLLMShadowPolicy:
     def clear_runtime(self) -> None:
         self._runtime_binding = None
 
-    def observe(
+    def suggest(
         self,
         *,
         plan: ActionPlan,
@@ -113,9 +113,7 @@ class ActionPhaseLLMShadowPolicy:
                 payload={"intent": plan.intent, "strategy": "action_phase_shadow_policy"},
             )
             return None
-        actual_action = actual_decision.next_actions[0] if actual_decision.next_actions else None
-        actual_request_replan = self._decision_requests_replan(actual_decision)
-        payload = {
+        return {
             "event": "action_phase_shadow_suggested",
             "intent": plan.intent,
             "policy_source": "llm_shadow",
@@ -124,17 +122,48 @@ class ActionPhaseLLMShadowPolicy:
             "reason": suggestion.reason,
             "confidence": suggestion.confidence,
             "notes": list(suggestion.notes or []),
-            "actual_action_node_id": actual_action.node_id if actual_action is not None else None,
-            "actual_request_replan": actual_request_replan,
-            "action_match": (
-                suggestion.selected_action_node_id == actual_action.node_id
-                if actual_action is not None and suggestion.selected_action_node_id
-                else suggestion.selected_action_node_id is None and actual_action is None
-            ),
-            "replan_match": bool(suggestion.request_replan) == actual_request_replan,
             "candidate_action_node_ids": [action.node_id for action in candidate_actions],
             "completed_actions": list(completed_actions),
             "blackboard_view": prompt_payload["blackboard_view"],
+        }
+
+    def observe(
+        self,
+        *,
+        plan: ActionPlan,
+        completed_actions: list[str],
+        pending_actions: list[ActionSpec],
+        blackboard_entries: list[BlackboardEntry],
+        actual_decision: SupervisorDecision,
+        shadow_payload: dict | None = None,
+    ) -> dict | None:
+        runtime_binding = dict(self._runtime_binding or {})
+        context = runtime_binding.get("context")
+        support = runtime_binding.get("support")
+        request_id = str(runtime_binding.get("request_id") or "")
+        if context is None or support is None or not request_id:
+            return None
+        payload = shadow_payload or self.suggest(
+            plan=plan,
+            completed_actions=completed_actions,
+            pending_actions=pending_actions,
+            blackboard_entries=blackboard_entries,
+            actual_decision=actual_decision,
+        )
+        if not isinstance(payload, dict):
+            return None
+        actual_action = actual_decision.next_actions[0] if actual_decision.next_actions else None
+        actual_request_replan = self._decision_requests_replan(actual_decision)
+        payload = {
+            **dict(payload),
+            "actual_action_node_id": actual_action.node_id if actual_action is not None else None,
+            "actual_request_replan": actual_request_replan,
+            "action_match": (
+                payload.get("selected_action_node_id") == actual_action.node_id
+                if actual_action is not None and payload.get("selected_action_node_id")
+                else payload.get("selected_action_node_id") is None and actual_action is None
+            ),
+            "replan_match": bool(payload.get("request_replan")) == actual_request_replan,
         }
         context.action_phase_shadow_suggestions.append(dict(payload))
         context.dynamic_trace.append(dict(payload))
@@ -157,6 +186,7 @@ class ActionPhaseLLMShadowPolicy:
             return False
         if not (
             bool(getattr(self.settings, "supervisor_shadow_llm_enabled", False))
+            or bool(getattr(self.settings, "supervisor_llm_policy_enabled", False))
             or bool(getattr(self.settings, "supervisor_hybrid_llm_enabled", False))
         ):
             return False

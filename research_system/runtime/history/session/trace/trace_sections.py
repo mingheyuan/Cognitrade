@@ -53,6 +53,7 @@ class SessionHistoryTraceSections:
                 and not event_type.startswith("subagent_phase_shadow_")
                 and not event_type.startswith("subagent_phase_llm_")
                 and not event_type.startswith("subagent_phase_hybrid_")
+                and not event_type.startswith("action_phase_llm_")
                 and not event_type.startswith("action_phase_hybrid_")
                 and not event_type.startswith("action_phase_shadow_")
             ):

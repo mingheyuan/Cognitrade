@@ -353,6 +353,40 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
         finally:
             temp_dir.cleanup()
 
+    def test_debug_payload_includes_action_phase_llm_decisions(self) -> None:
+        temp_dir, _settings, context, request = _build_runtime()
+        try:
+            context.action_phase_llm_decisions.append(
+                {
+                    "event": "action_phase_llm_applied",
+                    "final_action_node_id": "review",
+                    "override_action": True,
+                    "request_replan": True,
+                }
+            )
+
+            payload = OrchestratorDebugSupport().build_debug_payload(
+                context=context,
+                request=request,
+                plan=ActionPlan(intent="review_thesis", actions=[]),
+                plan_intent="review_thesis",
+                retrieval_summary=None,
+            )
+
+            self.assertEqual(
+                payload["action_phase_llm_decisions"],
+                [
+                    {
+                        "event": "action_phase_llm_applied",
+                        "final_action_node_id": "review",
+                        "override_action": True,
+                        "request_replan": True,
+                    }
+                ],
+            )
+        finally:
+            temp_dir.cleanup()
+
 
 if __name__ == "__main__":
     unittest.main()

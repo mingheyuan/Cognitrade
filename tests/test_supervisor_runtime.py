@@ -63,6 +63,26 @@ class _HybridProviderStub:
         )
 
 
+class _LLMReplanSuppressProviderStub:
+    available = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def parse(self, **kwargs):
+        self.calls += 1
+        schema = kwargs["schema"]
+        return schema.model_validate(
+            {
+                "selected_action_node_id": "retrieve",
+                "request_replan": False,
+                "reason": "retrieval can proceed without inserting review",
+                "confidence": 0.93,
+                "notes": ["llm_suppress_screen_review_replan"],
+            }
+        )
+
+
 def _blackboard_entry(
     *,
     kind: str,
@@ -239,6 +259,116 @@ class SupervisorRuntimeTests(unittest.TestCase):
                 self.assertEqual(decision.next_actions[0].node_id, "review")
                 self.assertEqual(len(runtime.context.action_phase_shadow_suggestions), 1)
                 self.assertEqual(len(runtime.context.action_phase_hybrid_decisions), 1)
+
+    def test_supervisor_llm_policy_can_override_rule_frontier_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.supervisor_shadow_llm_enabled = False
+            settings.supervisor_llm_policy_enabled = True
+            settings.supervisor_llm_policy_min_confidence = 0.8
+            settings.max_llm_calls_per_turn = 2
+            provider = _HybridProviderStub()
+            supervisor = RuntimeSupervisor(llm_provider=provider, settings=settings)
+            request = RequestEnvelope(user_query="decide next action", request_id="req_llm")
+            plan = ActionPlan(
+                intent="methodology_evolution",
+                actions=[
+                    ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever"),
+                    ActionSpec(node_id="review", phase="review", agent="reviewer"),
+                ],
+            )
+
+            with bind_local_runtime(
+                supervisor,
+                request=request,
+                intent="methodology_evolution",
+                phase="supervision",
+                runs_root=settings.runs_root,
+                max_llm_calls_per_turn=2,
+            ) as runtime:
+                decision = supervisor.decide(
+                    plan=plan,
+                    completed_actions=[],
+                    pending_actions=[plan.actions[0], plan.actions[1]],
+                    blackboard_entries=[],
+                )
+
+                self.assertEqual(provider.calls, 1)
+                self.assertEqual(decision.next_actions[0].node_id, "review")
+                self.assertIsNotNone(decision.plan_patch)
+                self.assertEqual(decision.plan_patch.policy_source, "llm")
+                self.assertEqual(len(runtime.context.action_phase_shadow_suggestions), 1)
+                self.assertEqual(len(runtime.context.action_phase_llm_decisions), 1)
+                self.assertEqual(len(runtime.context.action_phase_hybrid_decisions), 0)
+                llm_row = runtime.context.action_phase_llm_decisions[0]
+                self.assertEqual(llm_row["rule_action_node_id"], "retrieve")
+                self.assertEqual(llm_row["final_action_node_id"], "review")
+                self.assertTrue(llm_row["override_action"])
+                self.assertTrue(llm_row["override_replan"])
+
+    def test_supervisor_llm_policy_can_suppress_rule_replan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.supervisor_shadow_llm_enabled = False
+            settings.supervisor_llm_policy_enabled = True
+            settings.supervisor_llm_policy_min_confidence = 0.8
+            settings.max_llm_calls_per_turn = 2
+            provider = _LLMReplanSuppressProviderStub()
+            supervisor = RuntimeSupervisor(llm_provider=provider, settings=settings)
+            request = RequestEnvelope(user_query="screen growth stocks", request_id="req_llm_suppress")
+            plan = ActionPlan(
+                intent="stock_screen",
+                actions=[
+                    ActionSpec(node_id="collect", phase="collect", agent="collector"),
+                    ActionSpec(node_id="screen", phase="screen", agent="screener", depends_on=["collect"]),
+                    ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever", depends_on=["screen"]),
+                    ActionSpec(node_id="report", phase="report", agent="reporter", depends_on=["retrieve"]),
+                ],
+            )
+            scorecard_entry = _blackboard_entry(
+                kind="source_record",
+                agent="screener",
+                phase="screen",
+                request_id="req_llm_suppress",
+                payload={
+                    "title": "screening_scorecard",
+                    "content": "{}",
+                    "source_type": "screening_scorecard",
+                    "scorecard": {
+                        "top_candidate_count": 1,
+                        "watchlist_candidate_count": 0,
+                        "enrichment_target_count": 0,
+                        "enrichment_pending": False,
+                    },
+                },
+            )
+
+            with bind_local_runtime(
+                supervisor,
+                request=request,
+                intent="stock_screen",
+                phase="supervision",
+                runs_root=settings.runs_root,
+                max_llm_calls_per_turn=2,
+            ) as runtime:
+                decision = supervisor.decide(
+                    plan=plan,
+                    completed_actions=["collect", "screen"],
+                    pending_actions=[plan.actions[2], plan.actions[3]],
+                    blackboard_entries=[scorecard_entry],
+                )
+
+                self.assertEqual(provider.calls, 1)
+                self.assertEqual(decision.next_actions[0].node_id, "retrieve")
+                self.assertIsNone(decision.plan_patch)
+                self.assertEqual(len(runtime.context.action_phase_shadow_suggestions), 1)
+                self.assertEqual(len(runtime.context.action_phase_llm_decisions), 1)
+                llm_row = runtime.context.action_phase_llm_decisions[0]
+                self.assertEqual(llm_row["rule_action_node_id"], "screen_review")
+                self.assertEqual(llm_row["final_action_node_id"], "retrieve")
+                self.assertFalse(llm_row["final_request_replan"])
 
     def test_supervisor_shadow_policy_respects_runtime_execution_policy_budget(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

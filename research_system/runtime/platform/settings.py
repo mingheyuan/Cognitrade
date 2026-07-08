@@ -44,6 +44,8 @@ class Settings(BaseModel):
     max_child_threads_per_turn: int = 8
     supervisor_shadow_llm_enabled: bool = False
     supervisor_shadow_llm_reasoning_effort: str = "low"
+    supervisor_llm_policy_enabled: bool = False
+    supervisor_llm_policy_min_confidence: float = 0.7
     supervisor_hybrid_llm_enabled: bool = False
     supervisor_hybrid_llm_min_confidence: float = 0.7
     subagent_phase_shadow_llm_enabled: bool = False
@@ -115,6 +117,8 @@ class Settings(BaseModel):
             raise ValueError("max_child_threads_per_turn must be positive")
         if self.supervisor_hybrid_llm_min_confidence < 0 or self.supervisor_hybrid_llm_min_confidence > 1:
             raise ValueError("supervisor_hybrid_llm_min_confidence must be between 0 and 1")
+        if self.supervisor_llm_policy_min_confidence < 0 or self.supervisor_llm_policy_min_confidence > 1:
+            raise ValueError("supervisor_llm_policy_min_confidence must be between 0 and 1")
         if self.subagent_phase_hybrid_llm_min_confidence < 0 or self.subagent_phase_hybrid_llm_min_confidence > 1:
             raise ValueError("subagent_phase_hybrid_llm_min_confidence must be between 0 and 1")
         if self.subagent_phase_llm_policy_min_confidence < 0 or self.subagent_phase_llm_policy_min_confidence > 1:
