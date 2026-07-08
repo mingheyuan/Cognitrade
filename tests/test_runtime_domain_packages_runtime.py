@@ -30,21 +30,37 @@ from research_system.runtime.history import (
 )
 from research_system.runtime.orchestration import (
     OrchestratorSubagentDiscoveryAdminSupport,
+    SUPPORTED_RUNTIME_MATERIALIZATION_TYPES,
     SUPPORTED_RUNTIME_REGISTRATION_TYPES,
+    SUPPORTED_RUNTIME_REGISTRATION_BUILDER_TYPES,
     SUPPORTED_RUNTIME_TEMPLATE_TYPES,
     SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES,
     SUPPORTED_RUNTIME_VALIDATION_TYPES,
     SubagentDiscoveryStore,
+    SubagentRuntimeMaterializationSupport,
     SubagentRuntimePackagingSupport,
+    SubagentRuntimeRegistrationBuilderSupport,
     SubagentRuntimeTemplateSupport,
     SubagentRuntimeSourceResolutionSupport,
     SubagentRuntimeValidationSupport,
+)
+from research_system.runtime.orchestration.subagent_runtime_materialization import (
+    SUPPORTED_RUNTIME_MATERIALIZATION_TYPES as MaterializationTypes,
+)
+from research_system.runtime.orchestration.subagent_runtime_materialization import (
+    SubagentRuntimeMaterializationSupport as MaterializationSupportImpl,
 )
 from research_system.runtime.orchestration.subagent_runtime_packaging import (
     SUPPORTED_RUNTIME_REGISTRATION_TYPES as PackagingRuntimeRegistrationTypes,
 )
 from research_system.runtime.orchestration.subagent_runtime_packaging import (
     SubagentRuntimePackagingSupport as PackagingSupportImpl,
+)
+from research_system.runtime.orchestration.subagent_runtime_registration_builder import (
+    SUPPORTED_RUNTIME_REGISTRATION_BUILDER_TYPES as RegistrationBuilderTypes,
+)
+from research_system.runtime.orchestration.subagent_runtime_registration_builder import (
+    SubagentRuntimeRegistrationBuilderSupport as RegistrationBuilderSupportImpl,
 )
 from research_system.runtime.orchestration.subagent_runtime_templates import (
     SUPPORTED_RUNTIME_TEMPLATE_TYPES as TemplateTypes,
@@ -171,8 +187,16 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
             OrchestratorSubagentDiscoveryAdminSupport,
         )
         self.assertIs(
+            orchestration_package.SubagentRuntimeMaterializationSupport,
+            SubagentRuntimeMaterializationSupport,
+        )
+        self.assertIs(
             orchestration_package.SubagentRuntimePackagingSupport,
             SubagentRuntimePackagingSupport,
+        )
+        self.assertIs(
+            orchestration_package.SubagentRuntimeRegistrationBuilderSupport,
+            SubagentRuntimeRegistrationBuilderSupport,
         )
         self.assertIs(
             orchestration_package.SubagentRuntimeTemplateSupport,
@@ -191,8 +215,16 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
             SubagentDiscoveryStore,
         )
         self.assertIs(
+            SubagentRuntimeMaterializationSupport,
+            MaterializationSupportImpl,
+        )
+        self.assertIs(
             SubagentRuntimePackagingSupport,
             PackagingSupportImpl,
+        )
+        self.assertIs(
+            SubagentRuntimeRegistrationBuilderSupport,
+            RegistrationBuilderSupportImpl,
         )
         self.assertIs(
             SubagentRuntimeTemplateSupport,
@@ -205,6 +237,22 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
         self.assertIs(
             SUPPORTED_RUNTIME_REGISTRATION_TYPES,
             PackagingRuntimeRegistrationTypes,
+        )
+        self.assertIs(
+            orchestration_package.SUPPORTED_RUNTIME_MATERIALIZATION_TYPES,
+            SUPPORTED_RUNTIME_MATERIALIZATION_TYPES,
+        )
+        self.assertIs(
+            SUPPORTED_RUNTIME_MATERIALIZATION_TYPES,
+            MaterializationTypes,
+        )
+        self.assertIs(
+            orchestration_package.SUPPORTED_RUNTIME_REGISTRATION_BUILDER_TYPES,
+            SUPPORTED_RUNTIME_REGISTRATION_BUILDER_TYPES,
+        )
+        self.assertIs(
+            SUPPORTED_RUNTIME_REGISTRATION_BUILDER_TYPES,
+            RegistrationBuilderTypes,
         )
         self.assertIs(
             orchestration_package.SUPPORTED_RUNTIME_TEMPLATE_TYPES,
@@ -244,6 +292,20 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
         self.assertEqual(
             support.registration_types(),
             SUPPORTED_RUNTIME_REGISTRATION_TYPES,
+        )
+
+    def test_runtime_materialization_support_reports_complete_handler_registry(self) -> None:
+        support = SubagentRuntimeMaterializationSupport()
+        self.assertEqual(
+            support.materialization_types(),
+            SUPPORTED_RUNTIME_MATERIALIZATION_TYPES,
+        )
+
+    def test_runtime_registration_builder_support_reports_complete_handler_registry(self) -> None:
+        support = SubagentRuntimeRegistrationBuilderSupport()
+        self.assertEqual(
+            support.builder_types(),
+            SUPPORTED_RUNTIME_REGISTRATION_BUILDER_TYPES,
         )
 
     def test_runtime_template_support_reports_complete_handler_registry(self) -> None:

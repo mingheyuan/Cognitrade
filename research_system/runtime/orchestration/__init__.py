@@ -23,12 +23,16 @@ __all__ = [
     "OrchestratorRunTerminalSupport",
     "OrchestratorRuntimeIoSupport",
     "OrchestratorSubagentDiscoveryAdminSupport",
+    "SubagentRuntimeMaterializationSupport",
     "SubagentRuntimePackagingSupport",
+    "SubagentRuntimeRegistrationBuilderSupport",
     "SubagentRuntimeTemplateSupport",
     "SubagentRuntimeSourceResolutionSupport",
     "SubagentRuntimeValidationSupport",
     "SubagentDiscoveryStore",
+    "SUPPORTED_RUNTIME_MATERIALIZATION_TYPES",
     "SUPPORTED_RUNTIME_REGISTRATION_TYPES",
+    "SUPPORTED_RUNTIME_REGISTRATION_BUILDER_TYPES",
     "SUPPORTED_RUNTIME_TEMPLATE_TYPES",
     "SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES",
     "SUPPORTED_RUNTIME_VALIDATION_TYPES",
@@ -87,9 +91,17 @@ _EXPORTS = {
         "research_system.runtime.orchestration.subagent_discovery_admin_support",
         "OrchestratorSubagentDiscoveryAdminSupport",
     ),
+    "SubagentRuntimeMaterializationSupport": (
+        "research_system.runtime.orchestration.subagent_runtime_materialization",
+        "SubagentRuntimeMaterializationSupport",
+    ),
     "SubagentRuntimePackagingSupport": (
         "research_system.runtime.orchestration.subagent_runtime_packaging",
         "SubagentRuntimePackagingSupport",
+    ),
+    "SubagentRuntimeRegistrationBuilderSupport": (
+        "research_system.runtime.orchestration.subagent_runtime_registration_builder",
+        "SubagentRuntimeRegistrationBuilderSupport",
     ),
     "SubagentRuntimeTemplateSupport": (
         "research_system.runtime.orchestration.subagent_runtime_templates",
@@ -107,6 +119,14 @@ _EXPORTS = {
     "SUPPORTED_RUNTIME_REGISTRATION_TYPES": (
         "research_system.runtime.orchestration.subagent_runtime_packaging",
         "SUPPORTED_RUNTIME_REGISTRATION_TYPES",
+    ),
+    "SUPPORTED_RUNTIME_MATERIALIZATION_TYPES": (
+        "research_system.runtime.orchestration.subagent_runtime_materialization",
+        "SUPPORTED_RUNTIME_MATERIALIZATION_TYPES",
+    ),
+    "SUPPORTED_RUNTIME_REGISTRATION_BUILDER_TYPES": (
+        "research_system.runtime.orchestration.subagent_runtime_registration_builder",
+        "SUPPORTED_RUNTIME_REGISTRATION_BUILDER_TYPES",
     ),
     "SUPPORTED_RUNTIME_TEMPLATE_TYPES": (
         "research_system.runtime.orchestration.subagent_runtime_templates",
