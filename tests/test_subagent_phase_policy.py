@@ -95,18 +95,19 @@ class SubagentPhasePolicyTests(unittest.TestCase):
             ["insert_review_summary_builder", "insert_review_candidate_nodes"],
         )
 
-    def test_screen_reviewer_patch_handles_empty_candidates(self) -> None:
-        patch = ScreenReviewerPhasePolicy().build_screen_review_patch(
-            candidate_nodes=[],
-            summary_node=_node(node_id="screen_review_summary_builder", subagent_type="screen_review_summary_builder"),
+    def test_screen_reviewer_replan_patch_tracks_candidate_count(self) -> None:
+        patch = ScreenReviewerPhasePolicy().build_screen_review_replan_patch(
+            candidate_count=0,
         )
 
         self.assertIsNotNone(patch)
+        self.assertEqual(str(patch.decision_type), "replan")
         self.assertEqual(len(list(patch.operations or [])), 1)
-        self.assertEqual(str(patch.operations[0].node.node_id), "screen_review_summary_builder")
+        self.assertEqual(str(patch.operations[0].op_type), "request_replan")
+        self.assertEqual(str((patch.operations[0].metadata or {}).get("candidate_count") or ""), "0")
         self.assertEqual(
             list(patch.notes or []),
-            ["insert_screen_review_summary_builder", "no_screen_review_candidate_nodes"],
+            ["replan_screen_review_graph_from_strategy", "no_screen_review_candidate_nodes"],
         )
 
 

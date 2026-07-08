@@ -100,7 +100,11 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
                 scorecard=scorecard,
                 planning_context_hints=planning_context_hints,
             ),
-            patch_builder=lambda _base_results: self._build_screen_review_subagent_plan_patch(
+            patch_builder=lambda _base_results: self._build_screen_review_subagent_replan_patch(
+                candidates=candidates,
+            ),
+            replan_builder=lambda current_plan, _patch, _base_results: self._rebuild_screen_review_subagent_plan(
+                plan=current_plan,
                 source_run_id=source_run_id,
                 candidates=candidates,
             ),
@@ -194,12 +198,22 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
             },
         )
 
-    def _build_screen_review_subagent_plan_patch(
+    def _build_screen_review_subagent_replan_patch(
         self,
         *,
-        source_run_id: str,
         candidates: list[dict],
     ) -> SubagentGraphPatch:
+        return self.phase_policy.build_screen_review_replan_patch(
+            candidate_count=len(candidates),
+        )
+
+    def _rebuild_screen_review_subagent_plan(
+        self,
+        *,
+        plan: SubagentPlan,
+        source_run_id: str,
+        candidates: list[dict],
+    ) -> SubagentPlan:
         candidate_entry = self._select_screen_review_catalog_entry(
             capability="screen_review_candidate",
             preferred_subagent_type="screen_review_candidate",
@@ -234,10 +248,31 @@ class ScreenReviewerService(RuntimeBoundSubagentInvoker):
             cache_key="screen_review_summary_builder",
             notes=["phase=postprocess"],
         )
-        return self.phase_policy.build_screen_review_patch(
-            candidate_nodes=candidate_nodes,
-            summary_node=summary_node,
+        replanned = plan.model_copy(deep=True)
+        replanned.nodes = [node.model_copy(deep=True) for node in plan.nodes] + [*candidate_nodes, summary_node]
+        replanned.notes = self._unique_notes(
+            [
+                *list(replanned.notes or []),
+                "screen_review_graph_replanned_from_strategy",
+                f"screen_review_candidate_count={len(candidates)}",
+            ]
         )
+        replanned.catalog_trace = {
+            **dict(replanned.catalog_trace or {}),
+            "replanned_from_strategy": True,
+            "candidate_execution_enabled": bool(candidate_nodes),
+        }
+        return replanned
+
+    @staticmethod
+    def _unique_notes(notes: list[str]) -> list[str]:
+        unique: list[str] = []
+        for note in notes:
+            normalized = str(note or "").strip()
+            if not normalized or normalized in unique:
+                continue
+            unique.append(normalized)
+        return unique
 
     def _execute_subagent_plan(
         self,

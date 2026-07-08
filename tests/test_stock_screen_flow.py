@@ -247,7 +247,7 @@ class StockScreenFlowTests(unittest.TestCase):
             for patch in list(payload.get("subagent_plan_patches") or [])
             for operation in list((patch or {}).get("operations") or [])
         ]
-        self.assertIn("insert_subagent", patch_op_types)
+        self.assertIn("request_replan", patch_op_types)
 
     def test_screener_local_run_scope_records_agent_item(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

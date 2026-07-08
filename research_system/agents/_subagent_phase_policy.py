@@ -253,6 +253,22 @@ class ReviewerPhasePolicy(SubagentPhaseRulePolicy):
 
 
 class ScreenReviewerPhasePolicy(SubagentPhaseRulePolicy):
+    def build_screen_review_replan_patch(
+        self,
+        *,
+        candidate_count: int,
+    ) -> SubagentGraphPatch:
+        notes = ["replan_screen_review_graph_from_strategy"]
+        if candidate_count <= 0:
+            notes.append("no_screen_review_candidate_nodes")
+        else:
+            notes.append(f"screen_review_candidate_count={candidate_count}")
+        return self.build_replan_patch(
+            reason="screen_review_preprocess_completed",
+            notes=notes,
+            metadata={"candidate_count": str(candidate_count)},
+        )
+
     def build_screen_review_patch(
         self,
         *,
