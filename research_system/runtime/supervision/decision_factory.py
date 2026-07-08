@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from research_system.schemas.planning import ActionSpec, SupervisorDecision
+from research_system.schemas.planning import (
+    ActionPlanPatch,
+    ActionPlanPatchOperation,
+    ActionSpec,
+    SupervisorDecision,
+)
 
 
 class SupervisorDecisionFactory:
@@ -20,12 +25,14 @@ class SupervisorDecisionFactory:
         action: ActionSpec,
         completed_actions: list[str],
         notes: list[str] | None = None,
+        plan_patch: ActionPlanPatch | None = None,
     ) -> SupervisorDecision:
         return SupervisorDecision(
             decision_type="continue",
             next_actions=[action],
             completed_action_ids=completed_actions,
             notes=list(notes or []),
+            plan_patch=plan_patch,
         )
 
     def stop_with(
@@ -33,11 +40,54 @@ class SupervisorDecisionFactory:
         *,
         completed_actions: list[str],
         notes: list[str] | None = None,
+        plan_patch: ActionPlanPatch | None = None,
     ) -> SupervisorDecision:
         return SupervisorDecision(
             decision_type="stop",
             completed_action_ids=completed_actions,
             notes=list(notes or []),
+            plan_patch=plan_patch,
+        )
+
+    def build_patch(
+        self,
+        *,
+        notes: list[str],
+        operations: list[ActionPlanPatchOperation],
+        confidence: float = 1.0,
+        policy_source: str = "rule",
+    ) -> ActionPlanPatch | None:
+        if not operations:
+            return None
+        return ActionPlanPatch(
+            policy_source=policy_source,
+            confidence=confidence,
+            notes=list(notes),
+            operations=list(operations),
+        )
+
+    @staticmethod
+    def insert_action(*, action: ActionSpec, reason: str) -> ActionPlanPatchOperation:
+        return ActionPlanPatchOperation(
+            op_type="insert_action",
+            action=action,
+            reason=reason,
+        )
+
+    @staticmethod
+    def rewire_dependency(
+        *,
+        target_node_id: str,
+        new_depends_on: list[str] | None = None,
+        remove_depends_on: list[str] | None = None,
+        reason: str,
+    ) -> ActionPlanPatchOperation:
+        return ActionPlanPatchOperation(
+            op_type="rewire_dependency",
+            target_node_id=target_node_id,
+            new_depends_on=list(new_depends_on or []),
+            remove_depends_on=list(remove_depends_on or []),
+            reason=reason,
         )
 
     def screen_review_action(self, *, plan, existing: ActionSpec | None) -> ActionSpec:

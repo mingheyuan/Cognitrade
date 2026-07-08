@@ -44,19 +44,42 @@ class SupervisorStockScreenSupport:
                 plan=plan,
                 existing=pending_by_id.get("screen_enrich"),
             )
-            for plan_action in plan.actions:
-                if plan_action.node_id == "retrieve":
-                    plan_action.depends_on = ["screen_enrich"]
-                elif plan_action.node_id == "screen_review":
-                    plan_action.depends_on = ["screen_enrich"]
-            if "retrieve" in pending_by_id:
-                pending_by_id["retrieve"].depends_on = ["screen_enrich"]
-            if "screen_review" in pending_by_id:
-                pending_by_id["screen_review"].depends_on = ["screen_enrich"]
+            patch_operations = []
+            if enrich_action.node_id not in {action.node_id for action in plan.actions}:
+                patch_operations.append(
+                    self.decision_factory.insert_action(
+                        action=enrich_action,
+                        reason="insert screening enrichment before downstream retrieval",
+                    )
+                )
+            patch_operations.append(
+                self.decision_factory.rewire_dependency(
+                    target_node_id="retrieve",
+                    new_depends_on=["screen_enrich"],
+                    remove_depends_on=["screen"],
+                    reason="route retrieval through screen enrichment when deeper checks are pending",
+                )
+            )
+            if any(action.node_id == "screen_review" for action in plan.actions):
+                patch_operations.append(
+                    self.decision_factory.rewire_dependency(
+                        target_node_id="screen_review",
+                        new_depends_on=["screen_enrich"],
+                        remove_depends_on=["screen"],
+                        reason="route screen review through screen enrichment when deeper checks are pending",
+                    )
+                )
             return self.decision_factory.continue_with(
                 action=enrich_action,
                 completed_actions=completed_actions,
                 notes=["insert screening enrichment before review/retrieval when deep checks are still missing"],
+                plan_patch=self.decision_factory.build_patch(
+                    notes=[
+                        "insert_screen_enrich_before_retrieval",
+                        "rewire_retrieve_to_screen_enrich",
+                    ],
+                    operations=patch_operations,
+                ),
             )
 
         if (
@@ -70,10 +93,22 @@ class SupervisorStockScreenSupport:
                 plan=plan,
                 existing=pending_by_id.get("screen_review"),
             )
+            plan_patch = None
+            if review_action.node_id not in {action.node_id for action in plan.actions}:
+                plan_patch = self.decision_factory.build_patch(
+                    notes=["insert_screen_review_after_screening"],
+                    operations=[
+                        self.decision_factory.insert_action(
+                            action=review_action,
+                            reason="insert screen reviewer dynamically after screening",
+                        )
+                    ],
+                )
             return self.decision_factory.continue_with(
                 action=review_action,
                 completed_actions=completed_actions,
                 notes=["insert screen reviewer dynamically after screening"],
+                plan_patch=plan_patch,
             )
 
         if "retrieve" not in completed_actions and "retrieve" in pending_by_id:

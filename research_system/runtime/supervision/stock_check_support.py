@@ -33,10 +33,22 @@ class SupervisorStockCheckSupport:
                 missing_snapshot_types=view.missing_snapshot_types,
             )
             if replenish_action.node_id not in completed_actions and replenish_action.node_id not in pending_by_id:
+                plan_patch = None
+                if replenish_action.node_id not in {action.node_id for action in pending_actions}:
+                    plan_patch = self.decision_factory.build_patch(
+                        notes=["insert_stock_check_replenish_action"],
+                        operations=[
+                            self.decision_factory.insert_action(
+                                action=replenish_action,
+                                reason="insert replenishment collect action for missing stock snapshots",
+                            )
+                        ],
+                    )
                 return self.decision_factory.continue_with(
                     action=replenish_action,
                     completed_actions=completed_actions,
                     notes=[f"replenish missing stock snapshots: {','.join(view.missing_snapshot_types)}"],
+                    plan_patch=plan_patch,
                 )
 
         if "retrieve" not in completed_actions and "retrieve" in pending_by_id:

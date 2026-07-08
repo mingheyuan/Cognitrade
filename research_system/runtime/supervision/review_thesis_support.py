@@ -37,10 +37,22 @@ class SupervisorReviewThesisSupport:
                 plan=plan,
                 existing=pending_by_id.get("review"),
             )
+            plan_patch = None
+            if review_action.node_id not in {action.node_id for action in plan.actions}:
+                plan_patch = self.decision_factory.build_patch(
+                    notes=["insert_review_action_after_collection"],
+                    operations=[
+                        self.decision_factory.insert_action(
+                            action=review_action,
+                            reason="insert posterior review once review target and snapshots are ready",
+                        )
+                    ],
+                )
             return self.decision_factory.continue_with(
                 action=review_action,
                 completed_actions=completed_actions,
                 notes=["insert posterior review dynamically once review target and snapshots are ready"],
+                plan_patch=plan_patch,
             )
 
         if "retrieve" not in completed_actions and "retrieve" in pending_by_id:

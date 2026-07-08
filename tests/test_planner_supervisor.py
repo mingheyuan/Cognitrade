@@ -304,6 +304,11 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertEqual(decision.next_actions[0].node_id, "screen_review")
         self.assertEqual(decision.next_actions[0].agent, "screen_reviewer")
         self.assertEqual(decision.next_actions[0].inputs, {})
+        self.assertIsNotNone(decision.plan_patch)
+        self.assertEqual(
+            [operation.op_type for operation in list(decision.plan_patch.operations if decision.plan_patch else [])],
+            ["insert_action"],
+        )
 
     def test_supervisor_inserts_screen_enrich_before_review_and_retrieval_when_scorecard_pending(self) -> None:
         planner = RuntimePlanner()
@@ -342,7 +347,15 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertEqual(decision.next_actions[0].node_id, "screen_enrich")
         self.assertEqual(decision.next_actions[0].agent, "screener")
         retrieve_action = next(action for action in plan.actions if action.node_id == "retrieve")
-        self.assertEqual(retrieve_action.depends_on, ["screen_enrich"])
+        self.assertEqual(retrieve_action.depends_on, ["screen"])
+        self.assertIsNotNone(decision.plan_patch)
+        self.assertEqual(
+            [operation.op_type for operation in list(decision.plan_patch.operations if decision.plan_patch else [])],
+            ["insert_action", "rewire_dependency"],
+        )
+        rewire_operation = list(decision.plan_patch.operations if decision.plan_patch else [])[1]
+        self.assertEqual(rewire_operation.target_node_id, "retrieve")
+        self.assertEqual(rewire_operation.new_depends_on, ["screen_enrich"])
 
     def test_screen_review_action_depends_on_screen_enrich_when_present(self) -> None:
         planner = RuntimePlanner()
@@ -387,6 +400,11 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertEqual(decision.decision_type, "continue")
         self.assertEqual(decision.next_actions[0].node_id, "screen_review")
         self.assertEqual(decision.next_actions[0].depends_on, ["screen_enrich"])
+        self.assertIsNotNone(decision.plan_patch)
+        self.assertEqual(
+            [operation.op_type for operation in list(decision.plan_patch.operations if decision.plan_patch else [])],
+            ["insert_action"],
+        )
 
     def test_supervisor_passes_context_hints_into_dynamic_screen_review_action(self) -> None:
         planner = RuntimePlanner()
@@ -476,6 +494,11 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertEqual(decision.next_actions[0].node_id, "review")
         self.assertEqual(decision.next_actions[0].agent, "reviewer")
         self.assertEqual(decision.next_actions[0].inputs, {})
+        self.assertIsNotNone(decision.plan_patch)
+        self.assertEqual(
+            [operation.op_type for operation in list(decision.plan_patch.operations if decision.plan_patch else [])],
+            ["insert_action"],
+        )
 
     def test_supervisor_inserts_stock_check_replenish_when_notice_missing(self) -> None:
         planner = RuntimePlanner()
@@ -529,6 +552,11 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertEqual(decision.next_actions[0].agent, "collector")
         self.assertIn("replenish", decision.next_actions[0].tags)
         self.assertEqual(decision.next_actions[0].inputs["snapshot_types"], ["notice"])
+        self.assertIsNotNone(decision.plan_patch)
+        self.assertEqual(
+            [operation.op_type for operation in list(decision.plan_patch.operations if decision.plan_patch else [])],
+            ["insert_action"],
+        )
 
     def test_supervisor_inserts_sector_replenish_when_critical_sector_evidence_missing(self) -> None:
         planner = RuntimePlanner()
@@ -576,6 +604,11 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertEqual(
             decision.next_actions[0].inputs["missing_evidence"],
             ["policy_signals", "regulatory_signals", "relative_strength"],
+        )
+        self.assertIsNotNone(decision.plan_patch)
+        self.assertEqual(
+            [operation.op_type for operation in list(decision.plan_patch.operations if decision.plan_patch else [])],
+            ["insert_action"],
         )
 
 

@@ -7,8 +7,9 @@ from research_system.runtime.execution.core.dag_scheduler import ActionDagSchedu
 from research_system.runtime.orchestration.orchestrator_context import RuntimeContext
 from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.runtime.storage.runs.action_cache_store import ActionCacheStore
+from research_system.runtime.supervision.action_plan_patch import apply_action_plan_patch
 from research_system.schemas.runtime import BlackboardEntry
-from research_system.schemas.planning import ActionPlan, ActionSpec
+from research_system.schemas.planning import ActionPlan, ActionPlanPatch, ActionSpec
 from research_system.schemas.protocol import RequestEnvelope
 
 
@@ -111,6 +112,18 @@ class OrchestratorPlanExecutor:
                 pending_actions=ready_actions[:],
                 blackboard_entries=context.blackboard.list_entries(thread_id=context.thread.thread_id),
             )
+            applied_plan_patch_rows = self._apply_plan_patch_if_needed(
+                context=context,
+                request=request,
+                plan=plan,
+                pending_actions=pending_actions,
+                plan_patch=decision.plan_patch,
+            )
+            ready_actions = self.dag_scheduler.ready_actions(
+                pending_actions=pending_actions,
+                completed_node_ids=completed_node_ids,
+                skipped_node_ids=skipped_node_ids,
+            )
             self._emit_supervisor_decision(
                 context=context,
                 request=request,
@@ -119,6 +132,7 @@ class OrchestratorPlanExecutor:
                 skipped_node_ids=skipped_node_ids,
                 next_actions=decision.next_actions,
                 notes=decision.notes,
+                plan_patch_rows=applied_plan_patch_rows,
             )
             if not pending_actions:
                 self.host._update_state(
@@ -263,6 +277,7 @@ class OrchestratorPlanExecutor:
         skipped_node_ids: list[str],
         next_actions: list[ActionSpec],
         notes: list[str],
+        plan_patch_rows: list[dict[str, Any]],
     ) -> None:
         action_id_by_node_id = {
             action.node_id: action.action_id
@@ -293,6 +308,8 @@ class OrchestratorPlanExecutor:
                     for action in next_actions
                 ],
                 "notes": notes,
+                "plan_patch": plan_patch_rows[0] if len(plan_patch_rows) == 1 else plan_patch_rows,
+                "plan_patch_count": len(plan_patch_rows),
             },
         )
 
@@ -578,6 +595,59 @@ class OrchestratorPlanExecutor:
             plan.actions.append(action)
             write_json(context.paths.task_plan, plan.model_dump(mode="json"))
         pending_actions.append(action)
+        self._emit_dynamic_action_inserted(
+            context=context,
+            request=request,
+            plan=plan,
+            action=action,
+        )
+
+    def _apply_plan_patch_if_needed(
+        self,
+        *,
+        context: RuntimeContext,
+        request: RequestEnvelope,
+        plan: ActionPlan,
+        pending_actions: list[ActionSpec],
+        plan_patch: ActionPlanPatch | None,
+    ) -> list[dict[str, Any]]:
+        if plan_patch is None:
+            return []
+        updated_plan = apply_action_plan_patch(plan, plan_patch)
+        inserted_node_ids = {
+            operation.action.node_id
+            for operation in plan_patch.operations
+            if operation.op_type == "insert_action" and operation.action is not None
+        }
+        plan.actions = [action.model_copy(deep=True) for action in updated_plan.actions]
+        plan.notes = list(updated_plan.notes or [])
+        plan.dispatch_trace = dict(updated_plan.dispatch_trace or {})
+        pending_node_ids = {action.node_id for action in pending_actions}
+        pending_actions[:] = [
+            action.model_copy(deep=True)
+            for action in plan.actions
+            if action.node_id in pending_node_ids or action.node_id in inserted_node_ids
+        ]
+        write_json(context.paths.task_plan, plan.model_dump(mode="json"))
+        for action in plan.actions:
+            if action.node_id not in inserted_node_ids:
+                continue
+            self._emit_dynamic_action_inserted(
+                context=context,
+                request=request,
+                plan=plan,
+                action=action,
+            )
+        return [plan_patch.model_dump(mode="json")]
+
+    def _emit_dynamic_action_inserted(
+        self,
+        *,
+        context: RuntimeContext,
+        request: RequestEnvelope,
+        plan: ActionPlan,
+        action: ActionSpec,
+    ) -> None:
         context.dynamic_trace.append(
             {
                 "event": "dynamic_action_inserted",
