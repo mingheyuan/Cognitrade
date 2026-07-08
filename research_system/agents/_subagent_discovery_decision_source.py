@@ -5,11 +5,13 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from research_system.schemas.subagents import (
+    SubagentActivationEntry,
     SubagentCatalogEntry,
     SubagentCapabilityGap,
     SubagentDiscoveryCandidateRecommendation,
     SubagentDiscoveryReviewEvent,
     SubagentDiscoveryTicket,
+    SubagentRuntimeRegistration,
     SubagentToolDiscoveryRequest,
 )
 
@@ -153,10 +155,13 @@ class SubagentDiscoveryActivationStageDecision:
     intent: str | None
     stage: str | None
     capability: str
-    policy_source: Literal["rule"] = "rule"
+    policy_source: Literal["rule", "explicit"] = "rule"
     activate: bool = False
     candidate_subagent_type: str | None = None
     registration_template_id: str | None = None
+    delegate_subagent_type: str | None = None
+    runtime_registration: SubagentRuntimeRegistration | None = None
+    activated_by: str | None = None
     reason: str = "discovery_auto_activation_disabled"
     notes: list[str] = field(default_factory=list)
 
@@ -172,6 +177,8 @@ class SubagentDiscoveryActivationStageDecision:
             "activation_outcome": activation_outcome,
             "candidate_subagent_type": self.candidate_subagent_type,
             "registration_template_id": self.registration_template_id,
+            "delegate_subagent_type": self.delegate_subagent_type,
+            "activated_by": self.activated_by,
             "reason": self.reason,
             "notes": list(self.notes),
         }
@@ -414,6 +421,56 @@ class SubagentDiscoveryDecisionSource:
             ],
         )
 
+    def build_manual_activation(
+        self,
+        *,
+        ticket: SubagentDiscoveryTicket,
+        candidate_entry: SubagentCatalogEntry,
+        delegate_subagent_type: str | None,
+        runtime_registration: SubagentRuntimeRegistration | None,
+        activated_by: str,
+        reason: str | None = None,
+    ) -> SubagentDiscoveryActivationStageDecision:
+        return SubagentDiscoveryActivationStageDecision(
+            ticket_id=ticket.ticket_id,
+            intent=ticket.capability_gap.intent,
+            stage=ticket.capability_gap.stage,
+            capability=ticket.capability_gap.capability,
+            policy_source="explicit",
+            activate=True,
+            candidate_subagent_type=str(candidate_entry.subagent_type or "").strip() or None,
+            registration_template_id=(
+                str(runtime_registration.registration_template_id or "").strip() or None
+                if runtime_registration is not None
+                else None
+            ),
+            delegate_subagent_type=str(delegate_subagent_type or "").strip() or None,
+            runtime_registration=runtime_registration,
+            activated_by=str(activated_by or "manual_cli_activation").strip() or "manual_cli_activation",
+            reason=str(
+                reason
+                or f"activate_{str(candidate_entry.subagent_type or '').strip()}_via_cli"
+            ),
+            notes=[
+                "activated_from_approved_discovery_ticket",
+                *(
+                    [f"delegate_subagent_type={str(delegate_subagent_type).strip()}"]
+                    if str(delegate_subagent_type or "").strip()
+                    else []
+                ),
+                *(
+                    [f"runtime_registration_type={runtime_registration.registration_type}"]
+                    if runtime_registration is not None
+                    else []
+                ),
+                *(
+                    [f"runtime_registration_template_id={runtime_registration.registration_template_id}"]
+                    if runtime_registration is not None and runtime_registration.registration_template_id
+                    else []
+                ),
+            ],
+        )
+
     @staticmethod
     def apply_candidate_selection(
         *,
@@ -456,6 +513,31 @@ class SubagentDiscoveryDecisionSource:
                 notes.append(note)
         ticket.notes = notes
         return previous_status
+
+    @staticmethod
+    def apply_activation(
+        *,
+        ticket: SubagentDiscoveryTicket,
+        activation_decision: SubagentDiscoveryActivationStageDecision,
+        candidate_entry: SubagentCatalogEntry,
+    ) -> tuple[SubagentActivationEntry | None, bool]:
+        requested_type = str(activation_decision.candidate_subagent_type or "").strip()
+        for existing in list(ticket.activated_entries or []):
+            if str(existing.subagent_type).strip() == requested_type:
+                return existing, False
+        activation_entry = SubagentActivationEntry(
+            ticket_id=ticket.ticket_id,
+            subagent_type=str(candidate_entry.subagent_type).strip(),
+            delegate_subagent_type=activation_decision.delegate_subagent_type,
+            runtime_registration=activation_decision.runtime_registration,
+            catalog_entry=candidate_entry,
+            activated_by=activation_decision.activated_by,
+            activation_reason=activation_decision.reason,
+            notes=list(activation_decision.notes or []),
+        )
+        ticket.activated_entries.append(activation_entry)
+        ticket.updated_at = datetime.now(timezone.utc)
+        return activation_entry, True
 
     @classmethod
     def _selected_protocol(cls, *, ticket: SubagentDiscoveryTicket) -> str | None:

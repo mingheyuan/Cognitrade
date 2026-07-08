@@ -226,6 +226,115 @@ class SubagentDiscoveryDecisionSourceTests(unittest.TestCase):
                 "candidate_collect_market_snapshot_skill",
             )
 
+    def test_decision_source_can_apply_manual_activation_to_ticket(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = Settings.from_env(root)
+            ensure_workspace_layout(settings)
+            settings.skill_sources_path.write_text(
+                "\n".join(
+                    [
+                        "sources:",
+                        "  - skill_name: market_snapshot_skill",
+                        "    registration_type: snapshot_skill_runner",
+                        "    summary: Collect market snapshot through local runtime.",
+                        "    snapshot_type: market",
+                        "    capabilities: [market_signal_extension]",
+                        "    suitable_intents: [stock_check]",
+                        "    stage: collect",
+                        "    candidate_subagent_type: candidate_collect_market_snapshot_skill",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            store = SubagentDiscoveryStore(root / "discovery")
+            host = type(
+                "_Host",
+                (),
+                {
+                    "settings": settings,
+                    "llm_provider": None,
+                    "emit_event": None,
+                    "runtime_binding_getter": lambda self: {},
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_source_registry": lambda self: SkillSourceRegistry(settings=settings),
+                    "require_skill_runtime": lambda self: SimpleNamespace(
+                        backend=SimpleNamespace(registry={"market_snapshot_skill": object()})
+                    ),
+                },
+            )()
+            decision_source = SubagentDiscoveryDecisionSource(
+                discovery_policy=SubagentDiscoveryPolicyService(settings=settings),
+                discovery_llm_policy_source=SubagentDiscoveryLLMPolicySource(
+                    shadow_policy=SubagentDiscoveryLLMShadowPolicy(settings=settings),
+                    settings=settings,
+                ),
+                discovery_candidate_policy=SubagentDiscoveryCandidatePolicyService(settings=settings),
+                discovery_approval_policy=SubagentDiscoveryApprovalPolicyService(settings=settings),
+                discovery_activation_policy=SubagentDiscoveryActivationPolicyService(settings=settings),
+            )
+            candidate_support = SubagentDiscoveryCandidateSupport(host)
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                preferred_subagent_type="candidate_collect_market_snapshot_skill",
+                reason="missing market signal extension capability",
+            )
+
+            protocol_decision = decision_source.resolve_protocols(gap=gap)
+            ticket = store.create_request(gap=gap, request=protocol_decision.request)
+            candidate_result = decision_source.select_candidate(
+                ticket=ticket,
+                candidate_entries=candidate_support.candidate_entries(ticket),
+            )
+            decision_source.apply_candidate_selection(
+                ticket=ticket,
+                candidate_result=candidate_result,
+            )
+            review_decision = decision_source.build_manual_review(
+                ticket=ticket,
+                decision="approve",
+                reviewer="tester",
+                reason="manual approval for activation",
+            )
+            decision_source.apply_review(
+                ticket=ticket,
+                review_decision=review_decision,
+            )
+            candidate_entry = ticket.candidate_catalog_entries[0]
+            activation_decision = decision_source.build_manual_activation(
+                ticket=ticket,
+                candidate_entry=candidate_entry,
+                delegate_subagent_type="collector_delegate",
+                runtime_registration=None,
+                activated_by="tester",
+                reason="activate explicit delegate alias",
+            )
+            activation_entry, created = decision_source.apply_activation(
+                ticket=ticket,
+                activation_decision=activation_decision,
+                candidate_entry=candidate_entry,
+            )
+            duplicate_entry, duplicate_created = decision_source.apply_activation(
+                ticket=ticket,
+                activation_decision=activation_decision,
+                candidate_entry=candidate_entry,
+            )
+
+            self.assertTrue(created)
+            self.assertIsNotNone(activation_entry)
+            self.assertEqual(activation_decision.policy_source, "explicit")
+            self.assertEqual(
+                activation_entry.delegate_subagent_type,
+                "collector_delegate",
+            )
+            self.assertEqual(len(ticket.activated_entries), 1)
+            self.assertFalse(duplicate_created)
+            self.assertEqual(duplicate_entry.activation_id, activation_entry.activation_id)
+
 
 if __name__ == "__main__":
     unittest.main()

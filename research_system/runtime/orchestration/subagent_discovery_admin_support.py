@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from research_system.agents._subagent_discovery_decision_source import (
     SubagentDiscoveryDecisionSource,
 )
@@ -24,7 +22,6 @@ from research_system.runtime.orchestration._subagent_discovery_candidate_policy 
     SubagentDiscoveryCandidatePolicyService,
 )
 from research_system.schemas.subagents import (
-    SubagentActivationEntry,
     SubagentCatalogEntry,
 )
 from research_system.runtime.orchestration.subagent_discovery_candidate_sources import (
@@ -190,33 +187,27 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             raise self.host.orchestrator_error_cls(
                 "activation requires exactly one of delegate_subagent_type or runtime registration"
             )
-        for existing in ticket.activated_entries:
-            if str(existing.subagent_type).strip() == str(candidate_entry.subagent_type).strip():
-                current = self.show_request(ticket.ticket_id)
-                return {
-                    "ticket_id": ticket.ticket_id,
-                    "status": ticket.status,
-                    "message": f"activation already exists for {candidate_entry.subagent_type}",
-                    "result": current,
-                }
-        ticket.activated_entries.append(
-            SubagentActivationEntry(
-                ticket_id=ticket.ticket_id,
-                subagent_type=candidate_entry.subagent_type,
-                delegate_subagent_type=normalized_delegate_subagent_type,
-                runtime_registration=runtime_registration,
-                catalog_entry=candidate_entry,
-                activated_by=activated_by,
-                activation_reason=str(reason or f"activate_{candidate_entry.subagent_type}_via_cli"),
-                notes=[
-                    "activated_from_approved_discovery_ticket",
-                    *( [f"delegate_subagent_type={normalized_delegate_subagent_type}"] if normalized_delegate_subagent_type else [] ),
-                    *( [f"runtime_registration_type={runtime_registration.registration_type}"] if runtime_registration else [] ),
-                    *( [f"runtime_registration_template_id={runtime_registration.registration_template_id}"] if runtime_registration and runtime_registration.registration_template_id else [] ),
-                ],
-            )
+        activation_decision = self.discovery_decision_source.build_manual_activation(
+            ticket=ticket,
+            candidate_entry=candidate_entry,
+            delegate_subagent_type=normalized_delegate_subagent_type,
+            runtime_registration=runtime_registration,
+            activated_by=activated_by,
+            reason=reason,
         )
-        ticket.updated_at = datetime.now(timezone.utc)
+        _activation_entry, created = self.discovery_decision_source.apply_activation(
+            ticket=ticket,
+            activation_decision=activation_decision,
+            candidate_entry=candidate_entry,
+        )
+        if not created:
+            current = self.show_request(ticket.ticket_id)
+            return {
+                "ticket_id": ticket.ticket_id,
+                "status": ticket.status,
+                "message": f"activation already exists for {candidate_entry.subagent_type}",
+                "result": current,
+            }
         self.host.require_subagent_discovery_store().save(ticket, previous_status=previous_status)
         activation_message = (
             f"activated discovery runtime alias {candidate_entry.subagent_type}"
