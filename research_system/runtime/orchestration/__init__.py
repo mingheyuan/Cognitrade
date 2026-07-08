@@ -25,9 +25,11 @@ __all__ = [
     "OrchestratorSubagentDiscoveryAdminSupport",
     "SubagentRuntimePackagingSupport",
     "SubagentRuntimeSourceResolutionSupport",
+    "SubagentRuntimeValidationSupport",
     "SubagentDiscoveryStore",
     "SUPPORTED_RUNTIME_REGISTRATION_TYPES",
     "SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES",
+    "SUPPORTED_RUNTIME_VALIDATION_TYPES",
     "OrchestratorSubagentBridge",
     "ProgressService",
     "ResearchOrchestrator",
@@ -91,6 +93,10 @@ _EXPORTS = {
         "research_system.runtime.orchestration.subagent_runtime_source_resolution",
         "SubagentRuntimeSourceResolutionSupport",
     ),
+    "SubagentRuntimeValidationSupport": (
+        "research_system.runtime.orchestration.subagent_runtime_validation",
+        "SubagentRuntimeValidationSupport",
+    ),
     "SubagentDiscoveryStore": ("research_system.runtime.orchestration.subagent_discovery_store", "SubagentDiscoveryStore"),
     "SUPPORTED_RUNTIME_REGISTRATION_TYPES": (
         "research_system.runtime.orchestration.subagent_runtime_packaging",
@@ -99,6 +105,10 @@ _EXPORTS = {
     "SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES": (
         "research_system.runtime.orchestration.subagent_runtime_source_resolution",
         "SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES",
+    ),
+    "SUPPORTED_RUNTIME_VALIDATION_TYPES": (
+        "research_system.runtime.orchestration.subagent_runtime_validation",
+        "SUPPORTED_RUNTIME_VALIDATION_TYPES",
     ),
     "OrchestratorSubagentBridge": ("research_system.runtime.orchestration.orchestrator_subagent_bridge", "OrchestratorSubagentBridge"),
     "ProgressService": ("research_system.runtime.orchestration.progress_service", "ProgressService"),

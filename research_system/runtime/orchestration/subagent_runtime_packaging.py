@@ -7,6 +7,9 @@ from research_system.adapters.vendors.data_source_registry import DataSourceRegi
 from research_system.runtime.orchestration.subagent_runtime_source_resolution import (
     SubagentRuntimeSourceResolutionSupport,
 )
+from research_system.runtime.orchestration.subagent_runtime_validation import (
+    SubagentRuntimeValidationSupport,
+)
 from research_system.schemas.subagent_runtime_registration import SUPPORTED_RUNTIME_REGISTRATION_TYPES
 from research_system.schemas.subagent_runtime_registration_hints import runtime_registration_hint_payload
 from research_system.schemas.subagents import (
@@ -65,6 +68,7 @@ class SubagentRuntimePackagingSupport:
         self.host = host
         self._handlers = {handler.registration_type: handler for handler in _RUNTIME_REGISTRATION_HANDLERS}
         self.source_resolution = SubagentRuntimeSourceResolutionSupport(host)
+        self.validation_support = SubagentRuntimeValidationSupport(host)
 
     def normalize_candidate_entry(self, candidate_entry: SubagentCatalogEntry) -> SubagentCatalogEntry:
         return candidate_entry.model_copy(
@@ -320,16 +324,14 @@ class SubagentRuntimePackagingSupport:
         snapshot_type: str,
         **_ignored: Any,
     ) -> SubagentRuntimeRegistration:
-        normalized_stage = str(candidate_entry.stage or "").strip().lower()
-        if normalized_stage not in {"", "collect"}:
-            raise self.host.orchestrator_error_cls(
-                f"snapshot_skill_runner activation is only supported for collect-stage candidates: {candidate_entry.subagent_type}"
-            )
-        if not skill_name:
-            raise self.host.orchestrator_error_cls("skill_name is required for snapshot_skill_runner activation")
+        validation_notes = self.validation_support.validate_registration(
+            registration_type="snapshot_skill_runner",
+            candidate_entry=candidate_entry,
+            skill_name=skill_name,
+            snapshot_type=snapshot_type,
+        )
         if not snapshot_type:
             raise self.host.orchestrator_error_cls("snapshot_type is required for snapshot_skill_runner activation")
-        self._validate_skill_name(skill_name)
         return SubagentRuntimeRegistration(
             registration_type="snapshot_skill_runner",
             skill_name=skill_name,
@@ -337,7 +339,7 @@ class SubagentRuntimePackagingSupport:
             registration_template_id=template.template_id if template is not None else None,
             notes=[
                 *([f"registration_template_id={template.template_id}"] if template is not None else []),
-                "validated_via_skill_runtime_registry",
+                *validation_notes,
             ],
         )
 
@@ -349,18 +351,18 @@ class SubagentRuntimePackagingSupport:
         skill_name: str,
         **_ignored: Any,
     ) -> SubagentRuntimeRegistration:
-        if not skill_name:
-            raise self.host.orchestrator_error_cls("skill_name is required for skill_runner activation")
-        self._validate_runtime_contract(candidate_entry, registration_type="skill_runner")
-        self._validate_skill_name(skill_name)
+        validation_notes = self.validation_support.validate_registration(
+            registration_type="skill_runner",
+            candidate_entry=candidate_entry,
+            skill_name=skill_name,
+        )
         return SubagentRuntimeRegistration(
             registration_type="skill_runner",
             skill_name=skill_name,
             registration_template_id=template.template_id if template is not None else None,
             notes=[
                 *([f"registration_template_id={template.template_id}"] if template is not None else []),
-                "validated_via_skill_runtime_registry",
-                "validated_runtime_contract_schema",
+                *validation_notes,
             ],
         )
 
@@ -383,7 +385,10 @@ class SubagentRuntimePackagingSupport:
             http_method=http_method,
             openapi_hints={},
         )
-        self._validate_runtime_contract(candidate_entry, registration_type="http_json_runner")
+        validation_notes = self.validation_support.validate_registration(
+            registration_type="http_json_runner",
+            candidate_entry=candidate_entry,
+        )
         return SubagentRuntimeRegistration(
             registration_type="http_json_runner",
             source_id=resolved_source["source_id"],
@@ -395,7 +400,7 @@ class SubagentRuntimePackagingSupport:
                 *([f"registration_template_id={template.template_id}"] if template is not None else []),
                 "validated_via_data_source_registry",
                 "validated_http_json_endpoint",
-                "validated_runtime_contract_schema",
+                *validation_notes,
             ],
         )
 
@@ -418,7 +423,10 @@ class SubagentRuntimePackagingSupport:
             openapi_operation_id=openapi_operation_id,
             openapi_hints=self._candidate_openapi_hints(candidate_entry),
         )
-        self._validate_runtime_contract(candidate_entry, registration_type="openapi_http_runner")
+        validation_notes = self.validation_support.validate_registration(
+            registration_type="openapi_http_runner",
+            candidate_entry=candidate_entry,
+        )
         return SubagentRuntimeRegistration(
             registration_type="openapi_http_runner",
             source_id=resolved_openapi["source_id"],
@@ -431,7 +439,7 @@ class SubagentRuntimePackagingSupport:
             notes=[
                 *([f"registration_template_id={template.template_id}"] if template is not None else []),
                 "validated_via_openapi_operation_spec",
-                "validated_runtime_contract_schema",
+                *validation_notes,
             ],
         )
 
@@ -527,36 +535,6 @@ class SubagentRuntimePackagingSupport:
             defaults=defaults,
             notes=["generated_from_openapi_hints"],
         )
-
-    def _validate_skill_name(self, skill_name: str) -> None:
-        runtime = self.host.require_skill_runtime()
-        registry = getattr(getattr(runtime, "backend", None), "registry", None)
-        if not isinstance(registry, dict):
-            raise self.host.orchestrator_error_cls("skill_runtime registry is not available for validation")
-        if skill_name not in registry:
-            raise self.host.orchestrator_error_cls(f"unknown skill_name for runtime registration: {skill_name}")
-
-    def _validate_runtime_contract(self, candidate_entry: SubagentCatalogEntry, *, registration_type: str) -> None:
-        input_schema = candidate_entry.input_json_schema
-        output_schema = candidate_entry.output_json_schema
-        if not self._is_object_contract_schema(input_schema):
-            raise self.host.orchestrator_error_cls(
-                f"{registration_type} activation requires input_json_schema on candidate: {candidate_entry.subagent_type}"
-            )
-        if not self._is_object_contract_schema(output_schema):
-            raise self.host.orchestrator_error_cls(
-                f"{registration_type} activation requires output_json_schema on candidate: {candidate_entry.subagent_type}"
-            )
-
-    @staticmethod
-    def _is_object_contract_schema(schema: object) -> bool:
-        if not isinstance(schema, dict):
-            return False
-        normalized_type = str(schema.get("type") or "").strip().lower()
-        properties = schema.get("properties")
-        if normalized_type and normalized_type != "object":
-            return False
-        return isinstance(properties, dict)
 
     @staticmethod
     def _candidate_openapi_hints(candidate_entry: SubagentCatalogEntry) -> dict[str, Any]:
