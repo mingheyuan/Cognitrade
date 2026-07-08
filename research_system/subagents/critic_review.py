@@ -71,6 +71,21 @@ class CriticSummaryBuilderInputModel(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class CriticStrategyResolverInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    distillation_summary: CriticDistillationSummaryInputModel | None = None
+    logic_blocks: list[CriticLogicBlockInputItemModel] = Field(default_factory=list)
+    distilled_dimensions: list[CriticDimensionInputItemModel] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class CriticStrategyResolverOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    review_strategy: dict[str, object] = Field(default_factory=dict)
+
+
 class CriticSummaryBuilderOutputModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -274,6 +289,54 @@ class DimensionCriticSubagent:
                 )
         return {
             "findings": [finding.model_dump(mode="json") for finding in findings],
+        }
+
+
+class CriticStrategyResolverSubagent:
+    subagent_type = "critic_strategy_resolver"
+    input_model = CriticStrategyResolverInputModel
+    output_model = CriticStrategyResolverOutputModel
+    runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Resolve critic-review execution strategy from distillation artifacts.",
+        capabilities=("critic_strategy", "critic_review"),
+        stage="review",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("distill_kol_logic", "critic_review"),
+        tags=("deterministic", "preprocess"),
+    )
+
+    def run(
+        self,
+        *,
+        distillation_summary: CriticDistillationSummaryInputModel | None,
+        logic_blocks: list[CriticLogicBlockInputItemModel],
+        distilled_dimensions: list[CriticDimensionInputItemModel],
+        notes: list[str],
+    ) -> dict:
+        summary_risks = list((distillation_summary.major_risks if distillation_summary else []) or [])
+        include_logic_block_review = bool(logic_blocks)
+        include_dimension_review = bool(distilled_dimensions or logic_blocks)
+        review_mode = "full_parallel" if include_logic_block_review or include_dimension_review else "summary_only"
+        strategy_notes: list[str] = []
+        if summary_risks:
+            strategy_notes.append(f"summary_risk_count={len(summary_risks)}")
+        if not include_logic_block_review:
+            strategy_notes.append("skip_logic_block_review")
+        if not include_dimension_review:
+            strategy_notes.append("skip_dimension_review")
+        if notes:
+            strategy_notes.extend(str(item) for item in notes[:3] if str(item).strip())
+        return {
+            "review_strategy": {
+                "review_mode": review_mode,
+                "include_summary_risk_review": True,
+                "include_logic_block_review": include_logic_block_review,
+                "include_dimension_review": include_dimension_review,
+                "notes": strategy_notes,
+            }
         }
 
 

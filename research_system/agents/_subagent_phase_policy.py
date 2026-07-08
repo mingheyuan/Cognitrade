@@ -257,6 +257,36 @@ class DistillerPhasePolicy(SubagentPhaseRulePolicy):
         )
 
 
+class CriticPhasePolicy(SubagentPhaseRulePolicy):
+    def build_critic_replan_patch(
+        self,
+        *,
+        review_mode: str,
+        include_logic_block_review: bool,
+        include_dimension_review: bool,
+        summary_risk_count: int,
+    ) -> SubagentGraphPatch:
+        notes = [
+            "replan_critic_review_graph_from_strategy",
+            f"review_mode={review_mode}",
+            f"summary_risk_count={summary_risk_count}",
+        ]
+        if not include_logic_block_review:
+            notes.append("skip_logic_block_review")
+        if not include_dimension_review:
+            notes.append("skip_dimension_review")
+        return self.build_replan_patch(
+            reason="critic_review_strategy_resolved",
+            notes=notes,
+            metadata={
+                "review_mode": review_mode,
+                "include_logic_block_review": str(bool(include_logic_block_review)).lower(),
+                "include_dimension_review": str(bool(include_dimension_review)).lower(),
+                "summary_risk_count": str(summary_risk_count),
+            },
+        )
+
+
 class ReviewerPhasePolicy(SubagentPhaseRulePolicy):
     def build_review_replan_patch(
         self,
@@ -353,6 +383,7 @@ class ScreenReviewerPhasePolicy(SubagentPhaseRulePolicy):
 
 
 __all__ = [
+    "CriticPhasePolicy",
     "DistillerPhasePolicy",
     "ReporterPhasePolicy",
     "ReviewerPhasePolicy",

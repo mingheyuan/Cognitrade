@@ -88,7 +88,11 @@ def build_orchestrator_dependencies(settings: Settings) -> OrchestratorDependenc
         skill_runtime=skill_runtime,
         collector=CollectorService(skill_runtime, settings.runs_root),
         distiller=DistillerService(llm_provider, settings, settings.runs_root),
-        critic=CriticService(settings.runs_root),
+        critic=CriticService(
+            settings.runs_root,
+            llm_provider=llm_provider,
+            settings=settings,
+        ),
         reviewer=ReviewerService(
             yaml_configs.get("review_policy"),
             settings.runs_root,

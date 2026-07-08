@@ -116,14 +116,15 @@ def run_critic(
         phase=phase,
         payload={
             **critic_payload,
-            "subagent_trace": [
+            "subagent_trace": list(critic_payload.get("subagent_trace") or [])
+            or [
                 {
                     "subagent_type": "critic_review_pipeline",
                     "status": "completed",
                     "objective": "Review distillation risks and build scorecard.",
                     "notes": list((critic_payload.get("summary") or {}).get("notes") or []),
                 }
-            ]
+            ],
         },
     )
     summary = critic_payload.get("summary") or {}
