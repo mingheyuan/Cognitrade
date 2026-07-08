@@ -15,7 +15,7 @@ from research_system.schemas.distillation import (
     DistilledDimension,
     LogicBlock,
 )
-from research_system.subagents.base import SubagentRuntimePolicy
+from research_system.subagents.base import SubagentCatalogMetadata, SubagentRuntimePolicy
 
 
 class DistillSourceNormalizerInputModel(BaseModel):
@@ -97,6 +97,16 @@ class DistillSourceNormalizerSubagent:
     input_model = DistillSourceNormalizerInputModel
     output_model = DistillSourceNormalizerOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Normalize distillation inputs and expand structured source file references into source records.",
+        capabilities=("source_normalization", "source_record_loading"),
+        stage="distill",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="read_only",
+        suitable_intents=("distill_kol_logic",),
+        tags=("deterministic", "preprocess"),
+    )
 
     def __init__(self, *, extract_source_path: Callable[[str], Path | None]) -> None:
         self.extract_source_path = extract_source_path
@@ -181,6 +191,16 @@ class DistillRecordTrimmerSubagent:
     input_model = DistillRecordTrimmerInputModel
     output_model = DistillRecordTrimmerOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Trim ranked source records into a bounded distillation set before chunking.",
+        capabilities=("record_trimming", "distillation_preparation"),
+        stage="distill",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("distill_kol_logic",),
+        tags=("deterministic", "preprocess"),
+    )
 
     def __init__(self, *, record_rank: Callable[[DistillSourceRecord], float]) -> None:
         self.record_rank = record_rank
@@ -215,6 +235,16 @@ class DistillChunkBuilderSubagent:
     input_model = DistillChunkBuilderInputModel
     output_model = DistillChunkBuilderOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Split trimmed distillation records into chunk-sized batches for parallel processing.",
+        capabilities=("chunk_building", "parallel_chunk_preparation"),
+        stage="distill",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("distill_kol_logic",),
+        tags=("deterministic", "parallel_fanout"),
+    )
 
     def run(self, *, records: list[DistillSourceRecord], max_chunk_records: int = 3, max_chunk_chars: int = 2400) -> dict:
         chunks: list[list[DistillSourceRecord]] = []
@@ -245,6 +275,16 @@ class LLMChunkDistillerSubagent:
         error_fallback_subagent_type="fallback_chunk_distiller",
         allow_parallel=True,
         max_concurrency=4,
+    )
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Distill one chunk of source records into structured logic blocks and dimensions with an LLM.",
+        capabilities=("chunk_distillation", "llm_distillation"),
+        stage="distill",
+        cost_class="high",
+        latency_class="medium",
+        side_effect_level="none",
+        suitable_intents=("distill_kol_logic",),
+        tags=("llm", "parallel_fanout"),
     )
 
     def __init__(self, *, llm_provider: OpenAIProvider, schema: type, distillation_model: type) -> None:
@@ -282,6 +322,16 @@ class FallbackChunkDistillerSubagent:
     input_model = FallbackChunkDistillerInputModel
     output_model = DistillationEnvelopeOutputModel
     runtime_policy = SubagentRuntimePolicy(allow_parallel=True, max_concurrency=4)
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Fallback chunk distillation using deterministic heuristics when LLM distillation is unavailable.",
+        capabilities=("chunk_distillation", "fallback_distillation"),
+        stage="distill",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("distill_kol_logic",),
+        tags=("deterministic", "parallel_fanout", "fallback"),
+    )
 
     def __init__(
         self,
@@ -386,6 +436,16 @@ class ChunkResultMergerSubagent:
     input_model = ChunkResultMergerInputModel
     output_model = DistillationEnvelopeOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Merge chunk-level distillation outputs into one run-level distillation result.",
+        capabilities=("distillation_merge", "result_synthesis"),
+        stage="distill",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("distill_kol_logic",),
+        tags=("deterministic", "postprocess"),
+    )
 
     def __init__(
         self,

@@ -60,6 +60,7 @@ def run_distiller(
         agent="distiller",
         phase=phase,
         payload={
+            **payload,
             "subagent_trace": [
                 {
                     "subagent_type": "distillation_pipeline",
@@ -114,6 +115,7 @@ def run_critic(
         agent="critic",
         phase=phase,
         payload={
+            **critic_payload,
             "subagent_trace": [
                 {
                     "subagent_type": "critic_review_pipeline",

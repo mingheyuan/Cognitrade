@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from research_system.runtime.execution.handlers.dataflow.data import run_retriever
-from research_system.runtime.execution.handlers.distillation.distillation import run_distiller
+from research_system.runtime.execution.handlers.distillation.distillation import run_critic, run_distiller
 from research_system.runtime.execution.handlers.reporting import run_reporter
 from research_system.runtime.orchestration.orchestrator_context import build_runtime_context
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
@@ -80,6 +80,8 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
                 "summary": {"processing_notes": [], "major_risks": []},
                 "logic_blocks": [],
                 "distilled_dimensions": [],
+                "subagent_plans": [{"phase": "distill"}],
+                "subagent_plan_patches": [{"patch_id": "p1"}],
             }
             support = Mock()
             support.resolve_llm_execution.return_value = Mock(can_use_llm=False, degrade_reason="turn_llm_budget_exhausted")
@@ -106,6 +108,9 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
 
             self.assertEqual(distiller.run.call_args.kwargs["execution_mode"], "fallback")
             self.assertEqual(distiller.run.call_args.kwargs["runtime_degraded_reason"], "turn_llm_budget_exhausted")
+            trace_payload = support.extend_subagent_trace.call_args.kwargs["payload"]
+            self.assertEqual(trace_payload["subagent_plans"], [{"phase": "distill"}])
+            self.assertEqual(trace_payload["subagent_plan_patches"], [{"patch_id": "p1"}])
         finally:
             temp_dir.cleanup()
 
@@ -144,6 +149,44 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
             self.assertFalse(retriever.run.call_args.kwargs["allow_llm_decision"])
             self.assertEqual(retriever.run.call_args.kwargs["runtime_degraded_reason"], "turn_llm_budget_exhausted")
             self.assertEqual(retriever.run.call_args.kwargs["search_mode"], "blackboard_only")
+        finally:
+            temp_dir.cleanup()
+
+    def test_run_critic_passes_subagent_plans_to_trace_support(self) -> None:
+        temp_dir, _settings, context, request = _build_runtime()
+        try:
+            critic = Mock()
+            critic.run.return_value = {
+                "summary": {"review_required": False, "finding_count": 0, "notes": []},
+                "scorecard": {"finding_types": []},
+                "findings": [],
+                "subagent_plans": [{"phase": "review"}],
+                "subagent_plan_patches": [],
+            }
+            support = Mock()
+            host = Mock(critic=critic)
+
+            run_critic(
+                host,
+                support,
+                context=context,
+                request=request,
+                plan=ActionPlan(intent="distill_kol_logic", actions=[]),
+                intent="distill_kol_logic",
+                action=ActionSpec(
+                    action_id="a1",
+                    node_id="n1",
+                    phase="review",
+                    agent="critic",
+                    objective="critic",
+                    inputs={},
+                ),
+                phase="review",
+            )
+
+            trace_payload = support.extend_subagent_trace.call_args.kwargs["payload"]
+            self.assertEqual(trace_payload["subagent_plans"], [{"phase": "review"}])
+            self.assertEqual(trace_payload["subagent_plan_patches"], [])
         finally:
             temp_dir.cleanup()
 

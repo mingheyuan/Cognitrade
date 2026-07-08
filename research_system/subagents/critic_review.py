@@ -5,7 +5,7 @@ from collections import Counter, defaultdict
 from pydantic import BaseModel, ConfigDict, Field
 
 from research_system.schemas.review import CriticReviewFinding, CriticReviewSummary
-from research_system.subagents.base import SubagentRuntimePolicy
+from research_system.subagents.base import SubagentCatalogMetadata, SubagentRuntimePolicy
 
 
 class CriticDistillationSummaryInputModel(BaseModel):
@@ -83,6 +83,16 @@ class SummaryRiskCriticSubagent:
     input_model = SummaryRiskCriticInputModel
     output_model = CriticFindingsOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Review run-level distillation summary risks and emit critic findings.",
+        capabilities=("summary_risk_review", "critic_review"),
+        stage="review",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("distill_kol_logic", "critic_review"),
+        tags=("deterministic", "parallel_candidate"),
+    )
 
     def run(self, *, distillation_summary: CriticDistillationSummaryInputModel | None) -> dict:
         findings: list[CriticReviewFinding] = []
@@ -121,6 +131,16 @@ class LogicBlockCriticSubagent:
     input_model = LogicBlockCriticInputModel
     output_model = CriticFindingsOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Review logic-block attribution, confidence, and duplicate-claim risks.",
+        capabilities=("logic_block_review", "critic_review"),
+        stage="review",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("distill_kol_logic", "critic_review"),
+        tags=("deterministic", "parallel_candidate"),
+    )
 
     def __init__(self, *, attribution_review_payload) -> None:
         self.attribution_review_payload = attribution_review_payload
@@ -196,6 +216,16 @@ class DimensionCriticSubagent:
     input_model = DimensionCriticInputModel
     output_model = CriticFindingsOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Review dimension coverage and confidence quality for distilled themes.",
+        capabilities=("dimension_review", "critic_review"),
+        stage="review",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("distill_kol_logic", "critic_review"),
+        tags=("deterministic", "parallel_candidate"),
+    )
 
     def run(
         self,
@@ -252,6 +282,16 @@ class CriticSummaryBuilderSubagent:
     input_model = CriticSummaryBuilderInputModel
     output_model = CriticSummaryBuilderOutputModel
     runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Build critic review summary and normalize findings into one scoreable bundle.",
+        capabilities=("critic_summary", "critic_review"),
+        stage="review",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("distill_kol_logic", "critic_review"),
+        tags=("deterministic", "postprocess"),
+    )
 
     def run(self, *, findings: list[CriticReviewFinding], notes: list[str]) -> dict:
         typed_findings = [CriticReviewFinding.model_validate(item) for item in findings]

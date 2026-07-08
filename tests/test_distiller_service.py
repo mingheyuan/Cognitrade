@@ -5,7 +5,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from research_system.agents.distiller.service import DistillerService
+from research_system.agents.distiller.service import DISTILL_EXECUTION_FALLBACK, DistillerService
 from research_system.runtime.history.session.session_history import SessionHistory
 from research_system.runtime.storage.jsonl import read_jsonl
 from research_system.runtime.providers.provider_registry import LLMProviderError
@@ -262,6 +262,72 @@ class DistillerServiceTests(unittest.TestCase):
         self.assertIn("fallback_chunks=0", result["summary"]["processing_notes"])
         self.assertTrue(any(note.startswith("child_threads=") for note in result["summary"]["processing_notes"]))
         self.assertNotIn("fallback_distillation", result["summary"]["major_risks"])
+        subagent_plans = list(result.get("subagent_plans") or [])
+        self.assertEqual(len(subagent_plans), 2)
+        self.assertEqual([plan.get("strategy") for plan in subagent_plans], ["catalog", "catalog"])
+        chunk_node_types = {
+            str(node.get("node_id") or ""): str(node.get("subagent_type") or "")
+            for node in list(subagent_plans[1].get("nodes") or [])
+        }
+        self.assertEqual(chunk_node_types.get("chunk_1"), "llm_chunk_distiller")
+        self.assertEqual(chunk_node_types.get("chunk_2"), "llm_chunk_distiller")
+        self.assertEqual(chunk_node_types.get("chunk_result_merger"), "chunk_result_merger")
+        self.assertEqual(len(list(result.get("subagent_plan_patches") or [])), 0)
+
+    def test_forced_fallback_rewrites_chunk_plan_without_llm_calls(self) -> None:
+        provider = DistillerChunkProviderStub()
+        service = DistillerService(provider)
+
+        result = service.run(
+            query="distill multi chunk records without llm",
+            source_records=[
+                {
+                    "source_id": "src-1",
+                    "title": "note-1",
+                    "content": "AI " * 150,
+                    "source_type": "inline_text",
+                },
+                {
+                    "source_id": "src-2",
+                    "title": "note-2",
+                    "content": "internet " * 150,
+                    "source_type": "inline_text",
+                },
+                {
+                    "source_id": "src-3",
+                    "title": "note-3",
+                    "content": "biotech " * 150,
+                    "source_type": "inline_text",
+                },
+                {
+                    "source_id": "src-4",
+                    "title": "note-4",
+                    "content": "export " * 150,
+                    "source_type": "inline_text",
+                },
+            ],
+            execution_mode=DISTILL_EXECUTION_FALLBACK,
+            runtime_degraded_reason="turn_llm_budget_exhausted",
+        )
+
+        self.assertEqual(provider.calls, 0)
+        self.assertTrue(result["degraded"])
+        self.assertEqual(result["degrade_reason"], "turn_llm_budget_exhausted")
+        subagent_plans = list(result.get("subagent_plans") or [])
+        self.assertEqual(len(subagent_plans), 2)
+        chunk_node_types = {
+            str(node.get("node_id") or ""): str(node.get("subagent_type") or "")
+            for node in list(subagent_plans[1].get("nodes") or [])
+        }
+        self.assertEqual(chunk_node_types.get("chunk_1"), "fallback_chunk_distiller")
+        self.assertEqual(chunk_node_types.get("chunk_2"), "fallback_chunk_distiller")
+        patch_op_types = [
+            str(operation.get("op_type") or "")
+            for patch in list(result.get("subagent_plan_patches") or [])
+            for operation in list((patch or {}).get("operations") or [])
+        ]
+        self.assertTrue(patch_op_types)
+        self.assertTrue(all(op_type == "replace_subgraph" for op_type in patch_op_types))
 
     def test_distiller_invocations_emit_nested_trace_context(self) -> None:
         provider = DistillerChunkProviderStub()
@@ -495,6 +561,12 @@ class DistillerServiceTests(unittest.TestCase):
         self.assertTrue(
             any(
                 str(row.get("task_name") or "") == "distill:preprocess:source_normalizer"
+                for row in trace_payload["dynamic_trace"]
+            )
+        )
+        self.assertTrue(
+            any(
+                str(row.get("plan_node_id") or "") == "source_normalizer"
                 for row in trace_payload["dynamic_trace"]
             )
         )

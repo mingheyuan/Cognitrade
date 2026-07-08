@@ -52,6 +52,17 @@ class CriticServiceTests(unittest.TestCase):
         self.assertIn("duplicate_claim_cluster", finding_types)
         self.assertIn("scorecard", result)
         self.assertIn("speaker_type_counts", result["scorecard"])
+        subagent_plans = list(result.get("subagent_plans") or [])
+        self.assertEqual(len(subagent_plans), 1)
+        review_node_types = {
+            str(node.get("node_id") or ""): str(node.get("subagent_type") or "")
+            for node in list(subagent_plans[0].get("nodes") or [])
+        }
+        self.assertEqual(review_node_types.get("summary_risk_critic"), "summary_risk_critic")
+        self.assertEqual(review_node_types.get("logic_block_critic"), "logic_block_critic")
+        self.assertEqual(review_node_types.get("dimension_critic"), "dimension_critic")
+        self.assertEqual(review_node_types.get("critic_summary_builder"), "critic_summary_builder")
+        self.assertEqual(list(result.get("subagent_plan_patches") or []), [])
 
     def test_critic_differentiates_reply_repost_and_reported_attribution(self) -> None:
         service = CriticService()

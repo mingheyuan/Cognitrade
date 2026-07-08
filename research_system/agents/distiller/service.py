@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,7 +25,14 @@ from research_system.schemas.distillation import (
     SourceSpan,
 )
 from research_system.services.methodologies.dimensions import DimensionNormalizer
-from research_system.schemas.subagents import SubagentInvocation
+from research_system.schemas.subagents import (
+    SubagentCatalogEntry,
+    SubagentGraphPatch,
+    SubagentGraphPatchOperation,
+    SubagentInvocation,
+    SubagentPlan,
+    SubagentPlanNode,
+)
 from research_system.subagents.distillation import (
     ChunkResultMergerSubagent,
     DistillChunkBuilderSubagent,
@@ -33,6 +41,7 @@ from research_system.subagents.distillation import (
     FallbackChunkDistillerSubagent,
     LLMChunkDistillerSubagent,
 )
+from research_system.subagents.planning import apply_subagent_graph_patch
 from research_system.subagents.registry import SubagentRegistry
 
 
@@ -114,74 +123,22 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             title="distiller",
             objective="Distill source records into logic blocks and dimensions.",
         ):
-            preprocess_results = self._execute_subagent_dag(
-                [
-                    SubagentDagNodeSpec(
-                        node_id="source_normalizer",
-                        replayable=True,
-                        cache_scope="run",
-                        cache_key="source_normalizer",
-                        build_invocation=lambda _results: self._build_subagent_invocation(
-                            subagent_type="distill_source_normalizer",
-                            objective="Normalize raw distillation source records.",
-                            inputs={"query": query, "source_records": source_records},
-                            task_name="distill:preprocess:source_normalizer",
-                            agent_path="distiller/preprocess/source_normalizer",
-                        ),
-                        metadata=self._dag_metadata(
-                            task_name="distill:preprocess:source_normalizer",
-                            agent_path="distiller/preprocess/source_normalizer",
-                            objective="Normalize raw distillation source records.",
-                        ),
-                    ),
-                    SubagentDagNodeSpec(
-                        node_id="record_trimmer",
-                        depends_on=("source_normalizer",),
-                        replayable=True,
-                        cache_scope="run",
-                        cache_key="record_trimmer",
-                        build_invocation=lambda results: self._build_subagent_invocation(
-                            subagent_type="distill_record_trimmer",
-                            objective="Trim source records into bounded distillation input.",
-                            inputs={
-                                "records": list(
-                                    ((results["source_normalizer"].outputs or {}).get("records") or [])
-                                ),
-                            },
-                            task_name="distill:preprocess:record_trimmer",
-                            agent_path="distiller/preprocess/record_trimmer",
-                        ),
-                        metadata=self._dag_metadata(
-                            task_name="distill:preprocess:record_trimmer",
-                            agent_path="distiller/preprocess/record_trimmer",
-                            objective="Trim source records into bounded distillation input.",
-                        ),
-                    ),
-                    SubagentDagNodeSpec(
-                        node_id="chunk_builder",
-                        depends_on=("record_trimmer",),
-                        replayable=True,
-                        cache_scope="run",
-                        cache_key="chunk_builder",
-                        build_invocation=lambda results: self._build_subagent_invocation(
-                            subagent_type="distill_chunk_builder",
-                            objective="Split trimmed records into distillation chunks.",
-                            inputs={
-                                "records": list(
-                                    ((results["record_trimmer"].outputs or {}).get("records") or [])
-                                ),
-                            },
-                            task_name="distill:chunking:chunk_builder",
-                            agent_path="distiller/chunking/chunk_builder",
-                        ),
-                        metadata=self._dag_metadata(
-                            task_name="distill:chunking:chunk_builder",
-                            agent_path="distiller/chunking/chunk_builder",
-                            objective="Split trimmed records into distillation chunks.",
-                        ),
-                    ),
-                ],
+            subagent_plans: list[dict[str, Any]] = []
+            subagent_plan_patches: list[dict[str, Any]] = []
+            preprocess_plan = self._build_preprocess_subagent_plan(
+                query=query,
+                source_records=source_records,
+            )
+            subagent_plans.append(preprocess_plan.model_dump(mode="json"))
+            preprocess_results = self._execute_subagent_plan(
+                plan=preprocess_plan,
+                max_workers=1,
                 dag_id="preprocess",
+                build_invocation=self._build_preprocess_plan_invocations(
+                    plan=preprocess_plan,
+                    query=query,
+                    source_records=source_records,
+                ),
             )
             records = list((preprocess_results["source_normalizer"].outputs or {}).get("records") or [])
             if not records:
@@ -197,6 +154,8 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                     "distilled_dimensions": [],
                     "degraded": True,
                     "degrade_reason": "missing_source_records",
+                    "subagent_plans": subagent_plans,
+                    "subagent_plan_patches": subagent_plan_patches,
                 }
 
             trim_outputs = preprocess_results["record_trimmer"].outputs or {}
@@ -205,16 +164,18 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             trim_notes = list(trim_outputs.get("notes") or [])
             chunks = list(chunk_outputs.get("chunks") or [])
             force_fallback = execution_mode == DISTILL_EXECUTION_FALLBACK
-            if not force_fallback:
-                result = self._run_chunked(query=query, records=trimmed_records, chunks=chunks)
-            else:
-                result = self._run_fallback(records=trimmed_records)
-                if force_fallback:
-                    result["degraded"] = True
-                    result["degrade_reason"] = (
-                        runtime_degraded_reason or RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value
-                    )
+            result = self._run_chunked(
+                query=query,
+                records=trimmed_records,
+                chunks=chunks,
+                force_fallback=force_fallback,
+                runtime_degraded_reason=runtime_degraded_reason,
+                subagent_plans=subagent_plans,
+                subagent_plan_patches=subagent_plan_patches,
+            )
             result["summary"]["processing_notes"].extend(trim_notes)
+            result["subagent_plans"] = subagent_plans
+            result["subagent_plan_patches"] = subagent_plan_patches
             return result
 
     def _run_chunked(
@@ -223,97 +184,53 @@ class DistillerService(RuntimeBoundSubagentInvoker):
         query: str,
         records: list[DistillSourceRecord],
         chunks: list[list[DistillSourceRecord]],
+        force_fallback: bool,
+        runtime_degraded_reason: str | None,
+        subagent_plans: list[dict[str, Any]],
+        subagent_plan_patches: list[dict[str, Any]],
     ) -> dict:
         if not chunks:
-            return self._run_fallback(records=records)
+            merged = self._run_fallback(records=records)
+            if force_fallback:
+                merged["degraded"] = True
+                merged["degrade_reason"] = (
+                    runtime_degraded_reason or RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value
+                )
+            return merged
 
+        chunk_plan = self._build_chunk_execution_subagent_plan(
+            query=query,
+            chunks=chunks,
+        )
+        chunk_plan_patch = self._build_chunk_execution_subagent_plan_patch(
+            chunks=chunks,
+            force_fallback=force_fallback,
+            runtime_degraded_reason=runtime_degraded_reason,
+        )
+        if chunk_plan_patch is not None:
+            chunk_plan = apply_subagent_graph_patch(chunk_plan, chunk_plan_patch)
+            subagent_plan_patches.append(chunk_plan_patch.model_dump(mode="json"))
+        subagent_plans.append(chunk_plan.model_dump(mode="json"))
+
+        chunk_node_ids = [
+            node.node_id
+            for node in chunk_plan.nodes
+            if node.node_id != "chunk_result_merger"
+        ]
         chunk_results: list[dict] = []
         llm_successes = 0
         fallback_chunks = 0
         llm_timeout_seen = False
-        chunk_node_ids: list[str] = []
-        chunk_specs: list[SubagentDagNodeSpec] = []
-
-        for index, chunk_records in enumerate(chunks, start=1):
-            chunk_label = f"chunk_{index}_of_{len(chunks)}"
-            dag_node_id = f"chunk_{index}"
-            child_thread, child_turn = self.spawn_child_thread(
-                intent="distill_chunk",
-                objective=f"distill:{chunk_label}",
-                agent=self.agent_name,
-                phase="distill_chunk",
-            )
-            chunk_node_ids.append(dag_node_id)
-            chunk_specs.append(
-                SubagentDagNodeSpec(
-                    node_id=dag_node_id,
-                    failure_mode="isolate",
-                    max_attempts=2,
-                    replayable=True,
-                    cache_scope="run",
-                    cache_key=f"chunk:{chunk_label}",
-                    build_invocation=lambda _results, *, chunk=chunk_records, label=chunk_label, thread=child_thread, turn=child_turn: self._build_subagent_invocation(
-                        subagent_type="llm_chunk_distiller",
-                        objective=f"Distill {label} with LLM.",
-                        inputs={"query": f"{query}\nChunk: {label}", "records": chunk},
-                        task_name=f"distill:chunks:{label}:llm_chunk_distiller",
-                        agent_path=f"distiller/chunks/{label}/llm_chunk_distiller",
-                        phase="distill_chunk",
-                        child_thread_id=getattr(thread, "thread_id", None),
-                        child_turn_id=getattr(turn, "turn_id", None),
-                        requires_llm=True,
-                        fallback_subagent_type="fallback_chunk_distiller",
-                        fallback_objective=f"Fallback-distill {label}.",
-                        fallback_inputs={"records": chunk},
-                        fallback_task_name=f"distill:chunks:{label}:fallback_chunk_distiller",
-                        fallback_agent_path=f"distiller/chunks/{label}/fallback_chunk_distiller",
-                        error_fallback_subagent_type="fallback_chunk_distiller",
-                        error_fallback_objective=f"Fallback-distill {label}.",
-                        error_fallback_inputs={"records": chunk},
-                        error_fallback_task_name=f"distill:chunks:{label}:fallback_chunk_distiller",
-                        error_fallback_agent_path=f"distiller/chunks/{label}/fallback_chunk_distiller",
-                    ),
-                    metadata=self._dag_metadata(
-                        task_name=f"distill:chunks:{chunk_label}:llm_chunk_distiller",
-                        agent_path=f"distiller/chunks/{chunk_label}/llm_chunk_distiller",
-                        objective=f"Distill {chunk_label} with LLM.",
-                        child_thread_id=getattr(child_thread, "thread_id", None),
-                        child_turn_id=getattr(child_turn, "turn_id", None),
-                        phase="distill_chunk",
-                    ),
-                )
-            )
-
-        chunk_specs.append(
-            SubagentDagNodeSpec(
-                node_id="chunk_result_merger",
-                depends_on=tuple(chunk_node_ids),
-                allow_partial_dependencies=True,
-                build_invocation=lambda results: self._build_subagent_invocation(
-                    subagent_type="chunk_result_merger",
-                    objective="Merge chunk-level distillation outputs.",
-                    inputs={
-                        "records": records,
-                        "chunk_results": [
-                            result.outputs
-                            for node_id, result in results.items()
-                            if node_id in chunk_node_ids and result.outputs is not None
-                        ],
-                    },
-                    task_name="distill:postprocess:chunk_result_merger",
-                    agent_path="distiller/postprocess/chunk_result_merger",
-                ),
-                metadata=self._dag_metadata(
-                    task_name="distill:postprocess:chunk_result_merger",
-                    agent_path="distiller/postprocess/chunk_result_merger",
-                    objective="Merge chunk-level distillation outputs.",
-                ),
-            )
-        )
-        chunk_dag_results = self._execute_subagent_dag(
-            chunk_specs,
+        chunk_dag_results = self._execute_subagent_plan(
+            plan=chunk_plan,
             max_workers=max(len(chunk_node_ids), 1),
             dag_id="chunk_execution",
+            build_invocation=self._build_chunk_plan_invocations(
+                plan=chunk_plan,
+                query=query,
+                records=records,
+                chunks=chunks,
+            ),
         )
 
         for index, dag_node_id in enumerate(chunk_node_ids, start=1):
@@ -399,7 +316,464 @@ class DistillerService(RuntimeBoundSubagentInvoker):
                 merged["summary"]["major_risks"].append("isolated_chunk_failure")
             merged["degraded"] = True
             merged["degrade_reason"] = str(merged.get("degrade_reason") or "isolated_chunk_failure")
+        if force_fallback:
+            merged["degraded"] = True
+            merged["degrade_reason"] = (
+                runtime_degraded_reason or RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value
+            )
         return merged
+
+    def _select_distill_catalog_entry(
+        self,
+        *,
+        capability: str,
+        preferred_subagent_type: str | None = None,
+        requires_llm: bool | None = None,
+    ) -> SubagentCatalogEntry:
+        candidates = self.registry.catalog_entries(
+            stage="distill",
+            intent="distill_kol_logic",
+            capability=capability,
+            requires_llm=requires_llm,
+        )
+        if not candidates:
+            candidates = self.registry.catalog_entries(
+                stage="distill",
+                capability=capability,
+                requires_llm=requires_llm,
+            )
+        if not candidates:
+            raise KeyError(f"no distiller catalog entry for capability={capability!r}")
+        if preferred_subagent_type:
+            for candidate in candidates:
+                if candidate.subagent_type == preferred_subagent_type:
+                    return candidate
+        return sorted(
+            candidates,
+            key=lambda candidate: (
+                bool(candidate.requires_llm),
+                self._cost_rank(candidate.cost_class),
+                self._latency_rank(candidate.latency_class),
+                candidate.subagent_type,
+            ),
+        )[0]
+
+    def _cost_rank(self, cost_class: str | None) -> int:
+        return {"low": 0, "medium": 1, "high": 2}.get(str(cost_class or "").strip().lower(), 3)
+
+    def _latency_rank(self, latency_class: str | None) -> int:
+        return {"low": 0, "medium": 1, "high": 2}.get(str(latency_class or "").strip().lower(), 3)
+
+    def _build_catalog_plan_node(
+        self,
+        *,
+        node_id: str,
+        subagent_type: str,
+        objective: str,
+        inputs: dict[str, Any],
+        depends_on: list[str] | None = None,
+        tags: list[str] | None = None,
+        failure_mode: str = "raise",
+        allow_partial_dependencies: bool = False,
+        max_attempts: int = 1,
+        replayable: bool = True,
+        cache_scope: str | None = "run",
+        cache_key: str | None = None,
+        notes: list[str] | None = None,
+    ) -> SubagentPlanNode:
+        return SubagentPlanNode(
+            node_id=node_id,
+            subagent_type=subagent_type,
+            objective=objective,
+            inputs=dict(inputs),
+            depends_on=list(depends_on or []),
+            tags=list(tags or ["catalog_selected"]),
+            failure_mode=failure_mode,  # type: ignore[arg-type]
+            allow_partial_dependencies=allow_partial_dependencies,
+            max_attempts=max_attempts,
+            replayable=replayable,
+            cache_scope=cache_scope,  # type: ignore[arg-type]
+            cache_key=cache_key,
+            notes=list(notes or []),
+        )
+
+    def _build_preprocess_subagent_plan(
+        self,
+        *,
+        query: str,
+        source_records: list[dict],
+    ) -> SubagentPlan:
+        source_entry = self._select_distill_catalog_entry(
+            capability="source_normalization",
+            preferred_subagent_type="distill_source_normalizer",
+        )
+        trimmer_entry = self._select_distill_catalog_entry(
+            capability="record_trimming",
+            preferred_subagent_type="distill_record_trimmer",
+        )
+        chunk_builder_entry = self._select_distill_catalog_entry(
+            capability="chunk_building",
+            preferred_subagent_type="distill_chunk_builder",
+        )
+        return SubagentPlan(
+            intent="distill_kol_logic",
+            phase="distill",
+            strategy="catalog",
+            nodes=[
+                self._build_catalog_plan_node(
+                    node_id="source_normalizer",
+                    subagent_type=source_entry.subagent_type,
+                    objective="Normalize raw distillation source records.",
+                    inputs={"query": query, "source_record_count": len(source_records)},
+                    cache_key="source_normalizer",
+                    notes=["phase=preprocess"],
+                ),
+                self._build_catalog_plan_node(
+                    node_id="record_trimmer",
+                    subagent_type=trimmer_entry.subagent_type,
+                    objective="Trim source records into bounded distillation input.",
+                    inputs={"source_record_count": len(source_records)},
+                    depends_on=["source_normalizer"],
+                    cache_key="record_trimmer",
+                    notes=["phase=preprocess"],
+                ),
+                self._build_catalog_plan_node(
+                    node_id="chunk_builder",
+                    subagent_type=chunk_builder_entry.subagent_type,
+                    objective="Split trimmed records into distillation chunks.",
+                    inputs={"source_record_count": len(source_records)},
+                    depends_on=["record_trimmer"],
+                    cache_key="chunk_builder",
+                    notes=["phase=preprocess"],
+                ),
+            ],
+            notes=["distillation_preprocess_catalog_plan"],
+            catalog_trace={
+                "stage": "distill",
+                "selection_mode": "catalog",
+                "phase": "preprocess",
+                "selected_subagent_types": {
+                    "source_normalizer": source_entry.subagent_type,
+                    "record_trimmer": trimmer_entry.subagent_type,
+                    "chunk_builder": chunk_builder_entry.subagent_type,
+                },
+            },
+        )
+
+    def _build_chunk_execution_subagent_plan(
+        self,
+        *,
+        query: str,
+        chunks: list[list[DistillSourceRecord]],
+    ) -> SubagentPlan:
+        llm_entry = self._select_distill_catalog_entry(
+            capability="chunk_distillation",
+            preferred_subagent_type="llm_chunk_distiller",
+            requires_llm=True,
+        )
+        merger_entry = self._select_distill_catalog_entry(
+            capability="distillation_merge",
+            preferred_subagent_type="chunk_result_merger",
+        )
+        nodes: list[SubagentPlanNode] = []
+        selected_subagent_types: dict[str, str] = {}
+        for index, chunk_records in enumerate(chunks, start=1):
+            chunk_label = f"chunk_{index}_of_{len(chunks)}"
+            node_id = f"chunk_{index}"
+            nodes.append(
+                self._build_catalog_plan_node(
+                    node_id=node_id,
+                    subagent_type=llm_entry.subagent_type,
+                    objective=f"Distill {chunk_label} with LLM.",
+                    inputs={
+                        "query": query,
+                        "chunk_label": chunk_label,
+                        "record_count": len(chunk_records),
+                    },
+                    tags=["catalog_selected", "parallel_candidate"],
+                    failure_mode="isolate",
+                    max_attempts=2,
+                    cache_key=f"chunk:{chunk_label}",
+                    notes=["phase=chunk_execution", "candidate=llm_chunk_distiller"],
+                )
+            )
+            selected_subagent_types[node_id] = llm_entry.subagent_type
+        nodes.append(
+            self._build_catalog_plan_node(
+                node_id="chunk_result_merger",
+                subagent_type=merger_entry.subagent_type,
+                objective="Merge chunk-level distillation outputs.",
+                inputs={"chunk_count": len(chunks), "record_count": sum(len(chunk) for chunk in chunks)},
+                depends_on=[f"chunk_{index}" for index in range(1, len(chunks) + 1)],
+                allow_partial_dependencies=True,
+                cache_key="chunk_result_merger",
+                notes=["phase=postprocess"],
+            )
+        )
+        selected_subagent_types["chunk_result_merger"] = merger_entry.subagent_type
+        return SubagentPlan(
+            intent="distill_kol_logic",
+            phase="distill",
+            strategy="catalog",
+            nodes=nodes,
+            notes=["distillation_chunk_execution_catalog_plan"],
+            catalog_trace={
+                "stage": "distill",
+                "selection_mode": "catalog",
+                "phase": "chunk_execution",
+                "chunk_count": len(chunks),
+                "selected_subagent_types": selected_subagent_types,
+            },
+        )
+
+    def _build_chunk_execution_subagent_plan_patch(
+        self,
+        *,
+        chunks: list[list[DistillSourceRecord]],
+        force_fallback: bool,
+        runtime_degraded_reason: str | None,
+    ) -> SubagentGraphPatch | None:
+        if not force_fallback:
+            return None
+        fallback_entry = self._select_distill_catalog_entry(
+            capability="fallback_distillation",
+            preferred_subagent_type="fallback_chunk_distiller",
+            requires_llm=False,
+        )
+        operations: list[SubagentGraphPatchOperation] = []
+        for index, chunk_records in enumerate(chunks, start=1):
+            chunk_label = f"chunk_{index}_of_{len(chunks)}"
+            operations.append(
+                SubagentGraphPatchOperation(
+                    op_type="replace_subgraph",
+                    target_node_id=f"chunk_{index}",
+                    replacement_nodes=[
+                        self._build_catalog_plan_node(
+                            node_id=f"chunk_{index}",
+                            subagent_type=fallback_entry.subagent_type,
+                            objective=f"Fallback-distill {chunk_label}.",
+                            inputs={
+                                "chunk_label": chunk_label,
+                                "record_count": len(chunk_records),
+                                "degrade_reason": runtime_degraded_reason
+                                or RuntimeDegradeReason.TURN_LLM_BUDGET_EXHAUSTED.value,
+                            },
+                            tags=["catalog_selected", "parallel_candidate", "fallback_selected"],
+                            failure_mode="isolate",
+                            max_attempts=2,
+                            cache_key=f"chunk:{chunk_label}",
+                            notes=["phase=chunk_execution", "candidate=fallback_chunk_distiller"],
+                        )
+                    ],
+                    reason="llm chunk distillation disabled by runtime policy",
+                )
+            )
+        return SubagentGraphPatch(
+            policy_source="rule",
+            confidence=1.0,
+            notes=["replace_llm_chunk_distillers_with_fallback"],
+            operations=operations,
+        )
+
+    def _execute_subagent_plan(
+        self,
+        *,
+        plan: SubagentPlan,
+        max_workers: int | None,
+        dag_id: str,
+        build_invocation,
+    ) -> dict[str, SubagentDagNodeResult]:
+        dag_nodes: list[SubagentDagNodeSpec] = []
+        for plan_node in plan.nodes:
+            runtime_node = build_invocation[plan_node.node_id]
+            dag_nodes.append(
+                SubagentDagNodeSpec(
+                    node_id=plan_node.node_id,
+                    build_invocation=lambda results, *, builder=runtime_node["builder"]: builder(results),
+                    depends_on=tuple(plan_node.depends_on),
+                    failure_mode=plan_node.failure_mode,
+                    allow_partial_dependencies=plan_node.allow_partial_dependencies,
+                    max_attempts=plan_node.max_attempts,
+                    replayable=plan_node.replayable,
+                    cache_scope=plan_node.cache_scope,
+                    cache_key=plan_node.cache_key,
+                    metadata={
+                        **dict(runtime_node["metadata"]),
+                        "plan_id": plan.plan_id,
+                        "plan_node_id": plan_node.node_id,
+                        "subagent_plan_strategy": plan.strategy,
+                    },
+                )
+            )
+        return self._execute_subagent_dag(
+            dag_nodes,
+            max_workers=max_workers,
+            dag_id=dag_id,
+        )
+
+    def _build_preprocess_plan_invocations(
+        self,
+        *,
+        plan: SubagentPlan,
+        query: str,
+        source_records: list[dict],
+    ) -> dict[str, dict[str, Any]]:
+        _ = plan
+        return {
+            "source_normalizer": {
+                "builder": lambda _results: self._build_subagent_invocation(
+                    subagent_type="distill_source_normalizer",
+                    objective="Normalize raw distillation source records.",
+                    inputs={"query": query, "source_records": source_records},
+                    task_name="distill:preprocess:source_normalizer",
+                    agent_path="distiller/preprocess/source_normalizer",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="distill:preprocess:source_normalizer",
+                    agent_path="distiller/preprocess/source_normalizer",
+                    objective="Normalize raw distillation source records.",
+                ),
+            },
+            "record_trimmer": {
+                "builder": lambda results: self._build_subagent_invocation(
+                    subagent_type="distill_record_trimmer",
+                    objective="Trim source records into bounded distillation input.",
+                    inputs={
+                        "records": list(
+                            ((results["source_normalizer"].outputs or {}).get("records") or [])
+                        ),
+                    },
+                    task_name="distill:preprocess:record_trimmer",
+                    agent_path="distiller/preprocess/record_trimmer",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="distill:preprocess:record_trimmer",
+                    agent_path="distiller/preprocess/record_trimmer",
+                    objective="Trim source records into bounded distillation input.",
+                ),
+            },
+            "chunk_builder": {
+                "builder": lambda results: self._build_subagent_invocation(
+                    subagent_type="distill_chunk_builder",
+                    objective="Split trimmed records into distillation chunks.",
+                    inputs={
+                        "records": list(
+                            ((results["record_trimmer"].outputs or {}).get("records") or [])
+                        ),
+                    },
+                    task_name="distill:chunking:chunk_builder",
+                    agent_path="distiller/chunking/chunk_builder",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="distill:chunking:chunk_builder",
+                    agent_path="distiller/chunking/chunk_builder",
+                    objective="Split trimmed records into distillation chunks.",
+                ),
+            },
+        }
+
+    def _build_chunk_plan_invocations(
+        self,
+        *,
+        plan: SubagentPlan,
+        query: str,
+        records: list[DistillSourceRecord],
+        chunks: list[list[DistillSourceRecord]],
+    ) -> dict[str, dict[str, Any]]:
+        plan_node_map = {node.node_id: node for node in plan.nodes}
+        runtime_nodes: dict[str, dict[str, Any]] = {}
+
+        for index, chunk_records in enumerate(chunks, start=1):
+            node_id = f"chunk_{index}"
+            if node_id not in plan_node_map:
+                continue
+            chunk_label = f"chunk_{index}_of_{len(chunks)}"
+            plan_node = plan_node_map[node_id]
+            if plan_node.subagent_type == "llm_chunk_distiller":
+                child_thread, child_turn = self.spawn_child_thread(
+                    intent="distill_chunk",
+                    objective=f"distill:{chunk_label}",
+                    agent=self.agent_name,
+                    phase="distill_chunk",
+                )
+                runtime_nodes[node_id] = {
+                    "builder": lambda _results, *, chunk=chunk_records, label=chunk_label, thread=child_thread, turn=child_turn: self._build_subagent_invocation(
+                        subagent_type="llm_chunk_distiller",
+                        objective=f"Distill {label} with LLM.",
+                        inputs={"query": f"{query}\nChunk: {label}", "records": chunk},
+                        task_name=f"distill:chunks:{label}:llm_chunk_distiller",
+                        agent_path=f"distiller/chunks/{label}/llm_chunk_distiller",
+                        phase="distill_chunk",
+                        child_thread_id=getattr(thread, "thread_id", None),
+                        child_turn_id=getattr(turn, "turn_id", None),
+                        requires_llm=True,
+                        fallback_subagent_type="fallback_chunk_distiller",
+                        fallback_objective=f"Fallback-distill {label}.",
+                        fallback_inputs={"records": chunk},
+                        fallback_task_name=f"distill:chunks:{label}:fallback_chunk_distiller",
+                        fallback_agent_path=f"distiller/chunks/{label}/fallback_chunk_distiller",
+                        error_fallback_subagent_type="fallback_chunk_distiller",
+                        error_fallback_objective=f"Fallback-distill {label}.",
+                        error_fallback_inputs={"records": chunk},
+                        error_fallback_task_name=f"distill:chunks:{label}:fallback_chunk_distiller",
+                        error_fallback_agent_path=f"distiller/chunks/{label}/fallback_chunk_distiller",
+                    ),
+                    "metadata": self._dag_metadata(
+                        task_name=f"distill:chunks:{chunk_label}:llm_chunk_distiller",
+                        agent_path=f"distiller/chunks/{chunk_label}/llm_chunk_distiller",
+                        objective=f"Distill {chunk_label} with LLM.",
+                        child_thread_id=getattr(child_thread, "thread_id", None),
+                        child_turn_id=getattr(child_turn, "turn_id", None),
+                        phase="distill_chunk",
+                    ),
+                }
+                continue
+            if plan_node.subagent_type != "fallback_chunk_distiller":
+                raise KeyError(f"unsupported distiller chunk subagent type: {plan_node.subagent_type}")
+            runtime_nodes[node_id] = {
+                "builder": lambda _results, *, chunk=chunk_records, label=chunk_label: self._build_subagent_invocation(
+                    subagent_type="fallback_chunk_distiller",
+                    objective=f"Fallback-distill {label}.",
+                    inputs={"records": chunk},
+                    task_name=f"distill:chunks:{label}:fallback_chunk_distiller",
+                    agent_path=f"distiller/chunks/{label}/fallback_chunk_distiller",
+                    phase="distill_chunk",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name=f"distill:chunks:{chunk_label}:fallback_chunk_distiller",
+                    agent_path=f"distiller/chunks/{chunk_label}/fallback_chunk_distiller",
+                    objective=f"Fallback-distill {chunk_label}.",
+                    phase="distill_chunk",
+                ),
+            }
+
+        chunk_node_ids = [
+            node.node_id
+            for node in plan.nodes
+            if node.node_id != "chunk_result_merger"
+        ]
+        runtime_nodes["chunk_result_merger"] = {
+            "builder": lambda results: self._build_subagent_invocation(
+                subagent_type="chunk_result_merger",
+                objective="Merge chunk-level distillation outputs.",
+                inputs={
+                    "records": records,
+                    "chunk_results": [
+                        result.outputs
+                        for node_id, result in results.items()
+                        if node_id in chunk_node_ids and result.outputs is not None
+                    ],
+                },
+                task_name="distill:postprocess:chunk_result_merger",
+                agent_path="distiller/postprocess/chunk_result_merger",
+            ),
+            "metadata": self._dag_metadata(
+                task_name="distill:postprocess:chunk_result_merger",
+                agent_path="distiller/postprocess/chunk_result_merger",
+                objective="Merge chunk-level distillation outputs.",
+            ),
+        }
+        return runtime_nodes
 
     def _execute_subagent_dag(
         self,
