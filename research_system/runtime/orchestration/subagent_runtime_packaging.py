@@ -10,6 +10,7 @@ import yaml
 
 from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
 from research_system.schemas.subagent_runtime_registration import SUPPORTED_RUNTIME_REGISTRATION_TYPES
+from research_system.schemas.subagent_runtime_registration_hints import runtime_registration_hint_payload
 from research_system.schemas.subagents import (
     SubagentActivationEntry,
     SubagentCatalogEntry,
@@ -591,13 +592,7 @@ class SubagentRuntimePackagingSupport:
 
     @staticmethod
     def _runtime_registration_hint(candidate_entry: SubagentCatalogEntry, *, section: str) -> dict[str, Any]:
-        hints = candidate_entry.runtime_registration_hints
-        if not isinstance(hints, dict):
-            return {}
-        scoped_hints = hints.get(section)
-        if isinstance(scoped_hints, dict):
-            return dict(scoped_hints)
-        return {}
+        return runtime_registration_hint_payload(candidate_entry.runtime_registration_hints, section=section)
 
     def _load_openapi_spec(
         self,

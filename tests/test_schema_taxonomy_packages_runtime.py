@@ -15,6 +15,7 @@ from research_system.schemas import (
     runtime,
     snapshots,
     subagent_runtime_registration,
+    subagent_runtime_registration_hints,
     subagents,
     task_requests,
     valuation,
@@ -39,6 +40,7 @@ class SchemaTaxonomyPackagesRuntimeTests(unittest.TestCase):
         self.assertIs(schemas_package.runtime, runtime)
         self.assertIs(schemas_package.snapshots, snapshots)
         self.assertIs(schemas_package.subagent_runtime_registration, subagent_runtime_registration)
+        self.assertIs(schemas_package.subagent_runtime_registration_hints, subagent_runtime_registration_hints)
         self.assertIs(schemas_package.subagents, subagents)
         self.assertIs(schemas_package.task_requests, task_requests)
         self.assertIs(schemas_package.valuation, valuation)

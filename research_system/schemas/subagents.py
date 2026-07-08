@@ -11,6 +11,7 @@ from research_system.schemas.subagent_runtime_registration import (
     validate_runtime_registration_shape,
     validate_runtime_registration_template_defaults,
 )
+from research_system.schemas.subagent_runtime_registration_hints import SubagentRuntimeRegistrationHints
 
 
 class SubagentInvocation(BaseModel):
@@ -85,7 +86,7 @@ class SubagentCatalogEntry(BaseModel):
     output_schema_name: str | None = None
     input_json_schema: dict[str, Any] | None = None
     output_json_schema: dict[str, Any] | None = None
-    runtime_registration_hints: dict[str, Any] = Field(default_factory=dict)
+    runtime_registration_hints: SubagentRuntimeRegistrationHints = Field(default_factory=SubagentRuntimeRegistrationHints)
     runtime_registration_templates: list[SubagentRuntimeRegistrationTemplate] = Field(default_factory=list)
 
 
