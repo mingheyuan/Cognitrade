@@ -310,8 +310,16 @@ class ReviewThesisFlowTests(unittest.TestCase):
             debug = report.get("debug") or {}
             self.assertIn("subagent_trace", debug)
             self.assertIn("dynamic_trace", debug)
+            self.assertTrue(debug.get("subagent_plans"))
             self.assertTrue(any(item.get("subagent_type") == "review_target_loader" for item in debug["subagent_trace"]))
             self.assertTrue(any(item.get("subagent_type") == "review_summary_builder" for item in debug["subagent_trace"]))
+            self.assertTrue(
+                any(
+                    str(item.get("phase") or "") == "review"
+                    and any(str(node.get("node_id") or "") == "review_summary_builder" for node in list(item.get("nodes") or []))
+                    for item in list(debug.get("subagent_plans") or [])
+                )
+            )
             self.assertTrue(any(item.get("agent_path") == "reporter/strategy/report_strategy_resolver" for item in debug["subagent_trace"]))
             self.assertTrue(any(item.get("agent_path") == "reporter/fallback/fallback_report_composer" for item in debug["subagent_trace"]))
             self.assertTrue(any(item.get("event") == "dynamic_action_inserted" and item.get("node_id") == "review" for item in debug["dynamic_trace"]))

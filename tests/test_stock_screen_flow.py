@@ -233,6 +233,21 @@ class StockScreenFlowTests(unittest.TestCase):
         self.assertIn("screen_review_focus=cashflow_resilience", payload["summary"]["notes"])
         self.assertIn("screen_review_focus_source=methodology_memory", payload["summary"]["notes"])
         self.assertEqual(payload["findings"][0]["verdict"], "inconclusive")
+        subagent_plans = list(payload.get("subagent_plans") or [])
+        self.assertEqual(len(subagent_plans), 1)
+        review_node_types = {
+            str(node.get("node_id") or ""): str(node.get("subagent_type") or "")
+            for node in list(subagent_plans[0].get("nodes") or [])
+        }
+        self.assertEqual(review_node_types.get("screen_review_strategy_resolver"), "screen_review_strategy_resolver")
+        self.assertEqual(review_node_types.get("screen_review_candidate_1"), "screen_review_candidate")
+        self.assertEqual(review_node_types.get("screen_review_summary_builder"), "screen_review_summary_builder")
+        patch_op_types = [
+            str(operation.get("op_type") or "")
+            for patch in list(payload.get("subagent_plan_patches") or [])
+            for operation in list((patch or {}).get("operations") or [])
+        ]
+        self.assertIn("insert_subagent", patch_op_types)
 
     def test_screener_local_run_scope_records_agent_item(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -310,6 +325,8 @@ class StockScreenFlowTests(unittest.TestCase):
             self.assertEqual(final_agent_item["title"], "screen_reviewer")
             self.assertEqual(final_agent_item["status"], "completed")
             self.assertTrue(payload["findings"])
+            self.assertTrue(payload.get("subagent_trace"))
+            self.assertTrue(payload.get("subagent_plans"))
 
     def test_orchestrator_runs_stock_screen_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -336,7 +353,7 @@ class StockScreenFlowTests(unittest.TestCase):
                 self.assertTrue(debug.get("subagent_plans"))
                 self.assertTrue(debug.get("subagent_plan_patches"))
                 self.assertTrue(
-                    {"collect", "retrieve", "report"}.issubset(
+                    {"collect", "retrieve", "review", "report"}.issubset(
                         {str(item.get("phase") or "") for item in list(debug.get("subagent_plans") or [])}
                     )
                 )

@@ -1,14 +1,37 @@
 from __future__ import annotations
 
-from typing import Any
 from pathlib import Path
+from typing import Any
 
+from research_system.agents._subagent_dag import (
+    SubagentDagExecutor,
+    SubagentDagNodeResult,
+    SubagentDagNodeSpec,
+)
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.agents.reviewer.reviewer_candidate_support import ReviewerCandidateSupport
 from research_system.agents.reviewer.reviewer_strategy_support import ReviewerStrategySupport
 from research_system.agents.reviewer.reviewer_summary_support import ReviewerSummarySupport
 from research_system.agents.reviewer.reviewer_verdict_support import ReviewerVerdictSupport
 from research_system.schemas.review import ClaimVerdictBreakdown, ReviewFinding
+from research_system.schemas.subagents import (
+    SubagentCatalogEntry,
+    SubagentGraphPatch,
+    SubagentGraphPatchOperation,
+    SubagentInvocation,
+    SubagentPlan,
+    SubagentPlanNode,
+)
+from research_system.subagents.planning import apply_subagent_graph_patch
+from research_system.subagents.registry import SubagentRegistry
+from research_system.subagents.reviewing import (
+    ReviewCandidateVerdictSubagent,
+    ReviewClaimExtractorSubagent,
+    ReviewContextResolverSubagent,
+    ReviewFocusValidatorSubagent,
+    ReviewStrategyResolverSubagent,
+    ReviewSummaryBuilderSubagent,
+)
 
 
 class ReviewerService(RuntimeBoundSubagentInvoker):
@@ -21,6 +44,31 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
         self.candidate_support = ReviewerCandidateSupport()
         self.verdict_support = ReviewerVerdictSupport(strategy_support=self.strategy_support)
         self.summary_support = ReviewerSummarySupport()
+        self.registry = SubagentRegistry(
+            [
+                ReviewStrategyResolverSubagent(
+                    normalize_planning_context_hints=self._normalize_planning_context_hints,
+                    derive_review_strategy=self._derive_review_strategy,
+                ),
+                ReviewClaimExtractorSubagent(
+                    extract_review_claims=self._extract_review_claims,
+                ),
+                ReviewContextResolverSubagent(
+                    resolve_benchmark=self._resolve_benchmark,
+                    parse_anchor_date=self._parse_anchor_date,
+                    to_float=self._to_float,
+                ),
+                ReviewFocusValidatorSubagent(
+                    validate_review_strategy_requirements=self._validate_review_strategy_requirements,
+                ),
+                ReviewCandidateVerdictSubagent(
+                    review_candidate=self._review_candidate,
+                ),
+                ReviewSummaryBuilderSubagent(
+                    build_review_summary=self._build_review_summary,
+                ),
+            ]
+        )
 
     def run(
         self,
@@ -64,105 +112,558 @@ class ReviewerService(RuntimeBoundSubagentInvoker):
         latest_notice_snapshot: dict | None = None,
         planning_context_hints: dict[str, str] | None = None,
     ) -> dict:
-        normalized_planning_hints = self._normalize_planning_context_hints(planning_context_hints)
-        review_strategy = self._derive_review_strategy(
-            query=query,
-            planning_context_hints=normalized_planning_hints,
-        )
-        claim_outputs = self._extract_review_claims(source_entries=source_entries)
-        candidates = claim_outputs["candidates"]
-        claim_type_counts = claim_outputs["claim_type_counts"]
-        findings: list[ReviewFinding] = []
-        notes: list[str] = list(review_strategy.get("notes") or [])
-
-        if not candidates:
-            notes.append("no_reviewable_claims_detected")
-
-        if latest_sector_snapshot is None:
-            notes.append("missing_sector_snapshot")
-            summary_outputs = self._build_review_summary(
-                review_required=True,
-                findings=[],
-                candidates=candidates,
-                notes=notes,
-                claim_type_counts=claim_type_counts,
-            )
-            return {
-                "summary": summary_outputs["summary"],
-                "findings": [],
-            }
-
-        facts = latest_sector_snapshot.get("facts") or {}
-        relative_strength = facts.get("relative_strength") or {}
-        signal_scorecard = facts.get("signal_scorecard") or {}
-        benchmark = facts.get("benchmark") or {}
-        latest_hist = facts.get("latest_hist") or {}
-        catalyst_digest = facts.get("catalyst_digest") or {}
-        policy_signals = facts.get("policy_signals") or []
-        regulatory_signals = facts.get("regulatory_signals") or []
-        theme_news = facts.get("theme_news") or []
-
-        excess_metric = self._to_float(relative_strength.get("latest_excess_pct_change"))
-        benchmark_outputs = self._resolve_benchmark(
-            latest_sector_snapshot=latest_sector_snapshot,
-            latest_market_snapshot=latest_market_snapshot,
-            default_benchmark_name=str(benchmark.get("benchmark_name") or self.review_policy.get("default_broad_index") or "HS300"),
-            default_benchmark_symbol=str(benchmark.get("benchmark_code") or "000300"),
-        )
-        benchmark_scope = benchmark_outputs["benchmark_scope"]
-        benchmark_name = benchmark_outputs["benchmark_name"]
-        benchmark_symbol = benchmark_outputs["benchmark_symbol"]
-        observed_benchmark_metric = benchmark_outputs["observed_benchmark_metric"]
-        anchor_date = self._parse_anchor_date(
-            candidates=candidates,
-            snapshot_date=str(latest_sector_snapshot.get("snapshot_date") or ""),
-        )
-        setup_label = str(signal_scorecard.get("setup_label") or "")
-        sector_name = str(latest_sector_snapshot.get("sector") or "")
-
-        for candidate in candidates:
-            finding_outputs = self._review_candidate(
-                candidate=candidate,
+        subagent_plan = self._build_review_subagent_plan()
+        base_results = self._execute_subagent_plan(
+            plan=subagent_plan,
+            max_workers=3,
+            dag_id="review_execution",
+            build_invocation=self._build_review_plan_invocations(
+                plan=subagent_plan,
                 source_run_id=source_run_id,
-                anchor_date=anchor_date,
-                benchmark_scope=benchmark_scope,
-                benchmark_symbol=benchmark_symbol,
-                benchmark_name=benchmark_name,
-                observed_benchmark_metric=observed_benchmark_metric,
-                latest_hist=latest_hist,
+                query=query,
+                source_entries=source_entries,
+                latest_sector_snapshot=latest_sector_snapshot,
                 latest_market_snapshot=latest_market_snapshot,
                 latest_fundamental_snapshot=latest_fundamental_snapshot,
                 latest_notice_snapshot=latest_notice_snapshot,
-                excess_metric=excess_metric,
-                policy_signals=policy_signals,
-                regulatory_signals=regulatory_signals,
-                theme_news=theme_news,
-                setup_label=setup_label,
-                sector_name=sector_name,
-                catalyst_digest=catalyst_digest,
-            )
-            findings.append(ReviewFinding.model_validate(finding_outputs["finding"]))
+                planning_context_hints=planning_context_hints,
+            ),
+        )
 
-        focus_validation = self._validate_review_strategy_requirements(
-            review_strategy=review_strategy,
-            latest_market_snapshot=latest_market_snapshot,
-            latest_fundamental_snapshot=latest_fundamental_snapshot,
-            latest_notice_snapshot=latest_notice_snapshot,
-            policy_signals=policy_signals,
-            regulatory_signals=regulatory_signals,
+        claim_outputs = base_results["review_claim_extractor"].outputs or {}
+        context_outputs = base_results["review_context_resolver"].outputs or {}
+        subagent_plan_patch = self._build_review_subagent_plan_patch(
+            source_run_id=source_run_id,
+            candidates=list(claim_outputs.get("candidates") or []),
+            claim_type_counts=dict(claim_outputs.get("claim_type_counts") or {}),
+            review_required=bool(context_outputs.get("review_required")),
+            sector_snapshot_available=bool(context_outputs.get("sector_snapshot_available")),
         )
-        notes.extend(focus_validation["notes"])
-        summary_outputs = self._build_review_summary(
-            review_required=bool(focus_validation["review_required"]),
-            findings=findings,
-            candidates=candidates,
-            notes=notes,
-            claim_type_counts=claim_type_counts,
+        subagent_plan_patches: list[dict[str, Any]] = []
+        if subagent_plan_patch is not None:
+            subagent_plan = apply_subagent_graph_patch(subagent_plan, subagent_plan_patch)
+            subagent_plan_patches.append(subagent_plan_patch.model_dump(mode="json"))
+
+        final_results = self._execute_subagent_plan(
+            plan=subagent_plan,
+            max_workers=4,
+            dag_id="review_execution",
+            build_invocation=self._build_review_plan_invocations(
+                plan=subagent_plan,
+                source_run_id=source_run_id,
+                query=query,
+                source_entries=source_entries,
+                latest_sector_snapshot=latest_sector_snapshot,
+                latest_market_snapshot=latest_market_snapshot,
+                latest_fundamental_snapshot=latest_fundamental_snapshot,
+                latest_notice_snapshot=latest_notice_snapshot,
+                planning_context_hints=planning_context_hints,
+            ),
         )
+        summary_outputs = final_results["review_summary_builder"].outputs or {}
+        findings = [
+            ReviewFinding.model_validate((result.outputs or {}).get("finding")).model_dump(mode="json")
+            for node_id, result in final_results.items()
+            if node_id.startswith("review_candidate_") and (result.outputs or {}).get("finding") is not None
+        ]
         return {
             "summary": summary_outputs["summary"],
-            "findings": [finding.model_dump(mode="json") for finding in findings],
+            "findings": findings,
+            "subagent_trace": self._review_trace(results=final_results),
+            "subagent_plans": [subagent_plan.model_dump(mode="json")],
+            "subagent_plan_patches": subagent_plan_patches,
         }
+
+    def _select_review_catalog_entry(
+        self,
+        *,
+        capability: str,
+        preferred_subagent_type: str | None = None,
+    ) -> SubagentCatalogEntry:
+        candidates = self.registry.catalog_entries(
+            stage="review",
+            intent="review_thesis",
+            capability=capability,
+        )
+        if not candidates:
+            candidates = self.registry.catalog_entries(
+                stage="review",
+                capability=capability,
+            )
+        if not candidates:
+            raise KeyError(f"no reviewer catalog entry for capability={capability!r}")
+        if preferred_subagent_type:
+            for candidate in candidates:
+                if candidate.subagent_type == preferred_subagent_type:
+                    return candidate
+        return sorted(
+            candidates,
+            key=lambda candidate: (
+                self._cost_rank(candidate.cost_class),
+                self._latency_rank(candidate.latency_class),
+                candidate.subagent_type,
+            ),
+        )[0]
+
+    def _cost_rank(self, cost_class: str | None) -> int:
+        return {"low": 0, "medium": 1, "high": 2}.get(str(cost_class or "").strip().lower(), 3)
+
+    def _latency_rank(self, latency_class: str | None) -> int:
+        return {"low": 0, "medium": 1, "high": 2}.get(str(latency_class or "").strip().lower(), 3)
+
+    def _build_catalog_plan_node(
+        self,
+        *,
+        node_id: str,
+        subagent_type: str,
+        objective: str,
+        inputs: dict[str, Any],
+        depends_on: list[str] | None = None,
+        tags: list[str] | None = None,
+        failure_mode: str = "raise",
+        allow_partial_dependencies: bool = False,
+        max_attempts: int = 1,
+        replayable: bool = True,
+        cache_scope: str | None = "run",
+        cache_key: str | None = None,
+        notes: list[str] | None = None,
+    ) -> SubagentPlanNode:
+        return SubagentPlanNode(
+            node_id=node_id,
+            subagent_type=subagent_type,
+            objective=objective,
+            inputs=dict(inputs),
+            depends_on=list(depends_on or []),
+            tags=list(tags or ["catalog_selected"]),
+            failure_mode=failure_mode,  # type: ignore[arg-type]
+            allow_partial_dependencies=allow_partial_dependencies,
+            max_attempts=max_attempts,
+            replayable=replayable,
+            cache_scope=cache_scope,  # type: ignore[arg-type]
+            cache_key=cache_key,
+            notes=list(notes or []),
+        )
+
+    def _build_review_subagent_plan(self) -> SubagentPlan:
+        strategy_entry = self._select_review_catalog_entry(
+            capability="review_strategy",
+            preferred_subagent_type="review_strategy_resolver",
+        )
+        extractor_entry = self._select_review_catalog_entry(
+            capability="review_claim_extraction",
+            preferred_subagent_type="review_claim_extractor",
+        )
+        context_entry = self._select_review_catalog_entry(
+            capability="review_context",
+            preferred_subagent_type="review_context_resolver",
+        )
+        focus_entry = self._select_review_catalog_entry(
+            capability="review_focus_validation",
+            preferred_subagent_type="review_focus_validator",
+        )
+        return SubagentPlan(
+            intent="review_thesis",
+            phase="review",
+            strategy="catalog",
+            nodes=[
+                self._build_catalog_plan_node(
+                    node_id="review_strategy_resolver",
+                    subagent_type=strategy_entry.subagent_type,
+                    objective="Resolve posterior review strategy from query and planning hints.",
+                    inputs={},
+                    cache_key="review_strategy_resolver",
+                    notes=["phase=preprocess"],
+                ),
+                self._build_catalog_plan_node(
+                    node_id="review_claim_extractor",
+                    subagent_type=extractor_entry.subagent_type,
+                    objective="Extract reviewable claims from prior run artifacts.",
+                    inputs={},
+                    cache_key="review_claim_extractor",
+                    notes=["phase=preprocess"],
+                ),
+                self._build_catalog_plan_node(
+                    node_id="review_context_resolver",
+                    subagent_type=context_entry.subagent_type,
+                    objective="Resolve benchmark and sector evidence context for posterior review.",
+                    inputs={},
+                    depends_on=["review_claim_extractor"],
+                    cache_key="review_context_resolver",
+                    notes=["phase=preprocess"],
+                ),
+                self._build_catalog_plan_node(
+                    node_id="review_focus_validator",
+                    subagent_type=focus_entry.subagent_type,
+                    objective="Validate required review snapshots for the selected review focus.",
+                    inputs={},
+                    depends_on=["review_strategy_resolver", "review_context_resolver"],
+                    cache_key="review_focus_validator",
+                    notes=["phase=preprocess"],
+                ),
+            ],
+            notes=["review_thesis_base_catalog_plan"],
+            catalog_trace={
+                "stage": "review",
+                "selection_mode": "catalog",
+                "selected_subagent_types": {
+                    "review_strategy_resolver": strategy_entry.subagent_type,
+                    "review_claim_extractor": extractor_entry.subagent_type,
+                    "review_context_resolver": context_entry.subagent_type,
+                    "review_focus_validator": focus_entry.subagent_type,
+                },
+            },
+        )
+
+    def _build_review_subagent_plan_patch(
+        self,
+        *,
+        source_run_id: str,
+        candidates: list[dict],
+        claim_type_counts: dict[str, int],
+        review_required: bool,
+        sector_snapshot_available: bool,
+    ) -> SubagentGraphPatch:
+        candidate_entry = self._select_review_catalog_entry(
+            capability="review_candidate_verdict",
+            preferred_subagent_type="review_candidate_verdict",
+        )
+        summary_entry = self._select_review_catalog_entry(
+            capability="review_summary",
+            preferred_subagent_type="review_summary_builder",
+        )
+        operations: list[SubagentGraphPatchOperation] = []
+        candidate_node_ids: list[str] = []
+        if sector_snapshot_available:
+            for index, candidate in enumerate(candidates, start=1):
+                node_id = f"review_candidate_{index}"
+                candidate_node_ids.append(node_id)
+                operations.append(
+                    SubagentGraphPatchOperation(
+                        op_type="insert_subagent",
+                        node=self._build_catalog_plan_node(
+                            node_id=node_id,
+                            subagent_type=candidate_entry.subagent_type,
+                            objective=f"Review extracted claim candidate {index}.",
+                            inputs={
+                                "source_run_id": source_run_id,
+                                "candidate": candidate,
+                            },
+                            depends_on=["review_context_resolver"],
+                            tags=["catalog_selected", "parallel_candidate"],
+                            max_attempts=1,
+                            cache_key=node_id,
+                            notes=["phase=review_execution", f"claim_type={candidate.get('claim_type') or 'unknown'}"],
+                        ),
+                        reason="insert candidate-level posterior review node",
+                    )
+                )
+        operations.append(
+            SubagentGraphPatchOperation(
+                op_type="insert_subagent",
+                node=self._build_catalog_plan_node(
+                    node_id="review_summary_builder",
+                    subagent_type=summary_entry.subagent_type,
+                    objective="Aggregate posterior review findings into review summary.",
+                    inputs={
+                        "review_required": review_required,
+                        "claim_type_counts": claim_type_counts,
+                        "candidate_count": len(candidates),
+                    },
+                    depends_on=["review_focus_validator", *candidate_node_ids],
+                    cache_key="review_summary_builder",
+                    notes=["phase=postprocess"],
+                ),
+                reason="insert terminal review summary builder",
+            )
+        )
+        notes = ["insert_review_summary_builder"]
+        if candidate_node_ids:
+            notes.append("insert_review_candidate_nodes")
+        return SubagentGraphPatch(
+            policy_source="rule",
+            confidence=1.0,
+            notes=notes,
+            operations=operations,
+        )
+
+    def _execute_subagent_plan(
+        self,
+        *,
+        plan: SubagentPlan,
+        max_workers: int | None,
+        dag_id: str,
+        build_invocation,
+    ) -> dict[str, SubagentDagNodeResult]:
+        dag_nodes: list[SubagentDagNodeSpec] = []
+        for plan_node in plan.nodes:
+            runtime_node = build_invocation[plan_node.node_id]
+            dag_nodes.append(
+                SubagentDagNodeSpec(
+                    node_id=plan_node.node_id,
+                    build_invocation=lambda results, *, builder=runtime_node["builder"]: builder(results),
+                    depends_on=tuple(plan_node.depends_on),
+                    failure_mode=plan_node.failure_mode,
+                    allow_partial_dependencies=plan_node.allow_partial_dependencies,
+                    max_attempts=plan_node.max_attempts,
+                    replayable=plan_node.replayable,
+                    cache_scope=plan_node.cache_scope,
+                    cache_key=plan_node.cache_key,
+                    metadata={
+                        **dict(runtime_node["metadata"]),
+                        "plan_id": plan.plan_id,
+                        "plan_node_id": plan_node.node_id,
+                        "subagent_plan_strategy": plan.strategy,
+                    },
+                )
+            )
+        return self._execute_subagent_dag(
+            dag_nodes,
+            max_workers=max_workers,
+            dag_id=dag_id,
+        )
+
+    def _build_review_plan_invocations(
+        self,
+        *,
+        plan: SubagentPlan,
+        source_run_id: str,
+        query: str,
+        source_entries: list[dict],
+        latest_sector_snapshot: dict | None,
+        latest_market_snapshot: dict | None,
+        latest_fundamental_snapshot: dict | None,
+        latest_notice_snapshot: dict | None,
+        planning_context_hints: dict[str, str] | None,
+    ) -> dict[str, dict[str, Any]]:
+        runtime_nodes: dict[str, dict[str, Any]] = {
+            "review_strategy_resolver": {
+                "builder": lambda _results: self._build_subagent_invocation(
+                    subagent_type="review_strategy_resolver",
+                    objective="Resolve posterior review strategy from query and planning hints.",
+                    inputs={
+                        "query": query,
+                        "planning_context_hints": dict(planning_context_hints or {}),
+                    },
+                    task_name="review:strategy:review_strategy_resolver",
+                    agent_path="reviewer/strategy/review_strategy_resolver",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="review:strategy:review_strategy_resolver",
+                    agent_path="reviewer/strategy/review_strategy_resolver",
+                    objective="Resolve posterior review strategy from query and planning hints.",
+                ),
+            },
+            "review_claim_extractor": {
+                "builder": lambda _results: self._build_subagent_invocation(
+                    subagent_type="review_claim_extractor",
+                    objective="Extract reviewable claims from prior run artifacts.",
+                    inputs={"source_entries": source_entries},
+                    task_name="review:preprocess:review_claim_extractor",
+                    agent_path="reviewer/preprocess/review_claim_extractor",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="review:preprocess:review_claim_extractor",
+                    agent_path="reviewer/preprocess/review_claim_extractor",
+                    objective="Extract reviewable claims from prior run artifacts.",
+                ),
+            },
+            "review_context_resolver": {
+                "builder": lambda results: self._build_subagent_invocation(
+                    subagent_type="review_context_resolver",
+                    objective="Resolve benchmark and sector evidence context for posterior review.",
+                    inputs={
+                        "latest_sector_snapshot": latest_sector_snapshot,
+                        "latest_market_snapshot": latest_market_snapshot,
+                        "latest_fundamental_snapshot": latest_fundamental_snapshot,
+                        "latest_notice_snapshot": latest_notice_snapshot,
+                        "candidates": list(((results["review_claim_extractor"].outputs or {}).get("candidates") or [])),
+                        "default_benchmark_name": str(self.review_policy.get("default_broad_index") or "HS300"),
+                        "default_benchmark_symbol": "000300",
+                    },
+                    task_name="review:preprocess:review_context_resolver",
+                    agent_path="reviewer/preprocess/review_context_resolver",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="review:preprocess:review_context_resolver",
+                    agent_path="reviewer/preprocess/review_context_resolver",
+                    objective="Resolve benchmark and sector evidence context for posterior review.",
+                ),
+            },
+            "review_focus_validator": {
+                "builder": lambda results: self._build_subagent_invocation(
+                    subagent_type="review_focus_validator",
+                    objective="Validate required review snapshots for the selected review focus.",
+                    inputs={
+                        "review_strategy": dict(((results["review_strategy_resolver"].outputs or {}).get("review_strategy") or {})),
+                        "latest_market_snapshot": latest_market_snapshot,
+                        "latest_fundamental_snapshot": latest_fundamental_snapshot,
+                        "latest_notice_snapshot": latest_notice_snapshot,
+                        "policy_signals": list((((results["review_context_resolver"].outputs or {}).get("review_context") or {}).get("policy_signals") or [])),
+                        "regulatory_signals": list((((results["review_context_resolver"].outputs or {}).get("review_context") or {}).get("regulatory_signals") or [])),
+                    },
+                    task_name="review:preprocess:review_focus_validator",
+                    agent_path="reviewer/preprocess/review_focus_validator",
+                ),
+                "metadata": self._dag_metadata(
+                    task_name="review:preprocess:review_focus_validator",
+                    agent_path="reviewer/preprocess/review_focus_validator",
+                    objective="Validate required review snapshots for the selected review focus.",
+                ),
+            },
+        }
+
+        for plan_node in plan.nodes:
+            if plan_node.node_id.startswith("review_candidate_"):
+                plan_node_id = plan_node.node_id
+                candidate = dict(plan_node.inputs.get("candidate") or {})
+                runtime_nodes[plan_node_id] = {
+                    "builder": lambda results, *, claim_candidate=candidate, current_node_id=plan_node_id: self._build_subagent_invocation(
+                        subagent_type="review_candidate_verdict",
+                        objective="Review extracted claim candidate against benchmark-relative evidence.",
+                        inputs={
+                            "source_run_id": source_run_id,
+                            "candidate": claim_candidate,
+                            "latest_market_snapshot": latest_market_snapshot,
+                            "latest_fundamental_snapshot": latest_fundamental_snapshot,
+                            "latest_notice_snapshot": latest_notice_snapshot,
+                            "review_context": dict(((results["review_context_resolver"].outputs or {}).get("review_context") or {})),
+                        },
+                        task_name=f"review:execution:{current_node_id}:review_candidate_verdict",
+                        agent_path=f"reviewer/execution/{current_node_id}/review_candidate_verdict",
+                    ),
+                    "metadata": self._dag_metadata(
+                        task_name=f"review:execution:{plan_node_id}:review_candidate_verdict",
+                        agent_path=f"reviewer/execution/{plan_node_id}/review_candidate_verdict",
+                        objective="Review extracted claim candidate against benchmark-relative evidence.",
+                    ),
+                }
+            elif plan_node.node_id == "review_summary_builder":
+                runtime_nodes[plan_node.node_id] = {
+                    "builder": lambda results: self._build_subagent_invocation(
+                        subagent_type="review_summary_builder",
+                        objective="Aggregate posterior review findings into review summary.",
+                        inputs={
+                            "review_required": bool(((results["review_context_resolver"].outputs or {}).get("review_required") or False))
+                            or bool(((results["review_focus_validator"].outputs or {}).get("review_required") or False)),
+                            "findings": [
+                                ReviewFinding.model_validate((result.outputs or {}).get("finding")).model_dump(mode="python")
+                                for node_id, result in results.items()
+                                if node_id.startswith("review_candidate_") and (result.outputs or {}).get("finding") is not None
+                            ],
+                            "candidates": list(((results["review_claim_extractor"].outputs or {}).get("candidates") or [])),
+                            "notes": self._merge_review_notes(results=results),
+                            "claim_type_counts": dict(((results["review_claim_extractor"].outputs or {}).get("claim_type_counts") or {})),
+                        },
+                        task_name="review:postprocess:review_summary_builder",
+                        agent_path="reviewer/postprocess/review_summary_builder",
+                    ),
+                    "metadata": self._dag_metadata(
+                        task_name="review:postprocess:review_summary_builder",
+                        agent_path="reviewer/postprocess/review_summary_builder",
+                        objective="Aggregate posterior review findings into review summary.",
+                    ),
+                }
+        return runtime_nodes
+
+    def _merge_review_notes(self, *, results: dict[str, SubagentDagNodeResult]) -> list[str]:
+        notes: list[str] = []
+        review_strategy = dict(((results["review_strategy_resolver"].outputs or {}).get("review_strategy") or {}))
+        notes.extend([str(item) for item in list(review_strategy.get("notes") or []) if str(item).strip()])
+        notes.extend([str(item) for item in list((results["review_context_resolver"].outputs or {}).get("notes") or []) if str(item).strip()])
+        if not list(((results["review_claim_extractor"].outputs or {}).get("candidates") or [])):
+            notes.append("no_reviewable_claims_detected")
+        notes.extend([str(item) for item in list((results["review_focus_validator"].outputs or {}).get("notes") or []) if str(item).strip()])
+        unique: list[str] = []
+        for note in notes:
+            normalized = str(note or "").strip()
+            if not normalized or normalized in unique:
+                continue
+            unique.append(normalized)
+        return unique
+
+    def _execute_subagent_dag(
+        self,
+        nodes: list[SubagentDagNodeSpec],
+        *,
+        max_workers: int | None = None,
+        dag_id: str,
+        start_from_node_id: str | None = None,
+    ) -> dict[str, SubagentDagNodeResult]:
+        executor = SubagentDagExecutor(
+            invoke_subagent=self._invoke_subagent,
+            emit_event=self._emit_runtime_event,
+        )
+        resolved_start_from_node_id = start_from_node_id or self._subagent_dag_start_from_node_id(
+            dag_id=dag_id,
+        )
+        return executor.execute(
+            nodes,
+            max_workers=max_workers,
+            cache_context=self._subagent_dag_cache_context(dag_id=dag_id),
+            start_from_node_id=resolved_start_from_node_id,
+        )
+
+    def _dag_metadata(
+        self,
+        *,
+        task_name: str,
+        agent_path: str,
+        objective: str | None,
+    ) -> dict[str, Any]:
+        return {
+            "task_name": task_name,
+            "agent_path": agent_path,
+            "objective": objective,
+            "phase": "review",
+        }
+
+    def _build_subagent_invocation(
+        self,
+        *,
+        subagent_type: str,
+        objective: str | None,
+        inputs: dict[str, Any],
+        task_name: str,
+        agent_path: str,
+    ) -> SubagentInvocation:
+        return SubagentInvocation(
+            subagent_type=subagent_type,
+            objective=objective,
+            inputs=inputs,
+            context={
+                "task_name": task_name,
+                "agent_path": agent_path,
+                "phase": "review",
+            },
+        )
+
+    def _review_trace(self, *, results: dict[str, SubagentDagNodeResult]) -> list[dict[str, Any]]:
+        trace: list[dict[str, Any]] = []
+        for node_id, result in results.items():
+            metadata = dict(result.metadata or {})
+            record = {
+                "node_id": node_id,
+                "subagent_type": str((result.record.subagent_type if result.record is not None else metadata.get("subagent_type")) or node_id),
+                "status": result.status,
+                "objective": str((result.record.objective if result.record is not None else metadata.get("objective")) or ""),
+                "invocation_id": result.invocation_id,
+                "task_name": metadata.get("task_name"),
+                "agent_path": metadata.get("agent_path"),
+                "cache_hit": bool(result.cache_hit),
+                "attempts": result.attempts,
+            }
+            if metadata.get("plan_node_id"):
+                record["plan_node_id"] = metadata["plan_node_id"]
+            if metadata.get("subagent_plan_strategy"):
+                record["subagent_plan_strategy"] = metadata["subagent_plan_strategy"]
+            if result.record is not None and result.record.degrade_reason:
+                record["degrade_reason"] = result.record.degrade_reason
+            if result.blocked_by:
+                record["blocked_by"] = list(result.blocked_by)
+            if result.retry_errors:
+                record["retry_errors"] = list(result.retry_errors)
+            trace.append(record)
+        return trace
 
     def _normalize_planning_context_hints(self, raw_hints) -> dict[str, str]:
         return self.strategy_support.normalize_planning_context_hints(raw_hints)

@@ -14,6 +14,7 @@ __all__ = [
     "distillation",
     "planning",
     "reporting",
+    "reviewing",
     "retrieval",
 ]
 
@@ -29,6 +30,7 @@ _EXPORTS = {
     "distillation": "research_system.subagents.distillation",
     "planning": "research_system.subagents.planning",
     "reporting": "research_system.subagents.reporting",
+    "reviewing": "research_system.subagents.reviewing",
     "retrieval": "research_system.subagents.retrieval",
 }
 

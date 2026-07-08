@@ -78,6 +78,27 @@ class ReviewerServiceTests(unittest.TestCase):
         self.assertEqual(direction["benchmark_name"], "HS300")
         self.assertEqual(direction["benchmark_scope"], "sector_vs_hs300")
         self.assertAlmostEqual(direction["excess_metric"], -0.82)
+        subagent_plans = list(result.get("subagent_plans") or [])
+        self.assertEqual(len(subagent_plans), 1)
+        review_node_types = {
+            str(node.get("node_id") or ""): str(node.get("subagent_type") or "")
+            for node in list(subagent_plans[0].get("nodes") or [])
+        }
+        self.assertEqual(review_node_types.get("review_strategy_resolver"), "review_strategy_resolver")
+        self.assertEqual(review_node_types.get("review_claim_extractor"), "review_claim_extractor")
+        self.assertEqual(review_node_types.get("review_context_resolver"), "review_context_resolver")
+        self.assertEqual(review_node_types.get("review_focus_validator"), "review_focus_validator")
+        self.assertEqual(review_node_types.get("review_candidate_1"), "review_candidate_verdict")
+        self.assertEqual(review_node_types.get("review_candidate_2"), "review_candidate_verdict")
+        self.assertEqual(review_node_types.get("review_candidate_3"), "review_candidate_verdict")
+        self.assertEqual(review_node_types.get("review_summary_builder"), "review_summary_builder")
+        patch_op_types = [
+            str(operation.get("op_type") or "")
+            for patch in list(result.get("subagent_plan_patches") or [])
+            for operation in list((patch or {}).get("operations") or [])
+        ]
+        self.assertIn("insert_subagent", patch_op_types)
+        self.assertTrue(any(item.get("subagent_type") == "review_candidate_verdict" for item in list(result.get("subagent_trace") or [])))
 
     def test_reviewer_confirms_catalyst_claim_when_policy_and_regulatory_signals_exist(self) -> None:
         result = self.service.run(
@@ -248,6 +269,11 @@ class ReviewerServiceTests(unittest.TestCase):
         self.assertTrue(result["summary"]["review_required"])
         self.assertEqual(result["summary"]["finding_count"], 0)
         self.assertIn("missing_sector_snapshot", result["summary"]["notes"])
+        subagent_plans = list(result.get("subagent_plans") or [])
+        self.assertEqual(len(subagent_plans), 1)
+        review_node_ids = [str(node.get("node_id") or "") for node in list(subagent_plans[0].get("nodes") or [])]
+        self.assertIn("review_summary_builder", review_node_ids)
+        self.assertFalse(any(node_id.startswith("review_candidate_") for node_id in review_node_ids))
 
     def test_reviewer_requires_fundamental_snapshot_when_cashflow_focus_is_requested(self) -> None:
         result = self.service.run(

@@ -67,6 +67,7 @@ def run_reviewer(
         phase=phase,
         source_entry_count=len(source_entries),
         summary=summary,
+        payload=reviewer_payload,
     )
     emit_reviewer_requested(
         support,
@@ -160,6 +161,7 @@ def run_screen_reviewer(
         context=context,
         phase=phase,
         summary=summary,
+        payload=reviewer_payload,
     )
     source_refs = [{"type": "screen_review", "run_id": context.run_id}]
     add_review_findings(
