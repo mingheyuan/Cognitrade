@@ -86,7 +86,12 @@ def build_orchestrator_dependencies(settings: Settings) -> OrchestratorDependenc
         task_router=task_router,
         progress_service=progress_service,
         skill_runtime=skill_runtime,
-        collector=CollectorService(skill_runtime, settings.runs_root),
+        collector=CollectorService(
+            skill_runtime,
+            settings.runs_root,
+            llm_provider=llm_provider,
+            settings=settings,
+        ),
         distiller=DistillerService(llm_provider, settings, settings.runs_root),
         critic=CriticService(
             settings.runs_root,

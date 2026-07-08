@@ -4,13 +4,17 @@ from pathlib import Path
 from typing import Any
 
 from research_system.agents._subagent_phase_controller import SubagentPhaseController
+from research_system.agents._subagent_phase_policy import CollectorPhasePolicy
 from research_system.schemas.subagents import (
+    SubagentGraphPatch,
     SubagentCatalogEntry,
     SubagentExecutionRecord,
     SubagentInvocation,
     SubagentPlan,
     SubagentPlanNode,
 )
+from research_system.runtime.platform.settings import Settings
+from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.runtime.platform.skill_runtime import SkillRuntime
 from research_system.agents._subagent_invoker import RuntimeBoundSubagentInvoker
 from research_system.services.routing.stock_target_resolution import (
@@ -32,6 +36,7 @@ from research_system.services.methodologies.planning.planning_context import (
 )
 from research_system.subagents.collector import (
     CandidateUniverseBuilderSubagent,
+    CollectionStrategyResolverSubagent,
     QueryNormalizerSubagent,
     ReviewTargetLoaderSubagent,
     SectorSnapshotCollectorSubagent,
@@ -47,12 +52,21 @@ from research_system.subagents.registry import SubagentRegistry
 class CollectorService(RuntimeBoundSubagentInvoker):
     agent_name = "collector"
 
-    def __init__(self, skill_runtime: SkillRuntime, runs_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        skill_runtime: SkillRuntime,
+        runs_root: Path | None = None,
+        llm_provider: OpenAIProvider | None = None,
+        settings: Settings | None = None,
+    ) -> None:
         self._skill_runtime = skill_runtime
+        self.llm_provider = llm_provider
+        self.settings = settings
         self.runs_root = runs_root
         self.registry = SubagentRegistry(
             [
                 QueryNormalizerSubagent(normalize_query=self._normalize_query),
+                CollectionStrategyResolverSubagent(derive_collection_strategy=self._derive_collection_strategy),
                 StockSnapshotCollectorSubagent(skill_runtime),
                 SectorSnapshotCollectorSubagent(skill_runtime),
                 CandidateUniverseBuilderSubagent(skill_runtime),
@@ -65,7 +79,12 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             emit_event=self._emit_runtime_event,
             cache_context_builder=self._subagent_dag_cache_context,
             start_from_node_id_builder=self._subagent_dag_start_from_node_id,
+            runtime_binding_getter=self._runtime_binding_for_events,
+            llm_provider=self.llm_provider,
+            settings=self.settings,
+            service_name=self.agent_name,
         )
+        self.phase_policy = CollectorPhasePolicy()
 
     @property
     def skill_runtime(self) -> SkillRuntime:
@@ -98,6 +117,12 @@ class CollectorService(RuntimeBoundSubagentInvoker):
                 "subagent_trace": [],
                 "subagent_plans": [],
             }
+        if intent in {"stock_check", "sector_research", "stock_screen"}:
+            return self._run_strategy_controlled_collect(
+                intent=intent,
+                query=query,
+                constraints=constraints,
+            )
         trace = []
         subagent_plans: list[dict[str, Any]] = []
         normalized, trace_record = self._execute_single_subagent_node(
@@ -482,6 +507,560 @@ class CollectorService(RuntimeBoundSubagentInvoker):
             "subagent_trace": trace,
             "subagent_plans": subagent_plans,
         }
+
+    def _run_strategy_controlled_collect(
+        self,
+        *,
+        intent: str,
+        query: str,
+        constraints: dict[str, Any],
+    ) -> dict:
+        planning_context_hints = self._normalize_planning_context_hints(constraints.get("planning_context_hints"))
+        preprocess_plan = self._build_collect_preprocess_plan(
+            intent=intent,
+            query=query,
+            planning_context_hints=planning_context_hints,
+            investment_cycle=constraints.get("investment_cycle"),
+        )
+        final_plan, _base_results, patch_rows, final_results = self.phase_controller.execute_patch_cycle(
+            plan=preprocess_plan,
+            dag_id=f"collect_{intent}",
+            base_max_workers=1,
+            final_max_workers=1,
+            build_invocation_factory=lambda current_plan: self._build_collect_phase_invocations(plan=current_plan),
+            patch_builder=lambda base_results: self._build_collect_replan_patch(
+                intent=intent,
+                query=query,
+                constraints=constraints,
+                base_results=base_results,
+            ),
+            replan_builder=lambda current_plan, patch, base_results: self._rebuild_collect_plan(
+                plan=current_plan,
+                intent=intent,
+                query=query,
+                constraints=constraints,
+                planning_context_hints=planning_context_hints,
+                patch=patch,
+                base_results=base_results,
+            ),
+            candidate_plan_variants_builder=lambda rule_final_plan, patch, base_results: self._build_collect_candidate_plan_variants(
+                rule_final_plan=rule_final_plan,
+                intent=intent,
+                query=query,
+                constraints=constraints,
+                planning_context_hints=planning_context_hints,
+                patch=patch,
+                base_results=base_results,
+            ),
+        )
+        return self._finalize_strategy_controlled_collect(
+            intent=intent,
+            query=query,
+            constraints=constraints,
+            final_plan=final_plan,
+            final_results=final_results,
+            patch_rows=patch_rows,
+        )
+
+    def _build_collect_preprocess_plan(
+        self,
+        *,
+        intent: str,
+        query: str,
+        planning_context_hints: dict[str, str],
+        investment_cycle: str | None,
+    ) -> SubagentPlan:
+        query_node = self._build_collect_plan_node_with_inputs(
+            intent=intent,
+            capability="query_normalization",
+            node_id="query_normalizer",
+            objective="Extract structured collection targets from the user query.",
+            inputs={"query": query},
+            cache_key="query_normalizer",
+            notes=["phase=preprocess"],
+        )
+        strategy_node = self._build_collect_plan_node_with_inputs(
+            intent=intent,
+            capability="collection_strategy",
+            node_id="collection_strategy_resolver",
+            objective="Resolve planning-aware collection strategy and data augmentation hints.",
+            inputs={
+                "intent": intent,
+                "query": query,
+                "planning_context_hints": dict(planning_context_hints or {}),
+                "investment_cycle": investment_cycle,
+            },
+            depends_on=["query_normalizer"],
+            cache_key="collection_strategy_resolver",
+            notes=["phase=preprocess"],
+        )
+        return SubagentPlan(
+            intent=intent,
+            phase="collect",
+            strategy="catalog",
+            nodes=[query_node, strategy_node],
+            notes=["collect_preprocess_plan"],
+            catalog_trace={
+                "stage": "collect",
+                "selection_mode": "catalog",
+                "selected_subagent_types": {
+                    "query_normalizer": query_node.subagent_type,
+                    "collection_strategy_resolver": strategy_node.subagent_type,
+                },
+            },
+        )
+
+    def _build_collect_replan_patch(
+        self,
+        *,
+        intent: str,
+        query: str,
+        constraints: dict[str, Any],
+        base_results,
+    ) -> SubagentGraphPatch:
+        normalized = dict(base_results["query_normalizer"].outputs or {})
+        strategy = dict(((base_results["collection_strategy_resolver"].outputs or {}).get("collection_strategy") or {}))
+        if intent == "stock_check":
+            snapshot_types = self._merge_snapshot_types(
+                constraints.get("snapshot_types") or ["market", "fundamental", "notice"],
+                strategy.get("hint_augmented_snapshot_types") or [],
+            )
+            allow_partial = bool(constraints.get("allow_partial_snapshot_types")) or bool(
+                strategy.get("hint_augmented_snapshot_types")
+            )
+            return self.phase_policy.build_stock_check_replan_patch(
+                snapshot_types=snapshot_types,
+                allow_partial=allow_partial,
+            )
+        if intent == "sector_research":
+            include_policy_snapshot = bool(constraints.get("include_policy_snapshot")) or bool(
+                strategy.get("include_policy_snapshot")
+            )
+            return self.phase_policy.build_sector_research_replan_patch(
+                include_policy_snapshot=include_policy_snapshot,
+            )
+        if intent == "stock_screen":
+            sector_query = str(
+                constraints.get("sector_query")
+                or normalized.get("sector_query")
+                or ""
+            ).strip() or None
+            top_n = int(constraints.get("candidate_pool_size") or 8)
+            return self.phase_policy.build_stock_screen_replan_patch(
+                sector_query=sector_query,
+                top_n=top_n,
+            )
+        raise ValueError(f"unsupported strategy-controlled collector intent: {intent}")
+
+    def _rebuild_collect_plan(
+        self,
+        *,
+        plan: SubagentPlan,
+        intent: str,
+        query: str,
+        constraints: dict[str, Any],
+        planning_context_hints: dict[str, str],
+        patch: SubagentGraphPatch,
+        base_results,
+    ) -> SubagentPlan:
+        _ = plan
+        normalized = dict(base_results["query_normalizer"].outputs or {})
+        metadata = dict((patch.operations[0].metadata or {}) if patch.operations else {})
+        preprocess_plan = self._build_collect_preprocess_plan(
+            intent=intent,
+            query=query,
+            planning_context_hints=planning_context_hints,
+            investment_cycle=constraints.get("investment_cycle") or normalized.get("investment_cycle"),
+        )
+        nodes = [node.model_copy(deep=True) for node in preprocess_plan.nodes]
+        notes = list(preprocess_plan.notes or [])
+        if intent == "stock_check":
+            symbol = str(constraints.get("symbol") or normalized.get("symbol") or "").strip() or None
+            snapshot_types = [
+                item for item in str(metadata.get("snapshot_types") or "").split(",") if str(item).strip()
+            ] or ["market", "fundamental", "notice"]
+            allow_partial = str(metadata.get("allow_partial") or "").lower() == "true"
+            nodes.append(
+                self._build_collect_plan_node_with_inputs(
+                    intent=intent,
+                    capability="stock_snapshot_bundle",
+                    node_id="stock_snapshot_collector",
+                    objective="Collect stock-level verified snapshots.",
+                    inputs={
+                        "query": query,
+                        "symbol": symbol,
+                        "snapshot_types": snapshot_types,
+                        "allow_partial": allow_partial,
+                    },
+                    depends_on=["collection_strategy_resolver"],
+                    cache_key="stock_snapshot_collector",
+                    max_attempts=2,
+                    notes=["phase=collect_execution", f"snapshot_types={','.join(snapshot_types)}"],
+                )
+            )
+            notes.extend(
+                [
+                    "collect_stock_check_replanned_from_strategy",
+                    f"snapshot_types={','.join(snapshot_types)}",
+                ]
+            )
+        elif intent == "sector_research":
+            include_policy_snapshot = str(metadata.get("include_policy_snapshot") or "").lower() == "true"
+            nodes.append(
+                self._build_collect_plan_node_with_inputs(
+                    intent=intent,
+                    capability="sector_snapshot",
+                    node_id="sector_snapshot_collector",
+                    objective="Collect sector-level verified snapshot.",
+                    inputs={
+                        "query": str(constraints.get("sector_query") or normalized.get("sector_query") or query),
+                        "include_policy_snapshot": include_policy_snapshot,
+                    },
+                    depends_on=["collection_strategy_resolver"],
+                    cache_key="sector_snapshot_collector",
+                    notes=["phase=collect_execution", f"include_policy_snapshot={str(include_policy_snapshot).lower()}"],
+                )
+            )
+            notes.extend(
+                [
+                    "collect_sector_research_replanned_from_strategy",
+                    f"include_policy_snapshot={str(include_policy_snapshot).lower()}",
+                ]
+            )
+        elif intent == "stock_screen":
+            sector_query = str(metadata.get("sector_query") or "").strip() or None
+            top_n = int(str(metadata.get("top_n") or "8") or 8)
+            nodes.append(
+                self._build_collect_plan_node_with_inputs(
+                    intent=intent,
+                    capability="candidate_universe",
+                    node_id="candidate_universe_builder",
+                    objective="Build candidate universe for stock screening.",
+                    inputs={
+                        "query": query,
+                        "sector_query": sector_query,
+                        "top_n": top_n,
+                    },
+                    depends_on=["collection_strategy_resolver"],
+                    cache_key="candidate_universe_builder",
+                    notes=[
+                        "phase=collect_execution",
+                        f"universe_mode={'sector_seeded' if sector_query else 'market_slice'}",
+                        f"top_n={top_n}",
+                    ],
+                )
+            )
+            notes.extend(
+                [
+                    "collect_stock_screen_replanned_from_strategy",
+                    f"universe_mode={'sector_seeded' if sector_query else 'market_slice'}",
+                    f"top_n={top_n}",
+                ]
+            )
+        else:
+            raise ValueError(f"unsupported strategy-controlled collector intent: {intent}")
+        return SubagentPlan(
+            intent=intent,
+            phase="collect",
+            strategy="catalog",
+            nodes=nodes,
+            notes=self._unique_notes(notes),
+            catalog_trace={
+                **dict(preprocess_plan.catalog_trace or {}),
+                "replanned_from_strategy": True,
+                "final_node_ids": [node.node_id for node in nodes if node.node_id not in {"query_normalizer", "collection_strategy_resolver"}],
+            },
+        )
+
+    def _build_collect_candidate_plan_variants(
+        self,
+        *,
+        rule_final_plan: SubagentPlan,
+        intent: str,
+        query: str,
+        constraints: dict[str, Any],
+        planning_context_hints: dict[str, str],
+        patch: SubagentGraphPatch | None,
+        base_results,
+    ) -> dict[str, SubagentPlan]:
+        normalized = dict(base_results["query_normalizer"].outputs or {})
+        strategy = dict(((base_results["collection_strategy_resolver"].outputs or {}).get("collection_strategy") or {}))
+        variants: dict[str, SubagentPlan] = {}
+        if intent == "stock_check":
+            base_snapshot_types = self._merge_snapshot_types(
+                constraints.get("snapshot_types") or ["market", "fundamental", "notice"],
+                [],
+            )
+            augmented_snapshot_types = self._merge_snapshot_types(
+                base_snapshot_types,
+                strategy.get("hint_augmented_snapshot_types") or [],
+            )
+            rule_variant_id = (
+                "augmented_snapshot_bundle"
+                if augmented_snapshot_types != base_snapshot_types
+                and self._stock_check_plan_snapshot_types(rule_final_plan) == augmented_snapshot_types
+                else "baseline_snapshot_bundle"
+            )
+            variants[rule_variant_id] = rule_final_plan
+            if augmented_snapshot_types != base_snapshot_types:
+                for variant_id, snapshot_types in {
+                    "baseline_snapshot_bundle": base_snapshot_types,
+                    "augmented_snapshot_bundle": augmented_snapshot_types,
+                }.items():
+                    if variant_id in variants:
+                        continue
+                    variants[variant_id] = self._rebuild_collect_plan(
+                        plan=self._build_collect_preprocess_plan(
+                            intent=intent,
+                            query=query,
+                            planning_context_hints=planning_context_hints,
+                            investment_cycle=constraints.get("investment_cycle") or normalized.get("investment_cycle"),
+                        ),
+                        intent=intent,
+                        query=query,
+                        constraints=constraints,
+                        planning_context_hints=planning_context_hints,
+                        patch=self.phase_policy.build_stock_check_replan_patch(
+                            snapshot_types=snapshot_types,
+                            allow_partial=variant_id == "augmented_snapshot_bundle",
+                        ),
+                        base_results=base_results,
+                    )
+            return variants
+        if intent == "sector_research":
+            include_policy = self._sector_research_plan_includes_policy(rule_final_plan)
+            variants["sector_plus_policy" if include_policy else "sector_only"] = rule_final_plan
+            for variant_id, flag in {"sector_only": False, "sector_plus_policy": True}.items():
+                if variant_id in variants:
+                    continue
+                variants[variant_id] = self._rebuild_collect_plan(
+                    plan=self._build_collect_preprocess_plan(
+                        intent=intent,
+                        query=query,
+                        planning_context_hints=planning_context_hints,
+                        investment_cycle=constraints.get("investment_cycle") or normalized.get("investment_cycle"),
+                    ),
+                    intent=intent,
+                    query=query,
+                    constraints=constraints,
+                    planning_context_hints=planning_context_hints,
+                    patch=self.phase_policy.build_sector_research_replan_patch(include_policy_snapshot=flag),
+                    base_results=base_results,
+                )
+            return variants
+        if intent == "stock_screen":
+            sector_query = str(constraints.get("sector_query") or normalized.get("sector_query") or "").strip() or None
+            rule_variant_id = "sector_seeded_universe" if self._stock_screen_plan_sector_query(rule_final_plan) else "market_slice_universe"
+            variants[rule_variant_id] = rule_final_plan
+            if sector_query:
+                for variant_id, current_sector_query in {
+                    "sector_seeded_universe": sector_query,
+                    "market_slice_universe": None,
+                }.items():
+                    if variant_id in variants:
+                        continue
+                    variants[variant_id] = self._rebuild_collect_plan(
+                        plan=self._build_collect_preprocess_plan(
+                            intent=intent,
+                            query=query,
+                            planning_context_hints=planning_context_hints,
+                            investment_cycle=constraints.get("investment_cycle") or normalized.get("investment_cycle"),
+                        ),
+                        intent=intent,
+                        query=query,
+                        constraints=constraints,
+                        planning_context_hints=planning_context_hints,
+                        patch=self.phase_policy.build_stock_screen_replan_patch(
+                            sector_query=current_sector_query,
+                            top_n=int(constraints.get("candidate_pool_size") or 8),
+                        ),
+                        base_results=base_results,
+                    )
+            return variants
+        return {self._resolve_collect_variant_id(intent=intent, plan=rule_final_plan): rule_final_plan}
+
+    def _finalize_strategy_controlled_collect(
+        self,
+        *,
+        intent: str,
+        query: str,
+        constraints: dict[str, Any],
+        final_plan: SubagentPlan,
+        final_results,
+        patch_rows: list[dict[str, Any]],
+    ) -> dict:
+        normalized = dict(final_results["query_normalizer"].outputs or {})
+        collection_strategy = dict(((final_results["collection_strategy_resolver"].outputs or {}).get("collection_strategy") or {}))
+        planning_context_hints = self._normalize_planning_context_hints(constraints.get("planning_context_hints"))
+        source_type_override = str(constraints.get("source_type") or "").strip() or None
+        source_payload = {
+            "title": f"{intent} input query",
+            "content": query,
+            "source_type": source_type_override or ("screen_request" if intent == "stock_screen" else "user_query"),
+            "symbol": str(constraints.get("symbol") or normalized.get("symbol") or "").strip() or None,
+            "collection_strategy": collection_strategy,
+        }
+        symbols = [str(item).strip() for item in list(constraints.get("symbols") or normalized.get("symbols") or []) if str(item).strip()]
+        if symbols:
+            source_payload["symbols"] = symbols
+        if planning_context_hints:
+            source_payload["planning_context_hints"] = planning_context_hints
+        snapshots: list[dict] = []
+        if intent == "stock_check":
+            snapshots = list((final_results["stock_snapshot_collector"].outputs or {}).get("snapshots") or [])
+        elif intent == "sector_research":
+            sector_outputs = dict(final_results["sector_snapshot_collector"].outputs or {})
+            sector_snapshot = dict(sector_outputs.get("snapshot") or {})
+            source_payload["sector"] = sector_snapshot.get("sector")
+            source_payload["theme"] = sector_snapshot.get("theme")
+            if sector_outputs.get("related_snapshots"):
+                source_payload["include_policy_snapshot"] = True
+            if sector_snapshot:
+                snapshots.append(sector_snapshot)
+            snapshots.extend(list(sector_outputs.get("related_snapshots") or []))
+        elif intent == "stock_screen":
+            universe_outputs = dict(final_results["candidate_universe_builder"].outputs or {})
+            source_payload.update(
+                {
+                    "source_type": "screen_request",
+                    "investment_cycle": collection_strategy.get("resolved_investment_cycle") or constraints.get("investment_cycle") or normalized.get("investment_cycle") or "mid_term",
+                    "investment_cycle_assumption": (
+                        str(collection_strategy.get("cycle_assumption") or "").strip()
+                        or ("default_mid_term" if not constraints.get("investment_cycle") and not normalized.get("investment_cycle") else "explicit")
+                    ),
+                    "candidate_universe": universe_outputs.get("candidate_universe"),
+                    "sector_context": universe_outputs.get("sector_context"),
+                }
+            )
+            sector_context = universe_outputs.get("sector_context") or {}
+            sector_snapshot = sector_context.get("sector_snapshot")
+            if sector_snapshot:
+                source_payload["sector"] = sector_snapshot.get("sector")
+                source_payload["theme"] = sector_snapshot.get("theme")
+                snapshots.append(sector_snapshot)
+        return {
+            "sources": [source_payload],
+            "snapshots": snapshots,
+            "subagent_trace": self.phase_controller.trace_from_results(results=final_results),
+            "subagent_plans": [final_plan.model_dump(mode="json")],
+            "subagent_plan_patches": patch_rows,
+        }
+
+    def _build_collect_phase_invocations(self, *, plan: SubagentPlan) -> dict[str, dict[str, Any]]:
+        runtime_nodes: dict[str, dict[str, Any]] = {}
+        for node in plan.nodes:
+            task_name, agent_path = self._collect_node_path(node_id=node.node_id, subagent_type=node.subagent_type)
+            invocation = self.phase_controller.build_invocation(
+                subagent_type=node.subagent_type,
+                objective=node.objective,
+                inputs=dict(node.inputs or {}),
+                task_name=task_name,
+                agent_path=agent_path,
+                phase="collect",
+            )
+            runtime_nodes[node.node_id] = {
+                "builder": lambda results, *, current_invocation=invocation, current_node_id=node.node_id: self._collect_plan_invocation_for_results(
+                    node_id=current_node_id,
+                    invocation=current_invocation,
+                    results=results,
+                ),
+                "metadata": self.phase_controller.build_metadata(
+                    task_name=task_name,
+                    agent_path=agent_path,
+                    objective=node.objective,
+                    phase="collect",
+                ),
+        }
+        return runtime_nodes
+
+    def _collect_plan_invocation_for_results(
+        self,
+        *,
+        node_id: str,
+        invocation: SubagentInvocation,
+        results: dict[str, Any],
+    ) -> SubagentInvocation:
+        if node_id != "collection_strategy_resolver":
+            return invocation
+        query_outputs = dict((results.get("query_normalizer").outputs or {}) if results.get("query_normalizer") else {})
+        inputs = dict(invocation.inputs or {})
+        resolved_cycle = str(query_outputs.get("investment_cycle") or "").strip() or None
+        if resolved_cycle and not str(inputs.get("investment_cycle") or "").strip():
+            inputs["investment_cycle"] = resolved_cycle
+        return invocation.model_copy(update={"inputs": inputs})
+
+    @staticmethod
+    def _collect_node_path(*, node_id: str, subagent_type: str) -> tuple[str, str]:
+        mapping = {
+            "query_normalizer": ("collect:query_normalizer", "collector/query_normalizer"),
+            "collection_strategy_resolver": (
+                "collect:strategy:collection_strategy_resolver",
+                "collector/strategy/collection_strategy_resolver",
+            ),
+            "stock_snapshot_collector": ("collect:stock_snapshot_collector", "collector/stock_snapshot_collector"),
+            "sector_snapshot_collector": ("collect:sector_snapshot_collector", "collector/sector_snapshot_collector"),
+            "candidate_universe_builder": ("collect:candidate_universe_builder", "collector/candidate_universe_builder"),
+        }
+        return mapping.get(node_id, (f"collect:{node_id}", f"collector/{subagent_type}"))
+
+    def _build_collect_plan_node_with_inputs(
+        self,
+        *,
+        intent: str,
+        capability: str,
+        node_id: str,
+        objective: str,
+        inputs: dict[str, Any],
+        cache_key: str,
+        depends_on: list[str] | None = None,
+        max_attempts: int = 1,
+        notes: list[str] | None = None,
+    ) -> SubagentPlanNode:
+        selected = self._select_collect_catalog_entry(intent=intent, capability=capability)
+        return self.phase_controller.build_catalog_plan_node(
+            node_id=node_id,
+            subagent_type=selected.subagent_type,
+            objective=objective,
+            inputs=dict(inputs),
+            tags=["catalog_selected", capability],
+            depends_on=depends_on,
+            max_attempts=max_attempts,
+            replayable=True,
+            cache_scope="run",
+            cache_key=cache_key,
+            notes=notes,
+        )
+
+    @staticmethod
+    def _stock_check_plan_snapshot_types(plan: SubagentPlan) -> list[str]:
+        for node in plan.nodes:
+            if node.node_id == "stock_snapshot_collector":
+                return [str(item).strip() for item in list(node.inputs.get("snapshot_types") or []) if str(item).strip()]
+        return []
+
+    @staticmethod
+    def _sector_research_plan_includes_policy(plan: SubagentPlan) -> bool:
+        for node in plan.nodes:
+            if node.node_id == "sector_snapshot_collector":
+                return bool(node.inputs.get("include_policy_snapshot"))
+        return False
+
+    @staticmethod
+    def _stock_screen_plan_sector_query(plan: SubagentPlan) -> str | None:
+        for node in plan.nodes:
+            if node.node_id == "candidate_universe_builder":
+                value = str(node.inputs.get("sector_query") or "").strip()
+                return value or None
+        return None
+
+    def _resolve_collect_variant_id(self, *, intent: str, plan: SubagentPlan) -> str:
+        if intent == "stock_check":
+            return "augmented_snapshot_bundle" if len(self._stock_check_plan_snapshot_types(plan)) > 3 else "baseline_snapshot_bundle"
+        if intent == "sector_research":
+            return "sector_plus_policy" if self._sector_research_plan_includes_policy(plan) else "sector_only"
+        if intent == "stock_screen":
+            return "sector_seeded_universe" if self._stock_screen_plan_sector_query(plan) else "market_slice_universe"
+        return "rule_replanned"
 
     def _select_collect_catalog_entry(
         self,
@@ -991,6 +1570,16 @@ class CollectorService(RuntimeBoundSubagentInvoker):
         if not child_thread_ids:
             return []
         return [f"child_threads={','.join(child_thread_ids)}"]
+
+    @staticmethod
+    def _unique_notes(notes: list[str]) -> list[str]:
+        unique: list[str] = []
+        for note in notes:
+            normalized = str(note or "").strip()
+            if not normalized or normalized in unique:
+                continue
+            unique.append(normalized)
+        return unique
 
     def _derive_collection_strategy(
         self,

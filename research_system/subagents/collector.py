@@ -164,6 +164,21 @@ class QueryNormalizerOutputModel(BaseModel):
     investment_cycle: str | None = None
 
 
+class CollectionStrategyResolverInputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: str
+    query: str
+    planning_context_hints: dict[str, str] = Field(default_factory=dict)
+    investment_cycle: str | None = None
+
+
+class CollectionStrategyResolverOutputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    collection_strategy: dict[str, object] = Field(default_factory=dict)
+
+
 class QueryNormalizerSubagent:
     subagent_type = "query_normalizer"
     input_model = QueryNormalizerInputModel
@@ -192,6 +207,45 @@ class QueryNormalizerSubagent:
             "sector_query": outputs.get("sector_query"),
             "investment_cycle": outputs.get("investment_cycle"),
         }
+
+
+class CollectionStrategyResolverSubagent:
+    subagent_type = "collection_strategy_resolver"
+    input_model = CollectionStrategyResolverInputModel
+    output_model = CollectionStrategyResolverOutputModel
+    runtime_policy = SubagentRuntimePolicy()
+    catalog_metadata = SubagentCatalogMetadata(
+        summary="Resolve planning-aware collection strategy, including snapshot augmentation and policy focus.",
+        capabilities=("collection_strategy", "planning_strategy"),
+        stage="collect",
+        cost_class="low",
+        latency_class="low",
+        side_effect_level="none",
+        suitable_intents=("stock_check", "stock_compare", "stock_screen", "sector_research", "review_thesis"),
+        tags=("deterministic", "preprocess"),
+    )
+
+    def __init__(self, *, derive_collection_strategy: Callable[..., dict[str, Any]]) -> None:
+        self.derive_collection_strategy = derive_collection_strategy
+
+    def run(
+        self,
+        *,
+        intent: str,
+        query: str,
+        planning_context_hints: dict[str, str] | None = None,
+        investment_cycle: str | None = None,
+    ) -> dict[str, Any]:
+        strategy = dict(
+            self.derive_collection_strategy(
+                intent=intent,
+                query=query,
+                planning_context_hints=dict(planning_context_hints or {}),
+                investment_cycle=investment_cycle,
+            )
+            or {}
+        )
+        return {"collection_strategy": strategy}
 
 
 class SnapshotSkillRunnerSubagent:

@@ -227,6 +227,64 @@ class ReporterPhasePolicy(SubagentPhaseRulePolicy):
         return None
 
 
+class CollectorPhasePolicy(SubagentPhaseRulePolicy):
+    def build_stock_check_replan_patch(
+        self,
+        *,
+        snapshot_types: list[str],
+        allow_partial: bool,
+    ) -> SubagentGraphPatch:
+        return self.build_replan_patch(
+            reason="collector_stock_check_strategy_resolved",
+            notes=[
+                "replan_collect_stock_check_from_strategy",
+                f"snapshot_types={','.join(snapshot_types)}",
+                f"allow_partial={str(bool(allow_partial)).lower()}",
+            ],
+            metadata={
+                "snapshot_types": ",".join(snapshot_types),
+                "allow_partial": str(bool(allow_partial)).lower(),
+            },
+        )
+
+    def build_sector_research_replan_patch(
+        self,
+        *,
+        include_policy_snapshot: bool,
+    ) -> SubagentGraphPatch:
+        return self.build_replan_patch(
+            reason="collector_sector_strategy_resolved",
+            notes=[
+                "replan_collect_sector_research_from_strategy",
+                f"include_policy_snapshot={str(bool(include_policy_snapshot)).lower()}",
+            ],
+            metadata={
+                "include_policy_snapshot": str(bool(include_policy_snapshot)).lower(),
+            },
+        )
+
+    def build_stock_screen_replan_patch(
+        self,
+        *,
+        sector_query: str | None,
+        top_n: int,
+    ) -> SubagentGraphPatch:
+        universe_mode = "sector_seeded" if str(sector_query or "").strip() else "market_slice"
+        return self.build_replan_patch(
+            reason="collector_stock_screen_strategy_resolved",
+            notes=[
+                "replan_collect_stock_screen_from_strategy",
+                f"universe_mode={universe_mode}",
+                f"top_n={top_n}",
+            ],
+            metadata={
+                "sector_query": str(sector_query or ""),
+                "top_n": str(int(top_n)),
+                "universe_mode": universe_mode,
+            },
+        )
+
+
 class DistillerPhasePolicy(SubagentPhaseRulePolicy):
     def build_chunk_execution_replan_patch(
         self,
@@ -383,6 +441,7 @@ class ScreenReviewerPhasePolicy(SubagentPhaseRulePolicy):
 
 
 __all__ = [
+    "CollectorPhasePolicy",
     "CriticPhasePolicy",
     "DistillerPhasePolicy",
     "ReporterPhasePolicy",
