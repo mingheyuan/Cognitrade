@@ -86,6 +86,7 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "workspace_root": workspace_root,
         "runs_root": workspace_root / "runs",
         "proposals_root": workspace_root / "proposals",
+        "subagent_discovery_root": workspace_root / "subagent_discovery",
         "reports_root": workspace_root / "reports",
         "memory_root": workspace_root / "memory",
         "config_root": config_root,

@@ -43,6 +43,7 @@ from research_system.runtime.orchestration import (
     OrchestratorRunSuccessSupport,
     OrchestratorRunTerminalSupport,
     OrchestratorRuntimeIoSupport,
+    OrchestratorSubagentDiscoveryAdminSupport,
     OrchestratorSubagentBridge,
     build_orchestrator_dependencies,
 )
@@ -73,6 +74,10 @@ class OrchestratorDependenciesTests(unittest.TestCase):
                 self.assertIs(dependencies.retriever.llm_provider, dependencies.llm_provider)
                 self.assertIs(dependencies.supervisor.llm_provider, dependencies.llm_provider)
                 self.assertIs(dependencies.methodology_memory_writer.memory_service, dependencies.memory_service)
+                self.assertEqual(
+                    dependencies.subagent_discovery_store.root,
+                    settings.subagent_discovery_root,
+                )
             finally:
                 dependencies.close()
 
@@ -134,9 +139,14 @@ class OrchestratorDependenciesTests(unittest.TestCase):
                 )
                 self.assertIsInstance(orchestrator.admin, OrchestratorAdminService)
                 self.assertIs(orchestrator.admin.proposal_store, orchestrator.proposal_store)
+                self.assertIs(orchestrator.admin.subagent_discovery_store, orchestrator.subagent_discovery_store)
                 self.assertIs(orchestrator.admin.research_support, orchestrator.research_support)
                 self.assertIsInstance(orchestrator.admin.run_admin, OrchestratorRunAdminSupport)
                 self.assertIsInstance(orchestrator.admin.proposal_admin, OrchestratorProposalAdminSupport)
+                self.assertIsInstance(
+                    orchestrator.admin.subagent_discovery_admin,
+                    OrchestratorSubagentDiscoveryAdminSupport,
+                )
                 self.assertIsInstance(orchestrator.admin.qdrant_admin, OrchestratorQdrantAdminSupport)
                 self.assertIsInstance(orchestrator.subagent_bridge, OrchestratorSubagentBridge)
                 self.assertIs(orchestrator.subagent_bridge.host, orchestrator)

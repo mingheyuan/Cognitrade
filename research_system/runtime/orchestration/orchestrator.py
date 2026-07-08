@@ -91,6 +91,7 @@ class ResearchOrchestrator:
         self.dcf_service = dependencies.dcf_service
         self.cashflow_resilience_service = dependencies.cashflow_resilience_service
         self.proposal_store = dependencies.proposal_store
+        self.subagent_discovery_store = dependencies.subagent_discovery_store
         self.methodology_evolver = dependencies.methodology_evolver
         self.proposal_generator = dependencies.proposal_generator
         self.methodology_manifest_service = dependencies.methodology_manifest_service
@@ -218,6 +219,27 @@ class ResearchOrchestrator:
 
     def list_proposals(self, *, status: str | None = None, limit: int = 50) -> list[dict]:
         return self._admin().list_proposals(status=status, limit=limit)
+
+    def list_subagent_discovery_requests(self, *, status: str | None = None, limit: int = 50) -> list[dict]:
+        return self._admin().list_subagent_discovery_requests(status=status, limit=limit)
+
+    def show_subagent_discovery_request(self, ticket_id: str) -> dict:
+        return self._admin().show_subagent_discovery_request(ticket_id)
+
+    def review_subagent_discovery_request(
+        self,
+        ticket_id: str,
+        *,
+        decision: str,
+        reviewer: str = "manual_cli_review",
+        reason: str | None = None,
+    ) -> dict:
+        return self._admin().review_subagent_discovery_request(
+            ticket_id,
+            decision=decision,
+            reviewer=reviewer,
+            reason=reason,
+        )
 
     def show_proposal(self, proposal_id: str) -> dict:
         return self._admin().show_proposal(proposal_id)

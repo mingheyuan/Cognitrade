@@ -108,6 +108,7 @@ class OrchestratorActionRunner:
             execution_policy=context.execution_policy,
             context=context,
             support=self.support,
+            subagent_discovery_store=getattr(self.host, "subagent_discovery_store", None),
             intent=context.state.intent,
             thread_id=context.thread.thread_id,
             turn_id=context.turn.turn_id,

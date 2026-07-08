@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -91,6 +92,22 @@ class SubagentToolDiscoveryRequest(BaseModel):
     preferred_protocols: list[str] = Field(default_factory=lambda: ["mcp", "openapi"])
     reason: str
     policy_source: Literal["rule", "llm", "hybrid", "explicit"] = "rule"
+    notes: list[str] = Field(default_factory=list)
+
+
+class SubagentDiscoveryTicket(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ticket_id: str
+    status: Literal["pending", "approved", "rejected"] = "pending"
+    capability_gap: SubagentCapabilityGap
+    tool_discovery_request: SubagentToolDiscoveryRequest
+    reviewer: str | None = None
+    review_reason: str | None = None
+    reviewed_at: datetime | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    candidate_catalog_entries: list[SubagentCatalogEntry] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
 

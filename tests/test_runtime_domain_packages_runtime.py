@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from research_system.runtime import history as history_package
+from research_system.runtime import orchestration as orchestration_package
 from research_system.runtime import planning as planning_package
 from research_system.runtime import proposals as proposals_package
 from research_system.runtime import supervision as supervision_package
@@ -27,6 +28,7 @@ from research_system.runtime.history import (
     SessionHistoryStepBuilder,
     SessionHistoryTraceRebuilder,
 )
+from research_system.runtime.orchestration import OrchestratorSubagentDiscoveryAdminSupport, SubagentDiscoveryStore
 from research_system.runtime.planning.action_factory import PlannerActionFactory
 from research_system.runtime.planning.context_hints import PlannerContextHints
 from research_system.runtime.planning.dynamic_plan_support import PlannerDynamicPlanSupport
@@ -127,6 +129,16 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
         self.assertIs(supervision_package.SupervisorSectorResearchSupport, SupervisorSectorResearchSupport)
         self.assertIs(supervision_package.SupervisorStockCheckSupport, SupervisorStockCheckSupport)
         self.assertIs(supervision_package.SupervisorStockScreenSupport, SupervisorStockScreenSupport)
+
+    def test_orchestration_package_exports_discovery_components(self) -> None:
+        self.assertIs(
+            orchestration_package.OrchestratorSubagentDiscoveryAdminSupport,
+            OrchestratorSubagentDiscoveryAdminSupport,
+        )
+        self.assertIs(
+            orchestration_package.SubagentDiscoveryStore,
+            SubagentDiscoveryStore,
+        )
 
 
 if __name__ == "__main__":

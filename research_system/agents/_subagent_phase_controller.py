@@ -99,6 +99,10 @@ class SubagentPhaseController:
                 requires_llm=requires_llm,
             )
             discovery_request = self._build_tool_discovery_request(gap=gap)
+            self._persist_tool_discovery_request(
+                gap=gap,
+                request=discovery_request,
+            )
             self._record_capability_gap(gap=gap)
             self._record_tool_discovery_request(request=discovery_request)
             raise SubagentCapabilityGapError(
@@ -533,6 +537,25 @@ class SubagentPhaseController:
                 message=f"Requested tool discovery for capability {request.capability}",
                 payload=dict(payload),
             )
+
+    def _persist_tool_discovery_request(
+        self,
+        *,
+        gap: SubagentCapabilityGap,
+        request: SubagentToolDiscoveryRequest,
+    ) -> None:
+        binding = dict(self.runtime_binding_getter() or {}) if callable(self.runtime_binding_getter) else {}
+        store = binding.get("subagent_discovery_store")
+        create_request = getattr(store, "create_request", None)
+        if not callable(create_request):
+            return
+        try:
+            create_request(
+                gap=gap,
+                request=request,
+            )
+        except Exception:
+            return
 
 
 __all__ = ["SubagentCapabilityGapError", "SubagentPhaseController"]

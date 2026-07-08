@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from research_system.runtime.proposals.management.admin_support import (
     OrchestratorProposalAdminSupport,
 )
+from research_system.runtime.orchestration.subagent_discovery_admin_support import (
+    OrchestratorSubagentDiscoveryAdminSupport,
+)
 from research_system.runtime.orchestration.orchestrator_qdrant_admin_support import (
     OrchestratorQdrantAdminSupport,
 )
@@ -26,6 +29,7 @@ class OrchestratorAdminService:
     retention: RunRetentionService
     retriever: object
     proposal_store: object | None = None
+    subagent_discovery_store: object | None = None
     research_support: object | None = None
     orchestrator_error_cls: type[Exception] = Exception
 
@@ -33,6 +37,7 @@ class OrchestratorAdminService:
         self.runtime_io = OrchestratorRuntimeIoSupport(self)
         self.run_admin = OrchestratorRunAdminSupport(self)
         self.proposal_admin = OrchestratorProposalAdminSupport(self)
+        self.subagent_discovery_admin = OrchestratorSubagentDiscoveryAdminSupport(self)
         self.qdrant_admin = OrchestratorQdrantAdminSupport(self)
 
     def replay(self, run_id: str) -> dict:
@@ -70,6 +75,27 @@ class OrchestratorAdminService:
 
     def show_proposal(self, proposal_id: str) -> dict:
         return self.proposal_admin.show_proposal(proposal_id)
+
+    def list_subagent_discovery_requests(self, *, status: str | None = None, limit: int = 50) -> list[dict]:
+        return self.subagent_discovery_admin.list_requests(status=status, limit=limit)
+
+    def show_subagent_discovery_request(self, ticket_id: str) -> dict:
+        return self.subagent_discovery_admin.show_request(ticket_id)
+
+    def review_subagent_discovery_request(
+        self,
+        ticket_id: str,
+        *,
+        decision: str,
+        reviewer: str = "manual_cli_review",
+        reason: str | None = None,
+    ) -> dict:
+        return self.subagent_discovery_admin.review_request(
+            ticket_id,
+            decision=decision,
+            reviewer=reviewer,
+            reason=reason,
+        )
 
     def review_proposal(
         self,
@@ -109,6 +135,11 @@ class OrchestratorAdminService:
         if self.proposal_store is None:
             raise self.orchestrator_error_cls("proposal_store is not configured")
         return self.proposal_store
+
+    def require_subagent_discovery_store(self):
+        if self.subagent_discovery_store is None:
+            raise self.orchestrator_error_cls("subagent_discovery_store is not configured")
+        return self.subagent_discovery_store
 
     def require_research_support(self):
         if self.research_support is None:

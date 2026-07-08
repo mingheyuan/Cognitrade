@@ -12,6 +12,7 @@ from research_system.agents.retriever.service import RetrieverService
 from research_system.agents.screener.service import ScreenerService
 from research_system.agents.screen_reviewer.service import ScreenReviewerService
 from research_system.runtime.core.gates import GateEvaluator
+from research_system.runtime.orchestration.subagent_discovery_store import SubagentDiscoveryStore
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.platform.skill_runtime import SkillRuntime
 from research_system.runtime.planning.planner import RuntimePlanner
@@ -53,6 +54,7 @@ class OrchestratorDependencies:
     dcf_service: DCFService
     cashflow_resilience_service: CashflowResilienceService
     proposal_store: ProposalStore
+    subagent_discovery_store: SubagentDiscoveryStore
     methodology_evolver: MethodologyEvolver
     proposal_generator: ProposalGenerator
     methodology_manifest_service: MethodologyManifestService
@@ -120,6 +122,7 @@ def build_orchestrator_dependencies(settings: Settings) -> OrchestratorDependenc
         dcf_service=DCFService(),
         cashflow_resilience_service=CashflowResilienceService(),
         proposal_store=ProposalStore(settings.proposals_root),
+        subagent_discovery_store=SubagentDiscoveryStore(settings.subagent_discovery_root),
         methodology_evolver=MethodologyEvolver(),
         proposal_generator=ProposalGenerator(),
         methodology_manifest_service=MethodologyManifestService(settings),

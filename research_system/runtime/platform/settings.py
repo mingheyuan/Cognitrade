@@ -68,6 +68,7 @@ class Settings(BaseModel):
     workspace_root: Path
     runs_root: Path
     proposals_root: Path
+    subagent_discovery_root: Path
     reports_root: Path
     memory_root: Path
     config_root: Path
