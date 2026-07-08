@@ -213,6 +213,99 @@ class SubagentPhaseControllerTests(unittest.TestCase):
         )
         self.assertIn("review_summary_builder", final_results)
 
+    def test_execute_patch_cycle_supports_replan_requests(self) -> None:
+        plan = SubagentPlan(
+            plan_id="plan_initial",
+            intent="review_thesis",
+            phase="review",
+            strategy="catalog",
+            nodes=[
+                self.controller.build_catalog_plan_node(
+                    node_id="review_strategy_resolver",
+                    subagent_type="cheap_review",
+                    objective="Resolve review strategy.",
+                    inputs={"value": 1},
+                    cache_key="review_strategy_resolver",
+                )
+            ],
+        )
+
+        def _runtime_nodes(current_plan: SubagentPlan):
+            return {
+                node.node_id: {
+                    "builder": (
+                        lambda _results, *, current_node=node: self.controller.build_invocation(
+                            subagent_type=current_node.subagent_type,
+                            objective=current_node.objective,
+                            inputs=dict(current_node.inputs or {}),
+                            task_name=f"review:{current_node.node_id}",
+                            agent_path=f"reviewer/{current_node.node_id}",
+                            phase="review",
+                        )
+                    ),
+                    "metadata": self.controller.build_metadata(
+                        task_name=f"review:{node.node_id}",
+                        agent_path=f"reviewer/{node.node_id}",
+                        objective=node.objective,
+                        phase="review",
+                    ),
+                }
+                for node in current_plan.nodes
+            }
+
+        def _build_patch(_results):
+            return SubagentGraphPatch(
+                decision_type="replan",
+                policy_source="rule",
+                confidence=1.0,
+                notes=["request_subagent_replan"],
+                operations=[
+                    SubagentGraphPatchOperation(
+                        op_type="request_replan",
+                        reason="review summary path should be rebuilt",
+                    )
+                ],
+            )
+
+        def _replan_builder(current_plan: SubagentPlan, patch: SubagentGraphPatch, _results):
+            return current_plan.model_copy(
+                update={
+                    "plan_id": "plan_replanned",
+                    "notes": [*list(current_plan.notes or []), *list(patch.notes or []), "replanned"],
+                    "nodes": [
+                        *list(current_plan.nodes or []),
+                        self.controller.build_catalog_plan_node(
+                            node_id="review_summary_builder",
+                            subagent_type="cheap_review",
+                            objective="Build review summary.",
+                            inputs={"value": 2},
+                            depends_on=["review_strategy_resolver"],
+                            cache_key="review_summary_builder",
+                        ),
+                    ],
+                },
+                deep=True,
+            )
+
+        final_plan, base_results, patch_rows, final_results = self.controller.execute_patch_cycle(
+            plan=plan,
+            dag_id="review_execution",
+            base_max_workers=1,
+            final_max_workers=1,
+            build_invocation_factory=_runtime_nodes,
+            patch_builder=_build_patch,
+            replan_builder=_replan_builder,
+        )
+
+        self.assertIn("review_strategy_resolver", base_results)
+        self.assertEqual(len(patch_rows), 1)
+        self.assertEqual(final_plan.plan_id, "plan_replanned")
+        self.assertEqual(
+            [node.node_id for node in final_plan.nodes],
+            ["review_strategy_resolver", "review_summary_builder"],
+        )
+        self.assertIn("review_summary_builder", final_results)
+
 
 if __name__ == "__main__":
     unittest.main()

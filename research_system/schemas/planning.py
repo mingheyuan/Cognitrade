@@ -94,7 +94,7 @@ class ActionPlanPatch(BaseModel):
 class SupervisorDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    decision_type: Literal["continue", "stop"] = "continue"
+    decision_type: Literal["continue", "stop", "replan"] = "continue"
     next_actions: list[ActionSpec] = Field(default_factory=list)
     completed_action_ids: list[str] = Field(default_factory=list)
     skipped_action_ids: list[str] = Field(default_factory=list)

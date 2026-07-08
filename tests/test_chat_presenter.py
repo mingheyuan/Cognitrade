@@ -108,6 +108,22 @@ class ChatPresenterTests(unittest.TestCase):
         self.assertEqual(chunks[0].kind, "event")
         self.assertIn("next: retrieve / retriever / retrieve", chunks[0].text)
 
+    def test_supervisor_decision_event_summarizes_replan(self) -> None:
+        presenter = ChatStreamPresenter()
+        chunks = presenter.on_event(
+            _event(
+                event_type="supervisor_decision",
+                message="Supervisor evaluated next actions",
+                payload={
+                    "decision_type": "replan",
+                    "next_actions": [],
+                    "notes": ["need a fresh review path"],
+                },
+            )
+        )
+        self.assertEqual(chunks[0].kind, "event")
+        self.assertIn("replan: need a fresh review path", chunks[0].text)
+
     def test_action_plan_patch_event_is_captured_in_live_trace_payload(self) -> None:
         presenter = ChatStreamPresenter()
 

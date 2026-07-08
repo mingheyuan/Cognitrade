@@ -13,7 +13,7 @@ from research_system.runtime.storage.jsonl import read_json
 from research_system.runtime.supervision import RuntimeSupervisor
 from research_system.runtime.supervision.blackboard_view import SupervisorBlackboardView
 from research_system.runtime.supervision.decision_factory import SupervisorDecisionFactory
-from research_system.schemas.planning import ActionSpec
+from research_system.schemas.planning import ActionPlan, ActionPlanPatch, ActionPlanPatchOperation, ActionSpec
 from research_system.schemas.protocol import RequestEnvelope
 from research_system.schemas.runtime import BlackboardEntry
 
@@ -226,6 +226,49 @@ class PlannerSupervisorTests(unittest.TestCase):
             retrieve_action.inputs["planning_context_hints"]["methodology_memory_type"],
             "dimension_experience",
         )
+
+    def test_replan_action_plan_preserves_replan_metadata(self) -> None:
+        planner = RuntimePlanner()
+        current_plan = ActionPlan(
+            plan_id="plan_current",
+            intent="stock_screen",
+            strategy="dynamic",
+            actions=[
+                ActionSpec(node_id="collect", phase="collect", agent="collector"),
+                ActionSpec(node_id="screen", phase="screen", agent="screener", depends_on=["collect"]),
+                ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever", depends_on=["screen"]),
+                ActionSpec(node_id="report", phase="report", agent="reporter", depends_on=["retrieve"]),
+            ],
+            dispatch_trace={"source": "route_table"},
+        )
+        plan_patch = ActionPlanPatch(
+            decision_type="replan",
+            operations=[
+                ActionPlanPatchOperation(
+                    op_type="request_replan",
+                    reason="screen follow-up should be rebuilt",
+                    metadata={"trigger": "manual_test"},
+                )
+            ],
+            notes=["request_action_plan_replan"],
+            policy_source="rule",
+            termination_reason="screen follow-up should be rebuilt",
+        )
+
+        replanned = planner.replan_action_plan(
+            intent="stock_screen",
+            request=RequestEnvelope(user_query="screen growth stocks"),
+            current_plan=current_plan,
+            plan_patch=plan_patch,
+        )
+
+        self.assertEqual(replanned.intent, "stock_screen")
+        self.assertEqual(replanned.dispatch_trace["replanned_from_plan_id"], "plan_current")
+        self.assertEqual(replanned.dispatch_trace["replan_patch_id"], plan_patch.patch_id)
+        self.assertEqual(replanned.dispatch_trace["replan_policy_source"], "rule")
+        self.assertEqual(replanned.dispatch_trace["replan_reason"], "screen follow-up should be rebuilt")
+        self.assertIn("request_action_plan_replan", replanned.notes)
+        self.assertIn("replanned_from:plan_current", replanned.notes)
 
     def test_stock_screen_initial_plan_is_dynamic_and_excludes_screen_review(self) -> None:
         planner = RuntimePlanner()

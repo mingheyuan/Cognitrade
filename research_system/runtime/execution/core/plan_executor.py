@@ -117,6 +117,8 @@ class OrchestratorPlanExecutor:
                 request=request,
                 plan=plan,
                 pending_actions=pending_actions,
+                completed_node_ids=completed_node_ids,
+                skipped_node_ids=skipped_node_ids,
                 plan_patch=decision.plan_patch,
             )
             ready_actions = self.dag_scheduler.ready_actions(
@@ -609,10 +611,22 @@ class OrchestratorPlanExecutor:
         request: RequestEnvelope,
         plan: ActionPlan,
         pending_actions: list[ActionSpec],
+        completed_node_ids: list[str],
+        skipped_node_ids: list[str],
         plan_patch: ActionPlanPatch | None,
     ) -> list[dict[str, Any]]:
         if plan_patch is None:
             return []
+        if self._plan_patch_requests_replan(plan_patch):
+            return self._replan_action_plan(
+                context=context,
+                request=request,
+                plan=plan,
+                pending_actions=pending_actions,
+                completed_node_ids=completed_node_ids,
+                skipped_node_ids=skipped_node_ids,
+                plan_patch=plan_patch,
+            )
         updated_plan = apply_action_plan_patch(plan, plan_patch)
         inserted_node_ids = {
             operation.action.node_id
@@ -656,6 +670,82 @@ class OrchestratorPlanExecutor:
             )
         return [patch_record]
 
+    def _replan_action_plan(
+        self,
+        *,
+        context: RuntimeContext,
+        request: RequestEnvelope,
+        plan: ActionPlan,
+        pending_actions: list[ActionSpec],
+        completed_node_ids: list[str],
+        skipped_node_ids: list[str],
+        plan_patch: ActionPlanPatch,
+    ) -> list[dict[str, Any]]:
+        patch_record = plan_patch.model_dump(mode="json")
+        patch_record.setdefault("plan_id", plan.plan_id)
+        patch_record.setdefault("intent", plan.intent)
+        patch_record.setdefault("thread_id", context.thread.thread_id)
+        patch_record.setdefault("turn_id", context.turn.turn_id)
+        context.action_plan_patches.append(dict(patch_record))
+        self.host._emit_event(
+            context,
+            request_id=request.request_id,
+            intent=plan.intent,
+            event_type="action_plan_replan_requested",
+            phase="supervisor",
+            agent="supervisor",
+            message=f"Requested action plan replan: {plan_patch.patch_id}",
+            payload=patch_record,
+        )
+        replanned_plan = self.host._replan_action_plan(
+            context=context,
+            request=request,
+            current_plan=plan.model_copy(deep=True),
+            plan_patch=plan_patch,
+        )
+        previous_plan_id = plan.plan_id
+        self._replace_plan(plan=plan, replacement_plan=replanned_plan)
+        pending_actions[:] = [
+            action.model_copy(deep=True)
+            for action in plan.actions
+            if action.node_id not in set(completed_node_ids)
+            and action.node_id not in set(skipped_node_ids)
+        ]
+        write_json(context.paths.task_plan, plan.model_dump(mode="json"))
+        context.dynamic_trace.append(
+            {
+                "event": "action_plan_replanned",
+                "previous_plan_id": previous_plan_id,
+                "plan_id": plan.plan_id,
+                "intent": plan.intent,
+                "action_count": len(plan.actions),
+            }
+        )
+        self.host._emit_event(
+            context,
+            request_id=request.request_id,
+            intent=plan.intent,
+            event_type="action_plan_replanned",
+            phase="planning",
+            agent="planner",
+            message=f"Replanned action graph: {previous_plan_id} -> {plan.plan_id}",
+            payload={
+                "previous_plan_id": previous_plan_id,
+                "plan_id": plan.plan_id,
+                "intent": plan.intent,
+                "nodes": [
+                    {
+                        "node_id": action.node_id,
+                        "phase": action.phase,
+                        "agent": action.agent,
+                        "depends_on": list(action.depends_on),
+                    }
+                    for action in plan.actions
+                ],
+            },
+        )
+        return [patch_record]
+
     def _emit_dynamic_action_inserted(
         self,
         *,
@@ -685,6 +775,24 @@ class OrchestratorPlanExecutor:
             message=f"Dynamically inserted action: {action.node_id}",
             payload=action.model_dump(mode="json"),
         )
+
+    @staticmethod
+    def _plan_patch_requests_replan(plan_patch: ActionPlanPatch) -> bool:
+        if plan_patch.decision_type == "replan":
+            return True
+        return any(operation.op_type == "request_replan" for operation in plan_patch.operations)
+
+    @staticmethod
+    def _replace_plan(*, plan: ActionPlan, replacement_plan: ActionPlan) -> None:
+        plan.plan_id = replacement_plan.plan_id
+        plan.intent = replacement_plan.intent
+        plan.strategy = replacement_plan.strategy
+        plan.actions = [action.model_copy(deep=True) for action in replacement_plan.actions]
+        plan.notes = list(replacement_plan.notes or [])
+        plan.entry_strategy = replacement_plan.entry_strategy
+        plan.entry_reason = replacement_plan.entry_reason
+        plan.subagent_required = replacement_plan.subagent_required
+        plan.dispatch_trace = dict(replacement_plan.dispatch_trace or {})
 
     @staticmethod
     def _pop_pending_action(

@@ -49,6 +49,35 @@ class SupervisorDecisionFactory:
             plan_patch=plan_patch,
         )
 
+    def request_replan(
+        self,
+        *,
+        completed_actions: list[str],
+        reason: str,
+        notes: list[str] | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> SupervisorDecision:
+        patch = self.build_patch(
+            notes=list(notes or ["request_action_plan_replan"]),
+            operations=[
+                ActionPlanPatchOperation(
+                    op_type="request_replan",
+                    reason=reason,
+                    metadata={str(key): str(value) for key, value in dict(metadata or {}).items()},
+                )
+            ],
+            policy_source="rule",
+        )
+        assert patch is not None
+        patch.decision_type = "replan"
+        patch.termination_reason = reason
+        return SupervisorDecision(
+            decision_type="replan",
+            completed_action_ids=completed_actions,
+            notes=list(notes or [reason]),
+            plan_patch=patch,
+        )
+
     def build_patch(
         self,
         *,

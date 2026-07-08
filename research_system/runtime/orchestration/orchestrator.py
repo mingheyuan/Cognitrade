@@ -427,6 +427,35 @@ class ResearchOrchestrator:
             retrieval_summary=retrieval_summary,
         )
 
+    def _replan_action_plan(
+        self,
+        *,
+        context: RuntimeContext,
+        request: RequestEnvelope,
+        current_plan: ActionPlan,
+        plan_patch,
+    ) -> ActionPlan:
+        planner = self.planner
+        bind_runtime = getattr(planner, "bind_runtime", None)
+        clear_runtime = getattr(planner, "clear_runtime", None)
+        if callable(bind_runtime):
+            bind_runtime(
+                context=context,
+                support=self._execution_support(),
+                request_id=request.request_id,
+                intent=current_plan.intent,
+            )
+        try:
+            return planner.replan_action_plan(
+                intent=current_plan.intent,
+                request=request,
+                current_plan=current_plan,
+                plan_patch=plan_patch,
+            )
+        finally:
+            if callable(clear_runtime):
+                clear_runtime()
+
     def _trace_task_name(self, payload: dict) -> str:
         return self._compat().trace_task_name(payload)
 

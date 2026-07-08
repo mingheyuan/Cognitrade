@@ -55,6 +55,14 @@ class SubagentPhaseRulePolicy:
             reason=reason,
         )
 
+    @staticmethod
+    def request_replan(*, reason: str, metadata: dict[str, str] | None = None) -> SubagentGraphPatchOperation:
+        return SubagentGraphPatchOperation(
+            op_type="request_replan",
+            reason=reason,
+            metadata={str(key): str(value) for key, value in dict(metadata or {}).items()},
+        )
+
 
 class RetrieverPhasePolicy(SubagentPhaseRulePolicy):
     def build_phase_one_patch(

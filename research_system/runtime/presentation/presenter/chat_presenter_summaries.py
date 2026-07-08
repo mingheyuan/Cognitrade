@@ -35,6 +35,9 @@ class ChatPresenterSummaries:
         if decision_type == "stop":
             note = str(notes[0]).strip() if notes else "Supervisor stopped because no more actions are needed."
             return note
+        if decision_type == "replan":
+            note = str(notes[0]).strip() if notes else "Supervisor requested action plan replan."
+            return f"replan: {note}"
         if decision_type == "continue" and next_actions:
             first = next_actions[0]
             if isinstance(first, dict):

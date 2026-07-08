@@ -64,6 +64,34 @@ class _PatchSupervisor:
         )
 
 
+class _ReplanSupervisor:
+    def decide(self, *, plan, completed_actions, pending_actions, blackboard_entries):
+        if "collect" in completed_actions and plan.plan_id == "plan_initial":
+            return SupervisorDecision(
+                decision_type="replan",
+                completed_action_ids=completed_actions,
+                notes=["need a fresh review path"],
+                plan_patch=ActionPlanPatch(
+                    decision_type="replan",
+                    operations=[
+                        ActionPlanPatchOperation(
+                            op_type="request_replan",
+                            reason="review path should be inserted before retrieval",
+                            metadata={"trigger": "collect_completed"},
+                        )
+                    ],
+                    notes=["request_action_plan_replan"],
+                    termination_reason="review path should be inserted before retrieval",
+                ),
+            )
+        return SupervisorDecision(
+            decision_type="continue" if pending_actions else "stop",
+            next_actions=pending_actions[:1],
+            completed_action_ids=completed_actions,
+            notes=[],
+        )
+
+
 class _Host:
     orchestrator_error_cls = RuntimeError
 
@@ -87,6 +115,26 @@ class _Host:
             context.state.pending_nodes = list(kwargs["pending_nodes"])
         if "completed_nodes" in kwargs and kwargs["completed_nodes"] is not None:
             context.state.completed_nodes = list(kwargs["completed_nodes"])
+
+    def _replan_action_plan(self, *, context, request, current_plan, plan_patch):
+        if current_plan.plan_id != "plan_initial":
+            return current_plan
+        return ActionPlan(
+            plan_id="plan_replanned",
+            intent=current_plan.intent,
+            strategy="dynamic",
+            actions=[
+                ActionSpec(node_id="collect", phase="collect", agent="collector"),
+                ActionSpec(node_id="review", phase="review", agent="reviewer", depends_on=["collect"]),
+                ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever", depends_on=["review"]),
+                ActionSpec(node_id="report", phase="report", agent="reporter", depends_on=["retrieve"]),
+            ],
+            notes=["replanned_for_review_path"],
+            dispatch_trace={
+                "replanned_from_plan_id": current_plan.plan_id,
+                "replan_patch_id": plan_patch.patch_id,
+            },
+        )
 
     def _run_action(
         self,
@@ -321,6 +369,35 @@ class PlanExecutorDagTests(unittest.TestCase):
             retrieve_action = next(action for action in plan.actions if action.node_id == "retrieve")
             self.assertEqual(retrieve_action.depends_on, ["review"])
             self.assertTrue(any(event["event_type"] == "action_plan_patch_applied" for event in host.events))
+        finally:
+            temp_dir.cleanup()
+
+    def test_executor_replans_action_graph_and_resumes_from_completed_nodes(self) -> None:
+        temp_dir, request, context = self._build_context()
+        try:
+            host = _Host(supervisor=_ReplanSupervisor())
+            executor = OrchestratorPlanExecutor(host)
+            plan = ActionPlan(
+                plan_id="plan_initial",
+                intent="review_thesis",
+                strategy="dynamic",
+                actions=[
+                    ActionSpec(node_id="collect", phase="collect", agent="collector"),
+                    ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever", depends_on=["collect"]),
+                    ActionSpec(node_id="report", phase="report", agent="reporter", depends_on=["retrieve"]),
+                ],
+            )
+
+            executor.execute_plan(context=context, request=request, plan=plan)
+
+            self.assertEqual(host.run_attempts, ["collect", "review", "retrieve", "report"])
+            self.assertEqual(context.state.completed_nodes, ["collect", "review", "retrieve", "report"])
+            self.assertEqual(plan.plan_id, "plan_replanned")
+            self.assertEqual([action.node_id for action in plan.actions], ["collect", "review", "retrieve", "report"])
+            self.assertEqual(len(context.action_plan_patches), 1)
+            self.assertEqual(context.action_plan_patches[0]["decision_type"], "replan")
+            self.assertTrue(any(event["event_type"] == "action_plan_replan_requested" for event in host.events))
+            self.assertTrue(any(event["event_type"] == "action_plan_replanned" for event in host.events))
         finally:
             temp_dir.cleanup()
 

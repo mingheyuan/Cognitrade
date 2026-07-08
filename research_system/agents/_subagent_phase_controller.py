@@ -169,6 +169,7 @@ class SubagentPhaseController:
         final_max_workers: int | None,
         build_invocation_factory: Callable[[SubagentPlan], dict[str, dict[str, Any]]],
         patch_builder: Callable[[dict[str, SubagentDagNodeResult]], SubagentGraphPatch | None],
+        replan_builder: Callable[[SubagentPlan, SubagentGraphPatch, dict[str, SubagentDagNodeResult]], SubagentPlan] | None = None,
     ) -> tuple[SubagentPlan, dict[str, SubagentDagNodeResult], list[dict[str, Any]], dict[str, SubagentDagNodeResult]]:
         base_results = self.execute_plan(
             plan=plan,
@@ -177,6 +178,18 @@ class SubagentPhaseController:
             max_workers=base_max_workers,
         )
         patch = patch_builder(base_results)
+        if patch is not None and self._patch_requests_replan(patch):
+            if replan_builder is None:
+                raise ValueError("subagent patch requested replan but no replan_builder was provided")
+            replanned_plan = replan_builder(plan, patch, base_results)
+            patch_rows = [patch.model_dump(mode="json")]
+            final_results = self.execute_plan(
+                plan=replanned_plan,
+                build_invocation=build_invocation_factory(replanned_plan),
+                dag_id=dag_id,
+                max_workers=final_max_workers,
+            )
+            return replanned_plan, base_results, patch_rows, final_results
         final_plan, patch_rows = self.apply_patch(plan=plan, patch=patch)
         if not patch_rows:
             return final_plan, base_results, patch_rows, base_results
@@ -187,6 +200,12 @@ class SubagentPhaseController:
             max_workers=final_max_workers,
         )
         return final_plan, base_results, patch_rows, final_results
+
+    @staticmethod
+    def _patch_requests_replan(patch: SubagentGraphPatch) -> bool:
+        if patch.decision_type == "replan":
+            return True
+        return any(operation.op_type == "request_replan" for operation in patch.operations)
 
     def build_metadata(
         self,

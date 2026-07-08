@@ -44,5 +44,20 @@ class ActionPhaseRulePolicy(ABC):
             notes=notes,
         )
 
+    def request_replan(
+        self,
+        *,
+        completed_actions: list[str],
+        reason: str,
+        notes: list[str] | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> SupervisorDecision:
+        return self.decision_factory.request_replan(
+            completed_actions=completed_actions,
+            reason=reason,
+            notes=notes,
+            metadata=metadata,
+        )
+
 
 __all__ = ["ActionPhaseRulePolicy"]
