@@ -234,6 +234,16 @@ class CliCommandPayloadsTests(unittest.TestCase):
             timeout_seconds=9.5,
             candidate_subagent_type="candidate_collect_http_extension",
         )
+        openapi_runtime_activated = build_cli_command_payload(
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            activated_by="manual_cli_activation",
+            registration_type="openapi_http_runner",
+            source_id="eastmoney",
+            openapi_spec_uri="https://example.com/openapi.json",
+            openapi_operation_id="getMarketSignal",
+            candidate_subagent_type="candidate_collect_http_extension",
+        )
 
         self.assertEqual(
             listed,
@@ -268,6 +278,8 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "source_id": "",
                 "endpoint_path": "",
                 "http_method": "",
+                "openapi_spec_uri": "",
+                "openapi_operation_id": "",
                 "timeout_seconds": None,
             },
         )
@@ -286,6 +298,8 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "source_id": "",
                 "endpoint_path": "",
                 "http_method": "",
+                "openapi_spec_uri": "",
+                "openapi_operation_id": "",
                 "timeout_seconds": None,
             },
         )
@@ -304,6 +318,8 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "source_id": "",
                 "endpoint_path": "",
                 "http_method": "",
+                "openapi_spec_uri": "",
+                "openapi_operation_id": "",
                 "timeout_seconds": None,
             },
         )
@@ -322,7 +338,29 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "source_id": "eastmoney",
                 "endpoint_path": "/api/market-signal",
                 "http_method": "GET",
+                "openapi_spec_uri": "",
+                "openapi_operation_id": "",
                 "timeout_seconds": 9.5,
+            },
+        )
+        self.assertEqual(
+            openapi_runtime_activated,
+            {
+                "command": "activate-subagent-discovery",
+                "ticket_id": "01DISC",
+                "query": "",
+                "intent": "manual_cli_activation",
+                "status_filter": None,
+                "subagent_node_id": "candidate_collect_http_extension",
+                "registration_type": "openapi_http_runner",
+                "skill_name": "",
+                "snapshot_type": "",
+                "source_id": "eastmoney",
+                "endpoint_path": "",
+                "http_method": "",
+                "openapi_spec_uri": "https://example.com/openapi.json",
+                "openapi_operation_id": "getMarketSignal",
+                "timeout_seconds": None,
             },
         )
 

@@ -272,7 +272,7 @@ class RuntimeBoundSubagentInvoker:
                 runtime_policy=runtime_policy,
                 catalog_metadata=catalog_metadata,
             )
-        if runtime_registration.registration_type == "http_json_runner":
+        if runtime_registration.registration_type in {"http_json_runner", "openapi_http_runner"}:
             source_id = str(runtime_registration.source_id or "").strip()
             data_source = DataSourceRegistry().get(source_id)
             if data_source is None or str(data_source.access).strip().lower() != "http":

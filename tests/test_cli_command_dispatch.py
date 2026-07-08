@@ -115,6 +115,8 @@ class _DispatchOrchestratorStub:
         source_id: str | None = None,
         endpoint_path: str | None = None,
         http_method: str | None = None,
+        openapi_spec_uri: str | None = None,
+        openapi_operation_id: str | None = None,
         timeout_seconds: float | None = None,
     ) -> dict:
         return {
@@ -135,6 +137,8 @@ class _DispatchOrchestratorStub:
                                 "source_id": source_id,
                                 "endpoint_path": endpoint_path,
                                 "http_method": http_method,
+                                "openapi_spec_uri": openapi_spec_uri,
+                                "openapi_operation_id": openapi_operation_id,
                                 "timeout_seconds": timeout_seconds,
                             }
                             if registration_type
@@ -346,6 +350,19 @@ class CliCommandDispatchTests(unittest.TestCase):
             timeout_seconds=9.5,
             orchestrator_cls=_DispatchOrchestratorStub,
         )
+        openapi_runtime_activated = execute_cli_payload_command(
+            Settings.from_env(Path(".")),
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            activated_by="ops_user",
+            status_filter="activate openapi runtime skill",
+            candidate_subagent_type="candidate_collect_http_extension",
+            registration_type="openapi_http_runner",
+            source_id="eastmoney",
+            openapi_spec_uri="https://example.com/openapi.json",
+            openapi_operation_id="getMarketSignal",
+            orchestrator_cls=_DispatchOrchestratorStub,
+        )
 
         self.assertEqual(discoveries[0]["ticket_id"], "01DISC")
         self.assertEqual(detail["ticket_id"], "01DISC")
@@ -366,6 +383,14 @@ class CliCommandDispatchTests(unittest.TestCase):
         self.assertEqual(
             http_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["source_id"],
             "eastmoney",
+        )
+        self.assertEqual(
+            openapi_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["registration_type"],
+            "openapi_http_runner",
+        )
+        self.assertEqual(
+            openapi_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["openapi_operation_id"],
+            "getMarketSignal",
         )
 
     def test_execute_cli_payload_command_dispatches_run_id_commands(self) -> None:

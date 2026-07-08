@@ -76,6 +76,8 @@ def execute_app_main_command(
         source_id=getattr(args, "source_id", None),
         endpoint_path=getattr(args, "endpoint_path", None),
         http_method=getattr(args, "http_method", None),
+        openapi_spec_uri=getattr(args, "openapi_spec_uri", None),
+        openapi_operation_id=getattr(args, "openapi_operation_id", None),
         timeout_seconds=getattr(args, "timeout_seconds", None),
         action_node_id=getattr(args, "action_node_id", None),
         dag_id=getattr(args, "dag_id", None),

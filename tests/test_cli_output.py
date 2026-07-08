@@ -155,6 +155,8 @@ class _AppOrchestratorStub:
         source_id: str | None = None,
         endpoint_path: str | None = None,
         http_method: str | None = None,
+        openapi_spec_uri: str | None = None,
+        openapi_operation_id: str | None = None,
         timeout_seconds: float | None = None,
     ) -> dict:
         return {
@@ -175,6 +177,8 @@ class _AppOrchestratorStub:
                                 "source_id": source_id,
                                 "endpoint_path": endpoint_path,
                                 "http_method": http_method,
+                                "openapi_spec_uri": openapi_spec_uri,
+                                "openapi_operation_id": openapi_operation_id,
                                 "timeout_seconds": timeout_seconds,
                             }
                             if registration_type
@@ -481,6 +485,18 @@ class CliOutputTests(unittest.TestCase):
                 http_method="GET",
                 timeout_seconds=9.5,
             )
+            openapi_runtime_activated = _execute_cli_command(
+                Settings.from_env(Path(".")),
+                command="activate-subagent-discovery",
+                ticket_id="01DISC",
+                activated_by="ops_user",
+                status_filter="activate openapi runtime skill",
+                candidate_subagent_type="candidate_collect_http_extension",
+                registration_type="openapi_http_runner",
+                source_id="eastmoney",
+                openapi_spec_uri="https://example.com/openapi.json",
+                openapi_operation_id="getMarketSignal",
+            )
 
         self.assertEqual(rows[0]["ticket_id"], "01DISC")
         self.assertEqual(detail["ticket_id"], "01DISC")
@@ -496,6 +512,10 @@ class CliOutputTests(unittest.TestCase):
         self.assertEqual(
             http_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["source_id"],
             "eastmoney",
+        )
+        self.assertEqual(
+            openapi_runtime_activated["result"]["activated_entries"][0]["runtime_registration"]["openapi_operation_id"],
+            "getMarketSignal",
         )
 
     def test_render_tui_output_uses_ascii_sections(self) -> None:
@@ -1097,6 +1117,47 @@ class CliOutputTests(unittest.TestCase):
                 "notes": ["approved candidate available"],
             }
         )
+        openapi_runtime_detail_output = self._capture_payload_text(
+            {
+                "ticket_id": "01DISC",
+                "status": "approved",
+                "stored_status": "approved",
+                "capability_gap": {
+                    "intent": "stock_screen",
+                    "stage": "collect",
+                    "capability": "screening_strategy",
+                    "preferred_subagent_type": "candidate_screening_strategy",
+                    "requires_llm": False,
+                    "reason": "missing capability",
+                },
+                "tool_discovery_request": {
+                    "search_query": "screening strategy resolver",
+                    "preferred_protocols": ["mcp"],
+                    "reason": "discover resolver",
+                },
+                "candidate_catalog_entries": [],
+                "activated_entries": [
+                    {
+                        "subagent_type": "candidate_collect_http_extension",
+                        "delegate_subagent_type": None,
+                        "runtime_registration": {
+                            "registration_type": "openapi_http_runner",
+                            "skill_name": None,
+                            "snapshot_type": None,
+                            "source_id": "eastmoney",
+                            "endpoint_path": "/api/market-signal",
+                            "http_method": "GET",
+                            "openapi_spec_uri": "https://example.com/openapi.json",
+                            "openapi_operation_id": "getMarketSignal",
+                            "timeout_seconds": None,
+                        },
+                        "status": "active",
+                        "activated_by": "ops_user",
+                    }
+                ],
+                "notes": ["approved candidate available"],
+            }
+        )
 
         self.assertIn("01DISC  [approved]", rows_output)
         self.assertIn("capability=screening_strategy", rows_output)
@@ -1109,6 +1170,10 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn(
             "runtime:http_json_runner source=eastmoney method=GET path=/api/market-signal",
             http_runtime_detail_output,
+        )
+        self.assertIn(
+            "runtime:openapi_http_runner source=eastmoney method=GET path=/api/market-signal op=getMarketSignal spec=https://example.com/openapi.json",
+            openapi_runtime_detail_output,
         )
 
 

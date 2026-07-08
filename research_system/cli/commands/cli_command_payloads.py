@@ -38,6 +38,8 @@ def build_cli_command_payload(
     source_id: str | None = None,
     endpoint_path: str | None = None,
     http_method: str | None = None,
+    openapi_spec_uri: str | None = None,
+    openapi_operation_id: str | None = None,
     timeout_seconds: float | None = None,
     action_node_id: str | None = None,
     dag_id: str | None = None,
@@ -120,6 +122,8 @@ def build_cli_command_payload(
             "source_id": str(source_id or "").strip(),
             "endpoint_path": str(endpoint_path or "").strip(),
             "http_method": str(http_method or "").strip().upper(),
+            "openapi_spec_uri": str(openapi_spec_uri or "").strip(),
+            "openapi_operation_id": str(openapi_operation_id or "").strip(),
             "timeout_seconds": float(timeout_seconds) if timeout_seconds is not None else None,
         }
     raise ValueError(f"unsupported cli command payload: {command}")

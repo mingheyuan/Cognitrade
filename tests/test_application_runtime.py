@@ -108,6 +108,25 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertEqual(http_runtime_activate_args.endpoint_path, "/api/market-signal")
         self.assertEqual(http_runtime_activate_args.http_method, "GET")
         self.assertEqual(http_runtime_activate_args.timeout_seconds, 9.5)
+        openapi_runtime_activate_args = parser.parse_args(
+            [
+                "activate-subagent-discovery",
+                "01DISC",
+                "--registration-type",
+                "openapi_http_runner",
+                "--source-id",
+                "eastmoney",
+                "--openapi-spec-uri",
+                "https://example.com/openapi.json",
+                "--openapi-operation-id",
+                "getMarketSignal",
+            ]
+        )
+        self.assertIsNone(openapi_runtime_activate_args.delegate_subagent_type)
+        self.assertEqual(openapi_runtime_activate_args.registration_type, "openapi_http_runner")
+        self.assertEqual(openapi_runtime_activate_args.source_id, "eastmoney")
+        self.assertEqual(openapi_runtime_activate_args.openapi_spec_uri, "https://example.com/openapi.json")
+        self.assertEqual(openapi_runtime_activate_args.openapi_operation_id, "getMarketSignal")
 
     def test_execute_app_main_command_routes_query_from_thread_and_node_arguments(self) -> None:
         calls: list[dict[str, object]] = []
@@ -159,6 +178,8 @@ class ApplicationRuntimeTests(unittest.TestCase):
             source_id=None,
             endpoint_path=None,
             http_method=None,
+            openapi_spec_uri=None,
+            openapi_operation_id=None,
             timeout_seconds=None,
             as_json=False,
         )
@@ -175,6 +196,8 @@ class ApplicationRuntimeTests(unittest.TestCase):
             source_id=None,
             endpoint_path=None,
             http_method=None,
+            openapi_spec_uri=None,
+            openapi_operation_id=None,
             timeout_seconds=None,
             as_json=False,
         )
@@ -191,6 +214,8 @@ class ApplicationRuntimeTests(unittest.TestCase):
             source_id=None,
             endpoint_path=None,
             http_method=None,
+            openapi_spec_uri=None,
+            openapi_operation_id=None,
             timeout_seconds=None,
             as_json=False,
         )
@@ -207,7 +232,27 @@ class ApplicationRuntimeTests(unittest.TestCase):
             source_id="eastmoney",
             endpoint_path="/api/market-signal",
             http_method="GET",
+            openapi_spec_uri=None,
+            openapi_operation_id=None,
             timeout_seconds=9.5,
+            as_json=False,
+        )
+        openapi_runtime_activate_discovery_args = argparse.Namespace(
+            command="activate-subagent-discovery",
+            ticket_id="01DISC",
+            delegate_subagent_type=None,
+            candidate_subagent_type="candidate_collect_http_extension",
+            activated_by="ops_user",
+            reason="activate openapi runtime skill",
+            registration_type="openapi_http_runner",
+            skill_name=None,
+            snapshot_type=None,
+            source_id="eastmoney",
+            endpoint_path=None,
+            http_method=None,
+            openapi_spec_uri="https://example.com/openapi.json",
+            openapi_operation_id="getMarketSignal",
+            timeout_seconds=None,
             as_json=False,
         )
 
@@ -323,6 +368,20 @@ class ApplicationRuntimeTests(unittest.TestCase):
             ),
             0,
         )
+        self.assertEqual(
+            application_execute_app_main_command(
+                settings,
+                openapi_runtime_activate_discovery_args,
+                build_chat_entry_runtime_fn=None,
+                run_chat_entry_fn=None,
+                run_chat_tui_fn=None,
+                run_chat_fallback_fn=None,
+                handle_chat_line_fn=None,
+                execute_cli_command_fn=fake_execute_cli_command_fn,
+                print_payload_fn=lambda payload, as_json: 0,
+            ),
+            0,
+        )
 
         self.assertEqual(calls[0]["command"], "run-thread")
         self.assertEqual(calls[0]["query"], "thread-child")
@@ -352,6 +411,11 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertEqual(calls[7]["registration_type"], "skill_runner")
         self.assertEqual(calls[7]["skill_name"], "analysis_skill")
         self.assertIsNone(calls[7]["snapshot_type"])
+        self.assertEqual(calls[8]["command"], "activate-subagent-discovery")
+        self.assertEqual(calls[8]["registration_type"], "openapi_http_runner")
+        self.assertEqual(calls[8]["source_id"], "eastmoney")
+        self.assertEqual(calls[8]["openapi_spec_uri"], "https://example.com/openapi.json")
+        self.assertEqual(calls[8]["openapi_operation_id"], "getMarketSignal")
 
 
 if __name__ == "__main__":

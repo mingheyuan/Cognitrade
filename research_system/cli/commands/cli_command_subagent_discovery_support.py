@@ -76,6 +76,8 @@ def execute_activate_subagent_discovery_command(
     source_id: str | None,
     endpoint_path: str | None,
     http_method: str | None,
+    openapi_spec_uri: str | None,
+    openapi_operation_id: str | None,
     timeout_seconds: float | None,
     **_: object,
 ) -> object:
@@ -92,6 +94,8 @@ def execute_activate_subagent_discovery_command(
         source_id=source_id,
         endpoint_path=endpoint_path,
         http_method=http_method,
+        openapi_spec_uri=openapi_spec_uri,
+        openapi_operation_id=openapi_operation_id,
         timeout_seconds=timeout_seconds,
     )
     with orchestrator_cls(settings) as orchestrator:
@@ -107,5 +111,7 @@ def execute_activate_subagent_discovery_command(
             source_id=payload["source_id"] or None,
             endpoint_path=payload["endpoint_path"] or None,
             http_method=payload["http_method"] or None,
+            openapi_spec_uri=payload["openapi_spec_uri"] or None,
+            openapi_operation_id=payload["openapi_operation_id"] or None,
             timeout_seconds=payload["timeout_seconds"],
         )

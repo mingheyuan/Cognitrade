@@ -50,6 +50,8 @@ def _execute_cli_command(
     source_id: str | None = None,
     endpoint_path: str | None = None,
     http_method: str | None = None,
+    openapi_spec_uri: str | None = None,
+    openapi_operation_id: str | None = None,
     timeout_seconds: float | None = None,
 ) -> object:
     return package_execute_cli_command(
@@ -70,6 +72,8 @@ def _execute_cli_command(
         source_id=source_id,
         endpoint_path=endpoint_path,
         http_method=http_method,
+        openapi_spec_uri=openapi_spec_uri,
+        openapi_operation_id=openapi_operation_id,
         timeout_seconds=timeout_seconds,
         orchestrator_cls=ResearchOrchestrator,
     )

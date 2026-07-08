@@ -764,6 +764,136 @@ class SubagentRegistryTests(unittest.TestCase):
             finally:
                 temp_dir_runtime.cleanup()
 
+    def test_shared_runtime_registration_factory_supports_openapi_http_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_openapi_extension",
+                preferred_subagent_type="candidate_collect_market_signal_openapi_extension",
+                reason="missing openapi-backed market signal extension capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_openapi_extension",
+                search_query="stock_check collect market_signal_openapi_extension",
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_skill_runtime": lambda self: type(
+                        "_SkillRuntime",
+                        (),
+                        {"backend": type("_Backend", (), {"registry": {"analysis_skill": object()}})()},
+                    )(),
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+            admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                candidate_catalog_entries=[
+                    {
+                        "subagent_type": "candidate_collect_market_signal_openapi_extension",
+                        "summary": "Approved OpenAPI-backed market signal candidate.",
+                        "capabilities": ["market_signal_openapi_extension"],
+                        "stage": "collect",
+                        "side_effect_level": "read_only",
+                        "suitable_intents": ["stock_check"],
+                        "tags": ["approved_discovery_candidate"],
+                        "input_schema_name": "OpenApiSignalInput",
+                        "output_schema_name": "OpenApiSignalOutput",
+                        "input_json_schema": {
+                            "type": "object",
+                            "properties": {
+                                "symbol": {"type": "string"},
+                                "limit": {"type": "integer"},
+                            },
+                            "required": ["symbol"],
+                        },
+                        "output_json_schema": {
+                            "type": "object",
+                            "properties": {
+                                "signal": {"type": "string"},
+                                "score": {"type": "number"},
+                            },
+                            "required": ["signal"],
+                        },
+                        "runtime_registration_hints": {
+                            "openapi": {
+                                "spec": {
+                                    "openapi": "3.0.0",
+                                    "paths": {
+                                        "/api/market-signal": {
+                                            "get": {
+                                                "operationId": "getMarketSignal",
+                                            }
+                                        }
+                                    },
+                                }
+                            }
+                        },
+                    }
+                ],
+            )
+            admin.activate_request(
+                ticket.ticket_id,
+                registration_type="openapi_http_runner",
+                source_id="eastmoney",
+                openapi_operation_id="getMarketSignal",
+                activated_by="tester",
+                reason="activate openapi runtime registration",
+            )
+
+            service = _RuntimeRegisteredService(store=store, skill_runtime=None)
+            registry = service.registry
+
+            definition = registry.definition("candidate_collect_market_signal_openapi_extension")
+            self.assertIsNotNone(definition.input_model)
+            self.assertIsNotNone(definition.output_model)
+            self.assertIn("symbol", (definition.input_model.model_json_schema().get("properties") or {}))
+            self.assertIn("signal", (definition.output_model.model_json_schema().get("properties") or {}))
+
+            temp_dir_runtime, context, request_envelope = self._build_runtime()
+            try:
+                with patch(
+                    "research_system.subagents.runtime_registered.requests.request",
+                    return_value=_HttpJsonResponseStub({"signal": "bullish", "score": 0.91}),
+                ) as mock_request:
+                    outputs, record = context.agent_control.invoke(
+                        registry=registry,
+                        invocation=SubagentInvocation(
+                            subagent_type="candidate_collect_market_signal_openapi_extension",
+                            objective="Run openapi runtime-registered alias.",
+                            inputs={"symbol": "600036", "limit": 3},
+                        ),
+                        thread_id=context.thread.thread_id,
+                        turn_id=context.turn.turn_id,
+                        request_id=request_envelope.request_id,
+                        agent="tester",
+                        phase="collect",
+                        execution_policy=context.execution_policy,
+                    )
+
+                self.assertEqual(outputs["signal"], "bullish")
+                self.assertEqual(outputs["score"], 0.91)
+                self.assertEqual(record.subagent_type, "candidate_collect_market_signal_openapi_extension")
+                mock_request.assert_called_once_with(
+                    "GET",
+                    "https://www.eastmoney.com/api/market-signal",
+                    params={"symbol": "600036", "limit": 3},
+                    timeout=20.0,
+                )
+            finally:
+                temp_dir_runtime.cleanup()
+
     def test_agent_control_validates_typed_subagent_inputs_and_outputs(self) -> None:
         temp_dir, context, request = self._build_runtime()
         try:

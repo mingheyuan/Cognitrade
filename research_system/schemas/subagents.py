@@ -62,6 +62,7 @@ class SubagentCatalogEntry(BaseModel):
     output_schema_name: str | None = None
     input_json_schema: dict[str, Any] | None = None
     output_json_schema: dict[str, Any] | None = None
+    runtime_registration_hints: dict[str, Any] = Field(default_factory=dict)
 
 
 class SubagentCapabilityGap(BaseModel):
@@ -115,12 +116,14 @@ class SubagentDiscoveryTicket(BaseModel):
 class SubagentRuntimeRegistration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    registration_type: Literal["snapshot_skill_runner", "skill_runner", "http_json_runner"]
+    registration_type: Literal["snapshot_skill_runner", "skill_runner", "http_json_runner", "openapi_http_runner"]
     skill_name: str | None = None
     snapshot_type: str | None = None
     source_id: str | None = None
     endpoint_path: str | None = None
     http_method: Literal["GET", "POST"] | None = None
+    openapi_spec_uri: str | None = None
+    openapi_operation_id: str | None = None
     timeout_seconds: float | None = Field(default=None, gt=0.0)
     notes: list[str] = Field(default_factory=list)
 
@@ -132,13 +135,21 @@ class SubagentRuntimeRegistration(BaseModel):
         normalized_source_id = str(self.source_id or "").strip()
         normalized_endpoint_path = str(self.endpoint_path or "").strip()
         normalized_http_method = str(self.http_method or "").strip().upper()
+        normalized_openapi_spec_uri = str(self.openapi_spec_uri or "").strip()
+        normalized_openapi_operation_id = str(self.openapi_operation_id or "").strip()
         has_timeout_seconds = self.timeout_seconds is not None
         if registration_type == "snapshot_skill_runner":
             if not normalized_skill_name:
                 raise ValueError("snapshot_skill_runner requires skill_name")
             if not normalized_snapshot_type:
                 raise ValueError("snapshot_skill_runner requires snapshot_type")
-            if normalized_source_id or normalized_endpoint_path or normalized_http_method:
+            if (
+                normalized_source_id
+                or normalized_endpoint_path
+                or normalized_http_method
+                or normalized_openapi_spec_uri
+                or normalized_openapi_operation_id
+            ):
                 raise ValueError("snapshot_skill_runner does not support http source settings")
             if has_timeout_seconds:
                 raise ValueError("snapshot_skill_runner does not support timeout_seconds")
@@ -147,7 +158,13 @@ class SubagentRuntimeRegistration(BaseModel):
                 raise ValueError("skill_runner requires skill_name")
             if normalized_snapshot_type:
                 raise ValueError("skill_runner does not support snapshot_type")
-            if normalized_source_id or normalized_endpoint_path or normalized_http_method:
+            if (
+                normalized_source_id
+                or normalized_endpoint_path
+                or normalized_http_method
+                or normalized_openapi_spec_uri
+                or normalized_openapi_operation_id
+            ):
                 raise ValueError("skill_runner does not support http source settings")
             if has_timeout_seconds:
                 raise ValueError("skill_runner does not support timeout_seconds")
@@ -160,6 +177,19 @@ class SubagentRuntimeRegistration(BaseModel):
                 raise ValueError("http_json_runner requires endpoint_path")
             if not normalized_http_method:
                 raise ValueError("http_json_runner requires http_method")
+            if normalized_openapi_spec_uri or normalized_openapi_operation_id:
+                raise ValueError("http_json_runner does not support openapi provenance fields")
+        if registration_type == "openapi_http_runner":
+            if normalized_skill_name or normalized_snapshot_type:
+                raise ValueError("openapi_http_runner does not support skill_name or snapshot_type")
+            if not normalized_source_id:
+                raise ValueError("openapi_http_runner requires source_id")
+            if not normalized_endpoint_path:
+                raise ValueError("openapi_http_runner requires endpoint_path")
+            if not normalized_http_method:
+                raise ValueError("openapi_http_runner requires http_method")
+            if not normalized_openapi_operation_id:
+                raise ValueError("openapi_http_runner requires openapi_operation_id")
         return self
 
 

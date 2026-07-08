@@ -993,7 +993,27 @@ class ChatActionsTests(unittest.TestCase):
                     "source_id": "eastmoney",
                     "endpoint_path": "/api/market-signal",
                     "http_method": "GET",
+                    "openapi_spec_uri": None,
+                    "openapi_operation_id": None,
                     "timeout_seconds": 9.5,
+                },
+            ),
+            (
+                "activate-subagent-discovery",
+                {
+                    "action": "activate-subagent-discovery",
+                    "ticket_id": "01DISC",
+                    "delegate_subagent_type": None,
+                    "candidate_subagent_type": "candidate_collect_http_extension",
+                    "registration_type": "openapi_http_runner",
+                    "skill_name": None,
+                    "snapshot_type": None,
+                    "source_id": "eastmoney",
+                    "endpoint_path": None,
+                    "http_method": None,
+                    "openapi_spec_uri": "https://example.com/openapi.json",
+                    "openapi_operation_id": "getMarketSignal",
+                    "timeout_seconds": None,
                 },
             ),
         ]:
@@ -1025,7 +1045,11 @@ class ChatActionsTests(unittest.TestCase):
         self.assertEqual(calls[4]["endpoint_path"], "/api/market-signal")
         self.assertEqual(calls[4]["http_method"], "GET")
         self.assertEqual(calls[4]["timeout_seconds"], 9.5)
-        self.assertEqual(len(rendered), 5)
+        self.assertEqual(calls[5]["command"], "activate-subagent-discovery")
+        self.assertEqual(calls[5]["registration_type"], "openapi_http_runner")
+        self.assertEqual(calls[5]["openapi_spec_uri"], "https://example.com/openapi.json")
+        self.assertEqual(calls[5]["openapi_operation_id"], "getMarketSignal")
+        self.assertEqual(len(rendered), 6)
 
 
 if __name__ == "__main__":

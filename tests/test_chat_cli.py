@@ -198,7 +198,32 @@ class ChatCliTests(unittest.TestCase):
                 "source_id": "eastmoney",
                 "endpoint_path": "/api/market-signal",
                 "http_method": "GET",
+                "openapi_spec_uri": None,
+                "openapi_operation_id": None,
                 "timeout_seconds": 9.5,
+            },
+        )
+        self.assertEqual(
+            parse_chat_input(
+                "/activate-subagent-discovery 01DISC --registration-type openapi_http_runner "
+                "--candidate candidate_collect_http_extension --source-id eastmoney "
+                "--openapi-spec-uri https://example.com/openapi.json "
+                "--openapi-operation-id getMarketSignal"
+            ),
+            {
+                "action": "activate-subagent-discovery",
+                "ticket_id": "01DISC",
+                "delegate_subagent_type": None,
+                "candidate_subagent_type": "candidate_collect_http_extension",
+                "registration_type": "openapi_http_runner",
+                "skill_name": None,
+                "snapshot_type": None,
+                "source_id": "eastmoney",
+                "endpoint_path": None,
+                "http_method": None,
+                "openapi_spec_uri": "https://example.com/openapi.json",
+                "openapi_operation_id": "getMarketSignal",
+                "timeout_seconds": None,
             },
         )
 

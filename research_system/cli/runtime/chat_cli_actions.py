@@ -251,6 +251,8 @@ def _handle_activate_subagent_discovery_cli_action(runtime: ChatActionRuntime) -
             source_id=str(runtime.parsed.get("source_id") or "").strip() or None,
             endpoint_path=str(runtime.parsed.get("endpoint_path") or "").strip() or None,
             http_method=str(runtime.parsed.get("http_method") or "").strip() or None,
+            openapi_spec_uri=str(runtime.parsed.get("openapi_spec_uri") or "").strip() or None,
+            openapi_operation_id=str(runtime.parsed.get("openapi_operation_id") or "").strip() or None,
             timeout_seconds=runtime.parsed.get("timeout_seconds"),
         ),
     )

@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
+import requests
+import yaml
 from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
 from research_system.schemas.subagents import (
     SubagentActivationEntry,
@@ -89,6 +94,8 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         source_id: str | None = None,
         endpoint_path: str | None = None,
         http_method: str | None = None,
+        openapi_spec_uri: str | None = None,
+        openapi_operation_id: str | None = None,
         timeout_seconds: float | None = None,
     ) -> dict:
         located = self.host.require_subagent_discovery_store().find(ticket_id)
@@ -111,6 +118,8 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             source_id=source_id,
             endpoint_path=endpoint_path,
             http_method=http_method,
+            openapi_spec_uri=openapi_spec_uri,
+            openapi_operation_id=openapi_operation_id,
             timeout_seconds=timeout_seconds,
         )
         normalized_delegate_subagent_type = str(delegate_subagent_type or "").strip() or None
@@ -249,18 +258,22 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         source_id: str | None,
         endpoint_path: str | None,
         http_method: str | None,
+        openapi_spec_uri: str | None,
+        openapi_operation_id: str | None,
         timeout_seconds: float | None,
     ) -> SubagentRuntimeRegistration | None:
         normalized_type = str(registration_type or "").strip()
         if not normalized_type:
             return None
-        if normalized_type not in {"snapshot_skill_runner", "skill_runner", "http_json_runner"}:
+        if normalized_type not in {"snapshot_skill_runner", "skill_runner", "http_json_runner", "openapi_http_runner"}:
             raise self.host.orchestrator_error_cls(f"unsupported runtime registration type: {registration_type}")
         normalized_skill_name = str(skill_name or "").strip()
         normalized_snapshot_type = str(snapshot_type or "").strip()
         normalized_source_id = str(source_id or "").strip()
         normalized_endpoint_path = str(endpoint_path or "").strip()
         normalized_http_method = str(http_method or "").strip().upper()
+        normalized_openapi_spec_uri = str(openapi_spec_uri or "").strip()
+        normalized_openapi_operation_id = str(openapi_operation_id or "").strip()
         normalized_stage = str(candidate_entry.stage or "").strip().lower()
         if normalized_type == "snapshot_skill_runner" and normalized_stage not in {"", "collect"}:
             raise self.host.orchestrator_error_cls(
@@ -271,7 +284,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         if normalized_type == "snapshot_skill_runner" and not normalized_snapshot_type:
             raise self.host.orchestrator_error_cls("snapshot_type is required for snapshot_skill_runner activation")
         if normalized_type == "skill_runner":
-            self._validate_runtime_contract(candidate_entry)
+            self._validate_runtime_contract(candidate_entry, registration_type="skill_runner")
         if normalized_type == "http_json_runner":
             self._validate_http_runtime_registration(
                 candidate_entry,
@@ -279,7 +292,19 @@ class OrchestratorSubagentDiscoveryAdminSupport:
                 endpoint_path=normalized_endpoint_path,
                 http_method=normalized_http_method,
             )
-        else:
+        if normalized_type == "openapi_http_runner":
+            resolved_openapi = self._resolve_openapi_runtime_registration(
+                candidate_entry,
+                source_id=normalized_source_id or None,
+                openapi_spec_uri=normalized_openapi_spec_uri or None,
+                openapi_operation_id=normalized_openapi_operation_id or None,
+            )
+            normalized_source_id = resolved_openapi["source_id"]
+            normalized_endpoint_path = resolved_openapi["endpoint_path"]
+            normalized_http_method = resolved_openapi["http_method"]
+            normalized_openapi_spec_uri = resolved_openapi["openapi_spec_uri"]
+            normalized_openapi_operation_id = resolved_openapi["openapi_operation_id"]
+        if normalized_type in {"snapshot_skill_runner", "skill_runner"}:
             self._validate_skill_name(normalized_skill_name)
         return SubagentRuntimeRegistration(
             registration_type=normalized_type,
@@ -288,6 +313,8 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             source_id=normalized_source_id or None,
             endpoint_path=normalized_endpoint_path or None,
             http_method=normalized_http_method or None,
+            openapi_spec_uri=normalized_openapi_spec_uri or None,
+            openapi_operation_id=normalized_openapi_operation_id or None,
             timeout_seconds=float(timeout_seconds) if timeout_seconds is not None else None,
             notes=[
                 *(
@@ -301,8 +328,13 @@ class OrchestratorSubagentDiscoveryAdminSupport:
                     else []
                 ),
                 *(
+                    ["validated_via_openapi_operation_spec"]
+                    if normalized_type == "openapi_http_runner"
+                    else []
+                ),
+                *(
                     ["validated_runtime_contract_schema"]
-                    if normalized_type in {"skill_runner", "http_json_runner"}
+                    if normalized_type in {"skill_runner", "http_json_runner", "openapi_http_runner"}
                     else []
                 ),
             ],
@@ -316,16 +348,16 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         if skill_name not in registry:
             raise self.host.orchestrator_error_cls(f"unknown skill_name for runtime registration: {skill_name}")
 
-    def _validate_runtime_contract(self, candidate_entry: SubagentCatalogEntry) -> None:
+    def _validate_runtime_contract(self, candidate_entry: SubagentCatalogEntry, *, registration_type: str) -> None:
         input_schema = candidate_entry.input_json_schema
         output_schema = candidate_entry.output_json_schema
         if not self._is_object_contract_schema(input_schema):
             raise self.host.orchestrator_error_cls(
-                f"skill_runner activation requires input_json_schema on candidate: {candidate_entry.subagent_type}"
+                f"{registration_type} activation requires input_json_schema on candidate: {candidate_entry.subagent_type}"
             )
         if not self._is_object_contract_schema(output_schema):
             raise self.host.orchestrator_error_cls(
-                f"skill_runner activation requires output_json_schema on candidate: {candidate_entry.subagent_type}"
+                f"{registration_type} activation requires output_json_schema on candidate: {candidate_entry.subagent_type}"
             )
 
     @staticmethod
@@ -337,6 +369,106 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         if normalized_type and normalized_type != "object":
             return False
         return isinstance(properties, dict)
+
+    def _resolve_openapi_runtime_registration(
+        self,
+        candidate_entry: SubagentCatalogEntry,
+        *,
+        source_id: str | None,
+        openapi_spec_uri: str | None,
+        openapi_operation_id: str | None,
+    ) -> dict[str, str]:
+        if candidate_entry.side_effect_level not in {"none", "read_only"}:
+            raise self.host.orchestrator_error_cls(
+                f"openapi_http_runner activation only supports read-only candidates: {candidate_entry.subagent_type}"
+            )
+        self._validate_runtime_contract(candidate_entry, registration_type="openapi_http_runner")
+        hints = self._candidate_openapi_hints(candidate_entry)
+        resolved_source_id = str(source_id or hints.get("source_id") or "").strip()
+        resolved_spec_uri = str(openapi_spec_uri or hints.get("spec_uri") or "").strip()
+        resolved_operation_id = str(openapi_operation_id or hints.get("operation_id") or "").strip()
+        spec_payload = hints.get("spec")
+        self._validate_http_source(resolved_source_id, registration_type="openapi_http_runner")
+        if not resolved_operation_id:
+            raise self.host.orchestrator_error_cls(
+                f"openapi_http_runner activation requires operation_id for candidate: {candidate_entry.subagent_type}"
+            )
+        spec = self._load_openapi_spec(
+            spec_uri=resolved_spec_uri or None,
+            inline_spec=spec_payload,
+        )
+        endpoint_path, http_method = self._resolve_openapi_operation(
+            spec,
+            operation_id=resolved_operation_id,
+        )
+        return {
+            "source_id": resolved_source_id,
+            "endpoint_path": endpoint_path,
+            "http_method": http_method,
+            "openapi_spec_uri": resolved_spec_uri,
+            "openapi_operation_id": resolved_operation_id,
+        }
+
+    @staticmethod
+    def _candidate_openapi_hints(candidate_entry: SubagentCatalogEntry) -> dict[str, Any]:
+        hints = candidate_entry.runtime_registration_hints
+        if not isinstance(hints, dict):
+            return {}
+        openapi_hints = hints.get("openapi")
+        if isinstance(openapi_hints, dict):
+            return dict(openapi_hints)
+        return {}
+
+    def _load_openapi_spec(
+        self,
+        *,
+        spec_uri: str | None,
+        inline_spec: object,
+    ) -> dict[str, Any]:
+        if isinstance(inline_spec, dict):
+            return dict(inline_spec)
+        if not spec_uri:
+            raise self.host.orchestrator_error_cls("openapi_http_runner activation requires inline spec or openapi_spec_uri")
+        if spec_uri.startswith(("http://", "https://")):
+            response = requests.get(spec_uri, timeout=10)
+            response.raise_for_status()
+            return self._parse_openapi_payload(response.text, origin=spec_uri)
+        path = Path(spec_uri)
+        if not path.exists():
+            raise self.host.orchestrator_error_cls(f"openapi spec file not found: {spec_uri}")
+        return self._parse_openapi_payload(path.read_text(encoding="utf-8"), origin=spec_uri)
+
+    def _parse_openapi_payload(self, payload: str, *, origin: str) -> dict[str, Any]:
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError:
+            parsed = yaml.safe_load(payload) or {}
+        if not isinstance(parsed, dict):
+            raise self.host.orchestrator_error_cls(f"openapi spec must decode to an object: {origin}")
+        return parsed
+
+    def _resolve_openapi_operation(
+        self,
+        spec: dict[str, Any],
+        *,
+        operation_id: str,
+    ) -> tuple[str, str]:
+        for path_name, path_item in dict(spec.get("paths") or {}).items():
+            if not isinstance(path_item, dict):
+                continue
+            for method_name, operation in path_item.items():
+                normalized_method = str(method_name or "").strip().upper()
+                if normalized_method not in {"GET", "POST"} or not isinstance(operation, dict):
+                    continue
+                if str(operation.get("operationId") or "").strip() != operation_id:
+                    continue
+                normalized_path = str(path_name or "").strip()
+                if not normalized_path.startswith("/"):
+                    raise self.host.orchestrator_error_cls(
+                        f"openapi operation path must be relative: {operation_id}"
+                    )
+                return normalized_path, normalized_method
+        raise self.host.orchestrator_error_cls(f"openapi operation not found: {operation_id}")
 
     def _validate_http_runtime_registration(
         self,
@@ -350,19 +482,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             raise self.host.orchestrator_error_cls(
                 f"http_json_runner activation only supports read-only candidates: {candidate_entry.subagent_type}"
             )
-        if not source_id:
-            raise self.host.orchestrator_error_cls("source_id is required for http_json_runner activation")
-        source = DataSourceRegistry().get(source_id)
-        if source is None:
-            raise self.host.orchestrator_error_cls(f"unknown source_id for http_json_runner activation: {source_id}")
-        if str(source.access).strip().lower() != "http":
-            raise self.host.orchestrator_error_cls(
-                f"http_json_runner activation requires an http-access data source: {source_id}"
-            )
-        if bool(source.requires_key):
-            raise self.host.orchestrator_error_cls(
-                f"http_json_runner activation does not support keyed data sources yet: {source_id}"
-            )
+        self._validate_http_source(source_id, registration_type="http_json_runner")
         if not endpoint_path:
             raise self.host.orchestrator_error_cls("endpoint_path is required for http_json_runner activation")
         if endpoint_path.startswith(("http://", "https://")):
@@ -371,7 +491,22 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             raise self.host.orchestrator_error_cls("endpoint_path must start with '/' for http_json_runner activation")
         if http_method not in {"GET", "POST"}:
             raise self.host.orchestrator_error_cls("http_method must be GET or POST for http_json_runner activation")
-        self._validate_runtime_contract(candidate_entry)
+        self._validate_runtime_contract(candidate_entry, registration_type="http_json_runner")
+
+    def _validate_http_source(self, source_id: str, *, registration_type: str) -> None:
+        if not source_id:
+            raise self.host.orchestrator_error_cls(f"source_id is required for {registration_type} activation")
+        source = DataSourceRegistry().get(source_id)
+        if source is None:
+            raise self.host.orchestrator_error_cls(f"unknown source_id for {registration_type} activation: {source_id}")
+        if str(source.access).strip().lower() != "http":
+            raise self.host.orchestrator_error_cls(
+                f"{registration_type} activation requires an http-access data source: {source_id}"
+            )
+        if bool(source.requires_key):
+            raise self.host.orchestrator_error_cls(
+                f"{registration_type} activation does not support keyed data sources yet: {source_id}"
+            )
 
 
 __all__ = ["OrchestratorSubagentDiscoveryAdminSupport"]
