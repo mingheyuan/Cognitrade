@@ -319,6 +319,42 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["dynamic_trace"][0]["dag_id"], "phase_two")
         self.assertEqual(payload["dynamic_trace"][0]["selected_node_ids"], ["retrieval_decider"])
 
+    def test_trace_rebuilds_action_phase_hybrid_rows_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "01TRACEHYBRID"
+            run_root.mkdir(parents=True, exist_ok=True)
+
+            write_json(run_root / "request.json", {"intent": "methodology_evolution", "user_query": "decide next phase"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-hybrid-1",
+                    "request_id": "req-hybrid",
+                    "run_id": "01TRACEHYBRID",
+                    "intent": "methodology_evolution",
+                    "event_type": "action_phase_hybrid_applied",
+                    "phase": "supervision",
+                    "agent": "supervisor",
+                    "message": "Hybrid action-phase policy applied a model suggestion",
+                    "payload": {
+                        "rule_action_node_id": "retrieve",
+                        "final_action_node_id": "review",
+                        "override_action": True,
+                        "request_replan": True,
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-08T13:00:00+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(len(payload["dynamic_trace"]), 1)
+        self.assertEqual(payload["dynamic_trace"][0]["event"], "action_phase_hybrid_applied")
+        self.assertEqual(payload["dynamic_trace"][0]["final_action_node_id"], "review")
+
     def test_trace_rebuilds_action_plan_patches_from_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "01TRACEPATCH"

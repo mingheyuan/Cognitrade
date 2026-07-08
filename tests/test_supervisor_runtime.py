@@ -43,6 +43,26 @@ class _ShadowProviderStub:
         )
 
 
+class _HybridProviderStub:
+    available = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def parse(self, **kwargs):
+        self.calls += 1
+        schema = kwargs["schema"]
+        return schema.model_validate(
+            {
+                "selected_action_node_id": "review",
+                "request_replan": True,
+                "reason": "review should run before retrieval in this frontier",
+                "confidence": 0.91,
+                "notes": ["hybrid_selected_review"],
+            }
+        )
+
+
 def _blackboard_entry(
     *,
     kind: str,
@@ -134,6 +154,52 @@ class SupervisorRuntimeTests(unittest.TestCase):
                 self.assertEqual(suggestion["actual_action_node_id"], "screen_review")
                 self.assertTrue(suggestion["action_match"])
                 self.assertTrue(suggestion["replan_match"])
+
+    def test_supervisor_hybrid_policy_can_override_rule_frontier_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.supervisor_shadow_llm_enabled = True
+            settings.supervisor_hybrid_llm_enabled = True
+            settings.supervisor_hybrid_llm_min_confidence = 0.8
+            settings.max_llm_calls_per_turn = 2
+            provider = _HybridProviderStub()
+            supervisor = RuntimeSupervisor(llm_provider=provider, settings=settings)
+            request = RequestEnvelope(user_query="decide next action", request_id="req_hybrid")
+            plan = ActionPlan(
+                intent="methodology_evolution",
+                actions=[
+                    ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever"),
+                    ActionSpec(node_id="review", phase="review", agent="reviewer"),
+                ],
+            )
+
+            with bind_local_runtime(
+                supervisor,
+                request=request,
+                intent="methodology_evolution",
+                phase="supervision",
+                runs_root=settings.runs_root,
+                max_llm_calls_per_turn=2,
+            ) as runtime:
+                decision = supervisor.decide(
+                    plan=plan,
+                    completed_actions=[],
+                    pending_actions=[plan.actions[0], plan.actions[1]],
+                    blackboard_entries=[],
+                )
+
+                self.assertEqual(provider.calls, 1)
+                self.assertEqual(decision.next_actions[0].node_id, "review")
+                self.assertIsNotNone(decision.plan_patch)
+                self.assertEqual(decision.plan_patch.policy_source, "hybrid")
+                self.assertEqual(len(runtime.context.action_phase_shadow_suggestions), 1)
+                self.assertEqual(len(runtime.context.action_phase_hybrid_decisions), 1)
+                hybrid = runtime.context.action_phase_hybrid_decisions[0]
+                self.assertEqual(hybrid["rule_action_node_id"], "retrieve")
+                self.assertEqual(hybrid["final_action_node_id"], "review")
+                self.assertTrue(hybrid["override_action"])
+                self.assertTrue(hybrid["override_replan"])
 
 
 if __name__ == "__main__":

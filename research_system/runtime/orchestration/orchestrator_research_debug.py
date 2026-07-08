@@ -35,6 +35,7 @@ class OrchestratorDebugSupport:
             "subagent_phase_shadow_suggestions": context.subagent_phase_shadow_suggestions[:],
             "action_plan_patches": context.action_plan_patches[:],
             "action_phase_shadow_suggestions": context.action_phase_shadow_suggestions[:],
+            "action_phase_hybrid_decisions": context.action_phase_hybrid_decisions[:],
             "dynamic_trace": context.dynamic_trace[:],
             "retrieval_summary": retrieval_summary,
         }

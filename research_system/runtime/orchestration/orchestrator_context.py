@@ -39,6 +39,7 @@ class RuntimeContext:
     subagent_phase_shadow_suggestions: list[dict]
     action_plan_patches: list[dict]
     action_phase_shadow_suggestions: list[dict]
+    action_phase_hybrid_decisions: list[dict]
     dynamic_trace: list[dict]
     cache_restore_run_root: Path | None = None
     cache_restore_thread_id: str | None = None
@@ -113,6 +114,7 @@ def build_runtime_context(
         subagent_phase_shadow_suggestions=[],
         action_plan_patches=[],
         action_phase_shadow_suggestions=[],
+        action_phase_hybrid_decisions=[],
         dynamic_trace=[],
     )
     context.blackboard.bind_thread(thread.thread_id)
