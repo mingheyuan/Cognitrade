@@ -30,6 +30,7 @@ from research_system.runtime.history import (
 )
 from research_system.runtime.orchestration import (
     OrchestratorSubagentDiscoveryAdminSupport,
+    SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES,
     SUPPORTED_RUNTIME_MATERIALIZATION_TYPES,
     SUPPORTED_RUNTIME_REGISTRATION_TYPES,
     SUPPORTED_RUNTIME_REGISTRATION_BUILDER_TYPES,
@@ -37,6 +38,7 @@ from research_system.runtime.orchestration import (
     SUPPORTED_RUNTIME_SOURCE_RESOLUTION_TYPES,
     SUPPORTED_RUNTIME_VALIDATION_TYPES,
     SubagentDiscoveryStore,
+    SubagentDiscoveryCandidateSupport,
     SubagentRuntimeMaterializationSupport,
     SubagentRuntimePackagingSupport,
     SubagentRuntimeRegistrationBuilderSupport,
@@ -79,6 +81,12 @@ from research_system.runtime.orchestration.subagent_runtime_validation import (
 )
 from research_system.runtime.orchestration.subagent_runtime_validation import (
     SubagentRuntimeValidationSupport as ValidationSupportImpl,
+)
+from research_system.runtime.orchestration.subagent_discovery_candidate_sources import (
+    SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES as DiscoveryCandidateSourceTypes,
+)
+from research_system.runtime.orchestration.subagent_discovery_candidate_sources import (
+    SubagentDiscoveryCandidateSupport as DiscoveryCandidateSupportImpl,
 )
 from research_system.runtime.planning.action_factory import PlannerActionFactory
 from research_system.runtime.planning.context_hints import PlannerContextHints
@@ -215,6 +223,10 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
             SubagentDiscoveryStore,
         )
         self.assertIs(
+            orchestration_package.SubagentDiscoveryCandidateSupport,
+            SubagentDiscoveryCandidateSupport,
+        )
+        self.assertIs(
             SubagentRuntimeMaterializationSupport,
             MaterializationSupportImpl,
         )
@@ -279,6 +291,18 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
             ValidationSupportImpl,
         )
         self.assertIs(
+            SubagentDiscoveryCandidateSupport,
+            DiscoveryCandidateSupportImpl,
+        )
+        self.assertIs(
+            orchestration_package.SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES,
+            SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES,
+        )
+        self.assertIs(
+            SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES,
+            DiscoveryCandidateSourceTypes,
+        )
+        self.assertIs(
             orchestration_package.SUPPORTED_RUNTIME_VALIDATION_TYPES,
             SUPPORTED_RUNTIME_VALIDATION_TYPES,
         )
@@ -327,6 +351,13 @@ class RuntimeDomainPackagesRuntimeTests(unittest.TestCase):
         self.assertEqual(
             support.validation_types(),
             SUPPORTED_RUNTIME_VALIDATION_TYPES,
+        )
+
+    def test_discovery_candidate_support_reports_complete_handler_registry(self) -> None:
+        support = SubagentDiscoveryCandidateSupport()
+        self.assertEqual(
+            support.source_types(),
+            SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES,
         )
 
 

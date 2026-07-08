@@ -851,6 +851,199 @@ class SubagentDiscoveryStoreTests(unittest.TestCase):
                 "mcp_tool_runner",
             )
 
+    def test_admin_support_auto_generates_mcp_candidate_entries_from_registry(self) -> None:
+        from research_system.adapters.vendors.mcp_source_registry import (
+            McpServerSource,
+            McpSourceRegistry,
+            McpToolDefinition,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                preferred_subagent_type="candidate_collect_market_signal_extension",
+                reason="missing mcp-backed market signal capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                search_query="stock_check collect market_signal_extension",
+                preferred_protocols=["mcp"],
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            registry = McpSourceRegistry(
+                servers=[
+                    McpServerSource(
+                        id="mock_market_tools",
+                        name="Mock Market Tools",
+                        transport="stdio",
+                        command="python",
+                        timeout_seconds=7.5,
+                        tools=(
+                            McpToolDefinition(
+                                name="market_signal_lookup",
+                                summary="Lookup one market signal.",
+                                read_only=True,
+                                input_json_schema={
+                                    "type": "object",
+                                    "properties": {"symbol": {"type": "string"}},
+                                    "required": ["symbol"],
+                                },
+                                output_json_schema={
+                                    "type": "object",
+                                    "properties": {"signal": {"type": "string"}},
+                                    "required": ["signal"],
+                                },
+                                capabilities=("market_signal_extension",),
+                                suitable_intents=("stock_check",),
+                                stage="collect",
+                                candidate_subagent_type="candidate_collect_market_signal_lookup",
+                            ),
+                            McpToolDefinition(
+                                name="non_matching_tool",
+                                read_only=True,
+                                input_json_schema={
+                                    "type": "object",
+                                    "properties": {"symbol": {"type": "string"}},
+                                },
+                                output_json_schema={
+                                    "type": "object",
+                                    "properties": {"signal": {"type": "string"}},
+                                },
+                                capabilities=("peer_review",),
+                                suitable_intents=("review_thesis",),
+                                stage="review",
+                            ),
+                        ),
+                    )
+                ]
+            )
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_mcp_source_registry": lambda self: registry,
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+
+            result = admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                reviewer="tester",
+                reason="approve generated mcp discovery candidate",
+            )
+
+            self.assertEqual(result["status"], "approved")
+            self.assertEqual(len(result["result"]["candidate_catalog_entries"]), 1)
+            approved_entries = store.approved_catalog_entries()
+            self.assertEqual(len(approved_entries), 1)
+            approved_entry = approved_entries[0]
+            self.assertEqual(approved_entry.subagent_type, "candidate_collect_market_signal_lookup")
+            self.assertEqual(
+                approved_entry.runtime_registration_templates[0].template_id,
+                "mcp:mock_market_tools:market_signal_lookup",
+            )
+
+            activation = admin.activate_request(
+                ticket.ticket_id,
+                registration_template_id="mcp:mock_market_tools:market_signal_lookup",
+                activated_by="tester",
+                reason="activate auto-generated mcp discovery alias",
+            )
+
+            self.assertIn("runtime alias", activation["message"])
+            activated_entry = activation["result"]["activated_entries"][0]
+            self.assertEqual(activated_entry["runtime_registration"]["registration_type"], "mcp_tool_runner")
+            self.assertEqual(activated_entry["runtime_registration"]["source_id"], "mock_market_tools")
+            self.assertEqual(activated_entry["runtime_registration"]["tool_name"], "market_signal_lookup")
+
+    def test_admin_support_falls_back_to_placeholder_candidate_when_mcp_registry_has_no_match(self) -> None:
+        from research_system.adapters.vendors.mcp_source_registry import (
+            McpServerSource,
+            McpSourceRegistry,
+            McpToolDefinition,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = SubagentDiscoveryStore(Path(temp_dir))
+            gap = SubagentCapabilityGap(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                preferred_subagent_type="candidate_collect_market_signal_extension",
+                reason="missing mcp-backed market signal capability",
+            )
+            request = SubagentToolDiscoveryRequest(
+                intent="stock_check",
+                stage="collect",
+                capability="market_signal_extension",
+                search_query="stock_check collect market_signal_extension",
+                preferred_protocols=["mcp"],
+                reason=gap.reason,
+            )
+            ticket = store.create_request(gap=gap, request=request)
+            registry = McpSourceRegistry(
+                servers=[
+                    McpServerSource(
+                        id="mock_market_tools",
+                        name="Mock Market Tools",
+                        transport="stdio",
+                        command="python",
+                        tools=(
+                            McpToolDefinition(
+                                name="market_signal_lookup",
+                                read_only=True,
+                                input_json_schema={
+                                    "type": "object",
+                                    "properties": {"symbol": {"type": "string"}},
+                                },
+                                output_json_schema={
+                                    "type": "object",
+                                    "properties": {"signal": {"type": "string"}},
+                                },
+                                capabilities=("peer_review",),
+                                suitable_intents=("review_thesis",),
+                                stage="review",
+                            ),
+                        ),
+                    )
+                ]
+            )
+            host = type(
+                "_Host",
+                (),
+                {
+                    "orchestrator_error_cls": RuntimeError,
+                    "require_subagent_discovery_store": lambda self: store,
+                    "require_mcp_source_registry": lambda self: registry,
+                },
+            )()
+            admin = OrchestratorSubagentDiscoveryAdminSupport(host)
+
+            result = admin.review_request(
+                ticket.ticket_id,
+                decision="approve",
+                reviewer="tester",
+                reason="approve placeholder when no mcp candidate matches",
+            )
+
+            self.assertEqual(result["status"], "approved")
+            approved_entries = store.approved_catalog_entries()
+            self.assertEqual(len(approved_entries), 1)
+            approved_entry = approved_entries[0]
+            self.assertEqual(approved_entry.subagent_type, "candidate_collect_market_signal_extension")
+            self.assertEqual(approved_entry.capabilities, ["market_signal_extension"])
+            self.assertEqual(approved_entry.runtime_registration_templates, [])
+            self.assertIn("approved_discovery_candidate", approved_entry.tags)
+
     def test_admin_support_rejects_snapshot_skill_activation_for_non_collect_stage(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = SubagentDiscoveryStore(Path(temp_dir))

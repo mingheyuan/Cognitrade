@@ -27,6 +27,22 @@ class McpSourceRegistryTests(unittest.TestCase):
                         "      - name: market_signal_lookup",
                         "        summary: Lookup one market signal",
                         "        read_only: true",
+                        "        stage: collect",
+                        "        candidate_subagent_type: candidate_collect_market_signal_lookup",
+                        "        capabilities: ['market_signal_extension']",
+                        "        suitable_intents: ['stock_check']",
+                        "        input_json_schema:",
+                        "          type: object",
+                        "          properties:",
+                        "            symbol:",
+                        "              type: string",
+                        "          required: ['symbol']",
+                        "        output_json_schema:",
+                        "          type: object",
+                        "          properties:",
+                        "            signal:",
+                        "              type: string",
+                        "          required: ['signal']",
                     ]
                 )
                 + "\n",
@@ -44,6 +60,20 @@ class McpSourceRegistryTests(unittest.TestCase):
             assert tool is not None
             self.assertTrue(tool.read_only)
             self.assertEqual(tool.summary, "Lookup one market signal")
+            self.assertEqual(tool.stage, "collect")
+            self.assertEqual(tool.candidate_subagent_type, "candidate_collect_market_signal_lookup")
+            self.assertEqual(tool.capabilities, ("market_signal_extension",))
+            self.assertEqual(tool.suitable_intents, ("stock_check",))
+            self.assertEqual(tool.input_json_schema, {
+                "type": "object",
+                "properties": {"symbol": {"type": "string"}},
+                "required": ["symbol"],
+            })
+            self.assertEqual(tool.output_json_schema, {
+                "type": "object",
+                "properties": {"signal": {"type": "string"}},
+                "required": ["signal"],
+            })
 
 
 if __name__ == "__main__":

@@ -5,12 +5,16 @@ from research_system.schemas.subagents import (
     SubagentActivationEntry,
     SubagentCatalogEntry,
 )
+from research_system.runtime.orchestration.subagent_discovery_candidate_sources import (
+    SubagentDiscoveryCandidateSupport,
+)
 from research_system.runtime.orchestration.subagent_runtime_packaging import SubagentRuntimePackagingSupport
 
 
 class OrchestratorSubagentDiscoveryAdminSupport:
     def __init__(self, host) -> None:
         self.host = host
+        self.discovery_candidates = SubagentDiscoveryCandidateSupport(host)
         self.runtime_packaging = SubagentRuntimePackagingSupport(host)
 
     def list_requests(self, *, status: str | None = None, limit: int = 50) -> list[dict]:
@@ -179,18 +183,21 @@ class OrchestratorSubagentDiscoveryAdminSupport:
             "updated_at": ticket.updated_at.isoformat(),
         }
 
-    @staticmethod
     def _resolve_candidate_catalog_entries(
+        self,
         ticket,
         *,
         candidate_catalog_entries: list[dict] | None,
     ) -> list[SubagentCatalogEntry]:
         if candidate_catalog_entries:
             return [
-                OrchestratorSubagentDiscoveryAdminSupport._normalize_runtime_registration_templates(SubagentCatalogEntry.model_validate(item))
+                self._normalize_runtime_registration_templates(SubagentCatalogEntry.model_validate(item))
                 for item in candidate_catalog_entries
                 if isinstance(item, dict)
             ]
+        generated_entries = self.discovery_candidates.candidate_entries(ticket)
+        if generated_entries:
+            return generated_entries
         gap = ticket.capability_gap
         candidate_type = str(gap.preferred_subagent_type or "").strip()
         if not candidate_type:
@@ -200,7 +207,7 @@ class OrchestratorSubagentDiscoveryAdminSupport:
         summary = f"Approved discovery candidate for capability {gap.capability}"
         suitable_intents = [str(gap.intent).strip()] if str(gap.intent or "").strip() else []
         return [
-            OrchestratorSubagentDiscoveryAdminSupport._normalize_runtime_registration_templates(SubagentCatalogEntry(
+            self._normalize_runtime_registration_templates(SubagentCatalogEntry(
                 subagent_type=candidate_type,
                 summary=summary,
                 capabilities=[str(gap.capability).strip()],

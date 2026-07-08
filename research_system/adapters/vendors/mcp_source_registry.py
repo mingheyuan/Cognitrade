@@ -16,6 +16,11 @@ class McpToolDefinition:
     summary: str = ""
     read_only: bool = True
     input_json_schema: dict[str, Any] | None = None
+    output_json_schema: dict[str, Any] | None = None
+    capabilities: tuple[str, ...] = ()
+    suitable_intents: tuple[str, ...] = ()
+    stage: str | None = None
+    candidate_subagent_type: str | None = None
     notes: tuple[str, ...] = ()
 
 
@@ -96,6 +101,23 @@ class McpSourceRegistry:
                             if isinstance(tool_row.get("input_json_schema"), dict)
                             else None
                         ),
+                        output_json_schema=(
+                            dict(tool_row.get("output_json_schema") or {})
+                            if isinstance(tool_row.get("output_json_schema"), dict)
+                            else None
+                        ),
+                        capabilities=tuple(
+                            str(item).strip()
+                            for item in list(tool_row.get("capabilities") or [])
+                            if str(item).strip()
+                        ),
+                        suitable_intents=tuple(
+                            str(item).strip()
+                            for item in list(tool_row.get("suitable_intents") or [])
+                            if str(item).strip()
+                        ),
+                        stage=str(tool_row.get("stage") or "").strip() or None,
+                        candidate_subagent_type=str(tool_row.get("candidate_subagent_type") or "").strip() or None,
                         notes=tuple(
                             str(item).strip()
                             for item in list(tool_row.get("notes") or [])

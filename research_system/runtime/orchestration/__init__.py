@@ -23,6 +23,7 @@ __all__ = [
     "OrchestratorRunTerminalSupport",
     "OrchestratorRuntimeIoSupport",
     "OrchestratorSubagentDiscoveryAdminSupport",
+    "SubagentDiscoveryCandidateSupport",
     "SubagentRuntimeMaterializationSupport",
     "SubagentRuntimePackagingSupport",
     "SubagentRuntimeRegistrationBuilderSupport",
@@ -30,6 +31,7 @@ __all__ = [
     "SubagentRuntimeSourceResolutionSupport",
     "SubagentRuntimeValidationSupport",
     "SubagentDiscoveryStore",
+    "SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES",
     "SUPPORTED_RUNTIME_MATERIALIZATION_TYPES",
     "SUPPORTED_RUNTIME_REGISTRATION_TYPES",
     "SUPPORTED_RUNTIME_REGISTRATION_BUILDER_TYPES",
@@ -91,6 +93,10 @@ _EXPORTS = {
         "research_system.runtime.orchestration.subagent_discovery_admin_support",
         "OrchestratorSubagentDiscoveryAdminSupport",
     ),
+    "SubagentDiscoveryCandidateSupport": (
+        "research_system.runtime.orchestration.subagent_discovery_candidate_sources",
+        "SubagentDiscoveryCandidateSupport",
+    ),
     "SubagentRuntimeMaterializationSupport": (
         "research_system.runtime.orchestration.subagent_runtime_materialization",
         "SubagentRuntimeMaterializationSupport",
@@ -116,6 +122,10 @@ _EXPORTS = {
         "SubagentRuntimeValidationSupport",
     ),
     "SubagentDiscoveryStore": ("research_system.runtime.orchestration.subagent_discovery_store", "SubagentDiscoveryStore"),
+    "SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES": (
+        "research_system.runtime.orchestration.subagent_discovery_candidate_sources",
+        "SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES",
+    ),
     "SUPPORTED_RUNTIME_REGISTRATION_TYPES": (
         "research_system.runtime.orchestration.subagent_runtime_packaging",
         "SUPPORTED_RUNTIME_REGISTRATION_TYPES",
