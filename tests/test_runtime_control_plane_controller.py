@@ -34,6 +34,33 @@ class _ProtocolControllerStub:
         return ["escalated"]
 
 
+class _ServiceStub:
+    def __init__(self) -> None:
+        self.bind_calls: list[dict] = []
+        self.clear_calls = 0
+
+    def bind_runtime(self, **kwargs) -> None:
+        self.bind_calls.append(dict(kwargs))
+
+    def clear_runtime(self) -> None:
+        self.clear_calls += 1
+
+
+class _CatalogControllerStub:
+    def __init__(self, resolution) -> None:
+        self.resolution = resolution
+        self.calls: list[dict] = []
+        self.capability_gap_controller = SimpleNamespace(
+            build_unresolved_gap_error=lambda resolution: RuntimeError(
+                f"unresolved:{getattr(getattr(resolution, 'gap', None), 'capability', 'missing')}"
+            )
+        )
+
+    def resolve_catalog_entry(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return self.resolution
+
+
 class RuntimeControlPlaneControllerTests(unittest.TestCase):
     def test_bind_and_clear_runtime_delegate_to_supervisor(self) -> None:
         supervisor = _SupervisorStub()
@@ -88,6 +115,103 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
         self.assertEqual(escalation, ["escalated"])
         self.assertEqual(len(protocol.resolve_calls), 1)
         self.assertEqual(len(protocol.escalation_calls), 1)
+
+    def test_bind_and_clear_agent_service_runtime_delegate_through_shared_service(self) -> None:
+        host = SimpleNamespace(
+            subagent_discovery_store="store",
+            skill_runtime="skill-runtime",
+            require_subagent_discovery_store=lambda: "store",
+            require_skill_runtime=lambda: "skill-runtime",
+            require_mcp_source_registry=lambda: "mcp-registry",
+            require_http_json_source_registry=lambda: "http-json-registry",
+            require_openapi_source_registry=lambda: "openapi-registry",
+            require_skill_source_registry=lambda: "skill-source-registry",
+        )
+        controller = OrchestratorRuntimeControlPlaneController(
+            host=host,
+            supervisor=_SupervisorStub(),
+        )
+        service = _ServiceStub()
+        context = SimpleNamespace(
+            agent_control="agent-control",
+            execution_policy="execution-policy",
+            thread=SimpleNamespace(thread_id="thread-1"),
+            turn=SimpleNamespace(turn_id="turn-1"),
+        )
+
+        controller.bind_agent_service_runtime(
+            service=service,
+            context=context,
+            support="support",
+            request_id="req-1",
+            intent="stock_screen",
+            agent="collector",
+            phase="collect",
+        )
+        controller.clear_agent_service_runtime(service=service)
+
+        self.assertEqual(len(service.bind_calls), 1)
+        bind_call = service.bind_calls[0]
+        self.assertIs(bind_call["runtime_control"], controller)
+        self.assertEqual(bind_call["thread_id"], "thread-1")
+        self.assertEqual(bind_call["turn_id"], "turn-1")
+        self.assertEqual(bind_call["request_id"], "req-1")
+        self.assertEqual(bind_call["intent"], "stock_screen")
+        self.assertEqual(bind_call["agent"], "collector")
+        self.assertEqual(bind_call["phase"], "collect")
+        self.assertEqual(bind_call["require_mcp_source_registry"](), "mcp-registry")
+        self.assertEqual(bind_call["require_http_json_source_registry"](), "http-json-registry")
+        self.assertEqual(bind_call["require_openapi_source_registry"](), "openapi-registry")
+        self.assertEqual(bind_call["require_skill_source_registry"](), "skill-source-registry")
+        self.assertEqual(service.clear_calls, 1)
+
+    def test_resolve_subagent_catalog_entry_records_runtime_control_stage(self) -> None:
+        host = SimpleNamespace(events=[])
+
+        def _emit_event(context, **kwargs) -> None:
+            host.events.append(dict(kwargs))
+
+        host._emit_event = _emit_event
+        context = SimpleNamespace(runtime_control_stage_decisions=[], dynamic_trace=[])
+        resolution = SimpleNamespace(
+            selected_entry=SimpleNamespace(subagent_type="cheap_review"),
+            capability_gap_resolution=None,
+        )
+        controller = OrchestratorRuntimeControlPlaneController(
+            host=host,
+            supervisor=_SupervisorStub(),
+        )
+
+        resolved = controller.resolve_subagent_catalog_entry(
+            catalog_controller=_CatalogControllerStub(resolution),
+            runtime_binding={
+                "context": context,
+                "request_id": "req-subagent",
+                "intent": "review_thesis",
+                "agent": "reviewer",
+            },
+            stage="review",
+            intent="review_thesis",
+            capability="review_strategy",
+            preferred_subagent_type="cheap_review",
+            requires_llm=False,
+        )
+
+        self.assertEqual(resolved.selected_entry.subagent_type, "cheap_review")
+        self.assertEqual(len(context.runtime_control_stage_decisions), 1)
+        self.assertEqual(
+            context.runtime_control_stage_decisions[0]["event"],
+            "runtime_control_subagent_resolved",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[0]["resolution_source"],
+            "catalog",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[0]["selected_subagent_type"],
+            "cheap_review",
+        )
+        self.assertEqual(host.events[0]["event_type"], "runtime_control_subagent_resolved")
 
     def test_resolve_before_registering_execution_callbacks_raises(self) -> None:
         controller = OrchestratorRuntimeControlPlaneController(

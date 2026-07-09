@@ -194,6 +194,30 @@ class ResearchOrchestrator:
     def _attach_subagent_observers(self) -> None:
         self._subagent_bridge().attach_observers()
 
+    def require_subagent_discovery_store(self):
+        store = getattr(self, "subagent_discovery_store", None)
+        if store is None:
+            raise self.orchestrator_error_cls("subagent discovery store is not available")
+        return store
+
+    def require_skill_runtime(self):
+        runtime = getattr(self, "skill_runtime", None)
+        if runtime is None:
+            raise self.orchestrator_error_cls("skill runtime is not available")
+        return runtime
+
+    def require_mcp_source_registry(self):
+        return self._admin().require_mcp_source_registry()
+
+    def require_http_json_source_registry(self):
+        return self._admin().require_http_json_source_registry()
+
+    def require_openapi_source_registry(self):
+        return self._admin().require_openapi_source_registry()
+
+    def require_skill_source_registry(self):
+        return self._admin().require_skill_source_registry()
+
     def run(self, request: RequestEnvelope) -> ResponseEnvelope:
         return self._run_coordinator().run(request)
 

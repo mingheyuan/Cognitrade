@@ -161,6 +161,56 @@ class RuntimeControlProtocolStageDecision:
 
 
 @dataclass(frozen=True)
+class RuntimeControlSubagentStageDecision:
+    intent: str | None
+    stage: str | None
+    capability: str
+    preferred_subagent_type: str | None
+    requires_llm: bool | None
+    resolution_source: Literal[
+        "catalog",
+        "capability_gap_discovery",
+        "capability_gap_unresolved",
+    ]
+    decision_type: Literal["selected", "unresolved"]
+    selected_subagent_type: str | None = None
+    discovery_ticket_id: str | None = None
+    escalation_strategy: str | None = None
+    policy_source: str = "rule"
+    notes: list[str] = field(default_factory=list)
+
+    event_type: Literal["runtime_control_subagent_resolved"] = "runtime_control_subagent_resolved"
+    control_domain: Literal["runtime"] = "runtime"
+    control_stage: Literal["subagent_control_protocol"] = "subagent_control_protocol"
+    decision_stage: Literal["subagent_protocol_resolution"] = "subagent_protocol_resolution"
+
+    def event_payload(self) -> dict[str, object]:
+        return {
+            "control_domain": self.control_domain,
+            "control_stage": self.control_stage,
+            "decision_stage": self.decision_stage,
+            "intent": self.intent,
+            "stage": self.stage,
+            "capability": self.capability,
+            "preferred_subagent_type": self.preferred_subagent_type,
+            "requires_llm": self.requires_llm,
+            "resolution_source": self.resolution_source,
+            "decision_type": self.decision_type,
+            "selected_subagent_type": self.selected_subagent_type,
+            "discovery_ticket_id": self.discovery_ticket_id,
+            "escalation_strategy": self.escalation_strategy,
+            "policy_source": self.policy_source,
+            "notes": list(self.notes),
+        }
+
+    def message(self) -> str:
+        return (
+            f"{self.event_type} resolved {self.resolution_source} "
+            f"for capability {self.capability}"
+        )
+
+
+@dataclass(frozen=True)
 class SubagentCatalogStageDecision:
     intent: str | None
     stage: str | None
@@ -516,6 +566,7 @@ class SubagentDiscoveryActivationStageDecision:
 __all__ = [
     "ActionPhaseControlStageDecision",
     "RuntimeControlProtocolStageDecision",
+    "RuntimeControlSubagentStageDecision",
     "RuntimeControlTransitionStageDecision",
     "SubagentCatalogStageDecision",
     "SubagentCapabilityGapEscalationControlStageDecision",

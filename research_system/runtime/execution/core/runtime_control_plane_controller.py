@@ -9,6 +9,9 @@ from research_system.runtime.execution.core.runtime_control_protocol_controller 
     OrchestratorRuntimeControlProtocolController,
     RuntimeControlProtocolResolution,
 )
+from research_system.runtime.execution.core.runtime_subagent_control_controller import (
+    OrchestratorRuntimeSubagentControlController,
+)
 from research_system.schemas.planning import ActionPlan, ActionSpec
 
 
@@ -23,6 +26,7 @@ class OrchestratorRuntimeControlPlaneController:
         self.supervisor = supervisor
         self.transition_controller: OrchestratorRuntimeControlController | None = None
         self.protocol_controller: OrchestratorRuntimeControlProtocolController | None = None
+        self.subagent_controller = OrchestratorRuntimeSubagentControlController(host)
 
     def register_execution_callbacks(
         self,
@@ -63,6 +67,52 @@ class OrchestratorRuntimeControlPlaneController:
         if callable(clear_runtime):
             clear_runtime()
 
+    def bind_agent_service_runtime(
+        self,
+        *,
+        service,
+        context,
+        support,
+        request_id: str,
+        intent: str,
+        agent: str,
+        phase: str,
+    ) -> None:
+        bind_runtime = getattr(service, "bind_runtime", None)
+        if not callable(bind_runtime):
+            return
+        bind_runtime(
+            agent_control=context.agent_control,
+            execution_policy=context.execution_policy,
+            context=context,
+            support=support,
+            runtime_control=self,
+            subagent_discovery_store=getattr(self.host, "subagent_discovery_store", None),
+            skill_runtime=getattr(self.host, "skill_runtime", None),
+            mcp_source_registry=getattr(self.host, "mcp_source_registry", None),
+            http_json_source_registry=getattr(self.host, "http_json_source_registry", None),
+            openapi_source_registry=getattr(self.host, "openapi_source_registry", None),
+            skill_source_registry=getattr(self.host, "skill_source_registry", None),
+            require_subagent_discovery_store=getattr(self.host, "require_subagent_discovery_store", None),
+            require_skill_runtime=getattr(self.host, "require_skill_runtime", None),
+            require_mcp_source_registry=getattr(self.host, "require_mcp_source_registry", None),
+            require_http_json_source_registry=getattr(self.host, "require_http_json_source_registry", None),
+            require_openapi_source_registry=getattr(self.host, "require_openapi_source_registry", None),
+            require_skill_source_registry=getattr(self.host, "require_skill_source_registry", None),
+            intent=intent,
+            thread_id=context.thread.thread_id,
+            turn_id=context.turn.turn_id,
+            request_id=request_id,
+            agent=agent,
+            phase=phase,
+        )
+
+    @staticmethod
+    def clear_agent_service_runtime(*, service) -> None:
+        clear_runtime = getattr(service, "clear_runtime", None)
+        if callable(clear_runtime):
+            clear_runtime()
+
     def resolve_supervisor_cycle(
         self,
         *,
@@ -90,6 +140,12 @@ class OrchestratorRuntimeControlPlaneController:
         if self.protocol_controller is None:
             raise RuntimeError("runtime control execution callbacks not registered")
         return self.protocol_controller.handle_subagent_escalation(**kwargs)
+
+    def resolve_subagent_catalog_entry(self, **kwargs):
+        return self.subagent_controller.resolve_catalog_entry(**kwargs)
+
+    def select_subagent_catalog_entry(self, **kwargs):
+        return self.subagent_controller.select_catalog_entry(**kwargs)
 
 
 __all__ = ["OrchestratorRuntimeControlPlaneController"]

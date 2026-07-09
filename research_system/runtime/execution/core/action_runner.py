@@ -103,13 +103,37 @@ class OrchestratorActionRunner:
         service = getattr(self.host, agent, None)
         if service is None or not hasattr(service, "bind_runtime"):
             return
+        runtime_control = getattr(self.host, "runtime_control", None)
+        bind_runtime = getattr(runtime_control, "bind_agent_service_runtime", None)
+        if callable(bind_runtime):
+            bind_runtime(
+                service=service,
+                context=context,
+                support=self.support,
+                request_id=request.request_id,
+                intent=context.state.intent,
+                agent=agent,
+                phase=phase,
+            )
+            return
         service.bind_runtime(
             agent_control=context.agent_control,
             execution_policy=context.execution_policy,
             context=context,
             support=self.support,
+            runtime_control=runtime_control,
             subagent_discovery_store=getattr(self.host, "subagent_discovery_store", None),
             skill_runtime=getattr(self.host, "skill_runtime", None),
+            mcp_source_registry=getattr(self.host, "mcp_source_registry", None),
+            http_json_source_registry=getattr(self.host, "http_json_source_registry", None),
+            openapi_source_registry=getattr(self.host, "openapi_source_registry", None),
+            skill_source_registry=getattr(self.host, "skill_source_registry", None),
+            require_subagent_discovery_store=getattr(self.host, "require_subagent_discovery_store", None),
+            require_skill_runtime=getattr(self.host, "require_skill_runtime", None),
+            require_mcp_source_registry=getattr(self.host, "require_mcp_source_registry", None),
+            require_http_json_source_registry=getattr(self.host, "require_http_json_source_registry", None),
+            require_openapi_source_registry=getattr(self.host, "require_openapi_source_registry", None),
+            require_skill_source_registry=getattr(self.host, "require_skill_source_registry", None),
             intent=context.state.intent,
             thread_id=context.thread.thread_id,
             turn_id=context.turn.turn_id,
@@ -121,5 +145,10 @@ class OrchestratorActionRunner:
     def _clear_runtime_registry(self, *, agent: str) -> None:
         service = getattr(self.host, agent, None)
         if service is None or not hasattr(service, "clear_runtime"):
+            return
+        runtime_control = getattr(self.host, "runtime_control", None)
+        clear_runtime = getattr(runtime_control, "clear_agent_service_runtime", None)
+        if callable(clear_runtime):
+            clear_runtime(service=service)
             return
         service.clear_runtime()

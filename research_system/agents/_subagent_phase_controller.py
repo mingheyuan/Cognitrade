@@ -216,6 +216,8 @@ class SubagentPhaseController:
         self.control_controller = SubagentControlController(
             catalog_controller=self.catalog_controller,
             phase_execution_controller=self.phase_execution_controller,
+            runtime_control_resolver=lambda: self._binding_value("runtime_control"),
+            runtime_binding_getter=runtime_binding_getter,
         )
         self._mcp_source_registry = None
         self._http_json_source_registry = None

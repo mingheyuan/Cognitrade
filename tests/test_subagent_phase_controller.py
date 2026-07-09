@@ -221,6 +221,66 @@ class SubagentPhaseControllerTests(unittest.TestCase):
             "catalog",
         )
 
+    def test_select_catalog_entry_can_delegate_to_runtime_control_service(self) -> None:
+        runtime_context = SimpleNamespace(
+            subagent_control_stage_decisions=[],
+            subagent_catalog_stage_decisions=[],
+            runtime_control_stage_decisions=[],
+            dynamic_trace=[],
+        )
+        support = SimpleNamespace(emit_event=lambda *_args, **_kwargs: None)
+        delegated_calls: list[dict] = []
+
+        class _RuntimeControlStub:
+            def select_subagent_catalog_entry(self, **kwargs):
+                delegated_calls.append(dict(kwargs))
+                return kwargs["catalog_controller"].select_catalog_entry(
+                    stage=kwargs["stage"],
+                    intent=kwargs["intent"],
+                    capability=kwargs["capability"],
+                    preferred_subagent_type=kwargs.get("preferred_subagent_type"),
+                    requires_llm=kwargs.get("requires_llm"),
+                )
+
+        controller = SubagentPhaseController(
+            registry=self.registry,
+            invoke_subagent=lambda invocation: (
+                {"ok": True},
+                SubagentExecutionRecord(
+                    subagent_type=invocation.subagent_type,
+                    invocation_id=invocation.invocation_id,
+                    status="completed",
+                    objective=invocation.objective,
+                    inputs=invocation.inputs,
+                    output_keys=["ok"],
+                ),
+            ),
+            emit_event=None,
+            cache_context_builder=lambda **_: None,
+            start_from_node_id_builder=lambda **_: None,
+            runtime_binding_getter=lambda: {
+                "context": runtime_context,
+                "support": support,
+                "runtime_control": _RuntimeControlStub(),
+                "request_id": "req-runtime-control",
+                "intent": "review_thesis",
+                "agent": "reviewer",
+                "phase": "review",
+            },
+        )
+
+        selected = controller.select_catalog_entry(
+            stage="review",
+            intent="review_thesis",
+            capability="review_strategy",
+            preferred_subagent_type="preferred_review",
+        )
+
+        self.assertEqual(selected.subagent_type, "preferred_review")
+        self.assertEqual(len(delegated_calls), 1)
+        self.assertIs(delegated_calls[0]["catalog_controller"], controller.catalog_controller)
+        self.assertEqual(delegated_calls[0]["runtime_binding"]["request_id"], "req-runtime-control")
+
     def test_select_catalog_entry_records_capability_gap_when_missing(self) -> None:
         runtime_context = SimpleNamespace(
             subagent_control_stage_decisions=[],

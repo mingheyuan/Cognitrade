@@ -5,10 +5,14 @@ from typing import Any
 
 from pathlib import Path
 
+from research_system.adapters.vendors.http_json_source_registry import HttpJsonSourceRegistry
 from research_system.adapters.vendors.mcp_source_registry import McpSourceRegistry
+from research_system.adapters.vendors.openapi_source_registry import OpenApiSourceRegistry
+from research_system.adapters.vendors.skill_source_registry import SkillSourceRegistry
 from research_system.agents._subagent_dag import SubagentDagCacheContext
 from research_system.runtime.local_runtime import start_local_runtime
 from research_system.runtime.orchestration.subagent_runtime_packaging import SubagentRuntimePackagingSupport
+from research_system.runtime.platform.skill_runtime import SkillRuntime
 from research_system.runtime.storage.jsonl import write_json
 from research_system.schemas.runtime import RuntimeItemRecord
 from research_system.schemas.protocol import RequestEnvelope
@@ -115,8 +119,19 @@ class RuntimeBoundSubagentInvoker:
         execution_policy=None,
         context=None,
         support=None,
+        runtime_control=None,
         subagent_discovery_store=None,
         skill_runtime=None,
+        mcp_source_registry=None,
+        http_json_source_registry=None,
+        openapi_source_registry=None,
+        skill_source_registry=None,
+        require_subagent_discovery_store=None,
+        require_skill_runtime=None,
+        require_mcp_source_registry=None,
+        require_http_json_source_registry=None,
+        require_openapi_source_registry=None,
+        require_skill_source_registry=None,
         intent: str | None = None,
         thread_id: str,
         turn_id: str,
@@ -129,8 +144,19 @@ class RuntimeBoundSubagentInvoker:
             "execution_policy": execution_policy,
             "context": context,
             "support": support,
+            "runtime_control": runtime_control,
             "subagent_discovery_store": subagent_discovery_store,
             "skill_runtime": skill_runtime,
+            "mcp_source_registry": mcp_source_registry,
+            "http_json_source_registry": http_json_source_registry,
+            "openapi_source_registry": openapi_source_registry,
+            "skill_source_registry": skill_source_registry,
+            "require_subagent_discovery_store": require_subagent_discovery_store,
+            "require_skill_runtime": require_skill_runtime,
+            "require_mcp_source_registry": require_mcp_source_registry,
+            "require_http_json_source_registry": require_http_json_source_registry,
+            "require_openapi_source_registry": require_openapi_source_registry,
+            "require_skill_source_registry": require_skill_source_registry,
             "intent": intent,
             "thread_id": thread_id,
             "turn_id": turn_id,
@@ -218,6 +244,17 @@ class RuntimeBoundSubagentInvoker:
         return support
 
     def require_mcp_source_registry(self) -> McpSourceRegistry:
+        binding = self._runtime_binding_for_events()
+        registry = binding.get("mcp_source_registry")
+        if isinstance(registry, McpSourceRegistry):
+            self.mcp_source_registry = registry
+            return registry
+        factory = binding.get("require_mcp_source_registry")
+        if callable(factory):
+            registry = factory()
+            if isinstance(registry, McpSourceRegistry):
+                self.mcp_source_registry = registry
+                return registry
         registry = getattr(self, "mcp_source_registry", None)
         if isinstance(registry, McpSourceRegistry):
             return registry
@@ -225,6 +262,86 @@ class RuntimeBoundSubagentInvoker:
         registry = McpSourceRegistry(settings=settings)
         self.mcp_source_registry = registry
         return registry
+
+    def require_http_json_source_registry(self) -> HttpJsonSourceRegistry:
+        binding = self._runtime_binding_for_events()
+        registry = binding.get("http_json_source_registry")
+        if isinstance(registry, HttpJsonSourceRegistry):
+            self.http_json_source_registry = registry
+            return registry
+        factory = binding.get("require_http_json_source_registry")
+        if callable(factory):
+            registry = factory()
+            if isinstance(registry, HttpJsonSourceRegistry):
+                self.http_json_source_registry = registry
+                return registry
+        registry = getattr(self, "http_json_source_registry", None)
+        if isinstance(registry, HttpJsonSourceRegistry):
+            return registry
+        settings = getattr(self, "settings", None)
+        registry = HttpJsonSourceRegistry(settings=settings)
+        self.http_json_source_registry = registry
+        return registry
+
+    def require_openapi_source_registry(self) -> OpenApiSourceRegistry:
+        binding = self._runtime_binding_for_events()
+        registry = binding.get("openapi_source_registry")
+        if isinstance(registry, OpenApiSourceRegistry):
+            self.openapi_source_registry = registry
+            return registry
+        factory = binding.get("require_openapi_source_registry")
+        if callable(factory):
+            registry = factory()
+            if isinstance(registry, OpenApiSourceRegistry):
+                self.openapi_source_registry = registry
+                return registry
+        registry = getattr(self, "openapi_source_registry", None)
+        if isinstance(registry, OpenApiSourceRegistry):
+            return registry
+        settings = getattr(self, "settings", None)
+        registry = OpenApiSourceRegistry(settings=settings)
+        self.openapi_source_registry = registry
+        return registry
+
+    def require_skill_source_registry(self) -> SkillSourceRegistry:
+        binding = self._runtime_binding_for_events()
+        registry = binding.get("skill_source_registry")
+        if isinstance(registry, SkillSourceRegistry):
+            self.skill_source_registry = registry
+            return registry
+        factory = binding.get("require_skill_source_registry")
+        if callable(factory):
+            registry = factory()
+            if isinstance(registry, SkillSourceRegistry):
+                self.skill_source_registry = registry
+                return registry
+        registry = getattr(self, "skill_source_registry", None)
+        if isinstance(registry, SkillSourceRegistry):
+            return registry
+        settings = getattr(self, "settings", None)
+        registry = SkillSourceRegistry(settings=settings)
+        self.skill_source_registry = registry
+        return registry
+
+    def require_skill_runtime(self) -> SkillRuntime:
+        binding = self._runtime_binding_for_events()
+        runtime = binding.get("skill_runtime")
+        if isinstance(runtime, SkillRuntime):
+            self.skill_runtime = runtime
+            return runtime
+        factory = binding.get("require_skill_runtime")
+        if callable(factory):
+            runtime = factory()
+            if isinstance(runtime, SkillRuntime):
+                self.skill_runtime = runtime
+                return runtime
+        runtime = getattr(self, "skill_runtime", None)
+        if isinstance(runtime, SkillRuntime):
+            return runtime
+        settings = getattr(self, "settings", None)
+        runtime = SkillRuntime(settings) if settings is not None else SkillRuntime()
+        self.skill_runtime = runtime
+        return runtime
 
     def _activated_discovery_runtime_subagent(
         self,
@@ -432,6 +549,7 @@ class RuntimeBoundSubagentInvoker:
             "execution_policy": runtime.context.execution_policy,
             "context": runtime.context,
             "support": runtime.support,
+            "runtime_control": None,
             "skill_runtime": self._runtime_skill_runtime(),
             "intent": runtime.intent,
             "thread_id": runtime.context.thread.thread_id,
