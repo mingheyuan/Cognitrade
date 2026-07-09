@@ -8,11 +8,15 @@ from research_system.runtime.orchestration._runtime_control_stage_decisions impo
 from research_system.runtime.orchestration._runtime_control_stage_recorder import (
     RuntimeControlStageRecorder,
 )
+from research_system.runtime.execution.core.runtime_transition_decision_source import (
+    OrchestratorRuntimeTransitionDecisionSource,
+)
 
 
 class OrchestratorRuntimeSubagentTransitionController:
-    def __init__(self, host: Any) -> None:
+    def __init__(self, host: Any, *, decision_source=None) -> None:
         self.host = host
+        self.decision_source = decision_source or OrchestratorRuntimeTransitionDecisionSource()
         self._runtime_binding: dict[str, Any] | None = None
         self.control_stage_recorder = RuntimeControlStageRecorder(
             runtime_binding_getter=lambda: dict(self._runtime_binding or {}),
@@ -31,33 +35,13 @@ class OrchestratorRuntimeSubagentTransitionController:
         resolution,
     ) -> None:
         capability_gap_resolution = resolution.capability_gap_resolution
-        ticket = getattr(capability_gap_resolution, "ticket", None) if capability_gap_resolution is not None else None
-        escalation_decision = (
-            getattr(capability_gap_resolution, "escalation_decision", None)
-            if capability_gap_resolution is not None
-            else None
-        )
-        if resolution.selected_entry is not None and capability_gap_resolution is None:
-            transition_type = "continue_catalog"
-        elif resolution.selected_entry is not None:
-            transition_type = "continue_discovery"
-        else:
-            transition_type = "unresolved_capability_gap"
-        stage_decision = RuntimeControlSubagentTransitionStageDecision(
-            intent=intent,
-            transition_source="catalog_selection",
-            transition_type=transition_type,
+        stage_decision = self.decision_source.build_subagent_catalog_transition(
             stage=stage,
+            intent=intent,
             capability=capability,
             preferred_subagent_type=preferred_subagent_type,
             requires_llm=requires_llm,
-            selected_subagent_type=(
-                str(getattr(resolution.selected_entry, "subagent_type", None) or "").strip() or None
-            ),
-            discovery_ticket_id=str(getattr(ticket, "ticket_id", None) or "").strip() or None,
-            escalation_strategy=str(getattr(escalation_decision, "strategy", None) or "").strip() or None,
-            policy_source=str(getattr(escalation_decision, "policy_source", None) or "rule"),
-            notes=list(getattr(escalation_decision, "notes", None) or []),
+            resolution=resolution,
         )
         self._record_stage_decision(
             runtime_binding=runtime_binding,
@@ -75,19 +59,11 @@ class OrchestratorRuntimeSubagentTransitionController:
         requires_llm: bool | None,
         escalation_decision,
     ) -> None:
-        stage_decision = RuntimeControlSubagentTransitionStageDecision(
-            intent=str(getattr(gap, "intent", None) or "").strip() or None,
-            transition_source="capability_gap_escalation",
-            transition_type="request_action_replan"
-            if str(getattr(escalation_decision, "strategy", None) or "") == "action_replan"
-            else "continue_discovery",
-            stage=str(getattr(gap, "stage", None) or "").strip() or None,
-            capability=str(getattr(gap, "capability", None) or "").strip() or None,
+        stage_decision = self.decision_source.build_subagent_capability_gap_transition(
+            gap=gap,
             preferred_subagent_type=preferred_subagent_type,
             requires_llm=requires_llm,
-            escalation_strategy=str(getattr(escalation_decision, "strategy", None) or "").strip() or None,
-            policy_source=str(getattr(escalation_decision, "policy_source", None) or "rule"),
-            notes=list(getattr(escalation_decision, "notes", None) or []),
+            escalation_decision=escalation_decision,
         )
         self._record_stage_decision(
             runtime_binding=runtime_binding,
@@ -104,33 +80,10 @@ class OrchestratorRuntimeSubagentTransitionController:
         dag_id: str | None,
         resolution,
     ) -> None:
-        final_patch = resolution.final_patch
-        final_request_replan = bool(
-            getattr(final_patch, "decision_type", None) == "replan"
-            or any(
-                str(getattr(operation, "op_type", None) or "") == "request_replan"
-                for operation in list(getattr(final_patch, "operations", None) or [])
-            )
-        ) if final_patch is not None else False
-        if final_request_replan:
-            transition_type = "apply_local_replan"
-        elif resolution.final_patch_rows:
-            transition_type = "apply_local_patch"
-        else:
-            transition_type = "keep_current"
-        stage_decision = RuntimeControlSubagentTransitionStageDecision(
-            intent=str(getattr(plan, "intent", None) or "").strip() or None,
-            transition_source="phase_patch_cycle",
-            transition_type=transition_type,
-            phase=str(getattr(plan, "phase", None) or "").strip() or None,
+        stage_decision = self.decision_source.build_subagent_phase_transition(
+            plan=plan,
             dag_id=dag_id,
-            plan_id=str(getattr(plan, "plan_id", None) or "").strip() or None,
-            rule_plan_variant=str(getattr(resolution, "rule_variant_id", None) or "").strip() or None,
-            final_plan_variant=str(getattr(resolution, "final_plan_variant", None) or "").strip() or None,
-            final_request_replan=final_request_replan,
-            patch_count=len(list(getattr(resolution, "final_patch_rows", None) or [])),
-            policy_source=str(getattr(final_patch, "policy_source", None) or "rule"),
-            notes=list(getattr(final_patch, "notes", None) or []),
+            resolution=resolution,
         )
         self._record_stage_decision(
             runtime_binding=runtime_binding,

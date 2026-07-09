@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from research_system.runtime.orchestration._runtime_control_stage_decisions import (
     RuntimeControlTransitionStageDecision,
 )
 from research_system.runtime.orchestration._runtime_control_stage_recorder import (
     RuntimeControlStageRecorder,
+)
+from research_system.runtime.execution.core.runtime_transition_decision_source import (
+    OrchestratorRuntimeTransitionDecisionSource,
 )
 
 
@@ -17,10 +20,12 @@ class OrchestratorRuntimeControlController:
         *,
         apply_plan_patch,
         request_action_plan_replan,
+        decision_source=None,
     ) -> None:
         self.host = host
         self.apply_plan_patch = apply_plan_patch
         self.request_action_plan_replan = request_action_plan_replan
+        self.decision_source = decision_source or OrchestratorRuntimeTransitionDecisionSource()
         self._runtime_binding: dict[str, Any] | None = None
         self.control_stage_recorder = RuntimeControlStageRecorder(
             runtime_binding_getter=lambda: dict(self._runtime_binding or {}),
@@ -41,7 +46,7 @@ class OrchestratorRuntimeControlController:
     ) -> list[dict[str, Any]]:
         if plan_patch is None:
             return []
-        stage_decision = self._build_transition_decision(
+        stage_decision = self.decision_source.build_action_transition(
             plan=plan,
             plan_patch=plan_patch,
             source_domain="action_supervisor",
@@ -76,7 +81,7 @@ class OrchestratorRuntimeControlController:
         plan_patch = escalation_error.plan_patch
         if plan_patch is None:
             return []
-        stage_decision = self._build_transition_decision(
+        stage_decision = self.decision_source.build_action_transition(
             plan=plan,
             plan_patch=plan_patch,
             source_domain="subagent_capability_gap",
@@ -167,43 +172,5 @@ class OrchestratorRuntimeControlController:
             message=message,
             payload=dict(payload),
         )
-
-    @staticmethod
-    def _build_transition_decision(
-        *,
-        plan,
-        plan_patch,
-        source_domain: Literal["action_supervisor", "subagent_capability_gap"],
-        source_stage: str | None,
-        source_action_node_id: str | None,
-        capability: str | None,
-        reason: str,
-    ) -> RuntimeControlTransitionStageDecision:
-        request_replan = bool(
-            plan_patch.decision_type == "replan"
-            or any(operation.op_type == "request_replan" for operation in list(plan_patch.operations or []))
-        )
-        patch_operation_types = [
-            str(operation.op_type)
-            for operation in list(plan_patch.operations or [])
-            if str(operation.op_type or "").strip()
-        ]
-        return RuntimeControlTransitionStageDecision(
-            intent=plan.intent,
-            plan_id=plan.plan_id,
-            transition_type="request_action_replan" if request_replan else "apply_plan_patch",
-            source_domain=source_domain,
-            source_stage=source_stage,
-            source_action_node_id=source_action_node_id,
-            capability=capability,
-            policy_source=str(getattr(plan_patch, "policy_source", None) or "rule"),
-            patch_id=str(getattr(plan_patch, "patch_id", None) or "").strip() or None,
-            patch_decision_type=str(getattr(plan_patch, "decision_type", None) or "").strip() or None,
-            patch_operation_types=patch_operation_types,
-            request_replan=request_replan,
-            reason=reason,
-            notes=list(getattr(plan_patch, "notes", None) or []),
-        )
-
 
 __all__ = ["OrchestratorRuntimeControlController"]

@@ -18,6 +18,9 @@ from research_system.runtime.execution.core.runtime_subagent_control_protocol_co
 from research_system.runtime.execution.core.runtime_subagent_transition_controller import (
     OrchestratorRuntimeSubagentTransitionController,
 )
+from research_system.runtime.execution.core.runtime_transition_decision_source import (
+    OrchestratorRuntimeTransitionDecisionSource,
+)
 from research_system.schemas.planning import ActionPlan, ActionSpec
 
 
@@ -30,10 +33,14 @@ class OrchestratorRuntimeControlPlaneController:
     ) -> None:
         self.host = host
         self.supervisor = supervisor
+        self.transition_decision_source = OrchestratorRuntimeTransitionDecisionSource()
         self.transition_controller: OrchestratorRuntimeControlController | None = None
         self.protocol_controller: OrchestratorRuntimeControlProtocolController | None = None
         self.subagent_controller = OrchestratorRuntimeSubagentControlController(host)
-        self.subagent_transition_controller = OrchestratorRuntimeSubagentTransitionController(host)
+        self.subagent_transition_controller = OrchestratorRuntimeSubagentTransitionController(
+            host,
+            decision_source=self.transition_decision_source,
+        )
         self.subagent_protocol_controller = OrchestratorRuntimeSubagentControlProtocolController(
             host,
             subagent_controller=self.subagent_controller,
@@ -50,6 +57,7 @@ class OrchestratorRuntimeControlPlaneController:
             self.host,
             apply_plan_patch=apply_plan_patch,
             request_action_plan_replan=request_action_plan_replan,
+            decision_source=self.transition_decision_source,
         )
         self.protocol_controller = OrchestratorRuntimeControlProtocolController(
             self.host,
