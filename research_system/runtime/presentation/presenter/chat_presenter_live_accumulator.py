@@ -51,6 +51,7 @@ class ChatPresenterLiveAccumulator:
             or event.event_type.startswith("subagent_phase_llm_")
             or event.event_type.startswith("subagent_phase_hybrid_")
             or event.event_type.startswith("action_phase_")
+            or event.event_type.startswith("runtime_control_")
         ):
             trace_payload.setdefault("dynamic_trace", []).append(self._dynamic_trace_row(event))
         else:

@@ -319,6 +319,44 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["dynamic_trace"][0]["event"], "action_phase_decided")
         self.assertEqual(payload["dynamic_trace"][0]["final_action_node_id"], "screen_review")
 
+    def test_trace_rebuilds_runtime_control_transition_rows_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "01TRACERUNTIMECTRL"
+            run_root.mkdir(parents=True, exist_ok=True)
+
+            write_json(run_root / "request.json", {"intent": "review_thesis", "user_query": "review this thesis"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-runtime-ctrl-1",
+                    "request_id": "req-runtime-ctrl",
+                    "run_id": "01TRACERUNTIMECTRL",
+                    "intent": "review_thesis",
+                    "event_type": "runtime_control_transition_decided",
+                    "phase": "supervision",
+                    "agent": "runtime_control",
+                    "message": "runtime_control_transition_decided resolved request_action_replan from subagent_capability_gap for intent review_thesis",
+                    "payload": {
+                        "control_domain": "runtime",
+                        "control_stage": "plan_patch_transition",
+                        "decision_stage": "transition",
+                        "transition_type": "request_action_replan",
+                        "source_domain": "subagent_capability_gap",
+                        "source_action_node_id": "review",
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-10T10:00:00+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(len(payload["dynamic_trace"]), 1)
+        self.assertEqual(payload["dynamic_trace"][0]["event"], "runtime_control_transition_decided")
+        self.assertEqual(payload["dynamic_trace"][0]["transition_type"], "request_action_replan")
+
     def test_trace_rebuilds_subagent_phase_shadow_rows_from_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "01TRACESUBSHADOW"

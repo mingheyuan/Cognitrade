@@ -57,6 +57,56 @@ class ActionPhaseControlStageDecision:
 
 
 @dataclass(frozen=True)
+class RuntimeControlTransitionStageDecision:
+    intent: str | None
+    plan_id: str | None
+    transition_type: Literal["apply_plan_patch", "request_action_replan"]
+    source_domain: Literal["action_supervisor", "subagent_capability_gap"]
+    source_stage: str | None = None
+    source_action_node_id: str | None = None
+    capability: str | None = None
+    policy_source: str = "rule"
+    patch_id: str | None = None
+    patch_decision_type: str | None = None
+    patch_operation_types: list[str] = field(default_factory=list)
+    request_replan: bool = False
+    reason: str = ""
+    notes: list[str] = field(default_factory=list)
+
+    event_type: Literal["runtime_control_transition_decided"] = "runtime_control_transition_decided"
+    control_domain: Literal["runtime"] = "runtime"
+    control_stage: Literal["plan_patch_transition"] = "plan_patch_transition"
+    decision_stage: Literal["transition"] = "transition"
+
+    def event_payload(self) -> dict[str, object]:
+        return {
+            "control_domain": self.control_domain,
+            "control_stage": self.control_stage,
+            "decision_stage": self.decision_stage,
+            "intent": self.intent,
+            "plan_id": self.plan_id,
+            "transition_type": self.transition_type,
+            "source_domain": self.source_domain,
+            "source_stage": self.source_stage,
+            "source_action_node_id": self.source_action_node_id,
+            "capability": self.capability,
+            "policy_source": self.policy_source,
+            "patch_id": self.patch_id,
+            "patch_decision_type": self.patch_decision_type,
+            "patch_operation_types": list(self.patch_operation_types),
+            "request_replan": self.request_replan,
+            "reason": self.reason,
+            "notes": list(self.notes),
+        }
+
+    def message(self) -> str:
+        return (
+            f"{self.event_type} resolved {self.transition_type} "
+            f"from {self.source_domain} for intent {self.intent}"
+        )
+
+
+@dataclass(frozen=True)
 class SubagentCatalogStageDecision:
     intent: str | None
     stage: str | None
@@ -411,6 +461,7 @@ class SubagentDiscoveryActivationStageDecision:
 
 __all__ = [
     "ActionPhaseControlStageDecision",
+    "RuntimeControlTransitionStageDecision",
     "SubagentCatalogStageDecision",
     "SubagentCapabilityGapEscalationControlStageDecision",
     "SubagentDiscoveryActivationStageDecision",

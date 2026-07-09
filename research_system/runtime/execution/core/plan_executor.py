@@ -5,6 +5,9 @@ from typing import Any
 
 from research_system.agents._subagent_control_escalation import SubagentControlEscalationError
 from research_system.runtime.execution.core.dag_scheduler import ActionDagScheduler
+from research_system.runtime.execution.core.runtime_control_controller import (
+    OrchestratorRuntimeControlController,
+)
 from research_system.runtime.orchestration.orchestrator_context import RuntimeContext
 from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.runtime.storage.runs.action_cache_store import ActionCacheStore
@@ -18,6 +21,11 @@ class OrchestratorPlanExecutor:
     def __init__(self, host: Any) -> None:
         self.host = host
         self.dag_scheduler = ActionDagScheduler()
+        self.runtime_control_controller = OrchestratorRuntimeControlController(
+            host,
+            apply_plan_patch=self._apply_action_plan_patch,
+            request_action_plan_replan=self._request_action_plan_replan,
+        )
 
     def execute_plan(
         self,
@@ -113,7 +121,7 @@ class OrchestratorPlanExecutor:
                 pending_actions=ready_actions[:],
                 blackboard_entries=context.blackboard.list_entries(thread_id=context.thread.thread_id),
             )
-            applied_plan_patch_rows = self._apply_plan_patch_if_needed(
+            applied_plan_patch_rows = self._handle_supervisor_plan_patch(
                 context=context,
                 request=request,
                 plan=plan,
@@ -121,6 +129,7 @@ class OrchestratorPlanExecutor:
                 completed_node_ids=completed_node_ids,
                 skipped_node_ids=skipped_node_ids,
                 plan_patch=decision.plan_patch,
+                next_actions=decision.next_actions,
             )
             ready_actions = self.dag_scheduler.ready_actions(
                 pending_actions=pending_actions,
@@ -232,14 +241,15 @@ class OrchestratorPlanExecutor:
                     pending_actions_after_current=pending_actions_after_current[:],
                 )
             except SubagentControlEscalationError as exc:
-                self._apply_plan_patch_if_needed(
+                self._handle_subagent_control_escalation(
                     context=context,
                     request=request,
                     plan=plan,
                     pending_actions=pending_actions_after_current,
                     completed_node_ids=completed_node_ids,
                     skipped_node_ids=skipped_node_ids,
-                    plan_patch=exc.plan_patch,
+                    action=action,
+                    escalation_error=exc,
                 )
                 return {
                     "status": "replanned",
@@ -625,7 +635,7 @@ class OrchestratorPlanExecutor:
             action=action,
         )
 
-    def _apply_plan_patch_if_needed(
+    def _handle_supervisor_plan_patch(
         self,
         *,
         context: RuntimeContext,
@@ -635,19 +645,51 @@ class OrchestratorPlanExecutor:
         completed_node_ids: list[str],
         skipped_node_ids: list[str],
         plan_patch: ActionPlanPatch | None,
+        next_actions: list[ActionSpec],
     ) -> list[dict[str, Any]]:
-        if plan_patch is None:
-            return []
-        if self._plan_patch_requests_replan(plan_patch):
-            return self._replan_action_plan(
-                context=context,
-                request=request,
-                plan=plan,
-                pending_actions=pending_actions,
-                completed_node_ids=completed_node_ids,
-                skipped_node_ids=skipped_node_ids,
-                plan_patch=plan_patch,
-            )
+        return self.runtime_control_controller.handle_supervisor_plan_patch(
+            context=context,
+            request=request,
+            plan=plan,
+            pending_actions=pending_actions,
+            completed_node_ids=completed_node_ids,
+            skipped_node_ids=skipped_node_ids,
+            plan_patch=plan_patch,
+            next_actions=next_actions,
+        )
+
+    def _handle_subagent_control_escalation(
+        self,
+        *,
+        context: RuntimeContext,
+        request: RequestEnvelope,
+        plan: ActionPlan,
+        pending_actions: list[ActionSpec],
+        completed_node_ids: list[str],
+        skipped_node_ids: list[str],
+        action: ActionSpec,
+        escalation_error: SubagentControlEscalationError,
+    ) -> list[dict[str, Any]]:
+        return self.runtime_control_controller.handle_subagent_escalation(
+            context=context,
+            request=request,
+            plan=plan,
+            pending_actions=pending_actions,
+            completed_node_ids=completed_node_ids,
+            skipped_node_ids=skipped_node_ids,
+            action=action,
+            escalation_error=escalation_error,
+        )
+
+    def _apply_action_plan_patch(
+        self,
+        *,
+        context: RuntimeContext,
+        request: RequestEnvelope,
+        plan: ActionPlan,
+        pending_actions: list[ActionSpec],
+        plan_patch: ActionPlanPatch,
+    ) -> list[dict[str, Any]]:
         updated_plan = apply_action_plan_patch(plan, plan_patch)
         inserted_node_ids = {
             operation.action.node_id
@@ -691,7 +733,7 @@ class OrchestratorPlanExecutor:
             )
         return [patch_record]
 
-    def _replan_action_plan(
+    def _request_action_plan_replan(
         self,
         *,
         context: RuntimeContext,
@@ -806,12 +848,6 @@ class OrchestratorPlanExecutor:
             message=f"Dynamically inserted action: {action.node_id}",
             payload=action.model_dump(mode="json"),
         )
-
-    @staticmethod
-    def _plan_patch_requests_replan(plan_patch: ActionPlanPatch) -> bool:
-        if plan_patch.decision_type == "replan":
-            return True
-        return any(operation.op_type == "request_replan" for operation in plan_patch.operations)
 
     @staticmethod
     def _replace_plan(*, plan: ActionPlan, replacement_plan: ActionPlan) -> None:

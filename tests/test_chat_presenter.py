@@ -367,6 +367,31 @@ class ChatPresenterTests(unittest.TestCase):
         self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "action_phase_decided")
         self.assertEqual(trace_payload["dynamic_trace"][0]["final_action_node_id"], "screen_review")
 
+    def test_presenter_accumulates_runtime_control_transition_events_into_dynamic_trace(self) -> None:
+        presenter = ChatStreamPresenter()
+
+        presenter.on_event(
+            _event(
+                event_type="runtime_control_transition_decided",
+                phase="supervision",
+                agent="runtime_control",
+                payload={
+                    "control_domain": "runtime",
+                    "control_stage": "plan_patch_transition",
+                    "decision_stage": "transition",
+                    "transition_type": "request_action_replan",
+                    "source_domain": "subagent_capability_gap",
+                    "source_action_node_id": "review",
+                },
+            )
+        )
+
+        trace_payload = presenter.current_trace_payload()
+        self.assertIsNotNone(trace_payload)
+        self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "runtime_control_transition_decided")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["transition_type"], "request_action_replan")
+
     def test_presenter_accumulates_subagent_phase_shadow_events_into_dynamic_trace(self) -> None:
         presenter = ChatStreamPresenter()
 
