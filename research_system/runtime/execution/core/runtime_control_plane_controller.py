@@ -2,27 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from research_system.runtime.execution.core.runtime_control_controller import (
-    OrchestratorRuntimeControlController,
-)
 from research_system.runtime.execution.core.runtime_control_protocol_controller import (
-    OrchestratorRuntimeControlProtocolController,
     RuntimeControlProtocolResolution,
 )
-from research_system.runtime.execution.core.runtime_protocol_decision_source import (
-    OrchestratorRuntimeProtocolDecisionSource,
-)
-from research_system.runtime.execution.core.runtime_subagent_control_controller import (
-    OrchestratorRuntimeSubagentControlController,
-)
-from research_system.runtime.execution.core.runtime_subagent_control_protocol_controller import (
-    OrchestratorRuntimeSubagentControlProtocolController,
-)
-from research_system.runtime.execution.core.runtime_subagent_transition_controller import (
-    OrchestratorRuntimeSubagentTransitionController,
-)
-from research_system.runtime.execution.core.runtime_transition_decision_source import (
-    OrchestratorRuntimeTransitionDecisionSource,
+from research_system.runtime.execution.core.runtime_protocol_controller import (
+    OrchestratorRuntimeProtocolController,
 )
 from research_system.schemas.planning import ActionPlan, ActionSpec
 
@@ -36,23 +20,15 @@ class OrchestratorRuntimeControlPlaneController:
     ) -> None:
         self.host = host
         self.supervisor = supervisor
-        self.transition_decision_source = OrchestratorRuntimeTransitionDecisionSource()
-        self.protocol_decision_source = OrchestratorRuntimeProtocolDecisionSource(
-            transition_decision_source=self.transition_decision_source,
-        )
-        self.transition_controller: OrchestratorRuntimeControlController | None = None
-        self.protocol_controller: OrchestratorRuntimeControlProtocolController | None = None
-        self.subagent_controller = OrchestratorRuntimeSubagentControlController(host)
-        self.subagent_transition_controller = OrchestratorRuntimeSubagentTransitionController(
+        self.protocol_controller = OrchestratorRuntimeProtocolController(
             host,
-            decision_source=self.transition_decision_source,
+            supervisor=supervisor,
         )
-        self.subagent_protocol_controller = OrchestratorRuntimeSubagentControlProtocolController(
-            host,
-            subagent_controller=self.subagent_controller,
-            transition_controller=self.subagent_transition_controller,
-            decision_source=self.protocol_decision_source,
-        )
+        self.transition_decision_source = self.protocol_controller.transition_decision_source
+        self.protocol_decision_source = self.protocol_controller.decision_source
+        self.subagent_controller = self.protocol_controller.subagent_controller
+        self.subagent_transition_controller = self.protocol_controller.subagent_transition_controller
+        self.subagent_protocol_controller = self.protocol_controller.subagent_protocol_controller
 
     def register_execution_callbacks(
         self,
@@ -60,17 +36,9 @@ class OrchestratorRuntimeControlPlaneController:
         apply_plan_patch,
         request_action_plan_replan,
     ) -> None:
-        self.transition_controller = OrchestratorRuntimeControlController(
-            self.host,
+        self.protocol_controller.register_execution_callbacks(
             apply_plan_patch=apply_plan_patch,
             request_action_plan_replan=request_action_plan_replan,
-            decision_source=self.transition_decision_source,
-        )
-        self.protocol_controller = OrchestratorRuntimeControlProtocolController(
-            self.host,
-            supervisor=self.supervisor,
-            transition_controller=self.transition_controller,
-            decision_source=self.protocol_decision_source,
         )
 
     def bind_runtime(
@@ -152,8 +120,6 @@ class OrchestratorRuntimeControlPlaneController:
         completed_node_ids: list[str],
         skipped_node_ids: list[str],
     ) -> RuntimeControlProtocolResolution:
-        if self.protocol_controller is None:
-            raise RuntimeError("runtime control execution callbacks not registered")
         return self.protocol_controller.resolve_supervisor_cycle(
             context=context,
             request=request,
@@ -165,21 +131,19 @@ class OrchestratorRuntimeControlPlaneController:
         )
 
     def handle_subagent_escalation(self, **kwargs) -> list[dict[str, Any]]:
-        if self.protocol_controller is None:
-            raise RuntimeError("runtime control execution callbacks not registered")
         return self.protocol_controller.handle_subagent_escalation(**kwargs)
 
     def resolve_subagent_capability_gap_escalation(self, **kwargs):
-        return self.subagent_protocol_controller.resolve_capability_gap_escalation(**kwargs)
+        return self.protocol_controller.resolve_subagent_capability_gap_escalation(**kwargs)
 
     def resolve_subagent_catalog_entry(self, **kwargs):
-        return self.subagent_protocol_controller.resolve_catalog_entry(**kwargs)
+        return self.protocol_controller.resolve_subagent_catalog_entry(**kwargs)
 
     def select_subagent_catalog_entry(self, **kwargs):
-        return self.subagent_protocol_controller.select_catalog_entry(**kwargs)
+        return self.protocol_controller.select_subagent_catalog_entry(**kwargs)
 
     def execute_subagent_phase_patch_cycle(self, **kwargs):
-        return self.subagent_protocol_controller.execute_patch_cycle(**kwargs)
+        return self.protocol_controller.execute_subagent_phase_patch_cycle(**kwargs)
 
 
 __all__ = ["OrchestratorRuntimeControlPlaneController"]

@@ -102,14 +102,14 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
         self.assertEqual(supervisor.bind_calls[0]["intent"], "stock_screen")
         self.assertEqual(supervisor.clear_calls, 1)
 
-    def test_protocol_controllers_share_one_protocol_decision_source(self) -> None:
+    def test_runtime_protocol_service_shares_one_protocol_decision_source(self) -> None:
         controller = OrchestratorRuntimeControlPlaneController(
             host=SimpleNamespace(),
             supervisor=_SupervisorStub(),
         )
 
         self.assertIs(
-            controller.subagent_protocol_controller.decision_source,
+            controller.protocol_controller.subagent_protocol_controller.decision_source,
             controller.protocol_decision_source,
         )
 
@@ -118,8 +118,11 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
             request_action_plan_replan=lambda **kwargs: [],
         )
 
-        self.assertIsNotNone(controller.protocol_controller)
-        self.assertIs(controller.protocol_controller.decision_source, controller.protocol_decision_source)
+        self.assertIsNotNone(controller.protocol_controller.action_protocol_controller)
+        self.assertIs(
+            controller.protocol_controller.action_protocol_controller.decision_source,
+            controller.protocol_decision_source,
+        )
 
     def test_register_execution_callbacks_and_delegate_resolution(self) -> None:
         supervisor = _SupervisorStub()
