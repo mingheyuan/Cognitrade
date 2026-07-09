@@ -208,6 +208,21 @@ class SubagentCatalogController:
                 decision_rows = getattr(context, "subagent_catalog_stage_decisions", None)
         if isinstance(decision_rows, list):
             decision_rows.append(dict(payload))
+        control_rows = getattr(context, "subagent_control_stage_decisions", None)
+        if not isinstance(control_rows, list):
+            try:
+                setattr(context, "subagent_control_stage_decisions", [])
+            except Exception:
+                control_rows = None
+            else:
+                control_rows = getattr(context, "subagent_control_stage_decisions", None)
+        if isinstance(control_rows, list):
+            control_rows.append(
+                {
+                    **dict(payload),
+                    "control_stage": "catalog_selection",
+                }
+            )
         dynamic_trace = getattr(context, "dynamic_trace", None)
         if isinstance(dynamic_trace, list):
             dynamic_trace.append(dict(payload))

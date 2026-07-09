@@ -32,6 +32,7 @@ class OrchestratorDebugSupport:
             "subagent_trace": context.subagent_trace[:],
             "subagent_plans": context.subagent_plans[:],
             "subagent_plan_patches": context.subagent_plan_patches[:],
+            "subagent_control_stage_decisions": context.subagent_control_stage_decisions[:],
             "subagent_catalog_stage_decisions": context.subagent_catalog_stage_decisions[:],
             "subagent_capability_gaps": context.subagent_capability_gaps[:],
             "subagent_tool_discovery_requests": context.subagent_tool_discovery_requests[:],

@@ -173,6 +173,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
 
     def test_select_catalog_entry_prefers_explicit_type(self) -> None:
         runtime_context = SimpleNamespace(
+            subagent_control_stage_decisions=[],
             subagent_catalog_stage_decisions=[],
             dynamic_trace=[],
         )
@@ -209,6 +210,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
 
         self.assertEqual(selected.subagent_type, "preferred_review")
         self.assertEqual(len(runtime_context.subagent_catalog_stage_decisions), 1)
+        self.assertEqual(len(runtime_context.subagent_control_stage_decisions), 1)
         self.assertEqual(
             runtime_context.subagent_catalog_stage_decisions[0]["decision_type"],
             "selected",
@@ -220,6 +222,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
 
     def test_select_catalog_entry_records_capability_gap_when_missing(self) -> None:
         runtime_context = SimpleNamespace(
+            subagent_control_stage_decisions=[],
             subagent_catalog_stage_decisions=[],
             subagent_capability_gaps=[],
             subagent_tool_discovery_requests=[],
@@ -263,6 +266,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
             self.assertEqual(exc_info.exception.gap.capability, "missing_capability")
             self.assertEqual(len(runtime_context.subagent_capability_gaps), 1)
             self.assertEqual(len(runtime_context.subagent_tool_discovery_requests), 1)
+            self.assertEqual(len(runtime_context.subagent_control_stage_decisions), 1)
             self.assertEqual(
                 [row["decision_type"] for row in runtime_context.subagent_catalog_stage_decisions],
                 ["escalate_capability_gap"],
@@ -1185,6 +1189,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
     def test_execute_patch_cycle_hybrid_can_suppress_rule_replan(self) -> None:
         events: list[dict] = []
         runtime_context = SimpleNamespace(
+            subagent_control_stage_decisions=[],
             subagent_phase_shadow_suggestions=[],
             subagent_phase_hybrid_decisions=[],
             dynamic_trace=[],
@@ -1321,6 +1326,15 @@ class SubagentPhaseControllerTests(unittest.TestCase):
         self.assertEqual(list(final_results.keys()), ["review_strategy_resolver"])
         self.assertEqual(len(runtime_context.subagent_phase_shadow_suggestions), 1)
         self.assertEqual(len(runtime_context.subagent_phase_hybrid_decisions), 1)
+        self.assertEqual(len(runtime_context.subagent_control_stage_decisions), 1)
+        self.assertEqual(
+            runtime_context.subagent_control_stage_decisions[0]["event"],
+            "subagent_phase_execution_decided",
+        )
+        self.assertEqual(
+            runtime_context.subagent_control_stage_decisions[0]["control_stage"],
+            "phase_patch_cycle",
+        )
         self.assertEqual(runtime_context.subagent_phase_hybrid_decisions[0]["applied_plan_variant"], "current")
         self.assertTrue(any(event.get("event_type") == "subagent_phase_hybrid_applied" for event in events))
 

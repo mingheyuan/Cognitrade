@@ -13,6 +13,9 @@ from research_system.agents._subagent_capability_gap_controller import (
 from research_system.agents._subagent_catalog_controller import (
     SubagentCatalogController,
 )
+from research_system.agents._subagent_control_controller import (
+    SubagentControlController,
+)
 from research_system.agents._subagent_discovery_controller import SubagentDiscoveryController
 from research_system.agents._subagent_discovery_decision_source import SubagentDiscoveryDecisionSource
 from research_system.agents._subagent_discovery_policy import SubagentDiscoveryPolicyService
@@ -24,6 +27,9 @@ from research_system.agents._subagent_dag import (
     SubagentDagExecutor,
     SubagentDagNodeResult,
     SubagentDagNodeSpec,
+)
+from research_system.agents._subagent_phase_execution_controller import (
+    SubagentPhaseExecutionController,
 )
 from research_system.agents._subagent_phase_policy_source import SubagentPhaseLLMPolicySource
 from research_system.agents._subagent_phase_shadow_policy import SubagentPhaseLLMShadowPolicy
@@ -170,6 +176,20 @@ class SubagentPhaseController:
             emit_event=emit_event,
             service_name=service_name,
         )
+        self.phase_execution_controller = SubagentPhaseExecutionController(
+            execute_plan=self.execute_plan,
+            apply_patch=self.apply_patch,
+            llm_policy_source=self.llm_policy_source,
+            patch_requests_replan=self._patch_requests_replan,
+            resolve_variant_id=self._resolve_variant_id,
+            runtime_binding_getter=runtime_binding_getter,
+            emit_event=emit_event,
+            service_name=service_name,
+        )
+        self.control_controller = SubagentControlController(
+            catalog_controller=self.catalog_controller,
+            phase_execution_controller=self.phase_execution_controller,
+        )
         self._mcp_source_registry = None
         self._http_json_source_registry = None
         self._openapi_source_registry = None
@@ -185,7 +205,7 @@ class SubagentPhaseController:
         preferred_subagent_type: str | None = None,
         requires_llm: bool | None = None,
     ) -> SubagentCatalogEntry:
-        return self.catalog_controller.select_catalog_entry(
+        return self.control_controller.select_catalog_entry(
             stage=stage,
             intent=intent,
             capability=capability,
@@ -296,69 +316,23 @@ class SubagentPhaseController:
         ]
         | None = None,
     ) -> tuple[SubagentPlan, dict[str, SubagentDagNodeResult], list[dict[str, Any]], dict[str, SubagentDagNodeResult]]:
-        base_results = self.execute_plan(
+        resolution = self.control_controller.execute_patch_cycle(
             plan=plan,
-            build_invocation=build_invocation_factory(plan),
             dag_id=dag_id,
-            max_workers=base_max_workers,
+            base_max_workers=base_max_workers,
+            final_max_workers=final_max_workers,
+            build_invocation_factory=build_invocation_factory,
+            patch_builder=patch_builder,
+            replan_builder=replan_builder,
+            allow_current_plan_variant=allow_current_plan_variant,
+            candidate_plan_variants_builder=candidate_plan_variants_builder,
         )
-        patch = patch_builder(base_results)
-        rule_variant_id = "current"
-        rule_final_plan = plan
-        rule_patch_rows: list[dict[str, Any]] = []
-        if patch is not None and self._patch_requests_replan(patch):
-            if replan_builder is None:
-                raise ValueError("subagent patch requested replan but no replan_builder was provided")
-            rule_variant_id = "rule_replanned"
-            rule_final_plan = replan_builder(plan, patch, base_results)
-            rule_patch_rows = [patch.model_dump(mode="json")]
-        else:
-            rule_final_plan, rule_patch_rows = self.apply_patch(plan=plan, patch=patch)
-            if patch is not None and rule_patch_rows:
-                rule_variant_id = "rule_patched"
-        candidate_plans: dict[str, SubagentPlan] = {}
-        if allow_current_plan_variant:
-            candidate_plans["current"] = plan
-        if patch is not None and rule_variant_id != "current":
-            candidate_plans[rule_variant_id] = rule_final_plan
-        if candidate_plan_variants_builder is not None:
-            for variant_id, variant_plan in dict(
-                candidate_plan_variants_builder(rule_final_plan, patch, base_results) or {}
-            ).items():
-                if isinstance(variant_plan, SubagentPlan):
-                    candidate_plans[str(variant_id)] = variant_plan
-        rule_variant_id = self._resolve_variant_id(
-            target_plan=rule_final_plan,
-            candidate_plans=candidate_plans,
-            fallback=rule_variant_id,
+        return (
+            resolution.final_plan,
+            resolution.base_results,
+            resolution.final_patch_rows,
+            resolution.final_results,
         )
-        final_plan, final_patch, final_patch_rows, final_plan_variant, shadow_payload = self.llm_policy_source.apply(
-            dag_id=dag_id,
-            plan=plan,
-            candidate_plans=candidate_plans,
-            base_results=base_results,
-            rule_final_plan=rule_final_plan,
-            rule_patch=patch,
-            rule_patch_rows=rule_patch_rows,
-            rule_variant_id=rule_variant_id,
-        )
-        final_results = base_results if not final_patch_rows and final_plan is plan else self.execute_plan(
-            plan=final_plan,
-            build_invocation=build_invocation_factory(final_plan),
-            dag_id=dag_id,
-            max_workers=final_max_workers,
-        )
-        self.llm_policy_source.observe(
-            dag_id=dag_id,
-            plan=plan,
-            candidate_plans=candidate_plans,
-            actual_final_plan=final_plan,
-            actual_patch=final_patch,
-            actual_plan_variant=final_plan_variant,
-            base_results=base_results,
-            shadow_payload=shadow_payload,
-        )
-        return final_plan, base_results, final_patch_rows, final_results
 
     @staticmethod
     def _patch_requests_replan(patch: SubagentGraphPatch) -> bool:

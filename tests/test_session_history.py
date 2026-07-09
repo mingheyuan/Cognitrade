@@ -319,6 +319,43 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["dynamic_trace"][0]["dag_id"], "phase_two")
         self.assertEqual(payload["dynamic_trace"][0]["selected_node_ids"], ["retrieval_decider"])
 
+    def test_trace_rebuilds_subagent_phase_execution_rows_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "01TRACESUBEXEC"
+            run_root.mkdir(parents=True, exist_ok=True)
+
+            write_json(run_root / "request.json", {"intent": "review_thesis", "user_query": "review this thesis"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-subexec-1",
+                    "request_id": "req-subexec",
+                    "run_id": "01TRACESUBEXEC",
+                    "intent": "review_thesis",
+                    "event_type": "subagent_phase_execution_decided",
+                    "phase": "review",
+                    "agent": "reviewer",
+                    "message": "subagent_phase_execution_decided resolved keep_current for DAG review_execution",
+                    "payload": {
+                        "control_stage": "phase_patch_cycle",
+                        "decision_stage": "phase_execution",
+                        "dag_id": "review_execution",
+                        "decision_type": "keep_current",
+                        "final_plan_variant": "current",
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-10T10:00:00+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(len(payload["dynamic_trace"]), 1)
+        self.assertEqual(payload["dynamic_trace"][0]["event"], "subagent_phase_execution_decided")
+        self.assertEqual(payload["dynamic_trace"][0]["dag_id"], "review_execution")
+
     def test_trace_rebuilds_subagent_capability_gap_rows_from_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "01TRACECAPGAP"

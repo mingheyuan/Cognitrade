@@ -40,6 +40,7 @@ class _CapabilityGapControllerStub:
 class SubagentCatalogControllerTests(unittest.TestCase):
     def test_selects_existing_catalog_entry_without_escalation(self) -> None:
         runtime_context = SimpleNamespace(
+            subagent_control_stage_decisions=[],
             subagent_catalog_stage_decisions=[],
             dynamic_trace=[],
         )
@@ -105,6 +106,7 @@ class SubagentCatalogControllerTests(unittest.TestCase):
         self.assertEqual(selected.subagent_type, "preferred_review")
         self.assertEqual(gap_controller.calls, [])
         self.assertEqual(len(runtime_context.subagent_catalog_stage_decisions), 1)
+        self.assertEqual(len(runtime_context.subagent_control_stage_decisions), 1)
         self.assertEqual(
             runtime_context.subagent_catalog_stage_decisions[0]["decision_type"],
             "selected",
@@ -116,6 +118,7 @@ class SubagentCatalogControllerTests(unittest.TestCase):
 
     def test_escalates_capability_gap_and_records_recovery_selection(self) -> None:
         runtime_context = SimpleNamespace(
+            subagent_control_stage_decisions=[],
             subagent_catalog_stage_decisions=[],
             dynamic_trace=[],
         )
@@ -179,6 +182,10 @@ class SubagentCatalogControllerTests(unittest.TestCase):
         self.assertEqual(
             [row["decision_type"] for row in runtime_context.subagent_catalog_stage_decisions],
             ["escalate_capability_gap", "selected"],
+        )
+        self.assertEqual(
+            [row["control_stage"] for row in runtime_context.subagent_control_stage_decisions],
+            ["catalog_selection", "catalog_selection"],
         )
         self.assertEqual(
             runtime_context.subagent_catalog_stage_decisions[1]["selection_source"],
