@@ -7,6 +7,7 @@ from pathlib import Path
 from research_system.runtime.local_runtime import bind_local_runtime
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.runtime.supervision import RuntimeSupervisor
+from research_system.runtime.supervision._action_control_controller import ActionControlController
 from research_system.runtime.supervision._action_phase_controller import ActionPhaseController
 from research_system.schemas.planning import ActionPlan, ActionSpec
 from research_system.schemas.protocol import RequestEnvelope
@@ -113,6 +114,7 @@ class SupervisorRuntimeTests(unittest.TestCase):
         self.assertIsInstance(supervisor.sector_research, SupervisorSectorResearchSupport)
         self.assertIsInstance(supervisor.review_thesis, SupervisorReviewThesisSupport)
         self.assertIsInstance(supervisor.phase_controller, ActionPhaseController)
+        self.assertIsInstance(supervisor.control_controller, ActionControlController)
 
     def test_supervisor_shadow_policy_records_suggestion_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
