@@ -14,6 +14,7 @@ __all__ = [
     "OrchestratorRuntimeActionControlService",
     "OrchestratorRuntimeBindingController",
     "OrchestratorRuntimeControlPlaneController",
+    "OrchestratorRuntimeOrchestrationController",
     "OrchestratorRuntimeProtocolController",
     "OrchestratorRuntimeServiceBindingController",
     "OrchestratorRuntimeSubagentControlService",
@@ -63,6 +64,10 @@ _EXPORTS = {
     "OrchestratorRuntimeControlPlaneController": (
         "research_system.runtime.execution.core.runtime_control_plane_controller",
         "OrchestratorRuntimeControlPlaneController",
+    ),
+    "OrchestratorRuntimeOrchestrationController": (
+        "research_system.runtime.execution.core.runtime_orchestration_controller",
+        "OrchestratorRuntimeOrchestrationController",
     ),
     "OrchestratorRuntimeProtocolController": (
         "research_system.runtime.execution.core.runtime_protocol_controller",

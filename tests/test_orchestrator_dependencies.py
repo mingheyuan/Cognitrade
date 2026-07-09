@@ -16,6 +16,7 @@ from research_system.runtime.execution import (
     OrchestratorRuntimeActionControlService,
     OrchestratorRuntimeBindingController,
     OrchestratorRuntimeControlPlaneController,
+    OrchestratorRuntimeOrchestrationController,
     OrchestratorRuntimeServiceBindingController,
 )
 from research_system.runtime.execution.handlers import OrchestratorAgentHandlers
@@ -184,6 +185,14 @@ class OrchestratorDependenciesTests(unittest.TestCase):
                 self.assertIsInstance(orchestrator.runtime_control, OrchestratorRuntimeControlPlaneController)
                 self.assertIs(orchestrator.runtime_control.host, orchestrator)
                 self.assertIsInstance(
+                    orchestrator.runtime_orchestration,
+                    OrchestratorRuntimeOrchestrationController,
+                )
+                self.assertIs(
+                    orchestrator.runtime_orchestration.control_plane,
+                    orchestrator.runtime_control,
+                )
+                self.assertIsInstance(
                     orchestrator.runtime_control.runtime_binding_controller,
                     OrchestratorRuntimeBindingController,
                 )
@@ -199,8 +208,12 @@ class OrchestratorDependenciesTests(unittest.TestCase):
                 self.assertIs(orchestrator.plan_executor.host, orchestrator)
                 self.assertIs(orchestrator.plan_executor.runtime_control_plane, orchestrator.runtime_control)
                 self.assertIs(
+                    orchestrator.plan_executor.runtime_orchestration,
+                    orchestrator.runtime_orchestration,
+                )
+                self.assertIs(
                     orchestrator.plan_executor.runtime_control,
-                    orchestrator.runtime_control.action_runtime_control,
+                    orchestrator.runtime_orchestration.action_runtime_control,
                 )
                 self.assertIsInstance(orchestrator.run_coordinator, OrchestratorRunCoordinator)
                 self.assertIs(orchestrator.run_coordinator.host, orchestrator)

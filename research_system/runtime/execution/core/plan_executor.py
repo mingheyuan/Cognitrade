@@ -18,6 +18,7 @@ class OrchestratorPlanExecutor:
     def __init__(self, host: Any) -> None:
         self.host = host
         self.dag_scheduler = ActionDagScheduler()
+        runtime_orchestration = getattr(host, "runtime_orchestration", None)
         runtime_control = getattr(host, "runtime_control", None)
         if runtime_control is None:
             from research_system.runtime.execution.core.runtime_control_plane_controller import (
@@ -28,12 +29,32 @@ class OrchestratorPlanExecutor:
                 host,
                 supervisor=self.host.supervisor,
             )
-        action_runtime_control = getattr(runtime_control, "action_runtime_control", None) or runtime_control
-        action_runtime_control.register_execution_callbacks(
-            apply_plan_patch=self._apply_action_plan_patch,
-            request_action_plan_replan=self._request_action_plan_replan,
+        if runtime_orchestration is None:
+            from research_system.runtime.execution.core.runtime_orchestration_controller import (
+                OrchestratorRuntimeOrchestrationController,
+            )
+
+            runtime_orchestration = OrchestratorRuntimeOrchestrationController(
+                control_plane=runtime_control,
+            )
+        action_runtime_control = (
+            getattr(runtime_orchestration, "action_runtime_control", None)
+            or getattr(runtime_control, "action_runtime_control", None)
+            or runtime_orchestration
         )
+        register_execution_callbacks = getattr(runtime_orchestration, "register_execution_callbacks", None)
+        if callable(register_execution_callbacks):
+            register_execution_callbacks(
+                apply_plan_patch=self._apply_action_plan_patch,
+                request_action_plan_replan=self._request_action_plan_replan,
+            )
+        else:
+            action_runtime_control.register_execution_callbacks(
+                apply_plan_patch=self._apply_action_plan_patch,
+                request_action_plan_replan=self._request_action_plan_replan,
+            )
         self.runtime_control_plane = runtime_control
+        self.runtime_orchestration = runtime_orchestration
         self.runtime_control = action_runtime_control
 
     def execute_plan(

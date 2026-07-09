@@ -19,6 +19,7 @@ from research_system.runtime.execution.core import (
     OrchestratorRuntimeActionControlService,
     OrchestratorRuntimeBindingController,
     OrchestratorRuntimeControlPlaneController,
+    OrchestratorRuntimeOrchestrationController,
     OrchestratorRuntimeProtocolController,
     OrchestratorRuntimeServiceBindingController,
     OrchestratorRuntimeSubagentControlService,
@@ -109,6 +110,10 @@ class RuntimeRemainingPackagesRuntimeTests(unittest.TestCase):
             OrchestratorRuntimeBindingController,
         )
         self.assertIs(execution.OrchestratorRuntimeControlPlaneController, OrchestratorRuntimeControlPlaneController)
+        self.assertIs(
+            execution.OrchestratorRuntimeOrchestrationController,
+            OrchestratorRuntimeOrchestrationController,
+        )
         self.assertIs(execution.OrchestratorRuntimeProtocolController, OrchestratorRuntimeProtocolController)
         self.assertIs(
             execution.OrchestratorRuntimeServiceBindingController,
@@ -138,6 +143,10 @@ class RuntimeRemainingPackagesRuntimeTests(unittest.TestCase):
         self.assertIs(
             execution_core.OrchestratorRuntimeControlPlaneController,
             OrchestratorRuntimeControlPlaneController,
+        )
+        self.assertIs(
+            execution_core.OrchestratorRuntimeOrchestrationController,
+            OrchestratorRuntimeOrchestrationController,
         )
         self.assertIs(
             execution_core.OrchestratorRuntimeProtocolController,

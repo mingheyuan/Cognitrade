@@ -61,13 +61,17 @@ class OrchestratorRunCoordinator:
                 request=request,
                 intent=intent,
             )
+            runtime_orchestration = getattr(self.host, "runtime_orchestration", None)
             runtime_control = getattr(self.host, "runtime_control", None) or self.host.supervisor
-            runtime_binding = (
-                getattr(runtime_control, "runtime_binding_controller", None)
-                or runtime_control
-            )
-            bind_runtime = getattr(runtime_binding, "bind_runtime", None)
-            clear_runtime = getattr(runtime_binding, "clear_runtime", None)
+            bind_runtime = getattr(runtime_orchestration, "bind_runtime", None)
+            clear_runtime = getattr(runtime_orchestration, "clear_runtime", None)
+            if not callable(bind_runtime) or not callable(clear_runtime):
+                runtime_binding = (
+                    getattr(runtime_control, "runtime_binding_controller", None)
+                    or runtime_control
+                )
+                bind_runtime = getattr(runtime_binding, "bind_runtime", None)
+                clear_runtime = getattr(runtime_binding, "clear_runtime", None)
             if callable(bind_runtime):
                 bind_runtime(
                     context=context,
@@ -179,13 +183,17 @@ class OrchestratorRunCoordinator:
                 pending_nodes=[action.node_id for action in plan.actions if action.node_id in rerun_nodes],
                 completed_nodes=completed_nodes,
             )
+            runtime_orchestration = getattr(self.host, "runtime_orchestration", None)
             runtime_control = getattr(self.host, "runtime_control", None) or self.host.supervisor
-            runtime_binding = (
-                getattr(runtime_control, "runtime_binding_controller", None)
-                or runtime_control
-            )
-            bind_runtime = getattr(runtime_binding, "bind_runtime", None)
-            clear_runtime = getattr(runtime_binding, "clear_runtime", None)
+            bind_runtime = getattr(runtime_orchestration, "bind_runtime", None)
+            clear_runtime = getattr(runtime_orchestration, "clear_runtime", None)
+            if not callable(bind_runtime) or not callable(clear_runtime):
+                runtime_binding = (
+                    getattr(runtime_control, "runtime_binding_controller", None)
+                    or runtime_control
+                )
+                bind_runtime = getattr(runtime_binding, "bind_runtime", None)
+                clear_runtime = getattr(runtime_binding, "clear_runtime", None)
             if callable(bind_runtime):
                 bind_runtime(
                     context=context,

@@ -103,12 +103,15 @@ class OrchestratorActionRunner:
         service = getattr(self.host, agent, None)
         if service is None or not hasattr(service, "bind_runtime"):
             return
+        runtime_orchestration = getattr(self.host, "runtime_orchestration", None)
         runtime_control = getattr(self.host, "runtime_control", None)
-        runtime_service_binding = (
-            getattr(runtime_control, "service_binding_controller", None)
-            or runtime_control
-        )
-        bind_runtime = getattr(runtime_service_binding, "bind_agent_service_runtime", None)
+        bind_runtime = getattr(runtime_orchestration, "bind_agent_service_runtime", None)
+        if not callable(bind_runtime):
+            runtime_service_binding = (
+                getattr(runtime_control, "service_binding_controller", None)
+                or runtime_control
+            )
+            bind_runtime = getattr(runtime_service_binding, "bind_agent_service_runtime", None)
         if callable(bind_runtime):
             bind_runtime(
                 service=service,
@@ -125,7 +128,12 @@ class OrchestratorActionRunner:
             execution_policy=context.execution_policy,
             context=context,
             support=self.support,
-            runtime_control=getattr(runtime_control, "subagent_runtime_control", runtime_control),
+            runtime_control=(
+                getattr(runtime_orchestration, "subagent_runtime_control", None)
+                or getattr(runtime_control, "subagent_runtime_control", None)
+                or runtime_orchestration
+                or runtime_control
+            ),
             subagent_discovery_store=getattr(self.host, "subagent_discovery_store", None),
             skill_runtime=getattr(self.host, "skill_runtime", None),
             mcp_source_registry=getattr(self.host, "mcp_source_registry", None),
@@ -150,12 +158,15 @@ class OrchestratorActionRunner:
         service = getattr(self.host, agent, None)
         if service is None or not hasattr(service, "clear_runtime"):
             return
+        runtime_orchestration = getattr(self.host, "runtime_orchestration", None)
         runtime_control = getattr(self.host, "runtime_control", None)
-        runtime_service_binding = (
-            getattr(runtime_control, "service_binding_controller", None)
-            or runtime_control
-        )
-        clear_runtime = getattr(runtime_service_binding, "clear_agent_service_runtime", None)
+        clear_runtime = getattr(runtime_orchestration, "clear_agent_service_runtime", None)
+        if not callable(clear_runtime):
+            runtime_service_binding = (
+                getattr(runtime_control, "service_binding_controller", None)
+                or runtime_control
+            )
+            clear_runtime = getattr(runtime_service_binding, "clear_agent_service_runtime", None)
         if callable(clear_runtime):
             clear_runtime(service=service)
             return

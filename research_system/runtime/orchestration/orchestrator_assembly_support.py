@@ -4,6 +4,9 @@ from research_system.runtime.execution.core.action_runner import OrchestratorAct
 from research_system.runtime.execution.core.runtime_control_plane_controller import (
     OrchestratorRuntimeControlPlaneController,
 )
+from research_system.runtime.execution.core.runtime_orchestration_controller import (
+    OrchestratorRuntimeOrchestrationController,
+)
 from research_system.runtime.orchestration.orchestrator_admin import OrchestratorAdminService
 from research_system.runtime.orchestration.orchestrator_compat_support import OrchestratorCompatSupport
 from research_system.runtime.execution.core.plan_executor import OrchestratorPlanExecutor
@@ -111,6 +114,18 @@ class OrchestratorAssemblySupport:
         if controller is None:
             controller = self.build_runtime_control()
             self.host.runtime_control = controller
+        return controller
+
+    def build_runtime_orchestration(self) -> OrchestratorRuntimeOrchestrationController:
+        return OrchestratorRuntimeOrchestrationController(
+            control_plane=self.runtime_control(),
+        )
+
+    def runtime_orchestration(self) -> OrchestratorRuntimeOrchestrationController:
+        controller = getattr(self.host, "runtime_orchestration", None)
+        if controller is None:
+            controller = self.build_runtime_orchestration()
+            self.host.runtime_orchestration = controller
         return controller
 
     def build_plan_executor(self) -> OrchestratorPlanExecutor:
