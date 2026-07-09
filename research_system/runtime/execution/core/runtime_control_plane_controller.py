@@ -8,6 +8,9 @@ from research_system.runtime.execution.core.runtime_control_protocol_controller 
 from research_system.runtime.execution.core.runtime_protocol_controller import (
     OrchestratorRuntimeProtocolController,
 )
+from research_system.runtime.execution.core.runtime_subagent_control_service import (
+    OrchestratorRuntimeSubagentControlService,
+)
 from research_system.schemas.planning import ActionPlan, ActionSpec
 
 
@@ -29,6 +32,9 @@ class OrchestratorRuntimeControlPlaneController:
         self.subagent_controller = self.protocol_controller.subagent_controller
         self.subagent_transition_controller = self.protocol_controller.subagent_transition_controller
         self.subagent_protocol_controller = self.protocol_controller.subagent_protocol_controller
+        self.subagent_runtime_control = OrchestratorRuntimeSubagentControlService(
+            controller=self,
+        )
 
     def register_execution_callbacks(
         self,
@@ -82,7 +88,7 @@ class OrchestratorRuntimeControlPlaneController:
             execution_policy=context.execution_policy,
             context=context,
             support=support,
-            runtime_control=self,
+            runtime_control=self.subagent_runtime_control,
             subagent_discovery_store=getattr(self.host, "subagent_discovery_store", None),
             skill_runtime=getattr(self.host, "skill_runtime", None),
             mcp_source_registry=getattr(self.host, "mcp_source_registry", None),

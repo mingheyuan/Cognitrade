@@ -18,6 +18,7 @@ from research_system.runtime.execution.core import (
     OrchestratorPlanExecutor,
     OrchestratorRuntimeControlPlaneController,
     OrchestratorRuntimeProtocolController,
+    OrchestratorRuntimeSubagentControlService,
 )
 from research_system.runtime.methodology.banking import (
     OrchestratorMethodologyBankHighlightSupport as PackageBankHighlightSupport,
@@ -98,6 +99,10 @@ class RuntimeRemainingPackagesRuntimeTests(unittest.TestCase):
         self.assertIs(execution.OrchestratorPlanExecutor, OrchestratorPlanExecutor)
         self.assertIs(execution.OrchestratorRuntimeControlPlaneController, OrchestratorRuntimeControlPlaneController)
         self.assertIs(execution.OrchestratorRuntimeProtocolController, OrchestratorRuntimeProtocolController)
+        self.assertIs(
+            execution.OrchestratorRuntimeSubagentControlService,
+            OrchestratorRuntimeSubagentControlService,
+        )
         self.assertIs(execution.core, execution_core)
         self.assertIs(execution_core.OrchestratorActionRunner, OrchestratorActionRunner)
         self.assertIs(execution_core.OrchestratorExecutionControlSupport, OrchestratorExecutionControlSupport)
@@ -114,6 +119,10 @@ class RuntimeRemainingPackagesRuntimeTests(unittest.TestCase):
         self.assertIs(
             execution_core.OrchestratorRuntimeProtocolController,
             OrchestratorRuntimeProtocolController,
+        )
+        self.assertIs(
+            execution_core.OrchestratorRuntimeSubagentControlService,
+            OrchestratorRuntimeSubagentControlService,
         )
         self.assertIs(execution.handlers.OrchestratorAgentHandlers, OrchestratorAgentHandlers)
 

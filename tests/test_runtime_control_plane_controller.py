@@ -6,6 +6,9 @@ from types import SimpleNamespace
 from research_system.runtime.execution.core.runtime_control_plane_controller import (
     OrchestratorRuntimeControlPlaneController,
 )
+from research_system.runtime.execution.core.runtime_subagent_control_service import (
+    OrchestratorRuntimeSubagentControlService,
+)
 
 
 class _SupervisorStub:
@@ -194,7 +197,11 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
 
         self.assertEqual(len(service.bind_calls), 1)
         bind_call = service.bind_calls[0]
-        self.assertIs(bind_call["runtime_control"], controller)
+        self.assertIsInstance(
+            bind_call["runtime_control"],
+            OrchestratorRuntimeSubagentControlService,
+        )
+        self.assertIs(bind_call["runtime_control"], controller.subagent_runtime_control)
         self.assertEqual(bind_call["thread_id"], "thread-1")
         self.assertEqual(bind_call["turn_id"], "turn-1")
         self.assertEqual(bind_call["request_id"], "req-1")

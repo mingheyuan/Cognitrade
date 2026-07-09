@@ -13,6 +13,7 @@ __all__ = [
     "OrchestratorPlanExecutor",
     "OrchestratorRuntimeControlPlaneController",
     "OrchestratorRuntimeProtocolController",
+    "OrchestratorRuntimeSubagentControlService",
 ]
 
 _EXPORTS = {
@@ -55,6 +56,10 @@ _EXPORTS = {
     "OrchestratorRuntimeProtocolController": (
         "research_system.runtime.execution.core.runtime_protocol_controller",
         "OrchestratorRuntimeProtocolController",
+    ),
+    "OrchestratorRuntimeSubagentControlService": (
+        "research_system.runtime.execution.core.runtime_subagent_control_service",
+        "OrchestratorRuntimeSubagentControlService",
     ),
 }
 
