@@ -5,6 +5,9 @@ from typing import Any
 
 from research_system.agents._subagent_control_escalation import SubagentControlEscalationError
 from research_system.runtime.execution.core.dag_scheduler import ActionDagScheduler
+from research_system.runtime.execution.core.runtime_control_protocol_controller import (
+    OrchestratorRuntimeControlProtocolController,
+)
 from research_system.runtime.execution.core.runtime_control_controller import (
     OrchestratorRuntimeControlController,
 )
@@ -21,10 +24,15 @@ class OrchestratorPlanExecutor:
     def __init__(self, host: Any) -> None:
         self.host = host
         self.dag_scheduler = ActionDagScheduler()
-        self.runtime_control_controller = OrchestratorRuntimeControlController(
+        self.runtime_control_transition_controller = OrchestratorRuntimeControlController(
             host,
             apply_plan_patch=self._apply_action_plan_patch,
             request_action_plan_replan=self._request_action_plan_replan,
+        )
+        self.runtime_control_protocol_controller = OrchestratorRuntimeControlProtocolController(
+            host,
+            supervisor=self.host.supervisor,
+            transition_controller=self.runtime_control_transition_controller,
         )
 
     def execute_plan(
@@ -115,22 +123,17 @@ class OrchestratorPlanExecutor:
                 completed_node_ids=completed_node_ids,
                 skipped_node_ids=skipped_node_ids,
             )
-            decision = self.host.supervisor.decide(
-                plan=plan,
-                completed_actions=completed_node_ids[:] + skipped_node_ids[:],
-                pending_actions=ready_actions[:],
-                blackboard_entries=context.blackboard.list_entries(thread_id=context.thread.thread_id),
-            )
-            applied_plan_patch_rows = self._handle_supervisor_plan_patch(
+            control_resolution = self.runtime_control_protocol_controller.resolve_supervisor_cycle(
                 context=context,
                 request=request,
                 plan=plan,
+                ready_actions=ready_actions,
                 pending_actions=pending_actions,
                 completed_node_ids=completed_node_ids,
                 skipped_node_ids=skipped_node_ids,
-                plan_patch=decision.plan_patch,
-                next_actions=decision.next_actions,
             )
+            decision = control_resolution.decision
+            applied_plan_patch_rows = list(control_resolution.plan_patch_rows)
             ready_actions = self.dag_scheduler.ready_actions(
                 pending_actions=pending_actions,
                 completed_node_ids=completed_node_ids,
@@ -241,7 +244,7 @@ class OrchestratorPlanExecutor:
                     pending_actions_after_current=pending_actions_after_current[:],
                 )
             except SubagentControlEscalationError as exc:
-                self._handle_subagent_control_escalation(
+                self.runtime_control_protocol_controller.handle_subagent_escalation(
                     context=context,
                     request=request,
                     plan=plan,
@@ -633,52 +636,6 @@ class OrchestratorPlanExecutor:
             request=request,
             plan=plan,
             action=action,
-        )
-
-    def _handle_supervisor_plan_patch(
-        self,
-        *,
-        context: RuntimeContext,
-        request: RequestEnvelope,
-        plan: ActionPlan,
-        pending_actions: list[ActionSpec],
-        completed_node_ids: list[str],
-        skipped_node_ids: list[str],
-        plan_patch: ActionPlanPatch | None,
-        next_actions: list[ActionSpec],
-    ) -> list[dict[str, Any]]:
-        return self.runtime_control_controller.handle_supervisor_plan_patch(
-            context=context,
-            request=request,
-            plan=plan,
-            pending_actions=pending_actions,
-            completed_node_ids=completed_node_ids,
-            skipped_node_ids=skipped_node_ids,
-            plan_patch=plan_patch,
-            next_actions=next_actions,
-        )
-
-    def _handle_subagent_control_escalation(
-        self,
-        *,
-        context: RuntimeContext,
-        request: RequestEnvelope,
-        plan: ActionPlan,
-        pending_actions: list[ActionSpec],
-        completed_node_ids: list[str],
-        skipped_node_ids: list[str],
-        action: ActionSpec,
-        escalation_error: SubagentControlEscalationError,
-    ) -> list[dict[str, Any]]:
-        return self.runtime_control_controller.handle_subagent_escalation(
-            context=context,
-            request=request,
-            plan=plan,
-            pending_actions=pending_actions,
-            completed_node_ids=completed_node_ids,
-            skipped_node_ids=skipped_node_ids,
-            action=action,
-            escalation_error=escalation_error,
         )
 
     def _apply_action_plan_patch(

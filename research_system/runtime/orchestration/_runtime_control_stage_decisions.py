@@ -107,6 +107,60 @@ class RuntimeControlTransitionStageDecision:
 
 
 @dataclass(frozen=True)
+class RuntimeControlProtocolStageDecision:
+    intent: str | None
+    plan_id: str | None
+    resolution_source: Literal["supervisor_cycle", "subagent_escalation"]
+    decision_type: str
+    transition_type: Literal["apply_plan_patch", "request_action_replan"]
+    transition_source_domain: Literal["action_supervisor", "subagent_capability_gap"]
+    final_action_node_id: str | None = None
+    trigger_action_node_id: str | None = None
+    capability: str | None = None
+    policy_source: str = "rule"
+    patch_id: str | None = None
+    completed_action_node_ids: list[str] = field(default_factory=list)
+    skipped_action_node_ids: list[str] = field(default_factory=list)
+    ready_action_node_ids: list[str] = field(default_factory=list)
+    next_action_node_ids: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    event_type: Literal["runtime_control_protocol_resolved"] = "runtime_control_protocol_resolved"
+    control_domain: Literal["runtime"] = "runtime"
+    control_stage: Literal["control_protocol"] = "control_protocol"
+    decision_stage: Literal["protocol_resolution"] = "protocol_resolution"
+
+    def event_payload(self) -> dict[str, object]:
+        return {
+            "control_domain": self.control_domain,
+            "control_stage": self.control_stage,
+            "decision_stage": self.decision_stage,
+            "intent": self.intent,
+            "plan_id": self.plan_id,
+            "resolution_source": self.resolution_source,
+            "decision_type": self.decision_type,
+            "transition_type": self.transition_type,
+            "transition_source_domain": self.transition_source_domain,
+            "final_action_node_id": self.final_action_node_id,
+            "trigger_action_node_id": self.trigger_action_node_id,
+            "capability": self.capability,
+            "policy_source": self.policy_source,
+            "patch_id": self.patch_id,
+            "completed_action_node_ids": list(self.completed_action_node_ids),
+            "skipped_action_node_ids": list(self.skipped_action_node_ids),
+            "ready_action_node_ids": list(self.ready_action_node_ids),
+            "next_action_node_ids": list(self.next_action_node_ids),
+            "notes": list(self.notes),
+        }
+
+    def message(self) -> str:
+        return (
+            f"{self.event_type} resolved {self.resolution_source} via "
+            f"{self.transition_type} for intent {self.intent}"
+        )
+
+
+@dataclass(frozen=True)
 class SubagentCatalogStageDecision:
     intent: str | None
     stage: str | None
@@ -461,6 +515,7 @@ class SubagentDiscoveryActivationStageDecision:
 
 __all__ = [
     "ActionPhaseControlStageDecision",
+    "RuntimeControlProtocolStageDecision",
     "RuntimeControlTransitionStageDecision",
     "SubagentCatalogStageDecision",
     "SubagentCapabilityGapEscalationControlStageDecision",

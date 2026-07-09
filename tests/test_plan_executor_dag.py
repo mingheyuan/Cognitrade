@@ -370,7 +370,7 @@ class PlanExecutorDagTests(unittest.TestCase):
             self.assertEqual(host.run_attempts, ["collect", "review", "retrieve", "report"])
             self.assertEqual(context.state.completed_nodes, ["collect", "review", "retrieve", "report"])
             self.assertEqual(len(context.action_plan_patches), 1)
-            self.assertEqual(len(context.runtime_control_stage_decisions), 1)
+            self.assertEqual(len(context.runtime_control_stage_decisions), 2)
             self.assertEqual(context.action_plan_patches[0]["notes"], ["insert_review_after_collect"])
             self.assertEqual(
                 context.runtime_control_stage_decisions[0]["event"],
@@ -384,10 +384,21 @@ class PlanExecutorDagTests(unittest.TestCase):
                 context.runtime_control_stage_decisions[0]["source_domain"],
                 "action_supervisor",
             )
+            self.assertEqual(
+                context.runtime_control_stage_decisions[1]["event"],
+                "runtime_control_protocol_resolved",
+            )
+            self.assertEqual(
+                context.runtime_control_stage_decisions[1]["resolution_source"],
+                "supervisor_cycle",
+            )
             retrieve_action = next(action for action in plan.actions if action.node_id == "retrieve")
             self.assertEqual(retrieve_action.depends_on, ["review"])
             self.assertTrue(
                 any(event["event_type"] == "runtime_control_transition_decided" for event in host.events)
+            )
+            self.assertTrue(
+                any(event["event_type"] == "runtime_control_protocol_resolved" for event in host.events)
             )
             self.assertTrue(any(event["event_type"] == "action_plan_patch_applied" for event in host.events))
         finally:
@@ -416,16 +427,27 @@ class PlanExecutorDagTests(unittest.TestCase):
             self.assertEqual(plan.plan_id, "plan_replanned")
             self.assertEqual([action.node_id for action in plan.actions], ["collect", "review", "retrieve", "report"])
             self.assertEqual(len(context.action_plan_patches), 1)
-            self.assertEqual(len(context.runtime_control_stage_decisions), 1)
+            self.assertEqual(len(context.runtime_control_stage_decisions), 2)
             self.assertEqual(context.action_plan_patches[0]["decision_type"], "replan")
             self.assertEqual(
                 context.runtime_control_stage_decisions[0]["transition_type"],
                 "request_action_replan",
             )
             self.assertTrue(context.runtime_control_stage_decisions[0]["request_replan"])
+            self.assertEqual(
+                context.runtime_control_stage_decisions[1]["event"],
+                "runtime_control_protocol_resolved",
+            )
+            self.assertEqual(
+                context.runtime_control_stage_decisions[1]["resolution_source"],
+                "supervisor_cycle",
+            )
             self.assertTrue(any(event["event_type"] == "action_plan_replan_requested" for event in host.events))
             self.assertTrue(
                 any(event["event_type"] == "runtime_control_transition_decided" for event in host.events)
+            )
+            self.assertTrue(
+                any(event["event_type"] == "runtime_control_protocol_resolved" for event in host.events)
             )
             self.assertTrue(any(event["event_type"] == "action_plan_replanned" for event in host.events))
             self.assertTrue(
@@ -527,7 +549,7 @@ class PlanExecutorDagTests(unittest.TestCase):
             self.assertEqual(plan.plan_id, "plan_replanned")
             self.assertEqual([action.node_id for action in plan.actions], ["collect", "retrieve", "report"])
             self.assertEqual(len(context.action_plan_patches), 1)
-            self.assertEqual(len(context.runtime_control_stage_decisions), 1)
+            self.assertEqual(len(context.runtime_control_stage_decisions), 2)
             self.assertEqual(
                 context.action_plan_patches[0]["operations"][0]["metadata"]["control_source"],
                 "subagent_capability_gap",
@@ -544,9 +566,20 @@ class PlanExecutorDagTests(unittest.TestCase):
                 context.runtime_control_stage_decisions[0]["capability"],
                 "missing_review_capability",
             )
+            self.assertEqual(
+                context.runtime_control_stage_decisions[1]["event"],
+                "runtime_control_protocol_resolved",
+            )
+            self.assertEqual(
+                context.runtime_control_stage_decisions[1]["resolution_source"],
+                "subagent_escalation",
+            )
             self.assertTrue(any(event["event_type"] == "action_plan_replan_requested" for event in host.events))
             self.assertTrue(
                 any(event["event_type"] == "runtime_control_transition_decided" for event in host.events)
+            )
+            self.assertTrue(
+                any(event["event_type"] == "runtime_control_protocol_resolved" for event in host.events)
             )
             self.assertTrue(any(event["event_type"] == "action_plan_replanned" for event in host.events))
         finally:
