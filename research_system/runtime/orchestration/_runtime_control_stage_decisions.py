@@ -269,7 +269,11 @@ class RuntimeControlSubagentPhaseStageDecision:
 @dataclass(frozen=True)
 class RuntimeControlSubagentProtocolStageDecision:
     intent: str | None
-    resolution_source: Literal["catalog_selection", "phase_patch_cycle"]
+    resolution_source: Literal[
+        "catalog_selection",
+        "capability_gap_escalation",
+        "phase_patch_cycle",
+    ]
     decision_type: str
     stage: str | None = None
     phase: str | None = None

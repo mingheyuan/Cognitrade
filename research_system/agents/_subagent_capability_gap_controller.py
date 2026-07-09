@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from research_system.agents._subagent_capability_gap_escalation_controller import (
+    SubagentCapabilityGapEscalationController,
+)
 from research_system.agents._subagent_control_escalation import (
     SubagentControlEscalationDecision,
     SubagentControlEscalationError,
@@ -34,6 +37,7 @@ class SubagentCapabilityGapController:
         candidates_resolver,
         entry_selector,
         escalation_policy=None,
+        escalation_controller=None,
         discovery_store_resolver=None,
         runtime_binding_getter=None,
         record_capability_gap=None,
@@ -46,9 +50,11 @@ class SubagentCapabilityGapController:
         self.discovery_controller = discovery_controller
         self.candidates_resolver = candidates_resolver
         self.entry_selector = entry_selector
-        self.escalation_policy = escalation_policy
         self.discovery_store_resolver = discovery_store_resolver
-        self.runtime_binding_getter = runtime_binding_getter
+        self.escalation_controller = escalation_controller or SubagentCapabilityGapEscalationController(
+            escalation_policy=escalation_policy,
+            runtime_binding_getter=runtime_binding_getter,
+        )
         self.record_capability_gap = record_capability_gap
         self.record_tool_discovery_request = record_tool_discovery_request
         self.record_tool_discovery_auto_activation = record_tool_discovery_auto_activation
@@ -128,35 +134,10 @@ class SubagentCapabilityGapController:
         preferred_subagent_type: str | None,
         requires_llm: bool | None,
     ) -> SubagentControlEscalationDecision:
-        if self.escalation_policy is None:
-            return SubagentControlEscalationDecision(
-                strategy="discovery",
-                reason="subagent_control_escalation=discovery",
-                notes=("subagent_control_escalation_rule=default",),
-            )
-        decision = self.escalation_policy.resolve(
-            intent=gap.intent,
-            stage=gap.stage,
-            capability=gap.capability,
+        return self.escalation_controller.resolve(
+            gap=gap,
             preferred_subagent_type=preferred_subagent_type,
             requires_llm=requires_llm,
-        )
-        if decision.strategy != "action_replan":
-            return decision
-        if not self._action_replan_already_requested(gap=gap):
-            return decision
-        return SubagentControlEscalationDecision(
-            strategy="discovery",
-            policy_source=decision.policy_source,
-            rule_id=decision.rule_id,
-            reason="subagent_control_escalation=discovery",
-            notes=tuple(
-                [
-                    *list(decision.notes or ()),
-                    "action_replan_guarded_repeat_capability_gap",
-                ]
-            ),
-            metadata=dict(decision.metadata or {}),
         )
 
     def _resolve_discovery_store(self):
@@ -244,36 +225,6 @@ class SubagentCapabilityGapController:
             confidence=1.0,
             termination_reason=reason,
         )
-
-    def _action_replan_already_requested(self, *, gap: SubagentCapabilityGap) -> bool:
-        binding = (
-            dict(self.runtime_binding_getter() or {})
-            if callable(self.runtime_binding_getter)
-            else {}
-        )
-        context = binding.get("context")
-        patches = getattr(context, "action_plan_patches", None) if context is not None else None
-        if not isinstance(patches, list):
-            return False
-        for patch_row in patches:
-            if not isinstance(patch_row, dict):
-                continue
-            for operation in list(patch_row.get("operations") or []):
-                if not isinstance(operation, dict):
-                    continue
-                if str(operation.get("op_type") or "") != "request_replan":
-                    continue
-                metadata = dict(operation.get("metadata") or {})
-                if str(metadata.get("control_source") or "") != "subagent_capability_gap":
-                    continue
-                if str(metadata.get("intent") or "") != str(gap.intent or ""):
-                    continue
-                if str(metadata.get("stage") or "") != str(gap.stage or ""):
-                    continue
-                if str(metadata.get("capability") or "") != str(gap.capability or ""):
-                    continue
-                return True
-        return False
 
     def build_unresolved_gap_error(
         self,

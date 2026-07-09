@@ -44,6 +44,16 @@ class _HostStub:
         self.events.append(dict(kwargs))
 
 
+class _EscalationControllerStub:
+    def __init__(self, decision) -> None:
+        self.decision = decision
+        self.calls: list[dict] = []
+
+    def resolve(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return self.decision
+
+
 class RuntimeSubagentControlProtocolControllerTests(unittest.TestCase):
     def _build_binding(self, context):
         return {
@@ -168,6 +178,62 @@ class RuntimeSubagentControlProtocolControllerTests(unittest.TestCase):
                 "runtime_control_subagent_phase_resolved",
                 "runtime_control_subagent_protocol_resolved",
             ],
+        )
+
+    def test_resolve_capability_gap_escalation_records_protocol_row(self) -> None:
+        host = _HostStub()
+        controller = OrchestratorRuntimeSubagentControlProtocolController(
+            host,
+            subagent_controller=OrchestratorRuntimeSubagentControlController(host),
+        )
+        context = SimpleNamespace(runtime_control_stage_decisions=[], dynamic_trace=[])
+        escalation_controller = _EscalationControllerStub(
+            SimpleNamespace(
+                strategy="action_replan",
+                policy_source="rule",
+                notes=("skip_optional_review_phase",),
+            )
+        )
+
+        decision = controller.resolve_capability_gap_escalation(
+            escalation_controller=escalation_controller,
+            runtime_binding=self._build_binding(context),
+            gap=SimpleNamespace(
+                intent="review_thesis",
+                stage="review",
+                capability="missing_review_capability",
+                preferred_subagent_type=None,
+                requires_llm=None,
+            ),
+            preferred_subagent_type=None,
+            requires_llm=None,
+        )
+
+        self.assertEqual(decision.strategy, "action_replan")
+        self.assertEqual(len(escalation_controller.calls), 1)
+        self.assertEqual(
+            [row["event"] for row in context.runtime_control_stage_decisions],
+            ["runtime_control_subagent_protocol_resolved"],
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[0]["resolution_source"],
+            "capability_gap_escalation",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[0]["decision_type"],
+            "request_action_replan",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[0]["capability"],
+            "missing_review_capability",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[0]["escalation_strategy"],
+            "action_replan",
+        )
+        self.assertEqual(
+            [event["event_type"] for event in host.events],
+            ["runtime_control_subagent_protocol_resolved"],
         )
 
 

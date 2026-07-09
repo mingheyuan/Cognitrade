@@ -59,6 +59,34 @@ class OrchestratorRuntimeSubagentControlProtocolController:
             resolution.capability_gap_resolution
         )
 
+    def resolve_capability_gap_escalation(
+        self,
+        *,
+        escalation_controller,
+        runtime_binding: dict[str, Any] | None,
+        gap,
+        preferred_subagent_type: str | None,
+        requires_llm: bool | None,
+    ):
+        decision = escalation_controller.resolve(
+            gap=gap,
+            preferred_subagent_type=preferred_subagent_type,
+            requires_llm=requires_llm,
+        )
+        stage_decision = self._build_capability_gap_stage_decision(
+            gap=gap,
+            preferred_subagent_type=preferred_subagent_type,
+            requires_llm=requires_llm,
+            escalation_decision=decision,
+        )
+        self._record_stage_decision(
+            runtime_binding=dict(runtime_binding or {}),
+            stage_decision=stage_decision,
+            phase=str(getattr(gap, "stage", None) or "").strip() or None,
+            agent=str((runtime_binding or {}).get("agent") or "runtime_control").strip() or "runtime_control",
+        )
+        return decision
+
     def execute_patch_cycle(
         self,
         **kwargs,
@@ -198,6 +226,29 @@ class OrchestratorRuntimeSubagentControlProtocolController:
             patch_count=len(list(getattr(resolution, "final_patch_rows", None) or [])),
             policy_source=str(getattr(final_patch, "policy_source", None) or "rule"),
             notes=list(getattr(final_patch, "notes", None) or []),
+        )
+
+    @staticmethod
+    def _build_capability_gap_stage_decision(
+        *,
+        gap,
+        preferred_subagent_type: str | None,
+        requires_llm: bool | None,
+        escalation_decision,
+    ) -> RuntimeControlSubagentProtocolStageDecision:
+        return RuntimeControlSubagentProtocolStageDecision(
+            intent=str(getattr(gap, "intent", None) or "").strip() or None,
+            resolution_source="capability_gap_escalation",
+            decision_type="request_action_replan"
+            if str(getattr(escalation_decision, "strategy", None) or "") == "action_replan"
+            else "continue_discovery",
+            stage=str(getattr(gap, "stage", None) or "").strip() or None,
+            capability=str(getattr(gap, "capability", None) or "").strip() or None,
+            preferred_subagent_type=preferred_subagent_type,
+            requires_llm=requires_llm,
+            escalation_strategy=str(getattr(escalation_decision, "strategy", None) or "").strip() or None,
+            policy_source=str(getattr(escalation_decision, "policy_source", None) or "rule"),
+            notes=list(getattr(escalation_decision, "notes", None) or []),
         )
 
 

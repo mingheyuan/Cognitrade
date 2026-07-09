@@ -148,6 +148,9 @@ class OrchestratorRuntimeControlPlaneController:
             raise RuntimeError("runtime control execution callbacks not registered")
         return self.protocol_controller.handle_subagent_escalation(**kwargs)
 
+    def resolve_subagent_capability_gap_escalation(self, **kwargs):
+        return self.subagent_protocol_controller.resolve_capability_gap_escalation(**kwargs)
+
     def resolve_subagent_catalog_entry(self, **kwargs):
         return self.subagent_protocol_controller.resolve_catalog_entry(**kwargs)
 

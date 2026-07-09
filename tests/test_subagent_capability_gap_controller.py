@@ -282,6 +282,64 @@ class SubagentCapabilityGapControllerTests(unittest.TestCase):
             resolution.escalation_decision.notes,
         )
 
+    def test_can_delegate_capability_gap_escalation_to_runtime_control(self) -> None:
+        delegated_calls = []
+        discovery_controller = _DiscoveryControllerStub(
+            lambda gap, store: self.fail("runtime discovery should not run during action replan escalation")
+        )
+
+        class _RuntimeControlStub:
+            def resolve_subagent_capability_gap_escalation(self, **kwargs):
+                delegated_calls.append(dict(kwargs))
+                return kwargs["escalation_controller"].resolve(
+                    gap=kwargs["gap"],
+                    preferred_subagent_type=kwargs["preferred_subagent_type"],
+                    requires_llm=kwargs["requires_llm"],
+                )
+
+        controller = SubagentCapabilityGapController(
+            candidates_resolver=lambda **_: [],
+            entry_selector=lambda candidates, preferred_subagent_type=None: candidates[0],
+            capability_gap_builder=lambda **kwargs: SubagentCapabilityGap(
+                intent=kwargs["intent"],
+                stage=kwargs["stage"],
+                capability=kwargs["capability"],
+                preferred_subagent_type=kwargs["preferred_subagent_type"],
+                requires_llm=kwargs["requires_llm"],
+                reason="missing review capability",
+            ),
+            discovery_controller=discovery_controller,
+            escalation_policy=SubagentControlEscalationPolicyService(
+                default_strategy="discovery",
+                rules=[
+                    SubagentControlEscalationRule(
+                        strategy="action_replan",
+                        rule_id="review_optional_phase",
+                        intent="review_thesis",
+                        stage="review",
+                    )
+                ],
+            ),
+            runtime_binding_getter=lambda: {
+                "runtime_control": _RuntimeControlStub(),
+                "request_id": "req-gap-runtime-control",
+                "intent": "review_thesis",
+            },
+            error_factory=SubagentCapabilityGapError,
+        )
+
+        with self.assertRaises(SubagentControlEscalationError) as exc_info:
+            controller.resolve_capability_gap(
+                stage="review",
+                intent="review_thesis",
+                capability="missing_capability",
+            )
+
+        self.assertEqual(len(delegated_calls), 1)
+        self.assertEqual(delegated_calls[0]["gap"].capability, "missing_capability")
+        self.assertEqual(exc_info.exception.escalation_decision.strategy, "action_replan")
+        self.assertEqual(discovery_controller.calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

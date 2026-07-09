@@ -71,6 +71,16 @@ class _PhaseExecutionControllerStub:
         return self.resolution
 
 
+class _EscalationControllerStub:
+    def __init__(self, decision) -> None:
+        self.decision = decision
+        self.calls: list[dict] = []
+
+    def resolve(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return self.decision
+
+
 class RuntimeControlPlaneControllerTests(unittest.TestCase):
     def test_bind_and_clear_runtime_delegate_to_supervisor(self) -> None:
         supervisor = _SupervisorStub()
@@ -313,6 +323,64 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
         )
         self.assertEqual(host.events[0]["event_type"], "runtime_control_subagent_phase_resolved")
         self.assertEqual(host.events[1]["event_type"], "runtime_control_subagent_protocol_resolved")
+
+    def test_resolve_subagent_capability_gap_escalation_records_runtime_protocol_stage(self) -> None:
+        host = SimpleNamespace(events=[])
+
+        def _emit_event(context, **kwargs) -> None:
+            host.events.append(dict(kwargs))
+
+        host._emit_event = _emit_event
+        context = SimpleNamespace(runtime_control_stage_decisions=[], dynamic_trace=[])
+        controller = OrchestratorRuntimeControlPlaneController(
+            host=host,
+            supervisor=_SupervisorStub(),
+        )
+        escalation_controller = _EscalationControllerStub(
+            SimpleNamespace(
+                strategy="action_replan",
+                policy_source="rule",
+                notes=("skip_optional_review_phase",),
+            )
+        )
+
+        decision = controller.resolve_subagent_capability_gap_escalation(
+            escalation_controller=escalation_controller,
+            runtime_binding={
+                "context": context,
+                "request_id": "req-gap-escalation",
+                "intent": "review_thesis",
+                "agent": "reviewer",
+            },
+            gap=SimpleNamespace(
+                intent="review_thesis",
+                stage="review",
+                capability="missing_review_capability",
+            ),
+            preferred_subagent_type=None,
+            requires_llm=None,
+        )
+
+        self.assertEqual(decision.strategy, "action_replan")
+        self.assertEqual(len(escalation_controller.calls), 1)
+        self.assertEqual(len(context.runtime_control_stage_decisions), 1)
+        self.assertEqual(
+            context.runtime_control_stage_decisions[0]["event"],
+            "runtime_control_subagent_protocol_resolved",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[0]["resolution_source"],
+            "capability_gap_escalation",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[0]["decision_type"],
+            "request_action_replan",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[0]["capability"],
+            "missing_review_capability",
+        )
+        self.assertEqual(host.events[0]["event_type"], "runtime_control_subagent_protocol_resolved")
 
     def test_resolve_before_registering_execution_callbacks_raises(self) -> None:
         controller = OrchestratorRuntimeControlPlaneController(
