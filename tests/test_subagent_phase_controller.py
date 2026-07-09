@@ -172,6 +172,16 @@ class SubagentPhaseControllerTests(unittest.TestCase):
             start_from_node_id_builder=lambda **_: None,
         )
 
+    def test_phase_controller_shares_runtime_control_gateway_across_subagent_control_layers(self) -> None:
+        self.assertIs(
+            self.controller.control_controller.runtime_control_gateway,
+            self.controller.runtime_control_gateway,
+        )
+        self.assertIs(
+            self.controller.capability_gap_controller.escalation_controller.runtime_control_gateway,
+            self.controller.runtime_control_gateway,
+        )
+
     def test_select_catalog_entry_prefers_explicit_type(self) -> None:
         runtime_context = SimpleNamespace(
             subagent_control_stage_decisions=[],

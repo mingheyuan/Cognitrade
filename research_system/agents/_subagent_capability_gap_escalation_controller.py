@@ -5,6 +5,9 @@ from typing import Any
 from research_system.agents._subagent_control_escalation import (
     SubagentControlEscalationDecision,
 )
+from research_system.agents._subagent_runtime_control_gateway import (
+    SubagentRuntimeControlGateway,
+)
 from research_system.schemas.subagents import SubagentCapabilityGap
 
 
@@ -13,9 +16,13 @@ class SubagentCapabilityGapEscalationController:
         self,
         *,
         escalation_policy=None,
+        runtime_control_gateway=None,
         runtime_binding_getter=None,
     ) -> None:
         self.escalation_policy = escalation_policy
+        self.runtime_control_gateway = runtime_control_gateway or SubagentRuntimeControlGateway(
+            runtime_binding_getter=runtime_binding_getter,
+        )
         self.runtime_binding_getter = runtime_binding_getter
 
     def resolve(
@@ -25,17 +32,8 @@ class SubagentCapabilityGapEscalationController:
         preferred_subagent_type: str | None,
         requires_llm: bool | None,
     ) -> SubagentControlEscalationDecision:
-        runtime_control = self._runtime_control()
-        resolve_runtime_escalation = getattr(runtime_control, "resolve_subagent_capability_gap_escalation", None)
-        if callable(resolve_runtime_escalation):
-            return resolve_runtime_escalation(
-                escalation_controller=self,
-                runtime_binding=self._runtime_binding(),
-                gap=gap,
-                preferred_subagent_type=preferred_subagent_type,
-                requires_llm=requires_llm,
-            )
-        return self.resolve_local(
+        return self.runtime_control_gateway.resolve_capability_gap_escalation(
+            escalation_controller=self,
             gap=gap,
             preferred_subagent_type=preferred_subagent_type,
             requires_llm=requires_llm,
@@ -78,10 +76,6 @@ class SubagentCapabilityGapEscalationController:
             ),
             metadata=dict(decision.metadata or {}),
         )
-
-    def _runtime_control(self):
-        binding = self._runtime_binding()
-        return binding.get("runtime_control")
 
     def _runtime_binding(self) -> dict[str, Any]:
         if callable(self.runtime_binding_getter):

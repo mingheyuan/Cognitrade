@@ -10,6 +10,9 @@ from research_system.adapters.vendors.skill_source_registry import SkillSourceRe
 from research_system.agents._subagent_capability_gap_controller import (
     SubagentCapabilityGapController,
 )
+from research_system.agents._subagent_capability_gap_escalation_controller import (
+    SubagentCapabilityGapEscalationController,
+)
 from research_system.agents._subagent_control_escalation import (
     SubagentControlEscalationDecision,
     SubagentControlEscalationPolicyService,
@@ -19,6 +22,9 @@ from research_system.agents._subagent_catalog_controller import (
 )
 from research_system.agents._subagent_control_controller import (
     SubagentControlController,
+)
+from research_system.agents._subagent_runtime_control_gateway import (
+    SubagentRuntimeControlGateway,
 )
 from research_system.agents._subagent_discovery_controller import SubagentDiscoveryController
 from research_system.agents._subagent_discovery_decision_source import SubagentDiscoveryDecisionSource
@@ -181,12 +187,21 @@ class SubagentPhaseController:
             emit_event=emit_event,
             service_name=service_name,
         )
+        self.runtime_control_gateway = SubagentRuntimeControlGateway(
+            runtime_control_resolver=lambda: self._binding_value("runtime_control"),
+            runtime_binding_getter=runtime_binding_getter,
+        )
         self.capability_gap_controller = SubagentCapabilityGapController(
             capability_gap_builder=self._build_capability_gap,
             discovery_controller=self.discovery_controller,
             candidates_resolver=self._catalog_candidates,
             entry_selector=self._choose_catalog_entry,
             escalation_policy=self.control_escalation_policy,
+            escalation_controller=SubagentCapabilityGapEscalationController(
+                escalation_policy=self.control_escalation_policy,
+                runtime_control_gateway=self.runtime_control_gateway,
+                runtime_binding_getter=runtime_binding_getter,
+            ),
             discovery_store_resolver=lambda: self._binding_value("subagent_discovery_store"),
             runtime_binding_getter=runtime_binding_getter,
             record_capability_gap=self._record_capability_gap,
@@ -216,8 +231,7 @@ class SubagentPhaseController:
         self.control_controller = SubagentControlController(
             catalog_controller=self.catalog_controller,
             phase_execution_controller=self.phase_execution_controller,
-            runtime_control_resolver=lambda: self._binding_value("runtime_control"),
-            runtime_binding_getter=runtime_binding_getter,
+            runtime_control_gateway=self.runtime_control_gateway,
         )
         self._mcp_source_registry = None
         self._http_json_source_registry = None
