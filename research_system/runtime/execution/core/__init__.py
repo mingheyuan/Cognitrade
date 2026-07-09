@@ -11,8 +11,10 @@ __all__ = [
     "OrchestratorExecutionSupport",
     "OrchestratorExecutionTraceSupport",
     "OrchestratorPlanExecutor",
+    "OrchestratorRuntimeActionControlService",
     "OrchestratorRuntimeControlPlaneController",
     "OrchestratorRuntimeProtocolController",
+    "OrchestratorRuntimeServiceBindingController",
     "OrchestratorRuntimeSubagentControlService",
 ]
 
@@ -49,6 +51,10 @@ _EXPORTS = {
         "research_system.runtime.execution.core.plan_executor",
         "OrchestratorPlanExecutor",
     ),
+    "OrchestratorRuntimeActionControlService": (
+        "research_system.runtime.execution.core.runtime_action_control_service",
+        "OrchestratorRuntimeActionControlService",
+    ),
     "OrchestratorRuntimeControlPlaneController": (
         "research_system.runtime.execution.core.runtime_control_plane_controller",
         "OrchestratorRuntimeControlPlaneController",
@@ -56,6 +62,10 @@ _EXPORTS = {
     "OrchestratorRuntimeProtocolController": (
         "research_system.runtime.execution.core.runtime_protocol_controller",
         "OrchestratorRuntimeProtocolController",
+    ),
+    "OrchestratorRuntimeServiceBindingController": (
+        "research_system.runtime.execution.core.runtime_service_binding_controller",
+        "OrchestratorRuntimeServiceBindingController",
     ),
     "OrchestratorRuntimeSubagentControlService": (
         "research_system.runtime.execution.core.runtime_subagent_control_service",

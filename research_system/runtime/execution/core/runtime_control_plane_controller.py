@@ -5,8 +5,14 @@ from typing import Any
 from research_system.runtime.execution.core.runtime_control_protocol_controller import (
     RuntimeControlProtocolResolution,
 )
+from research_system.runtime.execution.core.runtime_action_control_service import (
+    OrchestratorRuntimeActionControlService,
+)
 from research_system.runtime.execution.core.runtime_protocol_controller import (
     OrchestratorRuntimeProtocolController,
+)
+from research_system.runtime.execution.core.runtime_service_binding_controller import (
+    OrchestratorRuntimeServiceBindingController,
 )
 from research_system.runtime.execution.core.runtime_subagent_control_service import (
     OrchestratorRuntimeSubagentControlService,
@@ -32,8 +38,15 @@ class OrchestratorRuntimeControlPlaneController:
         self.subagent_controller = self.protocol_controller.subagent_controller
         self.subagent_transition_controller = self.protocol_controller.subagent_transition_controller
         self.subagent_protocol_controller = self.protocol_controller.subagent_protocol_controller
+        self.action_runtime_control = OrchestratorRuntimeActionControlService(
+            controller=self,
+        )
         self.subagent_runtime_control = OrchestratorRuntimeSubagentControlService(
             controller=self,
+        )
+        self.service_binding_controller = OrchestratorRuntimeServiceBindingController(
+            host=host,
+            subagent_runtime_control=self.subagent_runtime_control,
         )
 
     def register_execution_callbacks(
@@ -42,7 +55,7 @@ class OrchestratorRuntimeControlPlaneController:
         apply_plan_patch,
         request_action_plan_replan,
     ) -> None:
-        self.protocol_controller.register_execution_callbacks(
+        self.action_runtime_control.register_execution_callbacks(
             apply_plan_patch=apply_plan_patch,
             request_action_plan_replan=request_action_plan_replan,
         )
@@ -80,40 +93,18 @@ class OrchestratorRuntimeControlPlaneController:
         agent: str,
         phase: str,
     ) -> None:
-        bind_runtime = getattr(service, "bind_runtime", None)
-        if not callable(bind_runtime):
-            return
-        bind_runtime(
-            agent_control=context.agent_control,
-            execution_policy=context.execution_policy,
+        self.service_binding_controller.bind_agent_service_runtime(
+            service=service,
             context=context,
             support=support,
-            runtime_control=self.subagent_runtime_control,
-            subagent_discovery_store=getattr(self.host, "subagent_discovery_store", None),
-            skill_runtime=getattr(self.host, "skill_runtime", None),
-            mcp_source_registry=getattr(self.host, "mcp_source_registry", None),
-            http_json_source_registry=getattr(self.host, "http_json_source_registry", None),
-            openapi_source_registry=getattr(self.host, "openapi_source_registry", None),
-            skill_source_registry=getattr(self.host, "skill_source_registry", None),
-            require_subagent_discovery_store=getattr(self.host, "require_subagent_discovery_store", None),
-            require_skill_runtime=getattr(self.host, "require_skill_runtime", None),
-            require_mcp_source_registry=getattr(self.host, "require_mcp_source_registry", None),
-            require_http_json_source_registry=getattr(self.host, "require_http_json_source_registry", None),
-            require_openapi_source_registry=getattr(self.host, "require_openapi_source_registry", None),
-            require_skill_source_registry=getattr(self.host, "require_skill_source_registry", None),
-            intent=intent,
-            thread_id=context.thread.thread_id,
-            turn_id=context.turn.turn_id,
             request_id=request_id,
+            intent=intent,
             agent=agent,
             phase=phase,
         )
 
-    @staticmethod
-    def clear_agent_service_runtime(*, service) -> None:
-        clear_runtime = getattr(service, "clear_runtime", None)
-        if callable(clear_runtime):
-            clear_runtime()
+    def clear_agent_service_runtime(self, *, service) -> None:
+        self.service_binding_controller.clear_agent_service_runtime(service=service)
 
     def resolve_supervisor_cycle(
         self,
@@ -126,7 +117,7 @@ class OrchestratorRuntimeControlPlaneController:
         completed_node_ids: list[str],
         skipped_node_ids: list[str],
     ) -> RuntimeControlProtocolResolution:
-        return self.protocol_controller.resolve_supervisor_cycle(
+        return self.action_runtime_control.resolve_supervisor_cycle(
             context=context,
             request=request,
             plan=plan,
@@ -137,19 +128,19 @@ class OrchestratorRuntimeControlPlaneController:
         )
 
     def handle_subagent_escalation(self, **kwargs) -> list[dict[str, Any]]:
-        return self.protocol_controller.handle_subagent_escalation(**kwargs)
+        return self.action_runtime_control.handle_subagent_escalation(**kwargs)
 
     def resolve_subagent_capability_gap_escalation(self, **kwargs):
-        return self.protocol_controller.resolve_subagent_capability_gap_escalation(**kwargs)
+        return self.subagent_runtime_control.resolve_subagent_capability_gap_escalation(**kwargs)
 
     def resolve_subagent_catalog_entry(self, **kwargs):
-        return self.protocol_controller.resolve_subagent_catalog_entry(**kwargs)
+        return self.subagent_runtime_control.resolve_subagent_catalog_entry(**kwargs)
 
     def select_subagent_catalog_entry(self, **kwargs):
-        return self.protocol_controller.select_subagent_catalog_entry(**kwargs)
+        return self.subagent_runtime_control.select_subagent_catalog_entry(**kwargs)
 
     def execute_subagent_phase_patch_cycle(self, **kwargs):
-        return self.protocol_controller.execute_subagent_phase_patch_cycle(**kwargs)
+        return self.subagent_runtime_control.execute_subagent_phase_patch_cycle(**kwargs)
 
 
 __all__ = ["OrchestratorRuntimeControlPlaneController"]

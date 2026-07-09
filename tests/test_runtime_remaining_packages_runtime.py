@@ -16,8 +16,10 @@ from research_system.runtime.execution.core import (
     OrchestratorExecutionSupport,
     OrchestratorExecutionTraceSupport,
     OrchestratorPlanExecutor,
+    OrchestratorRuntimeActionControlService,
     OrchestratorRuntimeControlPlaneController,
     OrchestratorRuntimeProtocolController,
+    OrchestratorRuntimeServiceBindingController,
     OrchestratorRuntimeSubagentControlService,
 )
 from research_system.runtime.methodology.banking import (
@@ -97,8 +99,16 @@ class RuntimeRemainingPackagesRuntimeTests(unittest.TestCase):
         self.assertIs(execution.OrchestratorExecutionSupport, OrchestratorExecutionSupport)
         self.assertIs(execution.OrchestratorExecutionTraceSupport, OrchestratorExecutionTraceSupport)
         self.assertIs(execution.OrchestratorPlanExecutor, OrchestratorPlanExecutor)
+        self.assertIs(
+            execution.OrchestratorRuntimeActionControlService,
+            OrchestratorRuntimeActionControlService,
+        )
         self.assertIs(execution.OrchestratorRuntimeControlPlaneController, OrchestratorRuntimeControlPlaneController)
         self.assertIs(execution.OrchestratorRuntimeProtocolController, OrchestratorRuntimeProtocolController)
+        self.assertIs(
+            execution.OrchestratorRuntimeServiceBindingController,
+            OrchestratorRuntimeServiceBindingController,
+        )
         self.assertIs(
             execution.OrchestratorRuntimeSubagentControlService,
             OrchestratorRuntimeSubagentControlService,
@@ -113,12 +123,20 @@ class RuntimeRemainingPackagesRuntimeTests(unittest.TestCase):
         self.assertIs(execution_core.OrchestratorExecutionTraceSupport, OrchestratorExecutionTraceSupport)
         self.assertIs(execution_core.OrchestratorPlanExecutor, OrchestratorPlanExecutor)
         self.assertIs(
+            execution_core.OrchestratorRuntimeActionControlService,
+            OrchestratorRuntimeActionControlService,
+        )
+        self.assertIs(
             execution_core.OrchestratorRuntimeControlPlaneController,
             OrchestratorRuntimeControlPlaneController,
         )
         self.assertIs(
             execution_core.OrchestratorRuntimeProtocolController,
             OrchestratorRuntimeProtocolController,
+        )
+        self.assertIs(
+            execution_core.OrchestratorRuntimeServiceBindingController,
+            OrchestratorRuntimeServiceBindingController,
         )
         self.assertIs(
             execution_core.OrchestratorRuntimeSubagentControlService,

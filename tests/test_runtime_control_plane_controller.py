@@ -6,6 +6,12 @@ from types import SimpleNamespace
 from research_system.runtime.execution.core.runtime_control_plane_controller import (
     OrchestratorRuntimeControlPlaneController,
 )
+from research_system.runtime.execution.core.runtime_action_control_service import (
+    OrchestratorRuntimeActionControlService,
+)
+from research_system.runtime.execution.core.runtime_service_binding_controller import (
+    OrchestratorRuntimeServiceBindingController,
+)
 from research_system.runtime.execution.core.runtime_subagent_control_service import (
     OrchestratorRuntimeSubagentControlService,
 )
@@ -125,6 +131,29 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
         self.assertIs(
             controller.protocol_controller.action_protocol_controller.decision_source,
             controller.protocol_decision_source,
+        )
+
+    def test_runtime_control_plane_exposes_split_action_subagent_and_binding_services(self) -> None:
+        controller = OrchestratorRuntimeControlPlaneController(
+            host=SimpleNamespace(),
+            supervisor=_SupervisorStub(),
+        )
+
+        self.assertIsInstance(
+            controller.action_runtime_control,
+            OrchestratorRuntimeActionControlService,
+        )
+        self.assertIsInstance(
+            controller.subagent_runtime_control,
+            OrchestratorRuntimeSubagentControlService,
+        )
+        self.assertIsInstance(
+            controller.service_binding_controller,
+            OrchestratorRuntimeServiceBindingController,
+        )
+        self.assertIs(
+            controller.service_binding_controller.subagent_runtime_control,
+            controller.subagent_runtime_control,
         )
 
     def test_register_execution_callbacks_and_delegate_resolution(self) -> None:

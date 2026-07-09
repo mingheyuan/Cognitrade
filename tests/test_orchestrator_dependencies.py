@@ -13,7 +13,9 @@ from research_system.runtime.execution import (
     OrchestratorExecutionSupport,
     OrchestratorExecutionTraceSupport,
     OrchestratorPlanExecutor,
+    OrchestratorRuntimeActionControlService,
     OrchestratorRuntimeControlPlaneController,
+    OrchestratorRuntimeServiceBindingController,
 )
 from research_system.runtime.execution.handlers import OrchestratorAgentHandlers
 from research_system.runtime.methodology import (
@@ -180,9 +182,21 @@ class OrchestratorDependenciesTests(unittest.TestCase):
                 self.assertIs(orchestrator.action_runner.handlers.support, orchestrator.execution_support)
                 self.assertIsInstance(orchestrator.runtime_control, OrchestratorRuntimeControlPlaneController)
                 self.assertIs(orchestrator.runtime_control.host, orchestrator)
+                self.assertIsInstance(
+                    orchestrator.runtime_control.action_runtime_control,
+                    OrchestratorRuntimeActionControlService,
+                )
+                self.assertIsInstance(
+                    orchestrator.runtime_control.service_binding_controller,
+                    OrchestratorRuntimeServiceBindingController,
+                )
                 self.assertIsInstance(orchestrator.plan_executor, OrchestratorPlanExecutor)
                 self.assertIs(orchestrator.plan_executor.host, orchestrator)
-                self.assertIs(orchestrator.plan_executor.runtime_control, orchestrator.runtime_control)
+                self.assertIs(orchestrator.plan_executor.runtime_control_plane, orchestrator.runtime_control)
+                self.assertIs(
+                    orchestrator.plan_executor.runtime_control,
+                    orchestrator.runtime_control.action_runtime_control,
+                )
                 self.assertIsInstance(orchestrator.run_coordinator, OrchestratorRunCoordinator)
                 self.assertIs(orchestrator.run_coordinator.host, orchestrator)
                 self.assertIsInstance(orchestrator.assembly, OrchestratorAssemblySupport)

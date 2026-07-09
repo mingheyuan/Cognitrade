@@ -28,11 +28,13 @@ class OrchestratorPlanExecutor:
                 host,
                 supervisor=self.host.supervisor,
             )
-        runtime_control.register_execution_callbacks(
+        action_runtime_control = getattr(runtime_control, "action_runtime_control", None) or runtime_control
+        action_runtime_control.register_execution_callbacks(
             apply_plan_patch=self._apply_action_plan_patch,
             request_action_plan_replan=self._request_action_plan_replan,
         )
-        self.runtime_control = runtime_control
+        self.runtime_control_plane = runtime_control
+        self.runtime_control = action_runtime_control
 
     def execute_plan(
         self,
