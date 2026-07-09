@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from research_system.runtime.execution.core.runtime_protocol_decision_source import (
+    OrchestratorRuntimeProtocolDecisionSource,
+)
 from research_system.runtime.orchestration._runtime_control_stage_decisions import (
     RuntimeControlSubagentProtocolStageDecision,
 )
@@ -17,10 +20,12 @@ class OrchestratorRuntimeSubagentControlProtocolController:
         *,
         subagent_controller,
         transition_controller,
+        decision_source=None,
     ) -> None:
         self.host = host
         self.subagent_controller = subagent_controller
         self.transition_controller = transition_controller
+        self.decision_source = decision_source or OrchestratorRuntimeProtocolDecisionSource()
         self._runtime_binding: dict[str, Any] | None = None
         self.control_stage_recorder = RuntimeControlStageRecorder(
             runtime_binding_getter=lambda: dict(self._runtime_binding or {}),
@@ -42,7 +47,7 @@ class OrchestratorRuntimeSubagentControlProtocolController:
             requires_llm=kwargs.get("requires_llm"),
             resolution=resolution,
         )
-        stage_decision = self._build_catalog_stage_decision(
+        stage_decision = self.decision_source.build_subagent_catalog_protocol(
             stage=str(kwargs.get("stage") or "").strip() or None,
             intent=str(kwargs.get("intent") or "").strip() or None,
             capability=str(kwargs.get("capability") or "").strip() or None,
@@ -99,7 +104,7 @@ class OrchestratorRuntimeSubagentControlProtocolController:
             requires_llm=requires_llm,
             escalation_decision=decision,
         )
-        stage_decision = self._build_capability_gap_stage_decision(
+        stage_decision = self.decision_source.build_subagent_capability_gap_protocol(
             gap=gap,
             preferred_subagent_type=preferred_subagent_type,
             requires_llm=requires_llm,
@@ -125,7 +130,7 @@ class OrchestratorRuntimeSubagentControlProtocolController:
             dag_id=str(kwargs.get("dag_id") or "").strip() or None,
             resolution=resolution,
         )
-        stage_decision = self._build_phase_stage_decision(
+        stage_decision = self.decision_source.build_subagent_phase_protocol(
             plan=kwargs.get("plan"),
             dag_id=str(kwargs.get("dag_id") or "").strip() or None,
             resolution=resolution,
@@ -182,105 +187,6 @@ class OrchestratorRuntimeSubagentControlProtocolController:
             agent=agent,
             message=message,
             payload=dict(payload),
-        )
-
-    @staticmethod
-    def _build_catalog_stage_decision(
-        *,
-        stage: str | None,
-        intent: str | None,
-        capability: str | None,
-        preferred_subagent_type: str | None,
-        requires_llm: bool | None,
-        resolution,
-    ) -> RuntimeControlSubagentProtocolStageDecision:
-        capability_gap_resolution = resolution.capability_gap_resolution
-        escalation_decision = (
-            getattr(capability_gap_resolution, "escalation_decision", None)
-            if capability_gap_resolution is not None
-            else None
-        )
-        ticket = getattr(capability_gap_resolution, "ticket", None) if capability_gap_resolution is not None else None
-        notes = list(getattr(escalation_decision, "notes", None) or [])
-        if resolution.selected_entry is not None and capability_gap_resolution is not None:
-            notes = [*notes, "runtime_control_subagent_recovered_via_discovery"]
-        return RuntimeControlSubagentProtocolStageDecision(
-            intent=intent,
-            resolution_source="catalog_selection",
-            decision_type="selected" if resolution.selected_entry is not None else "unresolved",
-            stage=stage,
-            capability=capability,
-            preferred_subagent_type=preferred_subagent_type,
-            requires_llm=requires_llm,
-            selected_subagent_type=(
-                str(getattr(resolution.selected_entry, "subagent_type", None) or "").strip() or None
-            ),
-            discovery_ticket_id=str(getattr(ticket, "ticket_id", None) or "").strip() or None,
-            escalation_strategy=str(getattr(escalation_decision, "strategy", None) or "").strip() or None,
-            policy_source=str(getattr(escalation_decision, "policy_source", None) or "rule"),
-            notes=notes,
-        )
-
-    @staticmethod
-    def _build_phase_stage_decision(
-        *,
-        plan,
-        dag_id: str | None,
-        resolution,
-    ) -> RuntimeControlSubagentProtocolStageDecision:
-        final_patch = resolution.final_patch
-        final_request_replan = bool(
-            getattr(final_patch, "decision_type", None) == "replan"
-            or any(
-                str(getattr(operation, "op_type", None) or "") == "request_replan"
-                for operation in list(getattr(final_patch, "operations", None) or [])
-            )
-        ) if final_patch is not None else False
-        if resolution.final_plan_variant != resolution.rule_variant_id:
-            decision_type = "override_rule_variant"
-        elif final_request_replan:
-            decision_type = "apply_rule_replan"
-        elif resolution.final_patch_rows:
-            decision_type = "apply_rule_patch"
-        else:
-            decision_type = "keep_current"
-        return RuntimeControlSubagentProtocolStageDecision(
-            intent=str(getattr(plan, "intent", None) or "").strip() or None,
-            resolution_source="phase_patch_cycle",
-            decision_type=decision_type,
-            phase=str(getattr(plan, "phase", None) or "").strip() or None,
-            dag_id=dag_id,
-            plan_id=str(getattr(plan, "plan_id", None) or "").strip() or None,
-            plan_strategy=str(getattr(plan, "strategy", None) or "").strip() or None,
-            rule_plan_variant=str(getattr(resolution, "rule_variant_id", None) or "").strip() or None,
-            final_plan_variant=str(getattr(resolution, "final_plan_variant", None) or "").strip() or None,
-            final_request_replan=final_request_replan,
-            patch_count=len(list(getattr(resolution, "final_patch_rows", None) or [])),
-            policy_source=str(getattr(final_patch, "policy_source", None) or "rule"),
-            notes=list(getattr(final_patch, "notes", None) or []),
-        )
-
-    @staticmethod
-    def _build_capability_gap_stage_decision(
-        *,
-        gap,
-        preferred_subagent_type: str | None,
-        requires_llm: bool | None,
-        escalation_decision,
-    ) -> RuntimeControlSubagentProtocolStageDecision:
-        return RuntimeControlSubagentProtocolStageDecision(
-            intent=str(getattr(gap, "intent", None) or "").strip() or None,
-            resolution_source="capability_gap_escalation",
-            decision_type="request_action_replan"
-            if str(getattr(escalation_decision, "strategy", None) or "") == "action_replan"
-            else "continue_discovery",
-            stage=str(getattr(gap, "stage", None) or "").strip() or None,
-            capability=str(getattr(gap, "capability", None) or "").strip() or None,
-            preferred_subagent_type=preferred_subagent_type,
-            requires_llm=requires_llm,
-            escalation_strategy=str(getattr(escalation_decision, "strategy", None) or "").strip() or None,
-            policy_source=str(getattr(escalation_decision, "policy_source", None) or "rule"),
-            notes=list(getattr(escalation_decision, "notes", None) or []),
         )
 
 

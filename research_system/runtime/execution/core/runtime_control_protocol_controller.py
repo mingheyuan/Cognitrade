@@ -3,13 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from research_system.runtime.execution.core.runtime_protocol_decision_source import (
+    OrchestratorRuntimeProtocolDecisionSource,
+)
 from research_system.runtime.orchestration._runtime_control_stage_decisions import (
     RuntimeControlProtocolStageDecision,
 )
 from research_system.runtime.orchestration._runtime_control_stage_recorder import (
     RuntimeControlStageRecorder,
 )
-from research_system.schemas.planning import ActionPlan, ActionPlanPatch, ActionSpec, SupervisorDecision
+from research_system.schemas.planning import ActionPlan, ActionSpec, SupervisorDecision
 
 
 @dataclass(frozen=True)
@@ -25,10 +28,12 @@ class OrchestratorRuntimeControlProtocolController:
         *,
         supervisor,
         transition_controller,
+        decision_source=None,
     ) -> None:
         self.host = host
         self.supervisor = supervisor
         self.transition_controller = transition_controller
+        self.decision_source = decision_source or OrchestratorRuntimeProtocolDecisionSource()
         self._runtime_binding: dict[str, Any] | None = None
         self.control_stage_recorder = RuntimeControlStageRecorder(
             runtime_binding_getter=lambda: dict(self._runtime_binding or {}),
@@ -64,7 +69,7 @@ class OrchestratorRuntimeControlProtocolController:
                 plan_patch=decision.plan_patch,
                 next_actions=decision.next_actions,
             )
-            stage_decision = self._build_supervisor_stage_decision(
+            stage_decision = self.decision_source.build_action_supervisor_protocol(
                 plan=plan,
                 decision=decision,
                 ready_actions=ready_actions,
@@ -105,7 +110,7 @@ class OrchestratorRuntimeControlProtocolController:
             escalation_error=escalation_error,
         )
         if escalation_error.plan_patch is not None:
-            stage_decision = self._build_subagent_escalation_stage_decision(
+            stage_decision = self.decision_source.build_action_subagent_escalation_protocol(
                 plan=plan,
                 action=action,
                 escalation_error=escalation_error,
@@ -169,75 +174,6 @@ class OrchestratorRuntimeControlProtocolController:
             message=message,
             payload=dict(payload),
         )
-
-    @staticmethod
-    def _build_supervisor_stage_decision(
-        *,
-        plan: ActionPlan,
-        decision: SupervisorDecision,
-        ready_actions: list[ActionSpec],
-        completed_node_ids: list[str],
-        skipped_node_ids: list[str],
-    ) -> RuntimeControlProtocolStageDecision:
-        plan_patch = decision.plan_patch
-        if plan_patch is None:
-            raise ValueError("supervisor stage decision requires a plan patch")
-        return RuntimeControlProtocolStageDecision(
-            intent=plan.intent,
-            plan_id=plan.plan_id,
-            resolution_source="supervisor_cycle",
-            decision_type=decision.decision_type,
-            transition_type=OrchestratorRuntimeControlProtocolController._transition_type(plan_patch),
-            transition_source_domain="action_supervisor",
-            final_action_node_id=decision.next_actions[0].node_id if decision.next_actions else None,
-            policy_source=OrchestratorRuntimeControlProtocolController._patch_policy_source(plan_patch),
-            patch_id=str(getattr(plan_patch, "patch_id", None) or "").strip() or None,
-            completed_action_node_ids=list(completed_node_ids),
-            skipped_action_node_ids=list(skipped_node_ids),
-            ready_action_node_ids=[action.node_id for action in ready_actions],
-            next_action_node_ids=[action.node_id for action in decision.next_actions],
-            notes=list(decision.notes or []),
-        )
-
-    @staticmethod
-    def _build_subagent_escalation_stage_decision(
-        *,
-        plan: ActionPlan,
-        action: ActionSpec,
-        escalation_error,
-        completed_node_ids: list[str],
-        skipped_node_ids: list[str],
-    ) -> RuntimeControlProtocolStageDecision:
-        plan_patch = escalation_error.plan_patch
-        if plan_patch is None:
-            raise ValueError("subagent escalation stage decision requires a plan patch")
-        return RuntimeControlProtocolStageDecision(
-            intent=plan.intent,
-            plan_id=plan.plan_id,
-            resolution_source="subagent_escalation",
-            decision_type="escalation",
-            transition_type=OrchestratorRuntimeControlProtocolController._transition_type(plan_patch),
-            transition_source_domain="subagent_capability_gap",
-            trigger_action_node_id=action.node_id,
-            capability=str(getattr(escalation_error.gap, "capability", None) or "").strip() or None,
-            policy_source=OrchestratorRuntimeControlProtocolController._patch_policy_source(plan_patch),
-            patch_id=str(getattr(plan_patch, "patch_id", None) or "").strip() or None,
-            completed_action_node_ids=list(completed_node_ids),
-            skipped_action_node_ids=list(skipped_node_ids),
-            notes=list(getattr(escalation_error.escalation_decision, "notes", None) or []),
-        )
-
-    @staticmethod
-    def _transition_type(plan_patch: ActionPlanPatch) -> str:
-        if plan_patch.decision_type == "replan":
-            return "request_action_replan"
-        if any(operation.op_type == "request_replan" for operation in list(plan_patch.operations or [])):
-            return "request_action_replan"
-        return "apply_plan_patch"
-
-    @staticmethod
-    def _patch_policy_source(plan_patch: ActionPlanPatch) -> str:
-        return str(getattr(plan_patch, "policy_source", None) or "rule")
 
 
 __all__ = [

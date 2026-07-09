@@ -9,6 +9,9 @@ from research_system.runtime.execution.core.runtime_control_protocol_controller 
     OrchestratorRuntimeControlProtocolController,
     RuntimeControlProtocolResolution,
 )
+from research_system.runtime.execution.core.runtime_protocol_decision_source import (
+    OrchestratorRuntimeProtocolDecisionSource,
+)
 from research_system.runtime.execution.core.runtime_subagent_control_controller import (
     OrchestratorRuntimeSubagentControlController,
 )
@@ -34,6 +37,9 @@ class OrchestratorRuntimeControlPlaneController:
         self.host = host
         self.supervisor = supervisor
         self.transition_decision_source = OrchestratorRuntimeTransitionDecisionSource()
+        self.protocol_decision_source = OrchestratorRuntimeProtocolDecisionSource(
+            transition_decision_source=self.transition_decision_source,
+        )
         self.transition_controller: OrchestratorRuntimeControlController | None = None
         self.protocol_controller: OrchestratorRuntimeControlProtocolController | None = None
         self.subagent_controller = OrchestratorRuntimeSubagentControlController(host)
@@ -45,6 +51,7 @@ class OrchestratorRuntimeControlPlaneController:
             host,
             subagent_controller=self.subagent_controller,
             transition_controller=self.subagent_transition_controller,
+            decision_source=self.protocol_decision_source,
         )
 
     def register_execution_callbacks(
@@ -63,6 +70,7 @@ class OrchestratorRuntimeControlPlaneController:
             self.host,
             supervisor=self.supervisor,
             transition_controller=self.transition_controller,
+            decision_source=self.protocol_decision_source,
         )
 
     def bind_runtime(
