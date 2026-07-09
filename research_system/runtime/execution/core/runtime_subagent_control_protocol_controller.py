@@ -68,11 +68,19 @@ class OrchestratorRuntimeSubagentControlProtocolController:
         preferred_subagent_type: str | None,
         requires_llm: bool | None,
     ):
-        decision = escalation_controller.resolve(
-            gap=gap,
-            preferred_subagent_type=preferred_subagent_type,
-            requires_llm=requires_llm,
-        )
+        resolve_local = getattr(escalation_controller, "resolve_local", None)
+        if callable(resolve_local):
+            decision = resolve_local(
+                gap=gap,
+                preferred_subagent_type=preferred_subagent_type,
+                requires_llm=requires_llm,
+            )
+        else:
+            decision = escalation_controller.resolve(
+                gap=gap,
+                preferred_subagent_type=preferred_subagent_type,
+                requires_llm=requires_llm,
+            )
         stage_decision = self._build_capability_gap_stage_decision(
             gap=gap,
             preferred_subagent_type=preferred_subagent_type,
