@@ -15,6 +15,9 @@ from research_system.runtime.execution.core.runtime_subagent_control_controller 
 from research_system.runtime.execution.core.runtime_subagent_control_protocol_controller import (
     OrchestratorRuntimeSubagentControlProtocolController,
 )
+from research_system.runtime.execution.core.runtime_subagent_transition_controller import (
+    OrchestratorRuntimeSubagentTransitionController,
+)
 from research_system.schemas.planning import ActionPlan, ActionSpec
 
 
@@ -30,9 +33,11 @@ class OrchestratorRuntimeControlPlaneController:
         self.transition_controller: OrchestratorRuntimeControlController | None = None
         self.protocol_controller: OrchestratorRuntimeControlProtocolController | None = None
         self.subagent_controller = OrchestratorRuntimeSubagentControlController(host)
+        self.subagent_transition_controller = OrchestratorRuntimeSubagentTransitionController(host)
         self.subagent_protocol_controller = OrchestratorRuntimeSubagentControlProtocolController(
             host,
             subagent_controller=self.subagent_controller,
+            transition_controller=self.subagent_transition_controller,
         )
 
     def register_execution_callbacks(

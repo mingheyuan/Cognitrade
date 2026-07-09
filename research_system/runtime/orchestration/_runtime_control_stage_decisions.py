@@ -333,6 +333,78 @@ class RuntimeControlSubagentProtocolStageDecision:
 
 
 @dataclass(frozen=True)
+class RuntimeControlSubagentTransitionStageDecision:
+    intent: str | None
+    transition_source: Literal[
+        "catalog_selection",
+        "capability_gap_escalation",
+        "phase_patch_cycle",
+    ]
+    transition_type: Literal[
+        "continue_catalog",
+        "continue_discovery",
+        "unresolved_capability_gap",
+        "keep_current",
+        "apply_local_patch",
+        "apply_local_replan",
+        "request_action_replan",
+    ]
+    stage: str | None = None
+    phase: str | None = None
+    capability: str | None = None
+    preferred_subagent_type: str | None = None
+    requires_llm: bool | None = None
+    selected_subagent_type: str | None = None
+    discovery_ticket_id: str | None = None
+    escalation_strategy: str | None = None
+    dag_id: str | None = None
+    plan_id: str | None = None
+    rule_plan_variant: str | None = None
+    final_plan_variant: str | None = None
+    final_request_replan: bool = False
+    patch_count: int = 0
+    policy_source: str = "rule"
+    notes: list[str] = field(default_factory=list)
+
+    event_type: Literal["runtime_control_subagent_transition_decided"] = "runtime_control_subagent_transition_decided"
+    control_domain: Literal["runtime"] = "runtime"
+    control_stage: Literal["subagent_control_transition"] = "subagent_control_transition"
+    decision_stage: Literal["subagent_transition"] = "subagent_transition"
+
+    def event_payload(self) -> dict[str, object]:
+        return {
+            "control_domain": self.control_domain,
+            "control_stage": self.control_stage,
+            "decision_stage": self.decision_stage,
+            "intent": self.intent,
+            "transition_source": self.transition_source,
+            "transition_type": self.transition_type,
+            "stage": self.stage,
+            "phase": self.phase,
+            "capability": self.capability,
+            "preferred_subagent_type": self.preferred_subagent_type,
+            "requires_llm": self.requires_llm,
+            "selected_subagent_type": self.selected_subagent_type,
+            "discovery_ticket_id": self.discovery_ticket_id,
+            "escalation_strategy": self.escalation_strategy,
+            "dag_id": self.dag_id,
+            "plan_id": self.plan_id,
+            "rule_plan_variant": self.rule_plan_variant,
+            "final_plan_variant": self.final_plan_variant,
+            "final_request_replan": self.final_request_replan,
+            "patch_count": self.patch_count,
+            "policy_source": self.policy_source,
+            "notes": list(self.notes),
+        }
+
+    def message(self) -> str:
+        return (
+            f"{self.event_type} resolved {self.transition_source} via "
+            f"{self.transition_type} for intent {self.intent}"
+        )
+
+
+@dataclass(frozen=True)
 class SubagentCatalogStageDecision:
     intent: str | None
     stage: str | None
@@ -691,6 +763,7 @@ __all__ = [
     "RuntimeControlSubagentProtocolStageDecision",
     "RuntimeControlSubagentPhaseStageDecision",
     "RuntimeControlSubagentStageDecision",
+    "RuntimeControlSubagentTransitionStageDecision",
     "RuntimeControlTransitionStageDecision",
     "SubagentCatalogStageDecision",
     "SubagentCapabilityGapEscalationControlStageDecision",

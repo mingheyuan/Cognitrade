@@ -218,7 +218,7 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
         )
 
         self.assertEqual(resolved.selected_entry.subagent_type, "cheap_review")
-        self.assertEqual(len(context.runtime_control_stage_decisions), 2)
+        self.assertEqual(len(context.runtime_control_stage_decisions), 3)
         self.assertEqual(
             context.runtime_control_stage_decisions[0]["event"],
             "runtime_control_subagent_resolved",
@@ -233,18 +233,31 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
         )
         self.assertEqual(
             context.runtime_control_stage_decisions[1]["event"],
-            "runtime_control_subagent_protocol_resolved",
+            "runtime_control_subagent_transition_decided",
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[1]["resolution_source"],
+            context.runtime_control_stage_decisions[1]["transition_source"],
             "catalog_selection",
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[1]["selected_subagent_type"],
+            context.runtime_control_stage_decisions[1]["transition_type"],
+            "continue_catalog",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[2]["event"],
+            "runtime_control_subagent_protocol_resolved",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[2]["resolution_source"],
+            "catalog_selection",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[2]["selected_subagent_type"],
             "cheap_review",
         )
         self.assertEqual(host.events[0]["event_type"], "runtime_control_subagent_resolved")
-        self.assertEqual(host.events[1]["event_type"], "runtime_control_subagent_protocol_resolved")
+        self.assertEqual(host.events[1]["event_type"], "runtime_control_subagent_transition_decided")
+        self.assertEqual(host.events[2]["event_type"], "runtime_control_subagent_protocol_resolved")
 
     def test_execute_subagent_phase_patch_cycle_records_runtime_control_stage(self) -> None:
         host = SimpleNamespace(events=[])
@@ -296,7 +309,7 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
         )
 
         self.assertIs(resolved, resolution)
-        self.assertEqual(len(context.runtime_control_stage_decisions), 2)
+        self.assertEqual(len(context.runtime_control_stage_decisions), 3)
         self.assertEqual(
             context.runtime_control_stage_decisions[0]["event"],
             "runtime_control_subagent_phase_resolved",
@@ -311,18 +324,31 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
         )
         self.assertEqual(
             context.runtime_control_stage_decisions[1]["event"],
-            "runtime_control_subagent_protocol_resolved",
+            "runtime_control_subagent_transition_decided",
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[1]["resolution_source"],
+            context.runtime_control_stage_decisions[1]["transition_source"],
             "phase_patch_cycle",
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[1]["final_plan_variant"],
+            context.runtime_control_stage_decisions[1]["transition_type"],
+            "keep_current",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[2]["event"],
+            "runtime_control_subagent_protocol_resolved",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[2]["resolution_source"],
+            "phase_patch_cycle",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[2]["final_plan_variant"],
             "current",
         )
         self.assertEqual(host.events[0]["event_type"], "runtime_control_subagent_phase_resolved")
-        self.assertEqual(host.events[1]["event_type"], "runtime_control_subagent_protocol_resolved")
+        self.assertEqual(host.events[1]["event_type"], "runtime_control_subagent_transition_decided")
+        self.assertEqual(host.events[2]["event_type"], "runtime_control_subagent_protocol_resolved")
 
     def test_resolve_subagent_capability_gap_escalation_records_runtime_protocol_stage(self) -> None:
         host = SimpleNamespace(events=[])
@@ -363,24 +389,37 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
 
         self.assertEqual(decision.strategy, "action_replan")
         self.assertEqual(len(escalation_controller.calls), 1)
-        self.assertEqual(len(context.runtime_control_stage_decisions), 1)
+        self.assertEqual(len(context.runtime_control_stage_decisions), 2)
         self.assertEqual(
             context.runtime_control_stage_decisions[0]["event"],
-            "runtime_control_subagent_protocol_resolved",
+            "runtime_control_subagent_transition_decided",
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[0]["resolution_source"],
+            context.runtime_control_stage_decisions[0]["transition_source"],
             "capability_gap_escalation",
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[0]["decision_type"],
+            context.runtime_control_stage_decisions[0]["transition_type"],
             "request_action_replan",
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[0]["capability"],
+            context.runtime_control_stage_decisions[1]["event"],
+            "runtime_control_subagent_protocol_resolved",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[1]["resolution_source"],
+            "capability_gap_escalation",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[1]["decision_type"],
+            "request_action_replan",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[1]["capability"],
             "missing_review_capability",
         )
-        self.assertEqual(host.events[0]["event_type"], "runtime_control_subagent_protocol_resolved")
+        self.assertEqual(host.events[0]["event_type"], "runtime_control_subagent_transition_decided")
+        self.assertEqual(host.events[1]["event_type"], "runtime_control_subagent_protocol_resolved")
 
     def test_resolve_before_registering_execution_callbacks_raises(self) -> None:
         controller = OrchestratorRuntimeControlPlaneController(

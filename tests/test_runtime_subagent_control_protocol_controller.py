@@ -9,6 +9,9 @@ from research_system.runtime.execution.core.runtime_subagent_control_controller 
 from research_system.runtime.execution.core.runtime_subagent_control_protocol_controller import (
     OrchestratorRuntimeSubagentControlProtocolController,
 )
+from research_system.runtime.execution.core.runtime_subagent_transition_controller import (
+    OrchestratorRuntimeSubagentTransitionController,
+)
 
 
 class _CatalogControllerStub:
@@ -81,6 +84,7 @@ class RuntimeSubagentControlProtocolControllerTests(unittest.TestCase):
         controller = OrchestratorRuntimeSubagentControlProtocolController(
             host,
             subagent_controller=OrchestratorRuntimeSubagentControlController(host),
+            transition_controller=OrchestratorRuntimeSubagentTransitionController(host),
         )
         context = SimpleNamespace(runtime_control_stage_decisions=[], dynamic_trace=[])
         resolution = SimpleNamespace(
@@ -103,25 +107,35 @@ class RuntimeSubagentControlProtocolControllerTests(unittest.TestCase):
             [row["event"] for row in context.runtime_control_stage_decisions],
             [
                 "runtime_control_subagent_resolved",
+                "runtime_control_subagent_transition_decided",
                 "runtime_control_subagent_protocol_resolved",
             ],
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[1]["resolution_source"],
+            context.runtime_control_stage_decisions[1]["transition_source"],
             "catalog_selection",
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[1]["decision_type"],
+            context.runtime_control_stage_decisions[1]["transition_type"],
+            "continue_catalog",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[2]["resolution_source"],
+            "catalog_selection",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[2]["decision_type"],
             "selected",
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[1]["selected_subagent_type"],
+            context.runtime_control_stage_decisions[2]["selected_subagent_type"],
             "cheap_review",
         )
         self.assertEqual(
             [event["event_type"] for event in host.events],
             [
                 "runtime_control_subagent_resolved",
+                "runtime_control_subagent_transition_decided",
                 "runtime_control_subagent_protocol_resolved",
             ],
         )
@@ -131,6 +145,7 @@ class RuntimeSubagentControlProtocolControllerTests(unittest.TestCase):
         controller = OrchestratorRuntimeSubagentControlProtocolController(
             host,
             subagent_controller=OrchestratorRuntimeSubagentControlController(host),
+            transition_controller=OrchestratorRuntimeSubagentTransitionController(host),
         )
         context = SimpleNamespace(runtime_control_stage_decisions=[], dynamic_trace=[])
         resolution = SimpleNamespace(
@@ -170,25 +185,35 @@ class RuntimeSubagentControlProtocolControllerTests(unittest.TestCase):
             [row["event"] for row in context.runtime_control_stage_decisions],
             [
                 "runtime_control_subagent_phase_resolved",
+                "runtime_control_subagent_transition_decided",
                 "runtime_control_subagent_protocol_resolved",
             ],
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[1]["resolution_source"],
+            context.runtime_control_stage_decisions[1]["transition_source"],
             "phase_patch_cycle",
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[1]["decision_type"],
+            context.runtime_control_stage_decisions[1]["transition_type"],
             "keep_current",
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[1]["final_plan_variant"],
+            context.runtime_control_stage_decisions[2]["resolution_source"],
+            "phase_patch_cycle",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[2]["decision_type"],
+            "keep_current",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[2]["final_plan_variant"],
             "current",
         )
         self.assertEqual(
             [event["event_type"] for event in host.events],
             [
                 "runtime_control_subagent_phase_resolved",
+                "runtime_control_subagent_transition_decided",
                 "runtime_control_subagent_protocol_resolved",
             ],
         )
@@ -198,6 +223,7 @@ class RuntimeSubagentControlProtocolControllerTests(unittest.TestCase):
         controller = OrchestratorRuntimeSubagentControlProtocolController(
             host,
             subagent_controller=OrchestratorRuntimeSubagentControlController(host),
+            transition_controller=OrchestratorRuntimeSubagentTransitionController(host),
         )
         context = SimpleNamespace(runtime_control_stage_decisions=[], dynamic_trace=[])
         escalation_controller = _EscalationControllerStub(
@@ -226,27 +252,41 @@ class RuntimeSubagentControlProtocolControllerTests(unittest.TestCase):
         self.assertEqual(len(escalation_controller.calls), 1)
         self.assertEqual(
             [row["event"] for row in context.runtime_control_stage_decisions],
-            ["runtime_control_subagent_protocol_resolved"],
+            [
+                "runtime_control_subagent_transition_decided",
+                "runtime_control_subagent_protocol_resolved",
+            ],
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[0]["resolution_source"],
+            context.runtime_control_stage_decisions[0]["transition_source"],
             "capability_gap_escalation",
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[0]["decision_type"],
+            context.runtime_control_stage_decisions[0]["transition_type"],
             "request_action_replan",
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[0]["capability"],
+            context.runtime_control_stage_decisions[1]["resolution_source"],
+            "capability_gap_escalation",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[1]["decision_type"],
+            "request_action_replan",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[1]["capability"],
             "missing_review_capability",
         )
         self.assertEqual(
-            context.runtime_control_stage_decisions[0]["escalation_strategy"],
+            context.runtime_control_stage_decisions[1]["escalation_strategy"],
             "action_replan",
         )
         self.assertEqual(
             [event["event_type"] for event in host.events],
-            ["runtime_control_subagent_protocol_resolved"],
+            [
+                "runtime_control_subagent_transition_decided",
+                "runtime_control_subagent_protocol_resolved",
+            ],
         )
 
     def test_resolve_capability_gap_escalation_prefers_local_resolution_when_available(self) -> None:
@@ -254,6 +294,7 @@ class RuntimeSubagentControlProtocolControllerTests(unittest.TestCase):
         controller = OrchestratorRuntimeSubagentControlProtocolController(
             host,
             subagent_controller=OrchestratorRuntimeSubagentControlController(host),
+            transition_controller=OrchestratorRuntimeSubagentTransitionController(host),
         )
         context = SimpleNamespace(runtime_control_stage_decisions=[], dynamic_trace=[])
         escalation_controller = _DualEscalationControllerStub(
@@ -282,7 +323,11 @@ class RuntimeSubagentControlProtocolControllerTests(unittest.TestCase):
         self.assertEqual(escalation_controller.calls, [])
         self.assertEqual(len(escalation_controller.local_calls), 1)
         self.assertEqual(
-            context.runtime_control_stage_decisions[0]["resolution_source"],
+            context.runtime_control_stage_decisions[0]["transition_source"],
+            "capability_gap_escalation",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[1]["resolution_source"],
             "capability_gap_escalation",
         )
 

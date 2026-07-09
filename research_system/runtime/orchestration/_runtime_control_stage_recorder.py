@@ -47,6 +47,13 @@ class RuntimeControlStageRecorder:
         dynamic_trace = getattr(context, "dynamic_trace", None)
         if isinstance(dynamic_trace, list):
             dynamic_trace.append(dict(row))
+        control_plane = getattr(context, "control_plane", None)
+        record_control_stage = getattr(control_plane, "record_runtime_control_stage_decision", None)
+        if callable(record_control_stage):
+            try:
+                record_control_stage(row=dict(row))
+            except Exception:
+                pass
         if callable(self.emit_event):
             self.emit_event(
                 event_type=event_type,

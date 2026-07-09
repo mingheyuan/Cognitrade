@@ -16,9 +16,11 @@ class OrchestratorRuntimeSubagentControlProtocolController:
         host: Any,
         *,
         subagent_controller,
+        transition_controller,
     ) -> None:
         self.host = host
         self.subagent_controller = subagent_controller
+        self.transition_controller = transition_controller
         self._runtime_binding: dict[str, Any] | None = None
         self.control_stage_recorder = RuntimeControlStageRecorder(
             runtime_binding_getter=lambda: dict(self._runtime_binding or {}),
@@ -31,6 +33,15 @@ class OrchestratorRuntimeSubagentControlProtocolController:
     ):
         resolution = self.subagent_controller.resolve_catalog_entry(**kwargs)
         runtime_binding = dict(kwargs.get("runtime_binding") or {})
+        self.transition_controller.handle_catalog_resolution(
+            runtime_binding=runtime_binding,
+            stage=str(kwargs.get("stage") or "").strip() or None,
+            intent=str(kwargs.get("intent") or "").strip() or None,
+            capability=str(kwargs.get("capability") or "").strip() or None,
+            preferred_subagent_type=str(kwargs.get("preferred_subagent_type") or "").strip() or None,
+            requires_llm=kwargs.get("requires_llm"),
+            resolution=resolution,
+        )
         stage_decision = self._build_catalog_stage_decision(
             stage=str(kwargs.get("stage") or "").strip() or None,
             intent=str(kwargs.get("intent") or "").strip() or None,
@@ -81,6 +92,13 @@ class OrchestratorRuntimeSubagentControlProtocolController:
                 preferred_subagent_type=preferred_subagent_type,
                 requires_llm=requires_llm,
             )
+        self.transition_controller.handle_capability_gap_escalation(
+            runtime_binding=dict(runtime_binding or {}),
+            gap=gap,
+            preferred_subagent_type=preferred_subagent_type,
+            requires_llm=requires_llm,
+            escalation_decision=decision,
+        )
         stage_decision = self._build_capability_gap_stage_decision(
             gap=gap,
             preferred_subagent_type=preferred_subagent_type,
@@ -101,6 +119,12 @@ class OrchestratorRuntimeSubagentControlProtocolController:
     ):
         resolution = self.subagent_controller.execute_patch_cycle(**kwargs)
         runtime_binding = dict(kwargs.get("runtime_binding") or {})
+        self.transition_controller.handle_phase_resolution(
+            runtime_binding=runtime_binding,
+            plan=kwargs.get("plan"),
+            dag_id=str(kwargs.get("dag_id") or "").strip() or None,
+            resolution=resolution,
+        )
         stage_decision = self._build_phase_stage_decision(
             plan=kwargs.get("plan"),
             dag_id=str(kwargs.get("dag_id") or "").strip() or None,

@@ -18,6 +18,7 @@ class RunControlState:
     cancellation_reason: str | None
     deadline_at: datetime
     external_wait_deadline_at: datetime | None
+    runtime_control_stage_decisions: list[dict]
     updated_at: datetime
 
     def to_dict(self) -> dict:
@@ -27,6 +28,7 @@ class RunControlState:
             "cancellation_reason": self.cancellation_reason,
             "deadline_at": self.deadline_at.isoformat(),
             "external_wait_deadline_at": self.external_wait_deadline_at.isoformat() if self.external_wait_deadline_at else None,
+            "runtime_control_stage_decisions": [dict(row) for row in list(self.runtime_control_stage_decisions or [])],
             "updated_at": self.updated_at.isoformat(),
         }
 
@@ -42,11 +44,18 @@ class RunControlState:
                 if payload.get("external_wait_deadline_at")
                 else None
             ),
+            runtime_control_stage_decisions=[
+                dict(row)
+                for row in list(payload.get("runtime_control_stage_decisions") or [])
+                if isinstance(row, dict)
+            ],
             updated_at=datetime.fromisoformat(payload["updated_at"]),
         )
 
 
 class RunControlPlane:
+    MAX_RUNTIME_CONTROL_STAGE_DECISIONS = 200
+
     def __init__(self, path: Path) -> None:
         self.path = path
 
@@ -57,6 +66,7 @@ class RunControlPlane:
             cancellation_reason=None,
             deadline_at=utc_now() + timedelta(seconds=run_timeout_seconds),
             external_wait_deadline_at=None,
+            runtime_control_stage_decisions=[],
             updated_at=utc_now(),
         )
         self.save(state)
@@ -95,6 +105,29 @@ class RunControlPlane:
         if state is None:
             return None
         state.external_wait_deadline_at = None
+        state.updated_at = utc_now()
+        self.save(state)
+        return state
+
+    def record_runtime_control_stage_decision(
+        self,
+        *,
+        row: dict,
+        max_entries: int | None = None,
+    ) -> RunControlState | None:
+        state = self.load()
+        if state is None:
+            return None
+        limit = int(max_entries or self.MAX_RUNTIME_CONTROL_STAGE_DECISIONS)
+        rows = [
+            dict(item)
+            for item in list(state.runtime_control_stage_decisions or [])
+            if isinstance(item, dict)
+        ]
+        rows.append(dict(row or {}))
+        if limit > 0:
+            rows = rows[-limit:]
+        state.runtime_control_stage_decisions = rows
         state.updated_at = utc_now()
         self.save(state)
         return state
