@@ -5,6 +5,10 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from research_system.agents._subagent_control_escalation import (
+    SubagentControlEscalationDecision,
+    SubagentControlEscalationError,
+)
 from research_system.runtime.execution.core.plan_executor import OrchestratorPlanExecutor
 from research_system.runtime.orchestration.orchestrator_context import build_runtime_context
 from research_system.runtime.storage.runs.run_store import RunStore
@@ -17,6 +21,7 @@ from research_system.schemas.planning import (
 )
 from research_system.schemas.protocol import RequestEnvelope
 from research_system.schemas.runtime import BlackboardEntry
+from research_system.schemas.subagents import SubagentCapabilityGap
 
 
 class _Supervisor:
@@ -405,6 +410,104 @@ class PlanExecutorDagTests(unittest.TestCase):
                     for event in host.events
                 )
             )
+        finally:
+            temp_dir.cleanup()
+
+    def test_executor_can_replan_from_subagent_capability_gap_escalation(self) -> None:
+        temp_dir, request, context = self._build_context()
+        try:
+            host = _Host()
+            executor = OrchestratorPlanExecutor(host)
+            plan = ActionPlan(
+                plan_id="plan_initial",
+                intent="review_thesis",
+                strategy="dynamic",
+                actions=[
+                    ActionSpec(node_id="collect", phase="collect", agent="collector"),
+                    ActionSpec(node_id="review", phase="review", agent="reviewer", depends_on=["collect"]),
+                    ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever", depends_on=["review"]),
+                    ActionSpec(node_id="report", phase="report", agent="reporter", depends_on=["retrieve"]),
+                ],
+            )
+
+            def _replan_action_plan(*, context, request, current_plan, plan_patch):
+                return ActionPlan(
+                    plan_id="plan_replanned",
+                    intent=current_plan.intent,
+                    strategy="dynamic",
+                    actions=[
+                        ActionSpec(node_id="collect", phase="collect", agent="collector"),
+                        ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever", depends_on=["collect"]),
+                        ActionSpec(node_id="report", phase="report", agent="reporter", depends_on=["retrieve"]),
+                    ],
+                    notes=["review_phase_skipped_for_capability_gap"],
+                    dispatch_trace={
+                        "replanned_from_plan_id": current_plan.plan_id,
+                        "replan_patch_id": plan_patch.patch_id,
+                    },
+                )
+
+            def _run_action(
+                *,
+                context,
+                request,
+                plan,
+                intent,
+                action,
+                completed_node_ids,
+                pending_actions_after_current,
+            ) -> None:
+                host.run_attempts.append(action.node_id)
+                if action.node_id != "review" or plan.plan_id != "plan_initial":
+                    return None
+                raise SubagentControlEscalationError(
+                    gap=SubagentCapabilityGap(
+                        intent="review_thesis",
+                        stage="review",
+                        capability="missing_review_capability",
+                        reason="missing review capability",
+                    ),
+                    escalation_decision=SubagentControlEscalationDecision(
+                        strategy="action_replan",
+                        rule_id="review_optional_phase",
+                        reason="subagent_control_escalation=action_replan",
+                        notes=("skip_optional_review_phase",),
+                    ),
+                    plan_patch=ActionPlanPatch(
+                        decision_type="replan",
+                        operations=[
+                            ActionPlanPatchOperation(
+                                op_type="request_replan",
+                                reason="review capability gap requires action replan",
+                                metadata={
+                                    "control_source": "subagent_capability_gap",
+                                    "intent": "review_thesis",
+                                    "stage": "review",
+                                    "capability": "missing_review_capability",
+                                },
+                            )
+                        ],
+                        notes=["request_action_plan_replan", "subagent_capability_gap_action_replan"],
+                        termination_reason="review capability gap requires action replan",
+                    ),
+                )
+
+            host._run_action = _run_action
+            host._replan_action_plan = _replan_action_plan
+
+            executor.execute_plan(context=context, request=request, plan=plan)
+
+            self.assertEqual(host.run_attempts, ["collect", "review", "retrieve", "report"])
+            self.assertEqual(context.state.completed_nodes, ["collect", "retrieve", "report"])
+            self.assertEqual(plan.plan_id, "plan_replanned")
+            self.assertEqual([action.node_id for action in plan.actions], ["collect", "retrieve", "report"])
+            self.assertEqual(len(context.action_plan_patches), 1)
+            self.assertEqual(
+                context.action_plan_patches[0]["operations"][0]["metadata"]["control_source"],
+                "subagent_capability_gap",
+            )
+            self.assertTrue(any(event["event_type"] == "action_plan_replan_requested" for event in host.events))
+            self.assertTrue(any(event["event_type"] == "action_plan_replanned" for event in host.events))
         finally:
             temp_dir.cleanup()
 

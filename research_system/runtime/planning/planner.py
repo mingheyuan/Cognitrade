@@ -208,12 +208,17 @@ class RuntimePlanner:
         blackboard_entries: list[Any],
     ) -> ActionPlan:
         view = self.blackboard_view.stock_screen_view(blackboard_entries)
+        gap_metadata = self._subagent_capability_gap_metadata(plan_patch)
+        review_capability_gap = gap_metadata.get("stage") == "review"
         action_ids = ["collect", "screen"]
         if view.enrichment_pending and view.enrichment_target_count > 0:
             action_ids.append("screen_enrich")
         if (
-            not view.review_summary_present
-            and (view.top_candidate_count > 0 or view.watchlist_candidate_count > 0)
+            not review_capability_gap
+            and (
+                not view.review_summary_present
+                and (view.top_candidate_count > 0 or view.watchlist_candidate_count > 0)
+            )
         ):
             action_ids.append("screen_review")
         action_ids.extend(["retrieve", "report"])
@@ -227,10 +232,13 @@ class RuntimePlanner:
             or current_plan.entry_reason
             or "stock_screen action graph replanned from runtime evidence"
         )
+        notes = ["stock_screen action graph replanned from runtime evidence"]
+        if review_capability_gap:
+            notes.append("stock_screen_review_skipped_for_capability_gap")
         return self.action_factory.build_research_plan(
             intent="stock_screen",
             actions=actions,
-            notes=["stock_screen action graph replanned from runtime evidence"],
+            notes=notes,
             entry_strategy=current_plan.entry_strategy,
             entry_reason=self.context_hints.merge_entry_reason(reason, context_hints),
             subagent_required=current_plan.subagent_required,
@@ -370,8 +378,10 @@ class RuntimePlanner:
         blackboard_entries: list[Any],
     ) -> ActionPlan:
         view = self.blackboard_view.review_thesis_view(blackboard_entries)
+        gap_metadata = self._subagent_capability_gap_metadata(plan_patch)
+        review_capability_gap = gap_metadata.get("stage") == "review"
         action_ids = ["collect"]
-        if view.needs_review and not view.review_summary_present:
+        if view.needs_review and not view.review_summary_present and not review_capability_gap:
             action_ids.append("review")
         action_ids.extend(["retrieve", "report"])
         actions = self.action_factory.build_entry_actions(
@@ -384,10 +394,13 @@ class RuntimePlanner:
             or current_plan.entry_reason
             or "review_thesis action graph replanned from runtime evidence"
         )
+        notes = ["review_thesis action graph replanned from runtime evidence"]
+        if review_capability_gap:
+            notes.append("review_phase_skipped_for_capability_gap")
         return self.action_factory.build_research_plan(
             intent="review_thesis",
             actions=actions,
-            notes=["review_thesis action graph replanned from runtime evidence"],
+            notes=notes,
             entry_strategy=current_plan.entry_strategy,
             entry_reason=self.context_hints.merge_entry_reason(reason, context_hints),
             subagent_required=current_plan.subagent_required,
@@ -406,3 +419,17 @@ class RuntimePlanner:
                 continue
             unique.append(normalized)
         return unique
+
+    @staticmethod
+    def _subagent_capability_gap_metadata(plan_patch: ActionPlanPatch) -> dict[str, str]:
+        for operation in list(plan_patch.operations or []):
+            if operation.op_type != "request_replan":
+                continue
+            metadata = {
+                str(key): str(value)
+                for key, value in dict(operation.metadata or {}).items()
+                if str(key).strip() and str(value).strip()
+            }
+            if metadata.get("control_source") == "subagent_capability_gap":
+                return metadata
+        return {}

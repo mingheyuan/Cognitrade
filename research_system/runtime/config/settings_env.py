@@ -89,6 +89,7 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "retrieval_policy_path": config_root / "retrieval_policy.yml",
         "methodology_manifest_path": config_root / "methodology_manifest.yml",
         "router_defaults_path": config_root / "router_defaults.yml",
+        "subagent_control_escalation_policy_path": config_root / "subagent_control_escalation_policy.yml",
         "subagent_discovery_policy_path": config_root / "subagent_discovery_policy.yml",
         "subagent_discovery_approval_policy_path": config_root / "subagent_discovery_approval_policy.yml",
         "subagent_discovery_activation_policy_path": config_root / "subagent_discovery_activation_policy.yml",

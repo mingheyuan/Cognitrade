@@ -10,6 +10,10 @@ from research_system.adapters.vendors.skill_source_registry import SkillSourceRe
 from research_system.agents._subagent_capability_gap_controller import (
     SubagentCapabilityGapController,
 )
+from research_system.agents._subagent_control_escalation import (
+    SubagentControlEscalationDecision,
+    SubagentControlEscalationPolicyService,
+)
 from research_system.agents._subagent_catalog_controller import (
     SubagentCatalogController,
 )
@@ -117,6 +121,7 @@ class SubagentPhaseController:
             emit_event=emit_event,
             service_name=service_name,
         )
+        self.control_escalation_policy = SubagentControlEscalationPolicyService(settings=settings)
         self.discovery_llm_policy_source = SubagentDiscoveryLLMPolicySource(
             shadow_policy=self.discovery_shadow_policy,
             settings=settings,
@@ -162,10 +167,13 @@ class SubagentPhaseController:
             discovery_controller=self.discovery_controller,
             candidates_resolver=self._catalog_candidates,
             entry_selector=self._choose_catalog_entry,
+            escalation_policy=self.control_escalation_policy,
             discovery_store_resolver=lambda: self._binding_value("subagent_discovery_store"),
+            runtime_binding_getter=runtime_binding_getter,
             record_capability_gap=self._record_capability_gap,
             record_tool_discovery_request=self._record_tool_discovery_request,
             record_tool_discovery_auto_activation=self._record_tool_discovery_auto_activation,
+            record_escalation_decision=self._record_capability_gap_escalation,
             error_factory=SubagentCapabilityGapError,
         )
         self.catalog_controller = SubagentCatalogController(
@@ -564,6 +572,77 @@ class SubagentPhaseController:
                 message=f"Requested tool discovery for capability {request.capability}",
                 payload=dict(payload),
             )
+
+    def _record_capability_gap_escalation(
+        self,
+        *,
+        gap: SubagentCapabilityGap,
+        escalation_decision: SubagentControlEscalationDecision,
+    ) -> None:
+        binding = dict(self.runtime_binding_getter() or {}) if callable(self.runtime_binding_getter) else {}
+        context = binding.get("context")
+        support = binding.get("support")
+        request_id = str(binding.get("request_id") or "").strip()
+        intent = str(binding.get("intent") or gap.intent or "").strip()
+        phase = str(binding.get("phase") or gap.stage or "").strip() or None
+        agent = str(binding.get("agent") or "subagent_control").strip() or "subagent_control"
+        if context is None or support is None or not request_id or not intent:
+            return
+        payload = {
+            "event": "subagent_capability_gap_escalated",
+            "control_stage": "capability_gap_escalation",
+            "intent": gap.intent,
+            "stage": gap.stage,
+            "capability": gap.capability,
+            "preferred_subagent_type": gap.preferred_subagent_type,
+            "requires_llm": gap.requires_llm,
+            "decision_type": "request_action_replan"
+            if escalation_decision.strategy == "action_replan"
+            else "continue_discovery",
+            "escalation_strategy": escalation_decision.strategy,
+            "policy_source": escalation_decision.policy_source,
+            "rule_id": escalation_decision.rule_id,
+            "reason": escalation_decision.reason,
+            "notes": list(escalation_decision.notes or ()),
+            "agent": agent,
+        }
+        control_rows = getattr(context, "subagent_control_stage_decisions", None)
+        if not isinstance(control_rows, list):
+            try:
+                setattr(context, "subagent_control_stage_decisions", [])
+            except Exception:
+                control_rows = None
+            else:
+                control_rows = getattr(context, "subagent_control_stage_decisions", None)
+        if isinstance(control_rows, list):
+            control_rows.append(dict(payload))
+        dynamic_trace = getattr(context, "dynamic_trace", None)
+        if isinstance(dynamic_trace, list):
+            dynamic_trace.append(dict(payload))
+        message = (
+            "subagent capability gap escalated to action replan"
+            if escalation_decision.strategy == "action_replan"
+            else "subagent capability gap continued through discovery"
+        )
+        if callable(self.emit_event):
+            self.emit_event(
+                event_type="subagent_capability_gap_escalated",
+                message=message,
+                payload=dict(payload),
+                phase=phase,
+                agent=agent,
+            )
+            return
+        support.emit_event(
+            context,
+            request_id=request_id,
+            intent=intent,
+            event_type="subagent_capability_gap_escalated",
+            phase=phase,
+            agent=agent,
+            message=message,
+            payload=dict(payload),
+        )
 
     def require_mcp_source_registry(self):
         if isinstance(self._mcp_source_registry, McpSourceRegistry):

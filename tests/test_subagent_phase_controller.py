@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
+from research_system.agents._subagent_control_escalation import SubagentControlEscalationError
 from research_system.agents._subagent_phase_controller import SubagentCapabilityGapError, SubagentPhaseController
 from research_system.runtime.orchestration.subagent_discovery_admin_support import (
     OrchestratorSubagentDiscoveryAdminSupport,
@@ -302,6 +303,86 @@ class SubagentPhaseControllerTests(unittest.TestCase):
                 pending_tickets[0].notes,
             )
 
+    def test_select_catalog_entry_can_escalate_capability_gap_to_action_replan(self) -> None:
+        runtime_context = SimpleNamespace(
+            subagent_control_stage_decisions=[],
+            subagent_catalog_stage_decisions=[],
+            subagent_capability_gaps=[],
+            subagent_tool_discovery_requests=[],
+            dynamic_trace=[],
+        )
+        support = SimpleNamespace(emit_event=lambda *_args, **_kwargs: None)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir))
+            ensure_workspace_layout(settings)
+            settings.subagent_control_escalation_policy_path.write_text(
+                "\n".join(
+                    [
+                        "defaults:",
+                        "  strategy: discovery",
+                        "rules:",
+                        "  - rule_id: review_optional_phase",
+                        "    intent: review_thesis",
+                        "    stage: review",
+                        "    strategy: action_replan",
+                        "    notes: [skip_optional_review_phase]",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            controller = SubagentPhaseController(
+                registry=self.registry,
+                invoke_subagent=lambda invocation: (
+                    {"ok": True},
+                    SubagentExecutionRecord(
+                        subagent_type=invocation.subagent_type,
+                        invocation_id=invocation.invocation_id,
+                        status="completed",
+                        objective=invocation.objective,
+                        inputs=invocation.inputs,
+                        output_keys=["ok"],
+                    ),
+                ),
+                emit_event=None,
+                cache_context_builder=lambda **_: None,
+                start_from_node_id_builder=lambda **_: None,
+                runtime_binding_getter=lambda: {
+                    "context": runtime_context,
+                    "support": support,
+                    "request_id": "req-gap-replan",
+                    "intent": "review_thesis",
+                },
+                settings=settings,
+            )
+
+            with self.assertRaises(SubagentControlEscalationError) as exc_info:
+                controller.select_catalog_entry(
+                    stage="review",
+                    intent="review_thesis",
+                    capability="missing_capability",
+                )
+
+            self.assertEqual(exc_info.exception.gap.capability, "missing_capability")
+            self.assertEqual(exc_info.exception.escalation_decision.strategy, "action_replan")
+            self.assertEqual(exc_info.exception.plan_patch.decision_type, "replan")
+            self.assertEqual(len(runtime_context.subagent_capability_gaps), 1)
+            self.assertEqual(len(runtime_context.subagent_tool_discovery_requests), 0)
+            self.assertEqual(
+                [row["decision_type"] for row in runtime_context.subagent_catalog_stage_decisions],
+                ["escalate_capability_gap"],
+            )
+            self.assertEqual(len(runtime_context.subagent_control_stage_decisions), 2)
+            self.assertEqual(
+                runtime_context.subagent_control_stage_decisions[1]["event"],
+                "subagent_capability_gap_escalated",
+            )
+            self.assertEqual(
+                runtime_context.subagent_control_stage_decisions[1]["decision_type"],
+                "request_action_replan",
+            )
+            self.assertIn("subagent_capability_gap_escalated", [row["event"] for row in runtime_context.dynamic_trace])
+
     def test_capability_gap_request_uses_discovery_policy_protocol_order(self) -> None:
         runtime_context = SimpleNamespace(
             subagent_capability_gaps=[],
@@ -316,6 +397,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings.from_env(Path(temp_dir))
             ensure_workspace_layout(settings)
+            settings.subagent_control_escalation_policy_path.write_text("defaults:\n  strategy: discovery\n", encoding="utf-8")
             settings.subagent_discovery_policy_path.write_text(
                 "\n".join(
                     [
@@ -386,6 +468,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings.from_env(Path(temp_dir))
             ensure_workspace_layout(settings)
+            settings.subagent_control_escalation_policy_path.write_text("defaults:\n  strategy: discovery\n", encoding="utf-8")
             settings.subagent_discovery_shadow_llm_enabled = True
             settings.max_llm_calls_per_turn = 3
             provider = _DiscoveryPolicyProviderStub(selected_protocols=["skill", "mcp", "openapi"])
@@ -449,6 +532,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings.from_env(Path(temp_dir))
             ensure_workspace_layout(settings)
+            settings.subagent_control_escalation_policy_path.write_text("defaults:\n  strategy: discovery\n", encoding="utf-8")
             settings.subagent_discovery_llm_policy_enabled = True
             settings.subagent_discovery_llm_policy_min_confidence = 0.8
             settings.max_llm_calls_per_turn = 3
@@ -519,6 +603,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings.from_env(Path(temp_dir))
             ensure_workspace_layout(settings)
+            settings.subagent_control_escalation_policy_path.write_text("defaults:\n  strategy: discovery\n", encoding="utf-8")
             settings.subagent_discovery_hybrid_llm_enabled = True
             settings.subagent_discovery_hybrid_llm_min_confidence = 0.8
             settings.max_llm_calls_per_turn = 3

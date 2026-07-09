@@ -3,6 +3,7 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any
 
+from research_system.agents._subagent_control_escalation import SubagentControlEscalationError
 from research_system.runtime.execution.core.dag_scheduler import ActionDagScheduler
 from research_system.runtime.orchestration.orchestrator_context import RuntimeContext
 from research_system.runtime.storage.jsonl import read_json, write_json
@@ -190,12 +191,15 @@ class OrchestratorPlanExecutor:
                     plan=plan,
                     action=current_action,
                     completed_node_ids=completed_node_ids[:],
-                    pending_actions_after_current=pending_actions[:],
+                    skipped_node_ids=skipped_node_ids[:],
+                    pending_actions_after_current=pending_actions,
                 )
                 if outcome["status"] == "completed":
                     completed_node_ids.append(current_action.node_id)
                 elif outcome["status"] == "skipped":
                     skipped_node_ids.append(current_action.node_id)
+                elif outcome["status"] == "replanned":
+                    continue
                 else:
                     failed_node_ids.append(current_action.node_id)
                     if current_action.failure_mode != "isolate":
@@ -209,6 +213,7 @@ class OrchestratorPlanExecutor:
         plan: ActionPlan,
         action: ActionSpec,
         completed_node_ids: list[str],
+        skipped_node_ids: list[str],
         pending_actions_after_current: list[ActionSpec],
     ) -> dict[str, Any]:
         max_attempts = max(int(action.max_retries or 0), 0) + 1
@@ -226,6 +231,22 @@ class OrchestratorPlanExecutor:
                     completed_node_ids=completed_node_ids[:],
                     pending_actions_after_current=pending_actions_after_current[:],
                 )
+            except SubagentControlEscalationError as exc:
+                self._apply_plan_patch_if_needed(
+                    context=context,
+                    request=request,
+                    plan=plan,
+                    pending_actions=pending_actions_after_current,
+                    completed_node_ids=completed_node_ids,
+                    skipped_node_ids=skipped_node_ids,
+                    plan_patch=exc.plan_patch,
+                )
+                return {
+                    "status": "replanned",
+                    "error": exc,
+                    "attempt": attempt,
+                    "duration_ms": int((perf_counter() - started) * 1000),
+                }
             except Exception as exc:
                 duration_ms = int((perf_counter() - started) * 1000)
                 if attempt < max_attempts:

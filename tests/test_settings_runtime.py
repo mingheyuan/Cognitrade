@@ -28,6 +28,7 @@ class SettingsRuntimeTests(unittest.TestCase):
                     "retrieval_policy",
                     "methodology_manifest",
                     "router_defaults",
+                    "subagent_control_escalation_policy",
                     "subagent_discovery_policy",
                     "subagent_discovery_approval_policy",
                     "subagent_discovery_activation_policy",
@@ -53,6 +54,7 @@ class SettingsRuntimeTests(unittest.TestCase):
                 "workspace/config/methodology_manifest.yml": "manifest: seeded\n",
                 "workspace/config/review_policy.yml": "review: seeded\n",
                 "workspace/config/router_defaults.yml": "router: seeded\n",
+                "workspace/config/subagent_control_escalation_policy.yml": "defaults: seeded-control-escalation\n",
                 "workspace/config/subagent_discovery_policy.yml": "defaults: seeded-discovery\n",
                 "workspace/config/subagent_discovery_approval_policy.yml": "defaults: seeded-discovery-approval\n",
                 "workspace/config/subagent_discovery_activation_policy.yml": "defaults: seeded-discovery-activation\n",
@@ -77,6 +79,10 @@ class SettingsRuntimeTests(unittest.TestCase):
             self.assertTrue((settings.proposals_root / "approved").is_dir())
             self.assertTrue((settings.proposals_root / "rejected").is_dir())
             self.assertEqual(settings.retrieval_policy_path.read_text(encoding="utf-8"), "retrieval: seeded\n")
+            self.assertEqual(
+                settings.subagent_control_escalation_policy_path.read_text(encoding="utf-8"),
+                "defaults: seeded-control-escalation\n",
+            )
             self.assertEqual(
                 settings.subagent_discovery_policy_path.read_text(encoding="utf-8"),
                 "defaults: seeded-discovery\n",

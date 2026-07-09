@@ -71,6 +71,7 @@ class Settings(BaseModel):
     retrieval_policy_path: Path
     methodology_manifest_path: Path
     router_defaults_path: Path
+    subagent_control_escalation_policy_path: Path
     subagent_discovery_policy_path: Path
     subagent_discovery_approval_policy_path: Path
     subagent_discovery_activation_policy_path: Path
@@ -97,6 +98,7 @@ class Settings(BaseModel):
             "retrieval_policy": self.retrieval_policy_path,
             "methodology_manifest": self.methodology_manifest_path,
             "router_defaults": self.router_defaults_path,
+            "subagent_control_escalation_policy": self.subagent_control_escalation_policy_path,
             "subagent_discovery_policy": self.subagent_discovery_policy_path,
             "subagent_discovery_approval_policy": self.subagent_discovery_approval_policy_path,
             "subagent_discovery_activation_policy": self.subagent_discovery_activation_policy_path,

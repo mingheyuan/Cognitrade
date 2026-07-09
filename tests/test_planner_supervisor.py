@@ -350,6 +350,90 @@ class PlannerSupervisorTests(unittest.TestCase):
         self.assertEqual(replanned.actions[3].depends_on, ["screen_enrich"])
         self.assertEqual(replanned.actions[4].depends_on, ["screen_review"])
 
+    def test_replan_action_plan_skips_screen_review_for_subagent_capability_gap(self) -> None:
+        planner = RuntimePlanner()
+        current_plan = ActionPlan(
+            plan_id="plan_current",
+            intent="stock_screen",
+            strategy="dynamic",
+            actions=[
+                ActionSpec(node_id="collect", phase="collect", agent="collector"),
+                ActionSpec(node_id="screen", phase="screen", agent="screener", depends_on=["collect"]),
+                ActionSpec(node_id="screen_review", phase="review", agent="screen_reviewer", depends_on=["screen"]),
+                ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever", depends_on=["screen_review"]),
+                ActionSpec(node_id="report", phase="report", agent="reporter", depends_on=["retrieve"]),
+            ],
+            entry_strategy="rule",
+            dispatch_trace={"source": "route_table"},
+        )
+        plan_patch = ActionPlanPatch(
+            decision_type="replan",
+            operations=[
+                ActionPlanPatchOperation(
+                    op_type="request_replan",
+                    reason="screen review capability gap requires action replan",
+                    metadata={
+                        "control_source": "subagent_capability_gap",
+                        "intent": "stock_screen",
+                        "stage": "review",
+                        "capability": "missing_screen_review_capability",
+                    },
+                )
+            ],
+            notes=["request_action_plan_replan", "subagent_capability_gap_action_replan"],
+            policy_source="rule",
+            termination_reason="screen review capability gap requires action replan",
+        )
+        scorecard_entry = _blackboard_entry(
+            kind="source_record",
+            agent="screener",
+            phase="screen",
+            payload={
+                "title": "screening_scorecard",
+                "content": "{}",
+                "source_type": "screening_scorecard",
+                "scorecard": {
+                    "top_candidate_count": 2,
+                    "watchlist_candidate_count": 0,
+                    "enrichment_target_count": 0,
+                    "enrichment_pending": False,
+                },
+            },
+        )
+
+        class _Blackboard:
+            def __init__(self, entries) -> None:
+                self._entries = entries
+
+            def list_entries(self, *, thread_id=None):
+                return list(self._entries)
+
+        class _Thread:
+            def __init__(self, thread_id: str) -> None:
+                self.thread_id = thread_id
+
+        class _Context:
+            def __init__(self, entries) -> None:
+                self.thread = _Thread("thread_01")
+                self.blackboard = _Blackboard(entries)
+
+        planner.bind_runtime(context=_Context([scorecard_entry]), support=None, request_id="req_1", intent="stock_screen")
+        try:
+            replanned = planner.replan_action_plan(
+                intent="stock_screen",
+                request=RequestEnvelope(user_query="screen growth stocks"),
+                current_plan=current_plan,
+                plan_patch=plan_patch,
+            )
+        finally:
+            planner.clear_runtime()
+
+        self.assertEqual(
+            [action.node_id for action in replanned.actions],
+            ["collect", "screen", "retrieve", "report"],
+        )
+        self.assertIn("stock_screen_review_skipped_for_capability_gap", replanned.notes)
+
     def test_replan_action_plan_uses_runtime_blackboard_to_insert_review_phase(self) -> None:
         planner = RuntimePlanner()
         current_plan = ActionPlan(
@@ -436,6 +520,98 @@ class PlannerSupervisorTests(unittest.TestCase):
         )
         self.assertEqual(replanned.actions[1].depends_on, ["collect"])
         self.assertEqual(replanned.actions[2].depends_on, ["review"])
+
+    def test_replan_action_plan_skips_review_phase_for_subagent_capability_gap(self) -> None:
+        planner = RuntimePlanner()
+        current_plan = ActionPlan(
+            plan_id="plan_current",
+            intent="review_thesis",
+            strategy="dynamic",
+            actions=[
+                ActionSpec(node_id="collect", phase="collect", agent="collector"),
+                ActionSpec(node_id="review", phase="review", agent="reviewer", depends_on=["collect"]),
+                ActionSpec(node_id="retrieve", phase="retrieve", agent="retriever", depends_on=["review"]),
+                ActionSpec(node_id="report", phase="report", agent="reporter", depends_on=["retrieve"]),
+            ],
+            entry_strategy="explicit_intent",
+            dispatch_trace={"source": "explicit_intent"},
+        )
+        plan_patch = ActionPlanPatch(
+            decision_type="replan",
+            operations=[
+                ActionPlanPatchOperation(
+                    op_type="request_replan",
+                    reason="review capability gap requires action replan",
+                    metadata={
+                        "control_source": "subagent_capability_gap",
+                        "intent": "review_thesis",
+                        "stage": "review",
+                        "capability": "missing_review_capability",
+                    },
+                )
+            ],
+            notes=["request_action_plan_replan", "subagent_capability_gap_action_replan"],
+            policy_source="rule",
+            termination_reason="review capability gap requires action replan",
+        )
+        review_request_entry = _blackboard_entry(
+            kind="source_record",
+            payload={
+                "title": "review_thesis input request",
+                "content": "review thesis for innovation drug",
+                "source_type": "review_request",
+                "review_target_run_id": "01TARGET",
+                "review_source_entries": [{"kind": "report_fragment", "payload": {"conclusion": "test"}}],
+            },
+        )
+        sector_snapshot_entry = _blackboard_entry(
+            kind="verified_snapshot",
+            payload={
+                "snapshot_type": "sector",
+                "sector": "innovation_drug",
+                "snapshot_date": "2026-06-28",
+                "facts": {},
+                "source": {"skill": "sector_snapshot_skill"},
+            },
+        )
+
+        class _Blackboard:
+            def __init__(self, entries) -> None:
+                self._entries = entries
+
+            def list_entries(self, *, thread_id=None):
+                return list(self._entries)
+
+        class _Thread:
+            def __init__(self, thread_id: str) -> None:
+                self.thread_id = thread_id
+
+        class _Context:
+            def __init__(self, entries) -> None:
+                self.thread = _Thread("thread_01")
+                self.blackboard = _Blackboard(entries)
+
+        planner.bind_runtime(
+            context=_Context([review_request_entry, sector_snapshot_entry]),
+            support=None,
+            request_id="req_1",
+            intent="review_thesis",
+        )
+        try:
+            replanned = planner.replan_action_plan(
+                intent="review_thesis",
+                request=RequestEnvelope(user_query="review thesis for innovation drug"),
+                current_plan=current_plan,
+                plan_patch=plan_patch,
+            )
+        finally:
+            planner.clear_runtime()
+
+        self.assertEqual(
+            [action.node_id for action in replanned.actions],
+            ["collect", "retrieve", "report"],
+        )
+        self.assertIn("review_phase_skipped_for_capability_gap", replanned.notes)
 
     def test_replan_action_plan_uses_runtime_blackboard_to_insert_stock_check_replenish(self) -> None:
         planner = RuntimePlanner()
