@@ -61,6 +61,16 @@ class _CatalogControllerStub:
         return self.resolution
 
 
+class _PhaseExecutionControllerStub:
+    def __init__(self, resolution) -> None:
+        self.resolution = resolution
+        self.calls: list[dict] = []
+
+    def execute_patch_cycle(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return self.resolution
+
+
 class RuntimeControlPlaneControllerTests(unittest.TestCase):
     def test_bind_and_clear_runtime_delegate_to_supervisor(self) -> None:
         supervisor = _SupervisorStub()
@@ -212,6 +222,71 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
             "cheap_review",
         )
         self.assertEqual(host.events[0]["event_type"], "runtime_control_subagent_resolved")
+
+    def test_execute_subagent_phase_patch_cycle_records_runtime_control_stage(self) -> None:
+        host = SimpleNamespace(events=[])
+
+        def _emit_event(context, **kwargs) -> None:
+            host.events.append(dict(kwargs))
+
+        host._emit_event = _emit_event
+        context = SimpleNamespace(runtime_control_stage_decisions=[], dynamic_trace=[])
+        resolution = SimpleNamespace(
+            final_plan=SimpleNamespace(nodes=[SimpleNamespace(node_id="review_strategy_resolver")]),
+            base_results={"review_strategy_resolver": "base"},
+            final_patch_rows=[],
+            final_results={"review_strategy_resolver": "final"},
+            rule_variant_id="current",
+            final_plan_variant="current",
+            candidate_plan_variants=["current"],
+            final_patch=None,
+            shadow_payload=None,
+        )
+        controller = OrchestratorRuntimeControlPlaneController(
+            host=host,
+            supervisor=_SupervisorStub(),
+        )
+
+        resolved = controller.execute_subagent_phase_patch_cycle(
+            phase_execution_controller=_PhaseExecutionControllerStub(resolution),
+            runtime_binding={
+                "context": context,
+                "request_id": "req-phase",
+                "intent": "review_thesis",
+                "agent": "reviewer",
+            },
+            plan=SimpleNamespace(
+                intent="review_thesis",
+                phase="review",
+                plan_id="plan-1",
+                strategy="catalog",
+                nodes=[SimpleNamespace(node_id="review_strategy_resolver")],
+            ),
+            dag_id="review_execution",
+            base_max_workers=1,
+            final_max_workers=1,
+            build_invocation_factory=lambda _plan: {},
+            patch_builder=lambda _results: None,
+            replan_builder=None,
+            allow_current_plan_variant=True,
+            candidate_plan_variants_builder=None,
+        )
+
+        self.assertIs(resolved, resolution)
+        self.assertEqual(len(context.runtime_control_stage_decisions), 1)
+        self.assertEqual(
+            context.runtime_control_stage_decisions[0]["event"],
+            "runtime_control_subagent_phase_resolved",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[0]["resolution_source"],
+            "phase_patch_cycle",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[0]["final_plan_variant"],
+            "current",
+        )
+        self.assertEqual(host.events[0]["event_type"], "runtime_control_subagent_phase_resolved")
 
     def test_resolve_before_registering_execution_callbacks_raises(self) -> None:
         controller = OrchestratorRuntimeControlPlaneController(

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from research_system.runtime.orchestration._runtime_control_stage_decisions import (
+    RuntimeControlSubagentPhaseStageDecision,
     RuntimeControlSubagentStageDecision,
 )
 from research_system.runtime.orchestration._runtime_control_stage_recorder import (
@@ -78,11 +79,50 @@ class OrchestratorRuntimeSubagentControlController:
             resolution.capability_gap_resolution
         )
 
+    def execute_patch_cycle(
+        self,
+        *,
+        phase_execution_controller,
+        runtime_binding: dict[str, Any] | None,
+        plan,
+        dag_id: str,
+        base_max_workers: int | None,
+        final_max_workers: int | None,
+        build_invocation_factory,
+        patch_builder,
+        replan_builder=None,
+        allow_current_plan_variant: bool = False,
+        candidate_plan_variants_builder=None,
+    ):
+        resolution = phase_execution_controller.execute_patch_cycle(
+            plan=plan,
+            dag_id=dag_id,
+            base_max_workers=base_max_workers,
+            final_max_workers=final_max_workers,
+            build_invocation_factory=build_invocation_factory,
+            patch_builder=patch_builder,
+            replan_builder=replan_builder,
+            allow_current_plan_variant=allow_current_plan_variant,
+            candidate_plan_variants_builder=candidate_plan_variants_builder,
+        )
+        stage_decision = self._build_phase_stage_decision(
+            dag_id=dag_id,
+            plan=plan,
+            resolution=resolution,
+        )
+        self._record_stage_decision(
+            runtime_binding=runtime_binding,
+            stage_decision=stage_decision,
+            phase=str(getattr(plan, "phase", None) or "").strip() or None,
+            agent=str((runtime_binding or {}).get("agent") or "runtime_control").strip() or "runtime_control",
+        )
+        return resolution
+
     def _record_stage_decision(
         self,
         *,
         runtime_binding: dict[str, Any] | None,
-        stage_decision: RuntimeControlSubagentStageDecision,
+        stage_decision: RuntimeControlSubagentStageDecision | RuntimeControlSubagentPhaseStageDecision,
         phase: str | None,
         agent: str | None,
     ) -> None:
@@ -184,6 +224,49 @@ class OrchestratorRuntimeSubagentControlController:
             escalation_strategy=str(getattr(escalation_decision, "strategy", None) or "").strip() or None,
             policy_source=str(getattr(escalation_decision, "policy_source", None) or "rule"),
             notes=notes,
+        )
+
+    @staticmethod
+    def _build_phase_stage_decision(
+        *,
+        dag_id: str,
+        plan,
+        resolution,
+    ) -> RuntimeControlSubagentPhaseStageDecision:
+        final_patch = resolution.final_patch
+        final_request_replan = bool(
+            getattr(final_patch, "decision_type", None) == "replan"
+            or any(
+                str(getattr(operation, "op_type", None) or "") == "request_replan"
+                for operation in list(getattr(final_patch, "operations", None) or [])
+            )
+        ) if final_patch is not None else False
+        if resolution.final_plan_variant != resolution.rule_variant_id:
+            decision_type = "override_rule_variant"
+        elif final_request_replan:
+            decision_type = "apply_rule_replan"
+        elif resolution.final_patch_rows:
+            decision_type = "apply_rule_patch"
+        else:
+            decision_type = "keep_current"
+        return RuntimeControlSubagentPhaseStageDecision(
+            dag_id=dag_id,
+            intent=getattr(plan, "intent", None),
+            phase=getattr(plan, "phase", None),
+            plan_id=getattr(plan, "plan_id", None),
+            plan_strategy=getattr(plan, "strategy", None),
+            decision_type=decision_type,
+            policy_source=str(getattr(final_patch, "policy_source", None) or "rule"),
+            rule_plan_variant=resolution.rule_variant_id,
+            final_plan_variant=resolution.final_plan_variant,
+            override_rule_variant=resolution.rule_variant_id != resolution.final_plan_variant,
+            candidate_plan_variants=list(resolution.candidate_plan_variants or []),
+            final_request_replan=final_request_replan,
+            base_node_ids=[node.node_id for node in list(getattr(plan, "nodes", None) or [])],
+            final_node_ids=[
+                node.node_id for node in list(getattr(getattr(resolution, "final_plan", None), "nodes", None) or [])
+            ],
+            patch_count=len(list(resolution.final_patch_rows or [])),
         )
 
 

@@ -211,6 +211,62 @@ class RuntimeControlSubagentStageDecision:
 
 
 @dataclass(frozen=True)
+class RuntimeControlSubagentPhaseStageDecision:
+    dag_id: str
+    intent: str | None
+    phase: str | None
+    plan_id: str | None
+    plan_strategy: str | None
+    resolution_source: Literal["phase_patch_cycle"] = "phase_patch_cycle"
+    decision_type: str = "keep_current"
+    policy_source: str = "rule"
+    rule_plan_variant: str = "current"
+    final_plan_variant: str = "current"
+    override_rule_variant: bool = False
+    candidate_plan_variants: list[str] = field(default_factory=list)
+    final_request_replan: bool = False
+    base_node_ids: list[str] = field(default_factory=list)
+    final_node_ids: list[str] = field(default_factory=list)
+    patch_count: int = 0
+    notes: list[str] = field(default_factory=list)
+
+    event_type: Literal["runtime_control_subagent_phase_resolved"] = "runtime_control_subagent_phase_resolved"
+    control_domain: Literal["runtime"] = "runtime"
+    control_stage: Literal["subagent_phase_protocol"] = "subagent_phase_protocol"
+    decision_stage: Literal["subagent_phase_resolution"] = "subagent_phase_resolution"
+
+    def event_payload(self) -> dict[str, object]:
+        return {
+            "control_domain": self.control_domain,
+            "control_stage": self.control_stage,
+            "decision_stage": self.decision_stage,
+            "dag_id": self.dag_id,
+            "intent": self.intent,
+            "phase": self.phase,
+            "plan_id": self.plan_id,
+            "plan_strategy": self.plan_strategy,
+            "resolution_source": self.resolution_source,
+            "decision_type": self.decision_type,
+            "policy_source": self.policy_source,
+            "rule_plan_variant": self.rule_plan_variant,
+            "final_plan_variant": self.final_plan_variant,
+            "override_rule_variant": self.override_rule_variant,
+            "candidate_plan_variants": list(self.candidate_plan_variants),
+            "final_request_replan": self.final_request_replan,
+            "base_node_ids": list(self.base_node_ids),
+            "final_node_ids": list(self.final_node_ids),
+            "patch_count": self.patch_count,
+            "notes": list(self.notes),
+        }
+
+    def message(self) -> str:
+        return (
+            f"{self.event_type} resolved {self.resolution_source} "
+            f"for DAG {self.dag_id}"
+        )
+
+
+@dataclass(frozen=True)
 class SubagentCatalogStageDecision:
     intent: str | None
     stage: str | None
@@ -566,6 +622,7 @@ class SubagentDiscoveryActivationStageDecision:
 __all__ = [
     "ActionPhaseControlStageDecision",
     "RuntimeControlProtocolStageDecision",
+    "RuntimeControlSubagentPhaseStageDecision",
     "RuntimeControlSubagentStageDecision",
     "RuntimeControlTransitionStageDecision",
     "SubagentCatalogStageDecision",

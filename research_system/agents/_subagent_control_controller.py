@@ -38,6 +38,14 @@ class SubagentControlController:
         return self.catalog_controller.resolve_catalog_entry(**kwargs)
 
     def execute_patch_cycle(self, **kwargs):
+        runtime_control = self._runtime_control()
+        execute_patch_cycle = getattr(runtime_control, "execute_subagent_phase_patch_cycle", None)
+        if callable(execute_patch_cycle):
+            return execute_patch_cycle(
+                phase_execution_controller=self.phase_execution_controller,
+                runtime_binding=self._runtime_binding(),
+                **kwargs,
+            )
         return self.phase_execution_controller.execute_patch_cycle(**kwargs)
 
     def _runtime_control(self):

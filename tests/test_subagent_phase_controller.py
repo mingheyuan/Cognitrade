@@ -1351,6 +1351,146 @@ class SubagentPhaseControllerTests(unittest.TestCase):
         )
         self.assertIn("review_summary_builder", final_results)
 
+    def test_execute_patch_cycle_can_delegate_to_runtime_control_service(self) -> None:
+        runtime_context = SimpleNamespace(
+            subagent_control_stage_decisions=[],
+            runtime_control_stage_decisions=[],
+            dynamic_trace=[],
+        )
+        support = SimpleNamespace(emit_event=lambda *_args, **_kwargs: None)
+        delegated_calls: list[dict] = []
+
+        class _RuntimeControlStub:
+            def execute_subagent_phase_patch_cycle(self, **kwargs):
+                delegated_calls.append(dict(kwargs))
+                return kwargs["phase_execution_controller"].execute_patch_cycle(
+                    plan=kwargs["plan"],
+                    dag_id=kwargs["dag_id"],
+                    base_max_workers=kwargs["base_max_workers"],
+                    final_max_workers=kwargs["final_max_workers"],
+                    build_invocation_factory=kwargs["build_invocation_factory"],
+                    patch_builder=kwargs["patch_builder"],
+                    replan_builder=kwargs.get("replan_builder"),
+                    allow_current_plan_variant=kwargs.get("allow_current_plan_variant", False),
+                    candidate_plan_variants_builder=kwargs.get("candidate_plan_variants_builder"),
+                )
+
+        controller = SubagentPhaseController(
+            registry=self.registry,
+            invoke_subagent=lambda invocation: (
+                {"ok": True, "value": invocation.inputs.get("value")},
+                SubagentExecutionRecord(
+                    subagent_type=invocation.subagent_type,
+                    invocation_id=invocation.invocation_id,
+                    status="completed",
+                    objective=invocation.objective,
+                    inputs=invocation.inputs,
+                    output_keys=["ok", "value"],
+                ),
+            ),
+            emit_event=None,
+            cache_context_builder=lambda **_: None,
+            start_from_node_id_builder=lambda **_: None,
+            runtime_binding_getter=lambda: {
+                "context": runtime_context,
+                "support": support,
+                "runtime_control": _RuntimeControlStub(),
+                "request_id": "req-phase-runtime-control",
+                "intent": "review_thesis",
+                "phase": "review",
+                "agent": "reviewer",
+            },
+        )
+        plan = SubagentPlan(
+            plan_id="plan_initial",
+            intent="review_thesis",
+            phase="review",
+            strategy="catalog",
+            nodes=[
+                controller.build_catalog_plan_node(
+                    node_id="review_strategy_resolver",
+                    subagent_type="cheap_review",
+                    objective="Resolve review strategy.",
+                    inputs={"value": 1},
+                    cache_key="review_strategy_resolver",
+                )
+            ],
+        )
+
+        def _runtime_nodes(current_plan: SubagentPlan):
+            return {
+                node.node_id: {
+                    "builder": (
+                        lambda _results, *, current_node=node: controller.build_invocation(
+                            subagent_type=current_node.subagent_type,
+                            objective=current_node.objective,
+                            inputs=dict(current_node.inputs or {}),
+                            task_name=f"review:{current_node.node_id}",
+                            agent_path=f"reviewer/{current_node.node_id}",
+                            phase="review",
+                        )
+                    ),
+                    "metadata": controller.build_metadata(
+                        task_name=f"review:{node.node_id}",
+                        agent_path=f"reviewer/{node.node_id}",
+                        objective=node.objective,
+                        phase="review",
+                    ),
+                }
+                for node in current_plan.nodes
+            }
+
+        def _build_patch(_results):
+            return SubagentGraphPatch(
+                decision_type="replan",
+                policy_source="rule",
+                confidence=1.0,
+                notes=["request_subagent_replan"],
+                operations=[
+                    SubagentGraphPatchOperation(
+                        op_type="request_replan",
+                        reason="review summary path should be rebuilt",
+                    )
+                ],
+            )
+
+        def _replan_builder(current_plan: SubagentPlan, patch: SubagentGraphPatch, _results):
+            return current_plan.model_copy(
+                update={
+                    "plan_id": "plan_replanned",
+                    "notes": [*list(current_plan.notes or []), *list(patch.notes or []), "replanned"],
+                    "nodes": [
+                        *list(current_plan.nodes or []),
+                        controller.build_catalog_plan_node(
+                            node_id="review_summary_builder",
+                            subagent_type="cheap_review",
+                            objective="Build review summary.",
+                            inputs={"value": 2},
+                            depends_on=["review_strategy_resolver"],
+                            cache_key="review_summary_builder",
+                        ),
+                    ],
+                },
+                deep=True,
+            )
+
+        final_plan, _base_results, patch_rows, final_results = controller.execute_patch_cycle(
+            plan=plan,
+            dag_id="review_execution",
+            base_max_workers=1,
+            final_max_workers=1,
+            build_invocation_factory=_runtime_nodes,
+            patch_builder=_build_patch,
+            replan_builder=_replan_builder,
+        )
+
+        self.assertEqual(len(delegated_calls), 1)
+        self.assertIs(delegated_calls[0]["phase_execution_controller"], controller.phase_execution_controller)
+        self.assertEqual(delegated_calls[0]["runtime_binding"]["request_id"], "req-phase-runtime-control")
+        self.assertEqual(final_plan.plan_id, "plan_replanned")
+        self.assertEqual(len(patch_rows), 1)
+        self.assertIn("review_summary_builder", final_results)
+
     def test_execute_patch_cycle_hybrid_can_suppress_rule_replan(self) -> None:
         events: list[dict] = []
         runtime_context = SimpleNamespace(

@@ -147,5 +147,8 @@ class OrchestratorRuntimeControlPlaneController:
     def select_subagent_catalog_entry(self, **kwargs):
         return self.subagent_controller.select_catalog_entry(**kwargs)
 
+    def execute_subagent_phase_patch_cycle(self, **kwargs):
+        return self.subagent_controller.execute_patch_cycle(**kwargs)
+
 
 __all__ = ["OrchestratorRuntimeControlPlaneController"]
