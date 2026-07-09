@@ -30,6 +30,7 @@ class SubagentPhaseExecutionController:
         llm_policy_source,
         patch_requests_replan,
         resolve_variant_id,
+        control_stage_recorder=None,
         runtime_binding_getter=None,
         emit_event=None,
         service_name: str | None = None,
@@ -39,6 +40,7 @@ class SubagentPhaseExecutionController:
         self.llm_policy_source = llm_policy_source
         self.patch_requests_replan = patch_requests_replan
         self.resolve_variant_id = resolve_variant_id
+        self.control_stage_recorder = control_stage_recorder
         self.runtime_binding_getter = runtime_binding_getter
         self.emit_event = emit_event
         self.service_name = service_name or "subagent_phase_execution"
@@ -207,12 +209,21 @@ class SubagentPhaseExecutionController:
                 control_rows = getattr(context, "subagent_control_stage_decisions", None)
         if isinstance(control_rows, list):
             control_rows.append(dict(payload))
-        dynamic_trace = getattr(context, "dynamic_trace", None)
-        if isinstance(dynamic_trace, list):
-            dynamic_trace.append(dict(payload))
         message = (
             f"subagent_phase_execution_decided resolved {decision_type} for DAG {dag_id}"
         )
+        if self.control_stage_recorder is not None:
+            self.control_stage_recorder.record(
+                event_type="subagent_phase_execution_decided",
+                message=message,
+                payload=dict(payload),
+                phase=phase,
+                agent=agent,
+            )
+            return
+        dynamic_trace = getattr(context, "dynamic_trace", None)
+        if isinstance(dynamic_trace, list):
+            dynamic_trace.append(dict(payload))
         if callable(self.emit_event):
             self.emit_event(
                 event_type="subagent_phase_execution_decided",

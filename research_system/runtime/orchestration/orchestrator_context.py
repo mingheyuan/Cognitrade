@@ -36,6 +36,7 @@ class RuntimeContext:
     subagent_trace: list[dict]
     subagent_plans: list[dict]
     subagent_plan_patches: list[dict]
+    runtime_control_stage_decisions: list[dict]
     subagent_control_stage_decisions: list[dict]
     subagent_catalog_stage_decisions: list[dict]
     subagent_capability_gaps: list[dict]
@@ -125,6 +126,7 @@ def build_runtime_context(
         subagent_trace=[],
         subagent_plans=[],
         subagent_plan_patches=[],
+        runtime_control_stage_decisions=[],
         subagent_control_stage_decisions=[],
         subagent_catalog_stage_decisions=[],
         subagent_capability_gaps=[],

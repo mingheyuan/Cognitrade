@@ -174,6 +174,15 @@ class SupervisorRuntimeTests(unittest.TestCase):
                 self.assertEqual(suggestion["actual_action_node_id"], "screen_review")
                 self.assertTrue(suggestion["action_match"])
                 self.assertTrue(suggestion["replan_match"])
+                self.assertEqual(len(runtime.context.runtime_control_stage_decisions), 1)
+                self.assertEqual(
+                    runtime.context.runtime_control_stage_decisions[0]["event"],
+                    "action_phase_decided",
+                )
+                self.assertEqual(
+                    runtime.context.runtime_control_stage_decisions[0]["final_action_node_id"],
+                    "screen_review",
+                )
 
     def test_supervisor_hybrid_policy_can_override_rule_frontier_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

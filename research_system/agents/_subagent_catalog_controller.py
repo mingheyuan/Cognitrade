@@ -57,6 +57,7 @@ class SubagentCatalogController:
         candidates_resolver,
         entry_selector,
         capability_gap_controller: SubagentCapabilityGapController,
+        control_stage_recorder=None,
         runtime_binding_getter=None,
         emit_event=None,
         service_name: str | None = None,
@@ -64,6 +65,7 @@ class SubagentCatalogController:
         self.candidates_resolver = candidates_resolver
         self.entry_selector = entry_selector
         self.capability_gap_controller = capability_gap_controller
+        self.control_stage_recorder = control_stage_recorder
         self.runtime_binding_getter = runtime_binding_getter
         self.emit_event = emit_event
         self.service_name = service_name or "subagent_catalog"
@@ -223,13 +225,22 @@ class SubagentCatalogController:
                     "control_stage": "catalog_selection",
                 }
             )
-        dynamic_trace = getattr(context, "dynamic_trace", None)
-        if isinstance(dynamic_trace, list):
-            dynamic_trace.append(dict(payload))
         message = (
             f"subagent_catalog_selection_decided resolved {decision.decision_type} "
             f"for capability {decision.capability}"
         )
+        if self.control_stage_recorder is not None:
+            self.control_stage_recorder.record(
+                event_type="subagent_catalog_selection_decided",
+                message=message,
+                payload=dict(payload),
+                phase=phase,
+                agent=agent,
+            )
+            return
+        dynamic_trace = getattr(context, "dynamic_trace", None)
+        if isinstance(dynamic_trace, list):
+            dynamic_trace.append(dict(payload))
         if callable(self.emit_event):
             self.emit_event(
                 event_type="subagent_catalog_selection_decided",

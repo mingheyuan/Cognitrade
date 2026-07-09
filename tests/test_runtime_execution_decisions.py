@@ -388,6 +388,46 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
         finally:
             temp_dir.cleanup()
 
+    def test_debug_payload_includes_runtime_control_stage_decisions(self) -> None:
+        temp_dir, _settings, context, request = _build_runtime()
+        try:
+            context.runtime_control_stage_decisions.append(
+                {
+                    "event": "action_phase_decided",
+                    "control_domain": "action",
+                    "control_stage": "action_phase",
+                    "decision_stage": "action_phase",
+                    "intent": "stock_screen",
+                    "decision_type": "continue",
+                    "final_action_node_id": "screen_review",
+                }
+            )
+
+            payload = OrchestratorDebugSupport().build_debug_payload(
+                context=context,
+                request=request,
+                plan=ActionPlan(intent="stock_screen", actions=[]),
+                plan_intent="stock_screen",
+                retrieval_summary=None,
+            )
+
+            self.assertEqual(
+                payload["runtime_control_stage_decisions"],
+                [
+                    {
+                        "event": "action_phase_decided",
+                        "control_domain": "action",
+                        "control_stage": "action_phase",
+                        "decision_stage": "action_phase",
+                        "intent": "stock_screen",
+                        "decision_type": "continue",
+                        "final_action_node_id": "screen_review",
+                    }
+                ],
+            )
+        finally:
+            temp_dir.cleanup()
+
     def test_debug_payload_includes_subagent_discovery_stage_decisions(self) -> None:
         temp_dir, _settings, context, request = _build_runtime()
         try:

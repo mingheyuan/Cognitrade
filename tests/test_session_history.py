@@ -282,6 +282,43 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["dynamic_trace"][0]["selected_action_node_id"], "screen_review")
         self.assertEqual(payload["dynamic_trace"][0]["actual_action_node_id"], "screen_review")
 
+    def test_trace_rebuilds_action_phase_decision_rows_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "01TRACEACTIONDECIDE"
+            run_root.mkdir(parents=True, exist_ok=True)
+
+            write_json(run_root / "request.json", {"intent": "stock_screen", "user_query": "screen growth stocks"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-action-decide-1",
+                    "request_id": "req-action-decide",
+                    "run_id": "01TRACEACTIONDECIDE",
+                    "intent": "stock_screen",
+                    "event_type": "action_phase_decided",
+                    "phase": "supervision",
+                    "agent": "supervisor",
+                    "message": "action_phase_decided resolved continue for intent stock_screen",
+                    "payload": {
+                        "control_domain": "action",
+                        "control_stage": "action_phase",
+                        "decision_stage": "action_phase",
+                        "final_action_node_id": "screen_review",
+                        "decision_type": "continue",
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-10T10:00:00+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(len(payload["dynamic_trace"]), 1)
+        self.assertEqual(payload["dynamic_trace"][0]["event"], "action_phase_decided")
+        self.assertEqual(payload["dynamic_trace"][0]["final_action_node_id"], "screen_review")
+
     def test_trace_rebuilds_subagent_phase_shadow_rows_from_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "01TRACESUBSHADOW"

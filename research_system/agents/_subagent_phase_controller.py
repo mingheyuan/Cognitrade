@@ -47,6 +47,9 @@ from research_system.runtime.orchestration._subagent_discovery_approval_policy i
 from research_system.runtime.orchestration._subagent_discovery_activation_policy import (
     SubagentDiscoveryActivationPolicyService,
 )
+from research_system.runtime.orchestration._runtime_control_stage_recorder import (
+    RuntimeControlStageRecorder,
+)
 from research_system.runtime.orchestration.subagent_discovery_candidate_sources import (
     SubagentDiscoveryCandidateSupport,
 )
@@ -100,6 +103,10 @@ class SubagentPhaseController:
         self.runtime_binding_getter = runtime_binding_getter
         self.settings = settings
         self.llm_provider = llm_provider
+        self.control_stage_recorder = RuntimeControlStageRecorder(
+            runtime_binding_getter=runtime_binding_getter,
+            emit_event=emit_event,
+        )
         self.shadow_policy = SubagentPhaseLLMShadowPolicy(
             llm_provider=llm_provider,
             settings=settings,
@@ -180,6 +187,7 @@ class SubagentPhaseController:
             candidates_resolver=self._catalog_candidates,
             entry_selector=self._choose_catalog_entry,
             capability_gap_controller=self.capability_gap_controller,
+            control_stage_recorder=self.control_stage_recorder,
             runtime_binding_getter=runtime_binding_getter,
             emit_event=emit_event,
             service_name=service_name,
@@ -190,6 +198,7 @@ class SubagentPhaseController:
             llm_policy_source=self.llm_policy_source,
             patch_requests_replan=self._patch_requests_replan,
             resolve_variant_id=self._resolve_variant_id,
+            control_stage_recorder=self.control_stage_recorder,
             runtime_binding_getter=runtime_binding_getter,
             emit_event=emit_event,
             service_name=service_name,
@@ -616,14 +625,23 @@ class SubagentPhaseController:
                 control_rows = getattr(context, "subagent_control_stage_decisions", None)
         if isinstance(control_rows, list):
             control_rows.append(dict(payload))
-        dynamic_trace = getattr(context, "dynamic_trace", None)
-        if isinstance(dynamic_trace, list):
-            dynamic_trace.append(dict(payload))
         message = (
             "subagent capability gap escalated to action replan"
             if escalation_decision.strategy == "action_replan"
             else "subagent capability gap continued through discovery"
         )
+        if self.control_stage_recorder is not None:
+            self.control_stage_recorder.record(
+                event_type="subagent_capability_gap_escalated",
+                message=message,
+                payload=dict(payload),
+                phase=phase,
+                agent=agent,
+            )
+            return
+        dynamic_trace = getattr(context, "dynamic_trace", None)
+        if isinstance(dynamic_trace, list):
+            dynamic_trace.append(dict(payload))
         if callable(self.emit_event):
             self.emit_event(
                 event_type="subagent_capability_gap_escalated",
