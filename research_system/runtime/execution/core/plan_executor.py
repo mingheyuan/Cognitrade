@@ -5,12 +5,6 @@ from typing import Any
 
 from research_system.agents._subagent_control_escalation import SubagentControlEscalationError
 from research_system.runtime.execution.core.dag_scheduler import ActionDagScheduler
-from research_system.runtime.execution.core.runtime_control_protocol_controller import (
-    OrchestratorRuntimeControlProtocolController,
-)
-from research_system.runtime.execution.core.runtime_control_controller import (
-    OrchestratorRuntimeControlController,
-)
 from research_system.runtime.orchestration.orchestrator_context import RuntimeContext
 from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.runtime.storage.runs.action_cache_store import ActionCacheStore
@@ -24,16 +18,21 @@ class OrchestratorPlanExecutor:
     def __init__(self, host: Any) -> None:
         self.host = host
         self.dag_scheduler = ActionDagScheduler()
-        self.runtime_control_transition_controller = OrchestratorRuntimeControlController(
-            host,
+        runtime_control = getattr(host, "runtime_control", None)
+        if runtime_control is None:
+            from research_system.runtime.execution.core.runtime_control_plane_controller import (
+                OrchestratorRuntimeControlPlaneController,
+            )
+
+            runtime_control = OrchestratorRuntimeControlPlaneController(
+                host,
+                supervisor=self.host.supervisor,
+            )
+        runtime_control.register_execution_callbacks(
             apply_plan_patch=self._apply_action_plan_patch,
             request_action_plan_replan=self._request_action_plan_replan,
         )
-        self.runtime_control_protocol_controller = OrchestratorRuntimeControlProtocolController(
-            host,
-            supervisor=self.host.supervisor,
-            transition_controller=self.runtime_control_transition_controller,
-        )
+        self.runtime_control = runtime_control
 
     def execute_plan(
         self,
@@ -123,7 +122,7 @@ class OrchestratorPlanExecutor:
                 completed_node_ids=completed_node_ids,
                 skipped_node_ids=skipped_node_ids,
             )
-            control_resolution = self.runtime_control_protocol_controller.resolve_supervisor_cycle(
+            control_resolution = self.runtime_control.resolve_supervisor_cycle(
                 context=context,
                 request=request,
                 plan=plan,
@@ -244,7 +243,7 @@ class OrchestratorPlanExecutor:
                     pending_actions_after_current=pending_actions_after_current[:],
                 )
             except SubagentControlEscalationError as exc:
-                self.runtime_control_protocol_controller.handle_subagent_escalation(
+                self.runtime_control.handle_subagent_escalation(
                     context=context,
                     request=request,
                     plan=plan,

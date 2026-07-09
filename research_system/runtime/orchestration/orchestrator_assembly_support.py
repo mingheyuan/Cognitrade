@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from research_system.runtime.execution.core.action_runner import OrchestratorActionRunner
+from research_system.runtime.execution.core.runtime_control_plane_controller import (
+    OrchestratorRuntimeControlPlaneController,
+)
 from research_system.runtime.orchestration.orchestrator_admin import OrchestratorAdminService
 from research_system.runtime.orchestration.orchestrator_compat_support import OrchestratorCompatSupport
 from research_system.runtime.execution.core.plan_executor import OrchestratorPlanExecutor
@@ -96,6 +99,19 @@ class OrchestratorAssemblySupport:
             runner = self.build_action_runner()
             self.host.action_runner = runner
         return runner
+
+    def build_runtime_control(self) -> OrchestratorRuntimeControlPlaneController:
+        return OrchestratorRuntimeControlPlaneController(
+            self.host,
+            supervisor=self.host.supervisor,
+        )
+
+    def runtime_control(self) -> OrchestratorRuntimeControlPlaneController:
+        controller = getattr(self.host, "runtime_control", None)
+        if controller is None:
+            controller = self.build_runtime_control()
+            self.host.runtime_control = controller
+        return controller
 
     def build_plan_executor(self) -> OrchestratorPlanExecutor:
         return OrchestratorPlanExecutor(self.host)

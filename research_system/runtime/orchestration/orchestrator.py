@@ -16,6 +16,9 @@ from research_system.runtime.orchestration.orchestrator_dependencies import (
     build_orchestrator_dependencies,
 )
 from research_system.runtime.execution.core.plan_executor import OrchestratorPlanExecutor
+from research_system.runtime.execution.core.runtime_control_plane_controller import (
+    OrchestratorRuntimeControlPlaneController,
+)
 from research_system.runtime.execution.core.support import OrchestratorExecutionSupport
 from research_system.runtime.orchestration.orchestrator_run_coordinator import OrchestratorRunCoordinator
 from research_system.runtime.orchestration.orchestrator_research_forwarding_support import (
@@ -64,6 +67,7 @@ class ResearchOrchestrator:
         self.execution_support = self._build_execution_support()
         self.admin = self._build_admin_service()
         self.action_runner = self._build_action_runner()
+        self.runtime_control = self._build_runtime_control()
         self.plan_executor = self._build_plan_executor()
         self.run_coordinator = self._build_run_coordinator()
         self.subagent_bridge = self._build_subagent_bridge()
@@ -139,6 +143,12 @@ class ResearchOrchestrator:
 
     def _plan_executor(self) -> OrchestratorPlanExecutor:
         return self._assembly().plan_executor()
+
+    def _build_runtime_control(self) -> OrchestratorRuntimeControlPlaneController:
+        return self._assembly().build_runtime_control()
+
+    def _runtime_control(self) -> OrchestratorRuntimeControlPlaneController:
+        return self._assembly().runtime_control()
 
     def _build_subagent_bridge(self) -> OrchestratorSubagentBridge:
         return self._assembly().build_subagent_bridge()

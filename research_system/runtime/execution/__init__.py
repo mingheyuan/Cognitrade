@@ -11,6 +11,7 @@ __all__ = [
     "OrchestratorExecutionSupport",
     "OrchestratorExecutionTraceSupport",
     "OrchestratorPlanExecutor",
+    "OrchestratorRuntimeControlPlaneController",
     "core",
     "handlers",
 ]
@@ -39,6 +40,10 @@ _EXPORTS = {
         "OrchestratorExecutionTraceSupport",
     ),
     "OrchestratorPlanExecutor": ("research_system.runtime.execution.core.plan_executor", "OrchestratorPlanExecutor"),
+    "OrchestratorRuntimeControlPlaneController": (
+        "research_system.runtime.execution.core.runtime_control_plane_controller",
+        "OrchestratorRuntimeControlPlaneController",
+    ),
     "core": "research_system.runtime.execution.core",
     "handlers": "research_system.runtime.execution.handlers",
 }

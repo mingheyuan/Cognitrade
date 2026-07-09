@@ -16,6 +16,7 @@ from research_system.runtime.execution.core import (
     OrchestratorExecutionSupport,
     OrchestratorExecutionTraceSupport,
     OrchestratorPlanExecutor,
+    OrchestratorRuntimeControlPlaneController,
 )
 from research_system.runtime.methodology.banking import (
     OrchestratorMethodologyBankHighlightSupport as PackageBankHighlightSupport,
@@ -94,6 +95,7 @@ class RuntimeRemainingPackagesRuntimeTests(unittest.TestCase):
         self.assertIs(execution.OrchestratorExecutionSupport, OrchestratorExecutionSupport)
         self.assertIs(execution.OrchestratorExecutionTraceSupport, OrchestratorExecutionTraceSupport)
         self.assertIs(execution.OrchestratorPlanExecutor, OrchestratorPlanExecutor)
+        self.assertIs(execution.OrchestratorRuntimeControlPlaneController, OrchestratorRuntimeControlPlaneController)
         self.assertIs(execution.core, execution_core)
         self.assertIs(execution_core.OrchestratorActionRunner, OrchestratorActionRunner)
         self.assertIs(execution_core.OrchestratorExecutionControlSupport, OrchestratorExecutionControlSupport)
@@ -103,6 +105,10 @@ class RuntimeRemainingPackagesRuntimeTests(unittest.TestCase):
         self.assertIs(execution_core.OrchestratorExecutionSupport, OrchestratorExecutionSupport)
         self.assertIs(execution_core.OrchestratorExecutionTraceSupport, OrchestratorExecutionTraceSupport)
         self.assertIs(execution_core.OrchestratorPlanExecutor, OrchestratorPlanExecutor)
+        self.assertIs(
+            execution_core.OrchestratorRuntimeControlPlaneController,
+            OrchestratorRuntimeControlPlaneController,
+        )
         self.assertIs(execution.handlers.OrchestratorAgentHandlers, OrchestratorAgentHandlers)
 
     def test_methodology_package_exports(self) -> None:
