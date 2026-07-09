@@ -440,6 +440,8 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
             context.subagent_discovery_stage_decisions.append(
                 {
                     "event": "subagent_tool_discovery_protocol_decided",
+                    "control_domain": "subagent",
+                    "control_stage": "protocol_selection",
                     "decision_stage": "protocol_selection",
                     "stage": "collect",
                     "capability": "market_signal_extension",
@@ -461,6 +463,8 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
                 [
                     {
                         "event": "subagent_tool_discovery_protocol_decided",
+                        "control_domain": "subagent",
+                        "control_stage": "protocol_selection",
                         "decision_stage": "protocol_selection",
                         "stage": "collect",
                         "capability": "market_signal_extension",

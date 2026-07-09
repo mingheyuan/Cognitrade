@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from research_system.agents._subagent_discovery_policy_controller import (
     SubagentDiscoveryActivationResolution,
     SubagentDiscoveryPolicyController,
+)
+from research_system.runtime.orchestration._subagent_control_stage_recorder import (
+    SubagentControlStageRecorder,
 )
 from research_system.schemas.subagents import (
     SubagentCapabilityGap,
@@ -27,6 +30,7 @@ class SubagentDiscoveryController:
         discovery_decision_source,
         activation_host,
         discovery_policy_controller=None,
+        control_stage_recorder=None,
         runtime_binding_getter=None,
         emit_event=None,
         service_name: str | None = None,
@@ -42,6 +46,10 @@ class SubagentDiscoveryController:
                 runtime_packaging=getattr(discovery_candidate_support, "runtime_packaging", None),
                 error_factory=getattr(activation_host, "orchestrator_error_cls", RuntimeError),
             )
+        )
+        self.control_stage_recorder = control_stage_recorder or SubagentControlStageRecorder(
+            runtime_binding_getter=runtime_binding_getter,
+            emit_event=emit_event,
         )
         self.runtime_binding_getter = runtime_binding_getter
         self.emit_event = emit_event
@@ -67,10 +75,7 @@ class SubagentDiscoveryController:
     ) -> SubagentToolDiscoveryRequest:
         protocol_decision = self.discovery_decision_source.resolve_protocols(gap=gap)
         request = protocol_decision.request
-        self._record_stage_decision(
-            event_name="subagent_tool_discovery_protocol_decided",
-            payload=protocol_decision.event_payload(),
-        )
+        self._record_stage_decision(protocol_decision)
         return request
 
     def persist_runtime_request(
@@ -100,15 +105,9 @@ class SubagentDiscoveryController:
         )
         preview_resolution = preview_application.preview_resolution
         candidate_result = preview_resolution.candidate_result
-        self._record_stage_decision(
-            event_name="subagent_tool_discovery_candidate_decided",
-            payload=candidate_result.decision.event_payload(),
-        )
+        self._record_stage_decision(candidate_result.decision)
         approval_decision = preview_application.review_application.review_resolution.review_decision
-        self._record_stage_decision(
-            event_name="subagent_tool_discovery_review_decided",
-            payload=approval_decision.event_payload(),
-        )
+        self._record_stage_decision(approval_decision)
         if not preview_application.review_application.persisted:
             return ticket
         if preview_application.activation_application is not None:
@@ -139,74 +138,59 @@ class SubagentDiscoveryController:
         )
         activation_decision = activation_application.activation_resolution.activation_decision
         if activation_application.activation_outcome == "skipped":
-            self._record_stage_decision(
-                event_name="subagent_tool_discovery_activation_decided",
-                payload=activation_decision.event_payload(activation_outcome="skipped"),
+            self._record_activation_decision(
+                activation_decision,
+                activation_outcome="skipped",
             )
             return ticket
         if activation_application.activation_outcome == "failed":
-            self._record_stage_decision(
-                event_name="subagent_tool_discovery_activation_decided",
-                payload=activation_decision.event_payload(activation_outcome="failed"),
+            self._record_activation_decision(
+                activation_decision,
+                activation_outcome="failed",
             )
             return ticket
-        self._record_stage_decision(
-            event_name="subagent_tool_discovery_activation_decided",
-            payload=activation_decision.event_payload(activation_outcome="activated"),
+        self._record_activation_decision(
+            activation_decision,
+            activation_outcome="activated",
         )
         return ticket
 
     def _record_stage_decision(
         self,
-        *,
-        event_name: str,
-        payload: dict[str, Any],
+        decision,
     ) -> None:
-        binding = dict(self.runtime_binding_getter() or {}) if callable(self.runtime_binding_getter) else {}
-        context = binding.get("context")
-        support = binding.get("support")
-        request_id = str(binding.get("request_id") or "").strip()
-        intent = str(payload.get("intent") or "").strip()
+        payload = decision.event_payload()
         phase = str(payload.get("stage") or "").strip() or None
-        agent = str(binding.get("agent") or self.service_name).strip() or self.service_name
-        if context is None or support is None or not request_id or not intent:
+        agent = self.service_name
+        if self.control_stage_recorder is None:
             return
-        event_payload = {"event": event_name, **dict(payload), "agent": agent}
-        decision_rows = getattr(context, "subagent_discovery_stage_decisions", None)
-        if not isinstance(decision_rows, list):
-            try:
-                setattr(context, "subagent_discovery_stage_decisions", [])
-            except Exception:
-                decision_rows = None
-            else:
-                decision_rows = getattr(context, "subagent_discovery_stage_decisions", None)
-        if isinstance(decision_rows, list):
-            decision_rows.append(dict(event_payload))
-        dynamic_trace = getattr(context, "dynamic_trace", None)
-        if isinstance(dynamic_trace, list):
-            dynamic_trace.append(dict(event_payload))
-        message = (
-            f"{event_name} resolved discovery {payload.get('decision_stage')} "
-            f"for capability {payload.get('capability')}"
-        )
-        if callable(self.emit_event):
-            self.emit_event(
-                event_type=event_name,
-                message=message,
-                payload=dict(event_payload),
-                phase=phase,
-                agent=agent,
-            )
-            return
-        support.emit_event(
-            context,
-            request_id=request_id,
-            intent=intent,
-            event_type=event_name,
+        self.control_stage_recorder.record(
+            event_type=decision.event_type,
+            message=decision.message(),
+            payload=payload,
             phase=phase,
             agent=agent,
-            message=message,
-            payload=dict(event_payload),
+            extra_context_attrs=["subagent_discovery_stage_decisions"],
+        )
+
+    def _record_activation_decision(
+        self,
+        decision,
+        *,
+        activation_outcome: Literal["skipped", "failed", "activated"],
+    ) -> None:
+        payload = decision.event_payload(activation_outcome=activation_outcome)
+        phase = str(payload.get("stage") or "").strip() or None
+        agent = self.service_name
+        if self.control_stage_recorder is None:
+            return
+        self.control_stage_recorder.record(
+            event_type=decision.event_type,
+            message=decision.message(activation_outcome=activation_outcome),
+            payload=payload,
+            phase=phase,
+            agent=agent,
+            extra_context_attrs=["subagent_discovery_stage_decisions"],
         )
 
 

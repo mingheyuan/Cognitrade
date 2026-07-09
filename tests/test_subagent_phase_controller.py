@@ -224,6 +224,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
     def test_select_catalog_entry_records_capability_gap_when_missing(self) -> None:
         runtime_context = SimpleNamespace(
             subagent_control_stage_decisions=[],
+            runtime_control_stage_decisions=[],
             subagent_catalog_stage_decisions=[],
             subagent_capability_gaps=[],
             subagent_tool_discovery_requests=[],
@@ -267,10 +268,28 @@ class SubagentPhaseControllerTests(unittest.TestCase):
             self.assertEqual(exc_info.exception.gap.capability, "missing_capability")
             self.assertEqual(len(runtime_context.subagent_capability_gaps), 1)
             self.assertEqual(len(runtime_context.subagent_tool_discovery_requests), 1)
-            self.assertEqual(len(runtime_context.subagent_control_stage_decisions), 1)
+            self.assertEqual(len(runtime_context.subagent_control_stage_decisions), 4)
             self.assertEqual(
                 [row["decision_type"] for row in runtime_context.subagent_catalog_stage_decisions],
                 ["escalate_capability_gap"],
+            )
+            self.assertEqual(
+                [row["event"] for row in runtime_context.subagent_control_stage_decisions],
+                [
+                    "subagent_catalog_selection_decided",
+                    "subagent_tool_discovery_protocol_decided",
+                    "subagent_tool_discovery_candidate_decided",
+                    "subagent_tool_discovery_review_decided",
+                ],
+            )
+            self.assertEqual(
+                [row["event"] for row in runtime_context.runtime_control_stage_decisions],
+                [
+                    "subagent_catalog_selection_decided",
+                    "subagent_tool_discovery_protocol_decided",
+                    "subagent_tool_discovery_candidate_decided",
+                    "subagent_tool_discovery_review_decided",
+                ],
             )
             self.assertEqual(runtime_context.subagent_capability_gaps[0]["event"], "subagent_capability_gap_detected")
             self.assertEqual(
@@ -387,6 +406,7 @@ class SubagentPhaseControllerTests(unittest.TestCase):
         runtime_context = SimpleNamespace(
             subagent_capability_gaps=[],
             subagent_tool_discovery_requests=[],
+            subagent_control_stage_decisions=[],
             subagent_discovery_stage_decisions=[],
             subagent_discovery_shadow_suggestions=[],
             subagent_discovery_llm_decisions=[],

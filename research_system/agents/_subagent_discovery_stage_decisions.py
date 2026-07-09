@@ -24,9 +24,16 @@ class SubagentDiscoveryProtocolStageDecision:
     confidence: float | None = None
     notes: list[str] = field(default_factory=list)
 
+    event_type: Literal["subagent_tool_discovery_protocol_decided"] = "subagent_tool_discovery_protocol_decided"
+    control_domain: Literal["subagent"] = "subagent"
+    control_stage: Literal["protocol_selection"] = "protocol_selection"
+    decision_stage: Literal["protocol_selection"] = "protocol_selection"
+
     def event_payload(self) -> dict[str, object]:
         return {
-            "decision_stage": "protocol_selection",
+            "control_domain": self.control_domain,
+            "control_stage": self.control_stage,
+            "decision_stage": self.decision_stage,
             "intent": self.request.intent,
             "stage": self.request.stage,
             "capability": self.request.capability,
@@ -40,6 +47,9 @@ class SubagentDiscoveryProtocolStageDecision:
             "confidence": self.confidence,
             "notes": list(self.notes),
         }
+
+    def message(self) -> str:
+        return f"{self.event_type} resolved discovery protocol_selection for capability {self.request.capability}"
 
 
 @dataclass(frozen=True)
@@ -57,6 +67,11 @@ class SubagentDiscoveryCandidateStageDecision:
     confidence: float | None = None
     notes: list[str] = field(default_factory=list)
 
+    event_type: Literal["subagent_tool_discovery_candidate_decided"] = "subagent_tool_discovery_candidate_decided"
+    control_domain: Literal["subagent"] = "subagent"
+    control_stage: Literal["candidate_selection"] = "candidate_selection"
+    decision_stage: Literal["candidate_selection"] = "candidate_selection"
+
     @property
     def policy_source(self) -> str:
         if self.recommendation is None:
@@ -65,7 +80,9 @@ class SubagentDiscoveryCandidateStageDecision:
 
     def event_payload(self) -> dict[str, object]:
         return {
-            "decision_stage": "candidate_selection",
+            "control_domain": self.control_domain,
+            "control_stage": self.control_stage,
+            "decision_stage": self.decision_stage,
             "ticket_id": self.ticket_id,
             "intent": self.intent,
             "stage": self.stage,
@@ -98,6 +115,9 @@ class SubagentDiscoveryCandidateStageDecision:
             "confidence": self.confidence,
             "notes": list(self.notes),
         }
+
+    def message(self) -> str:
+        return f"{self.event_type} resolved discovery candidate_selection for capability {self.capability}"
 
 
 @dataclass(frozen=True)
@@ -132,9 +152,16 @@ class SubagentDiscoveryReviewStageDecision:
     reason: str = "pending_manual_review_discovery_preview"
     notes: list[str] = field(default_factory=list)
 
+    event_type: Literal["subagent_tool_discovery_review_decided"] = "subagent_tool_discovery_review_decided"
+    control_domain: Literal["subagent"] = "subagent"
+    control_stage: Literal["approval"] = "approval"
+    decision_stage: Literal["approval"] = "approval"
+
     def event_payload(self) -> dict[str, object]:
         return {
-            "decision_stage": "approval",
+            "control_domain": self.control_domain,
+            "control_stage": self.control_stage,
+            "decision_stage": self.decision_stage,
             "ticket_id": self.ticket_id,
             "intent": self.intent,
             "stage": self.stage,
@@ -149,6 +176,9 @@ class SubagentDiscoveryReviewStageDecision:
             "reason": self.reason,
             "notes": list(self.notes),
         }
+
+    def message(self) -> str:
+        return f"{self.event_type} resolved discovery approval for capability {self.capability}"
 
 
 @dataclass(frozen=True)
@@ -167,9 +197,16 @@ class SubagentDiscoveryActivationStageDecision:
     reason: str = "discovery_auto_activation_disabled"
     notes: list[str] = field(default_factory=list)
 
+    event_type: Literal["subagent_tool_discovery_activation_decided"] = "subagent_tool_discovery_activation_decided"
+    control_domain: Literal["subagent"] = "subagent"
+    control_stage: Literal["activation"] = "activation"
+    decision_stage: Literal["activation"] = "activation"
+
     def event_payload(self, *, activation_outcome: Literal["skipped", "failed", "activated"]) -> dict[str, object]:
         return {
-            "decision_stage": "activation",
+            "control_domain": self.control_domain,
+            "control_stage": self.control_stage,
+            "decision_stage": self.decision_stage,
             "ticket_id": self.ticket_id,
             "intent": self.intent,
             "stage": self.stage,
@@ -184,6 +221,12 @@ class SubagentDiscoveryActivationStageDecision:
             "reason": self.reason,
             "notes": list(self.notes),
         }
+
+    def message(self, *, activation_outcome: Literal["skipped", "failed", "activated"]) -> str:
+        return (
+            f"{self.event_type} resolved discovery activation={activation_outcome} "
+            f"for capability {self.capability}"
+        )
 
 
 __all__ = [

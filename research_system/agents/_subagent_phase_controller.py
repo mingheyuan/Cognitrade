@@ -176,6 +176,7 @@ class SubagentPhaseController:
             discovery_decision_source=self.discovery_decision_source,
             activation_host=self,
             discovery_policy_controller=self.discovery_policy_controller,
+            control_stage_recorder=self.subagent_control_stage_recorder,
             runtime_binding_getter=runtime_binding_getter,
             emit_event=emit_event,
             service_name=service_name,
