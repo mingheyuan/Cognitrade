@@ -830,6 +830,11 @@ class CliOutputTests(unittest.TestCase):
             "control_state": replay_payload["control_state"],
             "runtime_control_stage_count": 1,
             "latest_runtime_control_stage_decision": replay_payload["runtime_control_stage_decisions"][0],
+            "recovery_guidance": {
+                "status": "resume_after_action_replan",
+                "reason": "latest control stage escalated a capability gap to action-level replan",
+                "suggested_next_step": "resume from checkpoint after reviewing the capability-gap escalation boundary",
+            },
         }
 
         replay_output = self._capture_payload_text(replay_payload)
@@ -840,6 +845,7 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("resumable: yes", resume_output)
         self.assertIn("resume_from:", resume_output)
         self.assertIn("latest_runtime_control_stage_decision:", resume_output)
+        self.assertIn("recovery_guidance:", resume_output)
         self.assertIn("\"current_phase\": \"review\"", resume_output)
 
     def test_print_events_payload_renders_event_rows_and_populates_session_events_panel(self) -> None:

@@ -100,6 +100,8 @@ class OrchestratorRunAdminSupportTests(unittest.TestCase):
                 }
             ],
         )
+        self.assertEqual(payload["recovery_guidance"]["status"], "resume_after_action_replan")
+        self.assertIn("capability gap", payload["recovery_guidance"]["reason"])
 
 
 if __name__ == "__main__":

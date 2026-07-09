@@ -62,6 +62,11 @@ class OrchestratorRunAdminSupport:
             if control_state is not None
             else []
         )
+        latest_runtime_control_stage_decision = (
+            dict(runtime_control_stage_decisions[-1])
+            if runtime_control_stage_decisions and isinstance(runtime_control_stage_decisions[-1], dict)
+            else None
+        )
         status = run_state_payload.get("status")
         resumable = status in {"failed", "timed_out", "cancelled"} and checkpoint is not None
         return {
@@ -72,10 +77,12 @@ class OrchestratorRunAdminSupport:
             "control_state": control_payload,
             "runtime_control_stage_decisions": [dict(row) for row in runtime_control_stage_decisions],
             "runtime_control_stage_count": len(runtime_control_stage_decisions),
-            "latest_runtime_control_stage_decision": (
-                dict(runtime_control_stage_decisions[-1])
-                if runtime_control_stage_decisions and isinstance(runtime_control_stage_decisions[-1], dict)
-                else None
+            "latest_runtime_control_stage_decision": latest_runtime_control_stage_decision,
+            "recovery_guidance": self._build_recovery_guidance(
+                status=status,
+                checkpoint=checkpoint,
+                control_payload=control_payload,
+                latest_runtime_control_stage_decision=latest_runtime_control_stage_decision,
             ),
             "resume_from": {
                 "current_phase": checkpoint.current_phase if checkpoint else None,
@@ -121,3 +128,66 @@ class OrchestratorRunAdminSupport:
         if active_run:
             write_json(paths.summary, payload)
         return payload
+
+    @staticmethod
+    def _build_recovery_guidance(
+        *,
+        status,
+        checkpoint,
+        control_payload: dict | None,
+        latest_runtime_control_stage_decision: dict | None,
+    ) -> dict:
+        guidance = {
+            "status": "resume_unavailable" if checkpoint is None else "resume_ready",
+            "reason": "checkpoint_missing" if checkpoint is None else "checkpoint_available",
+            "suggested_next_step": (
+                "resume is unavailable because no checkpoint was persisted"
+                if checkpoint is None
+                else "resume from the persisted checkpoint and inspect the latest control transition"
+            ),
+        }
+        if not isinstance(latest_runtime_control_stage_decision, dict):
+            return guidance
+        transition_type = str(
+            latest_runtime_control_stage_decision.get("transition_type")
+            or latest_runtime_control_stage_decision.get("decision_type")
+            or ""
+        ).strip()
+        transition_source = str(
+            latest_runtime_control_stage_decision.get("transition_source")
+            or latest_runtime_control_stage_decision.get("resolution_source")
+            or ""
+        ).strip()
+        if transition_source == "capability_gap_escalation" and transition_type == "request_action_replan":
+            guidance.update(
+                {
+                    "status": "resume_after_action_replan",
+                    "reason": "latest control stage escalated a capability gap to action-level replan",
+                    "suggested_next_step": "resume from checkpoint after reviewing the capability-gap escalation boundary",
+                }
+            )
+        elif transition_source == "catalog_selection" and transition_type == "unresolved_capability_gap":
+            guidance.update(
+                {
+                    "status": "resume_after_discovery_intervention",
+                    "reason": "latest control stage left a subagent capability gap unresolved",
+                    "suggested_next_step": "review discovery candidates or activate a bridge before resuming",
+                }
+            )
+        elif transition_source == "phase_patch_cycle" and transition_type == "apply_local_replan":
+            guidance.update(
+                {
+                    "status": "resume_with_local_replan",
+                    "reason": "latest control stage already selected a local subagent replan",
+                    "suggested_next_step": "resume from checkpoint and let the phase-local replan continue",
+                }
+            )
+        elif str(status or "").strip() == "cancelled" and bool((control_payload or {}).get("cancellation_requested")):
+            guidance.update(
+                {
+                    "status": "resume_after_manual_cancel",
+                    "reason": "run was cancelled manually after a persisted checkpoint",
+                    "suggested_next_step": "resume from checkpoint if the cancellation was only used as an inspection stop",
+                }
+            )
+        return guidance

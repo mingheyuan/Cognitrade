@@ -182,6 +182,12 @@ def print_resume_payload(payload: dict, *, emit_text, output_writer=None) -> boo
                 + json.dumps(latest_control_stage, ensure_ascii=True, sort_keys=True)
             ),
         )
+    recovery_guidance = payload.get("recovery_guidance")
+    if isinstance(recovery_guidance, dict):
+        emit_text(
+            output_writer,
+            meta_update(f"recovery_guidance: {json.dumps(recovery_guidance, ensure_ascii=True, sort_keys=True)}"),
+        )
     control_state = payload.get("control_state")
     if isinstance(control_state, dict):
         emit_text(
