@@ -172,7 +172,35 @@ class SubagentPhaseControllerTests(unittest.TestCase):
         )
 
     def test_select_catalog_entry_prefers_explicit_type(self) -> None:
-        selected = self.controller.select_catalog_entry(
+        runtime_context = SimpleNamespace(
+            subagent_catalog_stage_decisions=[],
+            dynamic_trace=[],
+        )
+        support = SimpleNamespace(emit_event=lambda *_args, **_kwargs: None)
+        controller = SubagentPhaseController(
+            registry=self.registry,
+            invoke_subagent=lambda invocation: (
+                {"ok": True},
+                SubagentExecutionRecord(
+                    subagent_type=invocation.subagent_type,
+                    invocation_id=invocation.invocation_id,
+                    status="completed",
+                    objective=invocation.objective,
+                    inputs=invocation.inputs,
+                    output_keys=["ok"],
+                ),
+            ),
+            emit_event=None,
+            cache_context_builder=lambda **_: None,
+            start_from_node_id_builder=lambda **_: None,
+            runtime_binding_getter=lambda: {
+                "context": runtime_context,
+                "support": support,
+                "request_id": "req-direct-select",
+                "intent": "review_thesis",
+            },
+        )
+        selected = controller.select_catalog_entry(
             stage="review",
             intent="review_thesis",
             capability="review_strategy",
@@ -180,9 +208,19 @@ class SubagentPhaseControllerTests(unittest.TestCase):
         )
 
         self.assertEqual(selected.subagent_type, "preferred_review")
+        self.assertEqual(len(runtime_context.subagent_catalog_stage_decisions), 1)
+        self.assertEqual(
+            runtime_context.subagent_catalog_stage_decisions[0]["decision_type"],
+            "selected",
+        )
+        self.assertEqual(
+            runtime_context.subagent_catalog_stage_decisions[0]["selection_source"],
+            "catalog",
+        )
 
     def test_select_catalog_entry_records_capability_gap_when_missing(self) -> None:
         runtime_context = SimpleNamespace(
+            subagent_catalog_stage_decisions=[],
             subagent_capability_gaps=[],
             subagent_tool_discovery_requests=[],
             dynamic_trace=[],
@@ -225,12 +263,17 @@ class SubagentPhaseControllerTests(unittest.TestCase):
             self.assertEqual(exc_info.exception.gap.capability, "missing_capability")
             self.assertEqual(len(runtime_context.subagent_capability_gaps), 1)
             self.assertEqual(len(runtime_context.subagent_tool_discovery_requests), 1)
+            self.assertEqual(
+                [row["decision_type"] for row in runtime_context.subagent_catalog_stage_decisions],
+                ["escalate_capability_gap"],
+            )
             self.assertEqual(runtime_context.subagent_capability_gaps[0]["event"], "subagent_capability_gap_detected")
             self.assertEqual(
                 runtime_context.subagent_tool_discovery_requests[0]["event"],
                 "subagent_tool_discovery_requested",
             )
             dynamic_events = [row["event"] for row in runtime_context.dynamic_trace]
+            self.assertIn("subagent_catalog_selection_decided", dynamic_events)
             self.assertIn("subagent_capability_gap_detected", dynamic_events)
             self.assertIn("subagent_tool_discovery_requested", dynamic_events)
             self.assertIn("subagent_tool_discovery_protocol_decided", dynamic_events)

@@ -308,6 +308,46 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
         finally:
             temp_dir.cleanup()
 
+    def test_debug_payload_includes_subagent_catalog_stage_decisions(self) -> None:
+        temp_dir, _settings, context, request = _build_runtime()
+        try:
+            context.subagent_catalog_stage_decisions.append(
+                {
+                    "event": "subagent_catalog_selection_decided",
+                    "decision_stage": "catalog_selection",
+                    "stage": "collect",
+                    "capability": "market_signal_extension",
+                    "decision_type": "escalate_capability_gap",
+                    "selection_source": None,
+                    "policy_source": "rule",
+                }
+            )
+
+            payload = OrchestratorDebugSupport().build_debug_payload(
+                context=context,
+                request=request,
+                plan=ActionPlan(intent="stock_check", actions=[]),
+                plan_intent="stock_check",
+                retrieval_summary=None,
+            )
+
+            self.assertEqual(
+                payload["subagent_catalog_stage_decisions"],
+                [
+                    {
+                        "event": "subagent_catalog_selection_decided",
+                        "decision_stage": "catalog_selection",
+                        "stage": "collect",
+                        "capability": "market_signal_extension",
+                        "decision_type": "escalate_capability_gap",
+                        "selection_source": None,
+                        "policy_source": "rule",
+                    }
+                ],
+            )
+        finally:
+            temp_dir.cleanup()
+
     def test_debug_payload_includes_subagent_discovery_stage_decisions(self) -> None:
         temp_dir, _settings, context, request = _build_runtime()
         try:

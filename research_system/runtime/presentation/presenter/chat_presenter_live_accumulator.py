@@ -37,6 +37,7 @@ class ChatPresenterLiveAccumulator:
         elif (
             event.event_type == "dynamic_action_inserted"
             or event.event_type.startswith("subagent_dag_")
+            or event.event_type.startswith("subagent_catalog_")
             or event.event_type.startswith("subagent_capability_")
             or event.event_type.startswith("subagent_tool_")
             or event.event_type.startswith("subagent_discovery_shadow_")

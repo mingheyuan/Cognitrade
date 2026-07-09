@@ -27,63 +27,6 @@ class _DiscoveryControllerStub:
 
 
 class SubagentCapabilityGapControllerTests(unittest.TestCase):
-    def test_returns_existing_catalog_entry_without_discovery(self) -> None:
-        preferred_entry = SubagentCatalogEntry(
-            subagent_type="preferred_review",
-            capabilities=["review_strategy"],
-            stage="review",
-            suitable_intents=["review_thesis"],
-        )
-        fallback_entry = SubagentCatalogEntry(
-            subagent_type="cheap_review",
-            capabilities=["review_strategy"],
-            stage="review",
-            suitable_intents=["review_thesis"],
-        )
-        discovery_controller = _DiscoveryControllerStub(
-            lambda gap, store: SubagentDiscoveryResolution(
-                tool_discovery_request=SubagentToolDiscoveryRequest(
-                    intent=gap.intent,
-                    stage=gap.stage,
-                    capability=gap.capability,
-                    search_query="unused",
-                    reason="unused",
-                ),
-                ticket=None,
-            )
-        )
-        controller = SubagentCapabilityGapController(
-            candidates_resolver=lambda **_: [fallback_entry, preferred_entry],
-            entry_selector=lambda candidates, preferred_subagent_type=None: next(
-                (
-                    candidate
-                    for candidate in candidates
-                    if candidate.subagent_type == preferred_subagent_type
-                ),
-                candidates[0],
-            ),
-            capability_gap_builder=lambda **kwargs: SubagentCapabilityGap(
-                intent=kwargs["intent"],
-                stage=kwargs["stage"],
-                capability=kwargs["capability"],
-                preferred_subagent_type=kwargs["preferred_subagent_type"],
-                requires_llm=kwargs["requires_llm"],
-                reason="missing capability",
-            ),
-            discovery_controller=discovery_controller,
-            error_factory=SubagentCapabilityGapError,
-        )
-
-        selected = controller.select_catalog_entry(
-            stage="review",
-            intent="review_thesis",
-            capability="review_strategy",
-            preferred_subagent_type="preferred_review",
-        )
-
-        self.assertEqual(selected.subagent_type, "preferred_review")
-        self.assertEqual(discovery_controller.calls, [])
-
     def test_resolves_missing_capability_through_discovery_and_catalog_retry(self) -> None:
         discovered_entry = SubagentCatalogEntry(
             subagent_type="candidate_collect_market_snapshot_skill",
@@ -139,15 +82,14 @@ class SubagentCapabilityGapControllerTests(unittest.TestCase):
             error_factory=SubagentCapabilityGapError,
         )
 
-        resolution = controller.resolve_catalog_entry(
+        resolution = controller.resolve_capability_gap(
             stage="collect",
             intent="stock_check",
             capability="market_signal_extension",
         )
 
-        self.assertIsNotNone(resolution.capability_gap_resolution)
         self.assertEqual(
-            resolution.capability_gap_resolution.tool_discovery_request.preferred_protocols,
+            resolution.tool_discovery_request.preferred_protocols,
             ["skill", "mcp"],
         )
         self.assertEqual(resolution.selected_entry.subagent_type, discovered_entry.subagent_type)
@@ -188,16 +130,17 @@ class SubagentCapabilityGapControllerTests(unittest.TestCase):
             error_factory=SubagentCapabilityGapError,
         )
 
-        with self.assertRaises(SubagentCapabilityGapError) as exc_info:
-            controller.select_catalog_entry(
-                stage="review",
-                intent="review_thesis",
-                capability="missing_capability",
-            )
+        resolution = controller.resolve_capability_gap(
+            stage="review",
+            intent="review_thesis",
+            capability="missing_capability",
+        )
+        error = controller.build_unresolved_gap_error(resolution)
 
-        self.assertEqual(exc_info.exception.gap.capability, "missing_capability")
+        self.assertIsInstance(error, SubagentCapabilityGapError)
+        self.assertEqual(error.gap.capability, "missing_capability")
         self.assertEqual(
-            exc_info.exception.tool_discovery_request.search_query,
+            error.tool_discovery_request.search_query,
             "review_thesis review missing_capability",
         )
 

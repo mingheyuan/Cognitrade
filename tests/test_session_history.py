@@ -378,6 +378,51 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["dynamic_trace"][1]["event"], "subagent_tool_discovery_requested")
         self.assertEqual(payload["dynamic_trace"][1]["search_query"], "review_thesis review peer_review")
 
+    def test_trace_rebuilds_subagent_catalog_rows_from_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_root = Path(temp_dir) / "01TRACECATALOG"
+            run_root.mkdir(parents=True, exist_ok=True)
+
+            write_json(run_root / "request.json", {"intent": "stock_check", "user_query": "check this stock"})
+            write_json(run_root / "result.json", {"report": {"summary": "done"}})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            append_jsonl(
+                run_root / "events.jsonl",
+                {
+                    "event_id": "evt-catalog-1",
+                    "request_id": "req-catalog",
+                    "run_id": "01TRACECATALOG",
+                    "intent": "stock_check",
+                    "event_type": "subagent_catalog_selection_decided",
+                    "phase": "collect",
+                    "agent": "collector",
+                    "message": "subagent_catalog_selection_decided resolved escalate_capability_gap for capability market_signal_extension",
+                    "payload": {
+                        "decision_stage": "catalog_selection",
+                        "stage": "collect",
+                        "intent": "stock_check",
+                        "capability": "market_signal_extension",
+                        "decision_type": "escalate_capability_gap",
+                        "selected_subagent_type": None,
+                        "selection_source": None,
+                    },
+                    "artifacts": [],
+                    "created_at": "2026-07-09T15:30:00+00:00",
+                },
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(len(payload["dynamic_trace"]), 1)
+        self.assertEqual(
+            payload["dynamic_trace"][0]["event"],
+            "subagent_catalog_selection_decided",
+        )
+        self.assertEqual(
+            payload["dynamic_trace"][0]["decision_type"],
+            "escalate_capability_gap",
+        )
+
     def test_trace_rebuilds_subagent_discovery_shadow_rows_from_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             run_root = Path(temp_dir) / "01TRACEDISCOVERYSHADOW"

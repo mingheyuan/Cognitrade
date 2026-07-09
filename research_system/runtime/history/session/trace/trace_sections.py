@@ -50,6 +50,7 @@ class SessionHistoryTraceSections:
             if (
                 event_type != "dynamic_action_inserted"
                 and not event_type.startswith("subagent_dag_")
+                and not event_type.startswith("subagent_catalog_")
                 and not event_type.startswith("subagent_capability_")
                 and not event_type.startswith("subagent_tool_")
                 and not event_type.startswith("subagent_discovery_shadow_")
