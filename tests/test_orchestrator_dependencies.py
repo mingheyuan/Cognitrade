@@ -14,6 +14,7 @@ from research_system.runtime.execution import (
     OrchestratorExecutionTraceSupport,
     OrchestratorPlanExecutor,
     OrchestratorRuntimeActionControlService,
+    OrchestratorRuntimeBindingController,
     OrchestratorRuntimeControlPlaneController,
     OrchestratorRuntimeServiceBindingController,
 )
@@ -182,6 +183,10 @@ class OrchestratorDependenciesTests(unittest.TestCase):
                 self.assertIs(orchestrator.action_runner.handlers.support, orchestrator.execution_support)
                 self.assertIsInstance(orchestrator.runtime_control, OrchestratorRuntimeControlPlaneController)
                 self.assertIs(orchestrator.runtime_control.host, orchestrator)
+                self.assertIsInstance(
+                    orchestrator.runtime_control.runtime_binding_controller,
+                    OrchestratorRuntimeBindingController,
+                )
                 self.assertIsInstance(
                     orchestrator.runtime_control.action_runtime_control,
                     OrchestratorRuntimeActionControlService,

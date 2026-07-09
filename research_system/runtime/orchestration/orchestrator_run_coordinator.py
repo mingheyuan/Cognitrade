@@ -62,8 +62,12 @@ class OrchestratorRunCoordinator:
                 intent=intent,
             )
             runtime_control = getattr(self.host, "runtime_control", None) or self.host.supervisor
-            bind_runtime = getattr(runtime_control, "bind_runtime", None)
-            clear_runtime = getattr(runtime_control, "clear_runtime", None)
+            runtime_binding = (
+                getattr(runtime_control, "runtime_binding_controller", None)
+                or runtime_control
+            )
+            bind_runtime = getattr(runtime_binding, "bind_runtime", None)
+            clear_runtime = getattr(runtime_binding, "clear_runtime", None)
             if callable(bind_runtime):
                 bind_runtime(
                     context=context,
@@ -176,8 +180,12 @@ class OrchestratorRunCoordinator:
                 completed_nodes=completed_nodes,
             )
             runtime_control = getattr(self.host, "runtime_control", None) or self.host.supervisor
-            bind_runtime = getattr(runtime_control, "bind_runtime", None)
-            clear_runtime = getattr(runtime_control, "clear_runtime", None)
+            runtime_binding = (
+                getattr(runtime_control, "runtime_binding_controller", None)
+                or runtime_control
+            )
+            bind_runtime = getattr(runtime_binding, "bind_runtime", None)
+            clear_runtime = getattr(runtime_binding, "clear_runtime", None)
             if callable(bind_runtime):
                 bind_runtime(
                     context=context,

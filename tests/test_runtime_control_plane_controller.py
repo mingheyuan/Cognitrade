@@ -9,6 +9,9 @@ from research_system.runtime.execution.core.runtime_control_plane_controller imp
 from research_system.runtime.execution.core.runtime_action_control_service import (
     OrchestratorRuntimeActionControlService,
 )
+from research_system.runtime.execution.core.runtime_binding_controller import (
+    OrchestratorRuntimeBindingController,
+)
 from research_system.runtime.execution.core.runtime_service_binding_controller import (
     OrchestratorRuntimeServiceBindingController,
 )
@@ -139,6 +142,10 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
             supervisor=_SupervisorStub(),
         )
 
+        self.assertIsInstance(
+            controller.runtime_binding_controller,
+            OrchestratorRuntimeBindingController,
+        )
         self.assertIsInstance(
             controller.action_runtime_control,
             OrchestratorRuntimeActionControlService,

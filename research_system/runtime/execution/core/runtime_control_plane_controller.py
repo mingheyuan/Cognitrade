@@ -8,6 +8,9 @@ from research_system.runtime.execution.core.runtime_control_protocol_controller 
 from research_system.runtime.execution.core.runtime_action_control_service import (
     OrchestratorRuntimeActionControlService,
 )
+from research_system.runtime.execution.core.runtime_binding_controller import (
+    OrchestratorRuntimeBindingController,
+)
 from research_system.runtime.execution.core.runtime_protocol_controller import (
     OrchestratorRuntimeProtocolController,
 )
@@ -38,6 +41,9 @@ class OrchestratorRuntimeControlPlaneController:
         self.subagent_controller = self.protocol_controller.subagent_controller
         self.subagent_transition_controller = self.protocol_controller.subagent_transition_controller
         self.subagent_protocol_controller = self.protocol_controller.subagent_protocol_controller
+        self.runtime_binding_controller = OrchestratorRuntimeBindingController(
+            supervisor=supervisor,
+        )
         self.action_runtime_control = OrchestratorRuntimeActionControlService(
             controller=self,
         )
@@ -68,19 +74,15 @@ class OrchestratorRuntimeControlPlaneController:
         request_id: str,
         intent: str,
     ) -> None:
-        bind_runtime = getattr(self.supervisor, "bind_runtime", None)
-        if callable(bind_runtime):
-            bind_runtime(
-                context=context,
-                support=support,
-                request_id=request_id,
-                intent=intent,
-            )
+        self.runtime_binding_controller.bind_runtime(
+            context=context,
+            support=support,
+            request_id=request_id,
+            intent=intent,
+        )
 
     def clear_runtime(self) -> None:
-        clear_runtime = getattr(self.supervisor, "clear_runtime", None)
-        if callable(clear_runtime):
-            clear_runtime()
+        self.runtime_binding_controller.clear_runtime()
 
     def bind_agent_service_runtime(
         self,
