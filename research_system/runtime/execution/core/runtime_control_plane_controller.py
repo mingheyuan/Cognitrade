@@ -12,6 +12,9 @@ from research_system.runtime.execution.core.runtime_control_protocol_controller 
 from research_system.runtime.execution.core.runtime_subagent_control_controller import (
     OrchestratorRuntimeSubagentControlController,
 )
+from research_system.runtime.execution.core.runtime_subagent_control_protocol_controller import (
+    OrchestratorRuntimeSubagentControlProtocolController,
+)
 from research_system.schemas.planning import ActionPlan, ActionSpec
 
 
@@ -27,6 +30,10 @@ class OrchestratorRuntimeControlPlaneController:
         self.transition_controller: OrchestratorRuntimeControlController | None = None
         self.protocol_controller: OrchestratorRuntimeControlProtocolController | None = None
         self.subagent_controller = OrchestratorRuntimeSubagentControlController(host)
+        self.subagent_protocol_controller = OrchestratorRuntimeSubagentControlProtocolController(
+            host,
+            subagent_controller=self.subagent_controller,
+        )
 
     def register_execution_callbacks(
         self,
@@ -142,13 +149,13 @@ class OrchestratorRuntimeControlPlaneController:
         return self.protocol_controller.handle_subagent_escalation(**kwargs)
 
     def resolve_subagent_catalog_entry(self, **kwargs):
-        return self.subagent_controller.resolve_catalog_entry(**kwargs)
+        return self.subagent_protocol_controller.resolve_catalog_entry(**kwargs)
 
     def select_subagent_catalog_entry(self, **kwargs):
-        return self.subagent_controller.select_catalog_entry(**kwargs)
+        return self.subagent_protocol_controller.select_catalog_entry(**kwargs)
 
     def execute_subagent_phase_patch_cycle(self, **kwargs):
-        return self.subagent_controller.execute_patch_cycle(**kwargs)
+        return self.subagent_protocol_controller.execute_patch_cycle(**kwargs)
 
 
 __all__ = ["OrchestratorRuntimeControlPlaneController"]

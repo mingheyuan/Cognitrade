@@ -208,7 +208,7 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
         )
 
         self.assertEqual(resolved.selected_entry.subagent_type, "cheap_review")
-        self.assertEqual(len(context.runtime_control_stage_decisions), 1)
+        self.assertEqual(len(context.runtime_control_stage_decisions), 2)
         self.assertEqual(
             context.runtime_control_stage_decisions[0]["event"],
             "runtime_control_subagent_resolved",
@@ -221,7 +221,20 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
             context.runtime_control_stage_decisions[0]["selected_subagent_type"],
             "cheap_review",
         )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[1]["event"],
+            "runtime_control_subagent_protocol_resolved",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[1]["resolution_source"],
+            "catalog_selection",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[1]["selected_subagent_type"],
+            "cheap_review",
+        )
         self.assertEqual(host.events[0]["event_type"], "runtime_control_subagent_resolved")
+        self.assertEqual(host.events[1]["event_type"], "runtime_control_subagent_protocol_resolved")
 
     def test_execute_subagent_phase_patch_cycle_records_runtime_control_stage(self) -> None:
         host = SimpleNamespace(events=[])
@@ -273,7 +286,7 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
         )
 
         self.assertIs(resolved, resolution)
-        self.assertEqual(len(context.runtime_control_stage_decisions), 1)
+        self.assertEqual(len(context.runtime_control_stage_decisions), 2)
         self.assertEqual(
             context.runtime_control_stage_decisions[0]["event"],
             "runtime_control_subagent_phase_resolved",
@@ -286,7 +299,20 @@ class RuntimeControlPlaneControllerTests(unittest.TestCase):
             context.runtime_control_stage_decisions[0]["final_plan_variant"],
             "current",
         )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[1]["event"],
+            "runtime_control_subagent_protocol_resolved",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[1]["resolution_source"],
+            "phase_patch_cycle",
+        )
+        self.assertEqual(
+            context.runtime_control_stage_decisions[1]["final_plan_variant"],
+            "current",
+        )
         self.assertEqual(host.events[0]["event_type"], "runtime_control_subagent_phase_resolved")
+        self.assertEqual(host.events[1]["event_type"], "runtime_control_subagent_protocol_resolved")
 
     def test_resolve_before_registering_execution_callbacks_raises(self) -> None:
         controller = OrchestratorRuntimeControlPlaneController(
