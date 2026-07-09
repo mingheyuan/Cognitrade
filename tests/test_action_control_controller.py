@@ -90,6 +90,8 @@ class ActionControlControllerTests(unittest.TestCase):
         self.assertEqual(len(llm_policy_source.calls), 1)
         self.assertEqual(len(recorder.calls), 1)
         self.assertEqual(recorder.calls[0]["event_type"], "action_phase_decided")
+        self.assertEqual(recorder.calls[0]["payload"]["control_domain"], "action")
+        self.assertEqual(recorder.calls[0]["payload"]["control_stage"], "action_phase")
         self.assertEqual(recorder.calls[0]["payload"]["rule_action_node_id"], "retrieve")
         self.assertEqual(recorder.calls[0]["payload"]["final_action_node_id"], "review")
         self.assertTrue(recorder.calls[0]["payload"]["override_rule_action"])

@@ -50,6 +50,12 @@ from research_system.runtime.orchestration._subagent_discovery_activation_policy
 from research_system.runtime.orchestration._runtime_control_stage_recorder import (
     RuntimeControlStageRecorder,
 )
+from research_system.runtime.orchestration._runtime_control_stage_decisions import (
+    SubagentCapabilityGapEscalationControlStageDecision,
+)
+from research_system.runtime.orchestration._subagent_control_stage_recorder import (
+    SubagentControlStageRecorder,
+)
 from research_system.runtime.orchestration.subagent_discovery_candidate_sources import (
     SubagentDiscoveryCandidateSupport,
 )
@@ -106,6 +112,11 @@ class SubagentPhaseController:
         self.control_stage_recorder = RuntimeControlStageRecorder(
             runtime_binding_getter=runtime_binding_getter,
             emit_event=emit_event,
+        )
+        self.subagent_control_stage_recorder = SubagentControlStageRecorder(
+            runtime_binding_getter=runtime_binding_getter,
+            emit_event=emit_event,
+            runtime_control_stage_recorder=self.control_stage_recorder,
         )
         self.shadow_policy = SubagentPhaseLLMShadowPolicy(
             llm_provider=llm_provider,
@@ -187,9 +198,7 @@ class SubagentPhaseController:
             candidates_resolver=self._catalog_candidates,
             entry_selector=self._choose_catalog_entry,
             capability_gap_controller=self.capability_gap_controller,
-            control_stage_recorder=self.control_stage_recorder,
-            runtime_binding_getter=runtime_binding_getter,
-            emit_event=emit_event,
+            control_stage_recorder=self.subagent_control_stage_recorder,
             service_name=service_name,
         )
         self.phase_execution_controller = SubagentPhaseExecutionController(
@@ -198,7 +207,7 @@ class SubagentPhaseController:
             llm_policy_source=self.llm_policy_source,
             patch_requests_replan=self._patch_requests_replan,
             resolve_variant_id=self._resolve_variant_id,
-            control_stage_recorder=self.control_stage_recorder,
+            control_stage_recorder=self.subagent_control_stage_recorder,
             runtime_binding_getter=runtime_binding_getter,
             emit_event=emit_event,
             service_name=service_name,
@@ -592,74 +601,31 @@ class SubagentPhaseController:
         context = binding.get("context")
         support = binding.get("support")
         request_id = str(binding.get("request_id") or "").strip()
-        intent = str(binding.get("intent") or gap.intent or "").strip()
         phase = str(binding.get("phase") or gap.stage or "").strip() or None
         agent = str(binding.get("agent") or "subagent_control").strip() or "subagent_control"
-        if context is None or support is None or not request_id or not intent:
+        if context is None or support is None or not request_id:
             return
-        payload = {
-            "event": "subagent_capability_gap_escalated",
-            "control_stage": "capability_gap_escalation",
-            "intent": gap.intent,
-            "stage": gap.stage,
-            "capability": gap.capability,
-            "preferred_subagent_type": gap.preferred_subagent_type,
-            "requires_llm": gap.requires_llm,
-            "decision_type": "request_action_replan"
+        stage_decision = SubagentCapabilityGapEscalationControlStageDecision(
+            intent=gap.intent,
+            stage=gap.stage,
+            capability=gap.capability,
+            preferred_subagent_type=gap.preferred_subagent_type,
+            requires_llm=gap.requires_llm,
+            decision_type="request_action_replan"
             if escalation_decision.strategy == "action_replan"
             else "continue_discovery",
-            "escalation_strategy": escalation_decision.strategy,
-            "policy_source": escalation_decision.policy_source,
-            "rule_id": escalation_decision.rule_id,
-            "reason": escalation_decision.reason,
-            "notes": list(escalation_decision.notes or ()),
-            "agent": agent,
-        }
-        control_rows = getattr(context, "subagent_control_stage_decisions", None)
-        if not isinstance(control_rows, list):
-            try:
-                setattr(context, "subagent_control_stage_decisions", [])
-            except Exception:
-                control_rows = None
-            else:
-                control_rows = getattr(context, "subagent_control_stage_decisions", None)
-        if isinstance(control_rows, list):
-            control_rows.append(dict(payload))
-        message = (
-            "subagent capability gap escalated to action replan"
-            if escalation_decision.strategy == "action_replan"
-            else "subagent capability gap continued through discovery"
+            escalation_strategy=escalation_decision.strategy,
+            policy_source=escalation_decision.policy_source,
+            rule_id=escalation_decision.rule_id,
+            reason=escalation_decision.reason,
+            notes=list(escalation_decision.notes or ()),
         )
-        if self.control_stage_recorder is not None:
-            self.control_stage_recorder.record(
-                event_type="subagent_capability_gap_escalated",
-                message=message,
-                payload=dict(payload),
-                phase=phase,
-                agent=agent,
-            )
-            return
-        dynamic_trace = getattr(context, "dynamic_trace", None)
-        if isinstance(dynamic_trace, list):
-            dynamic_trace.append(dict(payload))
-        if callable(self.emit_event):
-            self.emit_event(
-                event_type="subagent_capability_gap_escalated",
-                message=message,
-                payload=dict(payload),
-                phase=phase,
-                agent=agent,
-            )
-            return
-        support.emit_event(
-            context,
-            request_id=request_id,
-            intent=intent,
-            event_type="subagent_capability_gap_escalated",
+        self.subagent_control_stage_recorder.record(
+            event_type=stage_decision.event_type,
+            message=stage_decision.message(),
+            payload=stage_decision.event_payload(),
             phase=phase,
             agent=agent,
-            message=message,
-            payload=dict(payload),
         )
 
     def require_mcp_source_registry(self):

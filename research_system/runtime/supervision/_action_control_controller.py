@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from research_system.runtime.orchestration._runtime_control_stage_decisions import (
+    ActionPhaseControlStageDecision,
+)
 from research_system.schemas.planning import ActionPlan, ActionSpec, SupervisorDecision
 from research_system.schemas.runtime import BlackboardEntry
 
@@ -55,33 +58,30 @@ class ActionControlController:
         rule_decision: SupervisorDecision,
         final_decision: SupervisorDecision,
     ) -> None:
-        payload = {
-            "control_domain": "action",
-            "control_stage": "action_phase",
-            "decision_stage": "action_phase",
-            "intent": plan.intent,
-            "plan_id": plan.plan_id,
-            "policy_source": self._decision_policy_source(final_decision),
-            "decision_type": final_decision.decision_type,
-            "rule_action_node_id": rule_decision.next_actions[0].node_id if rule_decision.next_actions else None,
-            "final_action_node_id": final_decision.next_actions[0].node_id if final_decision.next_actions else None,
-            "rule_request_replan": self._decision_requests_replan(rule_decision),
-            "final_request_replan": self._decision_requests_replan(final_decision),
-            "override_rule_action": bool(
+        stage_decision = ActionPhaseControlStageDecision(
+            intent=plan.intent,
+            plan_id=plan.plan_id,
+            policy_source=self._decision_policy_source(final_decision),
+            decision_type=final_decision.decision_type,
+            rule_action_node_id=rule_decision.next_actions[0].node_id if rule_decision.next_actions else None,
+            final_action_node_id=final_decision.next_actions[0].node_id if final_decision.next_actions else None,
+            rule_request_replan=self._decision_requests_replan(rule_decision),
+            final_request_replan=self._decision_requests_replan(final_decision),
+            override_rule_action=bool(
                 rule_decision.next_actions
                 and final_decision.next_actions
                 and rule_decision.next_actions[0].node_id != final_decision.next_actions[0].node_id
             ),
-            "override_replan": self._decision_requests_replan(rule_decision)
+            override_replan=self._decision_requests_replan(rule_decision)
             != self._decision_requests_replan(final_decision),
-            "completed_actions": list(completed_actions),
-            "pending_action_node_ids": [action.node_id for action in pending_actions],
-            "notes": list(final_decision.notes or []),
-        }
+            completed_actions=list(completed_actions),
+            pending_action_node_ids=[action.node_id for action in pending_actions],
+            notes=list(final_decision.notes or []),
+        )
         self.control_stage_recorder.record(
-            event_type="action_phase_decided",
-            message=f"action_phase_decided resolved {final_decision.decision_type} for intent {plan.intent}",
-            payload=payload,
+            event_type=stage_decision.event_type,
+            message=stage_decision.message(),
+            payload=stage_decision.event_payload(),
             phase="supervision",
             agent="supervisor",
         )

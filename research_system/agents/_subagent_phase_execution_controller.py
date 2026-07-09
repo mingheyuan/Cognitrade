@@ -5,6 +5,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from research_system.agents._subagent_dag import SubagentDagNodeResult
+from research_system.runtime.orchestration._subagent_control_stage_recorder import (
+    SubagentControlStageRecorder,
+)
+from research_system.runtime.orchestration._runtime_control_stage_decisions import (
+    SubagentPhaseExecutionControlStageDecision,
+)
 from research_system.schemas.subagents import SubagentGraphPatch, SubagentPlan
 
 
@@ -40,7 +46,10 @@ class SubagentPhaseExecutionController:
         self.llm_policy_source = llm_policy_source
         self.patch_requests_replan = patch_requests_replan
         self.resolve_variant_id = resolve_variant_id
-        self.control_stage_recorder = control_stage_recorder
+        self.control_stage_recorder = control_stage_recorder or SubagentControlStageRecorder(
+            runtime_binding_getter=runtime_binding_getter,
+            emit_event=emit_event,
+        )
         self.runtime_binding_getter = runtime_binding_getter
         self.emit_event = emit_event
         self.service_name = service_name or "subagent_phase_execution"
@@ -179,72 +188,32 @@ class SubagentPhaseExecutionController:
             decision_type = "apply_rule_patch"
         else:
             decision_type = "keep_current"
-        payload = {
-            "event": "subagent_phase_execution_decided",
-            "control_stage": "phase_patch_cycle",
-            "decision_stage": "phase_execution",
-            "dag_id": dag_id,
-            "intent": plan.intent,
-            "phase": plan.phase,
-            "plan_id": plan.plan_id,
-            "plan_strategy": plan.strategy,
-            "policy_source": str(getattr(final_patch, "policy_source", None) or "rule"),
-            "decision_type": decision_type,
-            "rule_plan_variant": resolution.rule_variant_id,
-            "final_plan_variant": resolution.final_plan_variant,
-            "override_rule_variant": resolution.rule_variant_id != resolution.final_plan_variant,
-            "candidate_plan_variants": list(resolution.candidate_plan_variants),
-            "final_request_replan": final_request_replan,
-            "base_node_ids": [node.node_id for node in list(plan.nodes or [])],
-            "final_node_ids": [node.node_id for node in list(resolution.final_plan.nodes or [])],
-            "patch_count": len(resolution.final_patch_rows),
-        }
-        control_rows = getattr(context, "subagent_control_stage_decisions", None)
-        if not isinstance(control_rows, list):
-            try:
-                setattr(context, "subagent_control_stage_decisions", [])
-            except Exception:
-                control_rows = None
-            else:
-                control_rows = getattr(context, "subagent_control_stage_decisions", None)
-        if isinstance(control_rows, list):
-            control_rows.append(dict(payload))
-        message = (
-            f"subagent_phase_execution_decided resolved {decision_type} for DAG {dag_id}"
+        stage_decision = SubagentPhaseExecutionControlStageDecision(
+            dag_id=dag_id,
+            intent=plan.intent,
+            phase=plan.phase,
+            plan_id=plan.plan_id,
+            plan_strategy=plan.strategy,
+            policy_source=str(getattr(final_patch, "policy_source", None) or "rule"),
+            decision_type=decision_type,
+            rule_plan_variant=resolution.rule_variant_id,
+            final_plan_variant=resolution.final_plan_variant,
+            override_rule_variant=resolution.rule_variant_id != resolution.final_plan_variant,
+            candidate_plan_variants=list(resolution.candidate_plan_variants),
+            final_request_replan=final_request_replan,
+            base_node_ids=[node.node_id for node in list(plan.nodes or [])],
+            final_node_ids=[node.node_id for node in list(resolution.final_plan.nodes or [])],
+            patch_count=len(resolution.final_patch_rows),
         )
-        if self.control_stage_recorder is not None:
-            self.control_stage_recorder.record(
-                event_type="subagent_phase_execution_decided",
-                message=message,
-                payload=dict(payload),
-                phase=phase,
-                agent=agent,
-            )
+        if self.control_stage_recorder is None:
             return
-        dynamic_trace = getattr(context, "dynamic_trace", None)
-        if isinstance(dynamic_trace, list):
-            dynamic_trace.append(dict(payload))
-        if callable(self.emit_event):
-            self.emit_event(
-                event_type="subagent_phase_execution_decided",
-                message=message,
-                payload=dict(payload),
-                phase=phase,
-                agent=agent,
-            )
-            return
-        support_emit_event = getattr(support, "emit_event", None)
-        if callable(support_emit_event):
-            support_emit_event(
-                context,
-                request_id=request_id,
-                intent=intent,
-                event_type="subagent_phase_execution_decided",
-                phase=phase,
-                agent=agent,
-                message=message,
-                payload=dict(payload),
-            )
+        self.control_stage_recorder.record(
+            event_type=stage_decision.event_type,
+            message=stage_decision.message(),
+            payload=stage_decision.event_payload(),
+            phase=phase,
+            agent=agent,
+        )
 
 
 __all__ = [

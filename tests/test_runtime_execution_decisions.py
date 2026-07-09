@@ -314,6 +314,8 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
             context.subagent_catalog_stage_decisions.append(
                 {
                     "event": "subagent_catalog_selection_decided",
+                    "control_domain": "subagent",
+                    "control_stage": "catalog_selection",
                     "decision_stage": "catalog_selection",
                     "stage": "collect",
                     "capability": "market_signal_extension",
@@ -336,6 +338,8 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
                 [
                     {
                         "event": "subagent_catalog_selection_decided",
+                        "control_domain": "subagent",
+                        "control_stage": "catalog_selection",
                         "decision_stage": "catalog_selection",
                         "stage": "collect",
                         "capability": "market_signal_extension",
@@ -354,6 +358,7 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
             context.subagent_control_stage_decisions.append(
                 {
                     "event": "subagent_phase_execution_decided",
+                    "control_domain": "subagent",
                     "control_stage": "phase_patch_cycle",
                     "decision_stage": "phase_execution",
                     "phase": "review",
@@ -376,6 +381,7 @@ class RuntimeExecutionDecisionTests(unittest.TestCase):
                 [
                     {
                         "event": "subagent_phase_execution_decided",
+                        "control_domain": "subagent",
                         "control_stage": "phase_patch_cycle",
                         "decision_stage": "phase_execution",
                         "phase": "review",
