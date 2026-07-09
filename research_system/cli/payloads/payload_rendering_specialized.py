@@ -18,6 +18,7 @@ from research_system.services.payloads.status_payloads import (
     status_header_fields,
 )
 from research_system.services.payloads.runs.run_payloads import (
+    run_payload_fields,
     latest_run_context,
     render_run_row_text,
     replay_payload_fields,
@@ -135,9 +136,73 @@ def print_replay_payload(payload: dict, *, emit_text, output_writer=None) -> boo
         emit_text=emit_text,
         output_writer=output_writer,
     )
+    control_state = payload.get("control_state") if isinstance(payload.get("control_state"), dict) else {}
+    runtime_control_stage_decisions = payload.get("runtime_control_stage_decisions")
+    runtime_control_stage_count = (
+        len(runtime_control_stage_decisions)
+        if isinstance(runtime_control_stage_decisions, list)
+        else len(control_state.get("runtime_control_stage_decisions") or [])
+    )
+    if control_state:
+        control_summary = {
+            "cancellation_requested": bool(control_state.get("cancellation_requested")),
+            "cancellation_reason": control_state.get("cancellation_reason"),
+            "external_wait_deadline_at": control_state.get("external_wait_deadline_at"),
+            "updated_at": control_state.get("updated_at"),
+            "runtime_control_stage_count": runtime_control_stage_count,
+        }
+        emit_text(output_writer, meta_update(f"control_state: {json.dumps(control_summary, ensure_ascii=True, sort_keys=True)}"))
     result = payload.get("result")
     if result:
         emit_text(output_writer, meta_update(json.dumps(result, ensure_ascii=True, indent=2)))
+    return True
+
+
+def print_resume_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
+    if "resumable" not in payload or "resume_from" not in payload:
+        return False
+    emit_run_detail_fields(
+        [
+            *run_payload_fields(payload),
+            ("resumable", "yes" if bool(payload.get("resumable")) else "no"),
+            ("runtime_control_stages", str(payload.get("runtime_control_stage_count") or 0)),
+        ],
+        emit_text=emit_text,
+        output_writer=output_writer,
+    )
+    resume_from = payload.get("resume_from") if isinstance(payload.get("resume_from"), dict) else {}
+    if resume_from:
+        emit_text(output_writer, meta_update(f"resume_from: {json.dumps(resume_from, ensure_ascii=True, sort_keys=True)}"))
+    latest_control_stage = payload.get("latest_runtime_control_stage_decision")
+    if isinstance(latest_control_stage, dict):
+        emit_text(
+            output_writer,
+            meta_update(
+                "latest_runtime_control_stage_decision: "
+                + json.dumps(latest_control_stage, ensure_ascii=True, sort_keys=True)
+            ),
+        )
+    control_state = payload.get("control_state")
+    if isinstance(control_state, dict):
+        emit_text(
+            output_writer,
+            meta_update(
+                "control_state: "
+                + json.dumps(
+                    {
+                        "cancellation_requested": bool(control_state.get("cancellation_requested")),
+                        "cancellation_reason": control_state.get("cancellation_reason"),
+                        "external_wait_deadline_at": control_state.get("external_wait_deadline_at"),
+                        "updated_at": control_state.get("updated_at"),
+                    },
+                    ensure_ascii=True,
+                    sort_keys=True,
+                )
+            ),
+        )
+    checkpoint = payload.get("checkpoint")
+    if isinstance(checkpoint, dict):
+        emit_text(output_writer, meta_update(f"checkpoint: {json.dumps(checkpoint, ensure_ascii=True, sort_keys=True)}"))
     return True
 
 

@@ -738,6 +738,14 @@ class CliOutputTests(unittest.TestCase):
             "run_id": "01TRACE",
             "summary": {"status": "completed"},
             "display_summary": "summary line",
+            "event_counts": {"runtime_control_stage_decisions": 1},
+            "runtime_control_stage_decisions": [
+                {
+                    "event": "runtime_control_subagent_transition_decided",
+                    "transition_source": "phase_patch_cycle",
+                    "transition_type": "apply_local_replan",
+                }
+            ],
             "subagent_trace": [
                 {
                     "task_name": "collect:stock_snapshot_collector",
@@ -765,12 +773,74 @@ class CliOutputTests(unittest.TestCase):
         self._emit_payload_to_session(session, payload)
 
         self.assertIn("run_id: 01TRACE", output)
+        self.assertIn("runtime_control_stages: 1", output)
+        self.assertIn("runtime_control_stage_decisions:", output)
+        self.assertIn("\"transition_type\": \"apply_local_replan\"", output)
         self.assertIn("subagent_trace:", output)
         self.assertIn("dynamic_trace:", output)
         self.assertIn("wait_trace:", output)
         self.assertIn("collect:stock_snapshot_collector", output)
         self.assertIn("Review candidates", output)
         self.assertEqual(session.trace_payload, payload)
+
+    def test_print_replay_and_resume_payload_render_control_state_details(self) -> None:
+        replay_payload = {
+            "run_id": "01REPLAY",
+            "request": {"intent": "review_thesis", "user_query": "resume me"},
+            "summary": {"status": "failed"},
+            "display_summary": "failed before review",
+            "events": [],
+            "blackboard": [],
+            "control_state": {
+                "run_id": "01REPLAY",
+                "cancellation_requested": False,
+                "cancellation_reason": None,
+                "deadline_at": "2026-07-10T00:00:00+00:00",
+                "external_wait_deadline_at": None,
+                "runtime_control_stage_decisions": [
+                    {
+                        "event": "runtime_control_transition_decided",
+                        "transition_type": "request_action_replan",
+                    }
+                ],
+                "updated_at": "2026-07-10T00:00:05+00:00",
+            },
+            "runtime_control_stage_decisions": [
+                {
+                    "event": "runtime_control_transition_decided",
+                    "transition_type": "request_action_replan",
+                }
+            ],
+        }
+        resume_payload = {
+            "run_id": "01REPLAY",
+            "status": "failed",
+            "resumable": True,
+            "resume_from": {
+                "current_phase": "review",
+                "active_agent": "reviewer",
+                "completed_nodes": ["collect", "retrieve"],
+                "pending_nodes": ["review"],
+            },
+            "checkpoint": {
+                "run_id": "01REPLAY",
+                "current_phase": "review",
+                "active_agent": "reviewer",
+            },
+            "control_state": replay_payload["control_state"],
+            "runtime_control_stage_count": 1,
+            "latest_runtime_control_stage_decision": replay_payload["runtime_control_stage_decisions"][0],
+        }
+
+        replay_output = self._capture_payload_text(replay_payload)
+        resume_output = self._capture_payload_text(resume_payload)
+
+        self.assertIn("runtime_control_stages: 1", replay_output)
+        self.assertIn("control_state:", replay_output)
+        self.assertIn("resumable: yes", resume_output)
+        self.assertIn("resume_from:", resume_output)
+        self.assertIn("latest_runtime_control_stage_decision:", resume_output)
+        self.assertIn("\"current_phase\": \"review\"", resume_output)
 
     def test_print_events_payload_renders_event_rows_and_populates_session_events_panel(self) -> None:
         payload = {

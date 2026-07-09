@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from research_system.runtime.core.control_plane import RunControlPlane
 from research_system.runtime.storage.jsonl import append_jsonl, write_json
 from research_system.runtime.history.session.trace.run_trace_row_builder import RunTraceRowBuilder
 from research_system.runtime.history.session.trace.subagent_payload_builder import (
@@ -1345,6 +1346,65 @@ class SessionHistoryTests(unittest.TestCase):
         self.assertEqual(payload["metrics"]["counts"]["threads"], 1)
         self.assertEqual(payload["metrics"]["counts"]["subagents"], 1)
         self.assertEqual(payload["event_counts"]["dynamic_trace"], 0)
+
+    def test_replay_includes_control_state_and_runtime_control_stage_rows(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            run_root = Path(tmpdir) / "01REPLAYCONTROL"
+            run_root.mkdir(parents=True)
+            write_json(run_root / "request.json", {"request_id": "req-replay", "intent": "stock_check", "user_query": "replay"})
+            write_json(run_root / "summary.json", {"status": "completed", "message": "Run completed"})
+            control_plane = RunControlPlane(run_root / "run_control.json")
+            control_plane.initialize(run_id="01REPLAYCONTROL", run_timeout_seconds=30)
+            control_plane.record_runtime_control_stage_decision(
+                row={
+                    "event": "runtime_control_transition_decided",
+                    "transition_type": "request_action_replan",
+                }
+            )
+
+            payload = SessionHistory(run_root).replay()
+
+        self.assertIn("control_state", payload)
+        self.assertEqual(
+            payload["runtime_control_stage_decisions"],
+            [
+                {
+                    "event": "runtime_control_transition_decided",
+                    "transition_type": "request_action_replan",
+                }
+            ],
+        )
+
+    def test_trace_falls_back_to_control_state_runtime_rows_when_debug_is_missing(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            run_root = Path(tmpdir) / "01TRACECONTROL"
+            run_root.mkdir(parents=True)
+            write_json(run_root / "request.json", {"request_id": "req-trace", "intent": "stock_screen", "user_query": "trace"})
+            write_json(run_root / "summary.json", {"status": "failed", "message": "Run failed"})
+            write_json(run_root / "result.json", {"report": {"summary": "missing debug"}})
+            control_plane = RunControlPlane(run_root / "run_control.json")
+            control_plane.initialize(run_id="01TRACECONTROL", run_timeout_seconds=30)
+            control_plane.record_runtime_control_stage_decision(
+                row={
+                    "event": "runtime_control_subagent_transition_decided",
+                    "transition_source": "phase_patch_cycle",
+                    "transition_type": "apply_local_replan",
+                }
+            )
+
+            payload = SessionHistory(run_root).trace()
+
+        self.assertEqual(
+            payload["runtime_control_stage_decisions"],
+            [
+                {
+                    "event": "runtime_control_subagent_transition_decided",
+                    "transition_source": "phase_patch_cycle",
+                    "transition_type": "apply_local_replan",
+                }
+            ],
+        )
+        self.assertEqual(payload["event_counts"]["runtime_control_stage_decisions"], 1)
 
     def test_thread_replay_includes_descendants_blackboard_and_scoped_metrics(self) -> None:
         with TemporaryDirectory() as tmpdir:

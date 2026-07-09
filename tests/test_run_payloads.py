@@ -85,6 +85,7 @@ class RunPayloadsTests(unittest.TestCase):
                     "display_summary": "done",
                     "events": [{}, {}],
                     "blackboard": [{}],
+                    "runtime_control_stage_decisions": [{}, {}, {}],
                 }
             ),
             [
@@ -95,6 +96,7 @@ class RunPayloadsTests(unittest.TestCase):
                 ("status", "completed"),
                 ("events", "2"),
                 ("blackboard_entries", "1"),
+                ("runtime_control_stages", "3"),
             ],
         )
 
@@ -106,7 +108,12 @@ class RunPayloadsTests(unittest.TestCase):
                     "request": {"intent": "stock_compare", "user_query": "compare banks"},
                     "summary": {"status": "completed"},
                     "display_summary": "done",
-                    "event_counts": {"subagent_trace": 3, "dynamic_trace": 1, "wait_trace": 0},
+                    "event_counts": {
+                        "subagent_trace": 3,
+                        "dynamic_trace": 1,
+                        "wait_trace": 0,
+                        "runtime_control_stage_decisions": 2,
+                    },
                 }
             ),
             [
@@ -118,6 +125,7 @@ class RunPayloadsTests(unittest.TestCase):
                 ("subagent_trace", "3"),
                 ("dynamic_trace", "1"),
                 ("wait_trace", "0"),
+                ("runtime_control_stages", "2"),
             ],
         )
 

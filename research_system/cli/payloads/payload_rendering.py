@@ -21,6 +21,7 @@ from research_system.cli.payloads.payload_rendering_specialized import (
     print_proposal_payload as specialized_print_proposal_payload,
     print_proposal_rows as specialized_print_proposal_rows,
     print_replay_payload as specialized_print_replay_payload,
+    print_resume_payload as specialized_print_resume_payload,
     print_status_payload as specialized_print_status_payload,
     print_subagent_discovery_payload as specialized_print_subagent_discovery_payload,
     print_subagent_discovery_rows as specialized_print_subagent_discovery_rows,
@@ -66,6 +67,8 @@ def print_payload(payload: object, *, as_json: bool, emit_text, output_writer=No
         if print_status_payload(payload, emit_text=emit_text, output_writer=output_writer):
             return 0
         if print_doctor_payload(payload, emit_text=emit_text, output_writer=output_writer):
+            return 0
+        if print_resume_payload(payload, emit_text=emit_text, output_writer=output_writer):
             return 0
         if print_replay_payload(payload, emit_text=emit_text, output_writer=output_writer):
             return 0
@@ -124,6 +127,10 @@ def print_status_payload(payload: dict, *, emit_text, output_writer=None) -> boo
 
 def print_replay_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
     return specialized_print_replay_payload(payload, emit_text=emit_text, output_writer=output_writer)
+
+
+def print_resume_payload(payload: dict, *, emit_text, output_writer=None) -> bool:
+    return specialized_print_resume_payload(payload, emit_text=emit_text, output_writer=output_writer)
 
 
 def print_trace_payload(payload: dict, *, emit_text, output_writer=None) -> bool:

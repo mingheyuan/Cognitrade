@@ -30,6 +30,7 @@ def replay_payload_fields(payload: dict) -> list[tuple[str, str]]:
     )
     fields.append(("events", str(len(payload.get("events") or []))))
     fields.append(("blackboard_entries", str(len(payload.get("blackboard") or []))))
+    fields.append(("runtime_control_stages", str(_runtime_control_stage_count(payload))))
     return fields
 
 
@@ -48,6 +49,7 @@ def trace_payload_fields(payload: dict) -> list[tuple[str, str]]:
     fields.append(("subagent_trace", str(event_counts.get("subagent_trace") or 0)))
     fields.append(("dynamic_trace", str(event_counts.get("dynamic_trace") or 0)))
     fields.append(("wait_trace", str(event_counts.get("wait_trace") or 0)))
+    fields.append(("runtime_control_stages", str(event_counts.get("runtime_control_stage_decisions") or _runtime_control_stage_count(payload))))
     return fields
 
 
@@ -176,3 +178,13 @@ def thread_payload_fields(payload: dict) -> list[tuple[str, str]]:
     fields.append(("subagent_trace", str(event_counts.get("subagent_trace") or 0)))
     fields.append(("items", str(event_counts.get("items") or 0)))
     return fields
+
+
+def _runtime_control_stage_count(payload: dict) -> int:
+    rows = payload.get("runtime_control_stage_decisions")
+    if isinstance(rows, list):
+        return len(rows)
+    control_state = payload.get("control_state")
+    if isinstance(control_state, dict) and isinstance(control_state.get("runtime_control_stage_decisions"), list):
+        return len(control_state.get("runtime_control_stage_decisions") or [])
+    return 0

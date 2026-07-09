@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from research_system.runtime.core.control_plane import RunControlPlane
 from research_system.runtime.history.session.steps.step_builder import SessionHistoryStepBuilder
 from research_system.runtime.history.session.trace.trace_rebuilder import SessionHistoryTraceRebuilder
 from research_system.runtime.presentation.display import build_display_summary
@@ -19,6 +20,7 @@ class SessionHistory:
     def replay(self) -> dict[str, Any]:
         result_payload = read_json(self.run_root / "result.json")
         summary_payload = read_json(self.run_root / "summary.json")
+        control_state = self._control_state_payload()
         return {
             "run_id": self.run_root.name,
             "request": read_json(self.run_root / "request.json"),
@@ -32,14 +34,23 @@ class SessionHistory:
                 result_payload=result_payload,
                 summary_payload=summary_payload,
             ),
+            "control_state": control_state,
+            "runtime_control_stage_decisions": self._runtime_control_stage_rows(
+                control_state_payload=control_state,
+            ),
         }
 
     def trace(self) -> dict[str, Any]:
         request_payload = read_json(self.run_root / "request.json") or {}
         result_payload = read_json(self.run_root / "result.json") or {}
         summary_payload = read_json(self.run_root / "summary.json") or {}
+        control_state = self._control_state_payload()
         events = read_jsonl(self.run_root / "events.jsonl")
         debug_payload = self.trace_rebuilder.debug_payload(result_payload)
+        runtime_control_stage_decisions = self._runtime_control_stage_rows(
+            debug_payload=debug_payload,
+            control_state_payload=control_state,
+        )
         subagent_trace = self.trace_rebuilder.subagent_trace(debug_payload, events)
         dynamic_trace = self.trace_rebuilder.dynamic_trace(debug_payload, events)
         action_plan_patches = self.trace_rebuilder.action_plan_patches(debug_payload, events)
@@ -52,6 +63,8 @@ class SessionHistory:
                 result_payload=result_payload,
                 summary_payload=summary_payload,
             ),
+            "control_state": control_state,
+            "runtime_control_stage_decisions": runtime_control_stage_decisions,
             "subagent_trace": subagent_trace,
             "dynamic_trace": dynamic_trace,
             "action_plan_patches": action_plan_patches,
@@ -64,6 +77,7 @@ class SessionHistory:
                 "dynamic_trace": len(dynamic_trace),
                 "action_plan_patches": len(action_plan_patches),
                 "wait_trace": len(wait_trace),
+                "runtime_control_stage_decisions": len(runtime_control_stage_decisions),
             },
         }
 
@@ -71,8 +85,12 @@ class SessionHistory:
         request_payload = read_json(self.run_root / "request.json") or {}
         result_payload = read_json(self.run_root / "result.json") or {}
         summary_payload = read_json(self.run_root / "summary.json") or {}
+        control_state = self._control_state_payload()
         events = read_jsonl(self.run_root / "events.jsonl")
         timeline = self.trace_rebuilder.event_timeline(events)
+        runtime_control_stage_decisions = self._runtime_control_stage_rows(
+            control_state_payload=control_state,
+        )
         return {
             "run_id": self.run_root.name,
             "request": request_payload,
@@ -81,12 +99,15 @@ class SessionHistory:
                 result_payload=result_payload,
                 summary_payload=summary_payload,
             ),
+            "control_state": control_state,
+            "runtime_control_stage_decisions": runtime_control_stage_decisions,
             "events": timeline,
             "threads": self.thread_states(),
             "thread_tree": self.thread_tree(),
             "event_counts": {
                 "events": len(timeline),
                 "distinct_event_types": len({str(row.get("event_type") or "") for row in timeline}),
+                "runtime_control_stage_decisions": len(runtime_control_stage_decisions),
             },
         }
 
@@ -348,6 +369,7 @@ class SessionHistory:
                 result_payload=result_payload,
                 summary_payload=summary_payload,
             ),
+            "control_state": self._control_state_payload(),
             "thread": thread_payload,
             "threads": scoped_threads,
             "thread_tree": thread_tree,
@@ -370,6 +392,36 @@ class SessionHistory:
                 "threads": len(scoped_threads),
             },
         }
+
+    def _control_state_payload(self) -> dict[str, Any] | None:
+        control_state = RunControlPlane(self.run_root / "run_control.json").load()
+        return control_state.to_dict() if control_state is not None else None
+
+    def _runtime_control_stage_rows(
+        self,
+        *,
+        debug_payload: dict[str, Any] | None = None,
+        control_state_payload: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        debug_rows = debug_payload.get("runtime_control_stage_decisions") if isinstance(debug_payload, dict) else None
+        if isinstance(debug_rows, list) and debug_rows:
+            return [
+                dict(row)
+                for row in debug_rows
+                if isinstance(row, dict)
+            ]
+        control_rows = (
+            control_state_payload.get("runtime_control_stage_decisions")
+            if isinstance(control_state_payload, dict)
+            else None
+        )
+        if isinstance(control_rows, list):
+            return [
+                dict(row)
+                for row in control_rows
+                if isinstance(row, dict)
+            ]
+        return []
 
     def write_result(self, result: dict[str, Any], summary: dict[str, Any]) -> None:
         write_json(self.run_root / "result.json", result)

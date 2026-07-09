@@ -39,6 +39,14 @@ def print_trace_payload(payload: dict, *, emit_text, output_writer=None) -> bool
         emit_text=emit_text,
         output_writer=output_writer,
     )
+    emit_text(output_writer, meta_update("runtime_control_stage_decisions:"))
+    runtime_control_stage_decisions = payload.get("runtime_control_stage_decisions") or []
+    if not isinstance(runtime_control_stage_decisions, list) or not runtime_control_stage_decisions:
+        emit_text(output_writer, meta_update("  -"))
+    else:
+        for row in runtime_control_stage_decisions:
+            if isinstance(row, dict):
+                emit_text(output_writer, meta_update(f"  {json.dumps(row, ensure_ascii=True, sort_keys=True)}"))
     for section_name in ("subagent_trace", "dynamic_trace", "wait_trace"):
         rows = payload.get(section_name) or []
         if not isinstance(rows, list):

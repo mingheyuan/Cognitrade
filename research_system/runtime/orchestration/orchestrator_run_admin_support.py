@@ -55,6 +55,13 @@ class OrchestratorRunAdminSupport:
         paths = self.host.run_store.load_run_paths(run_id)
         run_state_payload = self.host.load_json_payload(paths.run_state) or {}
         checkpoint = CheckpointStore(paths.checkpoint).load()
+        control_state = RunControlPlane(paths.run_control).load()
+        control_payload = control_state.to_dict() if control_state is not None else None
+        runtime_control_stage_decisions = (
+            list(control_state.runtime_control_stage_decisions or [])
+            if control_state is not None
+            else []
+        )
         status = run_state_payload.get("status")
         resumable = status in {"failed", "timed_out", "cancelled"} and checkpoint is not None
         return {
@@ -62,6 +69,14 @@ class OrchestratorRunAdminSupport:
             "status": status,
             "resumable": resumable,
             "checkpoint": checkpoint.model_dump(mode="json") if checkpoint else None,
+            "control_state": control_payload,
+            "runtime_control_stage_decisions": [dict(row) for row in runtime_control_stage_decisions],
+            "runtime_control_stage_count": len(runtime_control_stage_decisions),
+            "latest_runtime_control_stage_decision": (
+                dict(runtime_control_stage_decisions[-1])
+                if runtime_control_stage_decisions and isinstance(runtime_control_stage_decisions[-1], dict)
+                else None
+            ),
             "resume_from": {
                 "current_phase": checkpoint.current_phase if checkpoint else None,
                 "active_agent": checkpoint.active_agent if checkpoint else None,
