@@ -291,6 +291,13 @@ class SubagentCapabilityGapControllerTests(unittest.TestCase):
         class _RuntimeControlStub:
             def resolve_subagent_capability_gap_escalation(self, **kwargs):
                 delegated_calls.append(dict(kwargs))
+                resolve_local = getattr(kwargs["escalation_controller"], "resolve_local", None)
+                if callable(resolve_local):
+                    return resolve_local(
+                        gap=kwargs["gap"],
+                        preferred_subagent_type=kwargs["preferred_subagent_type"],
+                        requires_llm=kwargs["requires_llm"],
+                    )
                 return kwargs["escalation_controller"].resolve(
                     gap=kwargs["gap"],
                     preferred_subagent_type=kwargs["preferred_subagent_type"],
