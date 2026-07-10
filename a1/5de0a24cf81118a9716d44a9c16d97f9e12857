@@ -1,0 +1,57 @@
+domain_packs/finance_ashare/artifact_schemas/sector_analysis.json
+  s_a6a8a3a6f43b3c::t_4ad51a1943ce1f 13-19
+domain_packs/finance_ashare/artifact_schemas/stock_snapshot_bundle.json
+  s_a6a8a3a6f43b3c::t_826e61d561b3d3 1-27
+domain_packs/finance_ashare/artifact_schemas/thesis_review.json
+  s_a6a8a3a6f43b3c::t_b48ac2a925323f 11-16
+domain_packs/finance_ashare/subagents/runtime.py
+  s_a6a8a3a6f43b3c::t_e9820867dd4d4e 5,40,91,95-127,157-166,177-180,343-344,347,370-373,377,404-409,415,417,419-425,622-625,631-653,783-790,806-816,837-845,849-858,861-870,884-898,903-905,908-909,911-913,927-930,944,949-950,1028,1034-1045,1047,1051-1052,1064-1065,1068-1078,1087-1140,1148-1174,1190-1208,1216-1221,1227-1231,1243-1251,1255-1278,1295-1324
+domain_packs/finance_ashare/subagents/task_intake.py
+  s_a6a8a3a6f43b3c::t_f5641950a7f3cd 6,8,23-24,32-34,63-64,72-73,75-77,79-86,97-99,104,109-113,126-161
+domain_packs/finance_ashare/tools/security_master.py
+  s_a6a8a3a6f43b3c::t_163f9bd7c1f13a 1-337
+domain_packs/finance_ashare/tools/snapshot_collector.py
+  s_a6a8a3a6f43b3c::t_96d935a4c3a5ac 16-17,28-29,73-176,203-254,259
+frontend/src/App.tsx
+  s_a6a8a3a6f43b3c::t_1628a2bcd85029 41,45-50
+frontend/src/CognitradeContext.tsx
+  s_a6a8a3a6f43b3c::t_58c250a321f0ca 50,178,185-186
+frontend/src/components/Overview.tsx
+  s_a6a8a3a6f43b3c::t_de37db84533b95 39,60,85-91
+frontend/src/components/Screening.tsx
+  s_a6a8a3a6f43b3c::t_216c211d35cf0c 18
+frontend/src/components/Workbench.tsx
+  s_a6a8a3a6f43b3c::t_64a8d71affa979 19,22,37,68,81-84,129-138,216-251
+frontend/src/live-data.ts
+  s_a6a8a3a6f43b3c::t_be853dac6dc0d0 229,241,243
+frontend/src/research-contracts.ts
+  s_a6a8a3a6f43b3c::t_36c1aa26627c03 175
+research_system/runtime/agent_os.py
+  s_a6a8a3a6f43b3c::t_13d5cbb0b5d134 195-198
+research_system/runtime/intake/task_intake.py
+  s_a6a8a3a6f43b3c::t_efbf861921a6c1 16-21,47-50
+tests/test_api_v1_runs.py
+  s_a6a8a3a6f43b3c::t_851f05ec454f89 172,183
+tests/test_domain_packs.py
+  s_a6a8a3a6f43b3c::t_2627a2062e4254 82
+tests/test_finance_pack_migration_completion.py
+  s_a6a8a3a6f43b3c::t_9a3f5ff136f733 1-194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "a15de0a24cf81118a9716d44a9c16d97f9e12857",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
