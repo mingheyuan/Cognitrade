@@ -79,6 +79,7 @@ class OpenAIProvider:
     ) -> str:
         client = self._client_instance()
         prompt = user_prompt if not force_json else f"{user_prompt}\n\nReturn only a JSON object."
+        effective_reasoning_effort = reasoning_effort or self.settings.openai_reasoning_effort
         try:
             parts: list[str] = []
             previous_response_id: str | None = None
@@ -90,7 +91,8 @@ class OpenAIProvider:
                     input=current_input,
                     previous_response_id=previous_response_id,
                     temperature=temperature,
-                    reasoning={"effort": reasoning_effort} if reasoning_effort else None,
+                    reasoning={"effort": effective_reasoning_effort} if effective_reasoning_effort else None,
+                    store=not self.settings.openai_disable_response_storage,
                     timeout=self.request_timeout_seconds,
                 )
                 response_text = self.response_support.coerce_responses_text(response)
@@ -121,6 +123,7 @@ class OpenAIProvider:
         reasoning_effort: str | None = None,
     ) -> str:
         client = self._client_instance()
+        effective_reasoning_effort = reasoning_effort or self.settings.openai_reasoning_effort
         try:
             parts: list[str] = []
             previous_response_id: str | None = None
@@ -132,7 +135,7 @@ class OpenAIProvider:
                     user_input=current_input,
                     previous_response_id=previous_response_id,
                     temperature=temperature,
-                    reasoning_effort=reasoning_effort,
+                    reasoning_effort=effective_reasoning_effort,
                     on_text_delta=on_text_delta,
                     on_reasoning_summary=on_reasoning_summary,
                 )

@@ -4,19 +4,13 @@ Cognitrade Web 是现有 CLI-first A 股多 Agent 研究系统的前端工作台
 
 ## 本地运行
 
-在项目根目录一键启动前后端：
+正式运行在项目根目录执行统一部署入口；该命令会同时构建并后台启动后端 `api` 和前端 `web` 容器，前端由 Nginx 发布：
 
 ```bash
-./scripts/service.sh start
+./scripts/deploy.sh --yes
 ```
 
-该命令默认要求根目录 `.env` 已配置 `COGNITRADE_API_TOKEN`。仅在隔离的本机开发环境中，可显式启动 loopback 无认证模式：
-
-```bash
-./scripts/service.sh start --local-unauthenticated
-```
-
-如果已经配置 token，此参数不会关闭 Bearer 认证。
+部署地址默认为 `http://127.0.0.1:8080/`，根目录 `.env` 中的 `COGNITRADE_API_TOKEN` 用于浏览器访问 API。
 
 如果只开发前端，则在当前 `frontend/` 目录执行：
 
@@ -27,7 +21,7 @@ npm run dev
 
 默认地址为 `http://127.0.0.1:4173/`。
 
-前端默认连接 `http://127.0.0.1:8000/api/v1`。可以在页面右上角的 API 状态按钮中修改地址并输入 Bearer token；地址持久化到 `localStorage`，token 只保存在当前标签页的 `sessionStorage`。也可以只配置非敏感地址：
+容器构建默认连接同源 `/api/v1`；本地开发模式默认连接 `http://127.0.0.1:8000/api/v1`。可以在页面右上角的 API 状态按钮中修改地址并输入 Bearer token；地址持久化到 `localStorage`，token 只保存在当前标签页的 `sessionStorage`。也可以只配置非敏感地址：
 
 ```bash
 VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1 npm run dev

@@ -26,6 +26,10 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
     return {
         "provider_name": env_values.get("PROVIDER_NAME", "openai"),
         "default_model": env_values.get("OPENAI_MODEL", "GPT-5.5"),
+        "review_model": env_values.get("OPENAI_REVIEW_MODEL") or env_values.get("OPENAI_MODEL", "GPT-5.5"),
+        "openai_reasoning_effort": env_values.get("OPENAI_REASONING_EFFORT") or None,
+        "openai_disable_response_storage": env_values.get("OPENAI_DISABLE_RESPONSE_STORAGE", "true").strip().lower()
+        in {"1", "true", "yes", "on"},
         "embedding_model": env_values.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
         "embedding_dimensions": int(env_values.get("OPENAI_EMBEDDING_DIMENSIONS", "1536")),
         "openai_api_key": env_values.get("OPENAI_API_KEY"),

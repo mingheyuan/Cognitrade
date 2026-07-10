@@ -28,6 +28,7 @@ class OpenAIResponseSupport:
             input=user_input,
             previous_response_id=previous_response_id,
             temperature=temperature,
+            store=not self.host.settings.openai_disable_response_storage,
             reasoning=(
                 {"effort": reasoning_effort, "summary": "concise"}
                 if reasoning_effort

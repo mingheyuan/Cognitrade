@@ -65,60 +65,97 @@ and `evaluations`. The loader rejects incomplete packs before planning.
 Cognitrade/
 ├─ api-doc/            # HTTP API 版本化契约
 ├─ api-todo/           # 下一版接口缺口与验收条件
+├─ deploy/             # 生产镜像与 Nginx 反向代理配置
 ├─ frontend/           # React + Vite 实时研究工作台
 ├─ research_system/    # 主代码
-├─ scripts/service.sh  # 前后端统一启动与生命周期管理脚本
+├─ scripts/deploy.sh   # 环境安装与容器部署脚本
 ├─ tests/              # 本地回归测试
 ├─ workspace/          # 运行数据、配置、taxonomy、runs、memory、Qdrant 本地库
-├─ .runtime/           # 启动后生成的 PID、就绪状态与日志（不入库）
 ├─ requirements.txt    # Python 运行与 API 依赖
+├─ compose.yaml        # API + Nginx Web 容器编排
 ├─ .env
 └─ .env.example
 ```
 
 `workspace/config/` 和 `workspace/taxonomy/` 是当前运行时真正读取的配置目录，不是包内静态配置目录。
 
-## 一键启动整套服务
+## 本地开发
 
-项目根目录的 `scripts/service.sh` 统一管理 FastAPI 后端和 Vite 前端，支持依赖安装、配置预检、端口检查、就绪探测、后台运行、日志查看和优雅停止。需要 Python 3.11+，以及满足 Vite 要求的 Node.js 20.19+、22.12+ 或更新版本。
-
-先根据 [`.env.example`](./.env.example) 准备根目录 `.env`，其中 `COGNITRADE_API_TOKEN` 默认必填。然后执行：
+正式运行统一使用下面的容器部署脚本。本地开发需要热更新时，分别启动 FastAPI 与 Vite，避免再维护一套重复的进程管理脚本：
 
 ```bash
-# 只做依赖、配置和端口预检
-./scripts/service.sh check --install auto
+# 首次安装后端依赖
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 
-# 前台启动前后端；首次运行会创建 .venv 并安装锁定的前端依赖
-./scripts/service.sh start --install auto
+# 终端 1：后端会读取项目根目录 .env
+python -m research_system.api
+
+# 终端 2：前端热更新服务器
+cd frontend
+npm ci
+npm run dev
 ```
 
-仅在隔离的本机开发环境中，可显式使用无认证模式；脚本会强制后端绑定 loopback 地址：
+默认 API 地址为 `http://127.0.0.1:8000`，Vite 前端地址为 `http://127.0.0.1:4173`。根目录 `.env` 必须配置 `COGNITRADE_API_TOKEN`；前端页面中输入同一个 Bearer token 后即可连接后端。
+
+## 一键安装与容器部署
+
+生产或长期运行只使用 `scripts/deploy.sh`。它会检查并按需安装 Docker、生成权限为 `600` 的 `.env` 和 256 位 API Token、构建并启动 FastAPI `api` 容器与 Nginx `web` 前端容器，通过 Nginx 同源代理 `/api`，最后同时检查网页和带认证 API：
 
 ```bash
-./scripts/service.sh start --local-unauthenticated
+# 默认完整流程：安装/检查环境、初始化配置、构建并后台启动 api + web
+./scripts/deploy.sh --yes
+
+# 要求必须配置 OpenAI，且更新基础镜像
+./scripts/deploy.sh deploy --yes --pull --require-openai
 ```
 
-后台运行与日常管理：
+前端由 Nginx `web` 容器提供，默认只监听 `http://127.0.0.1:8080`；API 容器不直接发布宿主机端口。浏览器右上角 API 地址使用 `/api/v1`，Bearer token 可通过以下命令读取：
 
 ```bash
-./scripts/service.sh start --detach
-./scripts/service.sh status
-./scripts/service.sh logs all     # Ctrl+C 退出日志跟踪，不会停止服务
-./scripts/service.sh stop
+./scripts/deploy.sh token
 ```
 
-默认 API 地址为 `http://127.0.0.1:8000`，前端地址为 `http://127.0.0.1:4173`。运行状态、PID 和日志位于 `.runtime/`。项目级操作锁固定放在仓库 `.runtime/` 下，因此不同 `--runtime-dir` 也不能并发启动或修改同一套依赖。常用变体：
+常用运维命令：
 
 ```bash
-./scripts/service.sh start --backend-only
-./scripts/service.sh start --frontend-only
-./scripts/service.sh start --preview
-./scripts/service.sh start --backend-port 8001 --frontend-port 4174
-./scripts/service.sh start --detach --startup-timeout 600
-./scripts/service.sh --help
+./scripts/deploy.sh check
+./scripts/deploy.sh status
+./scripts/deploy.sh logs all
+./scripts/deploy.sh restart
+./scripts/deploy.sh stop
+./scripts/deploy.sh down       # 删除容器和网络，但保留 workspace 数据
 ```
 
-`--preview` 只用于本机构建验收，不是生产 Web Server。脚本固定使用单进程 API，以保护当前本地 Qdrant 和 JSON/JSONL 存储；收到 Ctrl+C、TERM 或 `stop` 后，会同时通知前端和后端退出，并在超时后清理完整子进程组。
+对外提供服务时显式绑定地址，并在前方配置 TLS、防火墙和访问控制：
+
+```bash
+./scripts/deploy.sh deploy --web-host 0.0.0.0 --web-port 8080
+```
+
+容器部署默认从 AWS Public ECR 匿名拉取 Docker Official Images，避开不可达的 Docker Hub；也可在 `.env` 中替换为公司私有仓库：
+
+```env
+COGNITRADE_PYTHON_IMAGE=registry.example.com/library/python:3.11-slim-bookworm
+COGNITRADE_NODE_IMAGE=registry.example.com/library/node:22-alpine
+COGNITRADE_NGINX_IMAGE=registry.example.com/library/nginx:alpine
+```
+
+模型运行配置：
+
+```env
+PROVIDER_NAME=openai
+OPENAI_API_KEY=replace-with-your-key
+OPENAI_BASE_URL=https://your-openai-compatible-endpoint
+OPENAI_MODEL=gpt-5.5
+OPENAI_REVIEW_MODEL=gpt-5.5
+OPENAI_REASONING_EFFORT=xhigh
+OPENAI_DISABLE_RESPONSE_STORAGE=true
+```
+
+`OPENAI_BASE_URL` 会自动补 `/v1`；调用固定使用 OpenAI Responses API 和 Bearer 认证。`OPENAI_DISABLE_RESPONSE_STORAGE=true` 会向普通与流式 Responses 请求发送 `store=false`。运行数据保存在 `cognitrade_workspace` Docker 命名卷中，API 使用固定非 root 用户；重建镜像或执行 `down` 不会删除研究数据，新版本配置模板只补充缺失文件，不覆盖运维修改。
 
 ## Web 研究工作台
 
