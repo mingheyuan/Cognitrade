@@ -1,0 +1,77 @@
+.gitignore
+  s_48d46f7721d2e0::t_e822ea2a475eb7 16-18
+frontend/eslint.config.js
+  s_a6a8a3a6f43b3c::t_2cbdc0807716c6 1-25
+frontend/index.html
+  s_48d46f7721d2e0::t_9d3373784c7bee 1-17
+frontend/package-lock.json
+  s_48d46f7721d2e0::t_31307b2a35c280 1-3160
+frontend/package.json
+  s_65ff2aad6375ee::t_948963bd6d053f 1-31
+frontend/src/components/Methodology.tsx
+  s_a6a8a3a6f43b3c::t_79e9cb3b961ce5 1-300
+frontend/src/components/Overview.tsx
+  s_a6a8a3a6f43b3c::t_0951f8bf8be618 1-324
+frontend/src/components/ResearchComposer.tsx
+  s_a6a8a3a6f43b3c::t_8d3e000338b5ca 1-81
+frontend/src/components/RunInspector.tsx
+  s_a6a8a3a6f43b3c::t_61c6eb10a97f4f 1-203
+frontend/src/components/Runs.tsx
+  s_a6a8a3a6f43b3c::t_7dc241755f1486 1-173
+frontend/src/components/Screening.tsx
+  s_a6a8a3a6f43b3c::t_aabd44414d00ff 1-219
+frontend/src/components/Sidebar.tsx
+  s_a6a8a3a6f43b3c::t_0d16f1bf2674fb 1-142
+frontend/src/components/Topbar.tsx
+  s_a6a8a3a6f43b3c::t_ee1a1bcd21db3e 1-45
+frontend/src/components/Workbench.tsx
+  s_a6a8a3a6f43b3c::t_3c6ed6068039a8 1-475
+frontend/src/data.ts
+  s_a6a8a3a6f43b3c::t_61651e7a1303e7 1-237
+frontend/src/main.tsx
+  s_48d46f7721d2e0::t_4a3f27ff575e8f 1-10
+frontend/src/vite-env.d.ts
+  s_a6a8a3a6f43b3c::t_5b3ee230898a19 1
+frontend/tsconfig.app.json
+  s_48d46f7721d2e0::t_ba9850b300f955 1-23
+frontend/tsconfig.json
+  s_48d46f7721d2e0::t_802bc4d9e108fc 1-7
+frontend/tsconfig.node.json
+  s_48d46f7721d2e0::t_98b51f1842d6e3 1-16
+frontend/vite.config.ts
+  s_48d46f7721d2e0::t_cddfc672331922 1-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "9117647502879672e0031c385ae9cb9b92bd50ef",
+  "prompts": {},
+  "sessions": {
+    "s_48d46f7721d2e0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-ff86-7590-a401-1d40834e2d5c",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_65ff2aad6375ee": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-e2b3-7dc0-9b67-8706c5a80ef3",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
