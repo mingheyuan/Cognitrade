@@ -65,13 +65,16 @@ and `evaluations`. The loader rejects incomplete packs before planning.
 Cognitrade/
 ├─ api-doc/            # HTTP API 版本化契约
 ├─ api-todo/           # 下一版接口缺口与验收条件
+├─ deploy/             # 生产镜像与 Nginx 反向代理配置
 ├─ frontend/           # React + Vite 实时研究工作台
 ├─ research_system/    # 主代码
-├─ scripts/service.sh  # 前后端统一启动与生命周期管理脚本
+├─ scripts/service.sh  # 本地前后端生命周期管理脚本
+├─ scripts/deploy.sh   # 环境安装与容器部署脚本
 ├─ tests/              # 本地回归测试
 ├─ workspace/          # 运行数据、配置、taxonomy、runs、memory、Qdrant 本地库
 ├─ .runtime/           # 启动后生成的 PID、就绪状态与日志（不入库）
 ├─ requirements.txt    # Python 运行与 API 依赖
+├─ compose.yaml        # API + Nginx Web 容器编排
 ├─ .env
 └─ .env.example
 ```
@@ -119,6 +122,63 @@ Cognitrade/
 ```
 
 `--preview` 只用于本机构建验收，不是生产 Web Server。脚本固定使用单进程 API，以保护当前本地 Qdrant 和 JSON/JSONL 存储；收到 Ctrl+C、TERM 或 `stop` 后，会同时通知前端和后端退出，并在超时后清理完整子进程组。
+
+## 一键安装与容器部署
+
+生产或长期运行使用 `scripts/deploy.sh`。它会检查并按需安装 Docker、生成权限为 `600` 的 `.env` 和 256 位 API Token、构建 Python 3.11 API 镜像与 React 静态站点、通过 Nginx 同源代理 `/api`，最后执行带认证的健康检查：
+
+```bash
+# 默认完整流程：安装/检查环境、初始化配置、构建并后台启动
+./scripts/deploy.sh --yes
+
+# 要求必须配置 OpenAI，且更新基础镜像
+./scripts/deploy.sh deploy --yes --pull --require-openai
+```
+
+默认只监听 `http://127.0.0.1:8080`，API 不直接发布宿主机端口。浏览器右上角 API 地址使用 `/api/v1`，Bearer token 可通过以下命令读取：
+
+```bash
+./scripts/deploy.sh token
+```
+
+常用运维命令：
+
+```bash
+./scripts/deploy.sh check
+./scripts/deploy.sh status
+./scripts/deploy.sh logs all
+./scripts/deploy.sh restart
+./scripts/deploy.sh stop
+./scripts/deploy.sh down       # 删除容器和网络，但保留 workspace 数据
+```
+
+对外提供服务时显式绑定地址，并在前方配置 TLS、防火墙和访问控制：
+
+```bash
+./scripts/deploy.sh deploy --web-host 0.0.0.0 --web-port 8080
+```
+
+容器部署默认从 AWS Public ECR 匿名拉取 Docker Official Images，避开不可达的 Docker Hub；也可在 `.env` 中替换为公司私有仓库：
+
+```env
+COGNITRADE_PYTHON_IMAGE=registry.example.com/library/python:3.11-slim-bookworm
+COGNITRADE_NODE_IMAGE=registry.example.com/library/node:22-alpine
+COGNITRADE_NGINX_IMAGE=registry.example.com/library/nginx:alpine
+```
+
+模型运行配置：
+
+```env
+PROVIDER_NAME=openai
+OPENAI_API_KEY=replace-with-your-key
+OPENAI_BASE_URL=https://your-openai-compatible-endpoint
+OPENAI_MODEL=gpt-5.5
+OPENAI_REVIEW_MODEL=gpt-5.5
+OPENAI_REASONING_EFFORT=xhigh
+OPENAI_DISABLE_RESPONSE_STORAGE=true
+```
+
+`OPENAI_BASE_URL` 会自动补 `/v1`；调用固定使用 OpenAI Responses API 和 Bearer 认证。`OPENAI_DISABLE_RESPONSE_STORAGE=true` 会向普通与流式 Responses 请求发送 `store=false`。运行数据保存在 `cognitrade_workspace` Docker 命名卷中，API 使用固定非 root 用户；重建镜像或执行 `down` 不会删除研究数据，新版本配置模板只补充缺失文件，不覆盖运维修改。
 
 ## Web 研究工作台
 

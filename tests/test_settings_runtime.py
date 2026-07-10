@@ -98,15 +98,26 @@ class SettingsRuntimeTests(unittest.TestCase):
     def test_settings_from_env_preserves_workspace_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            (root / ".env").write_text("OPENAI_MODEL=test-model\nDEFAULT_TIMEZONE=UTC\n", encoding="utf-8")
+            (root / ".env").write_text(
+                "OPENAI_MODEL=test-model\n"
+                "OPENAI_REVIEW_MODEL=test-review-model\n"
+                "OPENAI_REASONING_EFFORT=xhigh\n"
+                "OPENAI_DISABLE_RESPONSE_STORAGE=false\n"
+                "DEFAULT_TIMEZONE=UTC\n",
+                encoding="utf-8",
+            )
 
             settings = Settings.from_env(root)
+            resolved_root = root.resolve()
 
             self.assertEqual(settings.default_model, "test-model")
+            self.assertEqual(settings.review_model, "test-review-model")
+            self.assertEqual(settings.openai_reasoning_effort, "xhigh")
+            self.assertFalse(settings.openai_disable_response_storage)
             self.assertEqual(settings.default_timezone, "UTC")
-            self.assertEqual(settings.workspace_root, root / "workspace")
-            self.assertEqual(settings.config_root, root / "workspace" / "config")
-            self.assertEqual(settings.taxonomy_root, root / "workspace" / "taxonomy")
+            self.assertEqual(settings.workspace_root, resolved_root / "workspace")
+            self.assertEqual(settings.config_root, resolved_root / "workspace" / "config")
+            self.assertEqual(settings.taxonomy_root, resolved_root / "workspace" / "taxonomy")
 
 
 if __name__ == "__main__":

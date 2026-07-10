@@ -15,6 +15,9 @@ class Settings(BaseModel):
 
     provider_name: str = "openai"
     default_model: str = "GPT-5.5"
+    review_model: str = "GPT-5.5"
+    openai_reasoning_effort: str | None = None
+    openai_disable_response_storage: bool = True
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
     openai_api_key: str | None = None

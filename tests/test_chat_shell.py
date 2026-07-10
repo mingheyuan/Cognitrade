@@ -7,9 +7,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from prompt_toolkit.output.win32 import NoConsoleScreenBufferError
-
 from research_system.cli.shell.chat_fallback import run_chat_fallback
+from research_system.cli.prompt_toolkit_compat import NoConsoleScreenBufferError
 from research_system.cli.memory.chat_thread_store import ChatThreadStore
 from research_system.cli.state.chat_updates import SessionStatePatch, TranscriptUpdate
 from research_system.runtime.orchestrator import ResearchOrchestrator

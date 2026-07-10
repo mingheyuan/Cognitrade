@@ -1,0 +1,63 @@
+name: cognitrade
+
+services:
+  api:
+    image: cognitrade-api:local
+    build:
+      context: .
+      dockerfile: deploy/backend.Dockerfile
+      args:
+        PYTHON_IMAGE: ${COGNITRADE_PYTHON_IMAGE:-public.ecr.aws/docker/library/python:3.11-slim-bookworm}
+    env_file:
+      - ${COGNITRADE_ENV_FILE:-.env}
+    environment:
+      COGNITRADE_API_TOKEN: ${COGNITRADE_API_TOKEN:?COGNITRADE_API_TOKEN is required}
+      COGNITRADE_API_ALLOW_UNAUTHENTICATED: "false"
+      COGNITRADE_API_HOST: 0.0.0.0
+      COGNITRADE_API_PORT: "8000"
+      COGNITRADE_API_RELOAD: "false"
+      HOME: /home/cognitrade
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 45s
+    volumes:
+      - cognitrade_workspace:/app/workspace
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=3).read(1)"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  web:
+    image: cognitrade-web:local
+    build:
+      context: .
+      dockerfile: deploy/frontend.Dockerfile
+      args:
+        NODE_IMAGE: ${COGNITRADE_NODE_IMAGE:-public.ecr.aws/docker/library/node:22-alpine}
+        NGINX_IMAGE: ${COGNITRADE_NGINX_IMAGE:-public.ecr.aws/docker/library/nginx:alpine}
+        VITE_COGNITRADE_API_BASE_URL: /api/v1
+    depends_on:
+      api:
+        condition: service_healthy
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${COGNITRADE_WEB_HOST:-127.0.0.1}:${COGNITRADE_WEB_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  cognitrade_workspace:
+    name: ${COGNITRADE_WORKSPACE_VOLUME:-cognitrade_workspace}
