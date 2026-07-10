@@ -27,6 +27,7 @@
 
 ```text
 Cognitrade/
+├─ frontend/           # React + Vite 研究工作台（当前为演示数据层）
 ├─ research_system/    # 主代码
 ├─ tests/              # 本地回归测试
 ├─ workspace/          # 运行数据、配置、taxonomy、runs、memory、Qdrant 本地库
@@ -35,6 +36,35 @@ Cognitrade/
 ```
 
 `workspace/config/` 和 `workspace/taxonomy/` 是当前运行时真正读取的配置目录，不是包内静态配置目录。
+
+## Web 研究工作台
+
+仓库现在包含一套面向现有研究运行时设计的 Web 前端，位于 `frontend/`。产品方向是“对话驱动、过程可见、证据可追溯”的研究工作台，而不是行情门户或自动交易终端。
+
+当前包含：
+
+- 研究工作台：问题输入、结构化个股报告、Agent 阶段、证据与数据完整度
+- 研究总览：候选、板块信号、最近运行和基础设施状态
+- 智能筛选：核心池 / 观察池、评分拆解、筛选与搜索
+- 方法论：维度权重、后验演进、待审核提案与写回保护
+- 运行记录：运行 DAG、阶段事件、历史筛选和回放入口
+
+本地启动：
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+生产构建与检查：
+
+```bash
+npm run lint
+npm run build
+```
+
+当前仓库没有入站 HTTP / SSE 服务，因此前端明确显示为“演示快照”，不会把示例数据伪装成实时结果。现有 Python 编排器、CLI 和运行目录的正确接入边界，以及建议的 REST/SSE 映射见 [`frontend/README.md`](./frontend/README.md)。OpenAI、Qdrant、Redis 和数据源密钥必须留在服务端，不能放入 `VITE_*` 环境变量。
 
 ## 环境变量
 
