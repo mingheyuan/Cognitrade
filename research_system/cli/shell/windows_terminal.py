@@ -4,7 +4,8 @@ import sys
 
 from prompt_toolkit.input.defaults import create_input
 from prompt_toolkit.output.defaults import create_output
-from prompt_toolkit.output.win32 import NoConsoleScreenBufferError
+
+from research_system.cli.prompt_toolkit_compat import NoConsoleScreenBufferError
 
 
 def _pick_interactive_stdio():

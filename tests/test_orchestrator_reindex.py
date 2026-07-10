@@ -191,6 +191,7 @@ class OrchestratorReindexTests(unittest.TestCase):
             self.assertFalse(payload["cancellation_requested"])
             summary = read_json(run_root / "summary.json")
             self.assertEqual(summary, {"run_id": run_id, "status": "completed", "message": "Run completed successfully"})
+            self.assertFalse((run_root / "run_control.json").exists())
 
     def test_admin_lazy_bootstraps_when_orchestrator_init_is_bypassed(self) -> None:
         orchestrator = object.__new__(ResearchOrchestrator)

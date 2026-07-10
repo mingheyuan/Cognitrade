@@ -97,10 +97,14 @@ class OrchestratorRunAdminSupport:
     def cancel(self, run_id: str) -> dict:
         paths = self.host.run_store.load_run_paths(run_id)
         control_plane = RunControlPlane(paths.run_control)
-        control_state = control_plane.request_cancellation(reason="manual_cancel")
         run_state_payload = self.host.load_json_payload(paths.run_state)
         status = run_state_payload.get("status") if isinstance(run_state_payload, dict) else None
         active_run = status in {"received", "identifying_intent", "ready", "running", "waiting_external", "gated"}
+        control_state = (
+            control_plane.request_cancellation(reason="manual_cancel")
+            if active_run
+            else control_plane.load()
+        )
         if active_run and run_state_payload:
             run_state_payload["status"] = "cancelled"
             write_json(paths.run_state, run_state_payload)
