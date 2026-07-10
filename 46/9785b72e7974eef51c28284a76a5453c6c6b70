@@ -1,0 +1,67 @@
+README.md
+  s_a6a8a3a6f43b3c::t_55f31a110cff15 67-68,150
+api-todo/api-v2-todo.md
+  s_a6a8a3a6f43b3c::t_931ff1b2715ea0 1-126
+frontend/.env.example
+  s_a6a8a3a6f43b3c::t_7b9ddd2b1ed019 1
+frontend/README.md
+  s_a6a8a3a6f43b3c::t_9bb2c361ff9e36 30-37,46-49,52,76-77,80-82,86
+frontend/src/App.tsx
+  s_a6a8a3a6f43b3c::t_dda86983f0c9fd 1,3,8,17-23,25,29,31-33,35,37-38,40-48,50-61,81-82,87,89,91,96,99-106,113-114,117
+frontend/src/CognitradeContext.tsx
+  s_a6a8a3a6f43b3c::t_224cdaf00c1073 1-302
+frontend/src/api-client.ts
+  s_a6a8a3a6f43b3c::t_0b9d28ce9f3fe5 1-157
+frontend/src/components/Methodology.tsx
+  s_a6a8a3a6f43b3c::t_a50b95e69f92df 4,12,14-16,19-38,42,45-49,52-55,58-75,80,82,84,88,90-92,94
+frontend/src/components/Overview.tsx
+  s_a6a8a3a6f43b3c::t_21458268432c28 14-15,17-23,27,30,33-42,48,50-51,54-56,60-72,77-80,85-90,93-95,99,101-104,107,112-116
+frontend/src/components/ResearchComposer.tsx
+  s_a6a8a3a6f43b3c::t_023659c0904b90 3,6,27,74
+frontend/src/components/RunInspector.tsx
+  s_a6a8a3a6f43b3c::t_4f9b97a0449a02 17-30,37,44-55,61-63,67-68,71-72,76-77,82-98,102,105-108,110,113,117,119-123,126,131-133
+frontend/src/components/Runs.tsx
+  s_a6a8a3a6f43b3c::t_719e6a9944ecee 17-18,20-21,23-24,27,29-36,38-64,69-70,73-79,81-83,86-89,94-96,100,104,106-108,114-115
+frontend/src/components/Screening.tsx
+  s_a6a8a3a6f43b3c::t_e86784a3a7cd7b 13-15,17-20,22-24,26-29,31-32,35-45,49,51-52,57,61-64,70,72-73,78,82-90,96-97
+frontend/src/components/Sidebar.tsx
+  s_a6a8a3a6f43b3c::t_2ec04652ffd4d7 16-18,24,35-39,51,53,57,63-64,69,71-72,75-76,78-79,81,84,86,91,93-94,100,104
+frontend/src/components/Topbar.tsx
+  s_a6a8a3a6f43b3c::t_9056663da64ee1 1-13,25-28,31-49,51-113,115-116
+frontend/src/components/Workbench.tsx
+  s_a6a8a3a6f43b3c::t_63e219ed99165a 2-3,6,16-17,19-31,35,39-40,43-63,70-72,74,77-80,85-90,92-93,95,97,99-100,102,106,108-114,116-120,122-123,125,128-131,133-134,136-137,139-152,154-164,166-179,181-189,191-192,194-196,198-204,208,210-211
+frontend/src/data.ts
+  s_a6a8a3a6f43b3c::t_8eebbd71b4199d 3-10,13-20
+frontend/src/live-data.ts
+  s_a6a8a3a6f43b3c::t_a93ea337f569a8 1-247
+frontend/src/main.tsx
+  s_a6a8a3a6f43b3c::t_6659afa53ab392 4,9-11
+frontend/src/research-contracts.ts
+  s_a6a8a3a6f43b3c::t_8fc1a9a4291515 10-12,14,16-17,22,31,35-37,44-45,48,52,54-55,64,71-77,82-84,89,91,98-226
+frontend/src/styles.css
+  s_a6a8a3a6f43b3c::t_41ef96a3278bc8 2356,4394-4734
+frontend/src/vite-env.d.ts
+  s_a6a8a3a6f43b3c::t_be110adb946643 2-9
+requirements.txt
+  s_a6a8a3a6f43b3c::t_d251efa6e70bec 4
+scripts/service.sh
+  s_a6a8a3a6f43b3c::t_7c29199d458cd6 1041-1050,1055,1071
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "469785b72e7974eef51c28284a76a5453c6c6b70",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
