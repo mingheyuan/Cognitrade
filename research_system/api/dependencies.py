@@ -32,7 +32,8 @@ class ApiRuntimeState:
     repo_root: Path
     settings: Settings
     config: ApiConfig
-    orchestrator: Any
+    agent_os: Any
+    run_service: Any
     chat_service: Any
     event_source: Any
     mutation_lock: asyncio.Lock
@@ -53,11 +54,10 @@ def get_settings(request: Request) -> Settings:
     return get_api_runtime(request).settings
 
 
-def get_orchestrator(request: Request):
-    return get_api_runtime(request).orchestrator
-
-
 def get_agent_os(request: Request):
+    runtime = getattr(request.app.state, "api_runtime", None)
+    if isinstance(runtime, ApiRuntimeState):
+        return runtime.agent_os
     agent_os = getattr(request.app.state, "agent_os", None)
     if agent_os is None:
         raise ApiError(
@@ -66,6 +66,10 @@ def get_agent_os(request: Request):
             message="Agent OS runtime has not finished starting",
         )
     return agent_os
+
+
+def get_run_service(request: Request):
+    return get_api_runtime(request).run_service
 
 
 def get_chat_service(request: Request):
@@ -121,7 +125,6 @@ __all__ = [
     "get_chat_service",
     "get_event_source",
     "get_mutation_lock",
-    "get_orchestrator",
     "get_repo_root",
     "get_settings",
     "require_principal",

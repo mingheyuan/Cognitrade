@@ -80,48 +80,6 @@ class ArtifactBoard:
             append_jsonl(self.path, artifact.model_dump(mode="json"))
         return artifact
 
-    def add_legacy_entry(
-        self,
-        entry: Any,
-        *,
-        responsibility_node_id: str | None = None,
-    ) -> ArtifactRecord:
-        parent_artifact_ids = [
-            str(source_ref.get("artifact_id") or "").strip()
-            for source_ref in list(entry.source_refs or [])
-            if str(source_ref.get("artifact_id") or "").strip()
-        ]
-        artifact = ArtifactRecord(
-            run_id=entry.run_id,
-            thread_id=entry.thread_id,
-            request_id=entry.request_id,
-            artifact_type=entry.kind,
-            schema_version="legacy.blackboard.v1",
-            producer=ArtifactProducer(
-                executor=entry.agent,
-                capability=f"legacy.blackboard.{entry.kind}",
-                node_id=responsibility_node_id,
-                subagent_type=None,
-                domain_id="finance_ashare",
-                responsibility_node_id=(
-                    responsibility_node_id or f"legacy:{entry.phase}:{entry.agent}"
-                ),
-            ),
-            content=dict(entry.payload or {}),
-            source_refs=list(entry.source_refs or []),
-            parent_artifact_ids=parent_artifact_ids,
-            confidence=entry.confidence,
-            risk_flags=list(entry.risk_flags or []),
-            status=entry.status,
-            metadata={
-                "legacy_entry_id": entry.entry_id,
-                "legacy_phase": entry.phase,
-                "responsibility_node_id": responsibility_node_id,
-            },
-            created_at=entry.created_at,
-        )
-        return self.add(artifact)
-
     def list_artifacts(
         self,
         *,

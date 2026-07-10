@@ -147,7 +147,6 @@ class FakeOrchestrator:
                 "cancellation_requested": True,
             },
             "rerun_from": completed_response(run_id=RERUN_ID),
-            "rerun_subagent_from": completed_response(run_id=RERUN_ID),
             "list_proposals": [],
             "show_proposal": {"proposal_id": "proposal_test", "status": "pending"},
             "review_proposal": {"proposal_id": "proposal_test", "status": "approved"},
@@ -213,22 +212,6 @@ class FakeOrchestrator:
 
     def rerun_from(self, run_id: str, *, from_node: str) -> ResponseEnvelope:
         return self._call("rerun_from", run_id, from_node=from_node)
-
-    def rerun_subagent_from(
-        self,
-        run_id: str,
-        *,
-        action_node: str,
-        dag_id: str,
-        from_node: str,
-    ) -> ResponseEnvelope:
-        return self._call(
-            "rerun_subagent_from",
-            run_id,
-            action_node=action_node,
-            dag_id=dag_id,
-            from_node=from_node,
-        )
 
     def list_proposals(self, *, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         return self._call("list_proposals", status=status, limit=limit)

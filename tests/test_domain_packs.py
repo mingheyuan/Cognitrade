@@ -83,6 +83,36 @@ class DomainPackTests(unittest.TestCase):
             ],
         )
 
+    def test_finance_pack_selects_distillation_graph_from_intent_policy(self) -> None:
+        graph = CapabilityPlanner(self.registry).build_graph(
+            CapabilityPlanningRequest(
+                domain_id="finance_ashare",
+                objective="Distill investment logic from source records.",
+                available_artifact_types=["user_request"],
+                required_artifact_types=["research_report"],
+                allowed_tools=["financial_data_provider"],
+                metadata={
+                    "intent": "distill_kol_logic",
+                    "intent_inputs": {
+                        "source_records": [
+                            {"id": "record-1", "text": "Focus on cash flow."}
+                        ]
+                    },
+                },
+            )
+        )
+
+        self.assertEqual(
+            [node.executor for node in graph.nodes if node.node_kind == "subagent"],
+            [
+                "query_normalizer",
+                "distillation_source_collector",
+                "kol_logic_distiller",
+                "distillation_reviewer",
+                "distillation_report_composer",
+            ],
+        )
+
     def test_installing_an_unseen_third_domain_requires_no_core_change(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

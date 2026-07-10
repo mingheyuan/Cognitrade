@@ -31,8 +31,9 @@ class OrchestratorAdminService:
     settings: Settings
     run_store: RunStore
     retention: RunRetentionService
-    retriever: object
     llm_provider: object | None = None
+    qdrant: object | None = None
+    qdrant_error: str | None = None
     skill_runtime: object | None = None
     proposal_store: object | None = None
     subagent_discovery_store: object | None = None

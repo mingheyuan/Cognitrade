@@ -25,18 +25,6 @@ class OrchestratorExecutionRuntimeSupport:
             lifecycle_support=self.lifecycle_support,
         )
 
-    def begin_action(self, **kwargs) -> None:
-        self.lifecycle_support.begin_action(control_support=self.control_support, **kwargs)
-
-    def complete_action(self, **kwargs) -> None:
-        self.lifecycle_support.complete_action(control_support=self.control_support, **kwargs)
-
-    def fail_action(self, **kwargs) -> None:
-        self.lifecycle_support.fail_action(control_support=self.control_support, **kwargs)
-
-    def add_entry(self, *args, **kwargs) -> None:
-        self.lifecycle_support.add_entry(*args, **kwargs)
-
     def emit_event(self, *args, **kwargs) -> None:
         self.lifecycle_support.emit_event(*args, **kwargs)
 
@@ -58,8 +46,8 @@ class OrchestratorExecutionRuntimeSupport:
     def trace_agent_label(self, payload: dict) -> str:
         return self.trace_support.trace_agent_label(payload)
 
-    def enforce_runtime_controls(self, *args, **kwargs) -> None:
-        self.control_support.enforce_runtime_controls(*args, **kwargs)
+    def enforce_run_controls(self, *args, **kwargs) -> None:
+        self.control_support.enforce_run_controls(*args, **kwargs)
 
     def wait_for_external_dependency(self, *args, **kwargs) -> None:
         self.control_support.wait_for_external_dependency(*args, **kwargs)

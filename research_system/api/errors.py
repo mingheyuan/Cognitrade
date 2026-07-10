@@ -161,7 +161,7 @@ def _classify_orchestrator_error(message: str) -> tuple[int, str]:
         return 404, "resource_not_found"
     if "unknown_rerun_node" in normalized:
         return 422, "unknown_rerun_node"
-    if "missing_request_payload" in normalized or "missing_task_plan_payload" in normalized:
+    if "missing_request_payload" in normalized or "missing_execution_graph_payload" in normalized:
         return 409, "source_run_incomplete"
     if "must be approved before activation" in normalized:
         return 409, "discovery_not_approved"

@@ -86,8 +86,6 @@ def execute_app_main_command(
         openapi_spec_uri=getattr(args, "openapi_spec_uri", None),
         openapi_operation_id=getattr(args, "openapi_operation_id", None),
         timeout_seconds=getattr(args, "timeout_seconds", None),
-        action_node_id=getattr(args, "action_node_id", None),
-        dag_id=getattr(args, "dag_id", None),
         subagent_node_id=getattr(args, "subagent_node_id", None),
     )
     return print_payload_fn(payload, as_json=getattr(args, "as_json", False))

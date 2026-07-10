@@ -12,18 +12,6 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-BlackboardKind = Literal[
-    "source_record",
-    "verified_snapshot",
-    "logic_block",
-    "distilled_dimension",
-    "retrieved_evidence",
-    "report_fragment",
-    "review_finding",
-    "proposal_draft",
-]
-
-BlackboardStatus = Literal["active", "superseded", "needs_review"]
 MailboxMessageType = Literal["supplement_request", "challenge", "review_feedback"]
 MailboxStatus = Literal["pending", "read", "resolved"]
 ThreadStatus = Literal["ready", "running", "waiting", "completed", "failed", "cancelled"]
@@ -42,33 +30,6 @@ OrchestratorStatus = Literal[
     "failed",
     "timed_out",
 ]
-GateVerdictType = Literal["pass", "fail", "needs_review"]
-
-
-class BlackboardEntry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    entry_id: str = Field(default_factory=generate_ulid)
-    run_id: str
-    thread_id: str
-    request_id: str
-    kind: BlackboardKind
-    agent: str
-    phase: str
-    status: BlackboardStatus = "active"
-    payload: dict[str, Any]
-    source_refs: list[dict[str, Any]] = Field(default_factory=list)
-    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    risk_flags: list[str] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=utc_now)
-
-    @classmethod
-    def model_validate(cls, obj, *args, **kwargs):
-        if isinstance(obj, dict) and "thread_id" not in obj:
-            obj = {**obj, "thread_id": str(obj.get("run_id") or "")}
-        return super().model_validate(obj, *args, **kwargs)
-
-
 class MailboxMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -150,18 +111,6 @@ class RunStateSnapshot(BaseModel):
     last_event_id: str | None = None
     error_summary: str | None = None
     updated_at: datetime = Field(default_factory=utc_now)
-
-
-class GateVerdict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    gate_id: str = Field(default_factory=generate_ulid)
-    run_id: str
-    gate_type: str
-    verdict: GateVerdictType
-    reason: str
-    blocking_items: list[str] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=utc_now)
 
 
 class RunEvent(BaseModel):

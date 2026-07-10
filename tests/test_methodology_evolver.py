@@ -8,11 +8,11 @@ from research_system.services.methodologies.evolver import MethodologyEvolver
 class MethodologyEvolverTests(unittest.TestCase):
     def test_build_candidates_attaches_matching_memory_context(self) -> None:
         evolver = MethodologyEvolver()
-        blackboard_entries = [
+        artifacts = [
             {
-                "kind": "distilled_dimension",
-                "entry_id": "dim-1",
-                "payload": {
+                "artifact_type": "distilled_dimension",
+                "artifact_id": "dim-1",
+                "content": {
                     "dimension_name": "policy catalyst",
                     "canonical_dimension_name": "policy catalyst",
                     "dimension_family": "event_driven",
@@ -36,7 +36,7 @@ class MethodologyEvolverTests(unittest.TestCase):
 
         candidates = evolver.build_candidates(
             run_id="01RUN",
-            blackboard_entries=blackboard_entries,
+            artifacts=artifacts,
             methodology_memory_rows=memory_rows,
         )
 
@@ -50,11 +50,11 @@ class MethodologyEvolverTests(unittest.TestCase):
         runs = [
             {
                 "run_id": "01RUNA",
-                "blackboard_entries": [
+                "artifacts": [
                     {
-                        "kind": "distilled_dimension",
-                        "entry_id": "dim-1",
-                        "payload": {
+                        "artifact_type": "distilled_dimension",
+                        "artifact_id": "dim-1",
+                        "content": {
                             "dimension_name": "policy catalyst",
                             "canonical_dimension_name": "policy catalyst",
                             "dimension_family": "event_driven",
@@ -66,18 +66,18 @@ class MethodologyEvolverTests(unittest.TestCase):
                         },
                     },
                     {
-                        "kind": "review_finding",
-                        "payload": {"severity": "high", "verdict": "rejected"},
+                        "artifact_type": "review_finding",
+                        "content": {"severity": "high", "verdict": "rejected"},
                     },
                 ],
             },
             {
                 "run_id": "01RUNB",
-                "blackboard_entries": [
+                "artifacts": [
                     {
-                        "kind": "distilled_dimension",
-                        "entry_id": "dim-2",
-                        "payload": {
+                        "artifact_type": "distilled_dimension",
+                        "artifact_id": "dim-2",
+                        "content": {
                             "dimension_name": "policy catalyst",
                             "canonical_dimension_name": "policy catalyst",
                             "dimension_family": "event_driven",
@@ -89,8 +89,8 @@ class MethodologyEvolverTests(unittest.TestCase):
                         },
                     },
                     {
-                        "kind": "review_finding",
-                        "payload": {"severity": "medium", "verdict": "confirmed"},
+                        "artifact_type": "review_finding",
+                        "content": {"severity": "medium", "verdict": "confirmed"},
                     },
                 ],
             },
@@ -112,11 +112,11 @@ class MethodologyEvolverTests(unittest.TestCase):
         runs = [
             {
                 "run_id": "01RUNA",
-                "blackboard_entries": [
+                "artifacts": [
                     {
-                        "kind": "distilled_dimension",
-                        "entry_id": "dim-1",
-                        "payload": {
+                        "artifact_type": "distilled_dimension",
+                        "artifact_id": "dim-1",
+                        "content": {
                             "dimension_name": "policy catalyst",
                             "canonical_dimension_name": "policy catalyst",
                             "dimension_family": "event_driven",
@@ -131,11 +131,11 @@ class MethodologyEvolverTests(unittest.TestCase):
             },
             {
                 "run_id": "01RUNB",
-                "blackboard_entries": [
+                "artifacts": [
                     {
-                        "kind": "distilled_dimension",
-                        "entry_id": "dim-2",
-                        "payload": {
+                        "artifact_type": "distilled_dimension",
+                        "artifact_id": "dim-2",
+                        "content": {
                             "dimension_name": "policy catalyst",
                             "canonical_dimension_name": "policy catalyst",
                             "dimension_family": "event_driven",
@@ -195,11 +195,11 @@ class MethodologyEvolverTests(unittest.TestCase):
         evolver = MethodologyEvolver()
         candidates = evolver.build_candidates(
             run_id="01RUN",
-            blackboard_entries=[
+            artifacts=[
                 {
-                    "kind": "distilled_dimension",
-                    "entry_id": "dim-1",
-                    "payload": {
+                    "artifact_type": "distilled_dimension",
+                    "artifact_id": "dim-1",
+                    "content": {
                         "dimension_name": "policy catalyst",
                         "canonical_dimension_name": "policy catalyst",
                         "dimension_family": "event_driven",

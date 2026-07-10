@@ -46,18 +46,6 @@ class Settings(BaseModel):
     max_llm_calls_per_turn: int = 1
     max_subagent_calls_per_turn: int = 32
     max_child_threads_per_turn: int = 8
-    supervisor_shadow_llm_enabled: bool = False
-    supervisor_shadow_llm_reasoning_effort: str = "low"
-    supervisor_llm_policy_enabled: bool = False
-    supervisor_llm_policy_min_confidence: float = 0.7
-    supervisor_hybrid_llm_enabled: bool = False
-    supervisor_hybrid_llm_min_confidence: float = 0.7
-    subagent_phase_shadow_llm_enabled: bool = False
-    subagent_phase_shadow_llm_reasoning_effort: str = "low"
-    subagent_phase_llm_policy_enabled: bool = False
-    subagent_phase_llm_policy_min_confidence: float = 0.7
-    subagent_phase_hybrid_llm_enabled: bool = False
-    subagent_phase_hybrid_llm_min_confidence: float = 0.7
     subagent_discovery_shadow_llm_enabled: bool = False
     subagent_discovery_shadow_llm_reasoning_effort: str = "low"
     subagent_discovery_llm_policy_enabled: bool = False
@@ -71,7 +59,6 @@ class Settings(BaseModel):
     retrieval_policy_path: Path
     methodology_manifest_path: Path
     router_defaults_path: Path
-    subagent_control_escalation_policy_path: Path
     subagent_discovery_policy_path: Path
     subagent_discovery_approval_policy_path: Path
     subagent_discovery_activation_policy_path: Path
@@ -99,7 +86,6 @@ class Settings(BaseModel):
             "retrieval_policy": self.retrieval_policy_path,
             "methodology_manifest": self.methodology_manifest_path,
             "router_defaults": self.router_defaults_path,
-            "subagent_control_escalation_policy": self.subagent_control_escalation_policy_path,
             "subagent_discovery_policy": self.subagent_discovery_policy_path,
             "subagent_discovery_approval_policy": self.subagent_discovery_approval_policy_path,
             "subagent_discovery_activation_policy": self.subagent_discovery_activation_policy_path,
@@ -139,14 +125,6 @@ class Settings(BaseModel):
             raise ValueError("max_subagent_calls_per_turn must be positive")
         if self.max_child_threads_per_turn <= 0:
             raise ValueError("max_child_threads_per_turn must be positive")
-        if self.supervisor_hybrid_llm_min_confidence < 0 or self.supervisor_hybrid_llm_min_confidence > 1:
-            raise ValueError("supervisor_hybrid_llm_min_confidence must be between 0 and 1")
-        if self.supervisor_llm_policy_min_confidence < 0 or self.supervisor_llm_policy_min_confidence > 1:
-            raise ValueError("supervisor_llm_policy_min_confidence must be between 0 and 1")
-        if self.subagent_phase_hybrid_llm_min_confidence < 0 or self.subagent_phase_hybrid_llm_min_confidence > 1:
-            raise ValueError("subagent_phase_hybrid_llm_min_confidence must be between 0 and 1")
-        if self.subagent_phase_llm_policy_min_confidence < 0 or self.subagent_phase_llm_policy_min_confidence > 1:
-            raise ValueError("subagent_phase_llm_policy_min_confidence must be between 0 and 1")
         if self.subagent_discovery_hybrid_llm_min_confidence < 0 or self.subagent_discovery_hybrid_llm_min_confidence > 1:
             raise ValueError("subagent_discovery_hybrid_llm_min_confidence must be between 0 and 1")
         if self.subagent_discovery_llm_policy_min_confidence < 0 or self.subagent_discovery_llm_policy_min_confidence > 1:

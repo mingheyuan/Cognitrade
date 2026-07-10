@@ -4,6 +4,13 @@ import { RunInspector } from './components/RunInspector'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
 import type { ViewId } from './data'
+import {
+  createAgentOSRun,
+  defaultIntent,
+  getAgentOSReplay,
+  subscribeToExecutionEvents,
+} from './api'
+import type { AgentOSReplay, ComposerIntent } from './research-contracts'
 
 const Workbench = lazy(() => import('./components/Workbench').then((module) => ({ default: module.Workbench })))
 const Overview = lazy(() => import('./components/Overview').then((module) => ({ default: module.Overview })))
@@ -17,8 +24,10 @@ function App() {
   const [progress, setProgress] = useState(100)
   const [lastQuery, setLastQuery] = useState('')
   const [selectedEvidence, setSelectedEvidence] = useState('E01')
+  const [selectedRun, setSelectedRun] = useState<AgentOSReplay | null>(null)
+  const [runRefreshToken, setRunRefreshToken] = useState(0)
   const [toast, setToast] = useState('')
-  const runTimer = useRef<number | undefined>(undefined)
+  const unsubscribeEvents = useRef<(() => void) | undefined>(undefined)
   const toastTimer = useRef<number | undefined>(undefined)
 
   const focusComposer = useCallback(() => {
@@ -28,31 +37,54 @@ function App() {
     })
   }, [])
 
-  const handleResearch = useCallback((query: string) => {
-    if (runTimer.current) window.clearInterval(runTimer.current)
+  const openRun = useCallback(async (runId: string) => {
+    const replay = await getAgentOSReplay(runId)
+    setSelectedRun(replay)
+    const request = replay.request?.request as Record<string, unknown> | undefined
+    setLastQuery(String(request?.user_query ?? ''))
+    setSelectedEvidence(replay.artifacts[0]?.artifact_id ?? '')
+  }, [])
+
+  const handleResearch = useCallback(async (query: string, intent: ComposerIntent = 'auto') => {
+    unsubscribeEvents.current?.()
     if (toastTimer.current) window.clearTimeout(toastTimer.current)
 
     setLastQuery(query)
     setActiveView('workbench')
-    setProgress(8)
+    setProgress(5)
     setRunning(true)
     setToast('')
 
-    let current = 8
-    runTimer.current = window.setInterval(() => {
-      current = Math.min(100, current + (current < 60 ? 11 : 7))
-      setProgress(current)
-      if (current >= 100) {
-        if (runTimer.current) window.clearInterval(runTimer.current)
-        runTimer.current = undefined
-        window.setTimeout(() => {
-          setRunning(false)
-          setToast('研究运行已完成，结构化报告与证据链已更新。')
-          toastTimer.current = window.setTimeout(() => setToast(''), 4200)
-        }, 450)
+    try {
+      const response = await createAgentOSRun({
+        intent: defaultIntent(intent),
+        user_query: query,
+      })
+      if (response.run_id) {
+        await openRun(response.run_id)
+        setRunRefreshToken((value) => value + 1)
+        unsubscribeEvents.current = subscribeToExecutionEvents(
+          response.run_id,
+          (event) => {
+            const eventType = String(event.event_type ?? '')
+            if (eventType === 'graph_run_started') setProgress(15)
+            else if (eventType === 'graph_frontier_ready') setProgress(45)
+            else if (eventType === 'graph_node_completed') setProgress((value) => Math.min(90, value + 15))
+            else if (eventType === 'graph_run_finished') setProgress(100)
+          },
+          (error) => setToast(error.message),
+        )
       }
-    }, 620)
-  }, [])
+      setProgress(100)
+      setRunning(false)
+      setToast(response.status === 'completed' ? 'Research completed.' : response.message)
+      toastTimer.current = window.setTimeout(() => setToast(''), 4200)
+    } catch (error) {
+      setRunning(false)
+      setProgress(0)
+      setToast(error instanceof Error ? error.message : 'Research request failed.')
+    }
+  }, [openRun])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -64,7 +96,7 @@ function App() {
     window.addEventListener('keydown', onKeyDown)
     return () => {
       window.removeEventListener('keydown', onKeyDown)
-      if (runTimer.current) window.clearInterval(runTimer.current)
+      unsubscribeEvents.current?.()
       if (toastTimer.current) window.clearTimeout(toastTimer.current)
     }
   }, [focusComposer])
@@ -79,12 +111,14 @@ function App() {
             lastQuery={lastQuery}
             onSubmit={handleResearch}
             onSelectEvidence={setSelectedEvidence}
+            run={selectedRun}
           />
           <RunInspector
             running={running}
             progress={progress}
             selectedEvidence={selectedEvidence}
             onSelectEvidence={setSelectedEvidence}
+            run={selectedRun}
           />
         </div>
       )
@@ -103,7 +137,16 @@ function App() {
 
     if (activeView === 'screening') return <Screening />
     if (activeView === 'methodology') return <Methodology />
-    return <Runs />
+    return (
+      <Runs
+        activeRunId={selectedRun?.run_id}
+        refreshToken={runRefreshToken}
+        onSelectRun={(runId) => {
+          void openRun(runId)
+          setActiveView('workbench')
+        }}
+      />
+    )
   }
 
   return (

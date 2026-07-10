@@ -1,8 +1,9 @@
 import { ArrowUp, ChevronDown, Paperclip, SlidersHorizontal, Sparkles } from 'lucide-react'
 import { type FormEvent, useState } from 'react'
+import type { ComposerIntent } from '../research-contracts'
 
 type ResearchComposerProps = {
-  onSubmit: (query: string) => void
+  onSubmit: (query: string, intent: ComposerIntent) => void
   running: boolean
   compact?: boolean
 }
@@ -23,7 +24,7 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
     event.preventDefault()
     const normalized = query.trim()
     if (!normalized || running) return
-    onSubmit(normalized)
+    onSubmit(normalized, intent)
     setQuery('')
   }
 

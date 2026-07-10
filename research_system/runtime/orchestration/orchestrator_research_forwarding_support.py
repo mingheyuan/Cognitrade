@@ -14,21 +14,6 @@ class OrchestratorResearchForwardingSupport:
             self.host.research_support = support
         return support
 
-    def run_methodology_evolution_collect(self, **kwargs):
-        return self._research_support().run_methodology_evolution_collect(**kwargs)
-
-    def build_candidate_methodology_entries(self, **kwargs):
-        return self._research_support().build_candidate_methodology_entries(**kwargs)
-
-    def build_stock_methodology_entries(self, **kwargs):
-        return self._research_support().build_stock_methodology_entries(**kwargs)
-
-    def build_review_methodology_entries(self, **kwargs):
-        return self._research_support().build_review_methodology_entries(**kwargs)
-
-    def build_debug_payload(self, **kwargs) -> dict:
-        return self._research_support().build_debug_payload(**kwargs)
-
     def persist_proposal_transition(self, proposal, *, previous_status: str, apply_approved_side_effects: bool):
         return self._research_support().persist_proposal_transition(
             proposal,

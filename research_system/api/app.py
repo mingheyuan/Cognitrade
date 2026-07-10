@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import ConfigDict, BaseModel, Field
 
 from research_system.api.chat_service import ChatService
+from research_system.api.agent_os_run_service import AgentOSRunService
 from research_system.api.config import ApiConfig
 from research_system.api.dependencies import ApiRuntimeState, get_agent_os, require_principal
 from research_system.api.errors import install_exception_handlers
@@ -21,7 +22,6 @@ from research_system.api.routes import admin, chat, runs, system
 from research_system.api.sse import RunEventSource
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.agent_os import AgentOS
-from research_system.runtime.orchestration.orchestrator import ResearchOrchestrator
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.schemas.artifacts import ArtifactDraft
 
@@ -57,13 +57,15 @@ def create_app(
     settings: Settings | None = None,
     api_config: ApiConfig | None = None,
     orchestrator_factory: Callable[[Settings], Any] | None = None,
+    agent_os_factory: Callable[[Settings], AgentOS] | None = None,
+    run_service_factory: Callable[[AgentOS], Any] | None = None,
     chat_service_factory: Callable[[Settings], Any] | None = None,
     event_source_factory: Callable[[Settings, ApiConfig], Any] | None = None,
     repo_root: Path | None = None,
 ) -> FastAPI:
     resolved_repo_root = (repo_root or _DEFAULT_REPO_ROOT).resolve()
     resolved_api_config = api_config or ApiConfig.from_env(resolved_repo_root)
-    build_orchestrator = orchestrator_factory or ResearchOrchestrator
+    build_agent_os = agent_os_factory or AgentOS
     build_chat_service = chat_service_factory or ChatService
     build_event_source = event_source_factory or RunEventSource
 
@@ -74,14 +76,26 @@ def create_app(
         resolved_api_config.validate()
         ensure_workspace_layout(effective_settings)
 
-        orchestrator = build_orchestrator(effective_settings)
-        agent_os = getattr(application.state, "agent_os", None) or AgentOS(effective_settings)
+        agent_os = build_agent_os(effective_settings)
+        # This injection exists only for transport-layer test doubles while API
+        # tests are migrated. Production always uses AgentOSRunService.
+        injected_run_service = (
+            orchestrator_factory(effective_settings)
+            if orchestrator_factory is not None
+            else None
+        )
+        run_service = (
+            run_service_factory(agent_os)
+            if run_service_factory is not None
+            else injected_run_service or AgentOSRunService(agent_os)
+        )
         try:
             runtime = ApiRuntimeState(
                 repo_root=resolved_repo_root,
                 settings=effective_settings,
                 config=resolved_api_config,
-                orchestrator=orchestrator,
+                agent_os=agent_os,
+                run_service=run_service,
                 chat_service=build_chat_service(effective_settings),
                 event_source=build_event_source(effective_settings, resolved_api_config),
                 mutation_lock=asyncio.Lock(),
@@ -94,7 +108,7 @@ def create_app(
         finally:
             application.state.api_runtime = None
             application.state.agent_os = None
-            close = getattr(orchestrator, "close", None)
+            close = getattr(injected_run_service, "close", None)
             if callable(close):
                 close()
 
@@ -104,9 +118,11 @@ def create_app(
         version="1.0.0",
         lifespan=lifespan,
     )
-    # Keep the canonical Agent OS workspace usable with both a plain TestClient
-    # and a lifespan-managed production server.
-    application.state.agent_os = AgentOS(settings or Settings.from_env(resolved_repo_root))
+    # The unversioned workspace API is also useful in lightweight TestClient and
+    # embedded use where a lifespan context is not explicitly entered.
+    application.state.agent_os = build_agent_os(
+        settings or Settings.from_env(resolved_repo_root)
+    )
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(resolved_api_config.cors_origins),

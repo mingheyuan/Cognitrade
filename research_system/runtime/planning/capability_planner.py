@@ -18,9 +18,19 @@ class CapabilityPlanner:
 
     def build_graph(self, request: CapabilityPlanningRequest) -> ExecutionGraph:
         manifest = self.registry.get(request.domain_id)
+        intent = str(request.metadata.get("intent") or "").strip()
+        intent_capabilities = manifest.planner_policies.get("intent_capabilities") or {}
+        policy_preferred = list(intent_capabilities.get(intent) or [])
+        if policy_preferred:
+            request = request.model_copy(
+                update={
+                    "preferred_capabilities": list(
+                        dict.fromkeys([*request.preferred_capabilities, *policy_preferred])
+                    )
+                }
+            )
         available = set(request.available_artifact_types)
         required_outputs = list(dict.fromkeys(request.required_artifact_types))
-        intent = str(request.metadata.get("intent") or "").strip()
         intent_outputs = manifest.planner_policies.get("intent_outputs") or {}
         for artifact_type in list(intent_outputs.get(intent) or []):
             if artifact_type not in required_outputs:
@@ -165,6 +175,7 @@ class CapabilityPlanner:
         allowed_permissions = set(request.allowed_permissions)
         allowed_side_effects = set(request.allowed_side_effect_levels)
         preferred = set(request.preferred_capabilities)
+        intent = str(request.metadata.get("intent") or "").strip()
         candidates = []
         cost_rank = {"low": 0, "medium": 1, "high": 2}
         latency_rank = {"low": 0, "medium": 1, "high": 2}
@@ -172,6 +183,13 @@ class CapabilityPlanner:
             domain_id=request.domain_id,
             produces=artifact_type,
         ):
+            intent_tags = {
+                tag.split(":", 1)[1]
+                for tag in capability.tags
+                if tag.startswith("intent:") and ":" in tag
+            }
+            if intent_tags and intent not in intent_tags:
+                continue
             if capability.side_effect_level not in allowed_side_effects:
                 continue
             if allowed_tools and not set(capability.tools).issubset(allowed_tools):

@@ -252,39 +252,17 @@ class ApiV1RunsTests(unittest.TestCase):
         self.assertEqual(call.args, (RUN_ID,))
         self.assertEqual(call.kwargs, {})
 
-    def test_rerun_routes_forward_explicit_nodes(self) -> None:
+    def test_rerun_route_forwards_execution_graph_node(self) -> None:
         top_level = self.client.post(
             f"/api/v1/runs/{RUN_ID}/reruns",
             headers=auth_headers(),
             json={"from_node": "retrieve"},
         )
-        subagent = self.client.post(
-            f"/api/v1/runs/{RUN_ID}/subagent-reruns",
-            headers=auth_headers(),
-            json={
-                "action_node": "collect",
-                "dag_id": "collector_dag",
-                "from_node": "market_snapshot",
-            },
-        )
-
         self.assertEqual(top_level.status_code, 200)
         self.assertEqual(top_level.json()["run_id"], RERUN_ID)
-        self.assertEqual(subagent.status_code, 200)
-        self.assertEqual(subagent.json()["run_id"], RERUN_ID)
         top_call = self.orchestrator.calls_for("rerun_from")[-1]
         self.assertEqual(top_call.args, (RUN_ID,))
         self.assertEqual(top_call.kwargs, {"from_node": "retrieve"})
-        sub_call = self.orchestrator.calls_for("rerun_subagent_from")[-1]
-        self.assertEqual(sub_call.args, (RUN_ID,))
-        self.assertEqual(
-            sub_call.kwargs,
-            {
-                "action_node": "collect",
-                "dag_id": "collector_dag",
-                "from_node": "market_snapshot",
-            },
-        )
 
     def test_run_mutations_are_serialized(self) -> None:
         state_lock = threading.Lock()

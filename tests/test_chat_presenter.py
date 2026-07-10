@@ -77,84 +77,31 @@ class ChatPresenterTests(unittest.TestCase):
         self.assertEqual(chunks[0].kind, "event")
         self.assertIn("Enriching top 3 stock_screen candidates", chunks[0].text)
 
-    def test_dynamic_action_inserted_event_is_exposed_as_event_text(self) -> None:
-        presenter = ChatStreamPresenter()
+    def test_graph_patch_event_is_exposed_in_full_event_mode(self) -> None:
+        presenter = ChatStreamPresenter(events_mode="full")
         chunks = presenter.on_event(
             _event(
-                event_type="dynamic_action_inserted",
-                phase="collect",
-                agent="collector",
-                message="Dynamically inserted action: collect_replenish_notice",
+                event_type="graph_patch_requested",
+                message="Graph patch requested",
+                payload={"patch_id": "patch-1"},
             )
         )
         self.assertEqual(chunks[0].kind, "event")
-        self.assertIn("collect_replenish_notice", chunks[0].text)
+        self.assertIn("graph_patch_requested", chunks[0].text)
 
-    def test_supervisor_decision_event_summarizes_next_action(self) -> None:
+    def test_graph_patch_event_is_captured_in_live_trace_payload(self) -> None:
         presenter = ChatStreamPresenter()
-        chunks = presenter.on_event(
-            _event(
-                event_type="supervisor_decision",
-                message="Supervisor evaluated next actions",
-                payload={
-                    "decision_type": "continue",
-                    "next_actions": [
-                        {"node_id": "retrieve", "phase": "retrieve", "agent": "retriever"}
-                    ],
-                    "notes": [],
-                },
-            )
-        )
-        self.assertEqual(chunks[0].kind, "event")
-        self.assertIn("next: retrieve / retriever / retrieve", chunks[0].text)
-
-    def test_supervisor_decision_event_summarizes_replan(self) -> None:
-        presenter = ChatStreamPresenter()
-        chunks = presenter.on_event(
-            _event(
-                event_type="supervisor_decision",
-                message="Supervisor evaluated next actions",
-                payload={
-                    "decision_type": "replan",
-                    "next_actions": [],
-                    "notes": ["need a fresh review path"],
-                },
-            )
-        )
-        self.assertEqual(chunks[0].kind, "event")
-        self.assertIn("replan: need a fresh review path", chunks[0].text)
-
-    def test_action_plan_patch_event_is_captured_in_live_trace_payload(self) -> None:
-        presenter = ChatStreamPresenter()
-
         presenter.on_event(
             _event(
-                event_type="action_plan_patch_applied",
-                phase="supervisor",
-                agent="supervisor",
-                payload={
-                    "patch_id": "patch-screen-enrich",
-                    "plan_id": "plan-screen",
-                    "intent": "stock_screen",
-                    "thread_id": "thread-root",
-                    "turn_id": "turn-root",
-                    "operations": [
-                        {
-                            "op_type": "rewire_dependency",
-                            "target_node_id": "retrieve",
-                            "new_depends_on": ["screen_enrich"],
-                        }
-                    ],
-                    "notes": ["rewire_retrieve_to_screen_enrich"],
-                },
+                event_type="graph_patch_requested",
+                payload={"patch_id": "patch-screen-enrich", "base_revision": 2},
             )
         )
 
         trace_payload = presenter.current_trace_payload()
         self.assertIsNotNone(trace_payload)
-        self.assertEqual(len(trace_payload["action_plan_patches"]), 1)
-        self.assertEqual(trace_payload["action_plan_patches"][0]["patch_id"], "patch-screen-enrich")
-        self.assertEqual(trace_payload["event_counts"]["action_plan_patches"], 1)
+        self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
+        self.assertEqual(trace_payload["dynamic_trace"][0]["patch_id"], "patch-screen-enrich")
 
     def test_subagent_trace_event_is_exposed_as_event_text(self) -> None:
         presenter = ChatStreamPresenter()
@@ -163,11 +110,11 @@ class ChatPresenterTests(unittest.TestCase):
                 event_type="subagent_trace",
                 phase="retrieve",
                 agent="retriever",
-                message="blackboard_evidence_indexer [completed]: Index blackboard entries and expose evidence candidates.",
+                message="artifact_evidence_indexer [completed]: Index artifacts and expose evidence candidates.",
             )
         )
         self.assertEqual(chunks[0].kind, "event")
-        self.assertIn("blackboard_evidence_indexer", chunks[0].text)
+        self.assertIn("artifact_evidence_indexer", chunks[0].text)
 
     def test_subagent_started_event_updates_status_with_live_progress_summary(self) -> None:
         presenter = ChatStreamPresenter()
@@ -256,10 +203,10 @@ class ChatPresenterTests(unittest.TestCase):
         )
         presenter.on_event(
             _event(
-                event_type="dynamic_action_inserted",
+                event_type="graph_patch_applied",
                 phase="review",
-                agent="supervisor",
-                payload={"action_id": "act_screen_review", "node_id": "screen_review", "objective": "Review screened candidates."},
+                agent="planner",
+                payload={"patch_id": "patch-screen-review", "revision": 2},
             )
         )
         presenter.on_event(
@@ -289,17 +236,17 @@ class ChatPresenterTests(unittest.TestCase):
         self.assertEqual(trace_payload["subagent_trace"][0]["agent_label"], "Stock Snapshot Collector")
         self.assertEqual(trace_payload["subagent_trace"][0]["invocation_id"], "01INVOCATION")
         self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
-        self.assertEqual(trace_payload["dynamic_trace"][0]["node_id"], "screen_review")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["patch_id"], "patch-screen-review")
         self.assertEqual(len(trace_payload["wait_trace"]), 1)
         self.assertEqual(trace_payload["wait_trace"][0]["event"], "waiting_external_started")
         self.assertEqual(trace_payload["wait_trace"][0]["node_id"], "collect")
 
-    def test_presenter_accumulates_subagent_dag_events_into_dynamic_trace(self) -> None:
+    def test_presenter_accumulates_graph_node_events_into_dynamic_trace(self) -> None:
         presenter = ChatStreamPresenter()
 
         presenter.on_event(
             _event(
-                event_type="subagent_dag_node_completed",
+                event_type="graph_node_completed",
                 phase="distill",
                 agent="distiller",
                 payload={
@@ -315,22 +262,22 @@ class ChatPresenterTests(unittest.TestCase):
         trace_payload = presenter.current_trace_payload()
         self.assertIsNotNone(trace_payload)
         self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
-        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "subagent_dag_node_completed")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "graph_node_completed")
         self.assertEqual(
             trace_payload["dynamic_trace"][0]["task_name"],
             "distill:preprocess:source_normalizer",
         )
 
-    def test_presenter_accumulates_action_phase_shadow_events_into_dynamic_trace(self) -> None:
+    def test_presenter_accumulates_graph_frontier_events_into_dynamic_trace(self) -> None:
         presenter = ChatStreamPresenter()
 
         presenter.on_event(
             _event(
-                event_type="action_phase_shadow_suggested",
-                phase="supervision",
-                agent="supervisor",
+                event_type="graph_frontier_ready",
+                phase="execution_graph",
+                agent="graph_runner",
                 payload={
-                    "selected_action_node_id": "screen_review",
+                    "node_id": "screen_review",
                     "request_replan": True,
                     "confidence": 0.74,
                 },
@@ -340,23 +287,21 @@ class ChatPresenterTests(unittest.TestCase):
         trace_payload = presenter.current_trace_payload()
         self.assertIsNotNone(trace_payload)
         self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
-        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "action_phase_shadow_suggested")
-        self.assertEqual(trace_payload["dynamic_trace"][0]["selected_action_node_id"], "screen_review")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "graph_frontier_ready")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["node_id"], "screen_review")
 
-    def test_presenter_accumulates_action_phase_decision_events_into_dynamic_trace(self) -> None:
+    def test_presenter_accumulates_graph_snapshot_events_into_dynamic_trace(self) -> None:
         presenter = ChatStreamPresenter()
 
         presenter.on_event(
             _event(
-                event_type="action_phase_decided",
-                phase="supervision",
-                agent="supervisor",
+                event_type="graph_snapshot_persisted",
+                phase="execution_graph",
+                agent="graph_runner",
                 payload={
-                    "control_domain": "action",
-                    "control_stage": "action_phase",
-                    "decision_stage": "action_phase",
-                    "final_action_node_id": "screen_review",
-                    "decision_type": "continue",
+                    "graph_id": "screen_graph",
+                    "revision": 2,
+                    "node_id": "screen_review",
                 },
             )
         )
@@ -364,24 +309,21 @@ class ChatPresenterTests(unittest.TestCase):
         trace_payload = presenter.current_trace_payload()
         self.assertIsNotNone(trace_payload)
         self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
-        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "action_phase_decided")
-        self.assertEqual(trace_payload["dynamic_trace"][0]["final_action_node_id"], "screen_review")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "graph_snapshot_persisted")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["node_id"], "screen_review")
 
-    def test_presenter_accumulates_runtime_control_transition_events_into_dynamic_trace(self) -> None:
+    def test_presenter_accumulates_graph_run_finished_events_into_dynamic_trace(self) -> None:
         presenter = ChatStreamPresenter()
 
         presenter.on_event(
             _event(
-                event_type="runtime_control_transition_decided",
-                phase="supervision",
-                agent="runtime_control",
+                event_type="graph_run_finished",
+                phase="execution_graph",
+                agent="graph_runner",
                 payload={
-                    "control_domain": "runtime",
-                    "control_stage": "plan_patch_transition",
-                    "decision_stage": "transition",
-                    "transition_type": "request_action_replan",
-                    "source_domain": "subagent_capability_gap",
-                    "source_action_node_id": "review",
+                    "transition_type": "request_replan",
+                    "source": "capability_gap",
+                    "node_id": "review",
                 },
             )
         )
@@ -389,19 +331,19 @@ class ChatPresenterTests(unittest.TestCase):
         trace_payload = presenter.current_trace_payload()
         self.assertIsNotNone(trace_payload)
         self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
-        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "runtime_control_transition_decided")
-        self.assertEqual(trace_payload["dynamic_trace"][0]["transition_type"], "request_action_replan")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "graph_run_finished")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["transition_type"], "request_replan")
 
-    def test_presenter_accumulates_subagent_phase_shadow_events_into_dynamic_trace(self) -> None:
+    def test_presenter_accumulates_graph_frontier_selection_into_dynamic_trace(self) -> None:
         presenter = ChatStreamPresenter()
 
         presenter.on_event(
             _event(
-                event_type="subagent_phase_shadow_suggested",
+                event_type="graph_frontier_ready",
                 phase="retrieve",
                 agent="retriever",
                 payload={
-                    "dag_id": "phase_two",
+                    "graph_id": "phase_two",
                     "selected_node_ids": ["retrieval_decider"],
                     "request_replan": True,
                     "confidence": 0.81,
@@ -412,24 +354,22 @@ class ChatPresenterTests(unittest.TestCase):
         trace_payload = presenter.current_trace_payload()
         self.assertIsNotNone(trace_payload)
         self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
-        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "subagent_phase_shadow_suggested")
-        self.assertEqual(trace_payload["dynamic_trace"][0]["dag_id"], "phase_two")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "graph_frontier_ready")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["graph_id"], "phase_two")
         self.assertEqual(trace_payload["dynamic_trace"][0]["selected_node_ids"], ["retrieval_decider"])
 
-    def test_presenter_accumulates_subagent_phase_execution_events_into_dynamic_trace(self) -> None:
+    def test_presenter_accumulates_graph_node_completion_into_dynamic_trace(self) -> None:
         presenter = ChatStreamPresenter()
 
         presenter.on_event(
             _event(
-                event_type="subagent_phase_execution_decided",
+                event_type="graph_node_completed",
                 phase="review",
                 agent="reviewer",
                 payload={
-                    "control_stage": "phase_patch_cycle",
-                    "decision_stage": "phase_execution",
-                    "dag_id": "review_execution",
-                    "decision_type": "keep_current",
-                    "final_plan_variant": "current",
+                    "graph_id": "review_execution",
+                    "node_id": "review",
+                    "status": "completed",
                 },
             )
         )
@@ -437,8 +377,8 @@ class ChatPresenterTests(unittest.TestCase):
         trace_payload = presenter.current_trace_payload()
         self.assertIsNotNone(trace_payload)
         self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
-        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "subagent_phase_execution_decided")
-        self.assertEqual(trace_payload["dynamic_trace"][0]["dag_id"], "review_execution")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "graph_node_completed")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["graph_id"], "review_execution")
 
     def test_presenter_accumulates_subagent_capability_gap_events_into_dynamic_trace(self) -> None:
         presenter = ChatStreamPresenter()
@@ -606,16 +546,16 @@ class ChatPresenterTests(unittest.TestCase):
         self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "subagent_discovery_hybrid_applied")
         self.assertEqual(trace_payload["dynamic_trace"][0]["applied_protocols"], ["mcp", "skill", "openapi"])
 
-    def test_presenter_accumulates_subagent_phase_hybrid_events_into_dynamic_trace(self) -> None:
+    def test_presenter_accumulates_graph_patch_applied_payload_into_dynamic_trace(self) -> None:
         presenter = ChatStreamPresenter()
 
         presenter.on_event(
             _event(
-                event_type="subagent_phase_hybrid_applied",
+                event_type="graph_patch_applied",
                 phase="retrieve",
                 agent="retriever",
                 payload={
-                    "dag_id": "phase_one",
+                    "graph_id": "phase_one",
                     "applied_plan_variant": "current",
                     "override_rule_variant": True,
                 },
@@ -625,19 +565,19 @@ class ChatPresenterTests(unittest.TestCase):
         trace_payload = presenter.current_trace_payload()
         self.assertIsNotNone(trace_payload)
         self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
-        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "subagent_phase_hybrid_applied")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "graph_patch_applied")
         self.assertEqual(trace_payload["dynamic_trace"][0]["applied_plan_variant"], "current")
 
-    def test_presenter_accumulates_subagent_phase_llm_events_into_dynamic_trace(self) -> None:
+    def test_presenter_accumulates_graph_patch_requested_payload_into_dynamic_trace(self) -> None:
         presenter = ChatStreamPresenter()
 
         presenter.on_event(
             _event(
-                event_type="subagent_phase_llm_applied",
+                event_type="graph_patch_requested",
                 phase="retrieve",
                 agent="retriever",
                 payload={
-                    "dag_id": "phase_two",
+                    "graph_id": "phase_two",
                     "applied_plan_variant": "fallback_retrieval_decider",
                     "override_rule_variant": True,
                 },
@@ -647,20 +587,20 @@ class ChatPresenterTests(unittest.TestCase):
         trace_payload = presenter.current_trace_payload()
         self.assertIsNotNone(trace_payload)
         self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
-        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "subagent_phase_llm_applied")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "graph_patch_requested")
         self.assertEqual(trace_payload["dynamic_trace"][0]["applied_plan_variant"], "fallback_retrieval_decider")
 
-    def test_presenter_accumulates_action_phase_hybrid_events_into_dynamic_trace(self) -> None:
+    def test_presenter_accumulates_graph_patch_applied_events_into_dynamic_trace(self) -> None:
         presenter = ChatStreamPresenter()
 
         presenter.on_event(
             _event(
-                event_type="action_phase_hybrid_applied",
-                phase="supervision",
-                agent="supervisor",
+                event_type="graph_patch_applied",
+                phase="execution_graph",
+                agent="capability_planner",
                 payload={
-                    "rule_action_node_id": "retrieve",
-                    "final_action_node_id": "review",
+                    "base_node_id": "retrieve",
+                    "node_id": "review",
                     "override_action": True,
                     "request_replan": True,
                 },
@@ -670,20 +610,20 @@ class ChatPresenterTests(unittest.TestCase):
         trace_payload = presenter.current_trace_payload()
         self.assertIsNotNone(trace_payload)
         self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
-        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "action_phase_hybrid_applied")
-        self.assertEqual(trace_payload["dynamic_trace"][0]["final_action_node_id"], "review")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "graph_patch_applied")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["node_id"], "review")
 
-    def test_presenter_accumulates_action_phase_llm_events_into_dynamic_trace(self) -> None:
+    def test_presenter_accumulates_graph_run_events_into_dynamic_trace(self) -> None:
         presenter = ChatStreamPresenter()
 
         presenter.on_event(
             _event(
-                event_type="action_phase_llm_applied",
-                phase="supervision",
-                agent="supervisor",
+                event_type="graph_run_started",
+                phase="execution_graph",
+                agent="graph_runner",
                 payload={
-                    "rule_action_node_id": "screen_review",
-                    "final_action_node_id": "retrieve",
+                    "base_node_id": "screen_review",
+                    "node_id": "retrieve",
                     "override_action": True,
                     "request_replan": False,
                 },
@@ -693,8 +633,8 @@ class ChatPresenterTests(unittest.TestCase):
         trace_payload = presenter.current_trace_payload()
         self.assertIsNotNone(trace_payload)
         self.assertEqual(len(trace_payload["dynamic_trace"]), 1)
-        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "action_phase_llm_applied")
-        self.assertEqual(trace_payload["dynamic_trace"][0]["final_action_node_id"], "retrieve")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["event"], "graph_run_started")
+        self.assertEqual(trace_payload["dynamic_trace"][0]["node_id"], "retrieve")
 
     def test_presenter_accumulates_live_events_payload_from_runtime_events(self) -> None:
         presenter = ChatStreamPresenter()
@@ -720,11 +660,11 @@ class ChatPresenterTests(unittest.TestCase):
         )
         presenter.on_event(
             _event(
-                event_type="dynamic_action_inserted",
+                event_type="graph_patch_applied",
                 phase="review",
-                agent="supervisor",
-                message="Dynamically inserted action: screen_review",
-                payload={"action_id": "act_screen_review", "node_id": "screen_review", "objective": "Review screened candidates."},
+                agent="planner",
+                message="Graph patch applied",
+                payload={"patch_id": "patch-screen-review", "revision": 2},
             )
         )
 
@@ -738,7 +678,7 @@ class ChatPresenterTests(unittest.TestCase):
         self.assertEqual(events_payload["events"][0]["agent_path"], "collector/stock_snapshot_collector")
         self.assertEqual(events_payload["events"][0]["agent_label"], "Stock Snapshot Collector")
         self.assertEqual(events_payload["events"][0]["invocation_id"], "01INVOCATION")
-        self.assertEqual(events_payload["events"][1]["event_type"], "dynamic_action_inserted")
+        self.assertEqual(events_payload["events"][1]["event_type"], "graph_patch_applied")
         self.assertEqual(events_payload["event_counts"]["events"], 2)
         self.assertEqual(events_payload["event_counts"]["distinct_event_types"], 2)
 

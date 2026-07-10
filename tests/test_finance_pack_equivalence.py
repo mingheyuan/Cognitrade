@@ -4,7 +4,6 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-from research_system.agents.screener.service import ScreenerService
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
 
@@ -35,7 +34,7 @@ class _PackContext:
 
 
 class FinancePackEquivalenceTests(unittest.TestCase):
-    def test_screening_pack_preserves_legacy_candidate_order_and_scorecard_contract(self) -> None:
+    def test_screening_pack_preserves_migrated_candidate_order_and_scorecard_contract(self) -> None:
         snapshots = [
             {
                 "snapshot_type": "market",
@@ -54,12 +53,6 @@ class FinancePackEquivalenceTests(unittest.TestCase):
             {"snapshot_type": "fundamental", "symbol": "300347", "facts": {"financial_abstract": {"revenue": 80}}},
             {"snapshot_type": "notice", "symbol": "300347", "facts": {"notice_count": 1}},
         ]
-        legacy = ScreenerService().run(
-            query="screen growth stocks",
-            source_payloads=[{"candidate_universe": [{"symbol": "300363", "name": "Alpha"}, {"symbol": "300347", "name": "Beta"}], "investment_cycle": "mid_term"}],
-            snapshot_payloads=snapshots,
-            constraints={"top_k": 2},
-        )
         registry = DomainPackRegistry.load(Path(__file__).resolve().parents[1] / "domain_packs")
         pack_executor = registry.resolve_executor(domain_id="finance_ashare", capability="finance.stock.screen")
         packed = pack_executor(
@@ -70,12 +63,12 @@ class FinancePackEquivalenceTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            [item["symbol"] for item in legacy["screened_candidates"]],
             [item["symbol"] for item in packed.content["screened_candidates"]],
+            ["300363", "300347"],
         )
         self.assertEqual(
-            legacy["scorecard"]["top_candidate_count"],
             packed.content["scorecard"]["top_candidate_count"],
+            2,
         )
         self.assertIn("score_breakdown", packed.content["screened_candidates"][0])
 

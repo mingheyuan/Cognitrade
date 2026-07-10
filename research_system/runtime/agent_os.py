@@ -7,6 +7,7 @@ from typing import Any
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.execution.core.graph_runner import ExecutionGraphRunner
 from research_system.runtime.planning.capability_planner import CapabilityPlanner
+from research_system.runtime.planning.planner import RuntimePlanner
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.runtime.storage.runs.run_store import RunStore
@@ -125,6 +126,67 @@ class AgentOS:
             with self._lock:
                 self._active.pop(effective_run_id, None)
 
+    def run_request(
+        self,
+        request: RequestEnvelope,
+        *,
+        run_id: str | None = None,
+    ) -> ExecutionRunResult:
+        intent = str(request.intent or "").strip()
+        if not intent:
+            raise ValueError("Agent OS Task Intake requires an intent")
+        graph = RuntimePlanner(settings=self.settings).build_initial_execution_graph(
+            intent=intent,
+            request=request,
+        )
+        effective_run_id, paths, _ = self.run_store.create_run(
+            request,
+            intent,
+            run_id=run_id,
+        )
+        thread_id = graph.graph_id
+        input_payload = dict(request.slots.get("user_request") or {})
+        input_payload.setdefault("query", request.user_query)
+        for key in ("symbols", "sector", "source_records", "snapshots", "source_refs"):
+            if key in request.slots and key not in input_payload:
+                input_payload[key] = request.slots[key]
+        write_json(
+            paths.root / "agent_os_request.json",
+            {
+                "run_id": effective_run_id,
+                "thread_id": thread_id,
+                "request": request.model_dump(mode="json"),
+                "domain_id": graph.domain_id,
+                "objective": graph.objective,
+                "intent": intent,
+                "required_artifact_types": list(
+                    graph.metadata.get("required_artifact_types") or []
+                ),
+            },
+        )
+        runner = self._runner(effective_run_id)
+        with self._lock:
+            self._active[effective_run_id] = runner
+        try:
+            result = runner.run(
+                graph=graph,
+                run_id=effective_run_id,
+                thread_id=thread_id,
+                request_id=request.request_id,
+                seed_artifacts=[
+                    ArtifactDraft(
+                        artifact_type="user_request",
+                        content=input_payload,
+                        source_refs=[{"type": "request", "id": request.request_id}],
+                    )
+                ],
+            )
+            self._write_summary(result, intent=intent)
+            return result
+        finally:
+            with self._lock:
+                self._active.pop(effective_run_id, None)
+
     def inspect_run(self, run_id: str) -> dict[str, Any]:
         root = self.run_store.load_run_paths(run_id).root
         snapshot = read_json(root / "execution_snapshot.json")
@@ -206,14 +268,19 @@ class AgentOS:
             cache_root=self.settings.memory_root / "agent_os_cache",
         )
 
-    def _write_summary(self, result: ExecutionRunResult) -> None:
+    def _write_summary(
+        self,
+        result: ExecutionRunResult,
+        *,
+        intent: str | None = None,
+    ) -> None:
         root = self.run_store.load_run_paths(result.snapshot.run_id).root
         write_json(
             root / "summary.json",
             {
                 "run_id": result.snapshot.run_id,
                 "request_id": result.snapshot.request_id,
-                "intent": f"domain:{result.snapshot.graph.domain_id}",
+                "intent": intent or f"domain:{result.snapshot.graph.domain_id}",
                 "domain_id": result.snapshot.graph.domain_id,
                 "status": result.snapshot.status,
                 "message": f"Agent OS run {result.snapshot.status}",

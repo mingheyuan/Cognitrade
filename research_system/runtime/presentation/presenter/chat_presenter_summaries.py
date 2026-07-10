@@ -28,27 +28,6 @@ class ChatPresenterSummaries:
         ordered = [f"{gate} {verdict}" for gate, verdict in sorted(self.state.gates.items())]
         return "gate: " + " | ".join(ordered)
 
-    def supervisor_summary(self, payload: dict) -> str | None:
-        decision_type = str(payload.get("decision_type") or "").strip()
-        next_actions = payload.get("next_actions") or []
-        notes = payload.get("notes") or []
-        if decision_type == "stop":
-            note = str(notes[0]).strip() if notes else "Supervisor stopped because no more actions are needed."
-            return note
-        if decision_type == "replan":
-            note = str(notes[0]).strip() if notes else "Supervisor requested action plan replan."
-            return f"replan: {note}"
-        if decision_type == "continue" and next_actions:
-            first = next_actions[0]
-            if isinstance(first, dict):
-                node_id = str(first.get("node_id") or "").strip()
-                phase = str(first.get("phase") or "").strip()
-                agent = str(first.get("agent") or "").strip()
-                parts = [part for part in (phase, agent, node_id) if part]
-                if parts:
-                    return "next: " + " / ".join(parts)
-        return None
-
     def subagent_progress_summary(self, event: RunEvent, *, status: str) -> str | None:
         payload = event.payload or {}
         subagent_type = str(payload.get("subagent_type") or "").strip()

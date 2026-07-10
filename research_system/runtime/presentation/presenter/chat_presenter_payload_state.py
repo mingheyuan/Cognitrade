@@ -30,7 +30,6 @@ class ChatPresenterPayloadState:
             "display_summary": payload.get("display_summary"),
             "subagent_trace": [dict(item) for item in payload.get("subagent_trace") or [] if isinstance(item, dict)],
             "dynamic_trace": [dict(item) for item in payload.get("dynamic_trace") or [] if isinstance(item, dict)],
-            "action_plan_patches": [dict(item) for item in payload.get("action_plan_patches") or [] if isinstance(item, dict)],
             "wait_trace": [dict(item) for item in payload.get("wait_trace") or [] if isinstance(item, dict)],
             "threads": [dict(item) for item in payload.get("threads") or [] if isinstance(item, dict)],
             "thread_tree": [dict(item) for item in payload.get("thread_tree") or [] if isinstance(item, dict)],
@@ -78,11 +77,10 @@ class ChatPresenterPayloadState:
             "display_summary": None,
             "subagent_trace": [],
             "dynamic_trace": [],
-            "action_plan_patches": [],
             "wait_trace": [],
             "threads": [],
             "thread_tree": [],
-            "event_counts": {"events": 0, "subagent_trace": 0, "dynamic_trace": 0, "action_plan_patches": 0, "wait_trace": 0},
+            "event_counts": {"events": 0, "subagent_trace": 0, "dynamic_trace": 0, "wait_trace": 0},
         }
 
     @staticmethod

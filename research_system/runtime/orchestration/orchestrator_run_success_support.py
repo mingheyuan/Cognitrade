@@ -5,9 +5,8 @@ from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
 
 
 class OrchestratorRunSuccessSupport:
-    def __init__(self, host, gate_support, response_support) -> None:
+    def __init__(self, host, response_support) -> None:
         self.host = host
-        self.gate_support = gate_support
         self.response_support = response_support
 
     def finalize_success_path(
@@ -19,7 +18,7 @@ class OrchestratorRunSuccessSupport:
         intent: str,
         result_path,
     ) -> ResponseEnvelope:
-        self.host._enforce_runtime_controls(context, request_id=request.request_id, intent=intent)
+        self.host._enforce_run_controls(context, request_id=request.request_id, intent=intent)
         self.host._transition(
             context,
             "gated",
@@ -27,24 +26,12 @@ class OrchestratorRunSuccessSupport:
             intent=intent,
             message="Evaluating run gates",
         )
-        agent_os_graph = (
-            getattr(context, "execution_graph", None) is not None
-            and context.execution_graph.metadata.get("planner") == "capability_contract"
-        )
-        if agent_os_graph:
-            snapshot = read_json(context.paths.root / "execution_snapshot.json") or {}
-            blocked = [
-                row
-                for row in snapshot.get("gate_evaluations", [])
-                if row.get("blocking") and row.get("verdict") != "pass"
-            ]
-        else:
-            blocked = self.gate_support.emit_gate_verdicts(
-                context=context,
-                request=request,
-                run_id=run_id,
-                intent=intent,
-            )
+        snapshot = read_json(context.paths.root / "execution_snapshot.json") or {}
+        blocked = [
+            row
+            for row in snapshot.get("gate_evaluations", [])
+            if row.get("blocking") and row.get("verdict") != "pass"
+        ]
         if blocked:
             context.thread.status = "failed"
             context.turn.status = "failed"

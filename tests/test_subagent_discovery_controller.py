@@ -54,8 +54,6 @@ class SubagentDiscoveryControllerTests(unittest.TestCase):
             store = SubagentDiscoveryStore(root / "discovery")
             runtime_context = SimpleNamespace(
                 subagent_discovery_stage_decisions=[],
-                subagent_control_stage_decisions=[],
-                runtime_control_stage_decisions=[],
                 dynamic_trace=[],
             )
             support = SimpleNamespace(emit_event=lambda *_args, **_kwargs: None)
@@ -128,15 +126,6 @@ class SubagentDiscoveryControllerTests(unittest.TestCase):
             )
             self.assertEqual(
                 [row["event"] for row in runtime_context.subagent_discovery_stage_decisions],
-                [
-                    "subagent_tool_discovery_protocol_decided",
-                    "subagent_tool_discovery_candidate_decided",
-                    "subagent_tool_discovery_review_decided",
-                    "subagent_tool_discovery_activation_decided",
-                ],
-            )
-            self.assertEqual(
-                [row["event"] for row in runtime_context.subagent_control_stage_decisions],
                 [
                     "subagent_tool_discovery_protocol_decided",
                     "subagent_tool_discovery_candidate_decided",

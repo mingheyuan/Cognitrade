@@ -12,7 +12,7 @@ from research_system.runtime.platform.settings import Settings
 from research_system.runtime.storage.jsonl import read_json
 
 
-_TERMINAL_STATUSES = {"completed", "cancelled", "failed", "timed_out", "needs_clarification"}
+_TERMINAL_STATUSES = {"completed", "cancelled", "failed", "gated"}
 _TERMINAL_DRAIN_POLLS = 4
 
 
@@ -35,7 +35,7 @@ class RunEventSource:
 
     def prepare(self, run_id: str, *, last_event_id: str | None = None) -> int:
         root = self._run_root(run_id)
-        rows = self._read_events(root / "events.jsonl")
+        rows = self._read_events(root / "execution_events.jsonl")
         normalized_last_id = str(last_event_id or "").strip()
         if not normalized_last_id:
             return 0
@@ -55,7 +55,10 @@ class RunEventSource:
         terminal_quiet_polls = 0
         terminal_observed = False
         while True:
-            rows = await asyncio.to_thread(self._read_events, root / "events.jsonl")
+            rows = await asyncio.to_thread(
+                self._read_events,
+                root / "execution_events.jsonl",
+            )
             emitted_event = False
             while next_index < len(rows):
                 yield format_sse_event(rows[next_index])
@@ -113,7 +116,7 @@ class RunEventSource:
 
     @staticmethod
     def _is_terminal(root: Path) -> bool:
-        state = read_json(root / "run_state.json") or {}
+        state = read_json(root / "execution_snapshot.json") or {}
         return str(state.get("status") or "") in _TERMINAL_STATUSES
 
 

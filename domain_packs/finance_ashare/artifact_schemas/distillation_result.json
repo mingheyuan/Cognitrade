@@ -1,0 +1,1 @@
+{"type":"object","required":["dimensions","summary"],"properties":{"dimensions":{"type":"array","items":{"type":"object"}},"summary":{"type":"object"}},"additionalProperties":true}

@@ -25,11 +25,14 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { marketBreadth, runHistory, screeningCandidates } from '../data'
+import { useEffect, useState } from 'react'
+import { listAgentOSRuns } from '../api'
+import { marketBreadth, screeningCandidates } from '../data'
 import { ResearchComposer } from './ResearchComposer'
+import type { AgentOSRunSummary, ComposerIntent } from '../research-contracts'
 
 type OverviewProps = {
-  onSubmit: (query: string) => void
+  onSubmit: (query: string, intent?: ComposerIntent) => void
   running: boolean
   onOpenWorkbench: () => void
   onOpenRuns: () => void
@@ -44,6 +47,21 @@ const chartTooltipStyle = {
 }
 
 export function Overview({ onSubmit, running, onOpenWorkbench, onOpenRuns }: OverviewProps) {
+  const [recentRuns, setRecentRuns] = useState<AgentOSRunSummary[]>([])
+
+  useEffect(() => {
+    void listAgentOSRuns().then(setRecentRuns).catch(() => setRecentRuns([]))
+  }, [])
+
+  const runHistory = recentRuns.map((run) => ({
+    id: run.run_id,
+    title: run.intent,
+    intent: run.domain_id,
+    status: run.status,
+    evidence: run.graph_revision,
+    time: run.updated_at,
+  }))
+
   return (
     <main className="page-content overview-page">
       <section className="overview-hero">

@@ -53,7 +53,7 @@ class ApiV1ChatTests(unittest.TestCase):
         error = response.json()["error"]
         self.assertEqual(error["code"], "chat_thread_not_found")
 
-    def test_all_nine_chat_routes_follow_the_documented_lifecycle(self) -> None:
+    def test_thread_lifecycle_routes_follow_the_documented_lifecycle(self) -> None:
         thread_id = self.create_thread()
 
         listed = self.client.get("/api/v1/chat/threads", headers=auth_headers())
@@ -146,6 +146,11 @@ class ApiV1ChatTests(unittest.TestCase):
             ("POST", f"/api/v1/chat/threads/{MISSING_THREAD_ID}/archive", None),
             ("POST", f"/api/v1/chat/threads/{MISSING_THREAD_ID}/unarchive", None),
             ("POST", f"/api/v1/chat/threads/{MISSING_THREAD_ID}/compact", None),
+            (
+                "POST",
+                f"/api/v1/chat/threads/{MISSING_THREAD_ID}/runs",
+                {"intent": "stock_check", "user_query": "Review 600000."},
+            ),
         )
 
         for method, path, body in cases:
@@ -167,6 +172,29 @@ class ApiV1ChatTests(unittest.TestCase):
         self.assertFalse(
             ChatThreadStore(self.settings).has_thread(thread_id=MISSING_THREAD_ID)
         )
+
+    def test_thread_research_runs_through_the_agent_os_run_service(self) -> None:
+        thread_id = self.create_thread()
+
+        response = self.client.post(
+            f"/api/v1/chat/threads/{thread_id}/runs",
+            headers=auth_headers(),
+            json={
+                "intent": "stock_check",
+                "user_query": "Review 600000 with supplied evidence.",
+                "slots": {"symbols": ["600000"]},
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["run_id"], "01J00000000000000000000002")
+        call = self.orchestrator.calls_for("run")[-1]
+        request = call.args[0]
+        self.assertEqual(request.intent, "stock_check")
+        self.assertEqual(request.slots["chat_thread_id"], thread_id)
+        turns = ChatThreadStore(self.settings).read_all_turns(thread_id=thread_id)
+        self.assertEqual([turn["turn_type"] for turn in turns], ["research_query", "research_result"])
+        self.assertEqual([turn["run_id"] for turn in turns], [response.json()["run_id"], response.json()["run_id"]])
 
     def test_archive_does_not_create_an_implicit_replacement_thread(self) -> None:
         thread_id = self.create_thread()

@@ -8,10 +8,24 @@ from research_system.runtime.orchestration.orchestrator import ResearchOrchestra
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.planning.planner import RuntimePlanner
 from research_system.runtime.platform.settings import Settings
+from research_system.runtime.storage.jsonl import read_jsonl
 from research_system.schemas.protocol import RequestEnvelope
 
 
 class StandardAgentOSEntryTests(unittest.TestCase):
+    def test_execution_graph_entry_rejects_intents_without_a_domain_pack(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        planner = RuntimePlanner(settings=Settings.from_env(repository_root))
+
+        with self.assertRaisesRegex(ValueError, "no DomainPack capability graph"):
+            planner.build_initial_execution_graph(
+                intent="methodology_evolution",
+                request=RequestEnvelope(
+                    intent="methodology_evolution",
+                    user_query="Promote a methodology.",
+                ),
+            )
+
     def test_domain_request_builds_capability_graph_without_legacy_plan_conversion(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         settings = Settings.from_env(repository_root)
@@ -134,7 +148,7 @@ class StandardAgentOSEntryTests(unittest.TestCase):
         self.assertEqual(graph.domain_id, "finance_ashare")
         self.assertEqual(graph.metadata["planner"], "capability_contract")
 
-    def test_research_orchestrator_executes_domain_graph_without_legacy_gate_projection(self) -> None:
+    def test_research_orchestrator_executes_domain_graph_with_canonical_artifacts(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -146,11 +160,13 @@ class StandardAgentOSEntryTests(unittest.TestCase):
                 }
             )
             with ResearchOrchestrator(settings) as orchestrator:
-                self.assertIsNone(orchestrator.supervisor)
-                self.assertIsNone(orchestrator.action_runner)
-                self.assertFalse(orchestrator.legacy_runtime_used)
-                self.assertFalse(orchestrator.collector.initialized)
-                self.assertFalse(orchestrator.retriever.initialized)
+                for legacy_name in (
+                    "supervisor",
+                    "action_runner",
+                    "collector",
+                    "retriever",
+                ):
+                    self.assertFalse(hasattr(orchestrator, legacy_name))
                 response = orchestrator.run(
                     RequestEnvelope(
                         intent="domain:finance_ashare",
@@ -158,15 +174,14 @@ class StandardAgentOSEntryTests(unittest.TestCase):
                         slots={"symbols": ["600000"]},
                     )
                 )
-                self.assertFalse(orchestrator.legacy_runtime_used)
+                self.assertFalse(hasattr(orchestrator, "supervisor"))
 
             self.assertEqual(response.status, "completed")
             self.assertEqual(response.result["report"]["protocol"], "agent_os")
             run_root = settings.runs_root / str(response.run_id)
             self.assertTrue((run_root / "artifact_board.jsonl").is_file())
-            self.assertFalse((run_root / "blackboard.jsonl").is_file())
 
-    def test_default_stock_check_execution_does_not_create_legacy_plan_or_blackboard(self) -> None:
+    def test_default_stock_check_execution_persists_canonical_graph_and_artifacts(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -188,10 +203,9 @@ class StandardAgentOSEntryTests(unittest.TestCase):
 
             self.assertEqual(response.status, "completed")
             run_root = settings.runs_root / str(response.run_id)
+            self.assertTrue((run_root / "execution_graph.json").is_file())
             self.assertTrue((run_root / "execution_snapshot.json").is_file())
             self.assertTrue((run_root / "artifact_board.jsonl").is_file())
-            self.assertFalse((run_root / "task_plan.json").is_file())
-            self.assertFalse((run_root / "blackboard.jsonl").is_file())
 
     def test_intent_specific_finance_artifacts_are_executed_and_written_to_board(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -199,6 +213,7 @@ class StandardAgentOSEntryTests(unittest.TestCase):
             "stock_screen": "screening_result",
             "sector_research": "sector_analysis",
             "review_thesis": "thesis_review",
+            "distill_kol_logic": "distillation_review",
         }
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -216,7 +231,18 @@ class StandardAgentOSEntryTests(unittest.TestCase):
                             RequestEnvelope(
                                 intent=intent,
                                 user_query=f"Run {intent}.",
-                                slots={"symbols": ["600000"], "sector": "semiconductor"},
+                                slots={
+                                    "symbols": ["600000"],
+                                    "sector": "semiconductor",
+                                    "source_records": [
+                                        {
+                                            "id": "record-1",
+                                            "text": "Cash-flow quality is the core investment thesis.",
+                                            "author": "analyst",
+                                            "tags": ["cash_flow"],
+                                        }
+                                    ],
+                                },
                             )
                         )
                         self.assertEqual(response.status, "completed")
@@ -230,7 +256,14 @@ class StandardAgentOSEntryTests(unittest.TestCase):
 
     def test_all_default_finance_intents_avoid_legacy_runtime(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
-        intents = ["stock_check", "stock_compare", "stock_screen", "sector_research", "review_thesis"]
+        intents = [
+            "stock_check",
+            "stock_compare",
+            "stock_screen",
+            "sector_research",
+            "review_thesis",
+            "distill_kol_logic",
+        ]
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             settings = Settings.from_env(repository_root).model_copy(
@@ -247,13 +280,23 @@ class StandardAgentOSEntryTests(unittest.TestCase):
                             RequestEnvelope(
                                 intent=intent,
                                 user_query=f"Run {intent}.",
-                                slots={"symbols": ["600000"], "sector": "semiconductor"},
+                                slots={
+                                    "symbols": ["600000"],
+                                    "sector": "semiconductor",
+                                    "source_records": [
+                                        {
+                                            "id": "record-1",
+                                            "text": "Track free cash flow and valuation discipline.",
+                                            "author": "analyst",
+                                        }
+                                    ],
+                                },
                             )
                         )
                         self.assertEqual(response.status, "completed")
-                        self.assertFalse(orchestrator.legacy_runtime_used)
+                        self.assertFalse(hasattr(orchestrator, "supervisor"))
 
-    def test_explicit_legacy_runtime_is_the_only_compatibility_switch(self) -> None:
+    def test_legacy_execution_protocol_cannot_bypass_agent_os(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -265,9 +308,56 @@ class StandardAgentOSEntryTests(unittest.TestCase):
                 }
             )
             with ResearchOrchestrator(settings) as orchestrator:
-                self.assertFalse(orchestrator.legacy_runtime_used)
-                orchestrator.ensure_legacy_runtime()
-                self.assertTrue(orchestrator.legacy_runtime_used)
+                response = orchestrator.run(
+                    RequestEnvelope(
+                        intent="stock_check",
+                        user_query="Run stock_check.",
+                        slots={"symbols": ["600000"]},
+                        constraints={"execution_protocol": "legacy"},
+                    )
+                )
+                self.assertEqual(response.status, "completed")
+                self.assertFalse(hasattr(orchestrator, "supervisor"))
+
+    def test_canonical_rerun_uses_graph_node_and_versions_board_artifacts(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            settings = Settings.from_env(repository_root).model_copy(
+                update={
+                    "runs_root": root / "runs",
+                    "memory_root": root / "memory",
+                    "domain_packs_root": repository_root / "domain_packs",
+                }
+            )
+            with ResearchOrchestrator(settings) as orchestrator:
+                response = orchestrator.run(
+                    RequestEnvelope(
+                        intent="stock_screen",
+                        user_query="Screen the supplied candidates.",
+                        slots={"symbols": ["600000"]},
+                    )
+                )
+                self.assertEqual(response.status, "completed")
+                run_id = str(response.run_id)
+                rerun = orchestrator.rerun_from(
+                    run_id,
+                    from_node="stock_screen_analyzer",
+                )
+                self.assertEqual(rerun.status, "completed")
+
+            board = ArtifactBoard(settings.runs_root / run_id / "artifact_board.jsonl")
+            screening = board.list_artifacts(
+                run_id=run_id,
+                artifact_type="screening_result",
+                status="active",
+            )
+            self.assertEqual(len(screening), 1)
+            self.assertEqual(screening[0].artifact_version, 2)
+            events = read_jsonl(settings.runs_root / run_id / "execution_events.jsonl")
+            self.assertTrue(
+                any(row.get("event_type") == "graph_partial_rerun_prepared" for row in events)
+            )
 
 
 if __name__ == "__main__":

@@ -5,7 +5,6 @@ from importlib import import_module
 __all__ = [
     "AgentControl",
     "ArtifactBoard",
-    "Blackboard",
     "HumanApprovalStore",
     "combine_degrade_reasons",
     "derive_llm_error_reason",
@@ -14,7 +13,6 @@ __all__ = [
     "RuntimeDegradation",
     "RuntimeDegradeReason",
     "RuntimeExecutionPolicy",
-    "GateEvaluator",
     "Mailbox",
     "RunControlPlane",
     "RunControlState",
@@ -27,7 +25,6 @@ __all__ = [
 _EXPORTS = {
     "AgentControl": ("research_system.runtime.core.agent_control", "AgentControl"),
     "ArtifactBoard": ("research_system.runtime.core.artifact_board", "ArtifactBoard"),
-    "Blackboard": ("research_system.runtime.core.blackboard", "Blackboard"),
     "HumanApprovalStore": ("research_system.runtime.core.approvals", "HumanApprovalStore"),
     "EventStream": ("research_system.runtime.core.event_stream", "EventStream"),
     "combine_degrade_reasons": ("research_system.runtime.core.execution_policy", "combine_degrade_reasons"),
@@ -36,7 +33,6 @@ _EXPORTS = {
     "RuntimeDegradation": ("research_system.runtime.core.execution_policy", "RuntimeDegradation"),
     "RuntimeDegradeReason": ("research_system.runtime.core.execution_policy", "RuntimeDegradeReason"),
     "RuntimeExecutionPolicy": ("research_system.runtime.core.execution_policy", "RuntimeExecutionPolicy"),
-    "GateEvaluator": ("research_system.runtime.core.gates", "GateEvaluator"),
     "Mailbox": ("research_system.runtime.core.mailbox", "Mailbox"),
     "RunControlPlane": ("research_system.runtime.core.control_plane", "RunControlPlane"),
     "RunControlState": ("research_system.runtime.core.control_plane", "RunControlState"),

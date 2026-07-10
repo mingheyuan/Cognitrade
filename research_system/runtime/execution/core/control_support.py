@@ -21,7 +21,7 @@ class OrchestratorExecutionControlSupport:
         self.host = host
         self.lifecycle_support = lifecycle_support
 
-    def enforce_runtime_controls(self, context: RuntimeContext, *, request_id: str, intent: str) -> None:
+    def enforce_run_controls(self, context: RuntimeContext, *, request_id: str, intent: str) -> None:
         if context.control_plane.cancellation_requested():
             self.lifecycle_support.transition(
                 context,

@@ -40,57 +40,25 @@ class SessionHistoryTraceSections:
         return rows
 
     def dynamic_trace(self, debug_payload: dict[str, Any], events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if isinstance(debug_payload.get("dynamic_trace"), list):
-            return [dict(item) for item in debug_payload["dynamic_trace"] if isinstance(item, dict)]
+        del debug_payload
         rows: list[dict[str, Any]] = []
         for event in events:
             if not isinstance(event, dict):
                 continue
             event_type = str(event.get("event_type") or "")
-            if (
-                event_type != "dynamic_action_inserted"
-                and not event_type.startswith("subagent_dag_")
-                and not event_type.startswith("subagent_catalog_")
-                and not event_type.startswith("subagent_phase_execution_")
-                and not event_type.startswith("subagent_capability_")
-                and not event_type.startswith("subagent_tool_")
-                and not event_type.startswith("subagent_discovery_shadow_")
-                and not event_type.startswith("subagent_discovery_llm_")
-                and not event_type.startswith("subagent_discovery_hybrid_")
-                and not event_type.startswith("subagent_discovery_candidate_shadow_")
-                and not event_type.startswith("subagent_discovery_candidate_llm_")
-                and not event_type.startswith("subagent_discovery_candidate_hybrid_")
-                and not event_type.startswith("subagent_phase_shadow_")
-                and not event_type.startswith("subagent_phase_llm_")
-                and not event_type.startswith("subagent_phase_hybrid_")
-                and not event_type.startswith("action_phase_")
-                and not event_type.startswith("runtime_control_")
+            if not event_type.startswith(
+                (
+                    "graph_",
+                    "execution_",
+                    "subagent_discovery_",
+                    "subagent_tool_discovery_",
+                    "subagent_catalog_",
+                    "subagent_capability_",
+                )
             ):
                 continue
             rows.append(
                 self.row_builder.dynamic_trace_row(
-                    event_type=event_type,
-                    phase=event.get("phase"),
-                    agent=event.get("agent"),
-                    payload=event.get("payload") or {},
-                    created_at=event.get("created_at"),
-                    default_context=False,
-                )
-            )
-        return rows
-
-    def action_plan_patches(self, debug_payload: dict[str, Any], events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if isinstance(debug_payload.get("action_plan_patches"), list):
-            return [dict(item) for item in debug_payload["action_plan_patches"] if isinstance(item, dict)]
-        rows: list[dict[str, Any]] = []
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            event_type = str(event.get("event_type") or "")
-            if event_type != "action_plan_patch_applied":
-                continue
-            rows.append(
-                self.row_builder.action_plan_patch_row(
                     event_type=event_type,
                     phase=event.get("phase"),
                     agent=event.get("agent"),

@@ -6,9 +6,10 @@ from fastapi import APIRouter, Depends, Query, status
 from starlette.concurrency import run_in_threadpool
 
 from research_system.api.chat_service import ChatService
-from research_system.api.dependencies import get_chat_service
-from research_system.api.models import ChatThreadRenameRequest
-from research_system.api.validation import safe_identifier
+from research_system.api.dependencies import get_chat_service, get_run_service
+from research_system.api.models import ChatResearchRequest, ChatThreadRenameRequest
+from research_system.api.validation import safe_identifier, validate_research_request
+from research_system.schemas.protocol import RequestEnvelope
 
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -105,6 +106,32 @@ async def compact_chat_thread(
 ) -> dict:
     resolved_thread_id = safe_identifier(thread_id, field_name="thread_id")
     return await run_in_threadpool(service.compact_thread, resolved_thread_id)
+
+
+@router.post("/threads/{thread_id}/runs")
+async def submit_chat_research(
+    thread_id: str,
+    payload: ChatResearchRequest,
+    service: Annotated[ChatService, Depends(get_chat_service)],
+    run_service=Depends(get_run_service),
+) -> dict:
+    resolved_thread_id = safe_identifier(thread_id, field_name="thread_id")
+    request = validate_research_request(
+        RequestEnvelope(
+            intent=payload.intent,
+            user_query=payload.user_query,
+            conversation_context=payload.conversation_context,
+            slots=payload.slots,
+            constraints=payload.constraints,
+        )
+    )
+    response = await run_in_threadpool(
+        service.submit_research,
+        resolved_thread_id,
+        request,
+        run_service=run_service,
+    )
+    return response.model_dump(mode="json")
 
 
 __all__ = ["router"]

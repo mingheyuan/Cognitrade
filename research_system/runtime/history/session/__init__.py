@@ -9,7 +9,6 @@ __all__ = [
     "SessionHistoryStepBuilder",
     "SessionHistoryStepRows",
     "SessionHistorySubagentPayloadBuilder",
-    "SessionHistorySupervisorState",
     "SessionHistoryTraceRebuilder",
     "SessionHistoryTraceSections",
 ]
@@ -38,10 +37,6 @@ _EXPORTS = {
     "SessionHistorySubagentPayloadBuilder": (
         "research_system.runtime.history.session.trace.subagent_payload_builder",
         "SessionHistorySubagentPayloadBuilder",
-    ),
-    "SessionHistorySupervisorState": (
-        "research_system.runtime.history.session.steps.supervisor_state",
-        "SessionHistorySupervisorState",
     ),
     "SessionHistoryTraceRebuilder": (
         "research_system.runtime.history.session.trace.trace_rebuilder",

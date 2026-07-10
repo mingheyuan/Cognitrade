@@ -16,6 +16,7 @@ import jsonschema
 
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.core.approvals import HumanApprovalStore
+from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.execution.core.execution_graph import (
     ExecutionGraphScheduler,
@@ -136,6 +137,7 @@ class ExecutionGraphRunner:
         self._lock = RLock()
         self._reserved_tokens = 0
         self._reserved_cost = 0.0
+        self._run_id: str | None = self.run_root.name
 
     def request_pause(self) -> None:
         self._pause_requested.set()
@@ -172,6 +174,7 @@ class ExecutionGraphRunner:
         seed_artifacts: list[ArtifactDraft] | None = None,
         resume: bool = False,
     ) -> ExecutionRunResult:
+        self._run_id = run_id
         self.board.bind_thread(thread_id)
         snapshot = self._load_snapshot() if resume else None
         if snapshot is None:
@@ -1324,6 +1327,8 @@ class ExecutionGraphRunner:
 
     def _emit(self, event_type: str, **payload: Any) -> None:
         event = {
+            "event_id": generate_ulid(),
+            "run_id": self._run_id,
             "event_type": event_type,
             "created_at": utc_now().isoformat(),
             **payload,

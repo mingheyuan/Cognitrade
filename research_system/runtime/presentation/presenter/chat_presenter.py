@@ -88,17 +88,6 @@ class ChatStreamPresenter:
                 chunks.append(DisplayChunk(kind="event", text=event.message.strip()))
             return chunks
 
-        if event.event_type == "dynamic_action_inserted":
-            if event.message.strip():
-                chunks.append(DisplayChunk(kind="event", text=event.message.strip()))
-            return chunks
-
-        if event.event_type == "supervisor_decision":
-            summary = self.summaries.supervisor_summary(event.payload or {})
-            if summary:
-                chunks.append(DisplayChunk(kind="event", text=summary))
-            return chunks
-
         if event.event_type == "review_requested":
             return chunks
 

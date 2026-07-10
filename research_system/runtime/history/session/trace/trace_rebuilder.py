@@ -32,9 +32,6 @@ class SessionHistoryTraceRebuilder:
     def dynamic_trace(self, debug_payload: dict[str, Any], events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return self.trace_sections.dynamic_trace(debug_payload, events)
 
-    def action_plan_patches(self, debug_payload: dict[str, Any], events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return self.trace_sections.action_plan_patches(debug_payload, events)
-
     def wait_trace(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return self.trace_sections.wait_trace(events)
 

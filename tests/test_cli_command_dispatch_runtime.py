@@ -58,7 +58,6 @@ class CliCommandDispatchRuntimeTests(unittest.TestCase):
         self.assertIs(CLI_COMMAND_EXECUTORS["subagent-read"], execute_run_query_command)
         self.assertIs(CLI_COMMAND_EXECUTORS["run-thread"], execute_run_query_command)
         self.assertIs(CLI_COMMAND_EXECUTORS["rerun-from"], execute_run_query_command)
-        self.assertIs(CLI_COMMAND_EXECUTORS["rerun-subagent"], execute_run_query_command)
         self.assertIs(CLI_COMMAND_EXECUTORS["cleanup"], execute_cleanup_command)
         self.assertIs(CLI_COMMAND_EXECUTORS["reindex-qdrant"], execute_reindex_command)
         self.assertIs(CLI_COMMAND_EXECUTORS["check"], execute_check_command)

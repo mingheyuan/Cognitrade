@@ -2,158 +2,143 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query
 from starlette.concurrency import run_in_threadpool
 
+from research_system.api.agent_os_admin_service import AgentOSAdminService
 from research_system.api.dependencies import (
     ApiPrincipal,
+    get_agent_os,
     get_mutation_lock,
-    get_orchestrator,
     require_principal,
 )
 from research_system.api.errors import ApiError
-from research_system.api.models import (
-    DiscoveryActivationRequest,
-    DiscoveryReviewRequest,
-    ProposalReviewRequest,
-)
+from research_system.api.models import RunApprovalRequest
 from research_system.api.validation import safe_identifier
 
 
-ReviewStatus = Literal["pending", "approved", "rejected"]
+ApprovalStatus = Literal["approved", "revoked"]
+MemoryLayer = Literal["episodic", "domain", "policy"]
 
 router = APIRouter(tags=["administration"])
 
 
-@router.get("/admin/proposals")
-async def list_proposals(
-    status: ReviewStatus | None = None,
+def _admin_service(agent_os=Depends(get_agent_os)) -> AgentOSAdminService:
+    return AgentOSAdminService(agent_os)
+
+
+@router.get("/admin/domain-packs")
+async def list_domain_packs(service: AgentOSAdminService = Depends(_admin_service)) -> list[dict]:
+    return await run_in_threadpool(service.list_domain_packs)
+
+
+@router.get("/admin/domain-packs/{domain_id}")
+async def show_domain_pack(
+    domain_id: str,
+    service: AgentOSAdminService = Depends(_admin_service),
+) -> dict:
+    resolved = safe_identifier(domain_id, field_name="domain_id")
+    try:
+        return await run_in_threadpool(service.domain_pack, resolved)
+    except KeyError as exc:
+        raise ApiError(
+            status_code=404,
+            code="resource_not_found",
+            message="The requested domain pack was not found",
+        ) from exc
+
+
+@router.get("/admin/runs/{run_id}/approvals")
+async def list_run_approvals(
+    run_id: str,
+    status: ApprovalStatus | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
-    orchestrator=Depends(get_orchestrator),
+    service: AgentOSAdminService = Depends(_admin_service),
 ) -> list[dict]:
-    return await run_in_threadpool(orchestrator.list_proposals, status=status, limit=limit)
+    resolved = safe_identifier(run_id, field_name="run_id")
+    try:
+        return await run_in_threadpool(service.list_approvals, resolved, status=status, limit=limit)
+    except FileNotFoundError as exc:
+        raise ApiError(
+            status_code=404,
+            code="resource_not_found",
+            message="The requested run was not found",
+        ) from exc
 
 
-@router.get("/admin/proposals/{proposal_id}")
-async def show_proposal(proposal_id: str, orchestrator=Depends(get_orchestrator)) -> dict:
-    resolved = safe_identifier(proposal_id, field_name="proposal_id")
-    return await run_in_threadpool(orchestrator.show_proposal, resolved)
-
-
-@router.post("/admin/proposals/{proposal_id}/reviews")
-async def review_proposal(
-    proposal_id: str,
-    payload: ProposalReviewRequest,
+@router.post("/admin/runs/{run_id}/approvals")
+async def approve_run_node(
+    run_id: str,
+    payload: RunApprovalRequest,
     principal: ApiPrincipal = Depends(require_principal),
-    orchestrator=Depends(get_orchestrator),
+    service: AgentOSAdminService = Depends(_admin_service),
     mutation_lock=Depends(get_mutation_lock),
 ) -> dict:
-    resolved = safe_identifier(proposal_id, field_name="proposal_id")
-    requested_status = "approved" if payload.decision == "approve" else "rejected"
+    resolved = safe_identifier(run_id, field_name="run_id")
     async with mutation_lock:
-        current = await run_in_threadpool(orchestrator.show_proposal, resolved)
-        current_status = str(current.get("status") or "")
-        if current_status in {"approved", "rejected"} and current_status != requested_status:
+        try:
+            return await run_in_threadpool(
+                service.approve,
+                resolved,
+                node_id=payload.node_id,
+                capability=payload.capability,
+                approval_id=payload.approval_id,
+                approved_by=f"api_v1:{principal.actor_id}",
+                reason=payload.reason,
+            )
+        except FileNotFoundError as exc:
+            raise ApiError(
+                status_code=404,
+                code="resource_not_found",
+                message="The requested run was not found",
+            ) from exc
+        except KeyError as exc:
+            raise ApiError(
+                status_code=404,
+                code="nested_resource_not_found",
+                message="The requested execution graph node was not found",
+            ) from exc
+        except ValueError as exc:
             raise ApiError(
                 status_code=409,
-                code="proposal_already_finalized",
-                message=f"Proposal {resolved} is already {current_status}",
-            )
-        return await run_in_threadpool(
-            orchestrator.review_proposal,
-            resolved,
-            decision=payload.decision,
-            reviewer=f"api_v1:{principal.actor_id}",
-            reason=payload.reason,
-        )
+                code="approval_conflict",
+                message=str(exc),
+            ) from exc
 
 
-@router.get("/admin/subagent-discoveries")
-async def list_subagent_discoveries(
-    status: ReviewStatus | None = None,
+@router.get("/admin/memory")
+async def list_memory(
+    layer: MemoryLayer | None = None,
+    domain_id: str | None = None,
+    status: str | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
-    orchestrator=Depends(get_orchestrator),
+    service: AgentOSAdminService = Depends(_admin_service),
 ) -> list[dict]:
     return await run_in_threadpool(
-        orchestrator.list_subagent_discovery_requests,
+        service.list_memory,
+        layer=layer,
+        domain_id=domain_id,
         status=status,
         limit=limit,
     )
 
 
-@router.get("/admin/subagent-discoveries/{ticket_id}")
-async def show_subagent_discovery(ticket_id: str, orchestrator=Depends(get_orchestrator)) -> dict:
-    resolved = safe_identifier(ticket_id, field_name="ticket_id")
-    return await run_in_threadpool(orchestrator.show_subagent_discovery_request, resolved)
-
-
-@router.post("/admin/subagent-discoveries/{ticket_id}/reviews")
-async def review_subagent_discovery(
-    ticket_id: str,
-    payload: DiscoveryReviewRequest,
-    principal: ApiPrincipal = Depends(require_principal),
-    orchestrator=Depends(get_orchestrator),
-    mutation_lock=Depends(get_mutation_lock),
-) -> dict:
-    resolved = safe_identifier(ticket_id, field_name="ticket_id")
-    requested_status = "approved" if payload.decision == "approve" else "rejected"
-    async with mutation_lock:
-        current = await run_in_threadpool(orchestrator.show_subagent_discovery_request, resolved)
-        current_status = str(current.get("status") or "")
-        if current_status in {"approved", "rejected"} and current_status != requested_status:
-            raise ApiError(
-                status_code=409,
-                code="discovery_ticket_already_finalized",
-                message=f"Discovery ticket {resolved} is already {current_status}",
-            )
-        return await run_in_threadpool(
-            orchestrator.review_subagent_discovery_request,
-            resolved,
-            decision=payload.decision,
-            reviewer=f"api_v1:{principal.actor_id}",
-            reason=payload.reason,
-            candidate_catalog_entries=None,
-        )
-
-
-@router.post("/admin/subagent-discoveries/{ticket_id}/activations")
-async def activate_subagent_discovery(
-    ticket_id: str,
-    payload: DiscoveryActivationRequest,
-    response: Response,
-    principal: ApiPrincipal = Depends(require_principal),
-    orchestrator=Depends(get_orchestrator),
-    mutation_lock=Depends(get_mutation_lock),
-) -> dict:
-    resolved = safe_identifier(ticket_id, field_name="ticket_id")
-    kwargs = payload.model_dump(exclude_none=True)
-    kwargs["activated_by"] = f"api_v1:{principal.actor_id}"
-    async with mutation_lock:
-        result = await run_in_threadpool(
-            orchestrator.activate_subagent_discovery_request,
-            resolved,
-            **kwargs,
-        )
-    response.status_code = 200 if "already exists" in str(result.get("message") or "") else 201
-    return result
-
-
 @router.post("/admin/artifacts/cleanup")
 async def cleanup_artifacts(
-    orchestrator=Depends(get_orchestrator),
+    service: AgentOSAdminService = Depends(_admin_service),
     mutation_lock=Depends(get_mutation_lock),
 ) -> dict:
     async with mutation_lock:
-        return await run_in_threadpool(orchestrator.cleanup)
+        return await run_in_threadpool(service.cleanup_artifacts)
 
 
 @router.post("/admin/qdrant/reindex")
 async def reindex_qdrant(
-    orchestrator=Depends(get_orchestrator),
+    service: AgentOSAdminService = Depends(_admin_service),
     mutation_lock=Depends(get_mutation_lock),
 ) -> dict:
     async with mutation_lock:
-        return await run_in_threadpool(orchestrator.rebuild_qdrant)
+        return await run_in_threadpool(service.rebuild_qdrant)
 
 
 __all__ = ["router"]

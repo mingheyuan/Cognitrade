@@ -1,23 +1,12 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
-from types import SimpleNamespace
-from tempfile import TemporaryDirectory
-
 from pydantic import ValidationError
 
 from research_system.runtime.execution.core.execution_graph import (
     ExecutionGraphScheduler,
     apply_execution_graph_patch,
 )
-from research_system.runtime.execution.core.execution_graph_compat import (
-    action_plan_to_execution_graph,
-    execution_graph_to_action_plan,
-    subagent_plan_to_execution_graph,
-)
-from research_system.runtime.execution.core.execution_graph_store import persist_execution_plan
-from research_system.runtime.storage.jsonl import read_json
 from research_system.schemas.execution_graph import (
     ArtifactPort,
     ExecutionGraph,
@@ -26,8 +15,6 @@ from research_system.schemas.execution_graph import (
     ExecutionGovernance,
     ExecutionNode,
 )
-from research_system.schemas.planning import ActionPlan, ActionSpec
-from research_system.schemas.subagents import SubagentPlan, SubagentPlanNode
 
 
 def _leaf(
@@ -249,68 +236,6 @@ class ExecutionGraphTests(unittest.TestCase):
             next(node for node in terminal.nodes if node.node_id == "review").status,
             "skipped",
         )
-
-    def test_legacy_plans_convert_to_the_canonical_protocol(self) -> None:
-        action_plan = ActionPlan(
-            intent="stock_check",
-            actions=[
-                ActionSpec(node_id="collect", phase="collect", agent="collector"),
-                ActionSpec(
-                    node_id="report",
-                    phase="report",
-                    agent="reporter",
-                    depends_on=["collect"],
-                ),
-            ],
-        )
-        subagent_plan = SubagentPlan(
-            intent="stock_check",
-            phase="collect",
-            nodes=[
-                SubagentPlanNode(
-                    node_id="normalize",
-                    subagent_type="query_normalizer",
-                )
-            ],
-        )
-
-        action_graph = action_plan_to_execution_graph(action_plan)
-        subagent_graph = subagent_plan_to_execution_graph(subagent_plan)
-
-        self.assertEqual(action_graph.graph_id, action_plan.plan_id)
-        self.assertEqual(action_graph.nodes[0].capability, "legacy.action.collector")
-        self.assertEqual(subagent_graph.graph_id, subagent_plan.plan_id)
-        self.assertEqual(subagent_graph.nodes[0].executor, "query_normalizer")
-        round_trip_plan = execution_graph_to_action_plan(action_graph)
-        self.assertEqual(round_trip_plan.plan_id, action_plan.plan_id)
-        self.assertEqual(round_trip_plan.actions[1].depends_on, ["collect"])
-
-    def test_persisted_execution_graph_tracks_revisions_and_patch_history(self) -> None:
-        with TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            context = SimpleNamespace(
-                paths=SimpleNamespace(
-                    task_plan=root / "task_plan.json",
-                    execution_graph=root / "execution_graph.json",
-                ),
-                execution_graph=None,
-                action_plan_patches=[],
-            )
-            plan = ActionPlan(
-                intent="stock_check",
-                actions=[ActionSpec(node_id="collect", phase="collect", agent="collector")],
-            )
-
-            first = persist_execution_plan(context=context, plan=plan)
-            context.action_plan_patches.append({"patch_id": "patch-1"})
-            second = persist_execution_plan(context=context, plan=plan)
-
-            self.assertEqual(first.revision, 1)
-            self.assertEqual(second.revision, 2)
-            self.assertEqual(second.metadata["legacy_patch_history"], [{"patch_id": "patch-1"}])
-            self.assertEqual(read_json(root / "execution_graph.json")["revision"], 2)
-            self.assertEqual(read_json(root / "task_plan.json")["plan_id"], plan.plan_id)
-
 
 if __name__ == "__main__":
     unittest.main()

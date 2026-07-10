@@ -106,19 +106,6 @@ def parse_chat_input(line: str) -> dict[str, object]:
         if len(parts) != 3:
             return {"action": "error", "message": "usage: /rerun-from <run_id|last> <node_id>"}
         return {"action": "rerun-from", "run_id": parts[1], "node_id": parts[2]}
-    if command == "/rerun-subagent":
-        if len(parts) != 5:
-            return {
-                "action": "error",
-                "message": "usage: /rerun-subagent <run_id|last> <action_node_id> <dag_id> <subagent_node_id>",
-            }
-        return {
-            "action": "rerun-subagent",
-            "run_id": parts[1],
-            "action_node_id": parts[2],
-            "dag_id": parts[3],
-            "subagent_node_id": parts[4],
-        }
     if command == "/history":
         return _parse_history_command(parts)
     if command == "/proposals":

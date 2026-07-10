@@ -9,6 +9,9 @@ artifact_types:
   - artifact_type: screening_result
   - artifact_type: sector_analysis
   - artifact_type: thesis_review
+  - artifact_type: source_record_set
+  - artifact_type: distillation_result
+  - artifact_type: distillation_review
   - artifact_type: research_report
 capabilities:
   - subagent_type: query_normalizer
@@ -79,6 +82,47 @@ capabilities:
       - artifact_type: thesis_review
     reliability: 0.9
     cache_scope: run
+  - subagent_type: distillation_source_collector
+    capability: finance.distillation.sources.collect
+    implementation: subagents.runtime:collect_distillation_sources
+    consumes:
+      - artifact_type: normalized_query
+    produces:
+      - artifact_type: source_record_set
+    reliability: 0.98
+    cache_scope: run
+    tags: [intent:distill_kol_logic]
+  - subagent_type: kol_logic_distiller
+    capability: finance.kol.logic.distill
+    implementation: subagents.runtime:distill_kol_logic
+    consumes:
+      - artifact_type: source_record_set
+    produces:
+      - artifact_type: distillation_result
+    parallel_safe: true
+    reliability: 0.9
+    cache_scope: run
+    tags: [intent:distill_kol_logic]
+  - subagent_type: distillation_reviewer
+    capability: finance.distillation.review
+    implementation: subagents.runtime:review_distillation
+    consumes:
+      - artifact_type: distillation_result
+    produces:
+      - artifact_type: distillation_review
+    reliability: 0.92
+    cache_scope: run
+    tags: [intent:distill_kol_logic]
+  - subagent_type: distillation_report_composer
+    capability: finance.distillation.report.compose
+    implementation: subagents.runtime:compose_distillation_report
+    consumes:
+      - artifact_type: distillation_review
+    produces:
+      - artifact_type: research_report
+    reliability: 0.9
+    cache_scope: run
+    tags: [intent:distill_kol_logic]
   - subagent_type: llm_report_composer
     capability: finance.report.compose
     implementation: subagents.runtime:compose_report
@@ -104,10 +148,21 @@ report_contracts:
     required_gate_ids: [finance.sources_required]
 planner_policies:
   prefer_evidence_backed_paths: true
+  supported_intents:
+    - stock_check
+    - stock_compare
+    - stock_screen
+    - sector_research
+    - review_thesis
+    - distill_kol_logic
   intent_outputs:
     stock_screen: [screening_result]
     sector_research: [sector_analysis]
     review_thesis: [thesis_review]
+    distill_kol_logic: [distillation_result, distillation_review]
+  intent_capabilities:
+    distill_kol_logic:
+      - finance.distillation.report.compose
 evaluations:
   - evaluations/finance_research.yaml
 governance:

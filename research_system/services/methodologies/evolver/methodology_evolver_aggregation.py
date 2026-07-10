@@ -48,10 +48,10 @@ class MethodologyEvolverAggregation:
 
         for run in runs:
             run_id = str(run.get("run_id") or "").strip()
-            blackboard_entries = list(run.get("blackboard_entries") or [])
+            artifacts = list(run.get("artifacts") or [])
             for candidate in self.extraction.build_candidates(
                 run_id=run_id,
-                blackboard_entries=blackboard_entries,
+                artifacts=artifacts,
                 methodology_memory_rows=memory_rows,
                 methodology_memory_search_rows=memory_search_rows,
             ):

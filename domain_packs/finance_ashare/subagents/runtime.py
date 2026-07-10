@@ -232,3 +232,159 @@ def review_thesis(context):
         confidence=evidence.confidence,
         risk_flags=["decision_support_only"],
     )
+
+
+def collect_distillation_sources(context):
+    query = context.require_artifact("normalized_query")
+    inputs = dict(context.node.inputs or {})
+    raw_records = (
+        inputs.get("source_records")
+        or inputs.get("records")
+        or inputs.get("statuses")
+        or inputs.get("items")
+        or []
+    )
+    if isinstance(raw_records, dict):
+        raw_records = [raw_records]
+    records = []
+    source_refs = []
+    for index, raw in enumerate(raw_records):
+        row = dict(raw) if isinstance(raw, dict) else {"text": str(raw)}
+        record_id = str(row.get("record_id") or row.get("id") or f"record-{index + 1}")
+        text = str(row.get("text") or row.get("content") or row.get("body") or "").strip()
+        if not text:
+            continue
+        records.append(
+            {
+                "record_id": record_id,
+                "text": text,
+                "author": row.get("author") or row.get("user_name"),
+                "published_at": row.get("published_at") or row.get("created_at"),
+                "tags": list(row.get("tags") or []),
+                "dimensions": list(row.get("dimensions") or []),
+            }
+        )
+        source_refs.append({"type": "source_record", "id": record_id})
+    if not records and query.content.get("query"):
+        records.append(
+            {
+                "record_id": "request-query",
+                "text": str(query.content["query"]),
+                "author": None,
+                "published_at": None,
+                "tags": [],
+                "dimensions": [],
+            }
+        )
+        source_refs.append({"type": "user_request", "id": query.artifact_id})
+    return ArtifactDraft(
+        artifact_type="source_record_set",
+        content={"query": str(query.content.get("query") or ""), "records": records},
+        source_refs=source_refs,
+        parent_artifact_ids=[query.artifact_id],
+        confidence=1.0 if raw_records else 0.6,
+        risk_flags=[] if raw_records else ["source_records_missing"],
+    )
+
+
+def distill_kol_logic(context):
+    source_set = context.require_artifact("source_record_set")
+    records = list(source_set.content.get("records") or [])
+    dimensions = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        text = str(record.get("text") or "").strip()
+        labels = list(record.get("dimensions") or record.get("tags") or [])
+        label = str(labels[0] if labels else "investment_logic")
+        dimensions.append(
+            {
+                "dimension_name": label,
+                "category": "finance_research",
+                "claim": text,
+                "source_record_ids": [str(record.get("record_id") or "unknown")],
+                "confidence": 0.75 if labels else 0.6,
+                "attribution": record.get("author"),
+            }
+        )
+    major_risks = []
+    if not records:
+        major_risks.append("no_source_records")
+    if any(not item.get("attribution") for item in dimensions):
+        major_risks.append("missing_attribution")
+    return ArtifactDraft(
+        artifact_type="distillation_result",
+        content={
+            "dimensions": dimensions,
+            "summary": {
+                "source_record_count": len(records),
+                "dimension_count": len(dimensions),
+                "major_risks": major_risks,
+                "method": "domain_pack_structured_distillation",
+            },
+        },
+        source_refs=list(source_set.source_refs),
+        parent_artifact_ids=[source_set.artifact_id],
+        confidence=min((item["confidence"] for item in dimensions), default=0.0),
+        risk_flags=major_risks,
+    )
+
+
+def review_distillation(context):
+    distillation = context.require_artifact("distillation_result")
+    dimensions = list(distillation.content.get("dimensions") or [])
+    findings = []
+    for item in dimensions:
+        if not isinstance(item, dict):
+            continue
+        if not item.get("attribution"):
+            findings.append(
+                {
+                    "finding_type": "missing_attribution",
+                    "severity": "medium",
+                    "dimension_name": item.get("dimension_name"),
+                    "reason": "The distilled claim has no attributable author.",
+                }
+            )
+        if float(item.get("confidence") or 0.0) < 0.7:
+            findings.append(
+                {
+                    "finding_type": "low_confidence",
+                    "severity": "medium",
+                    "dimension_name": item.get("dimension_name"),
+                    "reason": "The distilled claim requires stronger source evidence.",
+                }
+            )
+    verdict = "accepted" if dimensions and not findings else "needs_review"
+    return ArtifactDraft(
+        artifact_type="distillation_review",
+        content={
+            "verdict": verdict,
+            "findings": findings,
+            "distillation": dict(distillation.content),
+        },
+        source_refs=list(distillation.source_refs),
+        parent_artifact_ids=[distillation.artifact_id],
+        confidence=distillation.confidence,
+        risk_flags=[str(item["finding_type"]) for item in findings],
+    )
+
+
+def compose_distillation_report(context):
+    review = context.require_artifact("distillation_review")
+    distillation = dict(review.content.get("distillation") or {})
+    findings = list(review.content.get("findings") or [])
+    dimensions = list(distillation.get("dimensions") or [])
+    return ArtifactDraft(
+        artifact_type="research_report",
+        content={
+            "conclusion": f"Distilled {len(dimensions)} investment-logic dimensions; review verdict: {review.content.get('verdict')}.",
+            "evidence": dimensions,
+            "risk": findings or ["Distilled logic remains decision support and requires source verification."],
+            "follow_up": ["Verify attribution and refresh the original source records before reuse."],
+        },
+        source_refs=list(review.source_refs),
+        parent_artifact_ids=[review.artifact_id],
+        confidence=review.confidence,
+        risk_flags=["decision_support_only", *list(review.risk_flags)],
+    )

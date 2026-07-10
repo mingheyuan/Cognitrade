@@ -5,7 +5,6 @@ from research_system.cli.commands.cli_command_payloads import (
     PROPOSAL_COMMANDS,
     RUN_ID_COMMANDS,
     RUN_ID_QUERY_COMMANDS,
-    RUN_ID_SELECTOR_COMMANDS,
     STATUS_FILTER_COMMANDS,
     SUBAGENT_DISCOVERY_COMMANDS,
     SUBAGENT_COMMANDS,
@@ -48,7 +47,6 @@ def build_cli_command_executors() -> dict[str, object]:
         "subagent-read": execute_run_query_command,
         "run-thread": execute_run_query_command,
         "rerun-from": execute_run_query_command,
-        "rerun-subagent": execute_run_query_command,
         "trace": execute_run_id_command,
         "resume": execute_run_id_command,
         "cancel": execute_run_id_command,
@@ -71,8 +69,6 @@ def resolve_cli_command_executor(command: str, *, executors: dict[str, object] |
         raise ValueError(f"missing run-id command executor: {command}")
     if command in RUN_ID_QUERY_COMMANDS and command not in resolved_executors:
         raise ValueError(f"missing run-id query command executor: {command}")
-    if command in RUN_ID_SELECTOR_COMMANDS and command not in resolved_executors:
-        raise ValueError(f"missing run-id selector command executor: {command}")
     if command in SUBAGENT_COMMANDS and command not in resolved_executors:
         raise ValueError(f"missing subagent command executor: {command}")
     if command in PROPOSAL_COMMANDS and command not in resolved_executors:

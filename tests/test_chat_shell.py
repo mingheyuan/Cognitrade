@@ -55,8 +55,10 @@ class ChatShellTests(unittest.TestCase):
 
     def test_orchestrator_event_listener_receives_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            repo_root = Path(temp_dir)
-            settings = Settings.from_env(repo_root)
+            repository_root = Path(__file__).resolve().parents[1]
+            settings = Settings.from_env(repository_root).model_copy(
+                update={"runs_root": Path(temp_dir) / "runs", "memory_root": Path(temp_dir) / "memory"}
+            )
             ensure_workspace_layout(settings)
             events: list[str] = []
 
@@ -65,11 +67,9 @@ class ChatShellTests(unittest.TestCase):
 
             orchestrator = ResearchOrchestrator(settings, event_listener=listener)
             try:
-                orchestrator.retriever.qdrant_available = False
-                orchestrator.retriever.qdrant_error = "disabled_for_test"
                 response = orchestrator.run(RequestEnvelope(intent="stock_check", user_query="甯垜鐪嬩笅 000001 杩欎釜鑲＄エ"))
 
-                self.assertIn(response.status, {"completed", "failed"})
+                self.assertEqual(response.status, "completed")
                 self.assertIn("request_received", events)
                 self.assertIn("run_accepted", events)
             finally:

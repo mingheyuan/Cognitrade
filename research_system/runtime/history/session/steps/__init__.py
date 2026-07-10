@@ -5,7 +5,6 @@ from importlib import import_module
 __all__ = [
     "SessionHistoryStepBuilder",
     "SessionHistoryStepRows",
-    "SessionHistorySupervisorState",
 ]
 
 _EXPORTS = {
@@ -16,10 +15,6 @@ _EXPORTS = {
     "SessionHistoryStepRows": (
         "research_system.runtime.history.session.steps.step_rows",
         "SessionHistoryStepRows",
-    ),
-    "SessionHistorySupervisorState": (
-        "research_system.runtime.history.session.steps.supervisor_state",
-        "SessionHistorySupervisorState",
     ),
 }
 
