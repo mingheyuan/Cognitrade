@@ -1,0 +1,57 @@
+.dockerignore
+  s_a6a8a3a6f43b3c::t_c30d74d68d1336 1-22
+.env.example
+  s_a6a8a3a6f43b3c::t_8594469d679c8b 1,4-7,44-54
+README.md
+  s_a6a8a3a6f43b3c::t_b1bb0fc53454a3 68,71-72,77,126-182
+compose.yaml
+  s_a6a8a3a6f43b3c::t_8436d10aa32349 1-63
+deploy/backend-entrypoint.sh
+  s_a6a8a3a6f43b3c::t_141d08baa6403a 1-15
+deploy/backend.Dockerfile
+  s_a6a8a3a6f43b3c::t_dd08268bd8a25f 1-38
+deploy/frontend.Dockerfile
+  s_a6a8a3a6f43b3c::t_4ca377b19ee476 1-24
+deploy/nginx.conf
+  s_a6a8a3a6f43b3c::t_ec9281cc8b8728 1-68
+frontend/README.md
+  s_a6a8a3a6f43b3c::t_691ec0d1f944ac 30-36
+research_system/runtime/config/settings_env.py
+  s_a6a8a3a6f43b3c::t_80c18adfbc7411 29-32
+research_system/runtime/platform/settings.py
+  s_a6a8a3a6f43b3c::t_a34043bf8cabc8 18-20
+research_system/runtime/providers/openai_provider.py
+  s_a6a8a3a6f43b3c::t_cba470488a1f08 82,94-95,126,138
+research_system/runtime/providers/openai_response_support.py
+  s_a6a8a3a6f43b3c::t_9c982ca54fcd0e 31
+scripts/deploy.sh
+  s_a6a8a3a6f43b3c::t_c79324179bdd00 1-651
+tests/test_chat_shell.py
+  s_a6a8a3a6f43b3c::t_bd47febf169446 11
+tests/test_deploy_script.py
+  s_a6a8a3a6f43b3c::t_e2f534e845edf1 1-168
+tests/test_provider_registry.py
+  s_a6a8a3a6f43b3c::t_9597d29227b7a1 99,181,188-202
+tests/test_settings_runtime.py
+  s_a6a8a3a6f43b3c::t_a167bb8cb33b77 101-108,111,114-116,118-120
+tests/test_windows_terminal.py
+  s_a6a8a3a6f43b3c::t_26efd03f40f4b2 6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "d4316ac9210b5b9200c8e8c4653e62be39a52df7",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
