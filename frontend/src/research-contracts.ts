@@ -229,6 +229,7 @@ export type AgentOSDashboardProvenance = {
   status?: string
   source_run_ids?: string[]
   source_artifact_ids?: string[]
+  evaluations?: Array<Record<string, unknown>>
 }
 
 export type AgentOSDashboardItem = {
