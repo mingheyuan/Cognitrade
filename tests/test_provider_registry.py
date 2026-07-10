@@ -96,6 +96,7 @@ class ProviderRegistryTests(unittest.TestCase):
 
         self.assertEqual(text, "first half second half")
         self.assertEqual(len(responses.create_calls), 2)
+        self.assertFalse(responses.create_calls[0]["store"])
         self.assertIsNone(responses.create_calls[0].get("previous_response_id"))
         self.assertEqual(responses.create_calls[1].get("previous_response_id"), "resp_1")
         self.assertEqual(
@@ -177,9 +178,25 @@ class ProviderRegistryTests(unittest.TestCase):
         self.assertEqual(deltas, ["first half ", "second half"])
         self.assertEqual(summaries, ["summary one", "summary two"])
         self.assertEqual(len(responses.stream_calls), 2)
+        self.assertFalse(responses.stream_calls[0]["store"])
         self.assertIsNone(responses.stream_calls[0].get("previous_response_id"))
         self.assertEqual(responses.stream_calls[1].get("previous_response_id"), "resp_1")
         self.assertEqual(
             responses.stream_calls[1].get("input"),
             OpenAIProvider._CONTINUATION_PROMPT,
         )
+
+    def test_default_reasoning_effort_is_forwarded_when_call_does_not_override_it(self) -> None:
+        final = SimpleNamespace(
+            id="resp_1",
+            status="completed",
+            incomplete_details=None,
+            output_text="done",
+        )
+        responses = _FakeResponsesClient(create_responses=[final])
+        settings = self._settings().model_copy(update={"openai_reasoning_effort": "xhigh"})
+        provider = OpenAIProvider(settings)
+        provider._client = _FakeClient(responses)  # type: ignore[assignment]
+
+        self.assertEqual(provider.complete(system_prompt="sys", user_prompt="user"), "done")
+        self.assertEqual(responses.create_calls[0]["reasoning"], {"effort": "xhigh"})

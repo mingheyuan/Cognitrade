@@ -3,8 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from prompt_toolkit.output.win32 import NoConsoleScreenBufferError
-
+from research_system.cli.prompt_toolkit_compat import NoConsoleScreenBufferError
 from research_system.cli.windows_terminal import create_terminal_io
 
 

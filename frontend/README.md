@@ -27,7 +27,13 @@ npm run dev
 
 默认地址为 `http://127.0.0.1:4173/`。
 
-前端默认连接 `http://127.0.0.1:8000/api/v1`。可以在页面右上角的 API 状态按钮中修改地址并输入 Bearer token；地址持久化到 `localStorage`，token 只保存在当前标签页的 `sessionStorage`。也可以只配置非敏感地址：
+完整容器部署使用根目录脚本，默认通过 Nginx 发布在 `http://127.0.0.1:8080`，并把 `/api/v1` 同源代理到后端：
+
+```bash
+./scripts/deploy.sh --yes
+```
+
+容器构建默认连接同源 `/api/v1`；本地开发模式默认连接 `http://127.0.0.1:8000/api/v1`。可以在页面右上角的 API 状态按钮中修改地址并输入 Bearer token；地址持久化到 `localStorage`，token 只保存在当前标签页的 `sessionStorage`。也可以只配置非敏感地址：
 
 ```bash
 VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1 npm run dev
