@@ -54,7 +54,6 @@ type CognitradeContextValue = {
 }
 
 const CognitradeContext = createContext<CognitradeContextValue | null>(null)
-
 function errorMessage(error: unknown): string {
   if (error instanceof CognitradeApiError) {
     const requestId = error.requestId ? ` · request ${error.requestId}` : ''
@@ -183,7 +182,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
       try {
         const response = await client.createRun({
           user_query: query,
-          ...(intent ? { intent } : {}),
+          intent,
         })
         setLastResponse(response)
         if (response.run_id) {

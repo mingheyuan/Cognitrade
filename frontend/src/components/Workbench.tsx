@@ -40,6 +40,21 @@ function MetricCard({ label, value, note }: { label: string; value: string | num
   return <div className="metric-card"><span>{label}</span><strong>{value}</strong><small>{note}</small></div>
 }
 
+function methodologySummary(raw: Record<string, unknown>): string {
+  const outputs = asRecord(raw.outputs)
+  const valuationBand = asRecord(raw.valuation_band)
+  const values = [
+    outputs.relative_view,
+    outputs.market_to_intrinsic_gap,
+    outputs.cashflow_state,
+    outputs.debt_capacity_state,
+    valuationBand.base,
+  ].filter((value) => value !== undefined && value !== null)
+  return values.length
+    ? values.map((value) => String(value)).join(' | ')
+    : 'No displayable model output was returned.'
+}
+
 export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
   const {
     selectedRunId,
@@ -59,6 +74,7 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
   const counts = asRecord(selectedRun?.metrics.counts)
   const conclusion = asString(report.conclusion)
   const scorecard = asRecord(report.scorecard || report.screening_scorecard)
+  const methodologies = Array.isArray(report.methodologies) ? report.methodologies.map(asRecord) : []
   const artifactBackedReport = asString(report.protocol) === 'agent_os' && Array.isArray(report.final_artifact_ids)
   const updatedAt = selectedRun?.events.events.at(-1)?.created_at
 
@@ -180,9 +196,23 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
                 </div>
               </section>
 
+              {methodologies.length > 0 && (
+                <section className="report-section">
+                  <div className="report-section-heading"><div><span className="section-index">04</span><div><h3>Methodology Views</h3><p>Comps, DCF, and cashflow resilience are produced by the Finance Pack.</p></div></div></div>
+                  <div className="live-key-value-grid">
+                    {methodologies.slice(0, 12).map((methodology, index) => (
+                      <div key={`${asString(methodology.methodology_type, 'method')}-${asString(methodology.target_symbol, String(index))}`}>
+                        <span>{asString(methodology.target_symbol, 'symbol')} | {asString(methodology.methodology_type, 'methodology')}</span>
+                        <strong>{methodologySummary(methodology)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
               {Object.keys(scorecard).length > 0 && (
                 <section className="report-section">
-                  <div className="report-section-heading"><div><span className="section-index">04</span><div><h3>结构化评分卡</h3><p>原样展示后端 scorecard 字段</p></div></div></div>
+                  <div className="report-section-heading"><div><span className="section-index">05</span><div><h3>结构化评分卡</h3><p>原样展示后端 scorecard 字段</p></div></div></div>
                   <div className="live-key-value-grid">
                     {Object.entries(scorecard).slice(0, 12).map(([key, value]) => (
                       <div key={key}><span>{key}</span><strong>{typeof value === 'object' ? JSON.stringify(value) : String(value)}</strong></div>

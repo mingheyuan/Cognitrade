@@ -104,19 +104,49 @@ export function asStringList(value: unknown): string[] {
 }
 
 export function reportFromDetail(detail?: RunDetail | null): ResearchReport {
+  const artifacts = Array.isArray(detail?.replay.artifacts) ? detail.replay.artifacts : []
+  const reportArtifact = [...artifacts].reverse().find((artifact) => (
+    asString(asRecord(artifact).artifact_type) === 'research_report'
+  ))
+  const content = asRecord(asRecord(reportArtifact).content)
+  if (Object.keys(content).length > 0) {
+    const artifactId = asString(asRecord(reportArtifact).artifact_id)
+    return {
+      ...content,
+      protocol: 'agent_os',
+      final_artifact_ids: artifactId ? [artifactId] : [],
+    } as ResearchReport
+  }
   return asRecord(detail?.replay.result?.report) as ResearchReport
 }
 
 export function queryFromDetail(detail?: RunDetail | null): string {
-  return asString(detail?.replay.request?.user_query)
+  const request = asRecord(detail?.replay.request)
+  return asString(request.user_query || asRecord(request.request).user_query)
 }
 
 export function intentFromDetail(detail?: RunDetail | null): string {
-  return asString(detail?.replay.result?.intent || detail?.replay.request?.intent || detail?.steps.intent)
+  const request = asRecord(detail?.replay.request)
+  const graph = asRecord(asRecord(detail?.replay.snapshot).graph)
+  const metadata = asRecord(graph.metadata)
+  return asString(
+    detail?.replay.result?.intent
+      || request.intent
+      || asRecord(request.request).intent
+      || metadata.intent
+      || detail?.steps.intent,
+  )
 }
 
 export function statusFromDetail(detail?: RunDetail | null): string {
-  return asString(detail?.replay.summary?.status || detail?.metrics.summary?.status, 'unknown')
+  return asString(
+    detail?.replay.summary?.status
+      || asRecord(detail?.replay.snapshot).status
+      || detail?.metrics.status
+      || detail?.events.status
+      || detail?.metrics.summary?.status,
+    'unknown',
+  )
 }
 
 export function isActiveStatus(status?: string | null): boolean {

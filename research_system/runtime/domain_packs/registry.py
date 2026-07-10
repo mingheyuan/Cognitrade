@@ -103,9 +103,17 @@ class DomainPackRegistry:
         if not definitions:
             raise KeyError(f"unknown domain capability: {domain_id}:{capability}")
         implementation = str(definitions[0].implementation or "").strip()
-        if not implementation or ":" not in implementation:
+        if not implementation:
             raise ValueError(
                 f"capability has no executable implementation: {domain_id}:{capability}"
+            )
+        return self.resolve_callable(domain_id=domain_id, implementation=implementation)
+
+    def resolve_callable(self, *, domain_id: str, implementation: str) -> Callable:
+        """Load a callable declared by an installed pack without escaping its root."""
+        if ":" not in implementation:
+            raise ValueError(
+                f"domain implementation must be module:function: {domain_id}:{implementation}"
             )
         module_ref, function_name = implementation.rsplit(":", 1)
         relative_module = Path(*module_ref.split("."))

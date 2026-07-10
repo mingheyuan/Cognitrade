@@ -169,6 +169,19 @@ class ApiV1RunsTests(unittest.TestCase):
         self.assertEqual(request.constraints["symbol"], "600519")
         self.assertEqual(request.slots, {})
 
+    def test_post_runs_defaults_an_unspecified_intent_for_agent_os_task_intake(self) -> None:
+        response = self.client.post(
+            "/api/v1/runs",
+            headers=auth_headers(),
+            json={"user_query": "Analyze 600519."},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        calls = self.orchestrator.calls_for("run")
+        self.assertEqual(len(calls), 1)
+        request = calls[0].args[0]
+        self.assertEqual(request.intent, "stock_check")
+
     def test_domain_terminal_statuses_remain_http_200(self) -> None:
         for status in ("needs_clarification", "failed", "cancelled", "timed_out"):
             with self.subTest(status=status):
