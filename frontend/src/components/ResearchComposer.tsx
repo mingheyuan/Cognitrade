@@ -1,8 +1,9 @@
 import { ArrowUp, ChevronDown, Paperclip, SlidersHorizontal, Sparkles } from 'lucide-react'
 import { type FormEvent, useState } from 'react'
+import type { ResearchIntent } from '../research-contracts'
 
 type ResearchComposerProps = {
-  onSubmit: (query: string) => void
+  onSubmit: (query: string, intent?: ResearchIntent) => void
   running: boolean
   compact?: boolean
 }
@@ -23,7 +24,7 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
     event.preventDefault()
     const normalized = query.trim()
     if (!normalized || running) return
-    onSubmit(normalized)
+    onSubmit(normalized, intent === 'auto' ? undefined : intent)
     setQuery('')
   }
 
@@ -70,7 +71,7 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
           </select>
           <ChevronDown size={13} />
         </label>
-        <button className="composer-tool-button" type="button">
+        <button className="composer-tool-button" type="button" disabled title="后端 v1 暂未提供材料上传接口">
           <Paperclip size={14} />
           添加材料
         </button>

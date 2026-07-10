@@ -64,7 +64,8 @@ and `evaluations`. The loader rejects incomplete packs before planning.
 ```text
 Cognitrade/
 ├─ api-doc/            # HTTP API 版本化契约
-├─ frontend/           # React + Vite 研究工作台（当前为演示数据层）
+├─ api-todo/           # 下一版接口缺口与验收条件
+├─ frontend/           # React + Vite 实时研究工作台
 ├─ research_system/    # 主代码
 ├─ scripts/service.sh  # 前后端统一启动与生命周期管理脚本
 ├─ tests/              # 本地回归测试
@@ -146,7 +147,7 @@ npm run lint
 npm run build
 ```
 
-仓库已提供 FastAPI 入站服务和 `/api/v1` REST/SSE 接口；前端当前仍使用演示快照，尚未切换为实时 API 数据。接入说明见 [`frontend/README.md`](./frontend/README.md)。OpenAI、Qdrant、Redis 和数据源密钥必须留在服务端，不能放入 `VITE_*` 环境变量。
+前端已经接入 `/api/v1`：研究运行、历史回放、阶段事件、指标、系统状态和方法论提案均来自后端。尚未具备后端接口的行情、方法论版本、上传和全局搜索会显示明确空态，不再用演示值填充；缺口见 [`api-todo/api-v2-todo.md`](./api-todo/api-v2-todo.md)。接入与凭据说明见 [`frontend/README.md`](./frontend/README.md)。OpenAI、Qdrant、Redis 和数据源密钥必须留在服务端，不能放入 `VITE_*` 环境变量。
 
 ## FastAPI 服务
 

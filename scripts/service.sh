@@ -1038,10 +1038,21 @@ if (( START_BACKEND )); then
 fi
 
 if (( START_FRONTEND )); then
+    FRONTEND_API_BASE_URL="${VITE_COGNITRADE_API_BASE_URL:-}"
+    if [[ -z "$FRONTEND_API_BASE_URL" ]]; then
+        if (( START_BACKEND )); then
+            FRONTEND_API_BASE_URL="$BACKEND_URL/api/v1"
+        else
+            FRONTEND_API_HOST="${COGNITRADE_API_HOST:-127.0.0.1}"
+            FRONTEND_API_PORT="${COGNITRADE_API_PORT:-8000}"
+            FRONTEND_API_BASE_URL="http://$(url_host "$FRONTEND_API_HOST"):$FRONTEND_API_PORT/api/v1"
+        fi
+    fi
     [[ "$FRONTEND_MODE" == preview ]] || : > "$FRONTEND_LOG"
     log "starting frontend ($FRONTEND_MODE)"
     (
         cd "$FRONTEND_DIR"
+        export VITE_COGNITRADE_API_BASE_URL="$FRONTEND_API_BASE_URL"
         if [[ "$FRONTEND_MODE" == preview ]]; then
             spawn_new_session "$FRONTEND_DIR/node_modules/.bin/vite" preview \
                 --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
@@ -1057,7 +1068,7 @@ if (( START_FRONTEND )); then
         fail "frontend failed readiness"
     fi
     log "frontend ready: $FRONTEND_URL"
-    warn "frontend still renders demo snapshots and is not wired to the live API"
+    log "frontend API target: $FRONTEND_API_BASE_URL"
 fi
 
 ready_tmp="$READY_FILE.$$"
