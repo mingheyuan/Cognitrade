@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from prompt_toolkit.output.win32 import NoConsoleScreenBufferError
-
+from research_system.cli.prompt_toolkit_compat import NoConsoleScreenBufferError
 from research_system.runtime.platform.settings import Settings
 
 

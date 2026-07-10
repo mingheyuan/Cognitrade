@@ -27,10 +27,12 @@
 
 ```text
 Cognitrade/
+├─ api-doc/            # HTTP API 版本化契约
 ├─ frontend/           # React + Vite 研究工作台（当前为演示数据层）
 ├─ research_system/    # 主代码
 ├─ tests/              # 本地回归测试
 ├─ workspace/          # 运行数据、配置、taxonomy、runs、memory、Qdrant 本地库
+├─ requirements.txt    # Python 运行与 API 依赖
 ├─ .env
 └─ .env.example
 ```
@@ -64,11 +66,43 @@ npm run lint
 npm run build
 ```
 
-当前仓库没有入站 HTTP / SSE 服务，因此前端明确显示为“演示快照”，不会把示例数据伪装成实时结果。现有 Python 编排器、CLI 和运行目录的正确接入边界，以及建议的 REST/SSE 映射见 [`frontend/README.md`](./frontend/README.md)。OpenAI、Qdrant、Redis 和数据源密钥必须留在服务端，不能放入 `VITE_*` 环境变量。
+仓库已提供 FastAPI 入站服务和 `/api/v1` REST/SSE 接口；前端当前仍使用演示快照，尚未切换为实时 API 数据。接入说明见 [`frontend/README.md`](./frontend/README.md)。OpenAI、Qdrant、Redis 和数据源密钥必须留在服务端，不能放入 `VITE_*` 环境变量。
+
+## FastAPI 服务
+
+首次运行先安装 Python 依赖：
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+在根目录 `.env` 中配置一个强随机 Bearer token：
+
+```env
+COGNITRADE_API_TOKEN=replace-with-a-strong-random-token
+```
+
+启动单进程 API：
+
+```bash
+python -m research_system.api
+```
+
+默认监听 `http://127.0.0.1:8000`。FastAPI 交互文档位于 `/docs`，OpenAPI JSON 位于 `/openapi.json`。业务接口统一使用 `/api/v1`，例如：
+
+```bash
+export COGNITRADE_API_TOKEN=replace-with-a-strong-random-token
+curl http://127.0.0.1:8000/api/v1/system/status \
+  -H "Authorization: Bearer $COGNITRADE_API_TOKEN"
+```
+
+本地 Qdrant 与 JSON/JSONL store 不支持多进程并发写，当前服务固定使用一个 Uvicorn worker。研究运行、重跑、审批、激活和维护写操作会串行执行；取消和只读观测不等待研究锁。仅在未配置 token 的隔离本机开发环境中，才可设置 `COGNITRADE_API_ALLOW_UNAUTHENTICATED=true` 跳过 Bearer 校验；此模式只允许绑定 `127.0.0.1`、`localhost` 或 `::1`。
 
 ## 后端 API 契约
 
-完整的后端能力分析、Python/CLI 接口与 `/api/v1` REST/SSE 适配契约见 [`api-doc/api-v1.md`](./api-doc/api-v1.md)。后续新增接口时，新建完整的 `api-doc/api-v2.md` 并使用 `/api/v2`，不在 v1 中静默扩展接口。
+完整的后端能力分析、Python/CLI 接口与已实现的 `/api/v1` REST/SSE 契约见 [`api-doc/api-v1.md`](./api-doc/api-v1.md)。后续新增业务接口时，新建完整的 `api-doc/api-v2.md` 并使用 `/api/v2`，不在 v1 中静默扩展接口。
 
 ## 环境变量
 
@@ -105,6 +139,12 @@ LOG_LEVEL=INFO
 LLM_REQUEST_TIMEOUT_SECONDS=25
 RUN_TIMEOUT_SECONDS=120
 EXTERNAL_WAIT_TIMEOUT_SECONDS=30
+
+COGNITRADE_API_TOKEN=
+COGNITRADE_API_ALLOW_UNAUTHENTICATED=false
+COGNITRADE_API_CORS_ORIGINS=http://127.0.0.1:4173,http://localhost:4173
+COGNITRADE_API_HOST=127.0.0.1
+COGNITRADE_API_PORT=8000
 ```
 
 说明：
@@ -114,6 +154,9 @@ EXTERNAL_WAIT_TIMEOUT_SECONDS=30
 - 长期 memory 当前统一落在本地 `workspace/memory/`，包含 `records.jsonl`、`memory_summary.md` 和 `MEMORY.md`
 - `ROUTER_*` 用于 Redis 动态路由控制面；未配置时会退回本地 `router_defaults.yml`
 - `COGNITRADE_PROVIDERS_*` 用于 provider chain 覆盖，优先级高于默认 `provider_policy.yml`
+- `COGNITRADE_API_TOKEN` 默认必填；API 会从 `.env` 和进程环境读取，环境变量优先
+- 未配置 token 时，`COGNITRADE_API_ALLOW_UNAUTHENTICATED=true` 仅允许 loopback host；配置 token 后仍强制认证
+- `COGNITRADE_API_CORS_ORIGINS` 是逗号分隔的显式浏览器 origin 白名单，不允许 `*`
 
 ## 配置文件
 
@@ -324,10 +367,14 @@ python -m unittest discover -s tests -p "test_*.py" -v
 python -m compileall research_system tests
 ```
 
-截至 `2026-07-01`，当前工作树已本地通过：
+截至 `2026-07-10`，FastAPI 传输层已本地通过：
 
-- `python -m unittest discover -s tests -p "test_*.py"` `398 tests OK`
+- `python -m unittest discover -s tests -p "test_api_v1_*.py"`：`51 tests OK`
+- 编排器 reindex/cancel 回归模块：`4 tests OK`
 - `python -m compileall research_system tests`
+- `python -m pip check`
+
+全量测试含 Windows 终端专用模块和依赖本地 `.env` 的用例，应在对应平台与隔离测试环境中执行，不能用全局注入的真实 provider key 跑回归。
 
 `doctor` 现在会额外报告：
 

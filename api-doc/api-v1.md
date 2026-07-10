@@ -2,7 +2,7 @@
 
 > 文档文件：`api-doc/api-v1.md`
 > URL 版本前缀：`/api/v1`
-> 分析基线：2026-07-10，当前仓库后端源码
+> 实现基线：2026-07-10，`research_system/api/`
 > 项目性质：面向 A 股研究的 CLI-first 多 Agent 研究系统
 
 ## 1. 文档定位
@@ -10,24 +10,33 @@
 本文件是根据 `research_system/`、运行时 schema、CLI 命令、持久化结构和测试用例整理出的 **API v1 完整契约**。它同时说明：
 
 1. 当前后端已经实现的 Python/CLI 能力；
-2. Web 服务应如何把这些能力映射为 `/api/v1` REST/SSE 接口；
+2. FastAPI 服务如何把这些能力映射为 `/api/v1` REST/SSE 接口；
 3. 请求、响应、状态、错误、鉴权和安全边界；
 4. 当前源码尚未实现或无法保证的行为。
 
 ### 1.1 当前实现状态
 
-当前仓库 **没有 FastAPI、Flask、Django、HTTP、WebSocket 或 SSE 入站服务**。真实可调用入口是：
+当前仓库已经实现 FastAPI 入站服务。可调用入口是：
 
+- HTTP/SSE：`research_system.api.app:app`，业务前缀 `/api/v1`；
 - CLI：`python -m research_system.cli.app <command>`；
 - Python：`research_system.runtime.orchestration.orchestrator.ResearchOrchestrator`；
 - 本地持久化：`workspace/runs/`、`workspace/memory/` 和 chat thread store。
 
-所以本文中的 `/api/v1/...` 是供后续服务端适配层实现的规范契约，不代表这些 URL 已经可以访问。表格中的“核心映射”指当前已经存在的 Python 方法或服务。
+本文第 4 节列出的 37 个 `/api/v1` 业务操作均已注册为 FastAPI 路由。传输层负责 Bearer 鉴权、CORS 白名单、输入校验、统一错误、同步核心线程池调度、写操作串行化以及从 `events.jsonl` 输出 SSE；研究逻辑仍由现有 `ResearchOrchestrator` 和 store 执行。
+
+启动命令：
+
+```bash
+python -m research_system.api
+```
+
+默认地址为 `http://127.0.0.1:8000`。框架生成的 `/docs`、`/redoc` 和 `/openapi.json` 是开发/发现入口，不属于版本化业务资源。
 
 ### 1.2 版本命名与演进规则
 
 - v1 文档固定命名为 `api-doc/api-v1.md`，接口路径固定使用 `/api/v1`。
-- 后续只要新增接口，必须新增一份完整文档 `api-doc/api-v2.md`，新接口统一放在 `/api/v2`。
+- 后续只要新增业务接口，必须新增一份完整文档 `api-doc/api-v2.md`，新接口统一放在 `/api/v2`。
 - `api-v2.md` 必须是可独立阅读的完整契约，不能只记录相对 v1 的差异。
 - v1 发布后仅允许修正文案、示例和不改变契约的勘误；不得在 v1 中静默增加接口。
 - 删除字段、修改字段类型、改变必填性、改变状态码或状态语义均属于破坏性变更，必须升级版本。
@@ -35,17 +44,17 @@
 
 ## 2. 后端能力地图
 
-| 领域 | 主要代码 | 当前入口 | v1 适配职责 |
+| 领域 | 主要代码 | 当前入口 | FastAPI v1 实现 |
 | --- | --- | --- | --- |
-| 研究运行 | `runtime/orchestration/`、`runtime/execution/` | `ResearchOrchestrator.run`、CLI `run` | 请求校验、隔离编排器实例、同步执行 |
+| 研究运行 | `runtime/orchestration/`、`runtime/execution/` | `ResearchOrchestrator.run`、CLI `run` | 线程池执行、全局 mutation lock |
 | 运行控制 | `runtime/core/control_plane.py`、`runtime/execution/core/`、run store | `cancel`、`resume`、`rerun_from` | 取消、恢复检查、局部重跑 |
-| 过程观测 | `runtime/orchestration/*admin_support.py`、`runtime/storage/runs/`、`workspace/runs/*` | `events`、`trace`、`steps`、`metrics` | REST 查询与 SSE 尾随 |
+| 过程观测 | `runtime/orchestration/*admin_support.py`、`runtime/storage/runs/`、`workspace/runs/*` | `events`、`trace`、`steps`、`metrics` | REST 查询与持久化 SSE 尾随 |
 | 研究数据 | `schemas/snapshots.py`、collector/retriever | 黑板与 `result.json` | 保持来源、缺失项、降级信息 |
 | 估值与报告 | `schemas/valuation.py`、reporter | `ResponseEnvelope.result.report` | 输出多意图报告联合结构 |
-| 提案审批 | `runtime/proposals/` | proposal CLI/Python 方法 | 管理员鉴权、审计、配置写回 |
+| 提案审批 | `runtime/proposals/` | proposal CLI/Python 方法 | 服务级鉴权、评审主体写入、配置写回 |
 | 子 Agent 发现 | `runtime/orchestration/subagent_discovery_*` | discovery CLI/Python 方法 | 审批与动态注册保护 |
-| Chat thread | `cli/memory/`、`cli/commands/`、thread store | chat 斜杠命令 | 抽取传输无关 service 后暴露 |
-| 诊断维护 | `runtime/diagnostics/`、retention、Qdrant | `status/doctor/check/cleanup/reindex` | 脱敏、互斥、管理员鉴权 |
+| Chat thread | `cli/memory/`、`cli/commands/`、thread store | chat 斜杠命令、`api/chat_service.py` | 传输无关 facade、进程内写锁 |
+| 诊断维护 | `runtime/diagnostics/`、retention、Qdrant | `status/doctor/check/cleanup/reindex` | 线程池调度、写操作互斥、服务级鉴权 |
 
 ## 3. 通用协议
 
@@ -54,7 +63,7 @@
 ```text
 Base URL: /api/v1
 Request:  Content-Type: application/json; charset=utf-8
-Response: Content-Type: application/json; charset=utf-8
+Response: Content-Type: application/json
 SSE:      Content-Type: text/event-stream; charset=utf-8
 ```
 
@@ -69,19 +78,22 @@ SSE:      Content-Type: text/event-stream; charset=utf-8
 | `event_id` | 每条原始运行事件的 ULID，可用于 SSE 断点续传 |
 | `thread_id` | 运行时线程通常为 ULID；chat thread 为 `thread_` 加 12 位十六进制字符 |
 | `turn_id`、`item_id`、`entry_id` | 运行内部对象 ULID |
-| `proposal_id`、`ticket_id`、`invocation_id` | 对应提案、发现工单和子 Agent 调用标识 |
+| `proposal_id`、`ticket_id` | 当前均为不带资源前缀的 26 位 ULID |
+| `invocation_id` | 子 Agent 调用标识 |
 
 服务端必须把所有路径标识符当作不可信输入，校验允许字符和长度；禁止把未经校验的 `run_id`、`thread_id` 等直接拼接为文件路径，以防目录穿越。
 
 ### 3.3 鉴权与权限
 
-当前源码没有 HTTP 鉴权、CORS、CSRF、限流或租户隔离。v1 适配层必须补齐这些能力，推荐 Bearer token：
+FastAPI v1 对全部 `/api/v1` 路由执行静态 Bearer token 校验。服务启动时默认要求配置 `COGNITRADE_API_TOKEN`：
 
 ```http
 Authorization: Bearer <token>
 ```
 
-建议权限：
+token 使用常量时间比较；缺少或错误 token 返回 `401` 和 `WWW-Authenticate: Bearer`。OpenAPI 使用 `BearerAuth` HTTP security scheme，可在 `/docs` 的 Authorize 入口设置凭据。仅在未配置 token 的隔离本机开发环境中可设置 `COGNITRADE_API_ALLOW_UNAUTHENTICATED=true`；无鉴权模式只允许绑定 `127.0.0.1`、`localhost` 或 `::1`。开发 CORS origin 通过 `COGNITRADE_API_CORS_ORIGINS` 显式配置，`*` 会导致启动校验失败。
+
+当前 v1 只有一个服务级 token，持有者可访问全部业务与管理接口，尚未实现用户、角色或租户模型。生产多用户部署建议权限如下，属于后续安全演进而非当前已实现的角色系统：
 
 | 权限 | 可访问范围 |
 | --- | --- |
@@ -90,18 +102,17 @@ Authorization: Bearer <token>
 | `admin:review` | 审核提案和子 Agent 发现工单 |
 | `admin:operate` | 激活子 Agent、执行检查、清理和 Qdrant 重建 |
 
-`replay`、`trace`、检查输出和系统状态可能包含原始问题、绝对路径、数据源信息或错误堆栈，必须进行租户授权与敏感字段脱敏。
+`replay`、`trace`、检查输出和系统状态可能包含原始问题、绝对路径、数据源信息或错误堆栈。当前只能部署在共享同一信任边界的单租户环境；实现资源所有权和字段脱敏前，不得把服务级 token 分发给不受信任用户。v1 尚未实现应用层限流。
 
 ### 3.4 通用错误响应
 
-适配层错误统一使用：
+FastAPI 错误统一使用：
 
 ```json
 {
   "error": {
-    "code": "run_not_found",
-    "message": "Run 01J... was not found",
-    "details": {},
+    "code": "resource_not_found",
+    "message": "The requested resource was not found",
     "request_id": "01J..."
   }
 }
@@ -109,18 +120,19 @@ Authorization: Bearer <token>
 
 | HTTP 状态 | 使用场景 |
 | --- | --- |
-| `400` | JSON 语法错误、非法查询参数、非法标识符 |
+| `400` | JSON 语法错误、非法标识符 |
 | `401` | 未认证 |
-| `403` | 权限不足或跨租户访问 |
 | `404` | run、thread、subagent、proposal 或 discovery ticket 不存在 |
 | `409` | 状态冲突，如未审批工单激活、不可重跑状态 |
 | `422` | Pydantic 字段校验失败、未知重跑节点、注册合同不完整 |
-| `429` | 超出调用或并发限制 |
 | `500` | 未处理异常、存储损坏、部分写入失败 |
-| `502` | 上游 provider、远程 OpenAPI spec 或 MCP 调用失败 |
 | `503` | 服务未就绪或依赖不可用 |
 
 研究本身得到 `failed`、`timed_out`、`cancelled` 或 `needs_clarification` 时，仍返回 HTTP `200` 和 `ResponseEnvelope`；这些是领域状态，不等同于 HTTP 传输失败。请求尚未进入运行时的校验错误才返回 `4xx`。
+
+当前 v1 没有角色/租户授权、应用层限流和上游异常专用映射，因此不主动产生 `403`、`429` 或 `502`；这些能力若补充会改变错误契约，应随新 API 版本发布。
+
+错误响应会携带 `X-Request-ID`，body 中也包含同一 `request_id`。未知服务端异常返回 `internal_server_error`，不会把异常消息或 traceback 写入响应。
 
 ### 3.5 分页与列表
 
@@ -128,10 +140,12 @@ Authorization: Bearer <token>
 
 - `limit` 默认值见各接口，合法范围 `1..100`；
 - v1 不承诺游标分页；
-- 列表按当前 store 的最近更新时间倒序返回；
+- run 列表按 run 目录名（当前为近似创建时间有序的 ULID）倒序；proposal/discovery 列表按各自 store 的更新时间倒序；
 - 大规模游标分页应作为 v2 能力设计。
 
 ## 4. 接口总览
+
+下列 37 个操作均已由 FastAPI 注册，并由 OpenAPI 契约测试防止路径漂移。除 `/docs`、`/redoc`、`/openapi.json` 外，所有业务路由都需要第 3.3 节的 Bearer token。
 
 ### 4.1 研究运行与观测
 
@@ -141,7 +155,7 @@ Authorization: Bearer <token>
 | `GET` | `/runs` | 运行历史 | `history()` |
 | `GET` | `/runs/{run_id}/replay` | 完整回放快照 | `replay(run_id)` |
 | `GET` | `/runs/{run_id}/events` | 规范化事件时间线 | `events(run_id)` |
-| `GET` | `/runs/{run_id}/events/stream` | 原始事件 SSE | 适配 `events.jsonl`/event listener |
+| `GET` | `/runs/{run_id}/events/stream` | 原始事件 SSE | 尾随 `events.jsonl` |
 | `GET` | `/runs/{run_id}/trace` | 运行与动态编排追踪 | `trace(run_id)` |
 | `GET` | `/runs/{run_id}/steps` | 顶层计划步骤 | `steps(run_id)` |
 | `GET` | `/runs/{run_id}/metrics` | 运行指标 | `metrics(run_id)` |
@@ -168,7 +182,7 @@ Authorization: Bearer <token>
 | `POST` | `/chat/threads/{thread_id}/unarchive` | 取消归档 |
 | `POST` | `/chat/threads/{thread_id}/compact` | 压缩历史上下文 |
 
-Chat thread 的存储已经存在，但当前实现与 CLI session 状态耦合。以上接口需要先抽取传输无关 service；不能直接在并发 Web 请求中共享 CLI session 对象。
+Chat thread 通过 `research_system.api.chat_service.ChatService` 暴露；它为每次操作创建独立 `ChatSessionState`，并使用进程内 `RLock` 保护 index 的 read-modify-write，不共享 CLI TUI session。
 
 ### 4.3 管理与系统
 
@@ -181,7 +195,7 @@ Chat thread 的存储已经存在，但当前实现与 CLI session 状态耦合�
 | `GET` | `/admin/subagent-discoveries/{ticket_id}` | 工单详情 | `show_subagent_discovery_request` |
 | `POST` | `/admin/subagent-discoveries/{ticket_id}/reviews` | 审批工单 | `review_subagent_discovery_request` |
 | `POST` | `/admin/subagent-discoveries/{ticket_id}/activations` | 激活发现能力 | `activate_subagent_discovery_request` |
-| `GET` | `/system/status` | 运行环境摘要 | `build_runtime_status` |
+| `GET` | `/system/status` | 运行环境摘要 | `build_status` |
 | `POST` | `/system/doctor` | 执行诊断 | `run_doctor` |
 | `POST` | `/admin/system/checks` | 编译与单元测试 | `run_checks` |
 | `POST` | `/admin/artifacts/cleanup` | 清理旧 artifact | `cleanup` |
@@ -218,7 +232,7 @@ review_thesis
 methodology_evolution
 ```
 
-显式传入未知 `intent` 时，当前 router 可能忽略并重新推断；v1 适配层应直接返回 `422 invalid_intent`，以获得稳定契约。
+显式传入未知 `intent` 时，FastAPI v1 在进入 router 前返回 `422 invalid_intent`。`user_query` 会去除首尾空白，空字符串或超过 20,000 字符返回 `422 invalid_query`。
 
 #### 示例
 
@@ -232,7 +246,7 @@ Content-Type: application/json
   "conversation_context": [],
   "constraints": {
     "symbol": "600519",
-    "investment_cycle": "12个月",
+    "investment_cycle": "long_term",
     "snapshot_types": ["market", "fundamental", "notice"]
   }
 }
@@ -337,7 +351,7 @@ Content-Type: application/json
 
 - gate 校验失败：`status=failed`，`errors=["gate_validation_failed"]`，`result` 含 `intent`、`status` 和 `gate_failures[]`。
 - 运行异常：尽可能转换为 `status=failed` 的 `ResponseEnvelope`。
-- router、预检、存储初始化等在进入核心保护区前抛出的异常，适配层返回 `4xx/5xx` 通用错误响应。
+- router、预检、存储初始化等在进入核心保护区前抛出的异常，由 FastAPI 错误处理器返回 `4xx/5xx` 通用错误响应。
 - timeout 是运行时控制点检查，不是对正在阻塞的外部调用做硬中断。
 
 ### 5.2 `GET /runs`
@@ -348,8 +362,8 @@ Content-Type: application/json
 
 | 参数 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `limit` | integer | `20` | `1..100`，由适配层切片 |
-| `status` | string | - | 按 `OrchestratorStatus` 过滤，由适配层实现 |
+| `limit` | integer | `20` | `1..100`，FastAPI 在过滤后切片 |
+| `status` | string | - | 按 `OrchestratorStatus` 过滤 |
 
 响应为 JSON 数组。当前行对象来自 `summary.json`/`run_state.json`，是开放结构；通常含 `run_id`、`request_id`、`intent`、`status`、`display_summary`、`updated_at` 等。客户端必须容忍字段缺失和新增。
 
@@ -366,10 +380,10 @@ Content-Type: application/json
   "events": [],
   "blackboard": [],
   "threads": [],
-  "thread_tree": {},
+  "thread_tree": [],
   "result": {},
   "summary": {},
-  "display_summary": {},
+  "display_summary": "01J00000000000000000000010 approved",
   "control_state": {},
   "runtime_control_stage_decisions": []
 }
@@ -379,7 +393,7 @@ Content-Type: application/json
 
 ### 5.4 `GET /runs/{run_id}/events`
 
-返回适合 UI 展示的规范化时间线：
+返回适合 UI 展示的规范化时间线。下面只展示事件主体；实际响应还固定包含 `request`、`summary`、`display_summary`、`control_state`、`runtime_control_stage_decisions`、`threads`、`thread_tree` 和 `event_counts`：
 
 ```json
 {
@@ -416,7 +430,7 @@ Content-Type: application/json
 
 ### 5.5 `GET /runs/{run_id}/events/stream`
 
-SSE 事件流是适配层新增能力。数据源应以持久化的原始 `RunEvent` 为准，并同时监听新事件。
+SSE 事件流由 `RunEventSource` 实现，数据源是持久化的原始 `events.jsonl`；它会先回放游标后的已有事件，再轮询追加事件。
 
 请求头：
 
@@ -424,6 +438,8 @@ SSE 事件流是适配层新增能力。数据源应以持久化的原始 `RunEv
 Accept: text/event-stream
 Last-Event-ID: 01J...
 ```
+
+浏览器原生 `EventSource` 不能设置 `Authorization` 请求头；前端必须使用支持 header 的 fetch-SSE 客户端，或经同源 BFF 转发。不得把长期服务 token 放进查询字符串。
 
 响应：
 
@@ -445,11 +461,10 @@ X-Accel-Buffering: no
 实现要求：
 
 - 使用 `event_id` 作为 SSE `id`，`event_type` 作为 SSE `event`，完整 `RunEvent` JSON 作为 `data`；
-- 收到 `Last-Event-ID` 后从 `events.jsonl` 找到该事件，并按追加顺序补发其后的事件；
-- 定期发送注释心跳，例如 `: heartbeat`；
-- event listener 必须非阻塞并捕获自身异常，不能拖慢研究执行；
-- `cancel()` 当前可能绕过 listener，SSE 不能只依赖内存回调，必须同时尾随持久化事件或统一事件总线；
-- gate 失败不保证产生 `run_failed`，流实现还应观察 `run_state.json` 或 worker 完成状态；
+- 收到 `Last-Event-ID` 后从 `events.jsonl` 找到该事件，并按追加顺序补发其后的事件；游标不存在返回 `409 event_cursor_not_found`；
+- 按 `COGNITRADE_API_SSE_HEARTBEAT_SECONDS` 发送 `: heartbeat` 注释心跳；
+- 不使用运行时 `event_listener`，而是以持久化事件作为恢复和补发来源；
+- 同时观察 `run_state.json`；发现 `completed/cancelled/failed/timed_out/needs_clarification` 后继续执行 4 次安静轮询，补发终态写入之后才追加的事件，再关闭连接；
 - 连接断开不自动取消研究运行。
 
 `event_type` 在 schema 中是开放字符串，不是 enum。第 12 节列出的只是当前源码已知值，客户端不得做穷举校验。
@@ -534,7 +549,7 @@ subagent_trace[], dynamic_trace[], action_plan_patches[], wait_trace[]
 items[], metrics, event_counts
 ```
 
-`scope_thread_ids` 包含所选线程及其后代。`thread` 采用 `RuntimeThreadState`：
+此接口的 `scope_thread_ids` 只包含所选线程；`/replay` 和 `/metrics` 两个线程范围接口才默认包含其后代。`thread` 采用 `RuntimeThreadState`：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -556,7 +571,7 @@ items[], metrics, event_counts
 
 ### 5.12 `GET /runs/{run_id}/subagents/{invocation_id}`
 
-读取一次子 Agent 调用的完整观测视图。当前 payload 是开放对象，稳定的高层字段包括：
+读取一次子 Agent 调用的观测视图。当前 payload 是开放对象，稳定的高层字段包括：
 
 ```text
 run_id
@@ -564,24 +579,18 @@ invocation_id
 request
 summary
 display_summary
-control_state
-invocation
-parent_thread
-child_thread
-threads[]
-thread_tree
+subagent_type, task_name, agent_path, agent_label
+status, event_type, action_id, node_id
+thread_id, turn_id, phase, agent, objective
+child_thread_id, child_turn_id, duration_ms, notes[]
+trace_rows[]
 events[]
-blackboard[]
-items[]
-subagent_trace[]
-dynamic_trace[]
-action_plan_patches[]
-wait_trace[]
-metrics
 event_counts
+item, item_id, degrade_reason, created_at, updated_at（存在 item 时）
+llm_used, output_keys[]（存在对应 item payload 时）
 ```
 
-如果 `invocation_id` 在该 run 中不存在，返回 `404 subagent_invocation_not_found`。
+如果 `invocation_id` 在该 run 中不存在，返回 `404 nested_resource_not_found`。
 
 ### 5.13 `GET /runs/{run_id}/recovery`
 
@@ -599,10 +608,10 @@ event_counts
 | `runtime_control_stage_decisions` | object[] | 控制阶段决策，最多受内部保留策略限制 |
 | `runtime_control_stage_count` | integer | 决策数量 |
 | `latest_runtime_control_stage_decision` | object/null | 最近决策 |
-| `recovery_guidance` | string | 恢复建议 |
-| `resume_from` | string/null | 建议恢复节点 |
+| `recovery_guidance` | object | `{status, reason, suggested_next_step}` 恢复建议 |
+| `resume_from` | object/null | `{current_phase, active_agent, completed_nodes, pending_nodes}` 建议恢复位置 |
 
-只有 `failed`、`timed_out` 或 `cancelled` 且存在 checkpoint 时，`resumable=true`。`recovery_guidance` 当前可能值：
+只有 `failed`、`timed_out` 或 `cancelled` 且存在 checkpoint 时，`resumable=true`。`recovery_guidance.status` 当前可能值：
 
 ```text
 resume_unavailable
@@ -629,7 +638,7 @@ resume_after_manual_cancel
 }
 ```
 
-只有 `received`、`identifying_intent`、`ready`、`running`、`waiting_external`、`gated` 被视为活跃状态。对终态 run 重复调用时返回 HTTP `200`，`cancellation_requested=false`，不改变领域终态。当前核心仍可能把终态 run 的控制文件标记为 requested，这是已知实现不一致；适配层应在调用核心前先判断终态，避免写入错误标记。
+只有 `received`、`identifying_intent`、`ready`、`running`、`waiting_external`、`gated` 被视为活跃状态。对终态 run 重复调用时返回 HTTP `200`，`cancellation_requested=false`，不改变领域终态、summary 或 cancellation control 标记。
 
 取消是协作式控制点检查，不能保证立即中断正在阻塞的 LLM、网络或工具调用。
 
@@ -670,7 +679,7 @@ resume_after_manual_cancel
 | `dag_id` | 是 | 子 DAG 标识 |
 | `from_node` | 是 | 子 DAG 起始节点 |
 
-响应为新 run 的 `ResponseEnvelope`。顶层 action 会先校验；子 DAG 和节点可能在执行阶段才能确定无效，因此适配层应尽可能预检并将合同错误返回 `422`。
+响应为新 run 的 `ResponseEnvelope`。顶层 `action_node` 不存在时返回 `422 unknown_rerun_node`；当前核心没有在执行前完整验证 `dag_id/from_node`，未知子节点可能被核心收敛为 HTTP `200`、`status=failed` 的领域响应，未知 `dag_id` 也可能未应用预期的子 DAG 起点。这是 v1 已知契约缺口，调用方只能使用源 run 实际持久化的 DAG/node ID。
 
 ## 6. Chat thread 接口
 
@@ -918,12 +927,12 @@ source
 
 ```json
 {
-  "proposal_id": "proposal_...",
+  "proposal_id": "01J00000000000000000000010",
   "status": "approved",
-  "message": "Proposal approved",
+  "message": "proposal approved",
   "display_summary": {},
   "result": {
-    "proposal_id": "proposal_...",
+    "proposal_id": "01J00000000000000000000010",
     "status": "approved",
     "manifest": {},
     "retrieval_policy": {},
@@ -932,7 +941,7 @@ source
 }
 ```
 
-审批通过可能依次写入 proposal 文件、`methodology_manifest.yml`、`retrieval_policy.yml` 和方法论 memory。当前流程不是事务，后段失败可能留下部分写入；适配层必须加审计、互斥锁和失败告警。
+审批通过可能依次写入 proposal 文件、`methodology_manifest.yml`、`retrieval_policy.yml` 和方法论 memory。当前流程不是事务，后段失败可能留下部分写入。FastAPI 已加进程内互斥并记录 reviewer，但尚无持久 HTTP 审计和独立失败告警。
 
 提案进入 `approved`/`rejected` 后不可反转。对同一终态重复提交相同 decision 返回 HTTP `200` 和原终态；提交相反 decision 返回 `409 proposal_already_finalized`。这比底层当前“任何终态都 200”更严格，是 v1 适配合同。
 
@@ -1039,9 +1048,9 @@ notes[]
 
 ```json
 {
-  "ticket_id": "ticket_...",
+  "ticket_id": "01J00000000000000000000020",
   "status": "approved",
-  "message": "Discovery ticket approved",
+  "message": "discovery ticket approved",
   "result": {}
 }
 ```
@@ -1100,7 +1109,6 @@ notes[]
 | `tool_name` | string/null | MCP 工具名 |
 | `endpoint_path` | string/null | 以 `/` 开头的相对 HTTP 路径 |
 | `http_method` | enum/null | `GET` 或 `POST` |
-| `openapi_spec_uri` | string/null | OpenAPI spec 位置 |
 | `openapi_operation_id` | string/null | OpenAPI operationId |
 | `timeout_seconds` | number/null | 必须大于 0 |
 | `reason` | string/null | 激活理由 |
@@ -1112,18 +1120,20 @@ notes[]
 | `snapshot_skill_runner` | `skill_name`, `snapshot_type` | skill 已安装；stage 仅空或 `collect` |
 | `skill_runner` | `skill_name` | skill 已安装；候选有 object input/output JSON schema |
 | `http_json_runner` | `source_id`, `endpoint_path`, `http_method` | 已批准无密钥数据源、相对路径、GET/POST、object 合同 |
-| `openapi_http_runner` | `source_id`, `openapi_operation_id`，可选 spec URI | operation 解析为 GET/POST，object 合同 |
+| `openapi_http_runner` | `source_id`, `openapi_operation_id` | operation 从已配置 source/template 的 spec 解析为 GET/POST，object 合同 |
 | `mcp_tool_runner` | `source_id`, `tool_name` | 已配置 stdio server、read-only 工具、object 合同 |
 
-委托模式与运行时注册必须恰好存在一个。HTTP、OpenAPI、MCP 候选只允许 `side_effect_level=none|read_only`。服务端还必须限制远程 spec 的协议、主机、大小和超时，防止 SSRF。
+委托模式与运行时注册必须恰好存在一个。B 模式允许显式字段覆盖模板默认值，最终合同一致性由核心注册 builder 校验。HTTP、OpenAPI、MCP 候选只允许 `side_effect_level=none|read_only`。
+
+为阻断任意远程 URL 和本机路径读取，FastAPI v1 **不接受** `openapi_spec_uri`；该字段会作为未知字段返回 `422 validation_error`。OpenAPI spec 必须来自管理员预先配置并审核的 source 或 registration template。
 
 响应：
 
 ```json
 {
-  "ticket_id": "ticket_...",
+  "ticket_id": "01J00000000000000000000020",
   "status": "approved",
-  "message": "Discovery candidate activated",
+  "message": "activated discovery runtime alias mcp_market_reader",
   "result": {}
 }
 ```
@@ -1200,7 +1210,7 @@ runtime_registration_templates[]
 
 `recent_runs` 固定最多 5 条，是 summary/run state 的开放对象，并补充 `run_id`、可选 `display_summary` 和 `child_thread_count`。
 
-此接口只读取配置和本地运行状态，不探测 OpenAI、Qdrant 或数据源，不能作为 readiness。响应中的绝对路径必须对非管理员脱敏。当前 CLI 入口会先确保 workspace 布局，甚至 status 也可能创建缺失目录/模板；HTTP 实现应在服务启动时完成初始化，使 GET 尽量无副作用。
+此接口只读取配置和本地运行状态，不探测 OpenAI、Qdrant 或数据源，不能作为 readiness。响应当前会包含绝对路径且没有非管理员视图。FastAPI 在服务启动时初始化 workspace，使后续 GET 不负责 seed 布局。
 
 ### 9.2 `POST /system/doctor`
 
@@ -1228,7 +1238,7 @@ check 单项至少有 `name`、`status=passed|failed|skipped`，并可能有 `pa
 - workspace、runs、reports、memory、taxonomy、Qdrant 路径或 URL；
 - runs 是否存在。
 
-限制：OpenAI 只检查 key 是否存在；远程 Qdrant 只检查 URL 配置，不探活；真正外部网络探测仅是部分站点 HEAD 和可选 Redis health。不得把 doctor 宣称为完整依赖 readiness。URL、错误 detail 和路径需要脱敏。
+限制：OpenAI 只检查 key 是否存在；远程 Qdrant 只检查 URL 配置，不探活；真正外部网络探测仅是部分站点 HEAD 和可选 Redis health。不得把 doctor 宣称为完整依赖 readiness。URL、错误 detail 和路径当前没有面向低权限主体的独立脱敏视图。
 
 ### 9.3 `POST /admin/system/checks`
 
@@ -1256,7 +1266,7 @@ check 单项至少有 `name`、`status=passed|failed|skipped`，并可能有 `pa
 }
 ```
 
-此操作耗时且会生成 `__pycache__`。必须 `admin:operate`、限制并发并设置独立超时。v1 仍按现有同步语义返回 HTTP `200`；如未来改为异步 job，属于 v2 合同。`output` 可能包含堆栈和本地路径。
+此操作耗时且会生成 `__pycache__`。当前由服务级 token 和 mutation lock 保护，但没有独立 `admin:operate` 角色或接口级超时；生产部署仍应在网关限制访问和超时。v1 按现有同步语义返回 HTTP `200`；如未来改为异步 job，属于 v2 合同。`output` 可能包含堆栈和本地路径。
 
 ### 9.4 `POST /admin/artifacts/cleanup`
 
@@ -1274,7 +1284,7 @@ check 单项至少有 `name`、`status=passed|failed|skipped`，并可能有 `pa
 }
 ```
 
-只删除 mtime 早于截止时间的 `workspace/runs/*/artifacts/**` 文件，不删除 run、checkpoint 或其他运行记录。大小上限当前只报告，不强制删除。单文件删除失败会把 run 加入 `skipped_runs` 并继续。返回的绝对路径应脱敏。
+以 `workspace/runs/*` 的 run 目录 mtime 判断过期；过期后删除该 run 的 `artifacts/**` 文件，不删除 run、checkpoint 或其他运行记录。大小上限当前只报告，不强制删除。单文件删除失败会把 run 加入 `skipped_runs` 并继续。返回的绝对路径当前未脱敏。
 
 ### 9.5 `POST /admin/qdrant/reindex`
 
@@ -1312,18 +1322,18 @@ Qdrant 不可用：
 }
 ```
 
-这是破坏性、非事务操作：reset 后 upsert 中途异常会留下部分索引。必须使用管理员权限、全局互斥锁、维护窗口和审计日志；禁止与正常写索引并发。执行异常返回 `500`。
+这是破坏性、非事务操作：reset 后 upsert 中途异常会留下部分索引。当前只有服务级 token 和全局互斥锁，没有独立管理员角色或持久审计日志；部署方必须额外限制入口，并只在维护窗口执行。执行异常返回 `500`。
 
 ## 10. 研究意图与 `constraints` 合同
 
-核心 `RequestEnvelope.constraints` 当前是未类型化 object，很多错误直到运行中才暴露。v1 适配层必须按本节做意图相关校验；未知约束字段应返回 `422 unknown_constraint`，内部字段除外部明确列出者不得暴露。
+核心 `RequestEnvelope.constraints` 当前是未类型化 object，很多错误直到运行中才暴露。显式提供 `intent` 时，v1 适配层按本节做意图相关校验；省略 `intent` 时只能按所有公开字段的并集校验，核心推断出意图后不会再次回到 API 层复验。未知约束字段返回 `422 unknown_constraint`，内部字段除外部明确列出者不得暴露。
 
 ### 10.1 公共约束
 
 | 字段 | 类型 | 默认 | 适用范围 | 说明 |
 | --- | --- | --- | --- | --- |
 | `symbol` | string | 查询解析 | 单股/比较 | 单股票代码或核心可识别名称 |
-| `symbols` | string[] | 查询解析 | 比较 | 多标的；API 强制至少 2 个且去重 |
+| `symbols` | string[] | 查询解析 | 比较 | 显式传入时 1..20 个、不得重复；与可选 `symbol` 合并后至少 2 个不同标的 |
 | `sector_query` | string | 查询解析 | 筛选/板块 | 板块、行业或主题查询 |
 | `investment_cycle` | enum | `mid_term` | 股票/筛选/复核 | `short_term`、`mid_term`、`long_term` |
 | `planning_context_hints` | object | `{}` | 多数意图 | 规划偏好与上下文提示 |
@@ -1410,7 +1420,7 @@ methodology_memory_match_score
 }
 ```
 
-`symbol` 如同时提供会追加到 `symbols` 后去重。底层部分路径只检查至少一个标的，但 v1 合同要求 `symbols` 去重后至少 2 个、建议不超过 20 个。银行类比较会额外生成 `bank_compare_scorecard`。
+显式提供 `symbols` 时，重复值返回 `422`；`symbol` 如同时提供会参与不同标的数量检查。只提供 `symbol` 或完全不提供结构化标的时，API 允许核心继续从 `user_query` 解析，当前无法在传输层保证最终得到两个标的。银行类比较会额外生成 `bank_compare_scorecard`。
 
 ### 10.4 `stock_screen`
 
@@ -1480,13 +1490,13 @@ methodology_memory_match_score
 ```json
 {
   "intent": "distill_kol_logic",
-  "user_query": "蒸馏 /data/xueqiu/statuses.jsonl",
+  "user_query": "蒸馏 C:\\data\\xueqiu\\statuses.jsonl",
   "slots": {},
   "constraints": {}
 }
 ```
 
-`schemas/task_requests.py` 虽定义 `source_ref`，但编排器入口没有读取。路径必须由服务端允许目录白名单解析，禁止客户端读取任意本机文件。将 `source_ref` 变成正式上传/对象存储引用属于 v2 变更。
+`schemas/task_requests.py` 虽定义 `source_ref`，但编排器入口没有读取。当前正则只识别 Windows 盘符路径，且 FastAPI 尚未实现允许目录白名单，因此该意图只能向与服务端处于同一信任边界的调用方开放；不要把它暴露给不受信任用户。将 `source_ref` 变成正式上传/对象存储引用属于 v2 变更。
 
 ### 10.7 `review_thesis`
 
@@ -1508,7 +1518,7 @@ methodology_memory_match_score
 }
 ```
 
-`review_target_run_id` 必填且必须是调用方可读的 run；缺失时返回 `422 review_target_run_id_required`，不存在或跨租户时统一返回 `404` 以避免枚举。
+`review_target_run_id` 必填；缺失时返回 `422 review_target_run_id_required`，不存在时由核心返回 `404`。当前没有 owner/tenant 模型，无法执行跨租户隐藏或授权。
 
 ### 10.8 `methodology_evolution`
 
@@ -1534,7 +1544,7 @@ methodology_memory_match_score
 }
 ```
 
-`auto_approve` 默认 `true`，会执行自动门控并可能写配置/memory。`force_auto_approve=true` 绕过阈值，但仍需 `auto_approve=true` 才实际批准。此意图必须要求 `admin:review` 权限并产生审计记录。
+`auto_approve` 默认 `true`，会执行自动门控并可能写配置/memory。`force_auto_approve=true` 绕过阈值，但仍需 `auto_approve=true` 才实际批准。当前服务级 token 持有者均可调用，且没有独立审计记录；实现 `admin:review` 权限和持久审计前，不得向普通用户开放。
 
 自动生成器当前产生 `MethodologyTemplatePatch`、`ValuationHeuristicPatch`、`MemoryLearningUpdate`；完整 proposal 通过第 7 节接口读取，run report 本身只含 evidence 投影。
 
@@ -2157,7 +2167,28 @@ replayable
 
 本节记录当前已经可调用的后端表面，是实现 `/api/v1` 适配器时的来源依据。
 
-### 13.1 `ResearchOrchestrator`
+### 13.1 FastAPI 应用
+
+```text
+research_system/api/app.py            create_app()、lifespan、CORS、request id
+research_system/api/dependencies.py   runtime state、Bearer principal、依赖注入
+research_system/api/routes/           37 个版本化业务操作
+research_system/api/models.py         HTTP 请求模型
+research_system/api/validation.py     intent constraints 与 path id 校验
+research_system/api/errors.py         统一错误 envelope
+research_system/api/sse.py            events.jsonl 尾随与 SSE 编码
+research_system/api/chat_service.py   Chat thread 传输无关 facade
+```
+
+ASGI import：
+
+```text
+research_system.api.app:app
+```
+
+应用 lifespan 显式以仓库根目录构建 `Settings`、校验并 seed workspace，然后创建一个长生命周期 `ResearchOrchestrator`。shutdown 调用 `close()` 释放本地 Qdrant。`create_app(settings=..., api_config=..., orchestrator_factory=...)` 支持测试或嵌入式注入。
+
+### 13.2 `ResearchOrchestrator`
 
 构造：
 
@@ -2244,9 +2275,9 @@ rebuild_qdrant() -> dict
 close() -> None
 ```
 
-并发要求：`ResearchOrchestrator` 持有当前运行上下文和多个 service/registry 引用，不应把同一个实例作为无锁全局 singleton 并发执行多个 run。HTTP 适配器应为每个活跃 run 创建隔离实例，或实现明确的 worker/实例池；使用 context manager 或 finally 调用 `close()`。
+并发要求：`ResearchOrchestrator` 持有当前运行上下文和多个 service/registry 引用，不能并发执行多个 run。FastAPI 使用应用级单实例以避免重复打开同一个 local Qdrant，并用 `asyncio.Lock` 串行 `run`、rerun、审批、激活和维护操作；history/trace/events 等只读调用及 cancel 不取该锁。部署固定一个 Uvicorn worker。
 
-### 13.2 CLI 命令映射
+### 13.3 CLI 命令映射
 
 通用格式：
 
@@ -2278,7 +2309,7 @@ CLI 的 JSON renderer 即使 payload 顶层 `status=failed`，进程退出码也
 
 CLI 在命令分发前会执行 `Settings.validate()` 和 `ensure_workspace_layout()`，后者可能创建缺失目录或复制模板；因此 CLI 的看似只读命令不一定是文件系统零写入。
 
-### 13.3 Chat CLI 能力
+### 13.4 Chat CLI 能力
 
 当前 chat 管理命令：
 
@@ -2296,63 +2327,66 @@ CLI 在命令分发前会执行 `Settings.validate()` 和 `ensure_workspace_layo
 
 `/thread <id>` 会把 thread 绑定到当前 CLI session 并恢复 checkpoint，这属于有状态 session 行为，不映射为 v1 thread CRUD。仓库目前也没有独立的 HTTP session resource。
 
-## 14. 适配层实现规范
+## 14. FastAPI 实现与部署规范
 
 ### 14.1 请求处理顺序
 
-`POST /runs` 推荐按以下顺序实现：
+`POST /runs` 当前按以下顺序执行：
 
-1. 认证、租户解析和权限检查；
-2. body 大小、JSON 和 `RequestEnvelope` 校验；
-3. 按 intent 校验 `constraints`，验证引用 run 的所有权；
-4. 生成/记录 API request trace id；
-5. 创建隔离的 `ResearchOrchestrator`；
-6. 在 worker thread/process 中执行阻塞的 `run()`，避免阻塞 async event loop；
+1. 生成或接受合法的 `X-Request-ID`；
+2. 校验服务级 Bearer token；
+3. 解析 JSON 和 `RequestEnvelope`；
+4. 显式 intent 按意图校验公开 `constraints`；未显式指定时按公开字段并集校验；
+5. 获取应用生命周期内的单个 `ResearchOrchestrator`；
+6. 获取 mutation lock，在 worker thread 中执行阻塞的 `run()`；
 7. 对领域终态返回 HTTP `200` `ResponseEnvelope`；
-8. 对适配器异常进行错误归一化和敏感信息清理；
-9. 关闭 orchestrator/dependencies。
+8. 对传输/校验异常返回统一错误 envelope；
+9. 在应用 shutdown 时关闭应用级 orchestrator；启动中途失败也会执行该清理。
 
 v1 不定义 `202 Accepted` 异步 job。如果部署层无法接受最长运行时间，应在实现 v2 时引入 job resource、polling 状态和回调合同，不能让同一路径在不同部署中随机返回 200/202。
 
-### 14.2 错误归一化建议
+### 14.2 错误归一化
 
 | 原始异常/条件 | v1 错误码 | HTTP |
 | --- | --- | --- |
+| JSON 语法错误 | `invalid_json` | 400 |
 | Pydantic validation error | `validation_error` | 422 |
 | 非法 intent/constraint | `invalid_intent` / `invalid_constraint` | 422 |
-| `FileNotFoundError` 读取 run/proposal/ticket | `resource_not_found` | 404 |
-| thread/subagent lookup `KeyError` | `nested_resource_not_found` | 404 |
+| run 资源路由捕获 `FileNotFoundError` | `resource_not_found` | 404 |
+| thread/subagent 路由捕获 lookup `KeyError` | `nested_resource_not_found` | 404 |
 | 未知 rerun 节点 | `unknown_rerun_node` | 422 |
 | 源 run 缺 request/plan | `source_run_incomplete` | 409 |
 | 未审批 discovery 激活 | `discovery_not_approved` | 409 |
 | 注册参数/合同错误 | `invalid_runtime_registration` | 422 |
-| provider/MCP/远程 spec 失败 | `upstream_failure` | 502 |
-| store/config 文件损坏 | `storage_corrupted` | 500 |
-| 权限/租户不匹配 | `forbidden`，引用资源可用 `not_found` 防枚举 | 403/404 |
+| 未知服务端异常或 store/config 损坏 | `internal_server_error` | 500 |
+| 其他未在具体路由声明的 `FileNotFoundError` / `KeyError` / `ValueError` | `internal_server_error` | 500 |
+| API runtime 尚未完成启动 | `api_not_ready` | 503 |
 
 错误 `details` 不得包含 API key、Bearer token、Redis/Qdrant 凭据、完整环境变量、任意本机文件内容或未经脱敏的堆栈。
 
 ### 14.3 数据与并发
 
-- 每个 run 的持久化目录写入必须串行化；同一源 run 的多个 rerun 可并行，但不得写回源目录。
-- proposal 审批、discovery 激活、cleanup 和 Qdrant reindex 需要互斥锁与审计日志。
+- `run`、两种 rerun、proposal/discovery 审批与激活、check、cleanup 和 Qdrant reindex 共用一个 mutation lock，进程内串行执行。
+- Chat thread 所有操作通过独立的进程内 `RLock` 保护 index 与关联文件。
+- cancel 与只读观测不获取 mutation lock，可在长运行期间调用。
 - `request_id` 在 v1 只做关联，不自动去重。若实现幂等，必须按租户和请求 body hash 建立明确存储合同。
 - 运行历史当前无 owner/tenant 字段；多租户上线前需扩展 run、proposal、ticket、chat thread 的归属模型。
-- 对 `distill_kol_logic` 文件路径、OpenAPI spec URI、MCP source 和 HTTP endpoint 实施白名单和 SSRF 防护。
+- HTTP activation 禁止 `openapi_spec_uri`，只允许使用已审核配置或模板；`distill_kol_logic` 本机文件输入和预配置 MCP/HTTP source 仍需部署级白名单。
 - 对 replay/trace/events 设置响应大小上限或流式输出策略；不要一次把无限增长的 JSONL 加载进内存。
 - run 超时是软控制；服务进程还需设置上游请求超时、worker 终止策略和僵尸任务回收。
+- 当前本地 Qdrant 和 JSON/JSONL store 只支持一个 Uvicorn worker。`python -m research_system.api` 固定 `workers=1`；不要用外部命令覆盖为多 worker。
+- 未配置 token 的显式无鉴权模式只能绑定 loopback；配置 token 后即使同时设置 allow flag，仍会强制 Bearer 校验。
 
 ### 14.4 缓存与 HTTP 头
 
-- 研究、审批、激活和维护写操作：`Cache-Control: no-store`。
-- replay/trace 也建议 `private, no-store`，因为包含敏感信息。
-- system status 可使用极短私有缓存，但不得让跨租户结果共享。
-- 所有响应返回 `X-Request-ID`；对已有 `request_id` 的研究请求保持一致。
-- CORS 使用明确 origin allowlist；携带凭据时禁止 `Access-Control-Allow-Origin: *`。
+- 非 SSE 的 `/api/v1` 响应使用 `Cache-Control: no-store`；SSE 使用 `no-cache`。
+- 所有业务响应返回 `X-Request-ID`；它是传输请求标识，与 body 的研究 `request_id` 分属两层。
+- CORS 使用显式 origin allowlist，不允许 `*`，且不启用 cookie credential。
+- SSE 额外返回 `Cache-Control: no-cache` 和 `X-Accel-Buffering: no`。
 
-### 14.5 审计事件
+### 14.5 待补的持久审计
 
-至少审计：
+FastAPI 当前把认证主体写入 proposal/discovery 的 `reviewer`/`activated_by`，但尚无独立、不可篡改的 HTTP 审计 store。生产多用户化前至少补充：
 
 ```text
 research_run_created
@@ -2370,70 +2404,80 @@ qdrant_reindex_started/completed/failed
 
 ## 15. 已知契约缺口与上线阻断项
 
-1. **没有入站 Web 服务。** 本文 REST/SSE 路由全部需要实现适配层。
-2. **运行是同步阻塞的。** 当前没有 job、queue、webhook 或状态 polling resource。
-3. **`resume()` 不是恢复。** 它只返回可恢复性信息；真正恢复只能近似映射为新 run 的 rerun。
-4. **没有同一 run 的澄清续接。** 补充信息会创建新 run。
-5. **`slots` 完全未被主研究链路读取。** 不能把它宣传为有效参数。
-6. **`task_requests.py` 与真实入口双轨。** 编排器使用 `RequestEnvelope`，且 task request 模型缺少 stock compare。
-7. **蒸馏 `source_ref` 未接入。** 当前只能从 `user_query` 提取本机 JSONL 路径。
-8. **`constraints` 无核心 Pydantic 子模型。** 错误可能在执行中才出现，v1 适配层需前置校验。
-9. **report 没有统一 schema。** LLM、fallback、银行分支的可选字段不同。
-10. **Retriever/Distiller 有 schema drift。** 实际 payload 比领域 schema 多 degradation/trace 字段，Retriever 的 query 形态也不同。
-11. **snapshot `facts` 未类型化。** 不同供应商返回不同结构。
-12. **methodologies 只是文本投影。** 不是完整估值对象；需要 replay/blackboard 查看原始模型。
-13. **事件并非所有状态变更都完整发出。** gate failure、cancel listener 等存在漏事件路径。
-14. **事件类型是开放字符串。** 规划中的部分事件当前不保证产生。
-15. **超时不是硬中断。** 阻塞的上游调用可能延迟响应终止。
-16. **chat thread 没有 owner/tenant。** 多用户 REST 暴露前必须迁移数据模型。
-17. **run/proposal/discovery 也没有完整租户隔离。** 必须由适配层和存储层一起补齐。
-18. **路径标识符直接参与本地读取。** 必须防目录穿越。
-19. **核心实例不适合作为无锁并发 singleton。** 每个 run 要隔离实例或 worker。
-20. **history 没有游标。** v1 只适合有限列表，真正分页留到 v2。
-21. **doctor 不是 readiness。** 它不实际探测 OpenAI，远程 Qdrant 也只检查 URL。
-22. **check 很重且会写缓存文件。** 必须 admin-only 和限并发。
-23. **cleanup 没有 dry-run，大小上限只报告。** 删除结果还可能含绝对路径。
-24. **Qdrant reindex 先 reset 且非事务。** 失败可留下部分索引。
-25. **proposal 审批非事务。** 配置和 memory 可能部分写入。
-26. **activation 去重粒度是 candidate type。** 新参数不会更新既有激活。
-27. **CLI JSON 失败可能 exit code 0。** 自动化必须检查 payload 状态。
+1. **运行是同步阻塞的。** 当前没有 job、queue、webhook 或状态 polling resource；客户端断连不会终止 worker thread。
+2. **`resume()` 不是恢复。** 它只返回可恢复性信息；真正恢复只能近似映射为新 run 的 rerun。
+3. **没有同一 run 的澄清续接。** 补充信息会创建新 run。
+4. **`slots` 完全未被主研究链路读取。** 不能把它宣传为有效参数。
+5. **`task_requests.py` 与真实入口双轨。** 编排器使用 `RequestEnvelope`，且 task request 模型缺少 stock compare。
+6. **蒸馏 `source_ref` 未接入。** 当前只能从 `user_query` 提取本机 JSONL 路径，HTTP 层没有上传资源模型。
+7. **核心 `constraints` 仍是开放 object。** FastAPI 会前置校验公开字段，但 intent 省略时只能按字段并集校验，推断意图后不会复验；CLI/Python 直接调用也不经过这层校验。
+8. **report 没有统一 schema。** LLM、fallback、银行分支的可选字段不同。
+9. **Retriever/Distiller 有 schema drift。** 实际 payload 比领域 schema 多 degradation/trace 字段，Retriever 的 query 形态也不同。
+10. **snapshot `facts` 未类型化。** 不同供应商返回不同结构。
+11. **methodologies 只是文本投影。** 不是完整估值对象；需要 replay/blackboard 查看原始模型。
+12. **事件并非所有状态变更都完整发出。** SSE 通过同时观察持久化 run state 正确关闭，但不能补造不存在的领域事件。
+13. **事件类型是开放字符串。** 规划中的部分事件当前不保证产生。
+14. **超时不是硬中断。** 阻塞的上游调用可能延迟响应终止。
+15. **只有服务级 token。** 没有用户、角色、资源 owner 或 tenant；不得直接作为不受信任的多用户服务暴露。
+16. **只支持单 worker。** 本地 Qdrant、JSON/JSONL 和进程锁不能跨进程协调。
+17. **Python store 仍直接拼接路径。** FastAPI 已校验所有 path id 和引用 run id，CLI/Python 调用方仍需传可信 ID。
+18. **history 没有游标。** v1 只适合有限列表，真正分页留到 v2。
+19. **doctor 不是 readiness。** 它不实际探测 OpenAI，远程 Qdrant 也只检查 URL。
+20. **check 很重且会写缓存文件。** 虽受 mutation lock 和 Bearer 保护，仍应只在维护窗口调用。
+21. **cleanup 没有 dry-run，大小上限只报告。** 删除结果还可能含绝对路径。
+22. **Qdrant reindex 先 reset 且非事务。** 失败可留下部分索引。
+23. **proposal 审批非事务。** 配置和 memory 可能部分写入。
+24. **activation 去重粒度是 candidate type。** 新参数不会更新既有激活。
+25. **没有应用层限流、响应大小上限和独立 HTTP 审计 store。** 生产公网化前必须补齐。
+26. **CLI JSON 失败可能 exit code 0。** 自动化必须检查 payload 状态。
+27. **子 DAG 重跑缺完整预检。** 未知子节点可能成为 HTTP `200` 的 failed 领域响应，未知 `dag_id` 可能未应用预期局部起点；只能使用源计划中的真实标识。
+28. **SSE 每次轮询重读完整 `events.jsonl`。** 终态 drain 已避免顺序竞态，但长运行或多客户端会放大 I/O/CPU；增量字节偏移尾随留待后续版本。
 
 ## 16. v1 实现验收清单
 
 ### 16.1 功能
 
-- [ ] 本文第 4 节所有 v1 路由均有集成测试；
-- [ ] 7 个 research intent 均有成功、澄清、失败和降级样例；
-- [ ] run/replay/events/trace/steps/metrics 数据与核心方法一致；
-- [ ] rerun 生成新 run，且源 run 不变；
-- [ ] recovery 不产生执行副作用；
-- [ ] SSE 支持 `Last-Event-ID`、心跳、断线重连和终态关闭；
-- [ ] proposal/discovery 终态幂等与冲突语义符合本文；
-- [ ] maintenance 接口有锁、超时和操作审计。
+- [x] 本文第 4 节 37 个 v1 操作均已注册并有 OpenAPI 路径契约测试；
+- [x] 7 个 research intent 均有公开字段白名单；API 回归覆盖未知 intent/字段、比较、复核、方法论和通用类型/范围等关键负例，核心意图流程由原有测试覆盖；
+- [x] run/replay/events/trace/steps/metrics 与 Python facade 的参数和 payload 透传一致；
+- [x] rerun 调用创建新 run 的核心方法，不修改源 run；
+- [x] recovery 只读调用 `resume()`，不触发恢复执行；
+- [x] SSE 支持原始事件、`Last-Event-ID`、心跳、终态 drain 和关闭；
+- [x] proposal/discovery 终态幂等与反向冲突语义符合本文；
+- [x] maintenance 接口使用 mutation lock 并透传 completed/skipped/failed 业务状态；
+- [ ] 独立的持久 HTTP 操作审计尚未实现。
 
 ### 16.2 安全
 
-- [ ] 所有接口认证，资源按 owner/tenant 授权；
+- [x] 所有 `/api/v1` 业务接口使用 OpenAPI `BearerAuth` 和运行时 Bearer token 认证；显式无鉴权模式限制为 loopback；
+- [ ] 资源 owner/tenant 授权尚未实现；
 - [ ] admin 接口使用独立权限；
-- [ ] path id 防目录穿越；
+- [x] 所有 HTTP path id 和 constraints 中引用的 run id 防目录穿越；
 - [ ] 文件输入限制在白名单目录或对象存储；
-- [ ] OpenAPI/HTTP/MCP 注册防 SSRF 和写副作用；
+- [x] HTTP activation 禁止直接传 `openapi_spec_uri`，注册合同限制为已审核 source/template 和只读副作用；
 - [ ] trace/replay/error/check/status 完成敏感字段脱敏；
-- [ ] CORS、请求体大小、超时、并发和速率限制已配置；
-- [ ] 日志与审计不含密钥和完整敏感对话。
+- [x] CORS 白名单、上游超时、单 worker 和进程内并发锁已配置；
+- [ ] 请求体大小和应用层速率限制尚未实现；
+- [x] 未知异常响应和错误日志不包含原始异常消息；
+- [ ] 独立审计日志尚未实现。
 
 ### 16.3 兼容性
 
-- [ ] JSON 使用 `snake_case`，时间统一 RFC 3339 UTC；
-- [ ] 未知顶层请求字段返回 422；
-- [ ] 客户端可忽略未知响应字段和未知事件；
-- [ ] 领域失败使用 200 `ResponseEnvelope`，传输/校验失败使用通用错误 envelope；
-- [ ] API 发布后冻结本文件；任何新增接口新建完整 `api-doc/api-v2.md` 并使用 `/api/v2`。
+- [x] JSON 使用 `snake_case`，时间统一 RFC 3339 UTC；
+- [x] 未知顶层请求字段返回 422；
+- [x] 事件类型保持开放字符串；
+- [x] 领域失败使用 200 `ResponseEnvelope`，传输/校验失败使用通用错误 envelope；
+- [x] API 发布后冻结本文件；任何新增业务接口新建完整 `api-doc/api-v2.md` 并使用 `/api/v2`。
 
 ## 17. 源码索引
 
 | 契约 | 源文件 |
 | --- | --- |
+| FastAPI 应用与生命周期 | `research_system/api/app.py`, `config.py`, `dependencies.py` |
+| FastAPI 路由 | `research_system/api/routes/` |
+| HTTP 请求/错误/校验 | `research_system/api/models.py`, `errors.py`, `validation.py` |
+| SSE | `research_system/api/sse.py` |
+| Chat HTTP facade | `research_system/api/chat_service.py` |
 | 请求/响应 | `research_system/schemas/protocol.py` |
 | 运行状态/事件/黑板 | `research_system/schemas/runtime.py` |
 | 快照 | `research_system/schemas/snapshots.py` |
@@ -2453,7 +2497,9 @@ qdrant_reindex_started/completed/failed
 | 运行检查 | `research_system/runtime/platform/checks.py` |
 | artifact 保留 | `research_system/runtime/storage/runs/retention.py` |
 | 运行数据 | `workspace/runs/{run_id}/` |
+| Python 依赖 | `requirements.txt` |
+| FastAPI 回归测试 | `tests/test_api_v1_*.py` |
 
 ---
 
-本文件是 API v1 的完整基线。后续新增任何接口时，请复制并更新为 `api-doc/api-v2.md`，同时将 URL 前缀升级为 `/api/v2`。
+本文件是 API v1 的完整基线。后续新增任何业务接口时，请复制并更新为 `api-doc/api-v2.md`，同时将 URL 前缀升级为 `/api/v2`。
