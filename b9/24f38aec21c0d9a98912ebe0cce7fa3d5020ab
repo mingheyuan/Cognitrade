@@ -1,0 +1,27 @@
+README.md
+  s_a6a8a3a6f43b3c::t_545584e2e56599 82,84,87-98,101,105,108,115
+frontend/README.md
+  s_a6a8a3a6f43b3c::t_9a0375aec2f1df 7,10,13
+scripts/deploy.sh
+  s_a6a8a3a6f43b3c::t_cae1c8843b70fc 27,31-34,60-61,545,551,597,605,612,652
+tests/test_deploy_script.py
+  s_a6a8a3a6f43b3c::t_70297315912b81 9-10,14,50-51,54-62,167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "b924f38aec21c0d9a98912ebe0cce7fa3d5020ab",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
