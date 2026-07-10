@@ -1,0 +1,87 @@
+requirements.txt
+  s_a6a8a3a6f43b3c::t_f1e5c0018af077 1-13
+research_system/api/__init__.py
+  s_a6a8a3a6f43b3c::t_66e935b7f47ea0 1-5
+research_system/api/__main__.py
+  s_a6a8a3a6f43b3c::t_3dff364f93040a 1-25
+research_system/api/app.py
+  s_a6a8a3a6f43b3c::t_bfd88d44c8e7ef 1-116
+research_system/api/chat_service.py
+  s_538560a4559390::t_abfc819825f3a0 1-183
+research_system/api/config.py
+  s_0cc4f9f5047213::t_f03a33e94f9bc1 1-86
+research_system/api/models.py
+  s_a6a8a3a6f43b3c::t_ae3372096a56d3 1-172
+research_system/api/routes/admin.py
+  s_a6a8a3a6f43b3c::t_6a62b95b80438f 1-159
+research_system/api/routes/chat.py
+  s_a6a8a3a6f43b3c::t_9a79ec7e758281 1-110
+research_system/api/routes/system.py
+  s_a6a8a3a6f43b3c::t_6f8a2279f57331 1-33
+research_system/api/sse.py
+  s_0cc4f9f5047213::t_4008769a71a9f4 1-120
+research_system/cli/prompt_toolkit_compat.py
+  s_a6a8a3a6f43b3c::t_beca6aae56d3d7 1-11
+research_system/cli/runtime/app/chat_entry_runtime.py
+  s_a6a8a3a6f43b3c::t_210e8741fda236 5
+research_system/cli/shell/windows_terminal.py
+  s_a6a8a3a6f43b3c::t_fcf56b183f261c 7-8
+research_system/cli/windows_terminal.py
+  s_a6a8a3a6f43b3c::t_105480afcb9424 6
+research_system/runtime/orchestration/orchestrator_run_admin_support.py
+  s_a6a8a3a6f43b3c::t_e04ead578388db 103-107
+tests/api_test_support.py
+  s_ca96f4d0e663a5::t_1c303eb5c4e85f 1-350
+tests/test_api_v1_admin_system.py
+  s_a6a8a3a6f43b3c::t_6b5796601c155c 1-447
+tests/test_api_v1_chat.py
+  s_ca96f4d0e663a5::t_7c43c67037cd29 1-269
+tests/test_api_v1_errors.py
+  s_0cc4f9f5047213::t_d4bbb4db5bfe2e 1-189
+tests/test_api_v1_sse_openapi.py
+  s_0cc4f9f5047213::t_5e6360b9bd5cef 1-291
+tests/test_orchestrator_reindex.py
+  s_a6a8a3a6f43b3c::t_a97e76c71369c8 194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "a28f6e77e2872666d80696141426971a52f0e095",
+  "prompts": {},
+  "sessions": {
+    "s_0cc4f9f5047213": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4af8-57b0-7291-b0f3-400f5bc53a6b",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_538560a4559390": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4ad2-d064-79c1-b10d-1f7f44215e28",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_ca96f4d0e663a5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4ad2-e019-7050-8404-4bb35a057d6c",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
