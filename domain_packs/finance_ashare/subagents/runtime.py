@@ -3,6 +3,31 @@ from __future__ import annotations
 from research_system.schemas.artifacts import ArtifactDraft
 
 
+_SCREEN_STYLE_CRITERIA = {
+    "value": (
+        ("valuation_evidence", "valuation evidence", ("pe", "pb", "ps", "valuation")),
+        ("liquidity", "reported turnover", ("amount",)),
+    ),
+    "growth": (
+        ("growth_evidence", "reported growth evidence", ("revenue_growth", "profit_growth", "growth")),
+        ("momentum", "reported price change", ("pct_change",)),
+    ),
+    "quality": (
+        ("cashflow_or_profitability", "cash-flow or profitability evidence", ("operating_cash_flow", "roe", "net_profit")),
+        ("fundamental_evidence", "financial abstract", ("financial_abstract",)),
+    ),
+    "gulp": (
+        ("growth_evidence", "reported growth evidence", ("revenue_growth", "profit_growth", "growth")),
+        ("valuation_evidence", "valuation evidence", ("pe", "pb", "ps", "valuation")),
+        ("liquidity", "reported turnover", ("amount",)),
+    ),
+    "short": (
+        ("market_risk", "reported price change", ("pct_change",)),
+        ("disclosure_risk", "disclosure evidence", ("notice_count",)),
+    ),
+}
+
+
 def normalize_query(context):
     request = context.require_artifact("user_request")
     query = str(request.content.get("query") or request.content.get("text") or "").strip()
@@ -74,6 +99,10 @@ def screen_stocks(context):
         if not isinstance(row, dict) or not row.get("symbol"):
             continue
         grouped.setdefault(str(row["symbol"]), {})[str(row.get("snapshot_type") or "unknown")] = row
+    requested_style = str(
+        inputs.get("screen_style") or inputs.get("screening_style") or "quality"
+    ).strip().lower()
+    screen_style = requested_style if requested_style in _SCREEN_STYLE_CRITERIA else "quality"
     candidates = []
     for symbol, by_type in grouped.items():
         market = ((by_type.get("market") or {}).get("facts") or {}).get("market_overview") or {}
@@ -90,6 +119,13 @@ def screen_stocks(context):
                 ("notice", bool(by_type.get("notice"))),
             ) if not present
         ]
+        methodology = _candidate_methodology(
+            screen_style=screen_style,
+            market=market,
+            fundamental=fundamental,
+            notice=notice,
+            missing_evidence=missing,
+        )
         breakdown = {
             "liquidity": min((amount or 0.0) / 1_000_000_000, 1.0),
             "momentum": max(min((pct_change or 0.0) / 10.0, 1.0), -1.0),
@@ -106,6 +142,12 @@ def screen_stocks(context):
             "latest_amount": amount,
             "notice_count": notice_count,
             "has_financial_abstract": bool(fundamental),
+            "sector": str(
+                market.get("sector")
+                or fundamental.get("sector")
+                or (by_type.get("market") or {}).get("sector")
+                or ""
+            ),
             "score": score,
             "score_breakdown": breakdown,
             "missing_evidence": missing,
@@ -113,7 +155,7 @@ def screen_stocks(context):
             "deep_checked": not missing,
             "why_it_made_the_list": "Evidence-backed candidate with available market, fundamental, and notice data.",
             "main_risk": "; ".join(f"missing evidence: {item}" for item in missing) or "Requires professional review before acting.",
-            "methodology": {},
+            "methodology": methodology,
         })
     candidates.sort(key=lambda item: (item["score"], item.get("latest_amount") or 0.0), reverse=True)
     cycle = str(inputs.get("investment_cycle") or "mid_term")
@@ -140,6 +182,7 @@ def screen_stocks(context):
         "screening_strategy": {
             "methodology_source": "intent_input" if inputs.get("prefer_methodology") else "domain_pack_policy",
             "investment_cycle": cycle,
+            "screen_style": screen_style,
         },
         "summary": f"Screened {len(candidates)} candidates; {len(screened)} eligible.",
     }
@@ -150,7 +193,18 @@ def screen_stocks(context):
             "watchlist_candidates": watchlist,
             "enrichment_targets": [],
             "scorecard": scorecard,
-            "screening_notes": ["screening_strategy=domain_pack_policy"],
+            "screening_notes": [
+                "screening_strategy=domain_pack_policy",
+                "missing evidence is retained as a data gap and is never neutralized",
+            ],
+            "methodology": {
+                "screen_style": screen_style,
+                "requested_screen_style": requested_style,
+                "criteria": [
+                    {"id": criterion_id, "label": label}
+                    for criterion_id, label, _fields in _SCREEN_STYLE_CRITERIA[screen_style]
+                ],
+            },
         },
         source_refs=list(snapshots.source_refs),
         parent_artifact_ids=[snapshots.artifact_id],
@@ -166,6 +220,53 @@ def _to_float(value):
         return None
 
 
+def _candidate_methodology(*, screen_style, market, fundamental, notice, missing_evidence):
+    values = {
+        "amount": market.get("amount") or (market.get("spot") or {}).get("amount"),
+        "pct_change": market.get("pct_change") or (market.get("spot") or {}).get("pct_change"),
+        "notice_count": notice.get("notice_count"),
+        "financial_abstract": fundamental,
+        **{str(key): value for key, value in market.items()},
+        **{str(key): value for key, value in fundamental.items()},
+    }
+    criteria = []
+    for criterion_id, label, field_names in _SCREEN_STYLE_CRITERIA[screen_style]:
+        matched = next(
+            (field_name for field_name in field_names if _has_reported_value(values.get(field_name))),
+            None,
+        )
+        criteria.append(
+            {
+                "id": criterion_id,
+                "label": label,
+                "status": "pass" if matched else "missing",
+                "source_field": matched,
+            }
+        )
+    criteria.append(
+        {
+            "id": "evidence_completeness",
+            "label": "market, fundamental, and disclosure coverage",
+            "status": "pass" if not missing_evidence else "fail",
+            "source_field": None if missing_evidence else "artifact_bundle",
+        }
+    )
+    evaluated = [item for item in criteria if item["status"] != "missing"]
+    passed = [item for item in evaluated if item["status"] == "pass"]
+    return {
+        "screen_style": screen_style,
+        "criteria": criteria,
+        "evaluated_criterion_count": len(evaluated),
+        "passed_criterion_count": len(passed),
+        "pass_rate": round(len(passed) / len(evaluated), 3) if evaluated else None,
+        "data_gaps": [item["id"] for item in criteria if item["status"] == "missing"],
+    }
+
+
+def _has_reported_value(value):
+    return value not in (None, "", [], {})
+
+
 def research_sector(context):
     snapshots = context.require_artifact("stock_snapshot_bundle")
     content = snapshots.content
@@ -177,6 +278,22 @@ def research_sector(context):
     sector = inputs.get("sector") or content.get("sector") or sector_snapshot.get("sector") or facts.get("sector") or content.get("query")
     theme = content.get("theme") or sector_snapshot.get("theme") or facts.get("theme")
     related = [row for row in rows if row not in sector_rows]
+    source_fact_score = _to_float(
+        facts.get("research_heat") or facts.get("heat_score") or facts.get("evidence_coverage")
+    )
+    coverage_score = min(100.0, round(100.0 * len(rows) / max(len(rows), 3), 1))
+    sector_heatmap = []
+    if sector:
+        sector_heatmap.append(
+            {
+                "name": str(sector),
+                "score": source_fact_score if source_fact_score is not None else coverage_score,
+                "score_basis": "source_fact" if source_fact_score is not None else "artifact_coverage",
+                "source_count": len(rows),
+                "related_snapshot_count": len(related),
+                "theme": theme,
+            }
+        )
     risks = ["Sector evidence may be incomplete or stale."]
     if not related:
         risks.append("No related sector or constituent snapshots were supplied.")
@@ -193,6 +310,7 @@ def research_sector(context):
                 "sector_snapshot_present" if sector_rows else "missing_sector_snapshot",
                 "policy_snapshot_requested" if inputs.get("include_policy_snapshot") else "policy_snapshot_not_requested",
             ],
+            "sector_heatmap": sector_heatmap,
         },
         source_refs=list(snapshots.source_refs),
         parent_artifact_ids=[snapshots.artifact_id],

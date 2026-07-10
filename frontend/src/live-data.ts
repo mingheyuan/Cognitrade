@@ -1,5 +1,7 @@
 import { ACTIVE_RUN_STATUSES, INTENT_LABELS } from './data'
 import type {
+  AgentOSDashboardItem,
+  AgentOSDashboardView,
   EvidenceRecord,
   ResearchReport,
   RunDetail,
@@ -44,6 +46,30 @@ export type CandidateItem = {
   reason: string
   risk: string
   deepChecked: boolean
+}
+
+export type DashboardCandidateItem = {
+  rank: number
+  code: string
+  name: string
+  sector: string
+  score: number | null
+  change: number | null
+  tier: string
+  reason: string
+  risk: string
+  deepChecked: boolean
+  methodologyCoverage: number | null
+  dataGapCount: number
+  runId: string
+}
+
+export type SectorSignalItem = {
+  name: string
+  score: number
+  scoreBasis: string
+  sourceCount: number | null
+  runId: string
 }
 
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
@@ -187,6 +213,62 @@ export function candidatesFromReport(report: ResearchReport): CandidateItem[] {
       risk: asString(row.risk, '未提供'),
       deepChecked,
     }
+  })
+}
+
+export function dashboardItems(view: AgentOSDashboardView | null | undefined, resourceId: string): AgentOSDashboardItem[] {
+  return view?.resources[resourceId]?.items || []
+}
+
+export function dashboardValue(view: AgentOSDashboardView | null | undefined, resourceId: string): Record<string, unknown> {
+  const resource = view?.resources[resourceId]
+  if (resource?.value !== undefined) return asRecord(resource.value)
+  return asRecord(resource?.items?.[0]?.data)
+}
+
+export function dashboardCandidates(view: AgentOSDashboardView | null | undefined): DashboardCandidateItem[] {
+  const rows = [
+    ...dashboardItems(view, 'candidates'),
+    ...dashboardItems(view, 'watchlist_candidates'),
+  ]
+  return rows.map((item, index) => {
+    const row = asRecord(item.data)
+    const methodology = asRecord(row.methodology)
+    const gaps = Array.isArray(methodology.data_gaps)
+      ? methodology.data_gaps
+      : Array.isArray(row.missing_evidence) ? row.missing_evidence : []
+    const tier = asString(row.candidate_tier, 'watchlist')
+    const code = asString(row.symbol, `candidate-${index + 1}`)
+    return {
+      rank: index + 1,
+      code,
+      name: asString(row.name, code),
+      sector: asString(row.sector, '行业未提供'),
+      score: asNumber(row.score),
+      change: asNumber(row.latest_pct_change),
+      tier,
+      reason: asString(row.why_it_made_the_list, '后端未提供入选理由'),
+      risk: asString(row.main_risk, '未提供'),
+      deepChecked: Boolean(row.deep_checked),
+      methodologyCoverage: asNumber(methodology.pass_rate),
+      dataGapCount: gaps.length,
+      runId: asString(item.provenance.run_id),
+    }
+  })
+}
+
+export function dashboardSectorSignals(view: AgentOSDashboardView | null | undefined): SectorSignalItem[] {
+  return dashboardItems(view, 'sector_heatmap').flatMap((item) => {
+    const row = asRecord(item.data)
+    const score = asNumber(row.score)
+    if (score === null) return []
+    return [{
+      name: asString(row.name, '未命名板块'),
+      score,
+      scoreBasis: asString(row.score_basis, 'artifact_coverage'),
+      sourceCount: asNumber(row.source_count),
+      runId: asString(item.provenance.run_id),
+    }]
   })
 }
 

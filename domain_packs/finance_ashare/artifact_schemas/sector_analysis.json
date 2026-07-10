@@ -9,6 +9,7 @@
     "related_snapshots": {"type": "array"},
     "risks": {"type": "array"},
     "source_count": {"type": "integer"},
-    "analysis_notes": {"type": "array"}
+    "analysis_notes": {"type": "array"},
+    "sector_heatmap": {"type": "array"}
   }
 }

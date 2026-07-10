@@ -197,18 +197,6 @@ export type SystemStatus = {
   [key: string]: unknown
 }
 
-export type ProposalRecord = {
-  proposal_id: string
-  status?: 'pending' | 'approved' | 'rejected' | string
-  proposal_type?: string
-  title?: string
-  summary?: string
-  reason?: string
-  created_at?: string
-  updated_at?: string
-  [key: string]: unknown
-}
-
 export type RunDetail = {
   runId: string
   replay: RunReplayPayload
@@ -224,4 +212,43 @@ export type ApiErrorBody = {
     request_id?: string
   }
   detail?: string | Array<Record<string, unknown>>
+}
+
+export type AgentOSDashboardProvenance = {
+  artifact_id?: string
+  artifact_type?: string
+  artifact_version?: number
+  run_id?: string
+  thread_id?: string
+  created_at?: string
+  confidence?: number | null
+  risk_flags?: string[]
+  source_refs?: Array<Record<string, unknown>>
+  memory_id?: string
+  memory_type?: string
+  status?: string
+  source_run_ids?: string[]
+  source_artifact_ids?: string[]
+}
+
+export type AgentOSDashboardItem = {
+  data: unknown
+  provenance: AgentOSDashboardProvenance
+}
+
+export type AgentOSDashboardResource = {
+  source: 'artifacts' | 'memory' | 'manifest'
+  artifact_type?: string
+  layer?: string
+  count?: number
+  total_count?: number
+  items?: AgentOSDashboardItem[]
+  value?: unknown
+}
+
+export type AgentOSDashboardView = {
+  domain_id: string
+  view_id: string
+  generated_at: string
+  resources: Record<string, AgentOSDashboardResource>
 }

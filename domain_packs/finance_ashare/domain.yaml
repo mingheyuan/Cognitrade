@@ -172,3 +172,93 @@ governance:
   max_retries_per_node: 2
   required_gate_ids: []
   allowed_tools: [financial_data_provider]
+metadata:
+  dashboard_views:
+    overview:
+      resources:
+        candidates:
+          source: artifacts
+          artifact_type: screening_result
+          content_path: screened_candidates
+          selection: latest_artifact
+          limit: 4
+        sector_heatmap:
+          source: artifacts
+          artifact_type: sector_analysis
+          content_path: sector_heatmap
+          selection: latest_per_item_key
+          item_key: name
+          limit: 7
+    screening:
+      resources:
+        candidates:
+          source: artifacts
+          artifact_type: screening_result
+          content_path: screened_candidates
+          selection: latest_artifact
+        watchlist_candidates:
+          source: artifacts
+          artifact_type: screening_result
+          content_path: watchlist_candidates
+          selection: latest_artifact
+        scorecard:
+          source: artifacts
+          artifact_type: screening_result
+          content_path: scorecard
+          selection: latest_artifact
+          limit: 1
+        methodology:
+          source: manifest
+          value:
+            name: A-share evidence-backed screening
+            version: 1
+            screen_styles:
+              - id: value
+                name: Value
+                purpose: Prefer candidates with traceable valuation evidence.
+              - id: growth
+                name: Growth
+                purpose: Require reported growth evidence before ranking growth claims.
+              - id: quality
+                name: Quality
+                purpose: Prioritize profitability and cash-flow evidence coverage.
+              - id: gulp
+                name: GULP
+                purpose: Cross-check growth, valuation, liquidity, and price evidence.
+              - id: short
+                name: Short risk review
+                purpose: Surface downside and disclosure evidence gaps without simulating a trade.
+    methodology:
+      resources:
+        profile:
+          source: manifest
+          value:
+            name: A-share evidence-backed research
+            version: 1
+            description: Professional screening profiles are selected explicitly and never fill missing evidence with neutral scores.
+            screen_styles:
+              - id: value
+                name: Value
+                purpose: Prefer candidates with traceable valuation evidence.
+              - id: growth
+                name: Growth
+                purpose: Require reported growth evidence before ranking growth claims.
+              - id: quality
+                name: Quality
+                purpose: Prioritize profitability and cash-flow evidence coverage.
+              - id: gulp
+                name: GULP
+                purpose: Cross-check growth, valuation, liquidity, and price evidence.
+              - id: short
+                name: Short risk review
+                purpose: Surface downside and disclosure evidence gaps without simulating a trade.
+            guardrails:
+              - Hard data and source provenance are required for reusable conclusions.
+              - Missing facts remain explicit data gaps and reduce confidence.
+              - Conflicting valuation evidence is preserved for professional review.
+              - High-impact methodology changes require evaluation and human approval before promotion.
+        verified_policy_memory:
+          source: memory
+          layer: policy
+          statuses: [verified, promoted]
+          limit: 10

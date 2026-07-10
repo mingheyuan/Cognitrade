@@ -11,11 +11,23 @@ import {
   SearchCheck,
   Sparkles,
 } from 'lucide-react'
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 import { useCognitrade } from '../CognitradeContext'
 import { INTENT_LABELS } from '../data'
 import {
   asString,
-  candidatesFromReport,
+  dashboardCandidates,
+  dashboardItems,
+  dashboardSectorSignals,
   reportFromDetail,
   runListItem,
   statusTone,
@@ -30,13 +42,29 @@ type OverviewProps = {
   onOpenRun: (runId: string) => void
 }
 
+const chartTooltipStyle = {
+  background: '#101c19',
+  border: '1px solid rgba(148, 180, 169, 0.18)',
+  borderRadius: '8px',
+  color: '#eaf4f0',
+  fontSize: '12px',
+}
+
 export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: OverviewProps) {
-  const { runs, proposals, systemStatus, selectedRun, screeningRun, submitting } = useCognitrade()
+  const {
+    runs,
+    overviewDashboard,
+    methodologyDashboard,
+    systemStatus,
+    selectedRun,
+    submitting,
+  } = useCognitrade()
   const selectedReport = reportFromDetail(selectedRun)
-  const candidates = candidatesFromReport(reportFromDetail(screeningRun))
+  const candidates = dashboardCandidates(overviewDashboard)
+  const sectorSignals = dashboardSectorSignals(overviewDashboard)
+  const verifiedPolicyMemory = dashboardItems(methodologyDashboard, 'verified_policy_memory')
   const completed = runs.filter((run) => run.status === 'completed').length
   const active = runs.filter((run) => ['received', 'ready', 'running', 'waiting_external', 'gated'].includes(String(run.status))).length
-  const pendingProposals = proposals.filter((proposal) => proposal.status === 'pending').length
   const events = Number(selectedRun?.metrics.counts?.events || selectedRun?.events.events.length || 0)
   const latestRuns = runs.slice(0, 5).map(runListItem)
   const today = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'full' }).format(new Date())
@@ -47,7 +75,7 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
         <div className="overview-hero-copy">
           <div className="eyebrow-line"><CalendarDays size={14} />{today}</div>
           <h1>今天想研究什么？</h1>
-          <p>问题会直接提交到 `/api/v1/runs`，完成后自动加载报告、事件、步骤和运行指标。</p>
+          <p>问题会直接提交到 `/api/v1/runs`，候选与板块信号则读取 DomainPack 声明的 Agent OS Dashboard。</p>
           <ResearchComposer onSubmit={onSubmit} running={submitting} />
           <div className="query-presets">
             <span>常用研究</span>
@@ -76,23 +104,36 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
       <section className="overview-stat-grid">
         <article className="overview-stat-card"><span className="stat-icon stat-icon--mint"><Activity size={17} /></span><div><span>已完成研究</span><strong>{completed}</strong><small>{active} 个运行中</small></div></article>
         <article className="overview-stat-card"><span className="stat-icon stat-icon--gold"><SearchCheck size={17} /></span><div><span>当前运行事件</span><strong>{events}</strong><small>来自持久化事件流</small></div></article>
-        <article className="overview-stat-card"><span className="stat-icon stat-icon--blue"><Layers3 size={17} /></span><div><span>筛选候选</span><strong>{candidates.length}</strong><small>来自最近 stock_screen 报告</small></div></article>
-        <article className="overview-stat-card"><span className="stat-icon stat-icon--rose"><BrainCircuit size={17} /></span><div><span>待审提案</span><strong>{pendingProposals}</strong><small>{proposals.length} 条真实提案</small></div></article>
+        <article className="overview-stat-card"><span className="stat-icon stat-icon--blue"><Layers3 size={17} /></span><div><span>筛选候选</span><strong>{overviewDashboard?.resources.candidates?.total_count ?? candidates.length}</strong><small>来自 screening_result Artifact</small></div></article>
+        <article className="overview-stat-card"><span className="stat-icon stat-icon--rose"><BrainCircuit size={17} /></span><div><span>已验证策略记忆</span><strong>{verifiedPolicyMemory.length}</strong><small>仅含 verified / promoted 记录</small></div></article>
       </section>
 
       <div className="overview-grid">
         <section className="dashboard-panel candidate-panel">
-          <div className="panel-heading"><div><span className="section-kicker">LATEST SCREEN</span><h2>最近筛选候选</h2></div><button className="text-button" onClick={onOpenWorkbench}>查看报告<ChevronRight size={13} /></button></div>
+          <div className="panel-heading"><div><span className="section-kicker">LATEST SCREEN</span><h2>最近筛选候选</h2></div><button className="text-button" onClick={onOpenRuns}>查看运行<ChevronRight size={13} /></button></div>
           {candidates.length ? (
             <div className="candidate-table-wrap"><table className="candidate-table compact-table"><thead><tr><th>公司</th><th>综合分</th><th>涨跌</th><th>核心理由</th><th /></tr></thead><tbody>
-              {candidates.slice(0, 5).map((candidate) => <tr key={candidate.code}><td><strong>{candidate.name}</strong><small>{candidate.code}</small></td><td><span className="score-pill">{candidate.score ?? '—'}</span></td><td>{candidate.change === null ? '—' : `${candidate.change >= 0 ? '+' : ''}${candidate.change.toFixed(2)}%`}</td><td>{candidate.reason}</td><td /></tr>)}
+              {candidates.slice(0, 5).map((candidate) => <tr key={`${candidate.runId}-${candidate.code}`}><td><strong>{candidate.name}</strong><small>{candidate.code}</small></td><td><span className="score-pill">{candidate.score === null ? '—' : candidate.score.toFixed(2)}</span></td><td className={candidate.change === null ? '' : candidate.change >= 0 ? 'market-up' : 'market-down'}>{candidate.change === null ? '—' : `${candidate.change >= 0 ? '+' : ''}${candidate.change.toFixed(2)}%`}</td><td>{candidate.reason}</td><td><button className="row-action" aria-label={`打开 ${candidate.name} 的来源运行`} disabled={!candidate.runId} onClick={() => onOpenRun(candidate.runId)}><ArrowRight size={14} /></button></td></tr>)}
             </tbody></table></div>
-          ) : <div className="live-empty-state"><Layers3 size={20} /><strong>暂无筛选结果</strong><p>运行一次 stock_screen 后，这里会读取 report.candidates。</p></div>}
+          ) : <div className="live-empty-state"><Layers3 size={20} /><strong>暂无筛选结果</strong><p>运行一次 stock_screen 后，这里会读取带来源的 screening_result Artifact。</p></div>}
         </section>
 
-        <section className="dashboard-panel market-panel api-gap-panel">
-          <div className="panel-heading"><div><span className="section-kicker">MARKET DATA</span><h2>市场宽度</h2></div><CircleAlert size={16} /></div>
-          <div className="live-empty-state"><CircleAlert size={20} /><strong>后端暂未提供市场宽度 API</strong><p>界面不再显示演示行情。缺口已记录到 `api-todo/`。</p></div>
+        <section className="dashboard-panel market-panel">
+          <div className="panel-heading"><div><span className="section-kicker">SECTOR SIGNALS</span><h2>板块研究信号</h2></div><span className="panel-meta">最近可用 Artifact</span></div>
+          {sectorSignals.length ? (
+            <div className="breadth-chart" aria-label="板块研究信号条形图">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={sectorSignals} layout="vertical" margin={{ top: 0, right: 8, bottom: 0, left: 0 }}>
+                  <CartesianGrid horizontal={false} stroke="rgba(148,180,169,.09)" />
+                  <XAxis type="number" domain={[0, 100]} hide />
+                  <YAxis type="category" dataKey="name" width={72} axisLine={false} tickLine={false} tick={{ fill: '#9bb0a9', fontSize: 11 }} />
+                  <Tooltip contentStyle={chartTooltipStyle} cursor={{ fill: 'rgba(125,226,189,.05)' }} />
+                  <Bar dataKey="score" radius={[0, 3, 3, 0]} barSize={9}>{sectorSignals.map((item, index) => <Cell key={`${item.runId}-${item.name}`} fill={index < 3 ? '#7de2bd' : '#3d6358'} />)}</Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : <div className="live-empty-state"><CircleAlert size={20} /><strong>暂无板块分析</strong><p>运行 sector_research 后，这里会读取 sector_analysis Artifact。</p></div>}
+          <div className="breadth-footer"><CircleAlert size={13} />数值来自来源字段或 Artifact 证据覆盖度，不等同于涨跌预测。</div>
         </section>
 
         <section className="dashboard-panel recent-runs-panel">
@@ -113,7 +154,7 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
           <div className="guardrail-list">
             <div><span className="guardrail-icon"><Database size={15} /></span><span><strong>API</strong><small>{asString(systemStatus?.status, systemStatus ? '已连接' : '不可用')}</small></span></div>
             <div><span className="guardrail-icon"><Sparkles size={15} /></span><span><strong>模型 Provider</strong><small>{systemStatus ? `${asString(systemStatus.provider_name, '未报告')} · ${asString(systemStatus.default_model, '默认模型未报告')}` : '不可用'}</small></span></div>
-            <div><span className="guardrail-icon"><SearchCheck size={15} /></span><span><strong>Qdrant</strong><small>{systemStatus ? `${asString(systemStatus.qdrant_mode, '模式未报告')} · ${asString(systemStatus.qdrant_collection_name, 'collection 未报告')}` : '不可用'}</small></span></div>
+            <div><span className="guardrail-icon"><SearchCheck size={15} /></span><span><strong>板块资源</strong><small>{sectorSignals.length ? `${sectorSignals.length} 个来源板块` : '等待 sector_analysis'}</small></span></div>
           </div>
         </section>
       </div>

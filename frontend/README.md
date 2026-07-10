@@ -44,9 +44,9 @@ npm run preview
 ## 页面
 
 - `研究工作台`：真实研究入口、结构化报告、运行轨迹、指标和证据。
-- `研究总览`：运行统计、筛选候选、提案和系统状态。
-- `智能筛选`：读取最近一次 `stock_screen` 报告的候选、评分与风险字段。
-- `方法论`：方法论演进运行和真实提案审核；当前权重/版本接口缺失时显示空态。
+- `研究总览`：运行统计、ArtifactBoard 筛选候选、板块信号和系统状态。
+- `智能筛选`：读取最新 `screening_result` Artifact 的候选、评分、数据缺口与来源运行。
+- `方法论`：读取 DomainPack 方法论契约和已验证的 Policy Memory；不显示未验证的提案或回测数据。
 - `运行记录`：当前 DAG、事件摘要和历史 run 操作入口。
 
 页面不再内置行情、公司、评分或运行样本。后端未提供的字段统一显示“—”或接口缺口提示，不会用演示值补齐。
@@ -73,13 +73,12 @@ GET  /api/v1/runs/{run_id}/metrics
 POST /api/v1/runs/{run_id}/cancel
 POST /api/v1/runs/{run_id}/reruns
 GET  /api/v1/system/status
-GET  /api/v1/admin/proposals
-POST /api/v1/admin/proposals/{proposal_id}/reviews
+GET  /api/v1/dashboard/{domain_id}/{view_id}
 ```
 
-完整的 v1 接口、请求/响应和错误合同见根目录 [`api-doc/api-v1.md`](../api-doc/api-v1.md)。`src/research-contracts.ts` 与 `src/api-client.ts` 已覆盖当前页面实际使用的运行、回放、事件、指标、系统状态与提案合同；新增接口仍应以 OpenAPI 和版本化接口文档为准。
+完整的 v1 接口、请求/响应和错误合同见根目录 [`api-doc/api-v1.md`](../api-doc/api-v1.md)。`src/research-contracts.ts` 与 `src/api-client.ts` 已覆盖当前页面实际使用的运行、回放、事件、指标、系统状态与 Dashboard 合同；新增接口仍应以 OpenAPI 和版本化接口文档为准。
 
-当前 `POST /runs` 是同步请求，前端提交期间只能展示全局等待状态，完成并返回 `run_id` 后才加载详情。Agent OS 模式的 v1 回放目前只返回最终 artifact ID、没有版本化内容读取接口；实时行情、当前方法论权重、上传、派生研究和全局搜索等缺口同样见 [`api-todo/api-v2-todo.md`](../api-todo/api-v2-todo.md)。
+当前 `POST /runs` 是同步请求，前端提交期间只能展示全局等待状态，完成并返回 `run_id` 后才加载详情。Dashboard v1 仅投影 Pack 声明的视图；通用版本化 Artifact 内容读取、实时行情、上传、派生研究和全局搜索等缺口同样见 [`api-todo/api-v2-todo.md`](../api-todo/api-v2-todo.md)。
 
 API 默认监听 `http://127.0.0.1:8000`，开发 CORS 白名单已包含 Vite 的 `http://127.0.0.1:4173` 和 `http://localhost:4173`。所有 `/api/v1` 请求都需要 Bearer token；前端接入时应通过受控登录/BFF 或运行时输入获得短期凭据，不能把服务端 token 写进 `VITE_*`。
 

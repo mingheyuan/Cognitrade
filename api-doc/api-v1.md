@@ -20,7 +20,7 @@ FastAPI owns authentication, validation, CORS, error envelopes, request IDs,
 SSE transport, and mutation serialization. AgentOS owns planning, execution,
 artifacts, gates, replay, and long-term memory.
 
-There are 35 versioned operations. The old proposal, subagent-discovery,
+There are 36 versioned operations. The old proposal, subagent-discovery,
 ActionPlan, Supervisor, Handler, and Blackboard APIs are not part of v1.
 
 ## Authentication
@@ -104,6 +104,24 @@ The response identifies the canonical protocol and graph state:
 Run mutations are serialized at the HTTP boundary. Reads and cancellation do
 not wait for an unrelated run request.
 
+## Domain Dashboards
+
+`GET /api/v1/dashboard/{domain_id}/{view_id}` reads a view declaration from the
+installed DomainPack, then projects active ArtifactBoard records and optionally
+verified Layered Memory records. The core API has no finance-specific dashboard
+logic: artifact type, content path, ordering, and limits are all declared by
+the pack.
+
+Each returned artifact item contains `data` plus immutable provenance including
+the run ID, artifact ID and version, producer, confidence, risk flags, and
+source references. An empty item list means no canonical Agent OS result has
+yet been produced; it is not replaced with demo data.
+
+The installed `finance_ashare` pack currently declares `overview`, `screening`,
+and `methodology` views. The Methodology view exposes the Pack's controlled
+screening contract and verified policy-memory records, never unverified
+performance or invented methodology claims.
+
 ## Server-Sent Events
 
 `GET /api/v1/runs/{run_id}/events/stream` streams records from
@@ -151,6 +169,7 @@ Administrative resources expose canonical AgentOS state only:
 | `GET` | `/admin/runs/{run_id}/approvals` | immutable approval audit records |
 | `POST` | `/admin/runs/{run_id}/approvals` | approve a declared high-risk leaf node |
 | `GET` | `/admin/memory` | episodic, domain, or policy memory |
+| `GET` | `/dashboard/{domain_id}/{view_id}` | DomainPack-configured ArtifactBoard and memory projection |
 | `POST` | `/admin/artifacts/cleanup` | run artifact retention cleanup |
 | `POST` | `/admin/qdrant/reindex` | rebuild from ArtifactBoard records |
 | `POST` | `/admin/system/checks` | repository checks |

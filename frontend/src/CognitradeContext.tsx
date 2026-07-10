@@ -17,7 +17,7 @@ import {
 } from './api-client'
 import { isActiveStatus } from './live-data'
 import type {
-  ProposalRecord,
+  AgentOSDashboardView,
   ResearchIntent,
   ResearchResponse,
   RunDetail,
@@ -32,7 +32,9 @@ type CognitradeContextValue = {
   connectionState: ConnectionState
   systemStatus: SystemStatus | null
   runs: RunHistoryRecord[]
-  proposals: ProposalRecord[]
+  overviewDashboard: AgentOSDashboardView | null
+  screeningDashboard: AgentOSDashboardView | null
+  methodologyDashboard: AgentOSDashboardView | null
   selectedRunId: string
   selectedRun: RunDetail | null
   screeningRun: RunDetail | null
@@ -48,7 +50,6 @@ type CognitradeContextValue = {
   createRun: (query: string, intent?: ResearchIntent) => Promise<ResearchResponse>
   cancelRun: (runId: string) => Promise<void>
   rerunRun: (runId: string, fromNode: string) => Promise<ResearchResponse>
-  reviewProposal: (proposalId: string, decision: 'approve' | 'reject', reason?: string) => Promise<void>
   clearError: () => void
 }
 
@@ -73,7 +74,9 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
   const [connectionState, setConnectionState] = useState<ConnectionState>('connecting')
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
   const [runs, setRuns] = useState<RunHistoryRecord[]>([])
-  const [proposals, setProposals] = useState<ProposalRecord[]>([])
+  const [overviewDashboard, setOverviewDashboard] = useState<AgentOSDashboardView | null>(null)
+  const [screeningDashboard, setScreeningDashboard] = useState<AgentOSDashboardView | null>(null)
+  const [methodologyDashboard, setMethodologyDashboard] = useState<AgentOSDashboardView | null>(null)
   const [selectedRunId, setSelectedRunId] = useState('')
   const [selectedRun, setSelectedRun] = useState<RunDetail | null>(null)
   const [screeningRun, setScreeningRun] = useState<RunDetail | null>(null)
@@ -111,14 +114,20 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
     try {
       const status = await client.getSystemStatus()
       setSystemStatus(status)
-      const [runResult, proposalResult] = await Promise.allSettled([
+      const [runResult, overviewResult, screeningResult, methodologyResult] = await Promise.allSettled([
         client.listRuns(50),
-        client.listProposals(50),
+        client.getDashboard('finance_ashare', 'overview'),
+        client.getDashboard('finance_ashare', 'screening'),
+        client.getDashboard('finance_ashare', 'methodology'),
       ])
       if (runResult.status === 'fulfilled') setRuns(runResult.value)
       else setError(errorMessage(runResult.reason))
-      if (proposalResult.status === 'fulfilled') setProposals(proposalResult.value)
-      else setError(errorMessage(proposalResult.reason))
+      if (overviewResult.status === 'fulfilled') setOverviewDashboard(overviewResult.value)
+      else setError(errorMessage(overviewResult.reason))
+      if (screeningResult.status === 'fulfilled') setScreeningDashboard(screeningResult.value)
+      else setError(errorMessage(screeningResult.reason))
+      if (methodologyResult.status === 'fulfilled') setMethodologyDashboard(methodologyResult.value)
+      else setError(errorMessage(methodologyResult.reason))
       setConnectionState('online')
     } catch (refreshError) {
       setSystemStatus(null)
@@ -229,27 +238,15 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
     [client, loadRun, refresh],
   )
 
-  const reviewProposal = useCallback(
-    async (proposalId: string, decision: 'approve' | 'reject', reason?: string) => {
-      setError('')
-      try {
-        await client.reviewProposal(proposalId, decision, reason)
-        setProposals(await client.listProposals(50))
-      } catch (reviewError) {
-        setError(errorMessage(reviewError))
-        throw reviewError
-      }
-    },
-    [client],
-  )
-
   const value = useMemo<CognitradeContextValue>(
     () => ({
       settings,
       connectionState,
       systemStatus,
       runs,
-      proposals,
+      overviewDashboard,
+      screeningDashboard,
+      methodologyDashboard,
       selectedRunId,
       selectedRun,
       screeningRun,
@@ -265,7 +262,6 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
       createRun,
       cancelRun,
       rerunRun,
-      reviewProposal,
       clearError: () => setError(''),
     }),
     [
@@ -273,7 +269,9 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
       connectionState,
       systemStatus,
       runs,
-      proposals,
+      overviewDashboard,
+      screeningDashboard,
+      methodologyDashboard,
       selectedRunId,
       selectedRun,
       screeningRun,
@@ -288,7 +286,6 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
       createRun,
       cancelRun,
       rerunRun,
-      reviewProposal,
     ],
   )
 

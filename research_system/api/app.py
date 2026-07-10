@@ -18,7 +18,7 @@ from research_system.api.agent_os_run_service import AgentOSRunService
 from research_system.api.config import ApiConfig
 from research_system.api.dependencies import ApiRuntimeState, get_agent_os, require_principal
 from research_system.api.errors import install_exception_handlers
-from research_system.api.routes import admin, chat, runs, system
+from research_system.api.routes import admin, chat, dashboard, runs, system
 from research_system.api.sse import RunEventSource
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.agent_os import AgentOS
@@ -152,6 +152,7 @@ def create_app(
     versioned.include_router(runs.router)
     versioned.include_router(chat.router)
     versioned.include_router(admin.router)
+    versioned.include_router(dashboard.router)
     versioned.include_router(system.router)
     application.include_router(versioned)
 

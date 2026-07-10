@@ -27,6 +27,7 @@ _STOCK_SNAPSHOT_TYPES = frozenset(
     {"market", "fundamental", "notice", "lhb", "capital_flow", "sentiment", "events"}
 )
 _METHODOLOGIES = frozenset({"comps", "dcf", "cashflow_resilience"})
+_SCREEN_STYLES = frozenset({"value", "growth", "quality", "gulp", "short"})
 
 _PLANNING_FIELDS = {"planning_context_hints"}
 _STOCK_FIELDS = {
@@ -44,6 +45,7 @@ _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
         "candidate_pool_size",
         "investment_cycle",
         "prefer_methodology",
+        "screen_style",
         "top_k",
         "min_score",
         "watchlist_top_k",
@@ -155,6 +157,8 @@ def _validate_common_constraints(constraints: dict[str, Any]) -> None:
         _require_enum(constraints["investment_cycle"], field_name="investment_cycle", allowed=_INVESTMENT_CYCLES)
     if "prefer_methodology" in constraints:
         _require_enum(constraints["prefer_methodology"], field_name="prefer_methodology", allowed=_METHODOLOGIES)
+    if "screen_style" in constraints:
+        _require_enum(constraints["screen_style"], field_name="screen_style", allowed=_SCREEN_STYLES)
     if "snapshot_types" in constraints:
         snapshots = _require_string_list(constraints["snapshot_types"], field_name="snapshot_types", min_items=1)
         unsupported = sorted(set(snapshots) - _STOCK_SNAPSHOT_TYPES)

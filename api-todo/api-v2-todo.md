@@ -16,7 +16,7 @@
 | 运行指标 | `GET /api/v1/runs/{run_id}/metrics` | 已接入 |
 | 取消 / 重跑 | `POST /api/v1/runs/{run_id}/cancel`、`POST /api/v1/runs/{run_id}/reruns` | 已接入 |
 | 系统状态 | `GET /api/v1/system/status` | 已接入 |
-| 方法论提案审核 | `GET /api/v1/admin/proposals`、`POST /api/v1/admin/proposals/{id}/reviews` | 已接入 |
+| Pack Dashboard 投影 | `GET /api/v1/dashboard/{domain_id}/{view_id}` | 已接入；`finance_ashare` 提供 overview、screening、methodology |
 
 ## P0：研究任务异步化
 
@@ -59,13 +59,13 @@
   - `GET /api/v2/securities/{symbol}/quote`
   - `GET /api/v2/securities/{symbol}/series?interval=1d&from=&to=`
 - 最少字段：数据截止时间、来源、交易状态、上涨/下跌/平盘数量、指数表现、价格/OHLCV、货币和缺失原因。
-- 当前处理：总览和工作台明确显示“行情 API 未提供”，不生成虚假涨跌或图表。
+- 当前处理：实时行情 API 尚未提供；总览可展示 `sector_analysis` Artifact 的板块研究信号，但不生成市场涨跌宽度。
 
 ### 6. 持久化筛选结果
 
 - 建议：`GET /api/v2/screens`、`GET /api/v2/screens/{screen_id}`。
 - 最少字段：筛选条件、候选、排名、分层、综合分、因子分、理由、风险、数据截止时间及对应 `run_id`。
-- 当前处理：只读取最近一次 `stock_screen` 运行的 `report.candidates`；字段缺失显示“—”。
+- 当前处理：`GET /api/v1/dashboard/finance_ashare/screening` 投影最新 `screening_result` Artifact；字段缺失显示“—”。历史筛选结果和按条件检索仍需 v2。
 
 ### 7. 方法论只读合同与版本历史
 
@@ -74,7 +74,7 @@
   - `GET /api/v2/methodologies/versions?cursor=&limit=`
   - `GET /api/v2/methodologies/versions/{version}`
 - 最少字段：版本、发布时间、状态、维度/因子权重、变更说明、来源提案、审核人与生效时间。
-- 当前处理：提案列表和审核可用；权重、当前版本与版本差异显示接口缺口空态。
+- 当前处理：`GET /api/v1/dashboard/finance_ashare/methodology` 返回 Pack profile 与已验证 Policy Memory；完整版本历史和变更审批工作流仍需 v2。
 
 ### 8. 关注列表
 

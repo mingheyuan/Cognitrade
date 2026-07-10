@@ -1,6 +1,6 @@
 import type {
+  AgentOSDashboardView,
   ApiErrorBody,
-  ProposalRecord,
   ResearchRequest,
   ResearchResponse,
   RunDetail,
@@ -104,6 +104,12 @@ export class CognitradeApiClient {
     return this.request(`/runs/${encodeURIComponent(runId)}/metrics`)
   }
 
+  getDashboard(domainId: string, viewId: string): Promise<AgentOSDashboardView> {
+    return this.request(
+      `/dashboard/${encodeURIComponent(domainId)}/${encodeURIComponent(viewId)}`,
+    )
+  }
+
   async getRunDetail(runId: string): Promise<RunDetail> {
     const [replay, events, steps, metrics] = await Promise.all([
       this.getReplay(runId),
@@ -112,17 +118,6 @@ export class CognitradeApiClient {
       this.getMetrics(runId),
     ])
     return { runId, replay, events, steps, metrics }
-  }
-
-  listProposals(limit = 50): Promise<ProposalRecord[]> {
-    return this.request(`/admin/proposals?limit=${limit}`)
-  }
-
-  reviewProposal(proposalId: string, decision: 'approve' | 'reject', reason?: string): Promise<ProposalRecord> {
-    return this.request(`/admin/proposals/${encodeURIComponent(proposalId)}/reviews`, {
-      method: 'POST',
-      body: JSON.stringify({ decision, ...(reason?.trim() ? { reason: reason.trim() } : {}) }),
-    })
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
