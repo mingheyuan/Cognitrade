@@ -6,9 +6,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_SCRIPT = REPO_ROOT / "scripts" / "deploy.sh"
+COMPOSE_FILE = REPO_ROOT / "compose.yaml"
 
 
 class DeployScriptTests(unittest.TestCase):
@@ -44,8 +47,18 @@ class DeployScriptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             result = self.run_script("--help", cwd=Path(temporary))
         self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertIn("Install/check, configure, build, and start", result.stdout)
+        self.assertIn("start API + frontend web", result.stdout)
+        self.assertIn("Start both from existing images", result.stdout)
         self.assertIn("Debian/Ubuntu", result.stdout)
+
+    def test_compose_starts_frontend_web_after_healthy_api(self) -> None:
+        payload = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+        services = payload["services"]
+
+        self.assertEqual(set(services), {"api", "web"})
+        self.assertEqual(services["web"]["depends_on"]["api"]["condition"], "service_healthy")
+        self.assertEqual(services["web"]["ports"], ["${COGNITRADE_WEB_HOST:-127.0.0.1}:${COGNITRADE_WEB_PORT:-8080}:8080"])
+        self.assertEqual(services["web"]["build"]["args"]["VITE_COGNITRADE_API_BASE_URL"], "/api/v1")
 
     def test_init_generates_secure_token_and_runtime_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -151,6 +164,7 @@ class DeployScriptTests(unittest.TestCase):
         self.assertIn("would install Docker", result.stdout)
         self.assertIn("compose", result.stdout)
         self.assertIn("build", result.stdout)
+        self.assertIn("starting API and frontend web containers", result.stdout)
 
     @staticmethod
     def _env_values(payload: str) -> dict[str, str]:

@@ -68,11 +68,9 @@ Cognitrade/
 ├─ deploy/             # 生产镜像与 Nginx 反向代理配置
 ├─ frontend/           # React + Vite 实时研究工作台
 ├─ research_system/    # 主代码
-├─ scripts/service.sh  # 本地前后端生命周期管理脚本
 ├─ scripts/deploy.sh   # 环境安装与容器部署脚本
 ├─ tests/              # 本地回归测试
 ├─ workspace/          # 运行数据、配置、taxonomy、runs、memory、Qdrant 本地库
-├─ .runtime/           # 启动后生成的 PID、就绪状态与日志（不入库）
 ├─ requirements.txt    # Python 运行与 API 依赖
 ├─ compose.yaml        # API + Nginx Web 容器编排
 ├─ .env
@@ -81,61 +79,40 @@ Cognitrade/
 
 `workspace/config/` 和 `workspace/taxonomy/` 是当前运行时真正读取的配置目录，不是包内静态配置目录。
 
-## 一键启动整套服务
+## 本地开发
 
-项目根目录的 `scripts/service.sh` 统一管理 FastAPI 后端和 Vite 前端，支持依赖安装、配置预检、端口检查、就绪探测、后台运行、日志查看和优雅停止。需要 Python 3.11+，以及满足 Vite 要求的 Node.js 20.19+、22.12+ 或更新版本。
-
-先根据 [`.env.example`](./.env.example) 准备根目录 `.env`，其中 `COGNITRADE_API_TOKEN` 默认必填。然后执行：
+正式运行统一使用下面的容器部署脚本。本地开发需要热更新时，分别启动 FastAPI 与 Vite，避免再维护一套重复的进程管理脚本：
 
 ```bash
-# 只做依赖、配置和端口预检
-./scripts/service.sh check --install auto
+# 首次安装后端依赖
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 
-# 前台启动前后端；首次运行会创建 .venv 并安装锁定的前端依赖
-./scripts/service.sh start --install auto
+# 终端 1：后端会读取项目根目录 .env
+python -m research_system.api
+
+# 终端 2：前端热更新服务器
+cd frontend
+npm ci
+npm run dev
 ```
 
-仅在隔离的本机开发环境中，可显式使用无认证模式；脚本会强制后端绑定 loopback 地址：
-
-```bash
-./scripts/service.sh start --local-unauthenticated
-```
-
-后台运行与日常管理：
-
-```bash
-./scripts/service.sh start --detach
-./scripts/service.sh status
-./scripts/service.sh logs all     # Ctrl+C 退出日志跟踪，不会停止服务
-./scripts/service.sh stop
-```
-
-默认 API 地址为 `http://127.0.0.1:8000`，前端地址为 `http://127.0.0.1:4173`。运行状态、PID 和日志位于 `.runtime/`。项目级操作锁固定放在仓库 `.runtime/` 下，因此不同 `--runtime-dir` 也不能并发启动或修改同一套依赖。常用变体：
-
-```bash
-./scripts/service.sh start --backend-only
-./scripts/service.sh start --frontend-only
-./scripts/service.sh start --preview
-./scripts/service.sh start --backend-port 8001 --frontend-port 4174
-./scripts/service.sh start --detach --startup-timeout 600
-./scripts/service.sh --help
-```
-
-`--preview` 只用于本机构建验收，不是生产 Web Server。脚本固定使用单进程 API，以保护当前本地 Qdrant 和 JSON/JSONL 存储；收到 Ctrl+C、TERM 或 `stop` 后，会同时通知前端和后端退出，并在超时后清理完整子进程组。
+默认 API 地址为 `http://127.0.0.1:8000`，Vite 前端地址为 `http://127.0.0.1:4173`。根目录 `.env` 必须配置 `COGNITRADE_API_TOKEN`；前端页面中输入同一个 Bearer token 后即可连接后端。
 
 ## 一键安装与容器部署
 
-生产或长期运行使用 `scripts/deploy.sh`。它会检查并按需安装 Docker、生成权限为 `600` 的 `.env` 和 256 位 API Token、构建 Python 3.11 API 镜像与 React 静态站点、通过 Nginx 同源代理 `/api`，最后执行带认证的健康检查：
+生产或长期运行只使用 `scripts/deploy.sh`。它会检查并按需安装 Docker、生成权限为 `600` 的 `.env` 和 256 位 API Token、构建并启动 FastAPI `api` 容器与 Nginx `web` 前端容器，通过 Nginx 同源代理 `/api`，最后同时检查网页和带认证 API：
 
 ```bash
-# 默认完整流程：安装/检查环境、初始化配置、构建并后台启动
+# 默认完整流程：安装/检查环境、初始化配置、构建并后台启动 api + web
 ./scripts/deploy.sh --yes
 
 # 要求必须配置 OpenAI，且更新基础镜像
 ./scripts/deploy.sh deploy --yes --pull --require-openai
 ```
 
-默认只监听 `http://127.0.0.1:8080`，API 不直接发布宿主机端口。浏览器右上角 API 地址使用 `/api/v1`，Bearer token 可通过以下命令读取：
+前端由 Nginx `web` 容器提供，默认只监听 `http://127.0.0.1:8080`；API 容器不直接发布宿主机端口。浏览器右上角 API 地址使用 `/api/v1`，Bearer token 可通过以下命令读取：
 
 ```bash
 ./scripts/deploy.sh token
