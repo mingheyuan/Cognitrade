@@ -14,6 +14,7 @@ import type {
 
 export const API_BASE_STORAGE_KEY = 'cognitrade.api.base-url'
 export const API_TOKEN_STORAGE_KEY = 'cognitrade.api.token'
+export const API_CONNECTION_CONFIGURED_STORAGE_KEY = 'cognitrade.api.connection-configured'
 
 const DEFAULT_API_BASE = 'http://127.0.0.1:8000/api/v1'
 
@@ -44,8 +45,10 @@ export function normalizeApiBase(value: string): string {
 
 export function loadApiConnection(): ApiConnectionSettings {
   const configuredBase = import.meta.env.VITE_COGNITRADE_API_BASE_URL as string | undefined
+  const storedBase = localStorage.getItem(API_BASE_STORAGE_KEY)
+  const userConfigured = localStorage.getItem(API_CONNECTION_CONFIGURED_STORAGE_KEY) === 'true'
   return {
-    baseUrl: normalizeApiBase(localStorage.getItem(API_BASE_STORAGE_KEY) || configuredBase || DEFAULT_API_BASE),
+    baseUrl: normalizeApiBase((userConfigured && storedBase) || configuredBase || storedBase || DEFAULT_API_BASE),
     token: sessionStorage.getItem(API_TOKEN_STORAGE_KEY) || '',
   }
 }
@@ -53,6 +56,7 @@ export function loadApiConnection(): ApiConnectionSettings {
 export function saveApiConnection(settings: ApiConnectionSettings): ApiConnectionSettings {
   const normalized = { baseUrl: normalizeApiBase(settings.baseUrl), token: settings.token.trim() }
   localStorage.setItem(API_BASE_STORAGE_KEY, normalized.baseUrl)
+  localStorage.setItem(API_CONNECTION_CONFIGURED_STORAGE_KEY, 'true')
   if (normalized.token) sessionStorage.setItem(API_TOKEN_STORAGE_KEY, normalized.token)
   else sessionStorage.removeItem(API_TOKEN_STORAGE_KEY)
   return normalized
