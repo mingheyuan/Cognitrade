@@ -66,6 +66,10 @@ npm run build
 
 当前仓库没有入站 HTTP / SSE 服务，因此前端明确显示为“演示快照”，不会把示例数据伪装成实时结果。现有 Python 编排器、CLI 和运行目录的正确接入边界，以及建议的 REST/SSE 映射见 [`frontend/README.md`](./frontend/README.md)。OpenAI、Qdrant、Redis 和数据源密钥必须留在服务端，不能放入 `VITE_*` 环境变量。
 
+## 后端 API 契约
+
+完整的后端能力分析、Python/CLI 接口与 `/api/v1` REST/SSE 适配契约见 [`api-doc/api-v1.md`](./api-doc/api-v1.md)。后续新增接口时，新建完整的 `api-doc/api-v2.md` 并使用 `/api/v2`，不在 v1 中静默扩展接口。
+
 ## 环境变量
 
 先准备根目录 `.env`。最小示例见 [`.env.example`](./.env.example)。
