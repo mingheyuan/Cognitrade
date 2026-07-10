@@ -66,14 +66,58 @@ Cognitrade/
 ├─ api-doc/            # HTTP API 版本化契约
 ├─ frontend/           # React + Vite 研究工作台（当前为演示数据层）
 ├─ research_system/    # 主代码
+├─ scripts/service.sh  # 前后端统一启动与生命周期管理脚本
 ├─ tests/              # 本地回归测试
 ├─ workspace/          # 运行数据、配置、taxonomy、runs、memory、Qdrant 本地库
+├─ .runtime/           # 启动后生成的 PID、就绪状态与日志（不入库）
 ├─ requirements.txt    # Python 运行与 API 依赖
 ├─ .env
 └─ .env.example
 ```
 
 `workspace/config/` 和 `workspace/taxonomy/` 是当前运行时真正读取的配置目录，不是包内静态配置目录。
+
+## 一键启动整套服务
+
+项目根目录的 `scripts/service.sh` 统一管理 FastAPI 后端和 Vite 前端，支持依赖安装、配置预检、端口检查、就绪探测、后台运行、日志查看和优雅停止。需要 Python 3.11+，以及满足 Vite 要求的 Node.js 20.19+、22.12+ 或更新版本。
+
+先根据 [`.env.example`](./.env.example) 准备根目录 `.env`，其中 `COGNITRADE_API_TOKEN` 默认必填。然后执行：
+
+```bash
+# 只做依赖、配置和端口预检
+./scripts/service.sh check --install auto
+
+# 前台启动前后端；首次运行会创建 .venv 并安装锁定的前端依赖
+./scripts/service.sh start --install auto
+```
+
+仅在隔离的本机开发环境中，可显式使用无认证模式；脚本会强制后端绑定 loopback 地址：
+
+```bash
+./scripts/service.sh start --local-unauthenticated
+```
+
+后台运行与日常管理：
+
+```bash
+./scripts/service.sh start --detach
+./scripts/service.sh status
+./scripts/service.sh logs all     # Ctrl+C 退出日志跟踪，不会停止服务
+./scripts/service.sh stop
+```
+
+默认 API 地址为 `http://127.0.0.1:8000`，前端地址为 `http://127.0.0.1:4173`。运行状态、PID 和日志位于 `.runtime/`。项目级操作锁固定放在仓库 `.runtime/` 下，因此不同 `--runtime-dir` 也不能并发启动或修改同一套依赖。常用变体：
+
+```bash
+./scripts/service.sh start --backend-only
+./scripts/service.sh start --frontend-only
+./scripts/service.sh start --preview
+./scripts/service.sh start --backend-port 8001 --frontend-port 4174
+./scripts/service.sh start --detach --startup-timeout 600
+./scripts/service.sh --help
+```
+
+`--preview` 只用于本机构建验收，不是生产 Web Server。脚本固定使用单进程 API，以保护当前本地 Qdrant 和 JSON/JSONL 存储；收到 Ctrl+C、TERM 或 `stop` 后，会同时通知前端和后端退出，并在超时后清理完整子进程组。
 
 ## Web 研究工作台
 
@@ -87,7 +131,7 @@ Cognitrade/
 - 方法论：维度权重、后验演进、待审核提案与写回保护
 - 运行记录：运行 DAG、阶段事件、历史筛选和回放入口
 
-本地启动：
+只单独启动前端：
 
 ```bash
 cd frontend
@@ -105,6 +149,8 @@ npm run build
 仓库已提供 FastAPI 入站服务和 `/api/v1` REST/SSE 接口；前端当前仍使用演示快照，尚未切换为实时 API 数据。接入说明见 [`frontend/README.md`](./frontend/README.md)。OpenAI、Qdrant、Redis 和数据源密钥必须留在服务端，不能放入 `VITE_*` 环境变量。
 
 ## FastAPI 服务
+
+推荐使用上面的统一脚本。以下命令适合只调试后端或排查启动问题。
 
 首次运行先安装 Python 依赖：
 

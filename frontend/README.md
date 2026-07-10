@@ -4,6 +4,22 @@ Cognitrade Web 是现有 CLI-first A 股多 Agent 研究系统的前端工作台
 
 ## 本地运行
 
+在项目根目录一键启动前后端：
+
+```bash
+./scripts/service.sh start
+```
+
+该命令默认要求根目录 `.env` 已配置 `COGNITRADE_API_TOKEN`。仅在隔离的本机开发环境中，可显式启动 loopback 无认证模式：
+
+```bash
+./scripts/service.sh start --local-unauthenticated
+```
+
+如果已经配置 token，此参数不会关闭 Bearer 认证。
+
+如果只开发前端，则在当前 `frontend/` 目录执行：
+
 ```bash
 npm install
 npm run dev
