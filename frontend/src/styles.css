@@ -2380,7 +2380,7 @@ select:focus-visible {
   gap: 5px;
 }
 
-.demo-data-label {
+.live-data-label {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 5px;
@@ -4416,5 +4416,346 @@ select:focus-visible {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* Live API integration */
+.connection-badge {
+  appearance: none;
+  font: inherit;
+}
+
+.connection-badge--online {
+  color: var(--mint);
+  border-color: rgba(125, 226, 189, 0.28);
+  background: var(--mint-soft);
+}
+
+.connection-badge--connecting svg,
+.spin-icon {
+  animation: api-spin 1s linear infinite;
+}
+
+.connection-badge--auth-required,
+.connection-badge--offline {
+  color: var(--warning);
+  border-color: rgba(221, 168, 92, 0.3);
+  background: var(--warning-soft);
+}
+
+.api-dialog-backdrop {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(1, 7, 6, 0.74);
+  backdrop-filter: blur(8px);
+}
+
+.api-dialog {
+  width: min(520px, 100%);
+  padding: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: var(--surface-strong);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.5);
+}
+
+.api-dialog-heading {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.api-dialog-heading h2 {
+  margin: 2px 0 0;
+  font-size: 19px;
+}
+
+.api-dialog label {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.api-dialog input {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  color: var(--text);
+  background: var(--bg-deep);
+}
+
+.api-dialog > p {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.api-dialog-actions,
+.proposal-review-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 20px;
+}
+
+.api-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 12px 18px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(229, 110, 117, 0.28);
+  border-radius: 9px;
+  color: #f3b2b7;
+  background: rgba(229, 110, 117, 0.09);
+}
+
+.api-error-banner span {
+  flex: 1;
+}
+
+.api-error-banner button {
+  display: grid;
+  place-items: center;
+  padding: 4px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+}
+
+.global-run-indicator {
+  position: fixed;
+  z-index: 90;
+  right: 22px;
+  bottom: 22px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1px 10px;
+  min-width: 310px;
+  padding: 13px 15px;
+  border: 1px solid rgba(125, 226, 189, 0.3);
+  border-radius: 12px;
+  background: rgba(13, 25, 22, 0.96);
+  box-shadow: var(--shadow);
+}
+
+.global-run-indicator > span {
+  grid-row: 1 / 3;
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border: 2px solid var(--mint);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: api-spin 0.8s linear infinite;
+}
+
+.global-run-indicator small {
+  color: var(--muted);
+}
+
+.sidebar-empty-state {
+  padding: 16px 10px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 12px;
+}
+
+.online-dot.is-offline {
+  background: var(--warning);
+  box-shadow: 0 0 0 4px rgba(221, 168, 92, 0.1);
+}
+
+.live-data-label {
+  color: var(--mint);
+  border-color: rgba(125, 226, 189, 0.2);
+  background: var(--mint-soft);
+}
+
+.live-empty-state {
+  display: grid;
+  place-items: center;
+  gap: 7px;
+  min-height: 150px;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.live-empty-state--large {
+  min-height: 260px;
+}
+
+.live-empty-state h2,
+.live-empty-state strong {
+  margin: 0;
+  color: var(--text-soft);
+}
+
+.live-empty-state p {
+  max-width: 520px;
+  margin: 0;
+}
+
+.inline-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 70px;
+  padding: 18px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.live-report-hero {
+  grid-template-columns: minmax(0, 1.4fr) minmax(130px, 0.7fr) minmax(130px, 0.7fr);
+}
+
+.live-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.live-evidence-card {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-soft);
+  text-align: left;
+  background: var(--surface-soft);
+}
+
+.live-evidence-card:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.live-evidence-card span,
+.live-evidence-card small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.live-key-value-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.live-key-value-grid > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.live-key-value-grid span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.live-key-value-grid strong {
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.muted-copy,
+.candidate-risk {
+  color: var(--muted);
+}
+
+.candidate-risk {
+  display: block;
+  margin-top: 4px;
+}
+
+.active-run-card--empty {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 20px;
+}
+
+.active-run-card--empty h2,
+.active-run-card--empty p {
+  margin: 0;
+}
+
+.active-run-card--empty p {
+  color: var(--muted);
+}
+
+.proposal-live-list {
+  display: grid;
+  gap: 10px;
+}
+
+.proposal-card {
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.proposal-card h3,
+.proposal-card p {
+  margin: 8px 0 0;
+}
+
+.proposal-card p {
+  color: var(--muted);
+}
+
+.proposal-card-topline {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.progress-track.is-indeterminate > span,
+.progress-track.is-indeterminate > i {
+  animation: api-progress 1.3s ease-in-out infinite alternate;
+}
+
+@keyframes api-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes api-progress {
+  from { transform: translateX(-60%); }
+  to { transform: translateX(180%); }
+}
+
+@media (max-width: 900px) {
+  .live-report-hero,
+  .live-evidence-grid,
+  .live-key-value-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .global-run-indicator {
+    right: 14px;
+    bottom: 14px;
+    left: 14px;
+    min-width: 0;
   }
 }

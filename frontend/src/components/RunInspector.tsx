@@ -1,142 +1,137 @@
 import {
   Activity,
   Check,
+  ChevronRight,
   Circle,
-  CircleAlert,
   Clock3,
   Database,
   FileCheck2,
   FileText,
   Gauge,
+  RefreshCcw,
+  RotateCcw,
   ShieldCheck,
+  Square,
   Waypoints,
 } from 'lucide-react'
-import type { AgentOSArtifact, AgentOSReplay } from '../research-contracts'
+import { useCognitrade } from '../CognitradeContext'
+import {
+  asNumber,
+  asString,
+  evidenceFromReport,
+  formatDate,
+  isActiveStatus,
+  latestEvent,
+  reportFromDetail,
+  statusFromDetail,
+  statusLabel,
+  stepProgress,
+  type EvidenceItem,
+} from '../live-data'
 
 type RunInspectorProps = {
-  running: boolean
-  progress: number
   selectedEvidence: string
   onSelectEvidence: (id: string) => void
-  run: AgentOSReplay | null
 }
 
-function artifactIcon(artifact: AgentOSArtifact) {
-  if (artifact.artifact_type.includes('source') || artifact.artifact_type.includes('evidence')) return <FileCheck2 size={14} />
-  if (artifact.artifact_type.includes('analysis') || artifact.artifact_type.includes('report')) return <Gauge size={14} />
+function EvidenceIcon({ type }: { type: EvidenceItem['type'] }) {
+  if (type === 'market') return <Activity size={14} />
+  if (type === 'filing') return <FileCheck2 size={14} />
+  if (type === 'methodology') return <Gauge size={14} />
   return <FileText size={14} />
 }
 
-function contentSummary(content: Record<string, unknown>): string {
-  for (const key of ['summary', 'conclusion', 'title', 'message', 'query']) {
-    const value = content[key]
-    if (typeof value === 'string' && value.trim()) return value
-  }
-  const text = JSON.stringify(content)
-  return text.length > 110 ? `${text.slice(0, 107)}...` : text
-}
-
-function formatDuration(events: Array<Record<string, unknown>>): string {
-  const timestamps = events
-    .map((event) => new Date(String(event.created_at ?? '')).getTime())
-    .filter((value) => Number.isFinite(value))
-  if (timestamps.length < 2) return '--'
-  return `${((Math.max(...timestamps) - Math.min(...timestamps)) / 1000).toFixed(1)}s`
-}
-
-export function RunInspector({ running, progress, selectedEvidence, onSelectEvidence, run }: RunInspectorProps) {
-  const graph = run?.snapshot.graph
-  const state = run?.snapshot.status ?? (running ? 'running' : 'idle')
-  const nodes = graph?.nodes.filter((node) => node.node_kind === 'subagent') ?? []
-  const artifacts = (run?.artifacts ?? []).filter((artifact) => artifact.artifact_type !== 'user_request')
-  const completedNodes = nodes.filter((node) => run?.snapshot.node_states[node.node_id]?.status === 'completed').length
-  const displayProgress = running ? progress : nodes.length ? Math.round((completedNodes / nodes.length) * 100) : 0
+export function RunInspector({ selectedEvidence, onSelectEvidence }: RunInspectorProps) {
+  const { selectedRunId, selectedRun, submitting, cancelRun, reloadRun } = useCognitrade()
+  const report = reportFromDetail(selectedRun)
+  const evidences = evidenceFromReport(report)
+  const steps = selectedRun?.steps.steps || []
+  const events = selectedRun?.events.events || []
+  const currentEvent = latestEvent(events)
+  const status = statusFromDetail(selectedRun)
+  const running = submitting || isActiveStatus(status)
+  const progress = submitting ? 0 : status === 'completed' ? 100 : stepProgress(steps)
+  const counts = selectedRun?.metrics.counts || {}
+  const fallbackRate = asNumber(selectedRun?.metrics.rates?.fallback_rate)
 
   return (
-    <aside className="run-inspector" aria-label="Execution graph details">
+    <aside className="run-inspector" aria-label="运行详情">
       <section className="inspector-section inspector-run-card">
         <div className="section-heading-row">
-          <div>
-            <span className="section-kicker">CANONICAL RUN</span>
-            <h2>{graph?.objective ?? 'No run selected'}</h2>
-          </div>
-          <span className={`run-state-badge ${state === 'running' ? 'is-running' : 'is-complete'}`}>
-            {state === 'completed' ? <Check size={12} /> : <Activity size={12} />}
-            {state}
+          <div><span className="section-kicker">CURRENT RUN</span><h2>{selectedRunId ? statusLabel(status) : '未选择运行'}</h2></div>
+          <span className={`run-state-badge ${status === 'completed' ? 'is-complete' : 'is-running'}`}>
+            {status === 'completed' ? <Check size={12} /> : <Activity size={12} />}{selectedRunId ? statusLabel(status) : '空闲'}
           </span>
         </div>
 
-        <div className="run-progress-copy">
-          <span>{graph ? `${graph.domain_id} / revision ${graph.revision}` : 'Submit a research request to inspect its graph.'}</span>
-          <strong>{displayProgress}%</strong>
-        </div>
-        <div className="progress-track progress-track--large" role="progressbar" aria-valuenow={displayProgress} aria-valuemin={0} aria-valuemax={100}>
-          <span style={{ width: `${displayProgress}%` }} />
-        </div>
+        <div className="run-progress-copy"><span>{submitting ? '同步研究请求执行中' : asString(currentEvent?.message, '等待运行事件')}</span><strong>{progress}%</strong></div>
+        <div className={`progress-track progress-track--large ${submitting ? 'is-indeterminate' : ''}`} role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}><span style={{ width: submitting ? '30%' : `${progress}%` }} /></div>
 
         <div className="run-meta-grid">
-          <span><Clock3 size={13} /><small>Duration</small><strong>{formatDuration(run?.events ?? [])}</strong></span>
-          <span><Waypoints size={13} /><small>Leaf nodes</small><strong>{completedNodes} / {nodes.length}</strong></span>
+          <span><Clock3 size={13} /><small>最后事件</small><strong>{currentEvent?.created_at ? formatDate(currentEvent.created_at) : '—'}</strong></span>
+          <span><Waypoints size={13} /><small>执行步骤</small><strong>{steps.length}</strong></span>
+        </div>
+
+        <div className="run-actions">
+          <button disabled={!selectedRunId || !running || submitting} onClick={() => selectedRunId && void cancelRun(selectedRunId)}><Square size={13} />停止</button>
+          <button disabled={!selectedRunId} onClick={() => selectedRunId && void reloadRun(selectedRunId)}><RotateCcw size={13} />刷新</button>
         </div>
       </section>
 
       <section className="inspector-section">
-        <div className="section-heading-row section-heading-row--compact">
-          <h3>ExecutionGraph</h3>
-          <span className="count-badge">{nodes.length} nodes</span>
-        </div>
-        <ol className="agent-timeline">
-          {nodes.map((node) => {
-            const nodeState = run?.snapshot.node_states[node.node_id]?.status ?? node.status ?? 'pending'
-            const complete = nodeState === 'completed'
-            const active = nodeState === 'running'
-            return (
-              <li key={node.node_id} className={active ? 'is-active' : complete ? 'is-complete' : ''}>
-                <span className="timeline-marker">{complete ? <Check size={11} /> : active ? <Activity size={11} /> : <Circle size={8} />}</span>
-                <span className="timeline-copy"><strong>{node.capability ?? node.node_id}</strong><small>{node.executor ?? node.node_id}</small></span>
-                <time>{nodeState}</time>
-              </li>
-            )
-          })}
-          {!graph && <li><span className="timeline-marker"><Circle size={8} /></span><span className="timeline-copy"><strong>Waiting for a run</strong><small>Agent OS will populate the graph here.</small></span></li>}
-        </ol>
+        <div className="section-heading-row section-heading-row--compact"><h3>Agent 执行轨迹</h3><span className="count-badge">{steps.length}</span></div>
+        {steps.length ? (
+          <ol className="agent-timeline">
+            {steps.map((step, index) => {
+              const stepStatus = asString(step.status, 'pending')
+              const complete = ['completed', 'skipped'].includes(stepStatus)
+              const active = ['active', 'running'].includes(stepStatus)
+              return (
+                <li key={asString(step.node_id || step.action_id, `step-${index}`)} className={active ? 'is-active' : complete ? 'is-complete' : ''}>
+                  <span className="timeline-marker">{complete ? <Check size={11} /> : active ? <Activity size={11} /> : <Circle size={8} />}</span>
+                  <span className="timeline-copy"><strong>{asString(step.objective || step.node_id, `步骤 ${index + 1}`)}</strong><small>{asString(step.agent || step.phase, '未指定 Agent')}</small></span>
+                  <time>{stepStatus}</time>
+                </li>
+              )
+            })}
+          </ol>
+        ) : <div className="inline-empty-state"><Waypoints size={16} />后端未返回步骤。</div>}
       </section>
 
       <section className="inspector-section">
-        <div className="section-heading-row section-heading-row--compact">
-          <h3>Governance gates</h3>
-          <span className="quality-score">{run?.snapshot.gate_evaluations?.length ?? 0}</span>
-        </div>
+        <div className="section-heading-row section-heading-row--compact"><h3>运行质量</h3><span className="quality-score">{report.degraded ? 'DEGRADED' : 'LIVE'}</span></div>
         <div className="quality-list">
-          {(run?.snapshot.gate_evaluations ?? []).map((gate) => (
-            <div className="quality-row" key={gate.gate_id}>
-              <span>{gate.gate_id}</span>
-              <div className="progress-track"><i style={{ width: gate.verdict === 'pass' ? '100%' : '35%' }} /></div>
-              <strong>{gate.verdict}</strong>
-            </div>
+          {[
+            ['事件', Number(counts.events || events.length)],
+            ['证据', evidences.length],
+            ['子 Agent', Number(counts.subagents || 0)],
+            ['降级项', Number(counts.degradations || 0)],
+          ].map(([label, value]) => (
+            <div className="quality-row" key={label}><span>{label}</span><div className="progress-track"><i style={{ width: `${Math.min(100, Number(value) * 10)}%` }} /></div><strong>{value}</strong></div>
           ))}
-          {(!run?.snapshot.gate_evaluations || run.snapshot.gate_evaluations.length === 0) && <div className="quality-note"><ShieldCheck size={14} /><span>No delivery gates recorded yet.</span></div>}
         </div>
+        <div className="quality-note"><ShieldCheck size={14} /><span>{fallbackRate === null ? '后端未计算 fallback_rate' : `fallback rate ${(fallbackRate * 100).toFixed(1)}%`}</span></div>
       </section>
 
       <section className="inspector-section evidence-section">
-        <div className="section-heading-row section-heading-row--compact">
-          <h3>ArtifactBoard</h3>
-          <span className="count-badge">{artifacts.length}</span>
-        </div>
+        <div className="section-heading-row section-heading-row--compact"><h3>关键证据</h3><span className="count-badge">{evidences.length}</span></div>
         <div className="evidence-list">
-          {artifacts.map((artifact) => (
-            <button key={artifact.artifact_id} className={`evidence-item ${selectedEvidence === artifact.artifact_id ? 'is-selected' : ''}`} onClick={() => onSelectEvidence(artifact.artifact_id)}>
-              <span className="evidence-icon evidence-icon--news">{artifactIcon(artifact)}</span>
-              <span className="evidence-copy"><small>{artifact.artifact_type}</small><strong>{contentSummary(artifact.content)}</strong><span>{artifact.producer?.capability ?? artifact.producer?.executor ?? 'Agent OS artifact'}</span></span>
-              <span className="evidence-quality">{artifact.confidence == null ? '--' : Math.round(artifact.confidence * 100)}</span>
+          {evidences.map((evidence) => (
+            <button key={evidence.id} className={`evidence-item ${selectedEvidence === evidence.id ? 'is-selected' : ''}`} onClick={() => onSelectEvidence(evidence.id)}>
+              <span className={`evidence-icon evidence-icon--${evidence.type}`}><EvidenceIcon type={evidence.type} /></span>
+              <span className="evidence-copy"><small>{evidence.id} · {evidence.source}</small><strong>{evidence.title}</strong><span>{evidence.meta}</span></span>
+              <span className="evidence-quality">{evidence.quality || '—'}</span>
             </button>
           ))}
-          {!artifacts.length && <div className="empty-table-state">No reusable artifacts have been produced.</div>}
+          {!evidences.length && <div className="inline-empty-state"><FileText size={16} />暂无结构化证据。</div>}
         </div>
       </section>
 
-      {run && <section className="inspector-section run-technical-meta"><div><Database size={13} /><span>{run.run_id}</span></div><div><CircleAlert size={13} /><span>{run.events.length} execution events</span></div></section>}
+      <section className="inspector-section run-technical-meta">
+        <div><Database size={13} /><span>{selectedRunId || 'no run'}</span></div>
+        <div><RefreshCcw size={13} /><span>{events.length} events</span></div>
+        {currentEvent && <div><ChevronRight size={13} /><span>{asString(currentEvent.event_type, 'event')}</span></div>}
+      </section>
     </aside>
   )
 }

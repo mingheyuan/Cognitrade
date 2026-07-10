@@ -7,16 +7,19 @@ export type ResearchIntent =
   | 'review_thesis'
   | 'methodology_evolution'
 
-export type ComposerIntent = ResearchIntent | 'auto'
-
-export type ResearchStatus =
-  | 'accepted'
+export type RunStatus =
+  | 'received'
+  | 'identifying_intent'
   | 'needs_clarification'
+  | 'ready'
   | 'running'
+  | 'waiting_external'
+  | 'gated'
   | 'completed'
   | 'cancelled'
   | 'failed'
   | 'timed_out'
+  | 'unknown'
 
 export type ResearchRequest = {
   request_id?: string
@@ -25,24 +28,31 @@ export type ResearchRequest = {
   conversation_context?: Array<Record<string, unknown>>
   slots?: Record<string, unknown>
   constraints?: Record<string, unknown>
+  clarification_status?: 'not_needed' | 'pending' | 'resolved'
 }
 
 export type ProgressState = {
-  current_phase?: string
-  active_agent?: string
-  latest_event?: string
+  current_phase?: string | null
+  active_agent?: string | null
+  latest_event?: string | null
   status_message: string
   percent: number
   updated_at: string
 }
 
 export type EvidenceRecord = {
+  evidence_id?: string
+  id?: string
   source_type?: string
   source_name?: string
+  title?: string
   summary?: string
   published_at?: string
   confidence?: number
+  quality?: number
   metadata?: Record<string, unknown>
+  source_refs?: Array<Record<string, unknown>>
+  [key: string]: unknown
 }
 
 export type ResearchReport = {
@@ -51,103 +61,167 @@ export type ResearchReport = {
   risk?: string | string[]
   follow_up?: string | string[]
   degraded?: boolean
+  degraded_note?: string
   degrade_reason?: string
   scorecard?: Record<string, unknown>
   screening_scorecard?: Record<string, unknown>
   candidates?: Array<Record<string, unknown>>
   methodologies?: Array<Record<string, unknown>>
   review_summary?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export type ResearchResult = {
+  intent?: ResearchIntent
+  report?: ResearchReport
+  [key: string]: unknown
 }
 
 export type ResearchResponse = {
   request_id: string
-  run_id?: string
-  intent?: ResearchIntent
-  status: ResearchStatus
+  run_id?: string | null
+  intent?: ResearchIntent | null
+  status: RunStatus
   message: string
   clarification?: {
     question: string
     missing_fields: string[]
-  }
+  } | null
   progress: ProgressState
-  result?: {
-    protocol?: 'agent_os'
-    graph_id?: string
-    graph_revision?: number
-    artifact_ids?: string[]
-    final_artifact_ids?: string[]
-    report?: ResearchReport
-  }
+  result?: ResearchResult | null
   artifacts: Array<Record<string, unknown>>
   errors: string[]
   created_at: string
   updated_at: string
 }
 
-export type AgentOSRunSummary = {
+export type RunHistoryRecord = {
   run_id: string
-  request_id: string
-  intent: string
-  domain_id: string
-  status: string
-  graph_id: string
-  graph_revision: number
-  updated_at: string
-}
-
-export type AgentOSArtifact = {
-  artifact_id: string
-  artifact_type: string
-  schema_version: string
-  content: Record<string, unknown>
-  source_refs?: Array<Record<string, unknown>>
-  parent_artifact_ids?: string[]
-  confidence?: number | null
-  risk_flags?: string[]
-  status?: string
+  request_id?: string
+  intent?: ResearchIntent | string
+  status?: RunStatus | string
+  message?: string
+  progress?: ProgressState
+  display_summary?: string
+  child_thread_count?: number
   created_at?: string
-  producer?: {
-    executor?: string
-    capability?: string
-    domain_id?: string
-  }
+  updated_at?: string
+  [key: string]: unknown
 }
 
-export type AgentOSNode = {
-  node_id: string
-  node_kind: 'compound' | 'subagent'
-  capability?: string | null
-  executor?: string | null
+export type RunEvent = {
+  event_id?: string
+  event_type?: string
+  phase?: string
+  agent?: string
+  message?: string
+  payload?: Record<string, unknown>
+  created_at?: string
+  [key: string]: unknown
+}
+
+export type RunEventsPayload = {
+  run_id: string
+  request?: ResearchRequest
+  summary?: Record<string, unknown>
+  display_summary?: string
+  events: RunEvent[]
+  event_counts?: Record<string, number>
+  [key: string]: unknown
+}
+
+export type RunStep = {
+  step_index?: number
+  action_id?: string | null
+  node_id?: string | null
+  phase?: string | null
+  agent?: string | null
   objective?: string | null
   status?: string
-  depends_on?: string[]
-  output_artifact_ids?: string[]
+  tags?: string[]
+  supervisor_note?: string | null
+  [key: string]: unknown
 }
 
-export type AgentOSReplay = {
+export type RunStepsPayload = {
   run_id: string
-  request?: Record<string, unknown> | null
-  snapshot: {
-    run_id: string
-    status: string
-    graph: {
-      graph_id: string
-      domain_id: string
-      intent?: string | null
-      objective: string
-      revision: number
-      nodes: AgentOSNode[]
-    }
-    node_states: Record<string, { status: string; output_artifact_ids?: string[] }>
-    gate_evaluations?: Array<{ gate_id: string; verdict: string; reason: string; blocking: boolean }>
-  }
-  artifacts: AgentOSArtifact[]
-  events: Array<Record<string, unknown>>
+  request?: ResearchRequest
+  summary?: Record<string, unknown>
+  display_summary?: string
+  steps: RunStep[]
+  step_counts?: Record<string, number>
+  [key: string]: unknown
 }
 
-export interface ResearchGateway {
-  createRun(request: ResearchRequest): Promise<ResearchResponse>
-  getRun(runId: string): Promise<ResearchResponse>
-  cancelRun(runId: string): Promise<ResearchResponse>
-  subscribeToRun(runId: string, onEvent: (event: unknown) => void): () => void
+export type RunMetricsPayload = {
+  run_id: string
+  request?: ResearchRequest
+  summary?: Record<string, unknown>
+  display_summary?: string
+  counts?: Record<string, number>
+  rates?: Record<string, number | null>
+  latency_ms?: Record<string, unknown>
+  degrade_reason_counts?: Record<string, number>
+  [key: string]: unknown
+}
+
+export type RunReplayPayload = {
+  run_id: string
+  request?: ResearchRequest
+  result?: ResearchResult | null
+  summary?: Record<string, unknown>
+  display_summary?: string
+  events?: RunEvent[]
+  artifacts?: Array<Record<string, unknown>>
+  [key: string]: unknown
+}
+
+export type SystemStatus = {
+  status?: string
+  project_root?: string
+  workspace_root?: string
+  runs_root?: string
+  qdrant_mode?: string
+  qdrant_collection_name?: string
+  provider_name?: string
+  default_model?: string
+  total_runs?: number
+  status_counts?: Record<string, number>
+  recent_runs?: RunHistoryRecord[]
+  openai_configured?: boolean
+  qdrant_configured?: boolean
+  qdrant_available?: boolean
+  redis_configured?: boolean
+  redis_available?: boolean
+  providers?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export type ProposalRecord = {
+  proposal_id: string
+  status?: 'pending' | 'approved' | 'rejected' | string
+  proposal_type?: string
+  title?: string
+  summary?: string
+  reason?: string
+  created_at?: string
+  updated_at?: string
+  [key: string]: unknown
+}
+
+export type RunDetail = {
+  runId: string
+  replay: RunReplayPayload
+  events: RunEventsPayload
+  steps: RunStepsPayload
+  metrics: RunMetricsPayload
+}
+
+export type ApiErrorBody = {
+  error?: {
+    code?: string
+    message?: string
+    request_id?: string
+  }
+  detail?: string | Array<Record<string, unknown>>
 }

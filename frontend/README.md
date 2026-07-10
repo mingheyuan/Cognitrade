@@ -27,6 +27,14 @@ npm run dev
 
 默认地址为 `http://127.0.0.1:4173/`。
 
+前端默认连接 `http://127.0.0.1:8000/api/v1`。可以在页面右上角的 API 状态按钮中修改地址并输入 Bearer token；地址持久化到 `localStorage`，token 只保存在当前标签页的 `sessionStorage`。也可以只配置非敏感地址：
+
+```bash
+VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1 npm run dev
+```
+
+不要配置 `VITE_COGNITRADE_API_TOKEN`，所有 `VITE_*` 值都会进入浏览器构建产物。
+
 ```bash
 npm run lint
 npm run build
@@ -35,13 +43,13 @@ npm run preview
 
 ## 页面
 
-- `研究工作台`：三栏研究驾驶舱，包含线程、报告、运行轨迹、数据质量和证据。
-- `研究总览`：快捷研究入口、候选池、板块研究信号和系统状态。
-- `智能筛选`：核心 / 观察分层、综合分与因子拆解、搜索和筛选。
-- `方法论`：维度权重、版本演进、提案审核和写回保护规则。
+- `研究工作台`：真实研究入口、结构化报告、运行轨迹、指标和证据。
+- `研究总览`：运行统计、筛选候选、提案和系统状态。
+- `智能筛选`：读取最近一次 `stock_screen` 报告的候选、评分与风险字段。
+- `方法论`：方法论演进运行和真实提案审核；当前权重/版本接口缺失时显示空态。
 - `运行记录`：当前 DAG、事件摘要和历史 run 操作入口。
 
-所有行情、公司、评分与运行数据目前均是用于界面验收的演示快照，页面内有明确标识。
+页面不再内置行情、公司、评分或运行样本。后端未提供的字段统一显示“—”或接口缺口提示，不会用演示值补齐。
 
 ## 后端接入边界
 
@@ -65,13 +73,17 @@ GET  /api/v1/runs/{run_id}/metrics
 POST /api/v1/runs/{run_id}/cancel
 POST /api/v1/runs/{run_id}/reruns
 GET  /api/v1/system/status
+GET  /api/v1/admin/proposals
+POST /api/v1/admin/proposals/{proposal_id}/reviews
 ```
 
-完整的 37 个接口、请求/响应和错误合同见根目录 [`api-doc/api-v1.md`](../api-doc/api-v1.md)。`src/research-contracts.ts` 仍是演示 UI 的早期草案，尚未覆盖 replay、取消等真实响应；接入时应以 OpenAPI 和 `api-v1.md` 生成或校准类型。
+完整的 v1 接口、请求/响应和错误合同见根目录 [`api-doc/api-v1.md`](../api-doc/api-v1.md)。`src/research-contracts.ts` 与 `src/api-client.ts` 已覆盖当前页面实际使用的运行、回放、事件、指标、系统状态与提案合同；新增接口仍应以 OpenAPI 和版本化接口文档为准。
+
+当前 `POST /runs` 是同步请求，前端提交期间只能展示全局等待状态，完成并返回 `run_id` 后才加载详情。Agent OS 模式的 v1 回放目前只返回最终 artifact ID、没有版本化内容读取接口；实时行情、当前方法论权重、上传、派生研究和全局搜索等缺口同样见 [`api-todo/api-v2-todo.md`](../api-todo/api-v2-todo.md)。
 
 API 默认监听 `http://127.0.0.1:8000`，开发 CORS 白名单已包含 Vite 的 `http://127.0.0.1:4173` 和 `http://localhost:4173`。所有 `/api/v1` 请求都需要 Bearer token；前端接入时应通过受控登录/BFF 或运行时输入获得短期凭据，不能把服务端 token 写进 `VITE_*`。
 
-SSE 接口同样要求 Bearer token，而浏览器原生 `EventSource` 不能添加 `Authorization` header；接入实时进度时使用 fetch-SSE 或同源 BFF，不要把 token 放进 URL query。
+SSE 接口同样要求 Bearer token，而浏览器原生 `EventSource` 不能添加 `Authorization` header。当前页面通过 REST 轮询活动运行；后续切换 fetch-SSE 或同源 BFF 时，不要把 token 放进 URL query。
 
 ## 安全边界
 
