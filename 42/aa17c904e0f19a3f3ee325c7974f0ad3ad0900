@@ -1,0 +1,23 @@
+README.md
+  s_881018ac751046::t_1c22edfb7b9115 69-72
+api-doc/api-v1.md
+  s_881018ac751046::t_99fd262ff75792 1-2459
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "42aa17c904e0f19a3f3ee325c7974f0ad3ad0900",
+  "prompts": {},
+  "sessions": {
+    "s_881018ac751046": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4abe-6a8e-7210-9f05-4d0b714f3148",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
