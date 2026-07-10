@@ -1,0 +1,23 @@
+frontend/src/components/Methodology.tsx
+  s_a6a8a3a6f43b3c::t_746df3390e3172 2-4,8-10,13,15,21-65,67,70-72,74-90,93-104,107-175,178-203,206-225,228,230-236,239-263,266-273
+frontend/src/research-contracts.ts
+  s_a6a8a3a6f43b3c::t_7ad21e49c9d24d 232
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "1c84a0e64fafe49a9bd642f71854c4a45a6cc9a2",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
