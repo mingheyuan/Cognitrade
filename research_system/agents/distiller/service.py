@@ -327,7 +327,7 @@ class DistillerService(RuntimeBoundSubagentInvoker):
             if dag_result.outputs is None:
                 continue
             chunk_label = f"chunk_{index}_of_{len(chunks)}"
-            chunk_result = dag_result.outputs
+            chunk_result = dict(dag_result.outputs)
             degrade_reason = str(chunk_result.get("degrade_reason") or "").strip()
             degrade_tokens = {token.strip() for token in degrade_reason.split(";") if token.strip()}
             used_fallback = bool(chunk_result.get("degraded")) and bool(

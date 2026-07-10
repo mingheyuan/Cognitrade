@@ -18,6 +18,8 @@ __all__ = [
     "MemoryServiceMethodologyQuerySupport",
     "MemoryServiceQuerySupport",
     "MemoryService",
+    "LayeredMemoryStore",
+    "MemoryPromotionError",
     "MemoryServiceWriteSupport",
     "MethodologyMemoryWriter",
     "QDRANT_BLACKBOARD_MEMORY",
@@ -76,6 +78,8 @@ _EXPORTS = {
         "MemoryServiceQuerySupport",
     ),
     "MemoryService": ("research_system.services.memory.core.service", "MemoryService"),
+    "LayeredMemoryStore": ("research_system.services.memory.layers", "LayeredMemoryStore"),
+    "MemoryPromotionError": ("research_system.services.memory.layers", "MemoryPromotionError"),
     "MemoryServiceWriteSupport": (
         "research_system.services.memory.write.write_support",
         "MemoryServiceWriteSupport",

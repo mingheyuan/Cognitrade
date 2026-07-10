@@ -6,7 +6,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from research_system.runtime.core.artifact_board import ArtifactBoard
+from research_system.runtime.execution.core.execution_graph import ExecutionGraphScheduler
+from research_system.runtime.execution.core.execution_graph_compat import (
+    subagent_specs_to_execution_graph,
+)
 from research_system.runtime.storage.runs.subagent_dag_cache_store import SubagentDagCacheStore
+from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.schemas.subagents import SubagentExecutionRecord, SubagentInvocation
 
 
@@ -28,7 +34,8 @@ class SubagentDagNodeSpec:
 class SubagentDagNodeResult:
     node_id: str
     status: Literal["completed", "degraded", "failed", "skipped"]
-    outputs: dict[str, Any] | None = None
+    outputs: Mapping[str, Any] | None = None
+    artifact_id: str | None = None
     record: SubagentExecutionRecord | None = None
     invocation_id: str | None = None
     attempts: int = 0
@@ -41,6 +48,27 @@ class SubagentDagNodeResult:
     @property
     def succeeded(self) -> bool:
         return self.status in {"completed", "degraded"}
+
+
+class _ArtifactContentView(Mapping[str, Any]):
+    def __init__(self, board: ArtifactBoard, artifact_id: str) -> None:
+        self.board = board
+        self.artifact_id = artifact_id
+
+    def _content(self) -> dict[str, Any]:
+        artifact = self.board.get(self.artifact_id)
+        if artifact is None:
+            raise KeyError(f"missing subagent result artifact: {self.artifact_id}")
+        return artifact.content
+
+    def __getitem__(self, key: str) -> Any:
+        return self._content()[key]
+
+    def __iter__(self):
+        return iter(self._content())
+
+    def __len__(self) -> int:
+        return len(self._content())
 
 
 @dataclass
@@ -100,9 +128,18 @@ class SubagentDagExecutor:
             return {}
         node_map = self._build_node_map(nodes)
         self._validate_graph(node_map)
+        try:
+            execution_graph = subagent_specs_to_execution_graph(
+                nodes,
+                graph_id=cache_context.dag_id if cache_context is not None else "runtime-subagent-dag",
+            )
+        except ValueError as exc:
+            raise SubagentDagExecutionError(f"invalid canonical subagent graph: {exc}") from exc
+        graph_scheduler = ExecutionGraphScheduler()
         rerun_scope = self._rerun_scope(node_map, start_from_node_id)
         active_node_ids = self._active_node_ids(node_map, rerun_scope)
         results: dict[str, SubagentDagNodeResult] = {}
+        artifact_board = self._artifact_board(cache_context)
         pending = {
             node_id: spec
             for node_id, spec in node_map.items()
@@ -135,26 +172,39 @@ class SubagentDagExecutor:
                 pending=pending,
                 cache_context=cache_context,
                 rerun_scope=rerun_scope,
+                artifact_board=artifact_board,
             )
 
         while pending:
-            ready_specs: list[SubagentDagNodeSpec] = []
-            blocked_specs: list[tuple[SubagentDagNodeSpec, list[str]]] = []
-            for spec in list(pending.values()):
-                if not all(dependency_id in results for dependency_id in spec.depends_on):
-                    continue
-                blocked_by = [
-                    dependency_id
-                    for dependency_id in spec.depends_on
-                    if not results[dependency_id].succeeded
-                ]
-                if blocked_by:
-                    if spec.allow_partial_dependencies:
-                        ready_specs.append(spec)
-                        continue
-                    blocked_specs.append((spec, blocked_by))
-                    continue
-                ready_specs.append(spec)
+            completed_ids = [node_id for node_id, result in results.items() if result.succeeded]
+            failed_ids = [node_id for node_id, result in results.items() if not result.succeeded]
+            active_ids = list(pending)
+            ready_ids = {
+                node.node_id
+                for node in graph_scheduler.ready_leaf_nodes(
+                    execution_graph,
+                    completed_node_ids=completed_ids,
+                    failed_node_ids=failed_ids,
+                    active_node_ids=active_ids,
+                )
+            }
+            blocked_ids = {
+                node.node_id
+                for node in graph_scheduler.blocked_leaf_nodes(
+                    execution_graph,
+                    failed_node_ids=failed_ids,
+                    active_node_ids=active_ids,
+                )
+            }
+            ready_specs = [spec for node_id, spec in pending.items() if node_id in ready_ids]
+            blocked_specs = [
+                (
+                    spec,
+                    [dependency_id for dependency_id in spec.depends_on if dependency_id in failed_ids],
+                )
+                for node_id, spec in pending.items()
+                if node_id in blocked_ids
+            ]
 
             for spec, blocked_by in blocked_specs:
                 pending.pop(spec.node_id, None)
@@ -226,10 +276,24 @@ class SubagentDagExecutor:
                         ),
                     )
                 if outcome.error is None and outcome.outputs is not None and outcome.record is not None:
+                    artifact = self._persist_node_output(
+                        artifact_board=artifact_board,
+                        cache_context=cache_context,
+                        spec=spec,
+                        outputs=outcome.outputs,
+                        record=outcome.record,
+                        dependency_results=results,
+                        invocation=outcome.invocation,
+                    )
                     result = SubagentDagNodeResult(
                         node_id=spec.node_id,
                         status=str(outcome.record.status or "completed"),  # type: ignore[arg-type]
-                        outputs=outcome.outputs,
+                        outputs=(
+                            _ArtifactContentView(artifact_board, artifact.artifact_id)
+                            if artifact is not None and artifact_board is not None
+                            else outcome.outputs
+                        ),
+                        artifact_id=artifact.artifact_id if artifact is not None else None,
                         record=outcome.record,
                         invocation_id=outcome.invocation.invocation_id or outcome.record.invocation_id,
                         attempts=outcome.attempts,
@@ -311,6 +375,7 @@ class SubagentDagExecutor:
         pending: dict[str, SubagentDagNodeSpec],
         cache_context: SubagentDagCacheContext,
         rerun_scope: set[str],
+        artifact_board: ArtifactBoard | None,
     ) -> None:
         cache_store = SubagentDagCacheStore(run_root=cache_context.run_root)
         restored_node_ids: list[str] = []
@@ -336,6 +401,23 @@ class SubagentDagExecutor:
             restored_result = self._restored_result(spec=spec, payload=payload)
             if restored_result is None:
                 continue
+            restored_record = restored_result.record
+            if restored_record is not None and restored_result.outputs is not None:
+                artifact = self._persist_node_output(
+                    artifact_board=artifact_board,
+                    cache_context=cache_context,
+                    spec=spec,
+                    outputs=dict(restored_result.outputs),
+                    record=restored_record,
+                    dependency_results=results,
+                    invocation=None,
+                )
+                if artifact is not None and artifact_board is not None:
+                    restored_result.outputs = _ArtifactContentView(
+                        artifact_board,
+                        artifact.artifact_id,
+                    )
+                    restored_result.artifact_id = artifact.artifact_id
             results[node_id] = restored_result
             pending.pop(node_id, None)
             restored_node_ids.append(node_id)
@@ -417,7 +499,7 @@ class SubagentDagExecutor:
             request_id=cache_context.request_id,
             status=result.status,
             attempts=result.attempts,
-            outputs=result.outputs,
+            outputs=dict(result.outputs),
             record_payload=record_payload,
             metadata=dict(result.metadata or {}),
         )
@@ -456,6 +538,80 @@ class SubagentDagExecutor:
             attempts=int(payload.get("attempts") or 0),
             metadata=metadata,
             cache_hit=True,
+        )
+
+    @staticmethod
+    def _artifact_board(
+        cache_context: SubagentDagCacheContext | None,
+    ) -> ArtifactBoard | None:
+        if cache_context is None:
+            return None
+        board = ArtifactBoard(cache_context.run_root / "artifact_board.jsonl")
+        board.bind_thread(cache_context.thread_id)
+        return board
+
+    @staticmethod
+    def _persist_node_output(
+        *,
+        artifact_board: ArtifactBoard | None,
+        cache_context: SubagentDagCacheContext | None,
+        spec: SubagentDagNodeSpec,
+        outputs: dict[str, Any],
+        record: SubagentExecutionRecord,
+        dependency_results: Mapping[str, SubagentDagNodeResult],
+        invocation: SubagentInvocation | None,
+    ) -> ArtifactRecord | None:
+        if artifact_board is None or cache_context is None:
+            return None
+        parent_artifact_ids = [
+            str(dependency_results[dependency_id].artifact_id)
+            for dependency_id in spec.depends_on
+            if dependency_id in dependency_results
+            and dependency_results[dependency_id].artifact_id
+        ]
+        source_refs = [
+            {
+                "type": "subagent_invocation",
+                "invocation_id": str(
+                    (invocation.invocation_id if invocation is not None else None)
+                    or record.invocation_id
+                    or ""
+                ),
+                "subagent_type": record.subagent_type,
+            }
+        ]
+        return artifact_board.add(
+            ArtifactRecord(
+                run_id=cache_context.run_id,
+                thread_id=cache_context.thread_id,
+                request_id=cache_context.request_id,
+                artifact_type="subagent_execution_output",
+                schema_version="legacy.subagent.v1",
+                producer=ArtifactProducer(
+                    executor=record.subagent_type,
+                    capability=str(spec.metadata.get("capability") or record.subagent_type),
+                    node_id=spec.node_id,
+                    subagent_type=record.subagent_type,
+                    domain_id=str(spec.metadata.get("domain_id") or "finance_ashare"),
+                    responsibility_node_id=spec.node_id,
+                ),
+                content=dict(outputs),
+                source_refs=source_refs,
+                parent_artifact_ids=parent_artifact_ids,
+                confidence=(
+                    float(outputs["confidence"])
+                    if isinstance(outputs.get("confidence"), (int, float))
+                    else (0.5 if record.status == "degraded" else 1.0)
+                ),
+                status=("needs_review" if record.status == "degraded" else "active"),
+                metadata={
+                    "dag_id": cache_context.dag_id,
+                    "action_id": cache_context.action_id,
+                    "action_node_id": cache_context.action_node_id,
+                    "invocation_id": record.invocation_id,
+                    "attempts": 0,
+                },
+            )
         )
 
     def _rerun_scope(
@@ -531,6 +687,21 @@ class SubagentDagExecutor:
         results_snapshot: dict[str, SubagentDagNodeResult],
     ) -> _SubagentDagNodeOutcome:
         invocation = spec.build_invocation(results_snapshot)
+        invocation = invocation.model_copy(
+            update={
+                "inputs": self._materialize_artifact_views(invocation.inputs),
+                "context": self._materialize_artifact_views(invocation.context),
+                "fallback_inputs": self._materialize_artifact_views(invocation.fallback_inputs),
+                "fallback_context": self._materialize_artifact_views(invocation.fallback_context),
+                "error_fallback_inputs": self._materialize_artifact_views(
+                    invocation.error_fallback_inputs
+                ),
+                "error_fallback_context": self._materialize_artifact_views(
+                    invocation.error_fallback_context
+                ),
+            },
+            deep=False,
+        )
         retry_errors: list[str] = []
         attempts = max(int(spec.max_attempts or 1), 1)
         for attempt in range(1, attempts + 1):
@@ -555,6 +726,19 @@ class SubagentDagExecutor:
                     )
                 retry_errors.append(f"{exc.__class__.__name__}: {exc}")
         raise AssertionError("unreachable")
+
+    @classmethod
+    def _materialize_artifact_views(cls, value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {
+                str(key): cls._materialize_artifact_views(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [cls._materialize_artifact_views(item) for item in value]
+        if isinstance(value, tuple):
+            return [cls._materialize_artifact_views(item) for item in value]
+        return value
 
     def _build_node_map(self, nodes: list[SubagentDagNodeSpec]) -> dict[str, SubagentDagNodeSpec]:
         node_map: dict[str, SubagentDagNodeSpec] = {}

@@ -9,6 +9,7 @@ from research_system.agents._subagent_dag import (
     SubagentDagExecutor,
     SubagentDagNodeSpec,
 )
+from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.schemas.subagents import SubagentExecutionRecord, SubagentInvocation
 
 
@@ -189,7 +190,7 @@ class SubagentDagExecutorTests(unittest.TestCase):
                     ),
                 ),
             ]
-            executor.execute(
+            first_results = executor.execute(
                 nodes,
                 cache_context=SubagentDagCacheContext(
                     dag_id="retrieve:phase_one",
@@ -201,6 +202,14 @@ class SubagentDagExecutorTests(unittest.TestCase):
                 ),
             )
             self.assertEqual(call_order, ["index_inputs", "decide_outputs"])
+            self.assertTrue(first_results["index"].artifact_id)
+            self.assertEqual(first_results["decide"].outputs["value"], "decide_outputs")
+            artifacts = ArtifactBoard(first_run_root / "artifact_board.jsonl").list_artifacts(
+                thread_id="thread-1",
+                artifact_type="subagent_execution_output",
+            )
+            self.assertEqual(len(artifacts), 2)
+            self.assertEqual(artifacts[1].parent_artifact_ids, [artifacts[0].artifact_id])
 
             call_order.clear()
             results = executor.execute(

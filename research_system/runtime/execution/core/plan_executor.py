@@ -5,11 +5,28 @@ from typing import Any
 
 from research_system.agents._subagent_control_escalation import SubagentControlEscalationError
 from research_system.runtime.execution.core.dag_scheduler import ActionDagScheduler
+from research_system.runtime.execution.core.execution_graph import apply_execution_graph_patch
+from research_system.runtime.execution.core.execution_graph_compat import (
+    action_plan_patch_to_execution_graph_patch,
+    action_plan_to_execution_graph,
+    action_spec_to_execution_node,
+    execution_graph_to_action_plan,
+)
+from research_system.runtime.execution.core.execution_graph_store import (
+    persist_execution_graph,
+)
+from research_system.runtime.execution.core.graph_runner import ExecutionGraphRunner
+from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.orchestration.orchestrator_context import RuntimeContext
 from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.runtime.storage.runs.action_cache_store import ActionCacheStore
-from research_system.runtime.supervision.action_plan_patch import apply_action_plan_patch
 from research_system.schemas.runtime import BlackboardEntry
+from research_system.schemas.artifacts import ArtifactDraft
+from research_system.schemas.execution_graph import (
+    ExecutionGraph,
+    ExecutionGraphPatch,
+    ExecutionGraphPatchOperation,
+)
 from research_system.schemas.planning import ActionPlan, ActionPlanPatch, ActionSpec
 from research_system.schemas.protocol import RequestEnvelope
 
@@ -20,6 +37,11 @@ class OrchestratorPlanExecutor:
         self.dag_scheduler = ActionDagScheduler()
         runtime_orchestration = getattr(host, "runtime_orchestration", None)
         runtime_control = getattr(host, "runtime_control", None)
+        if runtime_control is None and getattr(host, "supervisor", None) is None:
+            self.runtime_control_plane = None
+            self.runtime_orchestration = None
+            self.runtime_control = None
+            return
         if runtime_control is None:
             from research_system.runtime.execution.core.runtime_control_plane_controller import (
                 OrchestratorRuntimeControlPlaneController,
@@ -62,8 +84,14 @@ class OrchestratorPlanExecutor:
         *,
         context: RuntimeContext,
         request: RequestEnvelope,
-        plan: ActionPlan,
+        plan: ActionPlan | ExecutionGraph,
     ) -> None:
+        if isinstance(plan, ExecutionGraph):
+            context.execution_graph = plan.model_copy(deep=True)
+            if self._is_canonical_agent_os_graph(plan):
+                self._execute_canonical_graph(context=context, request=request, graph=plan)
+                return
+            plan = execution_graph_to_action_plan(plan)
         validation = self.dag_scheduler.validate(plan)
         if not validation.valid:
             raise self.host.orchestrator_error_cls(
@@ -228,6 +256,12 @@ class OrchestratorPlanExecutor:
                     skipped_node_ids=skipped_node_ids[:],
                     pending_actions_after_current=pending_actions,
                 )
+                self._update_execution_graph_node(
+                    context=context,
+                    plan=plan,
+                    action=current_action,
+                    outcome=outcome,
+                )
                 if outcome["status"] == "completed":
                     completed_node_ids.append(current_action.node_id)
                 elif outcome["status"] == "skipped":
@@ -238,6 +272,66 @@ class OrchestratorPlanExecutor:
                     failed_node_ids.append(current_action.node_id)
                     if current_action.failure_mode != "isolate":
                         raise outcome["error"]
+
+    @staticmethod
+    def _is_canonical_agent_os_graph(graph: ExecutionGraph) -> bool:
+        return (
+            graph.metadata.get("planner") == "capability_contract"
+            and any(node.node_kind == "compound" for node in graph.nodes)
+        )
+
+    def _execute_canonical_graph(
+        self,
+        *,
+        context: RuntimeContext,
+        request: RequestEnvelope,
+        graph: ExecutionGraph,
+    ) -> None:
+        disable_projection = getattr(context.blackboard, "disable_legacy_projection", None)
+        if callable(disable_projection):
+            disable_projection()
+        registry = DomainPackRegistry.load(self.host.settings.domain_packs_root)
+        runner = ExecutionGraphRunner(
+            registry=registry,
+            run_root=context.paths.root,
+        )
+        input_payload = dict(request.slots.get("user_request") or {})
+        input_payload.setdefault("query", request.user_query)
+        input_payload.setdefault("symbols", list(request.slots.get("symbols") or []))
+        result = runner.run(
+            graph=graph,
+            run_id=context.run_id,
+            thread_id=context.state.thread_id or context.run_id,
+            request_id=request.request_id,
+            seed_artifacts=[
+                ArtifactDraft(
+                    artifact_type="user_request",
+                    content=input_payload,
+                    source_refs=[{"type": "request", "id": request.request_id}],
+                )
+            ],
+        )
+        context.execution_graph = result.snapshot.graph
+        context.state.completed_nodes = [
+            node_id
+            for node_id, state in result.snapshot.node_states.items()
+            if state.status == "completed"
+        ]
+        context.state.pending_nodes = [
+            node_id
+            for node_id, state in result.snapshot.node_states.items()
+            if state.status in {"pending", "waiting", "running"}
+        ]
+        write_json(
+            context.paths.result,
+            {
+                "protocol": "agent_os",
+                "status": result.snapshot.status,
+                "artifact_ids": result.artifact_ids,
+                "final_artifact_ids": result.final_artifact_ids,
+                "graph_revision": result.snapshot.graph.revision,
+            },
+        )
 
     def _run_action_with_retries(
         self,
@@ -256,6 +350,7 @@ class OrchestratorPlanExecutor:
             before_entries = context.blackboard.list_entries(thread_id=context.thread.thread_id)
             before_entry_ids = {entry.entry_id for entry in before_entries}
             try:
+                context.blackboard.bind_node(action.node_id)
                 self.host._run_action(
                     context=context,
                     request=request,
@@ -307,6 +402,8 @@ class OrchestratorPlanExecutor:
                     )
                     return {"status": "skipped", "error": exc, "attempt": attempt, "duration_ms": duration_ms}
                 raise
+            finally:
+                context.blackboard.bind_node(None)
             duration_ms = int((perf_counter() - started) * 1000)
             self._save_action_cache_snapshot(
                 context=context,
@@ -324,6 +421,46 @@ class OrchestratorPlanExecutor:
             )
             return {"status": "completed", "attempt": attempt, "duration_ms": duration_ms}
         raise self.host.orchestrator_error_cls(f"unreachable_action_retry_state:{action.node_id}")
+
+    def _update_execution_graph_node(
+        self,
+        *,
+        context: RuntimeContext,
+        plan: ActionPlan,
+        action: ActionSpec,
+        outcome: dict[str, Any],
+    ) -> None:
+        graph = context.execution_graph or action_plan_to_execution_graph(plan)
+        node = next((item for item in graph.nodes if item.node_id == action.node_id), None)
+        if node is None:
+            return
+        status = str(outcome.get("status") or "failed")
+        if status == "replanned":
+            return
+        node.status = status if status in {"completed", "skipped", "failed"} else "failed"
+        node.attempt_count = int(outcome.get("attempt") or node.attempt_count or 0)
+        node_map = {item.node_id: item for item in graph.nodes}
+        node.input_artifact_ids = list(
+            dict.fromkeys(
+                artifact_id
+                for dependency_id in node.depends_on
+                if dependency_id in node_map
+                for artifact_id in node_map[dependency_id].output_artifact_ids
+            )
+        )
+        node.output_artifact_ids = [
+            artifact.artifact_id
+            for artifact in context.artifact_board.list_artifacts(
+                run_id=context.run_id,
+                node_id=action.node_id,
+                status="active",
+            )
+        ]
+        persist_execution_graph(
+            context=context,
+            graph=graph,
+            compatibility_plan=plan,
+        )
 
     def _emit_supervisor_decision(
         self,
@@ -650,8 +787,28 @@ class OrchestratorPlanExecutor:
         if action.node_id in [existing.node_id for existing in pending_actions]:
             return
         if action.node_id not in [existing.node_id for existing in plan.actions]:
-            plan.actions.append(action)
-            write_json(context.paths.task_plan, plan.model_dump(mode="json"))
+            current_graph = context.execution_graph or action_plan_to_execution_graph(plan)
+            patch = ExecutionGraphPatch(
+                base_revision=current_graph.revision,
+                operations=[
+                    ExecutionGraphPatchOperation(
+                        op_type="insert_node",
+                        node=action_spec_to_execution_node(action),
+                        reason="supervisor_dynamic_action",
+                    )
+                ],
+                notes=[f"Dynamically inserted {action.node_id}."],
+                policy_source="rule",
+            )
+            updated_graph = apply_execution_graph_patch(current_graph, patch)
+            updated_plan = execution_graph_to_action_plan(updated_graph)
+            self._replace_plan(plan=plan, replacement_plan=updated_plan)
+            context.action_plan_patches.append(patch.model_dump(mode="json"))
+            persist_execution_graph(
+                context=context,
+                graph=updated_graph,
+                compatibility_plan=plan,
+            )
         pending_actions.append(action)
         self._emit_dynamic_action_inserted(
             context=context,
@@ -669,13 +826,20 @@ class OrchestratorPlanExecutor:
         pending_actions: list[ActionSpec],
         plan_patch: ActionPlanPatch,
     ) -> list[dict[str, Any]]:
-        updated_plan = apply_action_plan_patch(plan, plan_patch)
+        current_graph = context.execution_graph or action_plan_to_execution_graph(plan)
+        graph_patch = action_plan_patch_to_execution_graph_patch(
+            plan_patch,
+            base_revision=current_graph.revision,
+        )
+        updated_graph = apply_execution_graph_patch(current_graph, graph_patch)
+        updated_plan = execution_graph_to_action_plan(updated_graph)
         inserted_node_ids = {
             operation.action.node_id
             for operation in plan_patch.operations
             if operation.op_type == "insert_action" and operation.action is not None
         }
-        patch_record = plan_patch.model_dump(mode="json")
+        patch_record = graph_patch.model_dump(mode="json")
+        patch_record["compatibility_action_patch"] = plan_patch.model_dump(mode="json")
         patch_record.setdefault("plan_id", plan.plan_id)
         patch_record.setdefault("intent", plan.intent)
         patch_record.setdefault("thread_id", context.thread.thread_id)
@@ -690,7 +854,11 @@ class OrchestratorPlanExecutor:
             for action in plan.actions
             if action.node_id in pending_node_ids or action.node_id in inserted_node_ids
         ]
-        write_json(context.paths.task_plan, plan.model_dump(mode="json"))
+        persist_execution_graph(
+            context=context,
+            graph=updated_graph,
+            compatibility_plan=plan,
+        )
         self.host._emit_event(
             context,
             request_id=request.request_id,
@@ -754,7 +922,12 @@ class OrchestratorPlanExecutor:
             if action.node_id not in set(completed_node_ids)
             and action.node_id not in set(skipped_node_ids)
         ]
-        write_json(context.paths.task_plan, plan.model_dump(mode="json"))
+        replanned_graph = context.execution_graph or action_plan_to_execution_graph(replanned_plan)
+        persist_execution_graph(
+            context=context,
+            graph=replanned_graph,
+            compatibility_plan=plan,
+        )
         context.dynamic_trace.append(
             {
                 "event": "action_plan_replanned",

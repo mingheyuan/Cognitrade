@@ -151,6 +151,14 @@ class TaskRouterIdentifySupport:
         return self._clarify_fallback_decision()
 
     def _explicit_intent_decision(self, request: RequestEnvelope) -> RoutingDecision | None:
+        explicit_intent = str(request.intent or "").strip()
+        if explicit_intent.startswith("domain:"):
+            return RoutingDecision(
+                intent=explicit_intent,
+                missing_fields=[],
+                clarification=None,
+                trace={"source": "explicit_domain_pack", "intent": explicit_intent},
+            )
         if request.intent not in RESEARCH_INTENTS:
             return None
         return RoutingDecision(

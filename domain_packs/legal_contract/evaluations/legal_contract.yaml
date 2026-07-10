@@ -1,0 +1,3 @@
+evaluation_id: legal.contract.smoke.v1
+required_artifact_type: legal_review_report
+required_gate_id: legal.citation_required

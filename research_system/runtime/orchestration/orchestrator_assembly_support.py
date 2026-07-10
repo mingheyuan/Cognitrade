@@ -1,15 +1,9 @@
 from __future__ import annotations
 
-from research_system.runtime.execution.core.action_runner import OrchestratorActionRunner
-from research_system.runtime.execution.core.runtime_control_plane_controller import (
-    OrchestratorRuntimeControlPlaneController,
-)
-from research_system.runtime.execution.core.runtime_orchestration_controller import (
-    OrchestratorRuntimeOrchestrationController,
-)
+from typing import TYPE_CHECKING
+
 from research_system.runtime.orchestration.orchestrator_admin import OrchestratorAdminService
 from research_system.runtime.orchestration.orchestrator_compat_support import OrchestratorCompatSupport
-from research_system.runtime.execution.core.plan_executor import OrchestratorPlanExecutor
 from research_system.runtime.execution.core.support import OrchestratorExecutionSupport
 from research_system.runtime.orchestration.orchestrator_run_coordinator import OrchestratorRunCoordinator
 from research_system.runtime.orchestration.orchestrator_research_forwarding_support import (
@@ -22,7 +16,17 @@ from research_system.runtime.orchestration.orchestrator_runtime_io_support impor
 from research_system.runtime.orchestration.orchestrator_subagent_bridge import OrchestratorSubagentBridge
 from research_system.runtime.storage.runs.retention import RunRetentionService
 from research_system.runtime.storage.runs.run_store import RunStore
-from research_system.schemas.planning import ActionPlan
+
+if TYPE_CHECKING:
+    from research_system.runtime.execution.core.action_runner import OrchestratorActionRunner
+    from research_system.runtime.execution.core.plan_executor import OrchestratorPlanExecutor
+    from research_system.runtime.execution.core.runtime_control_plane_controller import (
+        OrchestratorRuntimeControlPlaneController,
+    )
+    from research_system.runtime.execution.core.runtime_orchestration_controller import (
+        OrchestratorRuntimeOrchestrationController,
+    )
+    from research_system.schemas.planning import ActionPlan
 
 
 class OrchestratorAssemblySupport:
@@ -94,6 +98,8 @@ class OrchestratorAssemblySupport:
         return support
 
     def build_action_runner(self) -> OrchestratorActionRunner:
+        from research_system.runtime.execution.core.action_runner import OrchestratorActionRunner
+
         return OrchestratorActionRunner(self.host, self.execution_support())
 
     def action_runner(self) -> OrchestratorActionRunner:
@@ -104,6 +110,10 @@ class OrchestratorAssemblySupport:
         return runner
 
     def build_runtime_control(self) -> OrchestratorRuntimeControlPlaneController:
+        from research_system.runtime.execution.core.runtime_control_plane_controller import (
+            OrchestratorRuntimeControlPlaneController,
+        )
+
         return OrchestratorRuntimeControlPlaneController(
             self.host,
             supervisor=self.host.supervisor,
@@ -117,6 +127,10 @@ class OrchestratorAssemblySupport:
         return controller
 
     def build_runtime_orchestration(self) -> OrchestratorRuntimeOrchestrationController:
+        from research_system.runtime.execution.core.runtime_orchestration_controller import (
+            OrchestratorRuntimeOrchestrationController,
+        )
+
         return OrchestratorRuntimeOrchestrationController(
             control_plane=self.runtime_control(),
         )
@@ -129,6 +143,8 @@ class OrchestratorAssemblySupport:
         return controller
 
     def build_plan_executor(self) -> OrchestratorPlanExecutor:
+        from research_system.runtime.execution.core.plan_executor import OrchestratorPlanExecutor
+
         return OrchestratorPlanExecutor(self.host)
 
     def plan_executor(self) -> OrchestratorPlanExecutor:
@@ -190,4 +206,6 @@ class OrchestratorAssemblySupport:
 
     @staticmethod
     def plan_from_payload(payload: dict) -> ActionPlan:
+        from research_system.schemas.planning import ActionPlan
+
         return ActionPlan.model_validate(payload)

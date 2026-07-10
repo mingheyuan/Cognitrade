@@ -3,6 +3,18 @@ from __future__ import annotations
 from typing import Any
 
 from research_system.runtime.execution.core.dag_scheduler import ActionDagScheduler
+from research_system.runtime.execution.core.execution_graph import (
+    ExecutionGraphScheduler,
+    apply_execution_graph_patch,
+)
+from research_system.runtime.execution.core.execution_graph_compat import (
+    execution_graph_to_action_plan,
+)
+from research_system.schemas.execution_graph import (
+    ExecutionGraph,
+    ExecutionGraphPatch,
+    ExecutionGraphPatchOperation,
+)
 from research_system.runtime.orchestration.orchestrator_run_startup_support import (
     OrchestratorRunStartupSupport,
 )
@@ -18,6 +30,7 @@ class OrchestratorRunCoordinator:
         self.startup_support = OrchestratorRunStartupSupport(host)
         self.terminal_support = OrchestratorRunTerminalSupport(host)
         self.dag_scheduler = ActionDagScheduler()
+        self.execution_graph_scheduler = ExecutionGraphScheduler()
 
     def run(self, request: RequestEnvelope) -> ResponseEnvelope:
         run_id, paths, context = self.startup_support.create_preflight_context(request=request)
@@ -145,10 +158,15 @@ class OrchestratorRunCoordinator:
         rerun_subagent_dag_id: str | None = None,
         rerun_subagent_from_node: str | None = None,
     ) -> ResponseEnvelope:
-        source_paths, request, plan, source_thread_payload = self._load_rerun_source(source_run_id)
-        if not any(action.node_id == from_node for action in plan.actions):
+        source_paths, request, source_graph, plan, source_thread_payload = self._load_rerun_source(
+            source_run_id
+        )
+        if not any(node.node_id == from_node for node in source_graph.nodes):
             raise self.host.orchestrator_error_cls(f"unknown_rerun_node:{from_node}")
-        rerun_nodes = {from_node, *self.dag_scheduler.descendants(plan, from_node)}
+        rerun_nodes = {
+            from_node,
+            *self.execution_graph_scheduler.dependency_descendants(source_graph, from_node),
+        }
         completed_nodes = [
             action.node_id
             for action in plan.actions
@@ -164,6 +182,22 @@ class OrchestratorRunCoordinator:
             context.rerun_subagent_dag_id = rerun_subagent_dag_id
             context.rerun_subagent_from_node_id = rerun_subagent_from_node
         context.state.completed_nodes = completed_nodes
+        rerun_graph = apply_execution_graph_patch(
+            source_graph,
+            ExecutionGraphPatch(
+                base_revision=source_graph.revision,
+                operations=[
+                    ExecutionGraphPatchOperation(
+                        op_type="rerun_from",
+                        target_node_id=from_node,
+                        reason=f"partial_rerun_from:{source_run_id}",
+                    )
+                ],
+                notes=[f"Partial rerun from {from_node} using source run {source_run_id}."],
+                policy_source="explicit",
+            ),
+        )
+        context.execution_graph = rerun_graph
         self.host._active_runtime_context = context
         self.host._attach_subagent_observers()
 
@@ -177,6 +211,7 @@ class OrchestratorRunCoordinator:
                 rerun_from_node=from_node,
                 rerun_subagent_dag_id=rerun_subagent_dag_id,
                 rerun_subagent_from_node=rerun_subagent_from_node,
+                execution_graph=rerun_graph,
             )
             self.host._update_state(
                 context,
@@ -202,7 +237,11 @@ class OrchestratorRunCoordinator:
                     intent=plan.intent,
                 )
             try:
-                self.host._execute_plan(context=context, request=request, plan=plan)
+                self.host._execute_plan(
+                    context=context,
+                    request=request,
+                    plan=rerun_graph,
+                )
             finally:
                 if callable(clear_runtime):
                     clear_runtime()
@@ -241,15 +280,25 @@ class OrchestratorRunCoordinator:
     def _load_rerun_source(
         self,
         source_run_id: str,
-    ) -> tuple[Any, RequestEnvelope, Any, dict[str, Any]]:
+    ) -> tuple[Any, RequestEnvelope, ExecutionGraph, Any, dict[str, Any]]:
         source_paths = self.host.run_store.load_run_paths(source_run_id)
         request_payload = self.host._load_json_payload(source_paths.request)
         if not isinstance(request_payload, dict):
             raise self.host.orchestrator_error_cls(f"missing_request_payload:{source_run_id}")
-        task_plan_payload = self.host._load_json_payload(source_paths.task_plan)
-        if not isinstance(task_plan_payload, dict):
-            raise self.host.orchestrator_error_cls(f"missing_task_plan_payload:{source_run_id}")
+        graph_payload = self.host._load_json_payload(source_paths.execution_graph)
+        if isinstance(graph_payload, dict):
+            graph = ExecutionGraph.model_validate(graph_payload)
+            plan = execution_graph_to_action_plan(graph)
+        else:
+            task_plan_payload = self.host._load_json_payload(source_paths.task_plan)
+            if not isinstance(task_plan_payload, dict):
+                raise self.host.orchestrator_error_cls(f"missing_task_plan_payload:{source_run_id}")
+            plan = self.host._assembly().plan_from_payload(task_plan_payload)
+            from research_system.runtime.execution.core.execution_graph_compat import (
+                action_plan_to_execution_graph,
+            )
+
+            graph = action_plan_to_execution_graph(plan)
         source_thread_payload = self.host._load_json_payload(source_paths.thread_state) or {}
         request = RequestEnvelope.model_validate(request_payload)
-        plan = self.host._assembly().plan_from_payload(task_plan_payload)
-        return source_paths, request, plan, source_thread_payload
+        return source_paths, request, graph, plan, source_thread_payload

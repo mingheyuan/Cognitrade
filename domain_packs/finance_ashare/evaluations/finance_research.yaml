@@ -1,0 +1,3 @@
+evaluation_id: finance.research.smoke.v1
+required_artifact_type: research_report
+required_gate_id: finance.sources_required

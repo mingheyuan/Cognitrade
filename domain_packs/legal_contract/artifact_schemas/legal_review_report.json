@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["scope", "findings", "obligations", "recommendations"],
+  "properties": {
+    "scope": {"type": "string"},
+    "findings": {"type": "array"},
+    "obligations": {"type": "array"},
+    "recommendations": {"type": "array"}
+  }
+}

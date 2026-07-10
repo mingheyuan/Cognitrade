@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from research_system.runtime.local_runtime import bind_local_runtime
+from research_system.runtime.domain_packs.registry import DomainPackRegistry
+from research_system.runtime.execution.core.execution_graph_compat import action_plan_to_execution_graph
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.planning.action_factory import PlannerActionFactory
 from research_system.runtime.planning.context_hints import PlannerContextHints
@@ -11,7 +13,10 @@ from research_system.runtime.planning.entry_decision_support import PlannerEntry
 from research_system.runtime.planning.static_plan_support import PlannerStaticPlanSupport
 from research_system.runtime.providers.provider_registry import OpenAIProvider
 from research_system.runtime.supervision.blackboard_view import SupervisorBlackboardView
+from research_system.runtime.planning.capability_planner import CapabilityPlanner
+from research_system.schemas.domain_pack import CapabilityPlanningRequest
 from research_system.schemas.planning import ActionPlan, ActionPlanPatch, ActionSpec
+from research_system.schemas.execution_graph import ExecutionGraph
 from research_system.schemas.protocol import RequestEnvelope
 
 
@@ -25,6 +30,14 @@ class RuntimePlanner:
         self.dynamic_support = PlannerDynamicPlanSupport(self)
         self.static_support = PlannerStaticPlanSupport(self)
         self.blackboard_view = SupervisorBlackboardView()
+        self.domain_pack_registry = DomainPackRegistry.load(
+            settings.domain_packs_root
+        ) if settings is not None else None
+        self.capability_planner = (
+            CapabilityPlanner(self.domain_pack_registry)
+            if self.domain_pack_registry is not None
+            else None
+        )
         self._runtime_binding: dict[str, Any] | None = None
 
     def build_initial_plan(self, *, intent: str, request: RequestEnvelope) -> ActionPlan:
@@ -59,6 +72,70 @@ class RuntimePlanner:
         if plan is not None:
             return plan
         raise ValueError(f"unsupported intent for planner: {intent}")
+
+    def build_initial_execution_graph(
+        self,
+        *,
+        intent: str,
+        request: RequestEnvelope,
+    ) -> ExecutionGraph:
+        domain_id = self._agent_os_domain_id(intent=intent, request=request)
+        if domain_id is not None:
+            if self.capability_planner is None or self.domain_pack_registry is None:
+                raise ValueError("Agent OS domain-pack planner is not configured")
+            manifest = self.domain_pack_registry.get(domain_id)
+            required = list(request.slots.get("required_artifact_types") or [])
+            if not required:
+                required = [contract.artifact_type for contract in manifest.report_contracts]
+            return self.capability_planner.build_graph(
+                CapabilityPlanningRequest(
+                    domain_id=domain_id,
+                    objective=request.user_query,
+                    available_artifact_types=list(
+                        request.slots.get("available_artifact_types") or ["user_request"]
+                    ),
+                    required_artifact_types=required,
+                    allowed_tools=list(manifest.governance.allowed_tools),
+                    allowed_permissions=list(manifest.governance.allowed_permissions),
+                    preferred_capabilities=list(
+                        request.slots.get("preferred_capabilities") or []
+                    ),
+                    token_budget=manifest.governance.token_budget,
+                    cost_budget=manifest.governance.cost_budget,
+                    metadata={
+                        "entry_protocol": "agent_os",
+                        "intent": intent,
+                        "intent_inputs": dict(request.slots),
+                    },
+                )
+            )
+        plan = self.build_initial_plan(intent=intent, request=request)
+        return action_plan_to_execution_graph(plan)
+
+    def _agent_os_domain_id(self, *, intent: str, request: RequestEnvelope) -> str | None:
+        if (
+            intent in {
+                "stock_check",
+                "stock_compare",
+                "stock_screen",
+                "sector_research",
+                "review_thesis",
+            }
+            and request.constraints.get("execution_protocol") != "legacy"
+            and self.domain_pack_registry is not None
+            and "finance_ashare" in {
+                manifest.domain_id for manifest in self.domain_pack_registry.list()
+            }
+        ):
+            return "finance_ashare"
+        configured = request.slots.get("domain_id")
+        if configured:
+            return str(configured).strip() or None
+        if str(intent).startswith("domain:"):
+            return str(intent).split(":", 1)[1].strip() or None
+        if request.constraints.get("execution_protocol") == "agent_os":
+            return "finance_ashare"
+        return None
 
     def replan_action_plan(
         self,
@@ -143,6 +220,37 @@ class RuntimePlanner:
                 "dispatch_trace": dispatch_trace,
             },
             deep=True,
+        )
+
+    def replan_execution_graph(
+        self,
+        *,
+        intent: str,
+        request: RequestEnvelope,
+        current_graph: ExecutionGraph,
+        current_plan: ActionPlan,
+        plan_patch: ActionPlanPatch,
+    ) -> ExecutionGraph:
+        replanned_plan = self.replan_action_plan(
+            intent=intent,
+            request=request,
+            current_plan=current_plan,
+            plan_patch=plan_patch,
+        )
+        replanned_graph = action_plan_to_execution_graph(replanned_plan)
+        metadata = {
+            **dict(current_graph.metadata or {}),
+            **dict(replanned_graph.metadata or {}),
+            "replanned_from_graph_id": current_graph.graph_id,
+            "replanned_from_revision": current_graph.revision,
+            "source_action_plan_patch": plan_patch.model_dump(mode="json"),
+        }
+        return ExecutionGraph.model_validate(
+            {
+                **replanned_graph.model_dump(mode="python"),
+                "revision": current_graph.revision + 1,
+                "metadata": metadata,
+            }
         )
 
     def _decide_research_entry(self, *, intent: str, request: RequestEnvelope):

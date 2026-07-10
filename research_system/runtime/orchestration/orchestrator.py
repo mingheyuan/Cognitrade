@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from research_system.runtime.execution.core.action_runner import OrchestratorActionRunner
 from research_system.runtime.orchestration.orchestrator_admin import OrchestratorAdminService
 from research_system.runtime.orchestration.orchestrator_assembly_support import (
     OrchestratorAssemblySupport,
@@ -15,13 +15,6 @@ from research_system.runtime.orchestration.orchestrator_dependencies import (
     OrchestratorDependencies,
     build_orchestrator_dependencies,
 )
-from research_system.runtime.execution.core.plan_executor import OrchestratorPlanExecutor
-from research_system.runtime.execution.core.runtime_control_plane_controller import (
-    OrchestratorRuntimeControlPlaneController,
-)
-from research_system.runtime.execution.core.runtime_orchestration_controller import (
-    OrchestratorRuntimeOrchestrationController,
-)
 from research_system.runtime.execution.core.support import OrchestratorExecutionSupport
 from research_system.runtime.orchestration.orchestrator_run_coordinator import OrchestratorRunCoordinator
 from research_system.runtime.orchestration.orchestrator_research_forwarding_support import (
@@ -33,9 +26,20 @@ from research_system.runtime.orchestration.orchestrator_runtime_io_support impor
 )
 from research_system.runtime.orchestration.orchestrator_subagent_bridge import OrchestratorSubagentBridge
 from research_system.runtime.platform.settings import Settings
-from research_system.schemas.planning import ActionPlan, ActionSpec
+from research_system.schemas.execution_graph import ExecutionGraph
 from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
 from research_system.schemas.runtime import BlackboardEntry
+
+if TYPE_CHECKING:
+    from research_system.runtime.execution.core.action_runner import OrchestratorActionRunner
+    from research_system.runtime.execution.core.plan_executor import OrchestratorPlanExecutor
+    from research_system.runtime.execution.core.runtime_control_plane_controller import (
+        OrchestratorRuntimeControlPlaneController,
+    )
+    from research_system.runtime.execution.core.runtime_orchestration_controller import (
+        OrchestratorRuntimeOrchestrationController,
+    )
+    from research_system.schemas.planning import ActionPlan, ActionSpec
 
 
 class OrchestratorError(Exception):
@@ -65,20 +69,29 @@ class ResearchOrchestrator:
         self.event_listener = event_listener
         self.dependencies = dependencies or build_orchestrator_dependencies(settings)
         self._bind_dependencies(self.dependencies)
+        self.legacy_runtime_used = self.supervisor is not None
+        self.legacy_adapter = None
         self.assembly = OrchestratorAssemblySupport(self)
         self.research_support = self._build_research_support()
         self.execution_support = self._build_execution_support()
         self.admin = self._build_admin_service()
-        self.action_runner = self._build_action_runner()
-        self.runtime_control = self._build_runtime_control()
-        self.runtime_orchestration = self._build_runtime_orchestration()
-        self.plan_executor = self._build_plan_executor()
+        if self.supervisor is None:
+            self.action_runner = None
+            self.runtime_control = None
+            self.runtime_orchestration = None
+            self.plan_executor = None
+        else:
+            self.action_runner = self._build_action_runner()
+            self.runtime_control = self._build_runtime_control()
+            self.runtime_orchestration = self._build_runtime_orchestration()
+            self.plan_executor = self._build_plan_executor()
         self.run_coordinator = self._build_run_coordinator()
         self.subagent_bridge = self._build_subagent_bridge()
         self.runtime_io = self._build_runtime_io_support()
         self.research_forwarding = self._build_research_forwarding_support()
         self.compat = self._build_compat_support()
-        self._attach_subagent_observers()
+        if self.supervisor is not None:
+            self._attach_subagent_observers()
 
     def _bind_dependencies(self, dependencies: OrchestratorDependencies) -> None:
         self.run_store = dependencies.run_store
@@ -229,7 +242,23 @@ class ResearchOrchestrator:
         return self._admin().require_skill_source_registry()
 
     def run(self, request: RequestEnvelope) -> ResponseEnvelope:
+        legacy_service_override = (
+            request.intent == "sector_research"
+            and getattr(getattr(self, "collector", None), "explicit_override", False)
+        )
+        if (
+            request.constraints.get("execution_protocol") == "legacy"
+            or legacy_service_override
+        ):
+            self.ensure_legacy_runtime()
         return self._run_coordinator().run(request)
+
+    def ensure_legacy_runtime(self) -> None:
+        if self.legacy_adapter is None:
+            from research_system.runtime.legacy_adapter import LegacyRuntimeAdapter
+
+            self.legacy_adapter = LegacyRuntimeAdapter(self)
+        self.legacy_adapter.activate()
 
     def replay(self, run_id: str) -> dict:
         return self._admin().replay(run_id)
@@ -374,7 +403,13 @@ class ResearchOrchestrator:
     def rebuild_qdrant(self) -> dict:
         return self._admin().rebuild_qdrant()
 
-    def _execute_plan(self, *, context: RuntimeContext, request: RequestEnvelope, plan: ActionPlan) -> None:
+    def _execute_plan(
+        self,
+        *,
+        context: RuntimeContext,
+        request: RequestEnvelope,
+        plan: ActionPlan | ExecutionGraph,
+    ) -> None:
         self._compat().execute_plan(context=context, request=request, plan=plan)
 
     def _run_action(
@@ -553,6 +588,28 @@ class ResearchOrchestrator:
                 intent=current_plan.intent,
             )
         try:
+            replan_execution_graph = getattr(planner, "replan_execution_graph", None)
+            if callable(replan_execution_graph):
+                current_graph = getattr(context, "execution_graph", None)
+                if current_graph is None:
+                    from research_system.runtime.execution.core.execution_graph_compat import (
+                        action_plan_to_execution_graph,
+                    )
+
+                    current_graph = action_plan_to_execution_graph(current_plan)
+                execution_graph = replan_execution_graph(
+                    intent=current_plan.intent,
+                    request=request,
+                    current_graph=current_graph,
+                    current_plan=current_plan,
+                    plan_patch=plan_patch,
+                )
+                context.execution_graph = execution_graph
+                from research_system.runtime.execution.core.execution_graph_compat import (
+                    execution_graph_to_action_plan,
+                )
+
+                return execution_graph_to_action_plan(execution_graph)
             return planner.replan_action_plan(
                 intent=current_plan.intent,
                 request=request,

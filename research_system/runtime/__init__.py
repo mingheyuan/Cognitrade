@@ -6,6 +6,7 @@ __all__ = [
     "config",
     "core",
     "diagnostics",
+    "domain_packs",
     "execution",
     "history",
     "methodology",
@@ -18,6 +19,7 @@ __all__ = [
     "storage",
     "supervision",
     "workspace",
+    "agent_os",
 ]
 
 _EXPORTS = {name: f"research_system.runtime.{name}" for name in __all__}

@@ -15,6 +15,48 @@ def build_app_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--json", action="store_true", dest="as_json")
     run_parser.add_argument("--run-id")
 
+    domain_packs_parser = subparsers.add_parser("domain-packs")
+    domain_packs_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    domain_run_parser = subparsers.add_parser("domain-run")
+    domain_run_parser.add_argument("domain_id")
+    domain_run_parser.add_argument("objective")
+    domain_run_parser.add_argument(
+        "--artifact",
+        action="append",
+        default=[],
+        metavar="ARTIFACT_TYPE=JSON_OR_@PATH",
+    )
+    domain_run_parser.add_argument("--require", action="append", default=[])
+    domain_run_parser.add_argument("--prefer-capability", action="append", default=[])
+    domain_run_parser.add_argument("--run-id")
+    domain_run_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    domain_inspect_parser = subparsers.add_parser("domain-inspect")
+    domain_inspect_parser.add_argument("run_id")
+    domain_inspect_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    domain_replay_parser = subparsers.add_parser("domain-replay")
+    domain_replay_parser.add_argument("run_id")
+    domain_replay_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    domain_resume_parser = subparsers.add_parser("domain-resume")
+    domain_resume_parser.add_argument("run_id")
+    domain_resume_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    domain_rerun_parser = subparsers.add_parser("domain-rerun")
+    domain_rerun_parser.add_argument("run_id")
+    domain_rerun_parser.add_argument("node_id")
+    domain_rerun_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    domain_pause_parser = subparsers.add_parser("domain-pause")
+    domain_pause_parser.add_argument("run_id")
+    domain_pause_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    domain_cancel_parser = subparsers.add_parser("domain-cancel")
+    domain_cancel_parser.add_argument("run_id")
+    domain_cancel_parser.add_argument("--json", action="store_true", dest="as_json")
+
     history_parser = subparsers.add_parser("history")
     history_parser.add_argument("--limit", type=int, default=20)
     history_parser.add_argument("--status")

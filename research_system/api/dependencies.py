@@ -57,6 +57,17 @@ def get_orchestrator(request: Request):
     return get_api_runtime(request).orchestrator
 
 
+def get_agent_os(request: Request):
+    agent_os = getattr(request.app.state, "agent_os", None)
+    if agent_os is None:
+        raise ApiError(
+            status_code=503,
+            code="agent_os_not_ready",
+            message="Agent OS runtime has not finished starting",
+        )
+    return agent_os
+
+
 def get_chat_service(request: Request):
     return get_api_runtime(request).chat_service
 
@@ -106,6 +117,7 @@ __all__ = [
     "ApiPrincipal",
     "ApiRuntimeState",
     "get_api_runtime",
+    "get_agent_os",
     "get_chat_service",
     "get_event_source",
     "get_mutation_lock",

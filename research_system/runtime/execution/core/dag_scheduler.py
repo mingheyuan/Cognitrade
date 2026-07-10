@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from research_system.runtime.execution.core.execution_graph import ExecutionGraphScheduler
+from research_system.runtime.execution.core.execution_graph_compat import (
+    action_frontier_to_execution_graph,
+    action_plan_to_execution_graph,
+)
 from research_system.schemas.planning import ActionPlan, ActionSpec
 
 
@@ -12,35 +17,28 @@ class DagValidationResult:
 
 
 class ActionDagScheduler:
+    def __init__(self) -> None:
+        self.execution_graph_scheduler = ExecutionGraphScheduler()
+
     def validate(self, plan: ActionPlan) -> DagValidationResult:
-        action_map = self._action_map(plan.actions)
-        errors: list[str] = []
-        for action in plan.actions:
-            for dependency in action.depends_on:
-                if dependency not in action_map:
-                    errors.append(f"missing_dependency:{action.node_id}->{dependency}")
-        if errors:
-            return DagValidationResult(valid=False, errors=errors)
-
-        visiting: set[str] = set()
-        visited: set[str] = set()
-
-        def visit(node_id: str) -> None:
-            if node_id in visited:
-                return
-            if node_id in visiting:
-                errors.append(f"cycle:{node_id}")
-                return
-            visiting.add(node_id)
-            action = action_map[node_id]
-            for dependency in action.depends_on:
-                visit(dependency)
-            visiting.remove(node_id)
-            visited.add(node_id)
-
-        for action in plan.actions:
-            visit(action.node_id)
-        return DagValidationResult(valid=not errors, errors=errors)
+        node_ids = {action.node_id for action in plan.actions}
+        missing_dependencies = [
+            f"missing_dependency:{action.node_id}->{dependency_id}"
+            for action in plan.actions
+            for dependency_id in action.depends_on
+            if dependency_id not in node_ids
+        ]
+        if missing_dependencies:
+            return DagValidationResult(valid=False, errors=missing_dependencies)
+        try:
+            graph = action_plan_to_execution_graph(plan)
+        except ValueError as exc:
+            if "dependency cycle" in str(exc):
+                first_node_id = plan.actions[0].node_id if plan.actions else "unknown"
+                return DagValidationResult(valid=False, errors=[f"cycle:{first_node_id}"])
+            return DagValidationResult(valid=False, errors=[str(exc)])
+        result = self.execution_graph_scheduler.validate(graph)
+        return DagValidationResult(valid=result.valid, errors=result.errors)
 
     def ready_actions(
         self,
@@ -49,13 +47,22 @@ class ActionDagScheduler:
         completed_node_ids: list[str],
         skipped_node_ids: list[str] | None = None,
     ) -> list[ActionSpec]:
-        completed = set(completed_node_ids)
-        skipped = set(skipped_node_ids or [])
-        ready: list[ActionSpec] = []
-        for action in pending_actions:
-            if all(dependency in completed or dependency in skipped for dependency in action.depends_on):
-                ready.append(action)
-        return ready
+        skipped = list(skipped_node_ids or [])
+        graph = action_frontier_to_execution_graph(
+            pending_actions,
+            completed_node_ids=completed_node_ids,
+            skipped_node_ids=skipped,
+        )
+        ready_ids = {
+            node.node_id
+            for node in self.execution_graph_scheduler.ready_leaf_nodes(
+                graph,
+                completed_node_ids=completed_node_ids,
+                skipped_node_ids=skipped,
+                active_node_ids=[action.node_id for action in pending_actions],
+            )
+        }
+        return [action for action in pending_actions if action.node_id in ready_ids]
 
     def dependency_blocked_actions(
         self,
@@ -63,54 +70,33 @@ class ActionDagScheduler:
         pending_actions: list[ActionSpec],
         failed_node_ids: list[str],
     ) -> list[ActionSpec]:
-        failed = set(failed_node_ids)
-        if not failed:
+        if not failed_node_ids:
             return []
-        blocked: list[ActionSpec] = []
-        for action in pending_actions:
-            if any(dependency in failed for dependency in action.depends_on):
-                blocked.append(action)
-        return blocked
+        graph = action_frontier_to_execution_graph(
+            pending_actions,
+            failed_node_ids=failed_node_ids,
+        )
+        blocked_ids = {
+            node.node_id
+            for node in self.execution_graph_scheduler.blocked_leaf_nodes(
+                graph,
+                failed_node_ids=failed_node_ids,
+                active_node_ids=[action.node_id for action in pending_actions],
+            )
+        }
+        return [action for action in pending_actions if action.node_id in blocked_ids]
 
     def fanout_depth(self, plan: ActionPlan) -> dict[str, int]:
-        action_map = self._action_map(plan.actions)
-        depth_cache: dict[str, int] = {}
-
-        def resolve(node_id: str) -> int:
-            cached = depth_cache.get(node_id)
-            if cached is not None:
-                return cached
-            action = action_map[node_id]
-            if not action.depends_on:
-                depth_cache[node_id] = 0
-                return 0
-            depth = max(resolve(dependency) for dependency in action.depends_on) + 1
-            depth_cache[node_id] = depth
-            return depth
-
-        for node_id in action_map:
-            resolve(node_id)
-        return depth_cache
+        return self.execution_graph_scheduler.fanout_depth(action_plan_to_execution_graph(plan))
 
     def descendants(self, plan: ActionPlan, node_id: str) -> set[str]:
-        action_map = self._action_map(plan.actions)
-        if node_id not in action_map:
-            raise KeyError(f"unknown_node:{node_id}")
-        children: dict[str, set[str]] = {}
-        for action in plan.actions:
-            for dependency in action.depends_on:
-                children.setdefault(dependency, set()).add(action.node_id)
-        resolved: set[str] = set()
-
-        def visit(current: str) -> None:
-            for child_id in children.get(current, set()):
-                if child_id in resolved:
-                    continue
-                resolved.add(child_id)
-                visit(child_id)
-
-        visit(node_id)
-        return resolved
+        try:
+            return self.execution_graph_scheduler.dependency_descendants(
+                action_plan_to_execution_graph(plan),
+                node_id,
+            )
+        except KeyError as exc:
+            raise KeyError(f"unknown_node:{node_id}") from exc
 
     @staticmethod
     def _action_map(actions: list[ActionSpec]) -> dict[str, ActionSpec]:

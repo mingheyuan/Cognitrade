@@ -1,0 +1,3 @@
+tool_id: financial_data_provider
+side_effect_level: read_only
+description: Provider abstraction owned by the finance pack.

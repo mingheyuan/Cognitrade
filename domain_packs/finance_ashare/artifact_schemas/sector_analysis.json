@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["sector", "theme", "findings", "related_snapshots", "risks", "source_count", "analysis_notes"],
+  "properties": {
+    "sector": {"type": ["string", "null"]},
+    "theme": {"type": ["string", "null"]},
+    "findings": {"type": "array"},
+    "related_snapshots": {"type": "array"},
+    "risks": {"type": "array"},
+    "source_count": {"type": "integer"},
+    "analysis_notes": {"type": "array"}
+  }
+}

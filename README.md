@@ -1,5 +1,41 @@
 # Cognitrade
 
+## Agent OS runtime
+
+The domain-neutral runtime uses one authoritative `ExecutionGraph`, an
+`ArtifactBoard` data plane, capability-driven planning, installable DomainPacks,
+and runner-enforced governance. The standard research workflow also persists and
+inspects this graph; `task_plan.json` remains a compatibility projection for old
+finance tooling during the final pack extraction.
+
+Installed packs:
+
+```bash
+python -m research_system.cli.app domain-packs --json
+```
+
+Run a pack by artifact contract:
+
+```bash
+python -m research_system.cli.app domain-run legal_contract "Review this contract" \
+  --artifact "contract_document=@contract.txt" --json
+```
+
+Run controls and inspection:
+
+```bash
+python -m research_system.cli.app domain-inspect <run_id> --json
+python -m research_system.cli.app domain-replay <run_id> --json
+python -m research_system.cli.app domain-pause <run_id> --json
+python -m research_system.cli.app domain-resume <run_id> --json
+python -m research_system.cli.app domain-rerun <run_id> <node_id> --json
+python -m research_system.cli.app domain-cancel <run_id> --json
+```
+
+Each pack must provide `domain.yaml` plus `ontology`, `artifact_schemas`,
+`subagents`, `tools`, `planner_policies`, `quality_gates`, `report_contracts`,
+and `evaluations`. The loader rejects incomplete packs before planning.
+
 当前目录是项目运行根目录。
 
 `Cognitrade` 是一个面向 A 股研究场景的 CLI-first 多 Agent 研究系统。当前代码主线已经从早期最小闭环推进到：

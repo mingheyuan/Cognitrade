@@ -1,0 +1,2 @@
+prefer_evidence_backed_paths: true
+rank_by: [cost, latency, reliability]

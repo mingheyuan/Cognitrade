@@ -66,6 +66,12 @@ from research_system.runtime.orchestration.subagent_discovery_candidate_sources 
     SubagentDiscoveryCandidateSupport,
 )
 from research_system.runtime.platform.skill_runtime import SkillRuntime
+from research_system.runtime.execution.core.execution_graph import apply_execution_graph_patch
+from research_system.runtime.execution.core.execution_graph_compat import (
+    execution_graph_to_subagent_plan,
+    subagent_graph_patch_to_execution_graph_patch,
+    subagent_plan_to_execution_graph,
+)
 from research_system.schemas.subagents import (
     SubagentCatalogEntry,
     SubagentCapabilityGap,
@@ -75,7 +81,6 @@ from research_system.schemas.subagents import (
     SubagentPlanNode,
     SubagentToolDiscoveryRequest,
 )
-from research_system.subagents.planning import apply_subagent_graph_patch
 from research_system.subagents.registry import SubagentRegistry
 
 
@@ -339,7 +344,14 @@ class SubagentPhaseController:
     ) -> tuple[SubagentPlan, list[dict[str, Any]]]:
         if patch is None:
             return plan, []
-        updated_plan = apply_subagent_graph_patch(plan, patch)
+        graph = subagent_plan_to_execution_graph(plan)
+        graph_patch = subagent_graph_patch_to_execution_graph_patch(
+            patch,
+            base_revision=graph.revision,
+        )
+        updated_plan = execution_graph_to_subagent_plan(
+            apply_execution_graph_patch(graph, graph_patch)
+        )
         return updated_plan, [patch.model_dump(mode="json")]
 
     def execute_patch_cycle(

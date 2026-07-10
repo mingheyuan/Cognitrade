@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from research_system.runtime.storage.jsonl import write_json
+from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
 
 
@@ -27,12 +27,24 @@ class OrchestratorRunSuccessSupport:
             intent=intent,
             message="Evaluating run gates",
         )
-        blocked = self.gate_support.emit_gate_verdicts(
-            context=context,
-            request=request,
-            run_id=run_id,
-            intent=intent,
+        agent_os_graph = (
+            getattr(context, "execution_graph", None) is not None
+            and context.execution_graph.metadata.get("planner") == "capability_contract"
         )
+        if agent_os_graph:
+            snapshot = read_json(context.paths.root / "execution_snapshot.json") or {}
+            blocked = [
+                row
+                for row in snapshot.get("gate_evaluations", [])
+                if row.get("blocking") and row.get("verdict") != "pass"
+            ]
+        else:
+            blocked = self.gate_support.emit_gate_verdicts(
+                context=context,
+                request=request,
+                run_id=run_id,
+                intent=intent,
+            )
         if blocked:
             context.thread.status = "failed"
             context.turn.status = "failed"
@@ -41,7 +53,10 @@ class OrchestratorRunSuccessSupport:
             result = {
                 "intent": intent,
                 "status": "failed",
-                "gate_failures": [verdict.model_dump(mode="json") for verdict in blocked],
+                "gate_failures": [
+                    verdict.model_dump(mode="json") if hasattr(verdict, "model_dump") else verdict
+                    for verdict in blocked
+                ],
             }
             summary = {
                 "intent": intent,

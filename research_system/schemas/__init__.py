@@ -3,7 +3,13 @@ from __future__ import annotations
 from importlib import import_module
 
 __all__ = [
+    "artifacts",
     "distillation",
+    "domain_pack",
+    "execution_graph",
+    "execution_runtime",
+    "governance",
+    "memory",
     "planning",
     "proposals",
     "protocol",
@@ -19,7 +25,13 @@ __all__ = [
 ]
 
 _EXPORTS = {
+    "artifacts": "research_system.schemas.artifacts",
     "distillation": "research_system.schemas.distillation",
+    "domain_pack": "research_system.schemas.domain_pack",
+    "execution_graph": "research_system.schemas.execution_graph",
+    "execution_runtime": "research_system.schemas.execution_runtime",
+    "governance": "research_system.schemas.governance",
+    "memory": "research_system.schemas.memory",
     "planning": "research_system.schemas.planning",
     "proposals": "research_system.schemas.proposals",
     "protocol": "research_system.schemas.protocol",

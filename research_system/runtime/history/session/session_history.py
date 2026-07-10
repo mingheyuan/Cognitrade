@@ -262,7 +262,11 @@ class SessionHistory:
         request_payload = read_json(self.run_root / "request.json") or {}
         result_payload = read_json(self.run_root / "result.json") or {}
         summary_payload = read_json(self.run_root / "summary.json") or {}
-        task_plan_payload = read_json(self.run_root / "task_plan.json") or {}
+        task_plan_payload = (
+            read_json(self.run_root / "execution_graph.json")
+            or read_json(self.run_root / "task_plan.json")
+            or {}
+        )
         events = read_jsonl(self.run_root / "events.jsonl")
         return self.step_builder.build_payload(
             run_id=self.run_root.name,

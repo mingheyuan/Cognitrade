@@ -1,0 +1,2 @@
+require_clause_citations: true
+rank_by: [cost, latency, reliability]

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from research_system.cli.runtime.app import build_chat_entry_runtime, run_chat_entry as runtime_run_chat_entry
+from research_system.cli.commands.agent_os_commands import execute_agent_os_command
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 
 
@@ -41,6 +42,10 @@ def execute_app_main_command(
             ui=args.ui,
             runtime=entry_runtime,
         )
+
+    if args.command.startswith("domain-"):
+        payload = execute_agent_os_command(settings, args)
+        return print_payload_fn(payload, as_json=getattr(args, "as_json", False))
 
     payload = execute_cli_command_fn(
         settings,

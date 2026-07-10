@@ -1,0 +1,3 @@
+contract_id: finance.research_report.v1
+required_sections: [conclusion, evidence, risk, follow_up]
+required_source_refs: true

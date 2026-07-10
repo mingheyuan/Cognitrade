@@ -1,0 +1,3 @@
+contract_id: legal.contract_review.v1
+required_sections: [scope, findings, obligations, recommendations]
+required_source_refs: true

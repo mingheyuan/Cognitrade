@@ -1,17 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Callable
 
 from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
-from research_system.agents.collector.service import CollectorService
-from research_system.agents.critic.service import CriticService
-from research_system.agents.distiller.service import DistillerService
-from research_system.agents.reporter.service import ReporterService
-from research_system.agents.reviewer.service import ReviewerService
-from research_system.agents.retriever.service import RetrieverService
-from research_system.agents.screener.service import ScreenerService
-from research_system.agents.screen_reviewer.service import ScreenReviewerService
 from research_system.runtime.core.gates import GateEvaluator
+from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.orchestration.subagent_discovery_store import SubagentDiscoveryStore
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.platform.skill_runtime import SkillRuntime
@@ -20,7 +14,6 @@ from research_system.runtime.proposals.management.proposal_store import Proposal
 from research_system.runtime.providers.provider_registry import OpenAIProvider, ProviderRegistry
 from research_system.runtime.storage.runs.retention import RunRetentionService
 from research_system.runtime.storage.runs.run_store import RunStore
-from research_system.runtime.supervision.supervisor import RuntimeSupervisor
 from research_system.services.memory import MemoryService
 from research_system.services.methodologies.evolver.methodology_evolver import MethodologyEvolver
 from research_system.services.methodologies.policy.methodology_manifest_service import MethodologyManifestService
@@ -34,6 +27,45 @@ from research_system.services.methodologies.policy.retrieval_policy_service impo
 from research_system.services.routing.router.task_router import TaskRouter
 
 
+class LazyLegacyService:
+    """Construct a legacy agent service only when the legacy path accesses it."""
+
+    def __init__(self, factory: Callable[[], Any]) -> None:
+        self._factory = factory
+        self._instance: Any | None = None
+        self._explicit_override = False
+
+    def _resolve(self) -> Any:
+        if self._instance is None:
+            self._instance = self._factory()
+        return self._instance
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._resolve(), name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+            return
+        object.__setattr__(self, "_explicit_override", True)
+        setattr(self._resolve(), name, value)
+
+    @property
+    def initialized(self) -> bool:
+        return self._instance is not None
+
+    @property
+    def explicit_override(self) -> bool:
+        return self._explicit_override
+
+    def close_if_initialized(self) -> None:
+        if self._instance is None:
+            return
+        close = getattr(self._instance, "close", None)
+        if callable(close):
+            close()
+
+
 @dataclass
 class OrchestratorDependencies:
     run_store: RunStore
@@ -42,14 +74,14 @@ class OrchestratorDependencies:
     task_router: TaskRouter
     progress_service: ProgressService
     skill_runtime: SkillRuntime
-    collector: CollectorService
-    distiller: DistillerService
-    critic: CriticService
-    reviewer: ReviewerService
-    retriever: RetrieverService
-    reporter: ReporterService
-    screener: ScreenerService
-    screen_reviewer: ScreenReviewerService
+    collector: Any
+    distiller: Any
+    critic: Any
+    reviewer: Any
+    retriever: Any
+    reporter: Any
+    screener: Any
+    screen_reviewer: Any
     comps_service: CompsService
     dcf_service: DCFService
     cashflow_resilience_service: CashflowResilienceService
@@ -64,12 +96,16 @@ class OrchestratorDependencies:
     gates: GateEvaluator
     retention: RunRetentionService
     planner: RuntimePlanner
-    supervisor: RuntimeSupervisor
+    supervisor: Any
 
     def close(self) -> None:
-        close = getattr(self.retriever, "close", None)
-        if callable(close):
-            close()
+        close_if_initialized = getattr(self.retriever, "close_if_initialized", None)
+        if callable(close_if_initialized):
+            close_if_initialized()
+        else:
+            close = getattr(self.retriever, "close", None)
+            if callable(close):
+                close()
 
 
 def build_orchestrator_dependencies(settings: Settings) -> OrchestratorDependencies:
@@ -88,50 +124,71 @@ def build_orchestrator_dependencies(settings: Settings) -> OrchestratorDependenc
         task_router=task_router,
         progress_service=progress_service,
         skill_runtime=skill_runtime,
-        collector=CollectorService(
-            skill_runtime,
-            settings.runs_root,
-            llm_provider=llm_provider,
-            settings=settings,
+        collector=LazyLegacyService(
+            lambda: _construct_legacy_service("collector",
+                skill_runtime,
+                settings.runs_root,
+                llm_provider=llm_provider,
+                settings=settings,
+            )
         ),
-        distiller=DistillerService(llm_provider, settings, settings.runs_root, skill_runtime=skill_runtime),
-        critic=CriticService(
-            settings.runs_root,
-            llm_provider=llm_provider,
-            settings=settings,
-            skill_runtime=skill_runtime,
+        distiller=LazyLegacyService(
+            lambda: _construct_legacy_service("distiller",
+                llm_provider,
+                settings,
+                settings.runs_root,
+                skill_runtime=skill_runtime,
+            )
         ),
-        reviewer=ReviewerService(
-            yaml_configs.get("review_policy"),
-            settings.runs_root,
-            llm_provider=llm_provider,
-            settings=settings,
-            skill_runtime=skill_runtime,
+        critic=LazyLegacyService(
+            lambda: _construct_legacy_service("critic",
+                settings.runs_root,
+                llm_provider=llm_provider,
+                settings=settings,
+                skill_runtime=skill_runtime,
+            )
         ),
-        retriever=RetrieverService(
-            llm_provider,
-            settings,
-            yaml_configs.get("retrieval_policy"),
-            settings.runs_root,
-            skill_runtime=skill_runtime,
+        reviewer=LazyLegacyService(
+            lambda: _construct_legacy_service("reviewer",
+                yaml_configs.get("review_policy"),
+                settings.runs_root,
+                llm_provider=llm_provider,
+                settings=settings,
+                skill_runtime=skill_runtime,
+            )
         ),
-        reporter=ReporterService(
-            llm_provider,
-            runs_root=settings.runs_root,
-            settings=settings,
-            skill_runtime=skill_runtime,
+        retriever=LazyLegacyService(
+            lambda: _construct_legacy_service("retriever",
+                llm_provider,
+                settings,
+                yaml_configs.get("retrieval_policy"),
+                settings.runs_root,
+                skill_runtime=skill_runtime,
+            )
         ),
-        screener=ScreenerService(
-            runs_root=settings.runs_root,
-            llm_provider=llm_provider,
-            settings=settings,
-            skill_runtime=skill_runtime,
+        reporter=LazyLegacyService(
+            lambda: _construct_legacy_service("reporter",
+                llm_provider,
+                runs_root=settings.runs_root,
+                settings=settings,
+                skill_runtime=skill_runtime,
+            )
         ),
-        screen_reviewer=ScreenReviewerService(
-            settings.runs_root,
-            llm_provider=llm_provider,
-            settings=settings,
-            skill_runtime=skill_runtime,
+        screener=LazyLegacyService(
+            lambda: _construct_legacy_service("screener",
+                runs_root=settings.runs_root,
+                llm_provider=llm_provider,
+                settings=settings,
+                skill_runtime=skill_runtime,
+            )
+        ),
+        screen_reviewer=LazyLegacyService(
+            lambda: _construct_legacy_service("screen_reviewer",
+                settings.runs_root,
+                llm_provider=llm_provider,
+                settings=settings,
+                skill_runtime=skill_runtime,
+            )
         ),
         comps_service=CompsService(),
         dcf_service=DCFService(),
@@ -147,5 +204,40 @@ def build_orchestrator_dependencies(settings: Settings) -> OrchestratorDependenc
         gates=GateEvaluator(),
         retention=RunRetentionService(settings),
         planner=RuntimePlanner(llm_provider, settings),
-        supervisor=RuntimeSupervisor(llm_provider=llm_provider, settings=settings),
+        supervisor=(
+            None
+            if DomainPackRegistry.load(settings.domain_packs_root).list()
+            else _construct_legacy_service("supervisor", llm_provider=llm_provider, settings=settings)
+        ),
     )
+
+
+def _construct_legacy_service(name: str, *args: Any, **kwargs: Any) -> Any:
+    if name == "collector":
+        from research_system.agents.collector.service import CollectorService
+        return CollectorService(*args, **kwargs)
+    if name == "distiller":
+        from research_system.agents.distiller.service import DistillerService
+        return DistillerService(*args, **kwargs)
+    if name == "critic":
+        from research_system.agents.critic.service import CriticService
+        return CriticService(*args, **kwargs)
+    if name == "reviewer":
+        from research_system.agents.reviewer.service import ReviewerService
+        return ReviewerService(*args, **kwargs)
+    if name == "retriever":
+        from research_system.agents.retriever.service import RetrieverService
+        return RetrieverService(*args, **kwargs)
+    if name == "reporter":
+        from research_system.agents.reporter.service import ReporterService
+        return ReporterService(*args, **kwargs)
+    if name == "screener":
+        from research_system.agents.screener.service import ScreenerService
+        return ScreenerService(*args, **kwargs)
+    if name == "screen_reviewer":
+        from research_system.agents.screen_reviewer.service import ScreenReviewerService
+        return ScreenReviewerService(*args, **kwargs)
+    if name == "supervisor":
+        from research_system.runtime.supervision.supervisor import RuntimeSupervisor
+        return RuntimeSupervisor(*args, **kwargs)
+    raise ValueError(f"unknown legacy service: {name}")

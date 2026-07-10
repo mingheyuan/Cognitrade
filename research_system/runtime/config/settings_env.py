@@ -106,6 +106,7 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "config_root": config_root,
         "taxonomy_root": taxonomy_root,
         "scraper_root": root / "scraper",
+        "domain_packs_root": root / "domain_packs",
     }
 
 

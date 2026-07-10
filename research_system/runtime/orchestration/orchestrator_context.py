@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from research_system.runtime.core.blackboard import Blackboard
+from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.core.control_plane import RunControlPlane
 from research_system.runtime.core.event_stream import EventStream
 from research_system.runtime.core.id_utils import generate_ulid
@@ -15,6 +16,7 @@ from research_system.runtime.core.execution_policy import RuntimeExecutionPolicy
 from research_system.runtime.storage.jsonl import write_json
 from research_system.runtime.storage.runs.checkpoint_store import CheckpointStore
 from research_system.runtime.storage.runs.run_store import RunPaths
+from research_system.schemas.execution_graph import ExecutionGraph
 from research_system.schemas.runtime import RunStateSnapshot, RuntimeThreadState, RuntimeTurnState
 
 
@@ -24,6 +26,7 @@ class RuntimeContext:
     paths: RunPaths
     event_stream: EventStream
     blackboard: Blackboard
+    artifact_board: ArtifactBoard
     checkpoint_store: CheckpointStore
     control_plane: RunControlPlane
     session_history: SessionHistory
@@ -33,6 +36,7 @@ class RuntimeContext:
     turn: RuntimeTurnState
     agent_control: AgentControl
     execution_policy: RuntimeExecutionPolicy
+    execution_graph: ExecutionGraph | None
     subagent_trace: list[dict]
     subagent_plans: list[dict]
     subagent_plan_patches: list[dict]
@@ -105,11 +109,13 @@ def build_runtime_context(
     write_json(paths.thread_state, thread.model_dump(mode="json"))
     write_json(paths.turn_state, turn.model_dump(mode="json"))
     write_json(paths.run_state, state.model_dump(mode="json"))
+    artifact_board = ArtifactBoard(paths.artifact_board)
     context = RuntimeContext(
         run_id=run_id,
         paths=paths,
         event_stream=EventStream(paths.events),
-        blackboard=Blackboard(paths.blackboard),
+        blackboard=Blackboard(paths.blackboard, artifact_board=artifact_board),
+        artifact_board=artifact_board,
         checkpoint_store=CheckpointStore(paths.checkpoint),
         control_plane=RunControlPlane(paths.run_control),
         session_history=SessionHistory(paths.root),
@@ -123,6 +129,7 @@ def build_runtime_context(
             max_subagent_calls_per_turn=max_subagent_calls_per_turn,
             max_child_threads_per_turn=max_child_threads_per_turn,
         ),
+        execution_graph=None,
         subagent_trace=[],
         subagent_plans=[],
         subagent_plan_patches=[],

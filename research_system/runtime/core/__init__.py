@@ -4,7 +4,9 @@ from importlib import import_module
 
 __all__ = [
     "AgentControl",
+    "ArtifactBoard",
     "Blackboard",
+    "HumanApprovalStore",
     "combine_degrade_reasons",
     "derive_llm_error_reason",
     "EventStream",
@@ -24,7 +26,9 @@ __all__ = [
 
 _EXPORTS = {
     "AgentControl": ("research_system.runtime.core.agent_control", "AgentControl"),
+    "ArtifactBoard": ("research_system.runtime.core.artifact_board", "ArtifactBoard"),
     "Blackboard": ("research_system.runtime.core.blackboard", "Blackboard"),
+    "HumanApprovalStore": ("research_system.runtime.core.approvals", "HumanApprovalStore"),
     "EventStream": ("research_system.runtime.core.event_stream", "EventStream"),
     "combine_degrade_reasons": ("research_system.runtime.core.execution_policy", "combine_degrade_reasons"),
     "derive_llm_error_reason": ("research_system.runtime.core.execution_policy", "derive_llm_error_reason"),

@@ -11,6 +11,8 @@ __all__ = [
     "OrchestratorExecutionSupport",
     "OrchestratorExecutionTraceSupport",
     "OrchestratorPlanExecutor",
+    "ExecutionGraphRunner",
+    "ExecutionGraphScheduler",
     "OrchestratorRuntimeActionControlService",
     "OrchestratorRuntimeBindingController",
     "OrchestratorRuntimeControlPlaneController",
@@ -21,6 +23,14 @@ __all__ = [
 ]
 
 _EXPORTS = {
+    "ExecutionGraphRunner": (
+        "research_system.runtime.execution.core.graph_runner",
+        "ExecutionGraphRunner",
+    ),
+    "ExecutionGraphScheduler": (
+        "research_system.runtime.execution.core.execution_graph",
+        "ExecutionGraphScheduler",
+    ),
     "OrchestratorActionRunner": (
         "research_system.runtime.execution.core.action_runner",
         "OrchestratorActionRunner",

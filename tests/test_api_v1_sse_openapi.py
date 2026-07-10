@@ -258,7 +258,8 @@ class ApiV1SseOpenApiTests(unittest.TestCase):
             (method.upper(), path)
             for path, path_item in schema["paths"].items()
             for method in path_item
-            if method.lower() in {"get", "post", "patch", "put", "delete"}
+            if path.startswith("/api/v1/")
+            and method.lower() in {"get", "post", "patch", "put", "delete"}
         }
 
         self.assertEqual(len(EXPECTED_API_V1_OPERATIONS), 37)

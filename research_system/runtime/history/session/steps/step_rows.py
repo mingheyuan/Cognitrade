@@ -6,6 +6,21 @@ from typing import Any
 class SessionHistoryStepRows:
     def action_rows(self, task_plan_payload: dict[str, Any]) -> list[dict[str, Any]]:
         actions = task_plan_payload.get("actions") if isinstance(task_plan_payload.get("actions"), list) else []
+        if not actions and isinstance(task_plan_payload.get("nodes"), list):
+            actions = [
+                {
+                    "action_id": (node.get("metadata") or {}).get("action_id"),
+                    "node_id": node.get("node_id"),
+                    "phase": (node.get("metadata") or {}).get("phase") or node.get("capability"),
+                    "agent": node.get("executor"),
+                    "objective": node.get("objective"),
+                    "status": node.get("status"),
+                    "depends_on": node.get("depends_on") or [],
+                    "tags": node.get("tags") or [],
+                }
+                for node in task_plan_payload.get("nodes") or []
+                if isinstance(node, dict) and node.get("node_kind") != "compound"
+            ]
         return [dict(row) for row in actions if isinstance(row, dict)]
 
     def step_rows(

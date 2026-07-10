@@ -1,0 +1,119 @@
+domain_id: finance_ashare
+version: 0.1.0
+description: A-share evidence-backed professional research pack.
+artifact_types:
+  - artifact_type: user_request
+  - artifact_type: normalized_query
+  - artifact_type: stock_snapshot_bundle
+  - artifact_type: evidence_set
+  - artifact_type: screening_result
+  - artifact_type: sector_analysis
+  - artifact_type: thesis_review
+  - artifact_type: research_report
+capabilities:
+  - subagent_type: query_normalizer
+    capability: finance.query.normalize
+    implementation: subagents.runtime:normalize_query
+    consumes:
+      - artifact_type: user_request
+    produces:
+      - artifact_type: normalized_query
+    cost_class: low
+    latency_class: low
+    reliability: 0.99
+    cache_scope: global
+  - subagent_type: stock_snapshot_collector
+    capability: finance.ashare.snapshot.collect
+    implementation: subagents.runtime:collect_snapshot
+    consumes:
+      - artifact_type: normalized_query
+    produces:
+      - artifact_type: stock_snapshot_bundle
+    tools:
+      - financial_data_provider
+    side_effect_level: read_only
+    parallel_safe: true
+    max_concurrency: 8
+    cost_class: medium
+    latency_class: medium
+    reliability: 0.9
+    cache_scope: run
+  - subagent_type: retrieval_decider
+    capability: evidence.select
+    implementation: subagents.runtime:select_evidence
+    consumes:
+      - artifact_type: stock_snapshot_bundle
+    produces:
+      - artifact_type: evidence_set
+    requires_llm: true
+    cost_class: medium
+    latency_class: medium
+    reliability: 0.85
+    cache_scope: run
+  - subagent_type: stock_screen_analyzer
+    capability: finance.stock.screen
+    implementation: subagents.runtime:screen_stocks
+    consumes:
+      - artifact_type: stock_snapshot_bundle
+    produces:
+      - artifact_type: screening_result
+    parallel_safe: true
+    reliability: 0.9
+    cache_scope: run
+  - subagent_type: sector_research_analyzer
+    capability: finance.sector.research
+    implementation: subagents.runtime:research_sector
+    consumes:
+      - artifact_type: stock_snapshot_bundle
+    produces:
+      - artifact_type: sector_analysis
+    parallel_safe: true
+    reliability: 0.9
+    cache_scope: run
+  - subagent_type: thesis_reviewer
+    capability: finance.thesis.review
+    implementation: subagents.runtime:review_thesis
+    consumes:
+      - artifact_type: evidence_set
+    produces:
+      - artifact_type: thesis_review
+    reliability: 0.9
+    cache_scope: run
+  - subagent_type: llm_report_composer
+    capability: finance.report.compose
+    implementation: subagents.runtime:compose_report
+    consumes:
+      - artifact_type: evidence_set
+    produces:
+      - artifact_type: research_report
+    requires_llm: true
+    cost_class: high
+    latency_class: high
+    reliability: 0.85
+    cache_scope: run
+quality_gates:
+  - gate_id: finance.sources_required
+    artifact_type: research_report
+    blocking: true
+    description: Research reports require traceable evidence sources.
+report_contracts:
+  - contract_id: finance.research_report.v1
+    artifact_type: research_report
+    required_sections: [conclusion, evidence, risk, follow_up]
+    required_source_refs: true
+    required_gate_ids: [finance.sources_required]
+planner_policies:
+  prefer_evidence_backed_paths: true
+  intent_outputs:
+    stock_screen: [screening_result]
+    sector_research: [sector_analysis]
+    review_thesis: [thesis_review]
+evaluations:
+  - evaluations/finance_research.yaml
+governance:
+  max_nodes: 128
+  max_depth: 12
+  max_concurrency: 16
+  max_retries_per_node: 2
+  required_gate_ids: []
+  allowed_tools: [financial_data_provider]

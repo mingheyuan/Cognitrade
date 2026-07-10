@@ -88,6 +88,7 @@ class Settings(BaseModel):
     config_root: Path
     taxonomy_root: Path
     scraper_root: Path
+    domain_packs_root: Path
 
     @classmethod
     def from_env(cls, repo_root: Path | None = None) -> "Settings":

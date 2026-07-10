@@ -1,0 +1,80 @@
+domain_id: legal_contract
+version: 0.1.0
+description: Contract analysis pack used to prove domain-neutral planning.
+artifact_types:
+  - artifact_type: contract_document
+  - artifact_type: clause_set
+  - artifact_type: risk_finding_set
+  - artifact_type: obligation_set
+  - artifact_type: legal_review_report
+capabilities:
+  - subagent_type: legal_clause_extractor
+    capability: legal.contract.clause.extract
+    implementation: subagents.runtime:extract_clauses
+    consumes:
+      - artifact_type: contract_document
+    produces:
+      - artifact_type: clause_set
+    side_effect_level: read_only
+    reliability: 0.98
+    cache_scope: global
+  - subagent_type: legal_risk_reviewer
+    capability: legal.contract.risk.review
+    implementation: subagents.runtime:review_risks
+    consumes:
+      - artifact_type: clause_set
+    produces:
+      - artifact_type: risk_finding_set
+    side_effect_level: read_only
+    parallel_safe: true
+    max_concurrency: 4
+    reliability: 0.95
+    cache_scope: global
+  - subagent_type: legal_obligation_analyzer
+    capability: legal.contract.obligation.analyze
+    implementation: subagents.runtime:analyze_obligations
+    consumes:
+      - artifact_type: clause_set
+    produces:
+      - artifact_type: obligation_set
+    side_effect_level: read_only
+    parallel_safe: true
+    max_concurrency: 4
+    reliability: 0.95
+    cache_scope: global
+  - subagent_type: legal_report_composer
+    capability: legal.contract.report.compose
+    implementation: subagents.runtime:compose_report
+    consumes:
+      - artifact_type: risk_finding_set
+      - artifact_type: obligation_set
+    produces:
+      - artifact_type: legal_review_report
+    requires_llm: true
+    cost_class: medium
+    latency_class: medium
+    reliability: 0.9
+    cache_scope: global
+quality_gates:
+  - gate_id: legal.citation_required
+    artifact_type: legal_review_report
+    evaluator_capability: legal.contract.citation.verify
+    blocking: true
+    description: Every material legal finding must cite a contract clause.
+report_contracts:
+  - contract_id: legal.contract_review.v1
+    artifact_type: legal_review_report
+    required_sections: [scope, findings, obligations, recommendations]
+    required_source_refs: true
+    required_gate_ids: [legal.citation_required]
+planner_policies:
+  require_clause_citations: true
+evaluations:
+  - evaluations/legal_contract.yaml
+governance:
+  max_nodes: 64
+  max_depth: 8
+  max_concurrency: 8
+  max_retries_per_node: 1
+  required_gate_ids: []
+  allowed_tools: []

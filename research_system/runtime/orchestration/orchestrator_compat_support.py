@@ -4,6 +4,7 @@ from pathlib import Path
 
 from research_system.runtime.orchestration.orchestrator_context import RuntimeContext
 from research_system.schemas.planning import ActionPlan, ActionSpec
+from research_system.schemas.execution_graph import ExecutionGraph
 from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
 from research_system.schemas.runtime import BlackboardEntry
 
@@ -12,7 +13,13 @@ class OrchestratorCompatSupport:
     def __init__(self, host) -> None:
         self.host = host
 
-    def execute_plan(self, *, context: RuntimeContext, request: RequestEnvelope, plan: ActionPlan) -> None:
+    def execute_plan(
+        self,
+        *,
+        context: RuntimeContext,
+        request: RequestEnvelope,
+        plan: ActionPlan | ExecutionGraph,
+    ) -> None:
         self.host._plan_executor().execute_plan(
             context=context,
             request=request,

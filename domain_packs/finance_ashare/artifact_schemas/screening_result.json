@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["screened_candidates", "watchlist_candidates", "enrichment_targets", "scorecard", "screening_notes"],
+  "properties": {
+    "screened_candidates": {"type": "array"},
+    "watchlist_candidates": {"type": "array"},
+    "enrichment_targets": {"type": "array"},
+    "scorecard": {"type": "object"},
+    "screening_notes": {"type": "array"}
+  }
+}
