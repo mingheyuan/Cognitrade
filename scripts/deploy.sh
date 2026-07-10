@@ -24,14 +24,14 @@ DOCKER_COMMAND=()
 usage() {
     cat <<'EOF'
 Usage:
-  ./scripts/deploy.sh [deploy] [options]       Install/check, configure, build, and start
+  ./scripts/deploy.sh [deploy] [options]       Install/check, build, and start API + frontend web
   ./scripts/deploy.sh install [options]        Install/check Docker and initialize .env
   ./scripts/deploy.sh init [options]           Initialize secure deployment configuration
   ./scripts/deploy.sh check [options]          Validate Docker, configuration, and Compose
-  ./scripts/deploy.sh build [options]          Build API and web images
-  ./scripts/deploy.sh start [options]          Start existing images and wait for readiness
-  ./scripts/deploy.sh restart [options]        Recreate containers and wait for readiness
-  ./scripts/deploy.sh stop [options]           Stop containers without removing them
+  ./scripts/deploy.sh build [options]          Build API and frontend web images
+  ./scripts/deploy.sh start [options]          Start API + frontend web from existing images
+  ./scripts/deploy.sh restart [options]        Recreate API + frontend web containers
+  ./scripts/deploy.sh stop [options]           Stop API + frontend web without removing them
   ./scripts/deploy.sh down [options]           Remove containers/network; keep workspace data
   ./scripts/deploy.sh status [options]         Show container and health status
   ./scripts/deploy.sh logs [api|web|all]        Follow deployment logs
@@ -57,7 +57,8 @@ Supported automatic Docker installation:
   - Fedora/CentOS/RHEL with dnf (official Docker repository)
 
 Examples:
-  ./scripts/deploy.sh --yes
+  ./scripts/deploy.sh --yes                    # Build and start API + frontend web
+  ./scripts/deploy.sh start                    # Start both from existing images
   ./scripts/deploy.sh deploy --pull --web-host 0.0.0.0 --web-port 8080
   ./scripts/deploy.sh token
   ./scripts/deploy.sh logs api
@@ -541,13 +542,13 @@ wait_for_ready() {
     local deadline=$((SECONDS + READY_TIMEOUT))
     base_url="$(web_url)"
     token="$(read_env_value COGNITRADE_API_TOKEN)"
-    log "waiting for web and API readiness at $base_url"
+    log "waiting for frontend web and API readiness at $base_url"
     while (( SECONDS < deadline )); do
         if curl --noproxy '*' -fsS --max-time 3 "$base_url/" >/dev/null 2>&1 \
             && curl --noproxy '*' -fsS --max-time 5 \
                 -H "Authorization: Bearer $token" \
                 "$base_url/api/v1/system/status" >/dev/null 2>&1; then
-            log "deployment ready: $base_url"
+            log "frontend web and API ready: $base_url"
             log "API docs: $base_url/docs"
             log "browser token: ./scripts/deploy.sh token"
             return 0
@@ -593,6 +594,7 @@ case "$COMMAND" in
         ensure_docker "$((1 - SKIP_SYSTEM_INSTALL))"
         validate_environment
         check_compose_configuration
+        log "starting API and frontend web containers"
         run_compose up -d --no-build --remove-orphans
         (( DRY_RUN )) || wait_for_ready
         ;;
@@ -600,12 +602,14 @@ case "$COMMAND" in
         ensure_docker "$((1 - SKIP_SYSTEM_INSTALL))"
         validate_environment
         check_compose_configuration
+        log "recreating API and frontend web containers"
         run_compose up -d --no-build --force-recreate --remove-orphans
         (( DRY_RUN )) || wait_for_ready
         ;;
     stop)
         ensure_docker 0
         validate_environment
+        log "stopping API and frontend web containers"
         run_compose stop
         ;;
     down)
@@ -645,6 +649,7 @@ case "$COMMAND" in
         if (( ! NO_BUILD )); then
             build_images
         fi
+        log "starting API and frontend web containers"
         run_compose up -d --remove-orphans
         (( DRY_RUN )) || wait_for_ready
         ;;
