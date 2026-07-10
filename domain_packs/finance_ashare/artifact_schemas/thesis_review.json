@@ -8,6 +8,11 @@
     "findings": {"type": "array"},
     "strengths": {"type": "array"},
     "weaknesses": {"type": "array"},
-    "follow_up": {"type": "array"}
+    "follow_up": {"type": "array"},
+    "review_target_run_id": {"type": ["string", "null"]},
+    "review_target_artifact_ids": {"type": "array"},
+    "review_target_found": {"type": "boolean"},
+    "target_thesis": {"type": "array"},
+    "evidence_comparison": {"type": "object"}
   }
 }

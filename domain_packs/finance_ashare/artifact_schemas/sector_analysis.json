@@ -10,6 +10,12 @@
     "risks": {"type": "array"},
     "source_count": {"type": "integer"},
     "analysis_notes": {"type": "array"},
-    "sector_heatmap": {"type": "array"}
+    "sector_heatmap": {"type": "array"},
+    "constituents": {"type": "array"},
+    "breadth": {"type": "object"},
+    "relative_strength": {"type": "object"},
+    "signal_scorecard": {"type": "object"},
+    "catalysts": {"type": "object"},
+    "policy_snapshots": {"type": "array"}
   }
 }

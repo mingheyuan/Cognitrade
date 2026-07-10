@@ -192,7 +192,10 @@ class AgentOS:
                 self._active.pop(effective_run_id, None)
 
     def intake(self, request: RequestEnvelope):
-        return self.task_intake.resolve(request)
+        return self.task_intake.resolve(
+            request,
+            runtime_context={"recent_runs": self.run_store.list_runs()},
+        )
 
     def inspect_run(self, run_id: str) -> dict[str, Any]:
         root = self.run_store.load_run_paths(run_id).root

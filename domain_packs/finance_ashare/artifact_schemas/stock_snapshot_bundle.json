@@ -1,1 +1,27 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["query","symbols","snapshots"],"properties":{"query":{"type":["string","null"]},"symbols":{"type":"array"},"snapshots":{"type":"array"}}}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["query", "symbols", "snapshots", "candidate_universe", "collection"],
+  "properties": {
+    "query": {"type": ["string", "null"]},
+    "symbols": {"type": "array", "items": {"type": "string"}},
+    "sector": {"type": ["string", "null"]},
+    "snapshots": {"type": "array", "items": {"type": "object"}},
+    "candidate_universe": {"type": "array", "items": {"type": "object"}},
+    "collection": {
+      "type": "object",
+      "required": ["universe_source", "candidate_count", "requested_snapshot_types", "collected_snapshot_types", "enrichment_targets"],
+      "properties": {
+        "universe_source": {"type": "string"},
+        "candidate_count": {"type": "integer", "minimum": 0},
+        "requested_snapshot_types": {"type": "array", "items": {"type": "string"}},
+        "collected_snapshot_types": {"type": "array", "items": {"type": "string"}},
+        "enrichment_snapshot_types": {"type": "array", "items": {"type": "string"}},
+        "enrichment_targets": {"type": "array", "items": {"type": "string"}},
+        "degraded": {"type": "boolean"}
+      }
+    },
+    "review_target_run_id": {"type": ["string", "null"]},
+    "review_target_artifact_ids": {"type": "array", "items": {"type": "string"}}
+  }
+}

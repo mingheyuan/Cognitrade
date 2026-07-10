@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshots
+from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshot_bundle, collect_snapshots
 from research_system.adapters.vendors.akshare_utils import coerce_numeric
 from research_system.services.methodologies import (
     CashflowResilienceService,
@@ -37,6 +37,7 @@ _SCREEN_STYLE_CRITERIA = {
     ),
 }
 _STOCK_CODE_PATTERN = re.compile(r"\b(\d{6})\b")
+_SAFE_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _BANK_METRIC_WEIGHTS = {
     "pb": 0.20,
     "roe": 0.16,
@@ -87,10 +88,43 @@ def collect_snapshot(context):
     query_text = str(query.content.get("query") or "")
     symbols = _unique_strings(query.content.get("symbols") or [])
     inputs = dict(context.node.inputs or {})
+    intent = str(inputs.get("intent") or "").strip()
     sector = str(inputs.get("sector") or inputs.get("sector_query") or "").strip() or None
     snapshots = list(query.content.get("snapshots") or inputs.get("snapshots") or [])
     requested_types = _requested_snapshot_types(inputs=inputs, sector=sector)
-    if not snapshots and symbols:
+    review_target_run_id = str(inputs.get("review_target_run_id") or "").strip() or None
+    target_artifacts = _review_target_artifacts(context, review_target_run_id) if intent == "review_thesis" else []
+    if intent == "review_thesis" and not symbols:
+        symbols = _target_symbols(target_artifacts)
+    candidate_universe: list[dict] = []
+    collection: dict = {
+        "universe_source": "user_supplied" if symbols else "unavailable",
+        "candidate_count": len(symbols),
+        "requested_snapshot_types": requested_types,
+        "collected_snapshot_types": [],
+        "enrichment_snapshot_types": [],
+        "enrichment_targets": [],
+        "degraded": False,
+    }
+    if not snapshots and intent in {"stock_screen", "sector_research"}:
+        collected = collect_snapshot_bundle(
+            query=query_text,
+            symbols=symbols,
+            snapshot_types=requested_types,
+            intent=intent,
+            sector=sector,
+            candidate_pool_size=int(inputs.get("candidate_pool_size") or 8),
+            enrichment_top_n=int(inputs.get("enrichment_top_n") or 2),
+            skip_enrichment=bool(inputs.get("skip_enrichment")),
+            cancellation=getattr(context, "cancellation", None),
+        )
+        snapshots = list(collected.get("snapshots") or [])
+        symbols = _unique_strings([*symbols, *(collected.get("symbols") or [])])
+        candidate_universe = [
+            dict(row) for row in collected.get("candidate_universe") or [] if isinstance(row, dict)
+        ]
+        collection = dict(collected.get("collection") or collection)
+    elif not snapshots and symbols:
         snapshots = _collect_provider_snapshots(
             query=query_text,
             symbols=symbols,
@@ -120,6 +154,16 @@ def collect_snapshot(context):
             symbol = str(snapshot.get("symbol") or "").strip()
             if symbol and symbol not in symbols:
                 symbols.append(symbol)
+    if not candidate_universe:
+        candidate_universe = _universe_from_snapshots(snapshots, symbols)
+    collection["collected_snapshot_types"] = list(
+        dict.fromkeys(
+            str(snapshot.get("snapshot_type") or "")
+            for snapshot in snapshots
+            if isinstance(snapshot, dict) and snapshot.get("snapshot_type")
+        )
+    )
+    collection["degraded"] = not bool(snapshots)
     source_refs = list(inputs.get("source_refs") or [])
     if not source_refs:
         source_refs = _snapshot_source_refs(snapshots) or [{"type": "user_supplied", "id": query.artifact_id}]
@@ -130,6 +174,10 @@ def collect_snapshot(context):
             "symbols": symbols,
             "sector": sector,
             "snapshots": snapshots,
+            "candidate_universe": candidate_universe,
+            "collection": collection,
+            "review_target_run_id": review_target_run_id,
+            "review_target_artifact_ids": [artifact.artifact_id for artifact in target_artifacts],
         },
         source_refs=source_refs,
         parent_artifact_ids=[query.artifact_id],
@@ -292,8 +340,11 @@ def compose_screening_report(context):
             "evidence": evidence,
             "risk": risks,
             "follow_up": ["Refresh the candidate universe and verify material disclosures before acting."],
+            "delivery_type": "stock_screen",
+            "candidates": [*candidates, *watchlist],
             "screening": screening.content,
             "scorecard": scorecard,
+            "screening_scorecard": scorecard,
             "methodologies": [dict(screening.content.get("methodology") or {})],
         },
         source_refs=list(screening.source_refs),
@@ -316,10 +367,14 @@ def compose_sector_report(context):
     return ArtifactDraft(
         artifact_type="research_report",
         content={
-            "conclusion": f"Sector research assembled {len(findings)} traceable evidence item(s) for {sector}.",
+            "conclusion": (
+                f"Sector research assembled {len(findings)} traceable evidence item(s) and "
+                f"{len(heatmap)} source-derived heatmap row(s) for {sector}."
+            ),
             "evidence": evidence,
             "risk": list(analysis.content.get("risks") or ["Sector evidence requires refresh before acting."]),
             "follow_up": ["Review constituent, policy, and catalyst evidence before acting on the sector view."],
+            "delivery_type": "sector_research",
             "sector_analysis": analysis.content,
             "sector_heatmap": heatmap,
         },
@@ -346,14 +401,28 @@ def compose_thesis_review_report(context):
         for index, item in enumerate(findings)
         if isinstance(item, dict)
     ]
+    weaknesses = [
+        str(item.get("summary") or item.get("claim") or item.get("verdict") or "Unresolved thesis weakness")
+        if isinstance(item, dict)
+        else str(item)
+        for item in review.content.get("weaknesses") or []
+    ]
     return ArtifactDraft(
         artifact_type="research_report",
         content={
             "conclusion": f"Thesis review verdict: {verdict}.",
             "evidence": evidence,
-            "risk": list(review.content.get("weaknesses") or ["Independent evidence remains limited."]),
+            "risk": weaknesses or ["Independent evidence remains limited."],
             "follow_up": list(review.content.get("follow_up") or []),
+            "delivery_type": "review_thesis",
             "thesis_review": review.content,
+            "review_summary": {
+                "overall_verdict": verdict,
+                "review_target_run_id": review.content.get("review_target_run_id"),
+                "review_target_found": review.content.get("review_target_found"),
+                "target_artifact_count": len(review.content.get("review_target_artifact_ids") or []),
+                "fresh_evidence_count": dict(review.content.get("evidence_comparison") or {}).get("fresh_evidence_count"),
+            },
         },
         source_refs=list(review.source_refs),
         parent_artifact_ids=[review.artifact_id],
@@ -550,10 +619,36 @@ def _requested_snapshot_types(*, inputs: dict, sector: str | None) -> list[str]:
         return _unique_strings(explicit)
     intent = str(inputs.get("intent") or "").strip()
     if intent == "sector_research":
-        return ["sector", "policy"]
+        return [
+            "sector",
+            *(["policy"] if inputs.get("include_policy_snapshot") is not False else []),
+        ]
     if intent == "stock_screen":
         return ["sector", "market", "fundamental", "notice"] if sector else ["market", "fundamental", "notice"]
     return ["market", "fundamental", "notice", "capital_flow", "sentiment", "events", "lhb"]
+
+
+def _universe_from_snapshots(snapshots: list[object], symbols: list[str]) -> list[dict]:
+    names: dict[str, str] = {}
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict):
+            continue
+        symbol = str(snapshot.get("symbol") or "").strip()
+        if not symbol:
+            continue
+        facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
+        info = facts.get("info") if isinstance(facts.get("info"), dict) else {}
+        names[symbol] = str(
+            snapshot.get("name")
+            or info.get("股票简称")
+            or info.get("名称")
+            or names.get(symbol)
+            or symbol
+        )
+    return [
+        {"symbol": symbol, "name": names.get(symbol, symbol), "source": "snapshot_bundle"}
+        for symbol in symbols
+    ]
 
 
 def _collect_provider_snapshots(
@@ -685,6 +780,14 @@ def screen_stocks(context):
     snapshots = context.require_artifact("stock_snapshot_bundle")
     inputs = dict(context.node.inputs or {})
     rows = list(snapshots.content.get("snapshots") or [])
+    universe = {
+        str(row.get("symbol") or ""): dict(row)
+        for row in snapshots.content.get("candidate_universe") or []
+        if isinstance(row, dict) and row.get("symbol")
+    }
+    collection = dict(snapshots.content.get("collection") or {})
+    enrichment_target_symbols = _unique_strings(collection.get("enrichment_targets") or [])
+    enrichment_types = _unique_strings(collection.get("enrichment_snapshot_types") or [])
     grouped: dict[str, dict[str, dict]] = {}
     for row in rows:
         if not isinstance(row, dict) or not row.get("symbol"):
@@ -700,8 +803,17 @@ def screen_stocks(context):
         spot = market.get("spot") or {}
         fundamental = ((by_type.get("fundamental") or {}).get("facts") or {}).get("financial_abstract") or {}
         notice = ((by_type.get("notice") or {}).get("facts") or {})
-        pct_change = _to_float(spot.get("pct_change"))
-        amount = _to_float(spot.get("amount"))
+        universe_row = universe.get(symbol) or {}
+        pct_change = _to_float(
+            market.get("pct_change")
+            if market.get("pct_change") is not None
+            else spot.get("pct_change") or spot.get("涨跌幅") or universe_row.get("pct_change")
+        )
+        amount = _to_float(
+            market.get("amount")
+            if market.get("amount") is not None
+            else spot.get("amount") or spot.get("成交额") or universe_row.get("amount")
+        )
         notice_count = int(_to_float(notice.get("notice_count")) or 0)
         missing = [
             label for label, present in (
@@ -722,13 +834,40 @@ def screen_stocks(context):
             "momentum": max(min((pct_change or 0.0) / 10.0, 1.0), -1.0),
             "fundamental": 1.0 if fundamental else 0.0,
             "notice": min(notice_count * 0.1, 0.5),
+            "enrichment_coverage": round(
+                0.05
+                * sum(
+                    1
+                    for snapshot_type in enrichment_types
+                    if by_type.get(snapshot_type) and not by_type[snapshot_type].get("degraded")
+                ),
+                3,
+            ),
             "evidence_penalty": -0.75 * len(missing),
         }
         score = round(sum(breakdown.values()), 3)
+        degraded_sources = [
+            snapshot_type
+            for snapshot_type, snapshot in by_type.items()
+            if isinstance(snapshot, dict) and snapshot.get("degraded")
+        ]
+        deep_checked = bool(enrichment_types) and all(
+            by_type.get(snapshot_type) and not by_type[snapshot_type].get("degraded")
+            for snapshot_type in enrichment_types
+        )
+        available_types = sorted(by_type)
         candidates.append({
             "symbol": symbol,
-            "name": str((by_type.get("market") or {}).get("name") or symbol),
-            "latest_price": _to_float(spot.get("latest_price")),
+            "name": str(
+                universe_row.get("name")
+                or (by_type.get("market") or {}).get("name")
+                or symbol
+            ),
+            "latest_price": _to_float(
+                market.get("latest_price")
+                if market.get("latest_price") is not None
+                else spot.get("latest_price") or spot.get("最新价") or universe_row.get("latest_price")
+            ),
             "latest_pct_change": pct_change,
             "latest_amount": amount,
             "notice_count": notice_count,
@@ -742,19 +881,36 @@ def screen_stocks(context):
             "score": score,
             "score_breakdown": breakdown,
             "missing_evidence": missing,
-            "degraded_sources": [],
-            "deep_checked": not missing,
-            "why_it_made_the_list": "Evidence-backed candidate with available market, fundamental, and notice data.",
-            "main_risk": "; ".join(f"missing evidence: {item}" for item in missing) or "Requires professional review before acting.",
+            "degraded_sources": degraded_sources,
+            "deep_checked": deep_checked,
+            "enrichment_requested": symbol in enrichment_target_symbols,
+            "evidence_snapshot_types": available_types,
+            "why_it_made_the_list": (
+                f"Ranked from {len(available_types)} provider-backed snapshot type(s): "
+                + ", ".join(available_types)
+                + "."
+            ),
+            "main_risk": (
+                "; ".join(
+                    [*(f"missing evidence: {item}" for item in missing), *(f"degraded source: {item}" for item in degraded_sources)]
+                )
+                or "Requires professional review before acting."
+            ),
             "methodology": methodology,
         })
     candidates.sort(key=lambda item: (item["score"], item.get("latest_amount") or 0.0), reverse=True)
     cycle = str(inputs.get("investment_cycle") or "mid_term")
-    min_score = {"short_term": 0.0, "mid_term": 0.0, "long_term": 0.15}.get(cycle, 0.0)
+    default_min_score = {"short_term": 0.0, "mid_term": 0.0, "long_term": 0.15}.get(cycle, 0.0)
+    min_score = _to_float(inputs.get("min_score"))
+    min_score = default_min_score if min_score is None else min_score
     top_k = max(int(inputs.get("top_k") or 5), 1)
     watchlist_top_k = max(int(inputs.get("watchlist_top_k") or 2), 1)
+    watchlist_min_score = _to_float(inputs.get("watchlist_min_score"))
+    watchlist_min_score = min_score - 0.75 if watchlist_min_score is None else watchlist_min_score
     screened = [item for item in candidates if item["score"] >= min_score][:top_k]
-    watchlist = [item for item in candidates if item not in screened and item["score"] >= min_score - 0.75][:watchlist_top_k]
+    watchlist = [item for item in candidates if item not in screened and item["score"] >= watchlist_min_score][:watchlist_top_k]
+    for rank, item in enumerate(candidates, start=1):
+        item["rank"] = rank
     for item in screened:
         item["candidate_tier"] = "core"
     for item in watchlist:
@@ -768,7 +924,10 @@ def screen_stocks(context):
         "watchlist_candidate_count": len(watchlist),
         "deep_checked_count": sum(1 for item in screened if item["deep_checked"]),
         "watchlist_deep_checked_count": sum(1 for item in watchlist if item["deep_checked"]),
-        "enrichment_target_count": 0,
+        "enrichment_target_count": len(enrichment_target_symbols),
+        "candidate_universe_source": collection.get("universe_source"),
+        "requested_snapshot_types": list(collection.get("requested_snapshot_types") or []),
+        "collected_snapshot_types": list(collection.get("collected_snapshot_types") or []),
         "preferred_methodology": str(inputs.get("prefer_methodology") or "comps"),
         "screening_strategy": {
             "methodology_source": "intent_input" if inputs.get("prefer_methodology") else "domain_pack_policy",
@@ -782,11 +941,13 @@ def screen_stocks(context):
         content={
             "screened_candidates": screened,
             "watchlist_candidates": watchlist,
-            "enrichment_targets": [],
+            "enrichment_targets": enrichment_target_symbols,
             "scorecard": scorecard,
             "screening_notes": [
                 "screening_strategy=domain_pack_policy",
                 "missing evidence is retained as a data gap and is never neutralized",
+                f"candidate_universe_source={collection.get('universe_source') or 'unknown'}",
+                f"enrichment_targets={len(enrichment_target_symbols)}",
             ],
             "methodology": {
                 "screen_style": screen_style,
@@ -864,30 +1025,31 @@ def research_sector(context):
     inputs = dict(context.node.inputs or {})
     rows = [row for row in list(content.get("snapshots") or []) if isinstance(row, dict)]
     sector_rows = [row for row in rows if row.get("snapshot_type") == "sector"]
+    policy_rows = [row for row in rows if row.get("snapshot_type") == "policy"]
     sector_snapshot = sector_rows[0] if sector_rows else {}
     facts = sector_snapshot.get("facts") or {}
     sector = inputs.get("sector") or content.get("sector") or sector_snapshot.get("sector") or facts.get("sector") or content.get("query")
     theme = content.get("theme") or sector_snapshot.get("theme") or facts.get("theme")
     related = [row for row in rows if row not in sector_rows]
-    source_fact_score = _to_float(
-        facts.get("research_heat") or facts.get("heat_score") or facts.get("evidence_coverage")
+    constituents = [
+        dict(row)
+        for row in facts.get("constituent_breadth_source") or facts.get("top_constituents") or []
+        if isinstance(row, dict)
+    ]
+    sector_heatmap = _sector_heatmap(
+        sector=sector,
+        theme=theme,
+        facts=facts,
+        constituents=constituents,
+        source_count=len(rows),
+        related_count=len(related),
     )
-    coverage_score = min(100.0, round(100.0 * len(rows) / max(len(rows), 3), 1))
-    sector_heatmap = []
-    if sector:
-        sector_heatmap.append(
-            {
-                "name": str(sector),
-                "score": source_fact_score if source_fact_score is not None else coverage_score,
-                "score_basis": "source_fact" if source_fact_score is not None else "artifact_coverage",
-                "source_count": len(rows),
-                "related_snapshot_count": len(related),
-                "theme": theme,
-            }
-        )
+    include_policy = inputs.get("include_policy_snapshot") is not False
     risks = ["Sector evidence may be incomplete or stale."]
     if not related:
         risks.append("No related sector or constituent snapshots were supplied.")
+    if include_policy and not policy_rows:
+        risks.append("The requested policy snapshot was unavailable.")
     return ArtifactDraft(
         artifact_type="sector_analysis",
         content={
@@ -899,15 +1061,81 @@ def research_sector(context):
             "source_count": len(rows),
             "analysis_notes": [
                 "sector_snapshot_present" if sector_rows else "missing_sector_snapshot",
-                "policy_snapshot_requested" if inputs.get("include_policy_snapshot") else "policy_snapshot_not_requested",
+                "policy_snapshot_requested" if include_policy else "policy_snapshot_not_requested",
+                "policy_snapshot_present" if policy_rows else "missing_policy_snapshot",
             ],
             "sector_heatmap": sector_heatmap,
+            "constituents": constituents,
+            "breadth": dict(facts.get("breadth") or {}),
+            "relative_strength": dict(facts.get("relative_strength") or {}),
+            "signal_scorecard": dict(facts.get("signal_scorecard") or {}),
+            "catalysts": {
+                "theme_news": list(facts.get("theme_news") or []),
+                "policy_signals": list(facts.get("policy_signals") or []),
+                "regulatory_signals": list(facts.get("regulatory_signals") or []),
+                "samples": list(facts.get("catalyst_samples") or []),
+            },
+            "policy_snapshots": policy_rows,
         },
         source_refs=list(snapshots.source_refs),
         parent_artifact_ids=[snapshots.artifact_id],
         confidence=snapshots.confidence,
         risk_flags=["sector_analysis_requires_source_refresh"],
     )
+
+
+def _sector_heatmap(
+    *,
+    sector: object,
+    theme: object,
+    facts: dict,
+    constituents: list[dict],
+    source_count: int,
+    related_count: int,
+) -> list[dict]:
+    rows: list[dict] = []
+    latest_hist = facts.get("latest_hist") if isinstance(facts.get("latest_hist"), dict) else {}
+    sector_change = _to_float(latest_hist.get("pct_change"))
+    source_fact_score = _to_float(
+        facts.get("research_heat") or facts.get("heat_score") or facts.get("evidence_coverage")
+    )
+    if sector:
+        sector_row = {
+            "name": str(sector),
+            "score": source_fact_score if source_fact_score is not None else _normalized_change_score(sector_change),
+            "score_basis": "source_fact" if source_fact_score is not None else "sector_latest_pct_change",
+            "source_count": source_count,
+            "related_snapshot_count": related_count,
+            "theme": theme,
+        }
+        if source_fact_score is None:
+            sector_row["raw_value"] = sector_change
+        rows.append(sector_row)
+    ranked = sorted(
+        constituents,
+        key=lambda row: _to_float(row.get("pct_change")) if _to_float(row.get("pct_change")) is not None else -10_000.0,
+        reverse=True,
+    )
+    for constituent in ranked[:6]:
+        change = _to_float(constituent.get("pct_change"))
+        rows.append(
+            {
+                "name": str(constituent.get("name") or constituent.get("code") or "constituent"),
+                "symbol": str(constituent.get("code") or constituent.get("symbol") or ""),
+                "score": _normalized_change_score(change),
+                "raw_value": change,
+                "score_basis": "constituent_latest_pct_change",
+                "source_count": 1,
+                "theme": theme,
+            }
+        )
+    return rows
+
+
+def _normalized_change_score(value: float | None) -> float:
+    if value is None:
+        return 50.0
+    return round(max(0.0, min(100.0, 50.0 + value * 5.0)), 2)
 
 
 def review_thesis(context):
@@ -917,16 +1145,33 @@ def review_thesis(context):
     review_target_run_id = str(inputs.get("review_target_run_id") or "").strip() or None
     target_artifacts = _review_target_artifacts(context, review_target_run_id)
     target_findings = _target_findings(target_artifacts)
-    findings = [*items, *target_findings]
-    verdicts = [str(item.get("verdict") or "").lower() for item in items if isinstance(item, dict)]
-    overall_verdict = (
-        "insufficient_evidence" if not items
-        else "confirmed" if verdicts and all(item == "confirmed" for item in verdicts)
-        else "rejected" if verdicts and all(item == "rejected" for item in verdicts)
-        else "inconclusive"
-    )
-    strengths = [item for item in findings if isinstance(item, dict) and str(item.get("verdict") or "").lower() == "confirmed"]
-    weaknesses = [item for item in findings if isinstance(item, dict) and str(item.get("verdict") or "").lower() != "confirmed"]
+    current_findings = _current_evidence_findings(items)
+    findings = [*target_findings, *current_findings]
+    explicit_verdicts = [
+        str(item.get("verdict") or "").lower()
+        for item in items
+        if isinstance(item, dict) and str(item.get("verdict") or "").lower() in {"confirmed", "rejected"}
+    ]
+    if review_target_run_id and not target_artifacts:
+        overall_verdict = "target_not_found"
+    elif not items:
+        overall_verdict = "insufficient_fresh_evidence"
+    elif explicit_verdicts and all(item == "confirmed" for item in explicit_verdicts):
+        overall_verdict = "confirmed"
+    elif explicit_verdicts and all(item == "rejected" for item in explicit_verdicts):
+        overall_verdict = "rejected"
+    else:
+        overall_verdict = "inconclusive"
+    strengths = [
+        item
+        for item in findings
+        if isinstance(item, dict) and str(item.get("verdict") or "").lower() in {"confirmed", "available"}
+    ]
+    weaknesses = [
+        item
+        for item in findings
+        if isinstance(item, dict) and str(item.get("verdict") or "").lower() in {"rejected", "degraded", "unverified"}
+    ]
     source_refs = [*list(evidence.source_refs)]
     if review_target_run_id:
         source_refs.append({"type": "execution_run", "id": review_target_run_id})
@@ -942,6 +1187,25 @@ def review_thesis(context):
             "review_target_run_id": review_target_run_id,
             "review_target_artifact_ids": [artifact.artifact_id for artifact in target_artifacts],
             "review_target_found": bool(target_artifacts),
+            "target_thesis": target_findings,
+            "evidence_comparison": {
+                "target_artifact_count": len(target_artifacts),
+                "fresh_evidence_count": len(items),
+                "fresh_snapshot_types": list(
+                    dict.fromkeys(
+                        str(item.get("snapshot_type") or "")
+                        for item in items
+                        if isinstance(item, dict) and item.get("snapshot_type")
+                    )
+                ),
+                "fresh_symbols": list(
+                    dict.fromkeys(
+                        str(item.get("symbol") or "")
+                        for item in items
+                        if isinstance(item, dict) and item.get("symbol")
+                    )
+                ),
+            },
             "follow_up": [
                 "Refresh filings, valuation, and risk evidence before acting.",
                 *([f"Review focus: {inputs['review_focus']}"] if inputs.get("review_focus") else []),
@@ -949,14 +1213,22 @@ def review_thesis(context):
         },
         source_refs=source_refs,
         parent_artifact_ids=[evidence.artifact_id],
-        confidence=evidence.confidence,
-        risk_flags=["decision_support_only"],
+        confidence=min(_artifact_confidence(evidence.confidence), 0.85 if target_artifacts else 0.4),
+        risk_flags=[
+            "decision_support_only",
+            *(["review_target_not_found"] if review_target_run_id and not target_artifacts else []),
+            *(["fresh_evidence_missing"] if not items else []),
+        ],
     )
 
 
 def _review_target_artifacts(context, review_target_run_id: str | None):
     board = getattr(context, "artifact_board", None)
-    if not review_target_run_id or board is None:
+    if (
+        not review_target_run_id
+        or not _SAFE_RUN_ID_PATTERN.fullmatch(review_target_run_id)
+        or board is None
+    ):
         return []
     current_run_id = str(getattr(context, "run_id", "") or "")
     if review_target_run_id == current_run_id:
@@ -968,8 +1240,40 @@ def _review_target_artifacts(context, review_target_run_id: str | None):
         artifact
         for artifact in ArtifactBoard(target_path).list_artifacts(thread_id=None)
         if artifact.status == "active"
-        and artifact.artifact_type in {"research_report", "financial_analysis", "sector_analysis", "screening_result"}
+        and artifact.artifact_type in {
+            "research_report",
+            "stock_snapshot_bundle",
+            "evidence_set",
+            "financial_analysis",
+            "sector_analysis",
+            "screening_result",
+            "thesis_review",
+        }
     ]
+
+
+def _target_symbols(artifacts) -> list[str]:
+    symbols: list[str] = []
+    for artifact in artifacts:
+        content = artifact.content if isinstance(artifact.content, dict) else {}
+        candidates: list[object] = [*(content.get("symbols") or [])]
+        for snapshot in content.get("snapshots") or content.get("items") or []:
+            if isinstance(snapshot, dict):
+                candidates.append(snapshot.get("symbol"))
+        for key in ("screened_candidates", "watchlist_candidates"):
+            for candidate in content.get(key) or []:
+                if isinstance(candidate, dict):
+                    candidates.append(candidate.get("symbol") or candidate.get("code"))
+        screening = content.get("screening") if isinstance(content.get("screening"), dict) else {}
+        for key in ("screened_candidates", "watchlist_candidates"):
+            for candidate in screening.get(key) or []:
+                if isinstance(candidate, dict):
+                    candidates.append(candidate.get("symbol") or candidate.get("code"))
+        for value in candidates:
+            symbol = str(value or "").strip()
+            if _STOCK_CODE_PATTERN.fullmatch(symbol) and symbol not in symbols:
+                symbols.append(symbol)
+    return symbols
 
 
 def _target_findings(artifacts) -> list[dict]:
@@ -988,7 +1292,36 @@ def _target_findings(artifacts) -> list[dict]:
                 "artifact_id": artifact.artifact_id,
                 "artifact_type": artifact.artifact_type,
                 "summary": summary,
-                "verdict": "unverified",
+                "verdict": "prior_claim",
+            }
+        )
+    return findings
+
+
+def _current_evidence_findings(items: list[object]) -> list[dict]:
+    findings: list[dict] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        explicit = str(item.get("verdict") or "").strip().lower()
+        if explicit:
+            findings.append(dict(item))
+            continue
+        snapshot_type = str(item.get("snapshot_type") or "evidence")
+        symbol = str(item.get("symbol") or "target")
+        facts = item.get("facts") if isinstance(item.get("facts"), dict) else {}
+        findings.append(
+            {
+                "claim": f"Fresh {symbol} {snapshot_type} evidence",
+                "artifact_type": snapshot_type,
+                "summary": _snapshot_summary(
+                    symbol=symbol,
+                    snapshot_type=snapshot_type,
+                    facts=facts,
+                    degraded=bool(item.get("degraded")),
+                ),
+                "verdict": "degraded" if item.get("degraded") else "available",
+                "evidence_index": index,
             }
         )
     return findings

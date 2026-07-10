@@ -3,23 +3,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
 
-_STOCK_NAME_ALIASES = {
-    "\u8d35\u5dde\u8305\u53f0": "600519",
-    "\u8305\u53f0": "600519",
-    "\u5b81\u5fb7\u65f6\u4ee3": "300750",
-    "\u6bd4\u4e9a\u8fea": "002594",
-    "\u4eac\u4e1c\u65b9a": "000725",
-    "\u4eac\u4e1c\u65b9\uff21": "000725",
-    "\u5bd2\u6b66\u7eaa": "688256",
-    "\u65b0\u6613\u76db": "300502",
-    "\u5e73\u5b89\u94f6\u884c": "000001",
-    "\u62db\u5546\u94f6\u884c": "600036",
-    "\u5b81\u6ce2\u94f6\u884c": "002142",
-    "\u5174\u4e1a\u94f6\u884c": "601166",
-    "\u6c5f\u82cf\u94f6\u884c": "600919",
-    "\u6210\u90fd\u94f6\u884c": "601838",
-}
+_SECURITY_MASTER = AShareSecurityMaster()
 _SECTOR_ALIASES = {
     "\u534a\u5bfc\u4f53": "\u534a\u5bfc\u4f53",
     "\u4eba\u5f62\u673a\u5668\u4eba": "\u4eba\u5f62\u673a\u5668\u4eba",
@@ -34,6 +20,8 @@ _SCREEN_KEYWORDS = ("screen", "watchlist", "candidate", "\u9009\u80a1", "\u7b5b\
 _SECTOR_KEYWORDS = ("sector", "industry", "\u677f\u5757", "\u884c\u4e1a")
 _REVIEW_KEYWORDS = ("review thesis", "thesis review", "\u590d\u6838", "\u4e0a\u4e00\u8f6e\u5224\u65ad")
 _DISTILL_KEYWORDS = ("distill", "kol", "\u84b8\u998f", "\u63d0\u70bc")
+_PREVIOUS_RUN_KEYWORDS = ("previous", "prior", "last run", "latest run", "上一轮", "上次", "最近一次")
+_RUN_ID_PATTERN = re.compile(r"(?:run|运行)(?:\s*id)?\s*[#：:=]?\s*([A-Za-z0-9][A-Za-z0-9_-]{5,127})", re.IGNORECASE)
 
 
 def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
@@ -41,7 +29,9 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
     explicit_intent = str(request.get("intent") or "").strip() or None
     slots = dict(request.get("slots") or {})
     constraints = dict(request.get("constraints") or {})
-    symbols = _symbols(query, slots=slots, constraints=constraints)
+    runtime_context = dict(request.get("_runtime_context") or {})
+    resolution = _symbols(query, slots=slots, constraints=constraints)
+    symbols = resolution.symbols
     sector = _sector(query, slots=slots, constraints=constraints)
     if symbols:
         slots["symbols"] = symbols
@@ -70,12 +60,8 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
             intent=intent,
         )
     if intent == "stock_screen" and not symbols and not sector:
-        return _clarify(
-            "Please specify a sector or a candidate list for screening so the result has a defined investment universe.",
-            ["sector_or_symbols"],
-            query=query,
-            intent=intent,
-        )
+        constraints.setdefault("candidate_pool_size", 8)
+        slots["universe_scope"] = "ashare_liquidity_ranked"
     if intent == "sector_research" and not sector:
         return _clarify(
             "Please specify the sector or industry to research.",
@@ -83,13 +69,21 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
             query=query,
             intent=intent,
         )
-    if intent == "review_thesis" and not constraints.get("review_target_run_id"):
-        return _clarify(
-            "Please select the prior run whose thesis should be reviewed.",
-            ["review_target_run_id"],
+    if intent == "review_thesis":
+        review_target_run_id = _review_target_run_id(
             query=query,
-            intent=intent,
+            slots=slots,
+            constraints=constraints,
+            runtime_context=runtime_context,
         )
+        if not review_target_run_id:
+            return _clarify(
+                "Please select the prior run whose thesis should be reviewed.",
+                ["review_target_run_id"],
+                query=query,
+                intent=intent,
+            )
+        constraints["review_target_run_id"] = review_target_run_id
     return {
         "status": "accepted",
         "intent": intent,
@@ -100,26 +94,24 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
             "symbols": symbols,
             "sector": sector,
             "explicit_intent": bool(explicit_intent),
+            "security_resolution_source": resolution.source,
+            "security_matches": resolution.matches,
+            "ambiguous_security_terms": resolution.ambiguous_terms,
         },
     }
 
 
-def _symbols(query: str, *, slots: dict[str, Any], constraints: dict[str, Any]) -> list[str]:
+def _symbols(query: str, *, slots: dict[str, Any], constraints: dict[str, Any]):
     values: list[object] = [*(slots.get("symbols") or [])]
     if constraints.get("symbol"):
         values.append(constraints["symbol"])
     values.extend(constraints.get("symbols") or [])
-    values.extend(re.findall(r"\b(\d{6})\b", query))
-    normalized_query = query.casefold()
-    values.extend(
-        code for alias, code in _STOCK_NAME_ALIASES.items() if alias.casefold() in normalized_query
+    supplied_text = " ".join(str(value or "") for value in values)
+    return _SECURITY_MASTER.resolve(
+        f"{query} {supplied_text}".strip(),
+        supplied_symbols=values,
+        allow_network=True,
     )
-    result: list[str] = []
-    for value in values:
-        symbol = str(value or "").strip()
-        if symbol and symbol not in result:
-            result.append(symbol)
-    return result
 
 
 def _sector(query: str, *, slots: dict[str, Any], constraints: dict[str, Any]) -> str | None:
@@ -131,7 +123,42 @@ def _sector(query: str, *, slots: dict[str, Any], constraints: dict[str, Any]) -
         if alias.casefold() in lowered:
             return sector
     match = re.search(r"([A-Za-z0-9\u4e00-\u9fff]{2,20})(?:\u677f\u5757|\u884c\u4e1a)", query)
-    return match.group(1).strip() if match else None
+    if not match:
+        return None
+    candidate = match.group(1).strip()
+    candidate = re.sub(r"^(?:请|帮我|分析|研究|梳理|看看|复盘|关于|筛选)", "", candidate)
+    return candidate or None
+
+
+def _review_target_run_id(
+    *,
+    query: str,
+    slots: dict[str, Any],
+    constraints: dict[str, Any],
+    runtime_context: dict[str, Any],
+) -> str | None:
+    supplied = str(
+        constraints.get("review_target_run_id")
+        or slots.get("review_target_run_id")
+        or ""
+    ).strip()
+    if not supplied:
+        match = _RUN_ID_PATTERN.search(query)
+        supplied = match.group(1) if match else ""
+    if supplied:
+        return supplied
+    lowered = query.casefold()
+    if not any(keyword in query or keyword in lowered for keyword in _PREVIOUS_RUN_KEYWORDS):
+        return None
+    recent_runs = [row for row in runtime_context.get("recent_runs") or [] if isinstance(row, dict)]
+    eligible = [
+        row
+        for row in recent_runs
+        if str(row.get("run_id") or "").strip()
+        and str(row.get("status") or "") == "completed"
+        and str(row.get("intent") or "") != "review_thesis"
+    ]
+    return str(eligible[0].get("run_id")) if eligible else None
 
 
 def _infer_intent(*, query: str, symbols: list[str], sector: str | None) -> str | None:

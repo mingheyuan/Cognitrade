@@ -13,7 +13,12 @@ class TaskIntakeService:
     def __init__(self, registry: DomainPackRegistry) -> None:
         self.registry = registry
 
-    def resolve(self, request: RequestEnvelope) -> TaskIntakeDecision:
+    def resolve(
+        self,
+        request: RequestEnvelope,
+        *,
+        runtime_context: dict[str, Any] | None = None,
+    ) -> TaskIntakeDecision:
         explicit_intent = str(request.intent or "").strip()
         if explicit_intent.startswith("domain:"):
             domain_id = explicit_intent.split(":", 1)[1].strip()
@@ -39,7 +44,10 @@ class TaskIntakeService:
                 domain_id=manifest.domain_id,
                 implementation=implementation,
             )
-            raw = resolver(request.model_dump(mode="json"))
+            payload = request.model_dump(mode="json")
+            if runtime_context:
+                payload["_runtime_context"] = dict(runtime_context)
+            raw = resolver(payload)
             decision = TaskIntakeDecision.model_validate(raw)
             if decision.domain_id not in {None, manifest.domain_id}:
                 raise ValueError(

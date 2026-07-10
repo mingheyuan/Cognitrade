@@ -79,6 +79,7 @@ class DomainPackTests(unittest.TestCase):
                 "query_normalizer",
                 "stock_snapshot_collector",
                 "retrieval_decider",
+                "financial_analyst",
                 "llm_report_composer",
             ],
         )

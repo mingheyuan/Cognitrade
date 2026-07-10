@@ -169,7 +169,7 @@ class ApiV1RunsTests(unittest.TestCase):
         self.assertEqual(request.constraints["symbol"], "600519")
         self.assertEqual(request.slots, {})
 
-    def test_post_runs_defaults_an_unspecified_intent_for_agent_os_task_intake(self) -> None:
+    def test_post_runs_forwards_an_unspecified_intent_to_agent_os_task_intake(self) -> None:
         response = self.client.post(
             "/api/v1/runs",
             headers=auth_headers(),
@@ -180,7 +180,7 @@ class ApiV1RunsTests(unittest.TestCase):
         calls = self.orchestrator.calls_for("run")
         self.assertEqual(len(calls), 1)
         request = calls[0].args[0]
-        self.assertEqual(request.intent, "stock_check")
+        self.assertIsNone(request.intent)
 
     def test_domain_terminal_statuses_remain_http_200(self) -> None:
         for status in ("needs_clarification", "failed", "cancelled", "timed_out"):
@@ -393,11 +393,6 @@ class ApiV1RunsTests(unittest.TestCase):
                 "intent": "stock_compare",
                 "user_query": "比较重复标的",
                 "constraints": {"symbols": ["600519", "000001", "600519"]},
-            },
-            {
-                "intent": "review_thesis",
-                "user_query": "复核历史结论",
-                "constraints": {},
             },
             {
                 "intent": "methodology_evolution",

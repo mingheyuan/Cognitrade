@@ -38,12 +38,16 @@ function App() {
   }, [])
 
   const handleResearch = useCallback(
-    async (query: string, intent?: ResearchIntent) => {
+    async (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => {
       setActiveView('workbench')
       setSelectedEvidence('')
       try {
-        const response = await createRun(query, intent)
-        showToast(response.status === 'completed' ? '研究运行已完成，已加载真实报告与证据链。' : response.message)
+        const response = await createRun(query, intent, constraints)
+        showToast(
+          response.status === 'completed'
+            ? '研究运行已完成，已加载真实报告与证据链。'
+            : response.clarification?.question || response.message,
+        )
       } catch {
         // The shared context renders the transport error with its request id.
       }

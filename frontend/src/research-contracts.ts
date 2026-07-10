@@ -5,7 +5,6 @@ export type ResearchIntent =
   | 'sector_research'
   | 'distill_kol_logic'
   | 'review_thesis'
-  | 'methodology_evolution'
 
 export type RunStatus =
   | 'received'
@@ -173,6 +172,7 @@ export type RunReplayPayload = {
   display_summary?: string
   events?: RunEvent[]
   artifacts?: Array<Record<string, unknown>>
+  snapshot?: Record<string, unknown>
   [key: string]: unknown
 }
 

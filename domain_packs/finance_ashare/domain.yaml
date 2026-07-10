@@ -149,7 +149,6 @@ capabilities:
     latency_class: high
     reliability: 0.85
     cache_scope: run
-    tags: [intent:stock_check, intent:stock_compare]
   - subagent_type: screening_report_composer
     capability: finance.screen.report.compose
     implementation: subagents.runtime:compose_screening_report
