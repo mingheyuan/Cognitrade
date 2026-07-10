@@ -16,8 +16,10 @@ import {
 import { useCognitrade } from '../CognitradeContext'
 import { INTENT_LABELS } from '../data'
 import {
+  asNumber,
   asRecord,
   asString,
+  candidatesFromReport,
   evidenceFromReport,
   formatDate,
   intentFromDetail,
@@ -32,12 +34,27 @@ import type { ResearchIntent } from '../research-contracts'
 import { ResearchComposer } from './ResearchComposer'
 
 type WorkbenchProps = {
-  onSubmit: (query: string, intent?: ResearchIntent) => void
+  onSubmit: (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => void
   onSelectEvidence: (id: string) => void
 }
 
 function MetricCard({ label, value, note }: { label: string; value: string | number; note: string }) {
   return <div className="metric-card"><span>{label}</span><strong>{value}</strong><small>{note}</small></div>
+}
+
+function methodologySummary(raw: Record<string, unknown>): string {
+  const outputs = asRecord(raw.outputs)
+  const valuationBand = asRecord(raw.valuation_band)
+  const values = [
+    outputs.relative_view,
+    outputs.market_to_intrinsic_gap,
+    outputs.cashflow_state,
+    outputs.debt_capacity_state,
+    valuationBand.base,
+  ].filter((value) => value !== undefined && value !== null)
+  return values.length
+    ? values.map((value) => String(value)).join(' | ')
+    : 'No displayable model output was returned.'
 }
 
 export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
@@ -48,6 +65,7 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
     submitting,
     submittedQuery,
     runs,
+    lastResponse,
   } = useCognitrade()
   const report = reportFromDetail(selectedRun)
   const evidences = evidenceFromReport(report)
@@ -59,6 +77,11 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
   const counts = asRecord(selectedRun?.metrics.counts)
   const conclusion = asString(report.conclusion)
   const scorecard = asRecord(report.scorecard || report.screening_scorecard)
+  const methodologies = Array.isArray(report.methodologies) ? report.methodologies.map(asRecord) : []
+  const specialistCandidates = candidatesFromReport(report)
+  const sectorAnalysis = asRecord(report.sector_analysis)
+  const sectorHeatmap = Array.isArray(report.sector_heatmap) ? report.sector_heatmap.map(asRecord) : []
+  const thesisReview = asRecord(report.thesis_review)
   const artifactBackedReport = asString(report.protocol) === 'agent_os' && Array.isArray(report.final_artifact_ids)
   const updatedAt = selectedRun?.events.events.at(-1)?.created_at
 
@@ -100,6 +123,16 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
               <span>POST /api/v1/runs 当前为同步接口，完成后将加载真实 run、报告和证据。</span>
             </div>
             <RefreshCw size={16} className="spin-icon" />
+          </section>
+        )}
+
+        {lastResponse?.status === 'needs_clarification' && lastResponse.clarification && (
+          <section className="live-research-strip" role="status">
+            <span className="live-agent-orbit"><MessageSquareText size={15} /></span>
+            <div>
+              <strong>需要补充信息</strong>
+              <span>{lastResponse.clarification.question}（缺少：{lastResponse.clarification.missing_fields.join('、')}）</span>
+            </div>
           </section>
         )}
 
@@ -180,9 +213,59 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
                 </div>
               </section>
 
+              {(specialistCandidates.length > 0 || sectorHeatmap.length > 0 || Object.keys(thesisReview).length > 0) && (
+                <section className="report-section">
+                  <div className="report-section-heading"><div><span className="section-index">04</span><div><h3>专属交付</h3><p>直接读取对应 intent 的专业 Artifact，不使用通用报告占位。</p></div></div></div>
+                  <div className="live-key-value-grid">
+                    {specialistCandidates.slice(0, 8).map((candidate) => (
+                      <div key={`candidate-${candidate.code}`}>
+                        <span>候选 {candidate.rank} · {candidate.code}</span>
+                        <strong>{candidate.name} · {candidate.score === null ? '未评分' : candidate.score.toFixed(3)}</strong>
+                        <small>{candidate.reason}</small>
+                      </div>
+                    ))}
+                    {sectorHeatmap.slice(0, 8).map((raw, index) => (
+                      <div key={`sector-${asString(raw.symbol || raw.name, String(index))}`}>
+                        <span>{asString(raw.name, '板块信号')} · {asString(raw.score_basis, 'source_metric')}</span>
+                        <strong>{asNumber(raw.score)?.toFixed(2) ?? '—'}</strong>
+                        <small>原始值 {asString(raw.raw_value, '未提供')}</small>
+                      </div>
+                    ))}
+                    {Object.keys(thesisReview).length > 0 && (
+                      <div>
+                        <span>Thesis Review · {asString(thesisReview.review_target_run_id, '未指定历史运行')}</span>
+                        <strong>{asString(thesisReview.overall_verdict || thesisReview.verdict, 'inconclusive')}</strong>
+                        <small>{thesisReview.review_target_found ? '已读取目标运行 ArtifactBoard' : '未读取到目标运行产物'}</small>
+                      </div>
+                    )}
+                    {Object.keys(sectorAnalysis).length > 0 && (
+                      <div>
+                        <span>板块证据覆盖</span>
+                        <strong>{asString(sectorAnalysis.sector, '未命名板块')} · {asNumber(sectorAnalysis.source_count) ?? 0} 个来源</strong>
+                        <small>{Array.isArray(sectorAnalysis.policy_snapshots) && sectorAnalysis.policy_snapshots.length ? '已采集政策快照' : '政策快照不可用或未请求'}</small>
+                      </div>
+                    )}
+                  </div>
+                </section>
+              )}
+
+              {methodologies.length > 0 && (
+                <section className="report-section">
+                  <div className="report-section-heading"><div><span className="section-index">04</span><div><h3>Methodology Views</h3><p>Comps, DCF, and cashflow resilience are produced by the Finance Pack.</p></div></div></div>
+                  <div className="live-key-value-grid">
+                    {methodologies.slice(0, 12).map((methodology, index) => (
+                      <div key={`${asString(methodology.methodology_type, 'method')}-${asString(methodology.target_symbol, String(index))}`}>
+                        <span>{asString(methodology.target_symbol, 'symbol')} | {asString(methodology.methodology_type, 'methodology')}</span>
+                        <strong>{methodologySummary(methodology)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
               {Object.keys(scorecard).length > 0 && (
                 <section className="report-section">
-                  <div className="report-section-heading"><div><span className="section-index">04</span><div><h3>结构化评分卡</h3><p>原样展示后端 scorecard 字段</p></div></div></div>
+                  <div className="report-section-heading"><div><span className="section-index">05</span><div><h3>结构化评分卡</h3><p>原样展示后端 scorecard 字段</p></div></div></div>
                   <div className="live-key-value-grid">
                     {Object.entries(scorecard).slice(0, 12).map(([key, value]) => (
                       <div key={key}><span>{key}</span><strong>{typeof value === 'object' ? JSON.stringify(value) : String(value)}</strong></div>

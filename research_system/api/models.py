@@ -31,7 +31,7 @@ class ChatThreadRenameRequest(ApiRequestModel):
 
 
 class ChatResearchRequest(ApiRequestModel):
-    intent: str = Field(min_length=1, max_length=128)
+    intent: str | None = Field(default=None, max_length=128)
     user_query: str = Field(min_length=1, max_length=20_000)
     conversation_context: list[dict[str, Any]] = Field(default_factory=list)
     slots: dict[str, Any] = Field(default_factory=dict)

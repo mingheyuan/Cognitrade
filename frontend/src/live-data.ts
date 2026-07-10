@@ -104,19 +104,49 @@ export function asStringList(value: unknown): string[] {
 }
 
 export function reportFromDetail(detail?: RunDetail | null): ResearchReport {
+  const artifacts = Array.isArray(detail?.replay.artifacts) ? detail.replay.artifacts : []
+  const reportArtifact = [...artifacts].reverse().find((artifact) => (
+    asString(asRecord(artifact).artifact_type) === 'research_report'
+  ))
+  const content = asRecord(asRecord(reportArtifact).content)
+  if (Object.keys(content).length > 0) {
+    const artifactId = asString(asRecord(reportArtifact).artifact_id)
+    return {
+      ...content,
+      protocol: 'agent_os',
+      final_artifact_ids: artifactId ? [artifactId] : [],
+    } as ResearchReport
+  }
   return asRecord(detail?.replay.result?.report) as ResearchReport
 }
 
 export function queryFromDetail(detail?: RunDetail | null): string {
-  return asString(detail?.replay.request?.user_query)
+  const request = asRecord(detail?.replay.request)
+  return asString(request.user_query || asRecord(request.request).user_query)
 }
 
 export function intentFromDetail(detail?: RunDetail | null): string {
-  return asString(detail?.replay.result?.intent || detail?.replay.request?.intent || detail?.steps.intent)
+  const request = asRecord(detail?.replay.request)
+  const graph = asRecord(asRecord(detail?.replay.snapshot).graph)
+  const metadata = asRecord(graph.metadata)
+  return asString(
+    detail?.replay.result?.intent
+      || request.intent
+      || asRecord(request.request).intent
+      || metadata.intent
+      || detail?.steps.intent,
+  )
 }
 
 export function statusFromDetail(detail?: RunDetail | null): string {
-  return asString(detail?.replay.summary?.status || detail?.metrics.summary?.status, 'unknown')
+  return asString(
+    detail?.replay.summary?.status
+      || asRecord(detail?.replay.snapshot).status
+      || detail?.metrics.status
+      || detail?.events.status
+      || detail?.metrics.summary?.status,
+    'unknown',
+  )
 }
 
 export function isActiveStatus(status?: string | null): boolean {
@@ -196,7 +226,7 @@ export function candidatesFromReport(report: ResearchReport): CandidateItem[] {
     const change = asNumber(row.latest_pct_change ?? row.change_pct ?? row.change)
     const cashflow = asNumber(row.cashflow_score ?? row.cash_flow_score)
     const momentum = asNumber(row.momentum_score ?? row.trend_score)
-    const reason = asString(row.why || row.reason || row.summary, '后端未提供候选理由')
+    const reason = asString(row.why_it_made_the_list || row.why || row.reason || row.summary, '后端未提供候选理由')
     const deepChecked = Boolean(row.deep_checked ?? row.verified)
     return {
       rank: asNumber(row.rank) || index + 1,
@@ -208,9 +238,9 @@ export function candidatesFromReport(report: ResearchReport): CandidateItem[] {
       valuation: asString(row.valuation || row.valuation_state, '未提供'),
       cashflow,
       momentum,
-      tier: asString(row.tier, deepChecked ? '深度核验' : '候选'),
+      tier: asString(row.candidate_tier || row.tier, deepChecked ? '深度核验' : '候选'),
       reason,
-      risk: asString(row.risk, '未提供'),
+      risk: asString(row.main_risk || row.risk, '未提供'),
       deepChecked,
     }
   })

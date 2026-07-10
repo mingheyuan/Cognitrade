@@ -1,0 +1,189 @@
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
+
+_SECURITY_MASTER = AShareSecurityMaster()
+_SECTOR_ALIASES = {
+    "\u534a\u5bfc\u4f53": "\u534a\u5bfc\u4f53",
+    "\u4eba\u5f62\u673a\u5668\u4eba": "\u4eba\u5f62\u673a\u5668\u4eba",
+    "\u65b0\u80fd\u6e90": "\u65b0\u80fd\u6e90",
+    "\u521b\u65b0\u836f": "\u521b\u65b0\u836f",
+    "\u94f6\u884c": "\u94f6\u884c",
+    "ai": "AI",
+    "semiconductor": "semiconductor",
+}
+_COMPARE_KEYWORDS = ("compare", "comparison", "\u5bf9\u6bd4", "\u6bd4\u8f83", "\u54ea\u4e2a\u597d", "\u6392\u4e00\u4e0b")
+_SCREEN_KEYWORDS = ("screen", "watchlist", "candidate", "\u9009\u80a1", "\u7b5b\u9009", "\u63a8\u8350")
+_SECTOR_KEYWORDS = ("sector", "industry", "\u677f\u5757", "\u884c\u4e1a")
+_REVIEW_KEYWORDS = ("review thesis", "thesis review", "\u590d\u6838", "\u4e0a\u4e00\u8f6e\u5224\u65ad")
+_DISTILL_KEYWORDS = ("distill", "kol", "\u84b8\u998f", "\u63d0\u70bc")
+_PREVIOUS_RUN_KEYWORDS = ("previous", "prior", "last run", "latest run", "上一轮", "上次", "最近一次")
+_RUN_ID_PATTERN = re.compile(r"(?:run|运行)(?:\s*id)?\s*[#：:=]?\s*([A-Za-z0-9][A-Za-z0-9_-]{5,127})", re.IGNORECASE)
+
+
+def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
+    query = str(request.get("user_query") or "").strip()
+    explicit_intent = str(request.get("intent") or "").strip() or None
+    slots = dict(request.get("slots") or {})
+    constraints = dict(request.get("constraints") or {})
+    runtime_context = dict(request.get("_runtime_context") or {})
+    resolution = _symbols(query, slots=slots, constraints=constraints)
+    symbols = resolution.symbols
+    sector = _sector(query, slots=slots, constraints=constraints)
+    if symbols:
+        slots["symbols"] = symbols
+    if sector:
+        slots["sector"] = sector
+
+    intent = explicit_intent or _infer_intent(query=query, symbols=symbols, sector=sector)
+    if intent is None:
+        return _clarify(
+            "Please provide an A-share code or company name, a sector, or state whether you want screening, comparison, or thesis review.",
+            ["intent_or_target"],
+            query=query,
+        )
+    if intent == "stock_compare" and len(symbols) < 2:
+        return _clarify(
+            "Please provide at least two A-share codes or company names to compare.",
+            ["symbols"],
+            query=query,
+            intent=intent,
+        )
+    if intent == "stock_check" and not symbols and not slots.get("snapshots"):
+        return _clarify(
+            "Please provide an A-share code or supported company name for the analysis.",
+            ["symbols"],
+            query=query,
+            intent=intent,
+        )
+    if intent == "stock_screen" and not symbols and not sector:
+        constraints.setdefault("candidate_pool_size", 8)
+        slots["universe_scope"] = "ashare_liquidity_ranked"
+    if intent == "sector_research" and not sector:
+        return _clarify(
+            "Please specify the sector or industry to research.",
+            ["sector"],
+            query=query,
+            intent=intent,
+        )
+    if intent == "review_thesis":
+        review_target_run_id = _review_target_run_id(
+            query=query,
+            slots=slots,
+            constraints=constraints,
+            runtime_context=runtime_context,
+        )
+        if not review_target_run_id:
+            return _clarify(
+                "Please select the prior run whose thesis should be reviewed.",
+                ["review_target_run_id"],
+                query=query,
+                intent=intent,
+            )
+        constraints["review_target_run_id"] = review_target_run_id
+    return {
+        "status": "accepted",
+        "intent": intent,
+        "slots": slots,
+        "constraints": constraints,
+        "trace": {
+            "source": "finance_ashare.task_intake",
+            "symbols": symbols,
+            "sector": sector,
+            "explicit_intent": bool(explicit_intent),
+            "security_resolution_source": resolution.source,
+            "security_matches": resolution.matches,
+            "ambiguous_security_terms": resolution.ambiguous_terms,
+        },
+    }
+
+
+def _symbols(query: str, *, slots: dict[str, Any], constraints: dict[str, Any]):
+    values: list[object] = [*(slots.get("symbols") or [])]
+    if constraints.get("symbol"):
+        values.append(constraints["symbol"])
+    values.extend(constraints.get("symbols") or [])
+    supplied_text = " ".join(str(value or "") for value in values)
+    return _SECURITY_MASTER.resolve(
+        f"{query} {supplied_text}".strip(),
+        supplied_symbols=values,
+        allow_network=True,
+    )
+
+
+def _sector(query: str, *, slots: dict[str, Any], constraints: dict[str, Any]) -> str | None:
+    supplied = str(slots.get("sector") or constraints.get("sector_query") or "").strip()
+    if supplied:
+        return supplied
+    lowered = query.casefold()
+    for alias, sector in _SECTOR_ALIASES.items():
+        if alias.casefold() in lowered:
+            return sector
+    match = re.search(r"([A-Za-z0-9\u4e00-\u9fff]{2,20})(?:\u677f\u5757|\u884c\u4e1a)", query)
+    if not match:
+        return None
+    candidate = match.group(1).strip()
+    candidate = re.sub(r"^(?:请|帮我|分析|研究|梳理|看看|复盘|关于|筛选)", "", candidate)
+    return candidate or None
+
+
+def _review_target_run_id(
+    *,
+    query: str,
+    slots: dict[str, Any],
+    constraints: dict[str, Any],
+    runtime_context: dict[str, Any],
+) -> str | None:
+    supplied = str(
+        constraints.get("review_target_run_id")
+        or slots.get("review_target_run_id")
+        or ""
+    ).strip()
+    if not supplied:
+        match = _RUN_ID_PATTERN.search(query)
+        supplied = match.group(1) if match else ""
+    if supplied:
+        return supplied
+    lowered = query.casefold()
+    if not any(keyword in query or keyword in lowered for keyword in _PREVIOUS_RUN_KEYWORDS):
+        return None
+    recent_runs = [row for row in runtime_context.get("recent_runs") or [] if isinstance(row, dict)]
+    eligible = [
+        row
+        for row in recent_runs
+        if str(row.get("run_id") or "").strip()
+        and str(row.get("status") or "") == "completed"
+        and str(row.get("intent") or "") != "review_thesis"
+    ]
+    return str(eligible[0].get("run_id")) if eligible else None
+
+
+def _infer_intent(*, query: str, symbols: list[str], sector: str | None) -> str | None:
+    lowered = query.casefold()
+    if _contains(query, lowered, _REVIEW_KEYWORDS):
+        return "review_thesis"
+    if _contains(query, lowered, _DISTILL_KEYWORDS):
+        return "distill_kol_logic"
+    if _contains(query, lowered, _COMPARE_KEYWORDS):
+        return "stock_compare"
+    if _contains(query, lowered, _SCREEN_KEYWORDS):
+        return "stock_screen"
+    if _contains(query, lowered, _SECTOR_KEYWORDS) or sector:
+        return "sector_research"
+    return "stock_check" if symbols else None
+
+
+def _contains(query: str, lowered: str, keywords: tuple[str, ...]) -> bool:
+    return any(keyword in query or keyword in lowered for keyword in keywords)
+
+
+def _clarify(question: str, missing_fields: list[str], *, query: str, intent: str | None = None) -> dict[str, Any]:
+    return {
+        "status": "needs_clarification",
+        "intent": intent,
+        "clarification": {"question": question, "missing_fields": missing_fields},
+        "trace": {"source": "finance_ashare.task_intake", "query": query},
+    }

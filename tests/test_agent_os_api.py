@@ -78,7 +78,6 @@ class AgentOSApiTests(unittest.TestCase):
                     "/api/v1/runs",
                     headers=headers,
                     json={
-                        "intent": "stock_check",
                         "user_query": "Review supplied evidence for 600000.",
                         "slots": {
                             "symbols": ["600000"],
@@ -95,6 +94,7 @@ class AgentOSApiTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200, response.text)
                 payload = response.json()
                 self.assertEqual(payload["result"]["protocol"], "agent_os")
+                self.assertEqual(payload["intent"], "stock_check")
                 run_id = payload["run_id"]
 
                 steps = client.get(f"/api/v1/runs/{run_id}/steps", headers=headers)

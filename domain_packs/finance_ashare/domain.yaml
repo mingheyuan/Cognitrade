@@ -6,6 +6,7 @@ artifact_types:
   - artifact_type: normalized_query
   - artifact_type: stock_snapshot_bundle
   - artifact_type: evidence_set
+  - artifact_type: financial_analysis
   - artifact_type: screening_result
   - artifact_type: sector_analysis
   - artifact_type: thesis_review
@@ -53,6 +54,15 @@ capabilities:
     latency_class: medium
     reliability: 0.85
     cache_scope: run
+  - subagent_type: financial_analyst
+    capability: finance.analysis.evaluate
+    implementation: subagents.runtime:analyze_financials
+    consumes:
+      - artifact_type: stock_snapshot_bundle
+    produces:
+      - artifact_type: financial_analysis
+    reliability: 0.92
+    cache_scope: run
   - subagent_type: stock_screen_analyzer
     capability: finance.stock.screen
     implementation: subagents.runtime:screen_stocks
@@ -63,6 +73,7 @@ capabilities:
     parallel_safe: true
     reliability: 0.9
     cache_scope: run
+    tags: [intent:stock_screen]
   - subagent_type: sector_research_analyzer
     capability: finance.sector.research
     implementation: subagents.runtime:research_sector
@@ -73,6 +84,7 @@ capabilities:
     parallel_safe: true
     reliability: 0.9
     cache_scope: run
+    tags: [intent:sector_research]
   - subagent_type: thesis_reviewer
     capability: finance.thesis.review
     implementation: subagents.runtime:review_thesis
@@ -82,6 +94,7 @@ capabilities:
       - artifact_type: thesis_review
     reliability: 0.9
     cache_scope: run
+    tags: [intent:review_thesis]
   - subagent_type: distillation_source_collector
     capability: finance.distillation.sources.collect
     implementation: subagents.runtime:collect_distillation_sources
@@ -128,6 +141,7 @@ capabilities:
     implementation: subagents.runtime:compose_report
     consumes:
       - artifact_type: evidence_set
+      - artifact_type: financial_analysis
     produces:
       - artifact_type: research_report
     requires_llm: true
@@ -135,6 +149,36 @@ capabilities:
     latency_class: high
     reliability: 0.85
     cache_scope: run
+  - subagent_type: screening_report_composer
+    capability: finance.screen.report.compose
+    implementation: subagents.runtime:compose_screening_report
+    consumes:
+      - artifact_type: screening_result
+    produces:
+      - artifact_type: research_report
+    reliability: 0.9
+    cache_scope: run
+    tags: [intent:stock_screen]
+  - subagent_type: sector_report_composer
+    capability: finance.sector.report.compose
+    implementation: subagents.runtime:compose_sector_report
+    consumes:
+      - artifact_type: sector_analysis
+    produces:
+      - artifact_type: research_report
+    reliability: 0.9
+    cache_scope: run
+    tags: [intent:sector_research]
+  - subagent_type: thesis_review_report_composer
+    capability: finance.thesis.report.compose
+    implementation: subagents.runtime:compose_thesis_review_report
+    consumes:
+      - artifact_type: thesis_review
+    produces:
+      - artifact_type: research_report
+    reliability: 0.9
+    cache_scope: run
+    tags: [intent:review_thesis]
 quality_gates:
   - gate_id: finance.sources_required
     artifact_type: research_report
@@ -147,6 +191,7 @@ report_contracts:
     required_source_refs: true
     required_gate_ids: [finance.sources_required]
 planner_policies:
+  task_intake: subagents.task_intake:resolve_request
   prefer_evidence_backed_paths: true
   supported_intents:
     - stock_check

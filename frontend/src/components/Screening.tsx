@@ -15,7 +15,7 @@ import { asNumber, asRecord, asString, dashboardCandidates, dashboardValue } fro
 import type { ResearchIntent } from '../research-contracts'
 
 type ScreeningProps = {
-  onSubmit: (query: string, intent?: ResearchIntent) => void
+  onSubmit: (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => void
   onOpenRun: (runId: string) => void
 }
 

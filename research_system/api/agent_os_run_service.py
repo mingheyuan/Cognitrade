@@ -16,7 +16,24 @@ class AgentOSRunService:
         self.agent_os = agent_os
 
     def run(self, request: RequestEnvelope) -> ResponseEnvelope:
-        return self._response(request, self.agent_os.run_request(request))
+        decision = self.agent_os.intake(request)
+        if decision.status != "accepted":
+            return ResponseEnvelope(
+                request_id=request.request_id,
+                intent=request.intent,
+                status="needs_clarification",
+                message="Clarification required before Agent OS execution",
+                clarification=decision.clarification,
+                progress=ProgressState(
+                    current_phase="task_intake",
+                    latest_event="clarification_requested",
+                    status_message="Task Intake requires more information",
+                    percent=0,
+                ),
+                result={"task_intake": decision.model_dump(mode="json")},
+            )
+        resolved_request = decision.apply_to(request)
+        return self._response(resolved_request, self.agent_os.run_request(resolved_request))
 
     def history(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []

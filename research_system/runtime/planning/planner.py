@@ -61,6 +61,7 @@ class RuntimePlanner:
                     "entry_protocol": "agent_os",
                     "intent": intent,
                     "intent_inputs": {
+                        "intent": intent,
                         **dict(request.slots),
                         **dict(request.constraints),
                     },

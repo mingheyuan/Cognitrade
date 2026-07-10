@@ -6,6 +6,7 @@ from typing import Any
 
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.execution.core.graph_runner import ExecutionGraphRunner
+from research_system.runtime.intake.task_intake import TaskIntakeService
 from research_system.runtime.planning.capability_planner import CapabilityPlanner
 from research_system.runtime.planning.planner import RuntimePlanner
 from research_system.runtime.platform.settings import Settings
@@ -26,6 +27,7 @@ class AgentOS:
         self.settings = settings
         self.registry = DomainPackRegistry.load(settings.domain_packs_root)
         self.planner = CapabilityPlanner(self.registry)
+        self.task_intake = TaskIntakeService(self.registry)
         self.run_store = RunStore(settings.runs_root)
         self.memory = LayeredMemoryStore(settings.memory_root / "agent_os")
         self._active: dict[str, ExecutionGraphRunner] = {}
@@ -132,9 +134,11 @@ class AgentOS:
         *,
         run_id: str | None = None,
     ) -> ExecutionRunResult:
+        decision = self.intake(request)
+        if decision.status != "accepted":
+            raise ValueError("Agent OS Task Intake requires clarification before execution")
+        request = decision.apply_to(request)
         intent = str(request.intent or "").strip()
-        if not intent:
-            raise ValueError("Agent OS Task Intake requires an intent")
         graph = RuntimePlanner(settings=self.settings).build_initial_execution_graph(
             intent=intent,
             request=request,
@@ -186,6 +190,12 @@ class AgentOS:
         finally:
             with self._lock:
                 self._active.pop(effective_run_id, None)
+
+    def intake(self, request: RequestEnvelope):
+        return self.task_intake.resolve(
+            request,
+            runtime_context={"recent_runs": self.run_store.list_runs()},
+        )
 
     def inspect_run(self, run_id: str) -> dict[str, Any]:
         root = self.run_store.load_run_paths(run_id).root

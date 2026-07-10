@@ -47,14 +47,13 @@ type CognitradeContextValue = {
   refresh: () => Promise<void>
   selectRun: (runId: string) => void
   reloadRun: (runId: string) => Promise<void>
-  createRun: (query: string, intent?: ResearchIntent) => Promise<ResearchResponse>
+  createRun: (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => Promise<ResearchResponse>
   cancelRun: (runId: string) => Promise<void>
   rerunRun: (runId: string, fromNode: string) => Promise<ResearchResponse>
   clearError: () => void
 }
 
 const CognitradeContext = createContext<CognitradeContextValue | null>(null)
-
 function errorMessage(error: unknown): string {
   if (error instanceof CognitradeApiError) {
     const requestId = error.requestId ? ` · request ${error.requestId}` : ''
@@ -176,7 +175,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const createRun = useCallback(
-    async (query: string, intent?: ResearchIntent) => {
+    async (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => {
       setSubmitting(true)
       setSubmittedQuery(query)
       setError('')
@@ -184,6 +183,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
         const response = await client.createRun({
           user_query: query,
           ...(intent ? { intent } : {}),
+          ...(constraints && Object.keys(constraints).length ? { constraints } : {}),
         })
         setLastResponse(response)
         if (response.run_id) {

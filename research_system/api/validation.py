@@ -17,7 +17,6 @@ SUPPORTED_RESEARCH_INTENTS = frozenset(
         "sector_research",
         "distill_kol_logic",
         "review_thesis",
-        "methodology_evolution",
     }
 )
 
@@ -64,25 +63,7 @@ _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
         "investment_cycle",
         *_PLANNING_FIELDS,
     },
-    "methodology_evolution": {
-        "target_run_id",
-        "target_run_ids",
-        "auto_approve",
-        "force_auto_approve",
-        "min_dimension_sample_size",
-        "min_valuation_sample_size",
-        "min_review_pattern_sample_size",
-        "min_dimension_average_confidence",
-        "min_valuation_average_confidence",
-        "max_memory_support_age_days",
-        "min_dimension_memory_support_entity_scope_count",
-        "min_valuation_memory_support_entity_scope_count",
-        *_PLANNING_FIELDS,
-    },
 }
-_ALL_PUBLIC_CONSTRAINTS = frozenset().union(*_CONSTRAINTS_BY_INTENT.values())
-
-
 def safe_identifier(value: str, *, field_name: str) -> str:
     normalized = str(value or "").strip()
     if not _IDENTIFIER_PATTERN.fullmatch(normalized):
@@ -113,7 +94,7 @@ def validate_research_request(request: RequestEnvelope) -> RequestEnvelope:
         )
 
     intent = str(request.intent or "").strip() or None
-    if intent is not None and intent not in SUPPORTED_RESEARCH_INTENTS:
+    if intent is not None and not intent.startswith("domain:") and intent not in SUPPORTED_RESEARCH_INTENTS:
         raise ApiError(
             status_code=422,
             code="invalid_intent",
@@ -122,7 +103,10 @@ def validate_research_request(request: RequestEnvelope) -> RequestEnvelope:
         )
 
     constraints = dict(request.constraints or {})
-    allowed_fields = _CONSTRAINTS_BY_INTENT[intent] if intent is not None else _ALL_PUBLIC_CONSTRAINTS
+    if intent is None or intent.startswith("domain:"):
+        return request.model_copy(update={"intent": intent, "user_query": query, "constraints": constraints})
+
+    allowed_fields = _CONSTRAINTS_BY_INTENT[intent]
     unknown_fields = sorted(str(key) for key in constraints if str(key) not in allowed_fields)
     if unknown_fields:
         raise ApiError(
@@ -137,11 +121,6 @@ def validate_research_request(request: RequestEnvelope) -> RequestEnvelope:
         _validate_stock_compare_constraints(constraints)
     elif intent == "stock_screen":
         _validate_stock_screen_constraints(constraints)
-    elif intent == "review_thesis":
-        _validate_review_constraints(constraints)
-    elif intent == "methodology_evolution":
-        _validate_methodology_evolution_constraints(constraints)
-
     return request.model_copy(update={"intent": intent, "user_query": query, "constraints": constraints})
 
 
@@ -238,30 +217,6 @@ def _validate_stock_screen_constraints(constraints: dict[str, Any]) -> None:
         value = int(constraints.get(field_name, default))
         if value > candidate_pool_size:
             _invalid_constraint(field_name, "must not exceed candidate_pool_size")
-
-
-def _validate_review_constraints(constraints: dict[str, Any]) -> None:
-    target = constraints.get("review_target_run_id")
-    if not isinstance(target, str) or not target.strip():
-        raise ApiError(
-            status_code=422,
-            code="review_target_run_id_required",
-            message="review_thesis requires review_target_run_id",
-            details={"field": "review_target_run_id"},
-        )
-
-
-def _validate_methodology_evolution_constraints(constraints: dict[str, Any]) -> None:
-    single_target = str(constraints.get("target_run_id") or "").strip()
-    target_list = constraints.get("target_run_ids")
-    has_target_list = isinstance(target_list, list) and bool(target_list)
-    if not single_target and not has_target_list:
-        raise ApiError(
-            status_code=422,
-            code="target_run_required",
-            message="methodology_evolution requires target_run_id or target_run_ids",
-            details={"fields": ["target_run_id", "target_run_ids"]},
-        )
 
 
 def _require_non_empty_string(value: Any, *, field_name: str) -> str:

@@ -36,7 +36,7 @@ import type { ResearchIntent } from '../research-contracts'
 import { ResearchComposer } from './ResearchComposer'
 
 type OverviewProps = {
-  onSubmit: (query: string, intent?: ResearchIntent) => void
+  onSubmit: (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => void
   onOpenWorkbench: () => void
   onOpenRuns: () => void
   onOpenRun: (runId: string) => void
@@ -57,6 +57,7 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
     methodologyDashboard,
     systemStatus,
     selectedRun,
+    selectedRunId,
     submitting,
   } = useCognitrade()
   const selectedReport = reportFromDetail(selectedRun)
@@ -81,7 +82,13 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
             <span>常用研究</span>
             <button onClick={() => onSubmit('筛选现金流质量改善且估值合理的公司', 'stock_screen')}>现金流筛选</button>
             <button onClick={() => onSubmit('梳理人形机器人板块的近期催化与主要风险', 'sector_research')}>板块催化</button>
-            <button onClick={() => onSubmit('复核上一轮创新药板块研究判断', 'review_thesis')}>复核判断</button>
+            <button
+              onClick={() => onSubmit(
+                '复核上一轮研究判断，并用最新证据检查结论是否仍成立',
+                'review_thesis',
+                selectedRunId ? { review_target_run_id: selectedRunId } : undefined,
+              )}
+            >复核判断</button>
           </div>
         </div>
         <aside className="daily-focus-card">

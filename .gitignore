@@ -18,6 +18,7 @@ node_modules/
 frontend/dist/
 frontend/.vite/
 
+workspace/
 workspace/qdrant_local/
 workspace/runs/
 workspace/chat_runs/
