@@ -22,7 +22,7 @@ __all__ = [
     "MemoryPromotionError",
     "MemoryServiceWriteSupport",
     "MethodologyMemoryWriter",
-    "QDRANT_BLACKBOARD_MEMORY",
+    "QDRANT_ARTIFACT_MEMORY",
     "SAME_INTENT_RECENT_MEMORY",
     "build_memory_id",
     "build_memory_recorded_at",
@@ -88,9 +88,9 @@ _EXPORTS = {
         "research_system.services.memory.write.methodology_writer",
         "MethodologyMemoryWriter",
     ),
-    "QDRANT_BLACKBOARD_MEMORY": (
+    "QDRANT_ARTIFACT_MEMORY": (
         "research_system.services.memory.core.retrieval_priority",
-        "QDRANT_BLACKBOARD_MEMORY",
+        "QDRANT_ARTIFACT_MEMORY",
     ),
     "SAME_INTENT_RECENT_MEMORY": (
         "research_system.services.memory.core.retrieval_priority",

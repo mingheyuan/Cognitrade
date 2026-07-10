@@ -29,7 +29,6 @@ CHAT_COMMANDS = [
     "/subagent-read",
     "/run-steps",
     "/rerun-from",
-    "/rerun-subagent",
     "/run",
     "/review",
     "/history",
@@ -114,8 +113,6 @@ def chat_completion_candidates(text_before_cursor: str, state) -> list[str]:
     if command == "/run-steps":
         return unique_run_ids
     if command == "/rerun-from":
-        return unique_run_ids if len(parts) <= 2 else []
-    if command == "/rerun-subagent":
         return unique_run_ids if len(parts) <= 2 else []
     if command == "/run-id":
         return ["clear", *recent_run_ids]

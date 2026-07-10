@@ -45,7 +45,6 @@ EXPECTED_API_V1_OPERATIONS = {
     ("GET", "/api/v1/runs/{run_id}/recovery"),
     ("POST", "/api/v1/runs/{run_id}/cancel"),
     ("POST", "/api/v1/runs/{run_id}/reruns"),
-    ("POST", "/api/v1/runs/{run_id}/subagent-reruns"),
     ("POST", "/api/v1/chat/threads"),
     ("GET", "/api/v1/chat/threads"),
     ("GET", "/api/v1/chat/threads/{thread_id}"),
@@ -55,13 +54,12 @@ EXPECTED_API_V1_OPERATIONS = {
     ("POST", "/api/v1/chat/threads/{thread_id}/archive"),
     ("POST", "/api/v1/chat/threads/{thread_id}/unarchive"),
     ("POST", "/api/v1/chat/threads/{thread_id}/compact"),
-    ("GET", "/api/v1/admin/proposals"),
-    ("GET", "/api/v1/admin/proposals/{proposal_id}"),
-    ("POST", "/api/v1/admin/proposals/{proposal_id}/reviews"),
-    ("GET", "/api/v1/admin/subagent-discoveries"),
-    ("GET", "/api/v1/admin/subagent-discoveries/{ticket_id}"),
-    ("POST", "/api/v1/admin/subagent-discoveries/{ticket_id}/reviews"),
-    ("POST", "/api/v1/admin/subagent-discoveries/{ticket_id}/activations"),
+    ("POST", "/api/v1/chat/threads/{thread_id}/runs"),
+    ("GET", "/api/v1/admin/domain-packs"),
+    ("GET", "/api/v1/admin/domain-packs/{domain_id}"),
+    ("GET", "/api/v1/admin/runs/{run_id}/approvals"),
+    ("POST", "/api/v1/admin/runs/{run_id}/approvals"),
+    ("GET", "/api/v1/admin/memory"),
     ("GET", "/api/v1/system/status"),
     ("POST", "/api/v1/system/doctor"),
     ("POST", "/api/v1/admin/system/checks"),
@@ -103,15 +101,15 @@ class ApiV1SseOpenApiTests(unittest.TestCase):
         root = self.settings.runs_root / run_id
         root.mkdir(parents=True, exist_ok=True)
         for event in events or []:
-            append_jsonl(root / "events.jsonl", event)
+            append_jsonl(root / "execution_events.jsonl", event)
         write_json(
-            root / "run_state.json",
+            root / "execution_snapshot.json",
             {"run_id": run_id, "status": status},
         )
         return root
 
     def test_sse_response_has_required_headers_and_raw_event_frame(self) -> None:
-        event = run_event().model_dump(mode="json")
+        event = run_event(event_type="graph_node_started").model_dump(mode="json")
         event["message"] = "采集进度 50%"
         self.write_terminal_run(events=[event])
 
@@ -133,14 +131,14 @@ class ApiV1SseOpenApiTests(unittest.TestCase):
         )
         self.assertEqual(
             response.text,
-            f"id: {EVENT_ID}\nevent: agent_progress\ndata: {expected_data}\n\n",
+            f"id: {EVENT_ID}\nevent: graph_node_started\ndata: {expected_data}\n\n",
         )
 
     def test_last_event_id_resumes_after_the_matching_event(self) -> None:
         first = run_event().model_dump(mode="json")
         second = run_event(
             event_id=SECOND_EVENT_ID,
-            event_type="run_completed",
+            event_type="graph_run_finished",
         ).model_dump(mode="json")
         self.write_terminal_run(events=[first, second])
 
@@ -152,7 +150,7 @@ class ApiV1SseOpenApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotIn(EVENT_ID + "\n", response.text)
         self.assertIn(f"id: {SECOND_EVENT_ID}\n", response.text)
-        self.assertIn("event: run_completed\n", response.text)
+        self.assertIn("event: graph_run_finished\n", response.text)
         self.assertEqual(response.text.count("data: "), 1)
 
     def test_each_terminal_status_ends_an_empty_stream(self) -> None:
@@ -160,8 +158,7 @@ class ApiV1SseOpenApiTests(unittest.TestCase):
             "completed",
             "cancelled",
             "failed",
-            "timed_out",
-            "needs_clarification",
+            "gated",
         )
         for index, terminal_status in enumerate(terminal_statuses, start=10):
             run_id = f"01J000000000000000000000{index:02d}"
@@ -176,7 +173,7 @@ class ApiV1SseOpenApiTests(unittest.TestCase):
 
     def test_terminal_stream_drains_an_event_written_after_terminal_state(self) -> None:
         self.write_terminal_run()
-        event = run_event(event_type="run_completed").model_dump(mode="json")
+        event = run_event(event_type="graph_run_finished").model_dump(mode="json")
         source = RunEventSource(
             self.settings,
             ApiConfig(
@@ -206,7 +203,7 @@ class ApiV1SseOpenApiTests(unittest.TestCase):
         ):
             frame = asyncio.run(read_first_frame())
 
-        self.assertIn("event: run_completed\n", frame)
+        self.assertIn("event: graph_run_finished\n", frame)
         self.assertIn(f"id: {EVENT_ID}\n", frame)
 
     def test_running_stream_emits_configured_heartbeat(self) -> None:
@@ -252,7 +249,7 @@ class ApiV1SseOpenApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["error"]["code"], "event_cursor_not_found")
 
-    def test_openapi_operations_exactly_match_the_37_documented_routes(self) -> None:
+    def test_openapi_operations_exactly_match_the_35_documented_routes(self) -> None:
         schema = self.app.openapi()
         actual_operations = {
             (method.upper(), path)
@@ -262,9 +259,9 @@ class ApiV1SseOpenApiTests(unittest.TestCase):
             and method.lower() in {"get", "post", "patch", "put", "delete"}
         }
 
-        self.assertEqual(len(EXPECTED_API_V1_OPERATIONS), 37)
+        self.assertEqual(len(EXPECTED_API_V1_OPERATIONS), 35)
         self.assertEqual(actual_operations, EXPECTED_API_V1_OPERATIONS)
-        self.assertEqual(len(actual_operations), 37)
+        self.assertEqual(len(actual_operations), 35)
         bearer = schema["components"]["securitySchemes"]["BearerAuth"]
         self.assertEqual(bearer["type"], "http")
         self.assertEqual(bearer["scheme"], "bearer")

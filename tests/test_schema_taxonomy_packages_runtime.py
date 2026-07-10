@@ -7,7 +7,6 @@ import research_system.taxonomy as taxonomy_package
 from research_system import schemas, taxonomy
 from research_system.schemas import (
     distillation,
-    planning,
     proposals,
     protocol,
     retrieval,
@@ -32,7 +31,6 @@ class SchemaTaxonomyPackagesRuntimeTests(unittest.TestCase):
 
     def test_schemas_package_exports_domain_modules(self) -> None:
         self.assertIs(schemas_package.distillation, distillation)
-        self.assertIs(schemas_package.planning, planning)
         self.assertIs(schemas_package.proposals, proposals)
         self.assertIs(schemas_package.protocol, protocol)
         self.assertIs(schemas_package.retrieval, retrieval)

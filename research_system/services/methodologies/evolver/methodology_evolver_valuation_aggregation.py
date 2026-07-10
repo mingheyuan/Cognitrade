@@ -19,7 +19,7 @@ class MethodologyEvolverValuationAggregation:
                 "sensitivity_tags": set(),
                 "run_ids": [],
                 "symbols": set(),
-                "related_entry_ids": [],
+                "related_artifact_ids": [],
                 "warnings_count": 0,
                 "confidence_values": [],
                 "memory_context": [],
@@ -33,9 +33,9 @@ class MethodologyEvolverValuationAggregation:
         symbol = str(candidate.get("symbol") or "").strip()
         if symbol:
             group["symbols"].add(symbol)
-        entry_id = str(candidate.get("entry_id") or "").strip()
-        if entry_id:
-            group["related_entry_ids"].append(entry_id)
+        artifact_id = str(candidate.get("artifact_id") or "").strip()
+        if artifact_id:
+            group["related_artifact_ids"].append(artifact_id)
         evidence_summary = candidate.get("evidence_summary") or {}
         group["warnings_count"] += len(evidence_summary.get("warnings") or [])
         confidence = candidate.get("confidence")
@@ -64,7 +64,7 @@ class MethodologyEvolverValuationAggregation:
                     "sample_size": len(run_ids),
                     "related_run_ids": run_ids,
                     "symbols": sorted(group["symbols"]),
-                    "related_entry_ids": list(group["related_entry_ids"]),
+                    "related_artifact_ids": list(group["related_artifact_ids"]),
                     "aggregated_evidence_summary": {
                         "warnings_count": group["warnings_count"],
                         "symbol_count": len(group["symbols"]),

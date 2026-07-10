@@ -5,9 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from research_system.runtime.core.artifact_board import ArtifactBoard
-from research_system.runtime.core.blackboard import Blackboard
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
-from research_system.schemas.runtime import BlackboardEntry
 
 
 class ArtifactBoardTests(unittest.TestCase):
@@ -39,33 +37,6 @@ class ArtifactBoardTests(unittest.TestCase):
 
             self.assertEqual(rows, [artifact])
             self.assertEqual(board.get(artifact.artifact_id), artifact)
-
-    def test_legacy_blackboard_entries_are_mirrored_as_artifacts(self) -> None:
-        with TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            artifact_board = ArtifactBoard(root / "artifact_board.jsonl")
-            blackboard = Blackboard(root / "blackboard.jsonl", artifact_board=artifact_board)
-            blackboard.bind_thread("thread-1")
-            entry = BlackboardEntry(
-                run_id="run-1",
-                thread_id="thread-1",
-                request_id="request-1",
-                kind="retrieved_evidence",
-                agent="retriever",
-                phase="retrieve",
-                payload={"evidences": [{"title": "Evidence"}]},
-                source_refs=[{"type": "source", "id": "source-1"}],
-                confidence=0.7,
-            )
-
-            blackboard.add(entry)
-
-            artifacts = artifact_board.list_artifacts(artifact_type="retrieved_evidence")
-            self.assertEqual(len(artifacts), 1)
-            self.assertEqual(artifacts[0].content, entry.payload)
-            self.assertEqual(artifacts[0].metadata["legacy_entry_id"], entry.entry_id)
-            self.assertEqual(artifacts[0].producer.executor, "retriever")
-
 
 if __name__ == "__main__":
     unittest.main()

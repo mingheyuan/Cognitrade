@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from research_system.runtime.storage.jsonl import read_jsonl
-from research_system.schemas.runtime import BlackboardEntry
+from research_system.adapters.storage.qdrant_adapter import QdrantAdapter, QdrantUnavailableError
+from research_system.runtime.core.artifact_board import ArtifactBoard
 
 
 class OrchestratorQdrantAdminSupport:
@@ -9,10 +9,20 @@ class OrchestratorQdrantAdminSupport:
         self.host = host
 
     def rebuild_qdrant(self) -> dict:
-        qdrant_available = getattr(self.host.retriever, "qdrant_available", False)
-        qdrant = getattr(self.host.retriever, "qdrant", None)
-        qdrant_error = getattr(self.host.retriever, "qdrant_error", None)
-        if not qdrant_available or qdrant is None:
+        qdrant = getattr(self.host, "qdrant", None)
+        qdrant_error = getattr(self.host, "qdrant_error", None)
+        if qdrant is None:
+            try:
+                qdrant = QdrantAdapter(
+                    self.host.settings,
+                    embedding_provider=getattr(self.host, "llm_provider", None),
+                )
+                self.host.qdrant = qdrant
+                self.host.qdrant_error = None
+            except QdrantUnavailableError as exc:
+                qdrant_error = str(exc)
+                self.host.qdrant_error = qdrant_error
+        if qdrant is None or not qdrant.available:
             return {
                 "status": "skipped",
                 "message": "Qdrant unavailable",
@@ -29,22 +39,18 @@ class OrchestratorQdrantAdminSupport:
         for run_dir in sorted(self.host.settings.runs_root.iterdir()):
             if not run_dir.is_dir():
                 continue
-            blackboard_path = run_dir / "blackboard.jsonl"
-            if not blackboard_path.exists():
+            artifact_board_path = run_dir / "artifact_board.jsonl"
+            if not artifact_board_path.exists():
                 skipped_runs.append(run_dir.name)
                 continue
 
             indexed_this_run = 0
-            for row in read_jsonl(blackboard_path):
-                if row.get("kind") not in {"source_record", "verified_snapshot", "logic_block", "distilled_dimension", "review_finding"}:
+            board = ArtifactBoard(artifact_board_path)
+            for artifact in board.list_artifacts(thread_id=None):
+                if artifact.artifact_type == "user_request":
                     skipped_entries += 1
                     continue
-                try:
-                    entry = BlackboardEntry.model_validate(row)
-                except Exception:
-                    skipped_entries += 1
-                    continue
-                qdrant.upsert_entry(entry)
+                qdrant.upsert_artifact(artifact)
                 indexed_entries += 1
                 indexed_this_run += 1
 
@@ -55,7 +61,7 @@ class OrchestratorQdrantAdminSupport:
 
         return {
             "status": "completed",
-            "message": "Qdrant rebuilt from workspace runs",
+            "message": "Qdrant rebuilt from Agent OS artifact boards",
             "collection_name": self.host.settings.qdrant_collection_name,
             "indexed_runs": indexed_runs,
             "indexed_entries": indexed_entries,

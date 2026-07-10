@@ -9,6 +9,7 @@ from research_system.cli.flow.chat_event_adapter import build_chat_presenter, ch
 from research_system.cli.flow.chat_research_runner import run_chat_research
 from research_system.runtime.orchestrator import ResearchOrchestrator
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
+from research_system.runtime.storage.jsonl import read_json
 from research_system.schemas.protocol import RequestEnvelope
 from research_system.schemas.runtime import RunEvent
 from research_system.services.routing.router.task_router import ChatDispatchDecision
@@ -181,14 +182,13 @@ class ChatResearchRunnerTests(unittest.TestCase):
 
     def test_chat_research_writes_dispatch_trace_into_result_debug(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            repo_root = Path(temp_dir)
-            settings = Settings.from_env(repo_root)
+            repository_root = Path(__file__).resolve().parents[1]
+            settings = Settings.from_env(repository_root).model_copy(
+                update={"runs_root": Path(temp_dir) / "runs", "memory_root": Path(temp_dir) / "memory"}
+            )
             ensure_workspace_layout(settings)
             orchestrator = ResearchOrchestrator(settings)
             try:
-                orchestrator.collector.skill_runtime = SkillRuntimeStub()
-                orchestrator.retriever.qdrant_available = False
-                orchestrator.retriever.qdrant_error = "disabled_for_test"
                 response = orchestrator.run(
                     RequestEnvelope(
                         intent="stock_check",
@@ -204,10 +204,12 @@ class ChatResearchRunnerTests(unittest.TestCase):
                     )
                 )
                 self.assertEqual(response.status, "completed")
-                result = response.result or {}
-                report = result.get("report") or {}
-                debug = report.get("debug") or {}
-                dispatch_trace = debug.get("dispatch_trace") or {}
+                snapshot = read_json(
+                    settings.runs_root / str(response.run_id) / "execution_snapshot.json"
+                ) or {}
+                dispatch_trace = dict(
+                    (snapshot.get("graph") or {}).get("metadata", {}).get("chat_dispatch") or {}
+                )
                 self.assertEqual(dispatch_trace.get("mode"), "research")
                 self.assertEqual(dispatch_trace.get("intent"), "stock_check")
                 self.assertEqual(dispatch_trace.get("reason"), "chat_dispatch_test")

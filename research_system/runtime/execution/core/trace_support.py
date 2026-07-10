@@ -16,9 +16,7 @@ class OrchestratorExecutionTraceSupport:
             record.setdefault("invocation_id", record.get("invocation_id"))
             record.setdefault("agent", agent)
             record.setdefault("phase", phase)
-            record.setdefault("action_id", context.current_action_id)
             record.setdefault("node_id", context.current_node_id)
-            record.setdefault("action_objective", context.current_action_objective)
             record.setdefault("task_name", self.trace_task_name(record))
             record.setdefault("agent_path", self.trace_agent_path(record))
             record.setdefault("agent_label", self.trace_agent_label(record))
@@ -39,27 +37,6 @@ class OrchestratorExecutionTraceSupport:
                 message=message,
                 payload=record,
             )
-        for item in list((payload or {}).get("subagent_plans") or []):
-            if not isinstance(item, dict):
-                continue
-            record = dict(item)
-            record.setdefault("agent", agent)
-            record.setdefault("phase", phase)
-            record.setdefault("action_id", context.current_action_id)
-            record.setdefault("node_id", context.current_node_id)
-            record.setdefault("action_objective", context.current_action_objective)
-            context.subagent_plans.append(record)
-        for item in list((payload or {}).get("subagent_plan_patches") or []):
-            if not isinstance(item, dict):
-                continue
-            record = dict(item)
-            record.setdefault("agent", agent)
-            record.setdefault("phase", phase)
-            record.setdefault("action_id", context.current_action_id)
-            record.setdefault("node_id", context.current_node_id)
-            record.setdefault("action_objective", context.current_action_objective)
-            context.subagent_plan_patches.append(record)
-
     def trace_task_name(self, payload: dict) -> str:
         node_id = str(payload.get("node_id") or "").strip()
         subagent_type = str(payload.get("subagent_type") or "").strip()

@@ -16,21 +16,21 @@ class MethodologyEvolverValuationCandidates:
         memory_search_rows: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
-        for entry in entries:
-            payload = entry.get("payload") or {}
-            methodology_result = payload.get("methodology_result") or {}
+        for artifact in entries:
+            content = artifact.get("content") or {}
+            methodology_result = content.get("methodology_result") or {}
             candidates.append(
                 {
                     "candidate_type": "valuation_heuristic",
                     "run_id": run_id,
-                    "entry_id": entry.get("entry_id"),
-                    "title": str(payload.get("title") or payload.get("methodology_type") or "valuation"),
-                    "methodology_type": payload.get("methodology_type"),
-                    "symbol": payload.get("symbol"),
-                    "assumption_tags": list(payload.get("assumption_tags") or []),
-                    "sensitivity_tags": list(payload.get("sensitivity_tags") or []),
-                    "valuation_band_label": payload.get("valuation_band_label"),
-                    "confidence": payload.get("confidence"),
+                    "artifact_id": artifact.get("artifact_id"),
+                    "title": str(content.get("title") or content.get("methodology_type") or "valuation"),
+                    "methodology_type": content.get("methodology_type"),
+                    "symbol": content.get("symbol"),
+                    "assumption_tags": list(content.get("assumption_tags") or []),
+                    "sensitivity_tags": list(content.get("sensitivity_tags") or []),
+                    "valuation_band_label": content.get("valuation_band_label"),
+                    "confidence": artifact.get("confidence", content.get("confidence")),
                     "evidence_summary": {
                         "warnings": list(methodology_result.get("warnings") or []),
                         "outputs": dict(methodology_result.get("outputs") or {}),
@@ -38,8 +38,8 @@ class MethodologyEvolverValuationCandidates:
                     "memory_context": self.memory_support.matching_memory_context(
                         memory_rows=memory_rows,
                         memory_search_rows=memory_search_rows,
-                        title=str(payload.get("title") or payload.get("methodology_type") or "valuation"),
-                        methodology_type=str(payload.get("methodology_type") or "").strip() or None,
+                        title=str(content.get("title") or content.get("methodology_type") or "valuation"),
+                        methodology_type=str(content.get("methodology_type") or "").strip() or None,
                     ),
                 }
             )

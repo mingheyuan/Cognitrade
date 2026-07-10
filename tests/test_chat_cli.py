@@ -91,16 +91,6 @@ class ChatCliTests(unittest.TestCase):
             parse_chat_input("/rerun-from last retrieve"),
             {"action": "rerun-from", "run_id": "last", "node_id": "retrieve"},
         )
-        self.assertEqual(
-            parse_chat_input("/rerun-subagent last retrieve phase_two retrieval_decider"),
-            {
-                "action": "rerun-subagent",
-                "run_id": "last",
-                "action_node_id": "retrieve",
-                "dag_id": "phase_two",
-                "subagent_node_id": "retrieval_decider",
-            },
-        )
 
     def test_stop_command_is_parsed(self) -> None:
         parsed = parse_chat_input("/stop")
@@ -332,7 +322,6 @@ class ChatCliTests(unittest.TestCase):
         self.assertEqual(chat_completion_candidates("/subagent-read ", state), ["last", "01LAST", "01TARGET"])
         self.assertEqual(chat_completion_candidates("/run-steps ", state), ["last", "01LAST", "01TARGET"])
         self.assertEqual(chat_completion_candidates("/rerun-from ", state), ["last", "01LAST", "01TARGET"])
-        self.assertEqual(chat_completion_candidates("/rerun-subagent ", state), ["last", "01LAST", "01TARGET"])
 
     def test_completion_candidates_for_proposal_commands(self) -> None:
         self.assertEqual(chat_completion_candidates("/proposals ", ChatSessionState()), ["10", "20", "50", "pending", "approved", "rejected"])

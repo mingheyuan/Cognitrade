@@ -19,7 +19,6 @@ __all__ = [
 
 _EXPORTS = {
     "adapters": "research_system.adapters",
-    "agents": "research_system.agents",
     "cli": "research_system.cli",
     "runtime": "research_system.runtime",
     "schemas": "research_system.schemas",

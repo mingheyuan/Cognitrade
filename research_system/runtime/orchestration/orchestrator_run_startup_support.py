@@ -2,11 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from research_system.runtime.execution.core.execution_graph_store import (
-    persist_execution_graph,
-    persist_execution_plan,
-)
-from research_system.runtime.execution.core.execution_graph_compat import execution_graph_to_action_plan
+from research_system.runtime.execution.core.execution_graph_store import persist_execution_graph
 from research_system.runtime.orchestration.orchestrator_context import build_runtime_context
 from research_system.runtime.storage.jsonl import write_json
 from research_system.schemas.runtime import RuntimeTurnState
@@ -120,42 +116,11 @@ class OrchestratorRunStartupSupport:
             event_type="intent_identified",
             message=f"Intent identified: {intent}",
         )
-        planner = self.host.planner
-        bind_runtime = getattr(planner, "bind_runtime", None)
-        clear_runtime = getattr(planner, "clear_runtime", None)
-        if callable(bind_runtime):
-            bind_runtime(
-                context=context,
-                support=self.host._execution_support(),
-                request_id=request.request_id,
-                intent=intent,
-            )
-        try:
-            build_execution_graph = getattr(planner, "build_initial_execution_graph", None)
-            if callable(build_execution_graph):
-                execution_graph = build_execution_graph(intent=intent, request=request)
-                context.execution_graph = execution_graph
-            else:
-                plan = planner.build_initial_plan(intent=intent, request=request)
-                from research_system.runtime.execution.core.execution_graph_compat import (
-                    action_plan_to_execution_graph,
-                )
-
-                execution_graph = action_plan_to_execution_graph(plan)
-        finally:
-            if callable(clear_runtime):
-                clear_runtime()
-        compatibility_plan = None
-        try:
-            compatibility_plan = execution_graph_to_action_plan(execution_graph)
-        except ValueError:
-            # Compound Agent OS graphs intentionally have no legacy plan shape.
-            compatibility_plan = None
-        self.write_task_plan(
-            context=context,
-            plan=execution_graph,
-            compatibility_plan=compatibility_plan,
+        execution_graph = self.host.planner.build_initial_execution_graph(
+            intent=intent,
+            request=request,
         )
+        persist_execution_graph(context=context, graph=execution_graph)
         self.host._emit_event(
             context,
             request_id=request.request_id,
@@ -201,119 +166,3 @@ class OrchestratorRunStartupSupport:
             message="Run accepted",
         )
         return execution_graph
-
-    def initialize_existing_plan(
-        self,
-        *,
-        context,
-        request: RequestEnvelope,
-        intent: str,
-        plan,
-        source_run_id: str | None = None,
-        rerun_from_node: str | None = None,
-        rerun_subagent_dag_id: str | None = None,
-        rerun_subagent_from_node: str | None = None,
-        execution_graph=None,
-    ):
-        self.host._emit_event(
-            context,
-            request_id=request.request_id,
-            intent=intent,
-            event_type="request_received",
-            message="Request received",
-        )
-        self.host._transition(
-            context,
-            "identifying_intent",
-            request_id=request.request_id,
-            intent=intent,
-            message="Identifying intent",
-        )
-        self.host._emit_event(
-            context,
-            request_id=request.request_id,
-            intent=intent,
-            event_type="intent_identified",
-            message=f"Intent identified: {intent}",
-        )
-        if execution_graph is not None:
-            self.write_task_plan(
-                context=context,
-                plan=execution_graph,
-                compatibility_plan=plan,
-            )
-        else:
-            self.write_task_plan(context=context, plan=plan)
-        self.host._emit_event(
-            context,
-            request_id=request.request_id,
-            intent=intent,
-            event_type="plan_created",
-            message="Execution plan restored",
-            payload={
-                "strategy": plan.strategy,
-                "entry_strategy": plan.entry_strategy,
-                "entry_reason": plan.entry_reason,
-                "subagent_required": plan.subagent_required,
-                "dispatch_trace": plan.dispatch_trace,
-                "actions": [
-                    {"node_id": action.node_id, "phase": action.phase, "agent": action.agent}
-                    for action in plan.actions
-                ],
-                "notes": plan.notes,
-                "source_run_id": source_run_id,
-                "rerun_from_node": rerun_from_node,
-                "rerun_subagent_dag_id": rerun_subagent_dag_id,
-                "rerun_subagent_from_node": rerun_subagent_from_node,
-            },
-        )
-        if source_run_id and rerun_from_node:
-            payload = {
-                "source_run_id": source_run_id,
-                "rerun_from_node": rerun_from_node,
-            }
-            if rerun_subagent_dag_id and rerun_subagent_from_node:
-                payload["rerun_subagent_dag_id"] = rerun_subagent_dag_id
-                payload["rerun_subagent_from_node"] = rerun_subagent_from_node
-            self.host._emit_event(
-                context,
-                request_id=request.request_id,
-                intent=intent,
-                event_type="dag_partial_rerun_requested",
-                message=f"Partial DAG rerun requested from {rerun_from_node}",
-                payload=payload,
-            )
-        self.host._transition(
-            context,
-            "ready",
-            request_id=request.request_id,
-            intent=intent,
-            message="Execution plan restored",
-        )
-        self.host._transition(
-            context,
-            "running",
-            request_id=request.request_id,
-            intent=intent,
-            message="Run accepted",
-        )
-        self.host._emit_event(
-            context,
-            request_id=request.request_id,
-            intent=intent,
-            event_type="run_accepted",
-            message="Run accepted",
-        )
-        return plan
-
-    def write_task_plan(self, *, context, plan, compatibility_plan=None) -> None:
-        from research_system.schemas.execution_graph import ExecutionGraph
-
-        if isinstance(plan, ExecutionGraph):
-            persist_execution_graph(
-                context=context,
-                graph=plan,
-                compatibility_plan=compatibility_plan,
-            )
-            return
-        persist_execution_plan(context=context, plan=plan)

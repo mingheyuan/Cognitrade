@@ -6,10 +6,7 @@ __all__ = [
     "OrchestratorProposalAdminSupport",
     "OrchestratorProposalApprovalPolicy",
     "OrchestratorProposalAutoApprovalSupport",
-    "OrchestratorProposalCollectSupport",
-    "OrchestratorProposalEntryFactory",
     "OrchestratorProposalMemoryGateSupport",
-    "OrchestratorProposalReviewPipeline",
     "OrchestratorProposalSupport",
     "OrchestratorProposalTargetSupport",
     "OrchestratorProposalTransitionSupport",
@@ -29,21 +26,9 @@ _EXPORTS = {
         "research_system.runtime.proposals.policy.auto_approval_support",
         "OrchestratorProposalAutoApprovalSupport",
     ),
-    "OrchestratorProposalCollectSupport": (
-        "research_system.runtime.proposals.workflow.collect_support",
-        "OrchestratorProposalCollectSupport",
-    ),
-    "OrchestratorProposalEntryFactory": (
-        "research_system.runtime.proposals.workflow.entry_factory",
-        "OrchestratorProposalEntryFactory",
-    ),
     "OrchestratorProposalMemoryGateSupport": (
         "research_system.runtime.proposals.policy.memory_gate_support",
         "OrchestratorProposalMemoryGateSupport",
-    ),
-    "OrchestratorProposalReviewPipeline": (
-        "research_system.runtime.proposals.workflow.review_pipeline",
-        "OrchestratorProposalReviewPipeline",
     ),
     "OrchestratorProposalSupport": (
         "research_system.runtime.proposals.workflow.support",

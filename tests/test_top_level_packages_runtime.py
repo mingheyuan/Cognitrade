@@ -3,24 +3,13 @@ from __future__ import annotations
 import unittest
 
 import research_system.adapters as adapters_package
-import research_system.agents as agents_package
 import research_system.cli as cli_package
 import research_system.runtime as runtime_package
 import research_system.services as services_package
-from research_system import adapters, agents, cli, runtime, services
+from research_system import adapters, cli, runtime, services
 
 
 class TopLevelPackagesRuntimeTests(unittest.TestCase):
-    def test_agents_package_exports_domain_modules(self) -> None:
-        self.assertIs(agents_package.collector, agents.collector)
-        self.assertIs(agents_package.critic, agents.critic)
-        self.assertIs(agents_package.distiller, agents.distiller)
-        self.assertIs(agents_package.reporter, agents.reporter)
-        self.assertIs(agents_package.retriever, agents.retriever)
-        self.assertIs(agents_package.reviewer, agents.reviewer)
-        self.assertIs(agents_package.screen_reviewer, agents.screen_reviewer)
-        self.assertIs(agents_package.screener, agents.screener)
-
     def test_adapters_package_exports_domain_modules(self) -> None:
         self.assertIs(adapters_package.sources, adapters.sources)
         self.assertIs(adapters_package.storage, adapters.storage)
@@ -50,7 +39,6 @@ class TopLevelPackagesRuntimeTests(unittest.TestCase):
         self.assertIs(runtime_package.diagnostics, runtime.diagnostics)
         self.assertIs(runtime_package.execution, runtime.execution)
         self.assertIs(runtime_package.history, runtime.history)
-        self.assertIs(runtime_package.methodology, runtime.methodology)
         self.assertIs(runtime_package.orchestration, runtime.orchestration)
         self.assertIs(runtime_package.planning, runtime.planning)
         self.assertIs(runtime_package.platform, runtime.platform)
@@ -58,7 +46,6 @@ class TopLevelPackagesRuntimeTests(unittest.TestCase):
         self.assertIs(runtime_package.proposals, runtime.proposals)
         self.assertIs(runtime_package.providers, runtime.providers)
         self.assertIs(runtime_package.storage, runtime.storage)
-        self.assertIs(runtime_package.supervision, runtime.supervision)
         self.assertIs(runtime_package.workspace, runtime.workspace)
 
     def test_services_package_exports_domain_modules(self) -> None:

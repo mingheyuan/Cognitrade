@@ -3,52 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from research_system.runtime.orchestration.orchestrator_context import RuntimeContext
-from research_system.schemas.planning import ActionPlan, ActionSpec
-from research_system.schemas.execution_graph import ExecutionGraph
 from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
-from research_system.schemas.runtime import BlackboardEntry
 
 
 class OrchestratorCompatSupport:
     def __init__(self, host) -> None:
         self.host = host
-
-    def execute_plan(
-        self,
-        *,
-        context: RuntimeContext,
-        request: RequestEnvelope,
-        plan: ActionPlan | ExecutionGraph,
-    ) -> None:
-        self.host._plan_executor().execute_plan(
-            context=context,
-            request=request,
-            plan=plan,
-        )
-
-    def run_action(
-        self,
-        *,
-        context: RuntimeContext,
-        request: RequestEnvelope,
-        plan: ActionPlan,
-        intent: str,
-        action: ActionSpec,
-        completed_node_ids: list[str],
-        pending_actions_after_current: list[ActionSpec],
-    ) -> None:
-        self.host._action_runner().run_action(
-            context=context,
-            request=request,
-            plan=plan,
-            intent=intent,
-            action=action,
-            completed_node_ids=completed_node_ids,
-            pending_actions_after_current=pending_actions_after_current,
-        )
-
-    def add_entry(self, context: RuntimeContext, request: RequestEnvelope, intent: str, entry: BlackboardEntry) -> None:
-        self.host._execution_support().add_entry(context, request, intent, entry)
 
     def emit_event(
         self,
@@ -146,26 +106,6 @@ class OrchestratorCompatSupport:
     def load_json_payload(self, path: Path) -> dict | None:
         return self.host._runtime_io().load_json_payload(path)
 
-    def extend_subagent_trace(self, context: RuntimeContext, *, agent: str, phase: str, payload: dict | None) -> None:
-        self.host._execution_support().extend_subagent_trace(context, agent=agent, phase=phase, payload=payload)
-
-    def handle_subagent_registry_event(
-        self,
-        *,
-        stage: str,
-        invocation,
-        record,
-        outputs: dict | None,
-        error: Exception | None,
-    ) -> None:
-        self.host._subagent_bridge().handle_registry_event(
-            stage=stage,
-            invocation=invocation,
-            record=record,
-            outputs=outputs,
-            error=error,
-        )
-
     def trace_task_name(self, payload: dict) -> str:
         return self.host._execution_support().trace_task_name(payload)
 
@@ -175,8 +115,8 @@ class OrchestratorCompatSupport:
     def trace_agent_label(self, payload: dict) -> str:
         return self.host._execution_support().trace_agent_label(payload)
 
-    def enforce_runtime_controls(self, context: RuntimeContext, *, request_id: str, intent: str) -> None:
-        self.host._execution_support().enforce_runtime_controls(context, request_id=request_id, intent=intent)
+    def enforce_run_controls(self, context: RuntimeContext, *, request_id: str, intent: str) -> None:
+        self.host._execution_support().enforce_run_controls(context, request_id=request_id, intent=intent)
 
     def wait_for_external_dependency(self, context: RuntimeContext, *, request_id: str, intent: str) -> None:
         self.host._execution_support().wait_for_external_dependency(context, request_id=request_id, intent=intent)

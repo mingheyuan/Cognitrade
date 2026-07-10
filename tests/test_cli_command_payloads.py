@@ -6,7 +6,6 @@ from research_system.cli.commands.cli_command_payloads import (
     PROPOSAL_COMMANDS,
     RUN_ID_COMMANDS,
     RUN_ID_QUERY_COMMANDS,
-    RUN_ID_SELECTOR_COMMANDS,
     STATUS_FILTER_COMMANDS,
     SUBAGENT_DISCOVERY_COMMANDS,
     SUBAGENT_COMMANDS,
@@ -19,7 +18,6 @@ class CliCommandPayloadsTests(unittest.TestCase):
         self.assertEqual(STATUS_FILTER_COMMANDS, frozenset({"history", "status", "doctor", "check", "cleanup", "reindex-qdrant"}))
         self.assertEqual(RUN_ID_COMMANDS, frozenset({"replay", "resume", "cancel", "trace", "events", "run-steps", "metrics"}))
         self.assertEqual(RUN_ID_QUERY_COMMANDS, frozenset({"subagent-read", "run-thread", "rerun-from"}))
-        self.assertEqual(RUN_ID_SELECTOR_COMMANDS, frozenset({"rerun-subagent"}))
         self.assertEqual(SUBAGENT_COMMANDS, frozenset({"subagent-read"}))
         self.assertEqual(PROPOSAL_COMMANDS, frozenset({"proposals", "proposal", "review-proposal"}))
         self.assertEqual(
@@ -115,25 +113,6 @@ class CliCommandPayloadsTests(unittest.TestCase):
                 "command": "rerun-from",
                 "run_id": "01RUN",
                 "query": "retrieve",
-            },
-        )
-
-    def test_build_rerun_subagent_command_payload(self) -> None:
-        payload = build_cli_command_payload(
-            command="rerun-subagent",
-            run_id="01RUN",
-            action_node_id="retrieve",
-            dag_id="phase_two",
-            subagent_node_id="retrieval_decider",
-        )
-        self.assertEqual(
-            payload,
-            {
-                "command": "rerun-subagent",
-                "run_id": "01RUN",
-                "action_node_id": "retrieve",
-                "dag_id": "phase_two",
-                "subagent_node_id": "retrieval_decider",
             },
         )
 

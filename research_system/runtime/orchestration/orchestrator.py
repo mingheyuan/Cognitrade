@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
-
 from research_system.runtime.orchestration.orchestrator_admin import OrchestratorAdminService
 from research_system.runtime.orchestration.orchestrator_assembly_support import (
     OrchestratorAssemblySupport,
@@ -16,6 +14,8 @@ from research_system.runtime.orchestration.orchestrator_dependencies import (
     build_orchestrator_dependencies,
 )
 from research_system.runtime.execution.core.support import OrchestratorExecutionSupport
+from research_system.runtime.execution.core.canonical_graph_executor import CanonicalGraphExecutor
+from research_system.runtime.agent_os import AgentOS
 from research_system.runtime.orchestration.orchestrator_run_coordinator import OrchestratorRunCoordinator
 from research_system.runtime.orchestration.orchestrator_research_forwarding_support import (
     OrchestratorResearchForwardingSupport,
@@ -24,23 +24,9 @@ from research_system.runtime.orchestration.orchestrator_research_support import 
 from research_system.runtime.orchestration.orchestrator_runtime_io_support import (
     OrchestratorRuntimeIoSupport,
 )
-from research_system.runtime.orchestration.orchestrator_subagent_bridge import OrchestratorSubagentBridge
 from research_system.runtime.platform.settings import Settings
 from research_system.schemas.execution_graph import ExecutionGraph
-from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
-from research_system.schemas.runtime import BlackboardEntry
-
-if TYPE_CHECKING:
-    from research_system.runtime.execution.core.action_runner import OrchestratorActionRunner
-    from research_system.runtime.execution.core.plan_executor import OrchestratorPlanExecutor
-    from research_system.runtime.execution.core.runtime_control_plane_controller import (
-        OrchestratorRuntimeControlPlaneController,
-    )
-    from research_system.runtime.execution.core.runtime_orchestration_controller import (
-        OrchestratorRuntimeOrchestrationController,
-    )
-    from research_system.schemas.planning import ActionPlan, ActionSpec
-
+from research_system.schemas.protocol import ProgressState, RequestEnvelope, ResponseEnvelope
 
 class OrchestratorError(Exception):
     pass
@@ -69,29 +55,15 @@ class ResearchOrchestrator:
         self.event_listener = event_listener
         self.dependencies = dependencies or build_orchestrator_dependencies(settings)
         self._bind_dependencies(self.dependencies)
-        self.legacy_runtime_used = self.supervisor is not None
-        self.legacy_adapter = None
         self.assembly = OrchestratorAssemblySupport(self)
+        self.graph_executor = CanonicalGraphExecutor(settings)
         self.research_support = self._build_research_support()
         self.execution_support = self._build_execution_support()
         self.admin = self._build_admin_service()
-        if self.supervisor is None:
-            self.action_runner = None
-            self.runtime_control = None
-            self.runtime_orchestration = None
-            self.plan_executor = None
-        else:
-            self.action_runner = self._build_action_runner()
-            self.runtime_control = self._build_runtime_control()
-            self.runtime_orchestration = self._build_runtime_orchestration()
-            self.plan_executor = self._build_plan_executor()
         self.run_coordinator = self._build_run_coordinator()
-        self.subagent_bridge = self._build_subagent_bridge()
         self.runtime_io = self._build_runtime_io_support()
         self.research_forwarding = self._build_research_forwarding_support()
         self.compat = self._build_compat_support()
-        if self.supervisor is not None:
-            self._attach_subagent_observers()
 
     def _bind_dependencies(self, dependencies: OrchestratorDependencies) -> None:
         self.run_store = dependencies.run_store
@@ -100,29 +72,14 @@ class ResearchOrchestrator:
         self.task_router = dependencies.task_router
         self.progress_service = dependencies.progress_service
         self.skill_runtime = dependencies.skill_runtime
-        self.collector = dependencies.collector
-        self.distiller = dependencies.distiller
-        self.critic = dependencies.critic
-        self.reviewer = dependencies.reviewer
-        self.retriever = dependencies.retriever
-        self.reporter = dependencies.reporter
-        self.screener = dependencies.screener
-        self.screen_reviewer = dependencies.screen_reviewer
-        self.comps_service = dependencies.comps_service
-        self.dcf_service = dependencies.dcf_service
-        self.cashflow_resilience_service = dependencies.cashflow_resilience_service
         self.proposal_store = dependencies.proposal_store
         self.subagent_discovery_store = dependencies.subagent_discovery_store
-        self.methodology_evolver = dependencies.methodology_evolver
-        self.proposal_generator = dependencies.proposal_generator
         self.methodology_manifest_service = dependencies.methodology_manifest_service
         self.retrieval_policy_service = dependencies.retrieval_policy_service
         self.memory_service = dependencies.memory_service
         self.methodology_memory_writer = dependencies.methodology_memory_writer
-        self.gates = dependencies.gates
         self.retention = dependencies.retention
         self.planner = dependencies.planner
-        self.supervisor = dependencies.supervisor
 
     def _build_admin_service(self) -> OrchestratorAdminService:
         return self._assembly().build_admin_service()
@@ -148,36 +105,6 @@ class ResearchOrchestrator:
 
     def _execution_support(self) -> OrchestratorExecutionSupport:
         return self._assembly().execution_support()
-
-    def _build_action_runner(self) -> OrchestratorActionRunner:
-        return self._assembly().build_action_runner()
-
-    def _action_runner(self) -> OrchestratorActionRunner:
-        return self._assembly().action_runner()
-
-    def _build_plan_executor(self) -> OrchestratorPlanExecutor:
-        return self._assembly().build_plan_executor()
-
-    def _plan_executor(self) -> OrchestratorPlanExecutor:
-        return self._assembly().plan_executor()
-
-    def _build_runtime_control(self) -> OrchestratorRuntimeControlPlaneController:
-        return self._assembly().build_runtime_control()
-
-    def _runtime_control(self) -> OrchestratorRuntimeControlPlaneController:
-        return self._assembly().runtime_control()
-
-    def _build_runtime_orchestration(self) -> OrchestratorRuntimeOrchestrationController:
-        return self._assembly().build_runtime_orchestration()
-
-    def _runtime_orchestration(self) -> OrchestratorRuntimeOrchestrationController:
-        return self._assembly().runtime_orchestration()
-
-    def _build_subagent_bridge(self) -> OrchestratorSubagentBridge:
-        return self._assembly().build_subagent_bridge()
-
-    def _subagent_bridge(self) -> OrchestratorSubagentBridge:
-        return self._assembly().subagent_bridge()
 
     def _build_run_coordinator(self) -> OrchestratorRunCoordinator:
         return self._assembly().build_run_coordinator()
@@ -214,9 +141,6 @@ class ResearchOrchestrator:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
 
-    def _attach_subagent_observers(self) -> None:
-        self._subagent_bridge().attach_observers()
-
     def require_subagent_discovery_store(self):
         store = getattr(self, "subagent_discovery_store", None)
         if store is None:
@@ -242,23 +166,7 @@ class ResearchOrchestrator:
         return self._admin().require_skill_source_registry()
 
     def run(self, request: RequestEnvelope) -> ResponseEnvelope:
-        legacy_service_override = (
-            request.intent == "sector_research"
-            and getattr(getattr(self, "collector", None), "explicit_override", False)
-        )
-        if (
-            request.constraints.get("execution_protocol") == "legacy"
-            or legacy_service_override
-        ):
-            self.ensure_legacy_runtime()
         return self._run_coordinator().run(request)
-
-    def ensure_legacy_runtime(self) -> None:
-        if self.legacy_adapter is None:
-            from research_system.runtime.legacy_adapter import LegacyRuntimeAdapter
-
-            self.legacy_adapter = LegacyRuntimeAdapter(self)
-        self.legacy_adapter.activate()
 
     def replay(self, run_id: str) -> dict:
         return self._admin().replay(run_id)
@@ -377,21 +285,38 @@ class ResearchOrchestrator:
         return self._admin().resume(run_id)
 
     def rerun_from(self, run_id: str, *, from_node: str) -> ResponseEnvelope:
-        return self._run_coordinator().rerun_from(run_id, from_node=from_node)
+        return self._agent_os_result_response(
+            AgentOS(self.settings).rerun_from(run_id, from_node)
+        )
 
-    def rerun_subagent_from(
-        self,
-        run_id: str,
-        *,
-        action_node: str,
-        dag_id: str,
-        from_node: str,
-    ) -> ResponseEnvelope:
-        return self._run_coordinator().rerun_subagent_from(
-            run_id,
-            action_node=action_node,
-            dag_id=dag_id,
-            from_node=from_node,
+    @staticmethod
+    def _agent_os_result_response(result) -> ResponseEnvelope:
+        snapshot = result.snapshot
+        intent = str(snapshot.graph.metadata.get("intent") or f"domain:{snapshot.graph.domain_id}")
+        status = snapshot.status
+        response_status = {
+            "ready": "accepted",
+            "paused": "running",
+            "gated": "failed",
+        }.get(status, status)
+        return ResponseEnvelope(
+            request_id=snapshot.request_id,
+            run_id=snapshot.run_id,
+            intent=intent,
+            status=response_status,
+            message=f"Agent OS run {status}",
+            progress=ProgressState(
+                current_phase="execution_graph",
+                latest_event=status,
+                status_message=f"Agent OS run {status}",
+                percent=100 if status in {"completed", "failed", "cancelled", "gated"} else 0,
+            ),
+            result={
+                "protocol": "agent_os",
+                "graph_revision": snapshot.graph.revision,
+                "artifact_ids": list(result.artifact_ids),
+                "final_artifact_ids": list(result.final_artifact_ids),
+            },
         )
 
     def cancel(self, run_id: str) -> dict:
@@ -408,33 +333,9 @@ class ResearchOrchestrator:
         *,
         context: RuntimeContext,
         request: RequestEnvelope,
-        plan: ActionPlan | ExecutionGraph,
+        plan: ExecutionGraph,
     ) -> None:
-        self._compat().execute_plan(context=context, request=request, plan=plan)
-
-    def _run_action(
-        self,
-        *,
-        context: RuntimeContext,
-        request: RequestEnvelope,
-        plan: ActionPlan,
-        intent: str,
-        action: ActionSpec,
-        completed_node_ids: list[str],
-        pending_actions_after_current: list[ActionSpec],
-    ) -> None:
-        self._compat().run_action(
-            context=context,
-            request=request,
-            plan=plan,
-            intent=intent,
-            action=action,
-            completed_node_ids=completed_node_ids,
-            pending_actions_after_current=pending_actions_after_current,
-        )
-
-    def _add_entry(self, context: RuntimeContext, request: RequestEnvelope, intent: str, entry: BlackboardEntry) -> None:
-        self._compat().add_entry(context, request, intent, entry)
+        self.graph_executor.execute(context=context, request=request, graph=plan)
 
     def _emit_event(
         self,
@@ -532,94 +433,6 @@ class ResearchOrchestrator:
     def _load_json_payload(self, path: Path) -> dict | None:
         return self._compat().load_json_payload(path)
 
-    def _extend_subagent_trace(self, context: RuntimeContext, *, agent: str, phase: str, payload: dict | None) -> None:
-        self._compat().extend_subagent_trace(context, agent=agent, phase=phase, payload=payload)
-
-    def _handle_subagent_registry_event(
-        self,
-        *,
-        stage: str,
-        invocation,
-        record,
-        outputs: dict | None,
-        error: Exception | None,
-    ) -> None:
-        self._compat().handle_subagent_registry_event(
-            stage=stage,
-            invocation=invocation,
-            record=record,
-            outputs=outputs,
-            error=error,
-        )
-
-    def _build_debug_payload(
-        self,
-        *,
-        context: RuntimeContext,
-        request: RequestEnvelope,
-        plan: ActionPlan,
-        plan_intent: str,
-        retrieval_summary: str | None,
-    ) -> dict:
-        return self._research_forwarding().build_debug_payload(
-            context=context,
-            request=request,
-            plan=plan,
-            plan_intent=plan_intent,
-            retrieval_summary=retrieval_summary,
-        )
-
-    def _replan_action_plan(
-        self,
-        *,
-        context: RuntimeContext,
-        request: RequestEnvelope,
-        current_plan: ActionPlan,
-        plan_patch,
-    ) -> ActionPlan:
-        planner = self.planner
-        bind_runtime = getattr(planner, "bind_runtime", None)
-        clear_runtime = getattr(planner, "clear_runtime", None)
-        if callable(bind_runtime):
-            bind_runtime(
-                context=context,
-                support=self._execution_support(),
-                request_id=request.request_id,
-                intent=current_plan.intent,
-            )
-        try:
-            replan_execution_graph = getattr(planner, "replan_execution_graph", None)
-            if callable(replan_execution_graph):
-                current_graph = getattr(context, "execution_graph", None)
-                if current_graph is None:
-                    from research_system.runtime.execution.core.execution_graph_compat import (
-                        action_plan_to_execution_graph,
-                    )
-
-                    current_graph = action_plan_to_execution_graph(current_plan)
-                execution_graph = replan_execution_graph(
-                    intent=current_plan.intent,
-                    request=request,
-                    current_graph=current_graph,
-                    current_plan=current_plan,
-                    plan_patch=plan_patch,
-                )
-                context.execution_graph = execution_graph
-                from research_system.runtime.execution.core.execution_graph_compat import (
-                    execution_graph_to_action_plan,
-                )
-
-                return execution_graph_to_action_plan(execution_graph)
-            return planner.replan_action_plan(
-                intent=current_plan.intent,
-                request=request,
-                current_plan=current_plan,
-                plan_patch=plan_patch,
-            )
-        finally:
-            if callable(clear_runtime):
-                clear_runtime()
-
     def _trace_task_name(self, payload: dict) -> str:
         return self._compat().trace_task_name(payload)
 
@@ -629,82 +442,8 @@ class ResearchOrchestrator:
     def _trace_agent_label(self, payload: dict) -> str:
         return self._compat().trace_agent_label(payload)
 
-    def _enforce_runtime_controls(self, context: RuntimeContext, *, request_id: str, intent: str) -> None:
-        self._compat().enforce_runtime_controls(context, request_id=request_id, intent=intent)
-
-    def _build_candidate_methodology_entries(
-        self,
-        *,
-        context: RuntimeContext,
-        request: RequestEnvelope,
-        phase: str,
-        agent: str,
-        candidate: dict,
-        source_type: str,
-    ) -> list[BlackboardEntry]:
-        return self._research_forwarding().build_candidate_methodology_entries(
-            context=context,
-            request=request,
-            phase=phase,
-            agent=agent,
-            candidate=candidate,
-            source_type=source_type,
-        )
-
-    def _build_stock_methodology_entries(
-        self,
-        *,
-        context: RuntimeContext,
-        request: RequestEnvelope,
-        intent: str,
-        phase: str,
-        agent: str,
-    ) -> list[BlackboardEntry]:
-        return self._research_forwarding().build_stock_methodology_entries(
-            context=context,
-            request=request,
-            intent=intent,
-            phase=phase,
-            agent=agent,
-        )
-
-    def _build_review_methodology_entries(
-        self,
-        *,
-        context: RuntimeContext,
-        request: RequestEnvelope,
-        intent: str,
-        phase: str,
-        agent: str,
-        review_request: dict,
-        latest_market_snapshot: dict | None,
-        latest_fundamental_snapshot: dict | None,
-    ) -> list[BlackboardEntry]:
-        return self._research_forwarding().build_review_methodology_entries(
-            context=context,
-            request=request,
-            intent=intent,
-            phase=phase,
-            agent=agent,
-            review_request=review_request,
-            latest_market_snapshot=latest_market_snapshot,
-            latest_fundamental_snapshot=latest_fundamental_snapshot,
-        )
-
-    def _run_methodology_evolution_collect(
-        self,
-        *,
-        context: RuntimeContext,
-        request: RequestEnvelope,
-        phase: str,
-        agent: str,
-    ) -> list[BlackboardEntry]:
-        return self._research_forwarding().run_methodology_evolution_collect(
-            context=context,
-            request=request,
-            phase=phase,
-            agent=agent,
-        )
+    def _enforce_run_controls(self, context: RuntimeContext, *, request_id: str, intent: str) -> None:
+        self._compat().enforce_run_controls(context, request_id=request_id, intent=intent)
 
     def _persist_proposal_transition(
         self,

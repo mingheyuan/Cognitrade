@@ -1,51 +1,25 @@
 from __future__ import annotations
 
-from research_system.runtime.orchestration.orchestrator_context import RuntimeContext
-from research_system.runtime.orchestration.orchestrator_methodology_evolution_input_support import (
-    OrchestratorMethodologyEvolutionInputSupport,
-)
 from research_system.runtime.proposals.policy.approval_policy import (
     OrchestratorProposalApprovalPolicy,
-)
-from research_system.runtime.proposals.workflow.collect_support import (
-    OrchestratorProposalCollectSupport,
-)
-from research_system.runtime.proposals.workflow.entry_factory import (
-    OrchestratorProposalEntryFactory,
-)
-from research_system.runtime.proposals.workflow.review_pipeline import (
-    OrchestratorProposalReviewPipeline,
 )
 from research_system.runtime.proposals.workflow.transition_support import (
     OrchestratorProposalTransitionSupport,
 )
 from research_system.schemas.protocol import RequestEnvelope
-from research_system.schemas.runtime import BlackboardEntry
 
 
 class OrchestratorProposalSupport:
     def __init__(
         self,
         *,
-        run_store,
         proposal_store,
-        methodology_evolver,
-        proposal_generator,
         methodology_manifest_service,
         retrieval_policy_service,
-        memory_service,
         methodology_memory_writer,
         orchestrator_error_cls: type[Exception],
     ) -> None:
-        self.run_store = run_store
         self.proposal_store = proposal_store
-        self.proposal_generator = proposal_generator
-        self.evolution_input_support = OrchestratorMethodologyEvolutionInputSupport(
-            run_store=run_store,
-            methodology_evolver=methodology_evolver,
-            memory_service=memory_service,
-        )
-        self.entry_factory = OrchestratorProposalEntryFactory()
         self.transition_support = OrchestratorProposalTransitionSupport(
             proposal_store=proposal_store,
             methodology_manifest_service=methodology_manifest_service,
@@ -54,23 +28,6 @@ class OrchestratorProposalSupport:
         )
         self.approval_policy = OrchestratorProposalApprovalPolicy(
             orchestrator_error_cls=orchestrator_error_cls,
-        )
-        self.review_pipeline = OrchestratorProposalReviewPipeline(host=self)
-        self.collect_support = OrchestratorProposalCollectSupport(host=self)
-
-    def run_methodology_evolution_collect(
-        self,
-        *,
-        context: RuntimeContext,
-        request: RequestEnvelope,
-        phase: str,
-        agent: str,
-    ) -> list[BlackboardEntry]:
-        return self.collect_support.run_methodology_evolution_collect(
-            context=context,
-            request=request,
-            phase=phase,
-            agent=agent,
         )
 
     def persist_proposal_transition(

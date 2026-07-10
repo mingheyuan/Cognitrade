@@ -39,14 +39,6 @@ def print_trace_payload(payload: dict, *, emit_text, output_writer=None) -> bool
         emit_text=emit_text,
         output_writer=output_writer,
     )
-    emit_text(output_writer, meta_update("runtime_control_stage_decisions:"))
-    runtime_control_stage_decisions = payload.get("runtime_control_stage_decisions") or []
-    if not isinstance(runtime_control_stage_decisions, list) or not runtime_control_stage_decisions:
-        emit_text(output_writer, meta_update("  -"))
-    else:
-        for row in runtime_control_stage_decisions:
-            if isinstance(row, dict):
-                emit_text(output_writer, meta_update(f"  {json.dumps(row, ensure_ascii=True, sort_keys=True)}"))
     for section_name in ("subagent_trace", "dynamic_trace", "wait_trace"):
         rows = payload.get(section_name) or []
         if not isinstance(rows, list):
@@ -208,27 +200,24 @@ def print_steps_payload(payload: dict, *, emit_text, output_writer=None) -> bool
             continue
         step_index = row.get("step_index")
         node_id = str(row.get("node_id") or "unknown")
-        phase = str(row.get("phase") or "-")
-        agent = str(row.get("agent") or "-")
+        node_kind = str(row.get("node_kind") or "-")
+        capability = str(row.get("capability") or "-")
+        executor = str(row.get("executor") or "-")
         status = str(row.get("status") or "pending")
         objective = str(row.get("objective") or "").strip()
-        line = f"  {step_index}. {node_id} [{status}]  phase={phase} agent={agent}"
-        if row.get("active_from_supervisor"):
-            line += "  next=active"
+        line = (
+            f"  {step_index}. {node_id} [{status}]  "
+            f"kind={node_kind} capability={capability} executor={executor}"
+        )
         emit_text(output_writer, meta_update(line))
         if objective:
             emit_text(output_writer, meta_update(f"    objective: {objective}"))
         tags = row.get("tags") or []
         if isinstance(tags, list) and tags:
             emit_text(output_writer, meta_update(f"    tags: {', '.join(str(tag) for tag in tags if str(tag).strip())}"))
-        inputs = row.get("inputs") or {}
-        if isinstance(inputs, dict) and inputs:
-            emit_text(output_writer, meta_update("    inputs:"))
-            for key in sorted(inputs):
-                emit_text(output_writer, meta_update(render_labeled_field_line(str(key), inputs[key], indent="      ")))
-        supervisor_note = str(row.get("supervisor_note") or "").strip()
-        if supervisor_note:
-            emit_text(output_writer, meta_update(f"    supervisor_note: {supervisor_note}"))
+        depends_on = row.get("depends_on") or []
+        if isinstance(depends_on, list) and depends_on:
+            emit_text(output_writer, meta_update(f"    depends_on: {', '.join(str(item) for item in depends_on)}"))
     return True
 
 

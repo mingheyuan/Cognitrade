@@ -18,7 +18,7 @@ class MethodologyEvolverDimensionAggregation:
                 "scenario_tags": set(),
                 "methodology_tags": set(),
                 "run_ids": [],
-                "related_entry_ids": [],
+                "related_artifact_ids": [],
                 "supported_claim_count": 0,
                 "evidence_block_count": 0,
                 "confidence_values": [],
@@ -30,9 +30,9 @@ class MethodologyEvolverDimensionAggregation:
         group["methodology_tags"].update(candidate.get("methodology_tags") or [])
         if run_id and run_id not in group["run_ids"]:
             group["run_ids"].append(run_id)
-        entry_id = str(candidate.get("entry_id") or "").strip()
-        if entry_id:
-            group["related_entry_ids"].append(entry_id)
+        artifact_id = str(candidate.get("artifact_id") or "").strip()
+        if artifact_id:
+            group["related_artifact_ids"].append(artifact_id)
         evidence_summary = candidate.get("evidence_summary") or {}
         group["supported_claim_count"] += len(evidence_summary.get("supported_claim_block_ids") or [])
         group["evidence_block_count"] += len(evidence_summary.get("evidence_block_ids") or [])
@@ -61,7 +61,7 @@ class MethodologyEvolverDimensionAggregation:
                     "methodology_tags": sorted(group["methodology_tags"]),
                     "sample_size": len(run_ids),
                     "related_run_ids": run_ids,
-                    "related_entry_ids": list(group["related_entry_ids"]),
+                    "related_artifact_ids": list(group["related_artifact_ids"]),
                     "aggregated_evidence_summary": {
                         "supported_claim_count": group["supported_claim_count"],
                         "evidence_block_count": group["evidence_block_count"],

@@ -11,7 +11,7 @@ from qdrant_client.http import models
 from qdrant_client.local.persistence import CollectionPersistence
 
 from research_system.runtime.platform.settings import Settings
-from research_system.schemas.runtime import BlackboardEntry
+from research_system.schemas.artifacts import ArtifactRecord
 
 _SEARCH_STOPWORDS = {
     "a",
@@ -119,16 +119,16 @@ class QdrantAdapter:
             vectors_config=models.VectorParams(size=self.vector_size, distance=models.Distance.COSINE),
         )
 
-    def upsert_entry(self, entry: BlackboardEntry) -> None:
+    def upsert_artifact(self, artifact: ArtifactRecord) -> None:
         if self.client is None:
             return
-        payload = self.to_payload(entry)
+        payload = self.to_payload(artifact)
         vector = self._vectorize_payload(payload)
         self.client.upsert(
             collection_name=self.collection_name,
             points=[
                 models.PointStruct(
-                    id=self._point_id(entry.entry_id),
+                    id=self._point_id(artifact.artifact_id),
                     vector=vector,
                     payload=payload,
                 )
@@ -182,38 +182,42 @@ class QdrantAdapter:
         self.client = None
         self.available = False
 
-    def to_payload(self, entry: BlackboardEntry) -> dict[str, Any]:
+    def to_payload(self, artifact: ArtifactRecord) -> dict[str, Any]:
+        content = artifact.content
         return {
-            "entry_id": entry.entry_id,
-            "record_type": entry.kind,
-            "source_type": self._source_type(entry),
-            "symbol": entry.payload.get("symbol"),
-            "sector": entry.payload.get("sector"),
-            "theme": entry.payload.get("theme"),
-            "dimension_tags": entry.payload.get("dimension_tags", []),
-            "dimension_family": entry.payload.get("dimension_family"),
-            "scenario_tags": entry.payload.get("scenario_tags", []),
-            "methodology_tags": entry.payload.get("methodology_tags", []),
-            "dimension_key": entry.payload.get("dimension_key"),
-            "methodology_type": entry.payload.get("methodology_type"),
-            "proposal_type": (entry.payload.get("proposal") or {}).get("proposal_type"),
-            "proposal_status": (entry.payload.get("proposal") or {}).get("status"),
-            "peer_group_tags": entry.payload.get("peer_group_tags", []),
-            "assumption_tags": entry.payload.get("assumption_tags", []),
-            "sensitivity_tags": entry.payload.get("sensitivity_tags", []),
-            "valuation_band_label": entry.payload.get("valuation_band_label"),
-            "publish_time": self._publish_time(entry),
-            "document_title": self._document_title(entry),
-            "document_id": entry.entry_id,
-            "run_id": entry.run_id,
-            "agent": entry.agent,
-            "phase": entry.phase,
-            "content": self._payload_text(entry.payload),
-            "source_refs": entry.source_refs,
+            "artifact_id": artifact.artifact_id,
+            "record_type": artifact.artifact_type,
+            "schema_version": artifact.schema_version,
+            "source_type": self._source_type(artifact),
+            "symbol": content.get("symbol"),
+            "sector": content.get("sector"),
+            "theme": content.get("theme"),
+            "dimension_tags": content.get("dimension_tags", []),
+            "dimension_family": content.get("dimension_family"),
+            "scenario_tags": content.get("scenario_tags", []),
+            "methodology_tags": content.get("methodology_tags", []),
+            "dimension_key": content.get("dimension_key"),
+            "methodology_type": content.get("methodology_type"),
+            "proposal_type": (content.get("proposal") or {}).get("proposal_type"),
+            "proposal_status": (content.get("proposal") or {}).get("status"),
+            "peer_group_tags": content.get("peer_group_tags", []),
+            "assumption_tags": content.get("assumption_tags", []),
+            "sensitivity_tags": content.get("sensitivity_tags", []),
+            "valuation_band_label": content.get("valuation_band_label"),
+            "publish_time": self._publish_time(artifact),
+            "document_title": self._document_title(artifact),
+            "document_id": artifact.artifact_id,
+            "run_id": artifact.run_id,
+            "thread_id": artifact.thread_id,
+            "executor": artifact.producer.executor,
+            "capability": artifact.producer.capability,
+            "node_id": artifact.producer.node_id,
+            "content": self._payload_text(content),
+            "source_refs": artifact.source_refs,
         }
 
-    def _point_id(self, entry_id: str) -> str:
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, entry_id))
+    def _point_id(self, artifact_id: str) -> str:
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, artifact_id))
 
     def _payload_text(self, payload: dict[str, Any]) -> str:
         snapshot_type = payload.get("snapshot_type")
@@ -673,9 +677,9 @@ class QdrantAdapter:
 
     def _candidate_key(self, point: Any) -> str:
         payload = getattr(point, "payload", {}) or {}
-        entry_id = str(payload.get("entry_id") or "").strip()
-        if entry_id:
-            return entry_id
+        artifact_id = str(payload.get("artifact_id") or "").strip()
+        if artifact_id:
+            return artifact_id
         return str(getattr(point, "id", "") or "")
 
     def _vectorize_text(self, text: str) -> list[float]:
@@ -741,35 +745,39 @@ class QdrantAdapter:
                     tokens.append(token[index:index + 2])
         return [token for token in tokens if token.strip()]
 
-    def _source_type(self, entry: BlackboardEntry) -> str:
-        if entry.kind == "verified_snapshot":
-            return f"{entry.payload.get('snapshot_type', 'snapshot')}_snapshot"
-        if entry.kind == "logic_block":
+    def _source_type(self, artifact: ArtifactRecord) -> str:
+        if artifact.artifact_type == "verified_snapshot":
+            return f"{artifact.content.get('snapshot_type', 'snapshot')}_snapshot"
+        if artifact.artifact_type == "logic_block":
             return "logic_block"
-        if entry.kind == "distilled_dimension":
+        if artifact.artifact_type == "distilled_dimension":
             return "distilled_dimension"
-        if entry.kind == "review_finding":
+        if artifact.artifact_type == "review_finding":
             return "review_finding"
-        return str(entry.payload.get("source_type", entry.kind))
+        return str(artifact.content.get("source_type", artifact.artifact_type))
 
-    def _document_title(self, entry: BlackboardEntry) -> str:
-        if entry.kind == "verified_snapshot":
-            snapshot_type = entry.payload.get("snapshot_type", "snapshot")
-            target = entry.payload.get("symbol") or entry.payload.get("sector") or "unknown"
+    def _document_title(self, artifact: ArtifactRecord) -> str:
+        if artifact.artifact_type == "verified_snapshot":
+            snapshot_type = artifact.content.get("snapshot_type", "snapshot")
+            target = artifact.content.get("symbol") or artifact.content.get("sector") or "unknown"
             return f"{snapshot_type}_snapshot:{target}"
-        if entry.kind == "logic_block":
-            return f"logic_block:{entry.payload.get('block_type', 'unknown')}"
-        if entry.kind == "distilled_dimension":
-            return f"distilled_dimension:{entry.payload.get('dimension_name', 'unknown')}"
-        if entry.kind == "review_finding":
-            return f"review_finding:{entry.payload.get('finding_type', 'unknown')}"
-        return str(entry.payload.get("title") or entry.payload.get("snapshot_type") or entry.kind)
+        if artifact.artifact_type == "logic_block":
+            return f"logic_block:{artifact.content.get('block_type', 'unknown')}"
+        if artifact.artifact_type == "distilled_dimension":
+            return f"distilled_dimension:{artifact.content.get('dimension_name', 'unknown')}"
+        if artifact.artifact_type == "review_finding":
+            return f"review_finding:{artifact.content.get('finding_type', 'unknown')}"
+        return str(
+            artifact.content.get("title")
+            or artifact.content.get("snapshot_type")
+            or artifact.artifact_type
+        )
 
-    def _publish_time(self, entry: BlackboardEntry) -> str:
-        if entry.kind == "verified_snapshot" and entry.payload.get("snapshot_type") == "notice":
-            latest_notice = entry.payload.get("facts", {}).get("latest_notice", {})
+    def _publish_time(self, artifact: ArtifactRecord) -> str:
+        if artifact.artifact_type == "verified_snapshot" and artifact.content.get("snapshot_type") == "notice":
+            latest_notice = artifact.content.get("facts", {}).get("latest_notice", {})
             for key in ("鍏憡鏃堕棿", "鍏憡鏃ユ湡"):
                 value = latest_notice.get(key)
                 if value:
                     return str(value)
-        return str(entry.payload.get("publish_time") or entry.created_at.isoformat())
+        return str(artifact.content.get("publish_time") or artifact.created_at.isoformat())

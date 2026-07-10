@@ -29,9 +29,6 @@ class ApplicationRuntimeTests(unittest.TestCase):
         metrics_args = parser.parse_args(["metrics", "01RUN"])
         run_thread_args = parser.parse_args(["run-thread", "01RUN", "thread-child"])
         rerun_args = parser.parse_args(["rerun-from", "01RUN", "retrieve"])
-        rerun_subagent_args = parser.parse_args(
-            ["rerun-subagent", "01RUN", "retrieve", "phase_two", "retrieval_decider"]
-        )
         discovery_args = parser.parse_args(["subagent-discovery", "01DISC"])
         activate_args = parser.parse_args(
             [
@@ -49,10 +46,6 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertEqual(run_thread_args.thread_id, "thread-child")
         self.assertEqual(rerun_args.command, "rerun-from")
         self.assertEqual(rerun_args.node_id, "retrieve")
-        self.assertEqual(rerun_subagent_args.command, "rerun-subagent")
-        self.assertEqual(rerun_subagent_args.action_node_id, "retrieve")
-        self.assertEqual(rerun_subagent_args.dag_id, "phase_two")
-        self.assertEqual(rerun_subagent_args.subagent_node_id, "retrieval_decider")
         self.assertEqual(discovery_args.ticket_id, "01DISC")
         self.assertEqual(activate_args.delegate_subagent_type, "stock_snapshot_collector")
         self.assertEqual(activate_args.candidate_subagent_type, "candidate_screening_strategy")
@@ -179,14 +172,6 @@ class ApplicationRuntimeTests(unittest.TestCase):
             command="rerun-from",
             run_id="01RUN",
             node_id="retrieve",
-            as_json=False,
-        )
-        rerun_subagent_args = argparse.Namespace(
-            command="rerun-subagent",
-            run_id="01RUN",
-            action_node_id="retrieve",
-            dag_id="phase_two",
-            subagent_node_id="retrieval_decider",
             as_json=False,
         )
         review_discovery_args = argparse.Namespace(
@@ -369,20 +354,6 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertEqual(
             application_execute_app_main_command(
                 settings,
-                rerun_subagent_args,
-                build_chat_entry_runtime_fn=None,
-                run_chat_entry_fn=None,
-                run_chat_tui_fn=None,
-                run_chat_fallback_fn=None,
-                handle_chat_line_fn=None,
-                execute_cli_command_fn=fake_execute_cli_command_fn,
-                print_payload_fn=lambda payload, as_json: 0,
-            ),
-            0,
-        )
-        self.assertEqual(
-            application_execute_app_main_command(
-                settings,
                 http_runtime_activate_discovery_args,
                 build_chat_entry_runtime_fn=None,
                 run_chat_entry_fn=None,
@@ -497,43 +468,39 @@ class ApplicationRuntimeTests(unittest.TestCase):
         self.assertEqual(calls[0]["query"], "thread-child")
         self.assertEqual(calls[1]["command"], "rerun-from")
         self.assertEqual(calls[1]["query"], "retrieve")
-        self.assertEqual(calls[2]["command"], "rerun-subagent")
-        self.assertEqual(calls[2]["action_node_id"], "retrieve")
-        self.assertEqual(calls[2]["dag_id"], "phase_two")
-        self.assertEqual(calls[2]["subagent_node_id"], "retrieval_decider")
-        self.assertEqual(calls[3]["command"], "activate-subagent-discovery")
-        self.assertEqual(calls[3]["registration_type"], "http_json_runner")
-        self.assertEqual(calls[3]["source_id"], "eastmoney")
-        self.assertEqual(calls[3]["endpoint_path"], "/api/market-signal")
-        self.assertEqual(calls[3]["http_method"], "GET")
-        self.assertEqual(calls[3]["timeout_seconds"], 9.5)
-        self.assertEqual(calls[4]["command"], "review-subagent-discovery")
-        self.assertEqual(calls[4]["query"], "approve")
-        self.assertEqual(calls[4]["ticket_id"], "01DISC")
+        self.assertEqual(calls[2]["command"], "activate-subagent-discovery")
+        self.assertEqual(calls[2]["registration_type"], "http_json_runner")
+        self.assertEqual(calls[2]["source_id"], "eastmoney")
+        self.assertEqual(calls[2]["endpoint_path"], "/api/market-signal")
+        self.assertEqual(calls[2]["http_method"], "GET")
+        self.assertEqual(calls[2]["timeout_seconds"], 9.5)
+        self.assertEqual(calls[3]["command"], "review-subagent-discovery")
+        self.assertEqual(calls[3]["query"], "approve")
+        self.assertEqual(calls[3]["ticket_id"], "01DISC")
+        self.assertEqual(calls[4]["command"], "activate-subagent-discovery")
+        self.assertEqual(calls[4]["delegate_subagent_type"], "stock_snapshot_collector")
+        self.assertEqual(calls[4]["candidate_subagent_type"], "candidate_screening_strategy")
         self.assertEqual(calls[5]["command"], "activate-subagent-discovery")
-        self.assertEqual(calls[5]["delegate_subagent_type"], "stock_snapshot_collector")
-        self.assertEqual(calls[5]["candidate_subagent_type"], "candidate_screening_strategy")
+        self.assertEqual(calls[5]["registration_type"], "snapshot_skill_runner")
+        self.assertEqual(calls[5]["skill_name"], "market_snapshot_skill")
+        self.assertEqual(calls[5]["snapshot_type"], "market")
         self.assertEqual(calls[6]["command"], "activate-subagent-discovery")
-        self.assertEqual(calls[6]["registration_type"], "snapshot_skill_runner")
-        self.assertEqual(calls[6]["skill_name"], "market_snapshot_skill")
-        self.assertEqual(calls[6]["snapshot_type"], "market")
+        self.assertEqual(calls[6]["registration_type"], "skill_runner")
+        self.assertEqual(calls[6]["skill_name"], "analysis_skill")
+        self.assertIsNone(calls[6]["snapshot_type"])
         self.assertEqual(calls[7]["command"], "activate-subagent-discovery")
-        self.assertEqual(calls[7]["registration_type"], "skill_runner")
-        self.assertEqual(calls[7]["skill_name"], "analysis_skill")
-        self.assertIsNone(calls[7]["snapshot_type"])
+        self.assertEqual(calls[7]["registration_type"], "openapi_http_runner")
+        self.assertEqual(calls[7]["source_id"], "eastmoney")
+        self.assertEqual(calls[7]["openapi_spec_uri"], "https://example.com/openapi.json")
+        self.assertEqual(calls[7]["openapi_operation_id"], "getMarketSignal")
         self.assertEqual(calls[8]["command"], "activate-subagent-discovery")
-        self.assertEqual(calls[8]["registration_type"], "openapi_http_runner")
-        self.assertEqual(calls[8]["source_id"], "eastmoney")
-        self.assertEqual(calls[8]["openapi_spec_uri"], "https://example.com/openapi.json")
-        self.assertEqual(calls[8]["openapi_operation_id"], "getMarketSignal")
+        self.assertEqual(calls[8]["registration_type"], "mcp_tool_runner")
+        self.assertEqual(calls[8]["source_id"], "akshare_mcp")
+        self.assertEqual(calls[8]["tool_name"], "market_signal_lookup")
+        self.assertEqual(calls[8]["timeout_seconds"], 7.5)
         self.assertEqual(calls[9]["command"], "activate-subagent-discovery")
-        self.assertEqual(calls[9]["registration_type"], "mcp_tool_runner")
-        self.assertEqual(calls[9]["source_id"], "akshare_mcp")
-        self.assertEqual(calls[9]["tool_name"], "market_signal_lookup")
-        self.assertEqual(calls[9]["timeout_seconds"], 7.5)
-        self.assertEqual(calls[10]["command"], "activate-subagent-discovery")
-        self.assertEqual(calls[10]["registration_template_id"], "openapi:getMarketSignal")
-        self.assertEqual(calls[10]["candidate_subagent_type"], "candidate_collect_http_extension")
+        self.assertEqual(calls[9]["registration_template_id"], "openapi:getMarketSignal")
+        self.assertEqual(calls[9]["candidate_subagent_type"], "candidate_collect_http_extension")
 
 
 if __name__ == "__main__":

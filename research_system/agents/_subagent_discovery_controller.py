@@ -7,8 +7,8 @@ from research_system.agents._subagent_discovery_policy_controller import (
     SubagentDiscoveryActivationResolution,
     SubagentDiscoveryPolicyController,
 )
-from research_system.runtime.orchestration._subagent_control_stage_recorder import (
-    SubagentControlStageRecorder,
+from research_system.runtime.orchestration.subagent_discovery_audit_recorder import (
+    SubagentDiscoveryAuditRecorder,
 )
 from research_system.schemas.subagents import (
     SubagentCapabilityGap,
@@ -47,7 +47,7 @@ class SubagentDiscoveryController:
                 error_factory=getattr(activation_host, "orchestrator_error_cls", RuntimeError),
             )
         )
-        self.control_stage_recorder = control_stage_recorder or SubagentControlStageRecorder(
+        self.control_stage_recorder = control_stage_recorder or SubagentDiscoveryAuditRecorder(
             runtime_binding_getter=runtime_binding_getter,
             emit_event=emit_event,
         )

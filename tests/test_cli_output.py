@@ -250,7 +250,7 @@ class _AppOrchestratorStub:
             "thread_tree": [{"thread_id": thread_id, "status": "completed", "children": []}],
             "subagent_trace": [],
             "events": [],
-            "blackboard": [],
+            "artifacts": [],
             "wait_trace": [],
             "items": [],
             "metrics": {
@@ -264,26 +264,11 @@ class _AppOrchestratorStub:
                 "event_type_counts": {},
                 "degrade_reason_counts": {},
             },
-            "event_counts": {"events": 0, "subagent_trace": 0, "dynamic_trace": 0, "wait_trace": 0, "items": 0, "blackboard": 0, "threads": 1},
+            "event_counts": {"events": 0, "subagent_trace": 0, "dynamic_trace": 0, "wait_trace": 0, "items": 0, "artifacts": 0, "threads": 1},
         }
 
     def rerun_from(self, run_id: str, *, from_node: str) -> dict:
         return {"run_id": "01RERUN", "status": "completed", "message": f"reran from {from_node}", "source_run_id": run_id}
-
-    def rerun_subagent_from(
-        self,
-        run_id: str,
-        *,
-        action_node: str,
-        dag_id: str,
-        from_node: str,
-    ) -> dict:
-        return {
-            "run_id": "01SUBRERUN",
-            "status": "completed",
-            "message": f"reran {action_node}/{dag_id}/{from_node}",
-            "source_run_id": run_id,
-        }
 
 
 THREAD_SUMMARY = {
@@ -388,7 +373,6 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("/resume <run_id|last>", output)
         self.assertIn("/metrics <run_id|last>", output)
         self.assertIn("/rerun-from <run_id|last> <node_id>", output)
-        self.assertIn("/rerun-subagent <run_id|last> <action_node_id> <dag_id> <subagent_node_id>", output)
         self.assertIn("/subagent-discoveries [limit] [status]", output)
         self.assertIn("/activate-subagent-discovery <id> <delegate> [candidate]", output)
         self.assertIn("show checkpoint resumability", output)
@@ -738,14 +722,7 @@ class CliOutputTests(unittest.TestCase):
             "run_id": "01TRACE",
             "summary": {"status": "completed"},
             "display_summary": "summary line",
-            "event_counts": {"runtime_control_stage_decisions": 1},
-            "runtime_control_stage_decisions": [
-                {
-                    "event": "runtime_control_subagent_transition_decided",
-                    "transition_source": "phase_patch_cycle",
-                    "transition_type": "apply_local_replan",
-                }
-            ],
+            "event_counts": {"dynamic_trace": 1},
             "subagent_trace": [
                 {
                     "task_name": "collect:stock_snapshot_collector",
@@ -756,9 +733,8 @@ class CliOutputTests(unittest.TestCase):
             ],
             "dynamic_trace": [
                 {
-                    "event": "dynamic_action_inserted",
-                    "phase": "review",
-                    "agent": "screen_reviewer",
+                    "event": "graph_patch_applied",
+                    "agent": "planner",
                     "objective": "Review candidates",
                     "node_id": "screen_review",
                 }
@@ -773,9 +749,6 @@ class CliOutputTests(unittest.TestCase):
         self._emit_payload_to_session(session, payload)
 
         self.assertIn("run_id: 01TRACE", output)
-        self.assertIn("runtime_control_stages: 1", output)
-        self.assertIn("runtime_control_stage_decisions:", output)
-        self.assertIn("\"transition_type\": \"apply_local_replan\"", output)
         self.assertIn("subagent_trace:", output)
         self.assertIn("dynamic_trace:", output)
         self.assertIn("wait_trace:", output)
@@ -790,27 +763,15 @@ class CliOutputTests(unittest.TestCase):
             "summary": {"status": "failed"},
             "display_summary": "failed before review",
             "events": [],
-            "blackboard": [],
+            "artifacts": [],
             "control_state": {
                 "run_id": "01REPLAY",
                 "cancellation_requested": False,
                 "cancellation_reason": None,
                 "deadline_at": "2026-07-10T00:00:00+00:00",
                 "external_wait_deadline_at": None,
-                "runtime_control_stage_decisions": [
-                    {
-                        "event": "runtime_control_transition_decided",
-                        "transition_type": "request_action_replan",
-                    }
-                ],
                 "updated_at": "2026-07-10T00:00:05+00:00",
             },
-            "runtime_control_stage_decisions": [
-                {
-                    "event": "runtime_control_transition_decided",
-                    "transition_type": "request_action_replan",
-                }
-            ],
         }
         resume_payload = {
             "run_id": "01REPLAY",
@@ -828,23 +789,19 @@ class CliOutputTests(unittest.TestCase):
                 "active_agent": "reviewer",
             },
             "control_state": replay_payload["control_state"],
-            "runtime_control_stage_count": 1,
-            "latest_runtime_control_stage_decision": replay_payload["runtime_control_stage_decisions"][0],
             "recovery_guidance": {
-                "status": "resume_after_action_replan",
-                "reason": "latest control stage escalated a capability gap to action-level replan",
-                "suggested_next_step": "resume from checkpoint after reviewing the capability-gap escalation boundary",
+                "status": "resume_ready",
+                "reason": "checkpoint_available",
+                "suggested_next_step": "resume from the persisted execution checkpoint",
             },
         }
 
         replay_output = self._capture_payload_text(replay_payload)
         resume_output = self._capture_payload_text(resume_payload)
 
-        self.assertIn("runtime_control_stages: 1", replay_output)
         self.assertIn("control_state:", replay_output)
         self.assertIn("resumable: yes", resume_output)
         self.assertIn("resume_from:", resume_output)
-        self.assertIn("latest_runtime_control_stage_decision:", resume_output)
         self.assertIn("recovery_guidance:", resume_output)
         self.assertIn("\"current_phase\": \"review\"", resume_output)
 
@@ -862,7 +819,7 @@ class CliOutputTests(unittest.TestCase):
                     "invocation_id": "01INVOCATION",
                 },
                 {
-                    "event_type": "dynamic_action_inserted",
+                    "event_type": "graph_patch_applied",
                     "node_id": "screen_review",
                     "objective": "Review candidates",
                 },
@@ -877,7 +834,7 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("event_types: 2", output)
         self.assertIn("[subagent_started]", output)
         self.assertIn("call_id=01INVOCATION", output)
-        self.assertIn("[dynamic_action_inserted]", output)
+        self.assertIn("[graph_patch_applied]", output)
         self.assertEqual(session.events_payload, payload)
 
     def test_print_metrics_payload_renders_runtime_observability_sections(self) -> None:
@@ -956,26 +913,24 @@ class CliOutputTests(unittest.TestCase):
                 {
                     "step_index": 1,
                     "node_id": "collect",
-                    "phase": "collect",
-                    "agent": "collector",
+                    "node_kind": "subagent",
+                    "capability": "finance.snapshot.collect",
+                    "executor": "finance_ashare.snapshot_collector",
                     "objective": "Collect comparison snapshots.",
                     "status": "completed",
                     "tags": ["compare"],
-                    "inputs": {"symbols": ["600036", "601166"]},
-                    "active_from_supervisor": False,
-                    "supervisor_note": None,
+                    "depends_on": [],
                 },
                 {
                     "step_index": 2,
                     "node_id": "retrieve",
-                    "phase": "retrieve",
-                    "agent": "retriever",
+                    "node_kind": "subagent",
+                    "capability": "finance.evidence.retrieve",
+                    "executor": "finance_ashare.evidence_retriever",
                     "objective": "Retrieve final evidence.",
                     "status": "active",
                     "tags": [],
-                    "inputs": {},
-                    "active_from_supervisor": True,
-                    "supervisor_note": "advance to retrieval",
+                    "depends_on": ["collect"],
                 },
             ],
         }
@@ -985,9 +940,15 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("strategy: dynamic", output)
         self.assertIn("dispatch_trace:", output)
         self.assertIn("status_counts: active=1, completed=1", output)
-        self.assertIn("1. collect [completed]  phase=collect agent=collector", output)
-        self.assertIn("2. retrieve [active]  phase=retrieve agent=retriever  next=active", output)
-        self.assertIn("supervisor_note: advance to retrieval", output)
+        self.assertIn(
+            "1. collect [completed]  kind=subagent capability=finance.snapshot.collect executor=finance_ashare.snapshot_collector",
+            output,
+        )
+        self.assertIn(
+            "2. retrieve [active]  kind=subagent capability=finance.evidence.retrieve executor=finance_ashare.evidence_retriever",
+            output,
+        )
+        self.assertIn("depends_on: collect", output)
 
     def test_print_subagent_payload_renders_call_trace_and_populates_subagent_panel(self) -> None:
         payload = {

@@ -100,31 +100,13 @@ class RunTraceRowBuilder:
         default_context: bool,
     ) -> dict[str, Any]:
         row_payload = dict(payload or {})
-        row_payload.setdefault("event", event_type or "dynamic_action_inserted")
+        row_payload.setdefault("event", event_type or "graph_event")
         if default_context:
             row_payload.setdefault("phase", phase)
             row_payload.setdefault("agent", agent)
             row_payload.setdefault("action_id", row_payload.get("action_id"))
             row_payload.setdefault("node_id", row_payload.get("node_id"))
             row_payload.setdefault("objective", row_payload.get("objective"))
-        row_payload.setdefault("created_at", created_at)
-        return row_payload
-
-    def action_plan_patch_row(
-        self,
-        *,
-        event_type: str | None = None,
-        phase: str | None,
-        agent: str | None,
-        payload: dict[str, Any] | None,
-        created_at,
-        default_context: bool,
-    ) -> dict[str, Any]:
-        row_payload = dict(payload or {})
-        row_payload.setdefault("event", event_type or "action_plan_patch_applied")
-        if default_context:
-            row_payload.setdefault("phase", phase)
-            row_payload.setdefault("agent", agent)
         row_payload.setdefault("created_at", created_at)
         return row_payload
 

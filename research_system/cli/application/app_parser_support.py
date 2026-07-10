@@ -148,13 +148,6 @@ def build_app_parser() -> argparse.ArgumentParser:
     rerun_from_parser.add_argument("node_id")
     rerun_from_parser.add_argument("--json", action="store_true", dest="as_json")
 
-    rerun_subagent_parser = subparsers.add_parser("rerun-subagent")
-    rerun_subagent_parser.add_argument("run_id")
-    rerun_subagent_parser.add_argument("action_node_id")
-    rerun_subagent_parser.add_argument("dag_id")
-    rerun_subagent_parser.add_argument("subagent_node_id")
-    rerun_subagent_parser.add_argument("--json", action="store_true", dest="as_json")
-
     resume_parser = subparsers.add_parser("resume")
     resume_parser.add_argument("run_id")
     resume_parser.add_argument("--json", action="store_true", dest="as_json")

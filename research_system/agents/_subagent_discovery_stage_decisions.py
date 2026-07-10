@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from research_system.runtime.orchestration._runtime_control_stage_decisions import (
+from research_system.runtime.orchestration.subagent_discovery_stage_decisions import (
     SubagentDiscoveryActivationStageDecision,
     SubagentDiscoveryActivationTarget,
     SubagentDiscoveryCandidateStageDecision,

@@ -53,6 +53,16 @@ class HumanApprovalStore:
                 return HumanApproval.model_validate(payload)
         return None
 
+    def list(self, *, status: str | None = None) -> list[HumanApproval]:
+        latest_by_id: dict[str, HumanApproval] = {}
+        for payload in read_jsonl(self.path):
+            approval = HumanApproval.model_validate(payload)
+            latest_by_id[approval.approval_id] = approval
+        rows = list(latest_by_id.values())
+        if status is not None:
+            rows = [row for row in rows if row.status == status]
+        return sorted(rows, key=lambda row: row.created_at, reverse=True)
+
     def validate(
         self,
         *,

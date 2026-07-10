@@ -92,7 +92,7 @@ class ApiV1ErrorTests(unittest.TestCase):
     def test_incomplete_rerun_source_maps_to_409(self) -> None:
         for core_message in (
             f"missing_request_payload:{RUN_ID}",
-            f"missing_task_plan_payload:{RUN_ID}",
+            f"missing_execution_graph_payload:{RUN_ID}",
         ):
             with self.subTest(core_message=core_message):
                 self.orchestrator.errors["rerun_from"] = OrchestratorError(core_message)

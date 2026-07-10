@@ -2,35 +2,23 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.runtime.proposals.workflow import (
-    OrchestratorProposalCollectSupport as WorkflowPackageProposalCollectSupport,
-)
-from research_system.runtime.proposals.workflow import (
-    OrchestratorProposalReviewPipeline as WorkflowPackageProposalReviewPipeline,
-)
-from research_system.runtime.proposals.workflow import (
-    OrchestratorProposalSupport as WorkflowPackageProposalSupport,
-)
-from research_system.runtime.proposals.workflow import (
-    OrchestratorProposalCollectSupport,
-    OrchestratorProposalReviewPipeline,
-    OrchestratorProposalSupport,
-)
+from research_system.runtime.proposals import OrchestratorProposalSupport as PackageProposalSupport
+from research_system.runtime.proposals import OrchestratorProposalTransitionSupport
+from research_system.runtime.proposals.workflow import OrchestratorProposalSupport
 
 
 class OrchestratorProposalRuntimeTests(unittest.TestCase):
-    def test_workflow_package_exports_match_compatibility_exports(self) -> None:
-        self.assertIs(WorkflowPackageProposalCollectSupport, OrchestratorProposalCollectSupport)
-        self.assertIs(WorkflowPackageProposalReviewPipeline, OrchestratorProposalReviewPipeline)
-        self.assertIs(WorkflowPackageProposalSupport, OrchestratorProposalSupport)
+    def test_workflow_exports_current_proposal_lifecycle(self) -> None:
+        self.assertIs(PackageProposalSupport, OrchestratorProposalSupport)
+        self.assertTrue(hasattr(OrchestratorProposalSupport, "persist_proposal_transition"))
+        self.assertTrue(hasattr(OrchestratorProposalTransitionSupport, "persist_proposal_transition"))
 
-    def test_proposal_support_wires_collect_and_review_pipeline(self) -> None:
-        support = object.__new__(OrchestratorProposalSupport)
-        support.review_pipeline = OrchestratorProposalReviewPipeline(host=support)
-        support.collect_support = OrchestratorProposalCollectSupport(host=support)
+    def test_removed_automatic_proposal_pipeline_exports_are_absent(self) -> None:
+        import research_system.runtime.proposals.workflow as workflow
 
-        self.assertIsInstance(support.review_pipeline, OrchestratorProposalReviewPipeline)
-        self.assertIsInstance(support.collect_support, OrchestratorProposalCollectSupport)
+        self.assertFalse(hasattr(workflow, "OrchestratorProposalCollectSupport"))
+        self.assertFalse(hasattr(workflow, "OrchestratorProposalEntryFactory"))
+        self.assertFalse(hasattr(workflow, "OrchestratorProposalReviewPipeline"))
 
 
 if __name__ == "__main__":

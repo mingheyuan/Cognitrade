@@ -7,10 +7,10 @@ class MethodologyEvolverReviewCandidates:
             return []
         severity_counts: dict[str, int] = {}
         verdict_counts: dict[str, int] = {}
-        for entry in entries:
-            payload = entry.get("payload") or {}
-            severity = str(payload.get("severity") or "")
-            verdict = str(payload.get("verdict") or "")
+        for artifact in entries:
+            content = artifact.get("content") or {}
+            severity = str(content.get("severity") or "")
+            verdict = str(content.get("verdict") or "")
             if severity:
                 severity_counts[severity] = severity_counts.get(severity, 0) + 1
             if verdict:

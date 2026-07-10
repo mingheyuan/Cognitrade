@@ -9,7 +9,6 @@ __all__ = [
     "domain_packs",
     "execution",
     "history",
-    "methodology",
     "orchestration",
     "planning",
     "platform",
@@ -17,7 +16,6 @@ __all__ = [
     "proposals",
     "providers",
     "storage",
-    "supervision",
     "workspace",
     "agent_os",
 ]

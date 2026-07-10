@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from research_system.runtime.orchestration.orchestrator_admin import OrchestratorAdminService
 from research_system.runtime.orchestration.orchestrator_compat_support import OrchestratorCompatSupport
 from research_system.runtime.execution.core.support import OrchestratorExecutionSupport
@@ -13,21 +11,8 @@ from research_system.runtime.orchestration.orchestrator_research_support import 
 from research_system.runtime.orchestration.orchestrator_runtime_io_support import (
     OrchestratorRuntimeIoSupport,
 )
-from research_system.runtime.orchestration.orchestrator_subagent_bridge import OrchestratorSubagentBridge
 from research_system.runtime.storage.runs.retention import RunRetentionService
 from research_system.runtime.storage.runs.run_store import RunStore
-
-if TYPE_CHECKING:
-    from research_system.runtime.execution.core.action_runner import OrchestratorActionRunner
-    from research_system.runtime.execution.core.plan_executor import OrchestratorPlanExecutor
-    from research_system.runtime.execution.core.runtime_control_plane_controller import (
-        OrchestratorRuntimeControlPlaneController,
-    )
-    from research_system.runtime.execution.core.runtime_orchestration_controller import (
-        OrchestratorRuntimeOrchestrationController,
-    )
-    from research_system.schemas.planning import ActionPlan
-
 
 class OrchestratorAssemblySupport:
     def __init__(self, host) -> None:
@@ -44,8 +29,9 @@ class OrchestratorAssemblySupport:
             settings=self.host.settings,
             run_store=run_store,
             retention=retention,
-            retriever=self.host.retriever,
             llm_provider=getattr(self.host, "llm_provider", None),
+            qdrant=getattr(self.host, "qdrant", None),
+            qdrant_error=getattr(self.host, "qdrant_error", None),
             skill_runtime=getattr(self.host, "skill_runtime", None),
             proposal_store=getattr(self.host, "proposal_store", None),
             subagent_discovery_store=getattr(self.host, "subagent_discovery_store", None),
@@ -66,16 +52,9 @@ class OrchestratorAssemblySupport:
 
     def build_research_support(self) -> OrchestratorResearchSupport:
         return OrchestratorResearchSupport(
-            run_store=self.host.run_store,
-            comps_service=self.host.comps_service,
-            dcf_service=self.host.dcf_service,
-            cashflow_resilience_service=self.host.cashflow_resilience_service,
             proposal_store=self.host.proposal_store,
-            methodology_evolver=self.host.methodology_evolver,
-            proposal_generator=self.host.proposal_generator,
             methodology_manifest_service=self.host.methodology_manifest_service,
             retrieval_policy_service=self.host.retrieval_policy_service,
-            memory_service=self.host.memory_service,
             methodology_memory_writer=self.host.methodology_memory_writer,
             orchestrator_error_cls=self.host.orchestrator_error_cls,
         )
@@ -96,73 +75,6 @@ class OrchestratorAssemblySupport:
             support = self.build_execution_support()
             self.host.execution_support = support
         return support
-
-    def build_action_runner(self) -> OrchestratorActionRunner:
-        from research_system.runtime.execution.core.action_runner import OrchestratorActionRunner
-
-        return OrchestratorActionRunner(self.host, self.execution_support())
-
-    def action_runner(self) -> OrchestratorActionRunner:
-        runner = getattr(self.host, "action_runner", None)
-        if runner is None:
-            runner = self.build_action_runner()
-            self.host.action_runner = runner
-        return runner
-
-    def build_runtime_control(self) -> OrchestratorRuntimeControlPlaneController:
-        from research_system.runtime.execution.core.runtime_control_plane_controller import (
-            OrchestratorRuntimeControlPlaneController,
-        )
-
-        return OrchestratorRuntimeControlPlaneController(
-            self.host,
-            supervisor=self.host.supervisor,
-        )
-
-    def runtime_control(self) -> OrchestratorRuntimeControlPlaneController:
-        controller = getattr(self.host, "runtime_control", None)
-        if controller is None:
-            controller = self.build_runtime_control()
-            self.host.runtime_control = controller
-        return controller
-
-    def build_runtime_orchestration(self) -> OrchestratorRuntimeOrchestrationController:
-        from research_system.runtime.execution.core.runtime_orchestration_controller import (
-            OrchestratorRuntimeOrchestrationController,
-        )
-
-        return OrchestratorRuntimeOrchestrationController(
-            control_plane=self.runtime_control(),
-        )
-
-    def runtime_orchestration(self) -> OrchestratorRuntimeOrchestrationController:
-        controller = getattr(self.host, "runtime_orchestration", None)
-        if controller is None:
-            controller = self.build_runtime_orchestration()
-            self.host.runtime_orchestration = controller
-        return controller
-
-    def build_plan_executor(self) -> OrchestratorPlanExecutor:
-        from research_system.runtime.execution.core.plan_executor import OrchestratorPlanExecutor
-
-        return OrchestratorPlanExecutor(self.host)
-
-    def plan_executor(self) -> OrchestratorPlanExecutor:
-        executor = getattr(self.host, "plan_executor", None)
-        if executor is None:
-            executor = self.build_plan_executor()
-            self.host.plan_executor = executor
-        return executor
-
-    def build_subagent_bridge(self) -> OrchestratorSubagentBridge:
-        return OrchestratorSubagentBridge(self.host)
-
-    def subagent_bridge(self) -> OrchestratorSubagentBridge:
-        bridge = getattr(self.host, "subagent_bridge", None)
-        if bridge is None:
-            bridge = self.build_subagent_bridge()
-            self.host.subagent_bridge = bridge
-        return bridge
 
     def build_run_coordinator(self) -> OrchestratorRunCoordinator:
         return OrchestratorRunCoordinator(self.host)
@@ -203,9 +115,3 @@ class OrchestratorAssemblySupport:
             compat = self.build_compat_support()
             self.host.compat = compat
         return compat
-
-    @staticmethod
-    def plan_from_payload(payload: dict) -> ActionPlan:
-        from research_system.schemas.planning import ActionPlan
-
-        return ActionPlan.model_validate(payload)

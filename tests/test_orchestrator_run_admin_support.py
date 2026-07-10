@@ -37,7 +37,7 @@ class _HostStub:
 
 
 class OrchestratorRunAdminSupportTests(unittest.TestCase):
-    def test_resume_includes_control_state_and_latest_runtime_control_stage(self) -> None:
+    def test_resume_includes_control_state_and_checkpoint_guidance(self) -> None:
         with TemporaryDirectory() as tmpdir:
             runs_root = Path(tmpdir)
             run_root = runs_root / "01RESUME"
@@ -70,38 +70,13 @@ class OrchestratorRunAdminSupportTests(unittest.TestCase):
             )
             control_plane = RunControlPlane(paths.run_control)
             control_plane.initialize(run_id="01RESUME", run_timeout_seconds=30)
-            control_plane.record_runtime_control_stage_decision(
-                row={
-                    "event": "runtime_control_subagent_transition_decided",
-                    "transition_source": "capability_gap_escalation",
-                    "transition_type": "request_action_replan",
-                }
-            )
 
             payload = OrchestratorRunAdminSupport(_HostStub(runs_root)).resume("01RESUME")
 
         self.assertTrue(payload["resumable"])
-        self.assertEqual(payload["runtime_control_stage_count"], 1)
-        self.assertEqual(
-            payload["latest_runtime_control_stage_decision"],
-            {
-                "event": "runtime_control_subagent_transition_decided",
-                "transition_source": "capability_gap_escalation",
-                "transition_type": "request_action_replan",
-            },
-        )
-        self.assertEqual(
-            payload["control_state"]["runtime_control_stage_decisions"],
-            [
-                {
-                    "event": "runtime_control_subagent_transition_decided",
-                    "transition_source": "capability_gap_escalation",
-                    "transition_type": "request_action_replan",
-                }
-            ],
-        )
-        self.assertEqual(payload["recovery_guidance"]["status"], "resume_after_action_replan")
-        self.assertIn("capability gap", payload["recovery_guidance"]["reason"])
+        self.assertEqual(payload["control_state"]["run_id"], "01RESUME")
+        self.assertEqual(payload["recovery_guidance"]["status"], "resume_ready")
+        self.assertEqual(payload["recovery_guidance"]["reason"], "checkpoint_available")
 
 
 if __name__ == "__main__":

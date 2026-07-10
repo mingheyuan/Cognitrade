@@ -5,9 +5,6 @@ from typing import Any
 from research_system.runtime.orchestration.orchestrator_run_failure_support import (
     OrchestratorRunFailureSupport,
 )
-from research_system.runtime.orchestration.orchestrator_run_gate_support import (
-    OrchestratorRunGateSupport,
-)
 from research_system.runtime.orchestration.orchestrator_run_response_support import (
     OrchestratorRunResponseSupport,
 )
@@ -20,9 +17,8 @@ from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
 class OrchestratorRunTerminalSupport:
     def __init__(self, host: Any) -> None:
         self.host = host
-        self.gate_support = OrchestratorRunGateSupport(host)
         self.response_support = OrchestratorRunResponseSupport(host)
-        self.success_support = OrchestratorRunSuccessSupport(host, self.gate_support, self.response_support)
+        self.success_support = OrchestratorRunSuccessSupport(host, self.response_support)
         self.failure_support = OrchestratorRunFailureSupport(host, self.response_support)
 
     def finalize_success_path(

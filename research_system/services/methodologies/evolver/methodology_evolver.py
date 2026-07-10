@@ -39,13 +39,13 @@ class MethodologyEvolver:
         self,
         *,
         run_id: str,
-        blackboard_entries: list[dict],
+        artifacts: list[dict],
         methodology_memory_rows: list[dict[str, Any]] | None = None,
         methodology_memory_search_rows: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         return self.extraction.build_candidates(
             run_id=run_id,
-            blackboard_entries=blackboard_entries,
+            artifacts=artifacts,
             methodology_memory_rows=methodology_memory_rows,
             methodology_memory_search_rows=methodology_memory_search_rows,
         )

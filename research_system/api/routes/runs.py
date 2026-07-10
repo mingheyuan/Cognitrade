@@ -9,10 +9,10 @@ from starlette.concurrency import run_in_threadpool
 from research_system.api.dependencies import (
     get_event_source,
     get_mutation_lock,
-    get_orchestrator,
+    get_run_service,
 )
 from research_system.api.errors import ApiError
-from research_system.api.models import RerunRequest, SubagentRerunRequest
+from research_system.api.models import RerunRequest
 from research_system.api.validation import safe_identifier, validate_research_request
 from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
 
@@ -56,36 +56,36 @@ async def _call_run_resource(operation, *args, nested: bool = False, **kwargs):
 @router.post("/runs", response_model=ResponseEnvelope)
 async def create_run(
     payload: RequestEnvelope,
-    orchestrator=Depends(get_orchestrator),
+    run_service=Depends(get_run_service),
     mutation_lock=Depends(get_mutation_lock),
 ) -> ResponseEnvelope:
     validated = validate_research_request(payload)
     async with mutation_lock:
-        return await run_in_threadpool(orchestrator.run, validated)
+        return await run_in_threadpool(run_service.run, validated)
 
 
 @router.get("/runs")
 async def list_runs(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     status: RunStatusFilter | None = None,
-    orchestrator=Depends(get_orchestrator),
+    run_service=Depends(get_run_service),
 ) -> list[dict]:
-    rows = await run_in_threadpool(orchestrator.history)
+    rows = await run_in_threadpool(run_service.history)
     if status is not None:
         rows = [row for row in rows if str(row.get("status") or "") == status]
     return rows[:limit]
 
 
 @router.get("/runs/{run_id}/replay")
-async def replay_run(run_id: str, orchestrator=Depends(get_orchestrator)) -> dict:
+async def replay_run(run_id: str, run_service=Depends(get_run_service)) -> dict:
     resolved = safe_identifier(run_id, field_name="run_id")
-    return await _call_run_resource(orchestrator.replay, resolved)
+    return await _call_run_resource(run_service.replay, resolved)
 
 
 @router.get("/runs/{run_id}/events")
-async def run_events(run_id: str, orchestrator=Depends(get_orchestrator)) -> dict:
+async def run_events(run_id: str, run_service=Depends(get_run_service)) -> dict:
     resolved = safe_identifier(run_id, field_name="run_id")
-    return await _call_run_resource(orchestrator.events, resolved)
+    return await _call_run_resource(run_service.events, resolved)
 
 
 @router.get("/runs/{run_id}/events/stream")
@@ -108,36 +108,36 @@ async def stream_run_events(
 
 
 @router.get("/runs/{run_id}/trace")
-async def run_trace(run_id: str, orchestrator=Depends(get_orchestrator)) -> dict:
+async def run_trace(run_id: str, run_service=Depends(get_run_service)) -> dict:
     resolved = safe_identifier(run_id, field_name="run_id")
-    return await _call_run_resource(orchestrator.trace, resolved)
+    return await _call_run_resource(run_service.trace, resolved)
 
 
 @router.get("/runs/{run_id}/steps")
-async def run_steps(run_id: str, orchestrator=Depends(get_orchestrator)) -> dict:
+async def run_steps(run_id: str, run_service=Depends(get_run_service)) -> dict:
     resolved = safe_identifier(run_id, field_name="run_id")
-    return await _call_run_resource(orchestrator.steps, resolved)
+    return await _call_run_resource(run_service.steps, resolved)
 
 
 @router.get("/runs/{run_id}/metrics")
-async def run_metrics(run_id: str, orchestrator=Depends(get_orchestrator)) -> dict:
+async def run_metrics(run_id: str, run_service=Depends(get_run_service)) -> dict:
     resolved = safe_identifier(run_id, field_name="run_id")
-    return await _call_run_resource(orchestrator.metrics, resolved)
+    return await _call_run_resource(run_service.metrics, resolved)
 
 
 @router.get("/runs/{run_id}/threads/{thread_id}")
-async def run_thread(run_id: str, thread_id: str, orchestrator=Depends(get_orchestrator)) -> dict:
+async def run_thread(run_id: str, thread_id: str, run_service=Depends(get_run_service)) -> dict:
     resolved_run = safe_identifier(run_id, field_name="run_id")
     resolved_thread = safe_identifier(thread_id, field_name="thread_id")
-    return await _call_run_resource(orchestrator.thread, resolved_run, resolved_thread, nested=True)
+    return await _call_run_resource(run_service.thread, resolved_run, resolved_thread, nested=True)
 
 
 @router.get("/runs/{run_id}/threads/{thread_id}/replay")
-async def replay_run_thread(run_id: str, thread_id: str, orchestrator=Depends(get_orchestrator)) -> dict:
+async def replay_run_thread(run_id: str, thread_id: str, run_service=Depends(get_run_service)) -> dict:
     resolved_run = safe_identifier(run_id, field_name="run_id")
     resolved_thread = safe_identifier(thread_id, field_name="thread_id")
     return await _call_run_resource(
-        orchestrator.thread_replay,
+        run_service.thread_replay,
         resolved_run,
         resolved_thread,
         nested=True,
@@ -145,11 +145,11 @@ async def replay_run_thread(run_id: str, thread_id: str, orchestrator=Depends(ge
 
 
 @router.get("/runs/{run_id}/threads/{thread_id}/metrics")
-async def run_thread_metrics(run_id: str, thread_id: str, orchestrator=Depends(get_orchestrator)) -> dict:
+async def run_thread_metrics(run_id: str, thread_id: str, run_service=Depends(get_run_service)) -> dict:
     resolved_run = safe_identifier(run_id, field_name="run_id")
     resolved_thread = safe_identifier(thread_id, field_name="thread_id")
     return await _call_run_resource(
-        orchestrator.thread_metrics,
+        run_service.thread_metrics,
         resolved_run,
         resolved_thread,
         nested=True,
@@ -157,52 +157,34 @@ async def run_thread_metrics(run_id: str, thread_id: str, orchestrator=Depends(g
 
 
 @router.get("/runs/{run_id}/subagents/{invocation_id}")
-async def run_subagent(run_id: str, invocation_id: str, orchestrator=Depends(get_orchestrator)) -> dict:
+async def run_subagent(run_id: str, invocation_id: str, run_service=Depends(get_run_service)) -> dict:
     resolved_run = safe_identifier(run_id, field_name="run_id")
     resolved_invocation = safe_identifier(invocation_id, field_name="invocation_id")
-    return await _call_run_resource(orchestrator.subagent, resolved_run, resolved_invocation, nested=True)
+    return await _call_run_resource(run_service.subagent, resolved_run, resolved_invocation, nested=True)
 
 
 @router.get("/runs/{run_id}/recovery")
-async def run_recovery(run_id: str, orchestrator=Depends(get_orchestrator)) -> dict:
+async def run_recovery(run_id: str, run_service=Depends(get_run_service)) -> dict:
     resolved = safe_identifier(run_id, field_name="run_id")
-    return await _call_run_resource(orchestrator.resume, resolved)
+    return await _call_run_resource(run_service.resume, resolved)
 
 
 @router.post("/runs/{run_id}/cancel")
-async def cancel_run(run_id: str, orchestrator=Depends(get_orchestrator)) -> dict:
+async def cancel_run(run_id: str, run_service=Depends(get_run_service)) -> dict:
     resolved = safe_identifier(run_id, field_name="run_id")
-    return await _call_run_resource(orchestrator.cancel, resolved)
+    return await _call_run_resource(run_service.cancel, resolved)
 
 
 @router.post("/runs/{run_id}/reruns", response_model=ResponseEnvelope)
 async def rerun_from_node(
     run_id: str,
     payload: RerunRequest,
-    orchestrator=Depends(get_orchestrator),
+    run_service=Depends(get_run_service),
     mutation_lock=Depends(get_mutation_lock),
 ) -> ResponseEnvelope:
     resolved = safe_identifier(run_id, field_name="run_id")
     async with mutation_lock:
-        return await _call_run_resource(orchestrator.rerun_from, resolved, from_node=payload.from_node)
-
-
-@router.post("/runs/{run_id}/subagent-reruns", response_model=ResponseEnvelope)
-async def rerun_subagent_from_node(
-    run_id: str,
-    payload: SubagentRerunRequest,
-    orchestrator=Depends(get_orchestrator),
-    mutation_lock=Depends(get_mutation_lock),
-) -> ResponseEnvelope:
-    resolved = safe_identifier(run_id, field_name="run_id")
-    async with mutation_lock:
-        return await _call_run_resource(
-            orchestrator.rerun_subagent_from,
-            resolved,
-            action_node=payload.action_node,
-            dag_id=payload.dag_id,
-            from_node=payload.from_node,
-        )
+        return await _call_run_resource(run_service.rerun_from, resolved, from_node=payload.from_node)
 
 
 __all__ = ["router"]

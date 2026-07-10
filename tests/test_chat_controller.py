@@ -12,6 +12,7 @@ from research_system.cli.state.chat_types import ChatSessionState, TuiSession
 from research_system.cli.state.chat_updates import TranscriptUpdate
 from research_system.runtime.orchestrator import ResearchOrchestrator
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
+from research_system.runtime.storage.jsonl import read_json
 from research_system.schemas.protocol import RequestEnvelope
 from research_system.services.memory import MemoryService
 from research_system.services.routing.router.task_router import TaskRouter
@@ -208,14 +209,16 @@ class ChatControllerTests(unittest.TestCase):
             self.assertIn("stock_compare", answers[-1])
             self.assertEqual(session.state.last_run_id, "01MEM0")
 
-    def test_planner_consumes_thread_profile_context_hints_from_chat_request(self) -> None:
+    def test_planner_preserves_thread_profile_context_in_execution_graph(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            repo_root = Path(temp_dir)
-            settings = Settings.from_env(repo_root)
+            repository_root = Path(__file__).resolve().parents[1]
+            settings = Settings.from_env(repository_root).model_copy(
+                update={"runs_root": Path(temp_dir) / "runs", "memory_root": Path(temp_dir) / "memory"}
+            )
             ensure_workspace_layout(settings)
             orchestrator = ResearchOrchestrator(settings)
             try:
-                plan = orchestrator.planner.build_initial_plan(
+                graph = orchestrator.planner.build_initial_execution_graph(
                     intent="stock_check",
                     request=RequestEnvelope(
                         user_query="continue the previous conclusion",
@@ -235,23 +238,24 @@ class ChatControllerTests(unittest.TestCase):
             finally:
                 orchestrator.close()
 
-        self.assertEqual(plan.dispatch_trace["context_hints"]["thread_topic"], "compare maotai and byd")
-        self.assertEqual(plan.dispatch_trace["context_hints"]["thread_status"], "clarification_pending")
-        self.assertIn("thread_next_step=", plan.entry_reason or "")
-        retrieve_action = next(action for action in plan.actions if action.node_id == "retrieve")
+        context = list(graph.metadata.get("conversation_context") or [])
+        self.assertEqual(context[0]["topic_title"], "compare maotai and byd")
+        self.assertEqual(context[0]["thread_status"], "clarification_pending")
         self.assertEqual(
-            retrieve_action.inputs["planning_context_hints"]["recommended_next_step"],
+            context[0]["recommended_next_step"],
             "supplement same-basis cashflow and valuation assumptions",
         )
 
-    def test_planner_consumes_relevant_methodology_memory_from_chat_request(self) -> None:
+    def test_planner_preserves_methodology_memory_context_in_execution_graph(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            repo_root = Path(temp_dir)
-            settings = Settings.from_env(repo_root)
+            repository_root = Path(__file__).resolve().parents[1]
+            settings = Settings.from_env(repository_root).model_copy(
+                update={"runs_root": Path(temp_dir) / "runs", "memory_root": Path(temp_dir) / "memory"}
+            )
             ensure_workspace_layout(settings)
             orchestrator = ResearchOrchestrator(settings)
             try:
-                plan = orchestrator.planner.build_initial_plan(
+                graph = orchestrator.planner.build_initial_execution_graph(
                     intent="stock_check",
                     request=RequestEnvelope(
                         user_query="continue the previous conclusion",
@@ -268,15 +272,9 @@ class ChatControllerTests(unittest.TestCase):
             finally:
                 orchestrator.close()
 
-        self.assertEqual(
-            plan.dispatch_trace["context_hints"]["methodology_benchmark_scope"],
-            "defensive_compounder",
-        )
-        retrieve_action = next(action for action in plan.actions if action.node_id == "retrieve")
-        self.assertEqual(
-            retrieve_action.inputs["planning_context_hints"]["methodology_memory_match_score"],
-            "3.5",
-        )
+        context = list(graph.metadata.get("conversation_context") or [])
+        self.assertEqual(context[0]["benchmark_scope"], "defensive_compounder")
+        self.assertEqual(context[0]["match_score"], 3.5)
 
     def test_handle_chat_line_passes_recent_context_into_research_runner(self) -> None:
         session = TuiSession(
@@ -515,8 +513,10 @@ class ChatControllerTests(unittest.TestCase):
 
     def test_orchestrator_event_listener_receives_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            repo_root = Path(temp_dir)
-            settings = Settings.from_env(repo_root)
+            repository_root = Path(__file__).resolve().parents[1]
+            settings = Settings.from_env(repository_root).model_copy(
+                update={"runs_root": Path(temp_dir) / "runs", "memory_root": Path(temp_dir) / "memory"}
+            )
             ensure_workspace_layout(settings)
             events: list[str] = []
 
@@ -525,34 +525,23 @@ class ChatControllerTests(unittest.TestCase):
 
             orchestrator = ResearchOrchestrator(settings, event_listener=listener)
             try:
-                orchestrator.retriever.qdrant_available = False
-                orchestrator.retriever.qdrant_error = "disabled_for_test"
                 response = orchestrator.run(RequestEnvelope(intent="stock_check", user_query="\u5206\u6790 000001"))
 
-                self.assertIn(response.status, {"completed", "failed"})
+                self.assertEqual(response.status, "completed")
                 self.assertIn("request_received", events)
                 self.assertIn("run_accepted", events)
             finally:
                 orchestrator.close()
 
-    def test_orchestrator_stock_check_consumes_methodology_memory_context_end_to_end(self) -> None:
+    def test_orchestrator_stock_check_records_methodology_context_in_execution_graph(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            repo_root = Path(temp_dir)
-            settings = Settings.from_env(repo_root)
-            ensure_workspace_layout(settings)
-            memory_service = MemoryService(LocalMemoryAdapter(settings))
-            memory_service.write_methodology_memory(
-                memory_type="dimension_experience",
-                content={
-                    "title": "Cashflow resilience heuristic",
-                    "summary": "Prefer stable free cash flow and lower leverage.",
-                    "benchmark_scope": "defensive_compounder",
-                },
+            repository_root = Path(__file__).resolve().parents[1]
+            settings = Settings.from_env(repository_root).model_copy(
+                update={"runs_root": Path(temp_dir) / "runs", "memory_root": Path(temp_dir) / "memory"}
             )
+            ensure_workspace_layout(settings)
             orchestrator = ResearchOrchestrator(settings)
             try:
-                orchestrator.retriever.disable_qdrant_for_test()
-                orchestrator.collector.skill_runtime = StockCheckSkillRuntimeStub()
                 response = orchestrator.run(
                     RequestEnvelope(
                         intent="stock_check",
@@ -571,12 +560,14 @@ class ChatControllerTests(unittest.TestCase):
                 orchestrator.close()
 
             self.assertEqual(response.status, "completed")
-            report = (response.result or {}).get("report") or {}
-            debug = report.get("debug") or {}
-            retrieval_summary = debug.get("retrieval_summary") or ""
-            self.assertIn("methodology_memory=", retrieval_summary)
-            self.assertIn("Cashflow resilience heuristic", retrieval_summary)
-            self.assertIn("cashflow resilience", str(report.get("follow_up") or "").lower())
+            snapshot = read_json(
+                settings.runs_root / str(response.run_id) / "execution_snapshot.json"
+            ) or {}
+            context = list(
+                (snapshot.get("graph") or {}).get("metadata", {}).get("conversation_context") or []
+            )
+            self.assertEqual(context[0]["memory_type"], "dimension_experience")
+            self.assertEqual(context[0]["benchmark_scope"], "defensive_compounder")
 
 
 if __name__ == "__main__":

@@ -93,7 +93,7 @@ class QdrantHybridSearchTests(unittest.TestCase):
                     id="doc-a",
                     score=0.95,
                     payload={
-                        "entry_id": "doc-a",
+                        "artifact_id": "doc-a",
                         "content": "liquidity overview and trading tone",
                         "document_title": "liquidity_note",
                         "symbol": "000001",
@@ -103,7 +103,7 @@ class QdrantHybridSearchTests(unittest.TestCase):
                     id="doc-b",
                     score=0.80,
                     payload={
-                        "entry_id": "doc-b",
+                        "artifact_id": "doc-b",
                         "content": "cash flow resilience framework with resilient cash flow assumptions",
                         "document_title": "cashflow_note",
                         "symbol": "000001",
@@ -130,7 +130,7 @@ class QdrantHybridSearchTests(unittest.TestCase):
                     id="doc-a",
                     score=0.95,
                     payload={
-                        "entry_id": "doc-a",
+                        "artifact_id": "doc-a",
                         "content": "cash flow resilience for symbol 000001",
                         "document_title": "doc_a",
                         "symbol": "000001",
@@ -140,7 +140,7 @@ class QdrantHybridSearchTests(unittest.TestCase):
                     id="doc-b",
                     score=0.90,
                     payload={
-                        "entry_id": "doc-b",
+                        "artifact_id": "doc-b",
                         "content": "cash flow resilience for symbol 600519",
                         "document_title": "doc_b",
                         "symbol": "600519",

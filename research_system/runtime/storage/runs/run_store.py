@@ -13,7 +13,6 @@ class RunPaths:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.request = root / "request.json"
-        self.task_plan = root / "task_plan.json"
         self.execution_graph = root / "execution_graph.json"
         self.run_state = root / "run_state.json"
         self.thread_state = root / "thread_state.json"
@@ -23,7 +22,6 @@ class RunPaths:
         self.checkpoint = root / "checkpoint.json"
         self.events = root / "events.jsonl"
         self.logs = root / "logs.jsonl"
-        self.blackboard = root / "blackboard.jsonl"
         self.artifact_board = root / "artifact_board.jsonl"
         self.mailbox = root / "mailbox" / "messages.jsonl"
         self.artifacts = root / "artifacts"

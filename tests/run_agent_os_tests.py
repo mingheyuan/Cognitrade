@@ -11,8 +11,7 @@ def main() -> int:
     if str(repository_root) not in sys.path:
         sys.path.insert(0, str(repository_root))
 
-    # Load only the top-level test files.  The legacy suite lives below
-    # ``tests/legacy_compat`` and is run separately.
+    # Load the canonical top-level test suite in a deterministic order.
     suite = unittest.TestSuite()
     for path in sorted(tests_root.glob("test_*.py")):
         suite.addTests(

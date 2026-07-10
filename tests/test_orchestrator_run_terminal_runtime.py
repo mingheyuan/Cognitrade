@@ -5,7 +5,6 @@ import unittest
 from research_system.runtime.orchestration.orchestrator_run_failure_support import (
     OrchestratorRunFailureSupport,
 )
-from research_system.runtime.orchestration.orchestrator_run_gate_support import OrchestratorRunGateSupport
 from research_system.runtime.orchestration.orchestrator_run_response_support import (
     OrchestratorRunResponseSupport,
 )
@@ -18,10 +17,10 @@ from research_system.runtime.orchestration.orchestrator_run_terminal_support imp
 
 
 class OrchestratorRunTerminalRuntimeTests(unittest.TestCase):
-    def test_terminal_support_exposes_gate_and_response_support(self) -> None:
+    def test_terminal_support_exposes_canonical_response_support(self) -> None:
         terminal = OrchestratorRunTerminalSupport(object())
 
-        self.assertIsInstance(terminal.gate_support, OrchestratorRunGateSupport)
+        self.assertFalse(hasattr(terminal, "gate_support"))
         self.assertIsInstance(terminal.response_support, OrchestratorRunResponseSupport)
         self.assertIsInstance(terminal.success_support, OrchestratorRunSuccessSupport)
         self.assertIsInstance(terminal.failure_support, OrchestratorRunFailureSupport)

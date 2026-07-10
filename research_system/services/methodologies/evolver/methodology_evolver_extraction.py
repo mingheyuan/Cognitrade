@@ -19,7 +19,7 @@ class MethodologyEvolverExtraction:
         self,
         *,
         run_id: str,
-        blackboard_entries: list[dict],
+        artifacts: list[dict],
         methodology_memory_rows: list[dict[str, Any]] | None = None,
         methodology_memory_search_rows: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
@@ -27,17 +27,17 @@ class MethodologyEvolverExtraction:
         memory_rows = methodology_memory_rows or []
         memory_search_rows = methodology_memory_search_rows or []
         dimension_entries = [
-            entry for entry in blackboard_entries
-            if entry.get("kind") == "distilled_dimension"
+            artifact for artifact in artifacts
+            if artifact.get("artifact_type") == "distilled_dimension"
         ]
         methodology_entries = [
-            entry for entry in blackboard_entries
-            if entry.get("kind") == "source_record"
-            and str((entry.get("payload") or {}).get("source_type") or "").startswith("methodology_")
+            artifact for artifact in artifacts
+            if artifact.get("artifact_type") == "source_record"
+            and str((artifact.get("content") or {}).get("source_type") or "").startswith("methodology_")
         ]
         review_findings = [
-            entry for entry in blackboard_entries
-            if entry.get("kind") == "review_finding"
+            artifact for artifact in artifacts
+            if artifact.get("artifact_type") == "review_finding"
         ]
 
         candidates.extend(

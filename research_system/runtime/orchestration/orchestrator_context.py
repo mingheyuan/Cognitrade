@@ -4,7 +4,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from research_system.runtime.core.blackboard import Blackboard
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.core.control_plane import RunControlPlane
 from research_system.runtime.core.event_stream import EventStream
@@ -25,7 +24,6 @@ class RuntimeContext:
     run_id: str
     paths: RunPaths
     event_stream: EventStream
-    blackboard: Blackboard
     artifact_board: ArtifactBoard
     checkpoint_store: CheckpointStore
     control_plane: RunControlPlane
@@ -38,13 +36,6 @@ class RuntimeContext:
     execution_policy: RuntimeExecutionPolicy
     execution_graph: ExecutionGraph | None
     subagent_trace: list[dict]
-    subagent_plans: list[dict]
-    subagent_plan_patches: list[dict]
-    runtime_control_stage_decisions: list[dict]
-    subagent_control_stage_decisions: list[dict]
-    subagent_catalog_stage_decisions: list[dict]
-    subagent_capability_gaps: list[dict]
-    subagent_tool_discovery_requests: list[dict]
     subagent_discovery_stage_decisions: list[dict]
     subagent_discovery_shadow_suggestions: list[dict]
     subagent_discovery_llm_decisions: list[dict]
@@ -52,24 +43,11 @@ class RuntimeContext:
     subagent_discovery_candidate_shadow_suggestions: list[dict]
     subagent_discovery_candidate_llm_decisions: list[dict]
     subagent_discovery_candidate_hybrid_decisions: list[dict]
-    subagent_phase_shadow_suggestions: list[dict]
-    subagent_phase_llm_decisions: list[dict]
-    subagent_phase_hybrid_decisions: list[dict]
-    action_plan_patches: list[dict]
-    action_phase_shadow_suggestions: list[dict]
-    action_phase_llm_decisions: list[dict]
-    action_phase_hybrid_decisions: list[dict]
     dynamic_trace: list[dict]
     cache_restore_run_root: Path | None = None
     cache_restore_thread_id: str | None = None
     rerun_from_node_id: str | None = None
-    rerun_subagent_action_node_id: str | None = None
-    rerun_subagent_dag_id: str | None = None
-    rerun_subagent_from_node_id: str | None = None
-    current_action_id: str | None = None
     current_node_id: str | None = None
-    current_action_objective: str | None = None
-    current_action_item: object | None = None
 
 
 def build_runtime_context(
@@ -114,7 +92,6 @@ def build_runtime_context(
         run_id=run_id,
         paths=paths,
         event_stream=EventStream(paths.events),
-        blackboard=Blackboard(paths.blackboard, artifact_board=artifact_board),
         artifact_board=artifact_board,
         checkpoint_store=CheckpointStore(paths.checkpoint),
         control_plane=RunControlPlane(paths.run_control),
@@ -131,13 +108,6 @@ def build_runtime_context(
         ),
         execution_graph=None,
         subagent_trace=[],
-        subagent_plans=[],
-        subagent_plan_patches=[],
-        runtime_control_stage_decisions=[],
-        subagent_control_stage_decisions=[],
-        subagent_catalog_stage_decisions=[],
-        subagent_capability_gaps=[],
-        subagent_tool_discovery_requests=[],
         subagent_discovery_stage_decisions=[],
         subagent_discovery_shadow_suggestions=[],
         subagent_discovery_llm_decisions=[],
@@ -145,15 +115,8 @@ def build_runtime_context(
         subagent_discovery_candidate_shadow_suggestions=[],
         subagent_discovery_candidate_llm_decisions=[],
         subagent_discovery_candidate_hybrid_decisions=[],
-        subagent_phase_shadow_suggestions=[],
-        subagent_phase_llm_decisions=[],
-        subagent_phase_hybrid_decisions=[],
-        action_plan_patches=[],
-        action_phase_shadow_suggestions=[],
-        action_phase_llm_decisions=[],
-        action_phase_hybrid_decisions=[],
         dynamic_trace=[],
     )
-    context.blackboard.bind_thread(thread.thread_id)
+    context.artifact_board.bind_thread(thread.thread_id)
     context.control_plane.initialize(run_id=run_id, run_timeout_seconds=run_timeout_seconds)
     return context

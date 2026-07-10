@@ -18,8 +18,10 @@ from research_system.cli.memory.chat_memory import (
     unarchive_session_thread,
 )
 from research_system.cli.memory.chat_thread_store import ChatThreadStore
+from research_system.cli.memory.chat_memory import build_thread_context
 from research_system.cli.state.chat_state_models import ChatSessionState
 from research_system.runtime.platform.settings import Settings
+from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
 
 
 _CHAT_STORE_LOCK = RLock()
@@ -135,11 +137,63 @@ class ChatService:
             state = self._hydrated_state(thread_id)
             return compact_session_thread(settings=self.settings, state=state)
 
+    def submit_research(
+        self,
+        thread_id: str,
+        request: RequestEnvelope,
+        *,
+        run_service,
+    ) -> ResponseEnvelope:
+        with self._lock:
+            self._require_thread(thread_id)
+            state = self._hydrated_state(thread_id)
+            effective_request = request.model_copy(
+                update={
+                    "conversation_context": [
+                        *build_thread_context(settings=self.settings, state=state),
+                        *list(request.conversation_context),
+                    ],
+                    "slots": {
+                        **dict(request.slots),
+                        "chat_thread_id": thread_id,
+                    },
+                }
+            )
+            response = run_service.run(effective_request)
+            store = ChatThreadStore(self.settings)
+            recorded_at = response.updated_at.isoformat()
+            store.append_turn(
+                thread_id=thread_id,
+                role="user",
+                content=effective_request.user_query,
+                turn_type="research_query",
+                intent=effective_request.intent,
+                run_id=response.run_id,
+                metadata={"request_id": effective_request.request_id},
+                recorded_at=recorded_at,
+            )
+            store.append_turn(
+                thread_id=thread_id,
+                role="assistant",
+                content=self._result_summary(response),
+                turn_type="research_result",
+                intent=response.intent,
+                run_id=response.run_id,
+                metadata={
+                    "status": response.status,
+                    "final_artifact_ids": list(
+                        ((response.result or {}).get("final_artifact_ids") or [])
+                    ),
+                },
+                recorded_at=recorded_at,
+            )
+            return response
+
     def _require_thread(self, thread_id: str) -> None:
         store = ChatThreadStore(self.settings)
         if store.has_thread(thread_id=thread_id):
             return
-        # Match read_session_thread's legacy recovery behavior: a thread can still
+        # Match read_session_thread's index recovery behavior: a thread can still
         # be considered present when its index entry is missing but a record exists.
         records = (
             store.load_thread_checkpoint(thread_id=thread_id),
@@ -170,6 +224,17 @@ class ChatService:
         # always remain scoped to the path thread, even when that fallback is used.
         state.thread_id = thread_id
         return state
+
+    @staticmethod
+    def _result_summary(response: ResponseEnvelope) -> str:
+        for artifact in response.artifacts:
+            content = artifact.get("content") if isinstance(artifact, dict) else None
+            if not isinstance(content, dict):
+                continue
+            conclusion = str(content.get("conclusion") or "").strip()
+            if conclusion:
+                return conclusion
+        return response.message
 
     @staticmethod
     def _not_found(thread_id: str) -> ApiError:
