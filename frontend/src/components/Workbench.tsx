@@ -127,6 +127,50 @@ function localizeWarning(value: string): string {
   return labels[value] ? `${labels[value]} (${value})` : value
 }
 
+function localizeReportText(value: string): string {
+  const exactLabels: Record<string, string> = {
+    'Evidence may be incomplete or stale.': '证据可能不完整或已过时。',
+    'No financial evidence was collected, so no investment conclusion can be made.': '未采集到金融证据，无法形成投资结论。',
+    'Professional review is required before acting.': '采取行动前需要专业人员复核。',
+    'Sector evidence may be incomplete or stale.': '板块证据可能不完整或已过时。',
+    'No related sector or constituent snapshots were supplied.': '未提供相关板块或成分股快照。',
+    'The requested policy snapshot was unavailable.': '请求的政策快照不可用。',
+    'Independent evidence remains limited.': '独立证据仍然有限。',
+    'Distilled logic remains decision support and requires source verification.': '提炼结果仅用于辅助决策，仍需核验来源。',
+    'Review the cited snapshots and refresh material filings and market data before acting.': '行动前请复核引用的快照，并刷新重要公告与市场数据。',
+    'Provide one or more six-digit A-share codes, or supply source snapshots.': '请提供一个或多个六位 A 股代码，或提供来源快照。',
+    'Refresh the candidate universe and verify material disclosures before acting.': '行动前请刷新候选标的范围，并核验重要披露。',
+    'Review constituent, policy, and catalyst evidence before acting on the sector view.': '采取板块观点前，请复核成分股、政策和催化剂证据。',
+    'Refresh filings, valuation, and risk evidence before acting.': '行动前请刷新公告、估值和风险证据。',
+    'Verify attribution and refresh the original source records before reuse.': '再次使用前请核验归属，并刷新原始来源记录。',
+  }
+  if (exactLabels[value]) return exactLabels[value]
+
+  const degradedMatch = value.match(/^(\d+) provider snapshot\(s\) were degraded; inspect the evidence source details\.$/)
+  if (degradedMatch) {
+    return `${degradedMatch[1]} 个数据提供方快照已降级，请查看证据来源详情。`
+  }
+
+  const assumptionsPrefix = 'Model assumptions or incomplete inputs: '
+  if (value.startsWith(assumptionsPrefix)) {
+    const warnings = value
+      .slice(assumptionsPrefix.length)
+      .split(',')
+      .map((warning) => warning.trim())
+      .filter(Boolean)
+      .map((warning) => localizeWarning(warning).replace(` (${warning})`, ''))
+    return `模型假设或输入不完整：${warnings.join('、')}`
+  }
+
+  if (value.startsWith('missing evidence: ')) {
+    return `缺失证据：${value.slice('missing evidence: '.length)}`
+  }
+  if (value.startsWith('degraded source: ')) {
+    return `数据源降级：${value.slice('degraded source: '.length)}`
+  }
+  return value
+}
+
 export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
   const {
     selectedRunId,
@@ -142,8 +186,8 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
   } = useCognitrade()
   const report = reportFromDetail(selectedRun)
   const evidences = evidenceFromReport(report)
-  const risks = reportRisks(report)
-  const followUps = reportFollowUps(report)
+  const risks = reportRisks(report).map(localizeReportText)
+  const followUps = reportFollowUps(report).map(localizeReportText)
   const intent = intentFromDetail(selectedRun) || asString(runs.find((run) => run.run_id === selectedRunId)?.intent)
   const status = statusFromDetail(selectedRun) || asString(runs.find((run) => run.run_id === selectedRunId)?.status)
   const query = queryFromDetail(selectedRun) || submittedQuery
