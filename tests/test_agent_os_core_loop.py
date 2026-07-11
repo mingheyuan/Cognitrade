@@ -100,6 +100,15 @@ class AgentOSCoreLoopTests(unittest.TestCase):
                     for event in read_jsonl(run_root / "execution_events.jsonl")
                 )
             )
+            core_progress = [
+                event
+                for event in read_jsonl(run_root / "execution_events.jsonl")
+                if event.get("event_type") == "agent_progress"
+                and event.get("progress_kind") == "main_agent_loop"
+            ]
+            self.assertTrue(core_progress)
+            self.assertTrue(all(event.get("current_action") for event in core_progress))
+            self.assertTrue(all(event.get("next_action") for event in core_progress))
             state = read_json(run_root / "main_agent_state.json")
             self.assertEqual(state["status"], "completed")
             self.assertEqual(len(response.artifacts), 1)
@@ -299,6 +308,16 @@ class AgentOSCoreLoopTests(unittest.TestCase):
             self.assertIn("main_agent_turn_started", event_types)
             self.assertIn("main_agent_tool_calls_requested", event_types)
             self.assertIn("main_agent_tool_loop_result", event_types)
+            loop_progress = [
+                event
+                for event in events
+                if event.get("event_type") == "agent_progress"
+                and event.get("progress_kind") == "main_agent_loop"
+            ]
+            self.assertTrue(loop_progress)
+            self.assertTrue(all(event.get("current_action") for event in loop_progress))
+            self.assertTrue(all(event.get("next_action") for event in loop_progress))
+            self.assertTrue(any(event.get("phase") == "tool_result" for event in loop_progress))
             self.assertIn("assistant_message_ready", event_types)
             tool_result_event = next(
                 event for event in events if event["event_type"] == "main_agent_tool_loop_result"

@@ -1002,6 +1002,18 @@ select:focus-visible {
   line-height: 1.5;
 }
 
+.agent-progress-feed li p.agent-progress-feed__detail {
+  color: var(--text-soft);
+  font-size: 10px;
+}
+
+.agent-progress-feed li p.agent-progress-feed__detail b {
+  display: inline-block;
+  min-width: 36px;
+  color: var(--mint);
+  font-weight: 600;
+}
+
 .agent-progress-feed li time {
   color: var(--muted-dim);
   font-size: 9px;

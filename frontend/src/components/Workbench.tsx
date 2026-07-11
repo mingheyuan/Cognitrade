@@ -242,6 +242,12 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
             <div>
               <strong>{item.actor}</strong>
               <p>{item.message}</p>
+              {item.currentAction && (
+                <p className="agent-progress-feed__detail"><b>当前</b>{item.currentAction}</p>
+              )}
+              {item.nextAction && (
+                <p className="agent-progress-feed__detail"><b>下一步</b>{item.nextAction}</p>
+              )}
             </div>
             {item.createdAt && <time>{formatDate(item.createdAt)}</time>}
           </li>

@@ -130,6 +130,15 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
 
             self.assertEqual(result.snapshot.status, "completed")
             self.assertEqual(result.snapshot.graph.nodes[0].status, "completed")
+            main_agent_progress = [
+                event
+                for event in events
+                if event["event_type"] == "agent_progress"
+                and str(event.get("progress_kind", "")).startswith("main_agent_")
+            ]
+            self.assertTrue(main_agent_progress)
+            self.assertTrue(all(event.get("current_action") for event in main_agent_progress))
+            self.assertTrue(all(event.get("next_action") for event in main_agent_progress))
             frontiers = [event["node_ids"] for event in events if event["event_type"] == "graph_frontier_ready"]
             self.assertIn(
                 ["legal_risk_reviewer", "legal_obligation_analyzer"],

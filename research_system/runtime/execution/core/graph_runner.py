@@ -488,6 +488,11 @@ class ExecutionGraphRunner:
             actor="main_agent",
             message="Main Agent started the governed ExecutionGraph.",
         )
+        self._emit_main_agent_progress(
+            phase="graph_start",
+            current_action="正在启动受治理的 ExecutionGraph",
+            next_action="展开当前任务图并计算第一批可执行叶子节点",
+        )
 
         try:
             while True:
@@ -549,7 +554,16 @@ class ExecutionGraphRunner:
                     node_ids=[node.node_id for node in frontier],
                     revision=graph.revision,
                 )
-                for outcome in self._execute_frontier(snapshot, frontier):
+                self._emit_main_agent_progress(
+                    phase="frontier_ready",
+                    current_action=(
+                        "已确定本轮就绪节点："
+                        + ", ".join(node.node_id for node in frontier)
+                    ),
+                    next_action="并发执行就绪 Subagent，并等待 ArtifactBoard 结果",
+                )
+                frontier_outcomes = self._execute_frontier(snapshot, frontier)
+                for outcome_index, outcome in enumerate(frontier_outcomes):
                     snapshot.node_states[outcome.node.node_id] = outcome.state
                     if outcome.output is not None:
                         snapshot.usage = self._add_usage(snapshot.usage, outcome.output.usage)
@@ -574,6 +588,16 @@ class ExecutionGraphRunner:
                         raise GraphExecutionError(
                             f"execution node failed: {outcome.node.node_id}: {outcome.state.error}"
                         ) from outcome.error
+                    remaining = len(frontier_outcomes) - outcome_index - 1
+                    self._emit_main_agent_progress(
+                        phase="subagent_result",
+                        current_action=f"已收到 Subagent {outcome.node.node_id} 的结果",
+                        next_action=(
+                            "继续处理本轮其他就绪 Subagent 的结果"
+                            if remaining
+                            else "检查 ArtifactBoard 和质量状态，决定继续、重规划或结束"
+                        ),
+                    )
                 snapshot.updated_at = utc_now()
                 self._refresh_compound_statuses(snapshot)
                 graph = self._evaluate_frontier(snapshot, graph, frontier)
@@ -598,6 +622,12 @@ class ExecutionGraphRunner:
                 "graph_run_finished",
                 status=snapshot.status,
                 blocking_gate_ids=[gate.gate_id for gate in blocking],
+            )
+            self._emit_main_agent_progress(
+                phase="delivery",
+                current_action=f"ExecutionGraph 已结束，状态为 {snapshot.status}",
+                next_action="整理最终 Artifact 并交付用户",
+                status=snapshot.status,
             )
             return self._result(snapshot)
         except GraphTimedOutError:
@@ -1939,6 +1969,11 @@ class ExecutionGraphRunner:
                 patch_id=patch.patch_id,
                 revision=graph.revision,
             )
+            self._emit_main_agent_progress(
+                phase="graph_expansion",
+                current_action=f"已根据当前任务和 Board 扩展子图 {compound.node_id}",
+                next_action="重新计算就绪叶子节点并进入统一调度",
+            )
         return graph
 
     def _apply_pending_patches(
@@ -2469,6 +2504,28 @@ class ExecutionGraphRunner:
             append_jsonl(self.events_path, event)
         if self.event_callback is not None:
             self.event_callback(event)
+
+    def _emit_main_agent_progress(
+        self,
+        *,
+        phase: str,
+        current_action: str,
+        next_action: str,
+        status: str = "running",
+    ) -> None:
+        """Publish an operational graph update without exposing hidden reasoning."""
+        current = str(current_action).strip()
+        next_step = str(next_action).strip()
+        self._emit(
+            "agent_progress",
+            actor="main_agent",
+            progress_kind="main_agent_graph",
+            phase=phase,
+            status=status,
+            current_action=current,
+            next_action=next_step,
+            message=f"当前：{current}；下一步：{next_step}",
+        )
 
     @staticmethod
     def _node_ids(snapshot: ExecutionRunSnapshot, status: str) -> set[str]:

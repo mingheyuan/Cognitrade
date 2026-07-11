@@ -633,19 +633,59 @@ class MainAgent:
             and provider.__class__.__name__ == "OpenAIProvider"
             and self._has_deterministic_core_route(request.user_query)
         ):
-            return self._answer(
+            self._emit_loop_progress(
+                root,
+                event_callback,
+                state=state,
+                turn=max(1, state.turn_count + 1),
+                phase="core_route",
+                current_action="正在处理 Core Agent 请求",
+                next_action="执行必要的 Core Tool 并准备直接回答",
+            )
+            message = self._answer(
                 request=request,
                 decision=decision,
                 context=context,
                 tool_results=tool_results,
-            ), state
+            )
+            self._emit_loop_progress(
+                root,
+                event_callback,
+                state=state,
+                turn=max(1, state.turn_count + 1),
+                phase="core_tool_result",
+                current_action="已完成 Core Tool 和基础请求处理",
+                next_action="组装回答并交付给用户",
+                status="completed",
+            )
+            return message, state
         if not callable(native_turn) or not available:
-            return self._answer(
+            self._emit_loop_progress(
+                root,
+                event_callback,
+                state=state,
+                turn=max(1, state.turn_count + 1),
+                phase="core_route",
+                current_action="正在处理 Core Agent 请求",
+                next_action="执行必要的 Core Tool 并准备直接回答",
+            )
+            message = self._answer(
                 request=request,
                 decision=decision,
                 context=context,
                 tool_results=tool_results,
-            ), state
+            )
+            self._emit_loop_progress(
+                root,
+                event_callback,
+                state=state,
+                turn=max(1, state.turn_count + 1),
+                phase="core_tool_result",
+                current_action="已完成 Core Tool 和基础请求处理",
+                next_action="组装回答并交付给用户",
+                status="completed",
+            )
+            return message, state
 
         transcript = list(state.transcript)
         if not transcript:
@@ -688,6 +728,15 @@ class MainAgent:
                 turn=turn_index + 1,
                 message=f"Main Agent started loop {turn_index + 1}.",
             )
+            self._emit_loop_progress(
+                root,
+                event_callback,
+                state=state,
+                turn=turn_index + 1,
+                phase="model_turn",
+                current_action="正在分析用户请求和当前上下文",
+                next_action="决定直接回答、调用 Core Tool，或请求补充信息",
+            )
             try:
                 response = self._provider_tool_turn(
                     provider=provider,
@@ -723,6 +772,16 @@ class MainAgent:
                 question = str(response.question or response.message or "").strip()
                 if not question:
                     question = "Please clarify the request before I continue."
+                self._emit_loop_progress(
+                    root,
+                    event_callback,
+                    state=state,
+                    turn=turn_index + 1,
+                    phase="clarification",
+                    current_action="已识别出继续执行所需的缺失信息",
+                    next_action="等待用户补充后恢复同一个 Main Agent Run",
+                    status="paused",
+                )
                 self._emit(
                     root,
                     event_callback,
@@ -751,6 +810,16 @@ class MainAgent:
             if response.kind != "tool_calls" or not response.tool_calls:
                 message = response.message or response.question
                 if message:
+                    self._emit_loop_progress(
+                        root,
+                        event_callback,
+                        state=state,
+                        turn=turn_index + 1,
+                        phase="answer",
+                        current_action="已生成当前请求的最终回答",
+                        next_action="将回答和相关 Artifact 交付给用户",
+                        status="completed",
+                    )
                     self._emit(
                         root,
                         event_callback,
@@ -790,6 +859,18 @@ class MainAgent:
                     f"Main Agent loop {turn_index + 1} selected "
                     f"{len(response.tool_calls)} Tool(s)."
                 ),
+            )
+            self._emit_loop_progress(
+                root,
+                event_callback,
+                state=state,
+                turn=turn_index + 1,
+                phase="tool_dispatch",
+                current_action=(
+                    "已选择工具："
+                    + ", ".join(item.tool_name for item in response.tool_calls)
+                ),
+                next_action="执行工具并检查返回结果，再决定是否继续循环",
             )
 
             transcript.append(
@@ -848,24 +929,33 @@ class MainAgent:
                         f"the result from Tool {result.tool_name}."
                     ),
                 )
-                self._emit(
+                self._emit_loop_progress(
                     root,
                     event_callback,
-                    "agent_progress",
-                    run_id=state.run_id,
-                    thread_id=state.thread_id,
-                    request_id=state.request_id,
-                    actor="main_agent",
-                    message=(
-                        f"Main Agent completed Tool {result.tool_name}"
-                        if result.status == "completed"
-                        else f"Main Agent Tool {result.tool_name} returned {result.status}"
-                    ),
+                    state=state,
                     turn=turn_index + 1,
+                    phase="tool_result",
+                    current_action=(
+                        f"已收到 Tool {result.tool_name} 的结果"
+                        if result.status == "completed"
+                        else f"Tool {result.tool_name} 返回了 {result.status}"
+                    ),
+                    next_action="根据结果决定直接回答、继续调用工具，或升级到专业 ExecutionGraph",
+                    status=result.status,
                 )
 
         message = (
             "Agent OS Core Agent Loop reached its Tool-loop limit before producing a final answer."
+        )
+        self._emit_loop_progress(
+            root,
+            event_callback,
+            state=state,
+            turn=state.turn_count,
+            phase="loop_limit",
+            current_action="Tool 循环已达到治理上限",
+            next_action="返回受限结果并等待用户决定是否继续",
+            status="bounded",
         )
         state = state.model_copy(
             update={
@@ -950,6 +1040,38 @@ class MainAgent:
     def _trim_transcript(transcript: list[dict[str, Any]]) -> list[dict[str, Any]]:
         rows = transcript[-100:]
         return [dict(row) for row in rows]
+
+    @staticmethod
+    def _emit_loop_progress(
+        root: Path,
+        callback,
+        *,
+        state: MainAgentState,
+        turn: int,
+        phase: str,
+        current_action: str,
+        next_action: str,
+        status: str = "running",
+    ) -> None:
+        """Persist an operational loop update without exposing hidden reasoning."""
+        current = str(current_action).strip()
+        next_step = str(next_action).strip()
+        MainAgent._emit(
+            root,
+            callback,
+            "agent_progress",
+            run_id=state.run_id,
+            thread_id=state.thread_id,
+            request_id=state.request_id,
+            actor="main_agent",
+            progress_kind="main_agent_loop",
+            phase=phase,
+            turn=turn,
+            status=status,
+            current_action=current,
+            next_action=next_step,
+            message=f"当前：{current}；下一步：{next_step}",
+        )
 
     @staticmethod
     def _has_deterministic_core_route(query: str) -> bool:

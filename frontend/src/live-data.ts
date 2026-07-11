@@ -185,6 +185,8 @@ export type AgentActivityItem = {
   actor: string
   nodeId: string
   message: string
+  currentAction?: string
+  nextAction?: string
   kind: 'main_agent' | 'planner' | 'tool' | 'subagent' | 'system'
   turn: number | null
   status: string
@@ -216,6 +218,12 @@ function eventSummary(event: RunEvent): string {
   const decision = asRecord(event.decision)
   const reason = asString(event.message || event.reason || decision.reason)
   if (eventType === 'assistant_message_ready') return 'Main Agent produced the final delivery artifact.'
+  if (eventType === 'agent_progress' && asString(event.progress_kind) === 'main_agent_graph') {
+    return 'Main Agent updated the governed execution plan.'
+  }
+  if (eventType === 'agent_progress' && asString(event.progress_kind) === 'main_agent_loop') {
+    return `Main Agent loop ${turn ?? '?'} progress update.`
+  }
   if (eventType === 'main_agent_plan_started') return 'Main Agent is building the ExecutionGraph from the active capability catalog.'
   if (eventType === 'graph_compound_expanded') return 'PlanAgent expanded the dynamic task graph.'
   if (eventType === 'graph_compound_expansion_completed') return 'PlanAgent completed the current graph expansion.'
@@ -350,6 +358,8 @@ export function activityFromEvents(events: RunEvent[]): AgentActivityItem[] {
       actor: displayActor(asString(event.actor, 'Agent OS')),
       nodeId: asString(event.node_id, 'main_agent'),
       message,
+      currentAction: asString(event.current_action),
+      nextAction: asString(event.next_action),
       kind: activityKind(event),
       turn: asNumber(event.turn),
       status: asString(event.status),
