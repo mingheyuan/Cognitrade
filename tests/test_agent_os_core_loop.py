@@ -74,6 +74,19 @@ class _ClarifyingProvider:
         }
 
 
+class _ProgressSummaryProvider:
+    available = True
+
+    def complete(self, *, system_prompt, **_kwargs):
+        if "负责交付研究结果" in system_prompt:
+            return (
+                '{"conclusion":"基于当前证据，估值与现金流信号存在支持，但相对估值仍受样本缺口限制。",'
+                '"assistant_message":"我已完成本轮研究，结论仍受同行样本和数据完整性约束。",'
+                '"follow_up":["补充同行样本并复核最新披露"]}'
+            )
+        return '{"current":"已收到快照结果并完成证据整理。","next":"继续检查方法论输出和数据缺口。"}'
+
+
 class AgentOSCoreLoopTests(unittest.TestCase):
     def _settings(self, root: Path) -> Settings:
         repository_root = Path(__file__).resolve().parents[1]
@@ -85,6 +98,36 @@ class AgentOSCoreLoopTests(unittest.TestCase):
                 "workspace_root": root / "workspace",
             }
         )
+
+    def test_main_agent_generates_public_graph_progress_and_research_synthesis(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            agent_os = AgentOS(self._settings(Path(temporary_directory)))
+            agent_os.main_agent.llm_provider = _ProgressSummaryProvider()
+
+            progress = agent_os.main_agent.observe_graph_progress(
+                {
+                    "event": "subagent_completed",
+                    "node_id": "financial_analyst",
+                    "status": "completed",
+                    "output_artifact_ids": ["financial-analysis-1"],
+                }
+            )
+            self.assertEqual(progress["current"], "已收到快照结果并完成证据整理。")
+            self.assertEqual(progress["next"], "继续检查方法论输出和数据缺口。")
+
+            synthesis = agent_os.main_agent.compose_research_synthesis(
+                request="分析 300750",
+                report={
+                    "conclusion": "fixed fallback",
+                    "methodologies": [{"methodology_type": "dcf"}],
+                    "risk": ["peer_group_missing"],
+                },
+            )
+            self.assertEqual(
+                synthesis["conclusion"],
+                "基于当前证据，估值与现金流信号存在支持，但相对估值仍受样本缺口限制。",
+            )
+            self.assertEqual(synthesis["follow_up"], ["补充同行样本并复核最新披露"])
 
     def test_core_loop_answers_without_a_domain_pack_or_graph_snapshot(self) -> None:
         with TemporaryDirectory() as temporary_directory:

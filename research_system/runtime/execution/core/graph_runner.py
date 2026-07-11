@@ -124,6 +124,8 @@ class ExecutionNodeContext:
     memory_store: Any | None = None
     settings: Any | None = None
     event_callback: Callable[[dict[str, Any]], None] | None = None
+    progress_observer: Callable[[dict[str, Any]], dict[str, str] | None] | None = None
+    progress_emitter: Callable[[dict[str, Any]], None] | None = None
     authorize_tool_call: Callable[[], bool] | None = None
     tool_semaphore: Semaphore | None = None
     approval_store: HumanApprovalStore | None = None
@@ -207,13 +209,41 @@ class ExecutionNodeContext:
             rate_limit_key=self.thread_id,
             tool_semaphore=self.tool_semaphore,
         )
-        return self.tool_registry.invoke(
+        result = self.tool_registry.invoke(
             tool_name=tool_name,
             arguments=arguments,
             context=context,
             graph_revision=self.graph.revision,
             node_id=self.node.node_id,
         )
+        if self.progress_observer is not None and self.progress_emitter is not None:
+            facts = {
+                "event": "tool_completed",
+                "run_id": self.run_id,
+                "graph_revision": self.graph.revision,
+                "node_id": self.node.node_id,
+                "capability": self.node.capability,
+                "tool_name": tool_name,
+                "status": result.status,
+                "output": json.dumps(result.output, ensure_ascii=False, default=str)[:2_000],
+                "error": result.error,
+            }
+            try:
+                progress = self.progress_observer(facts)
+            except Exception:
+                progress = None
+            if progress:
+                self.progress_emitter(
+                    {
+                        "node_id": self.node.node_id,
+                        "phase": "tool_result",
+                        "status": result.status,
+                        "progress_source": "llm",
+                        "current_action": progress["current"],
+                        "next_action": progress["next"],
+                    }
+                )
+        return result
 
 
 @dataclass(frozen=True)
@@ -262,6 +292,7 @@ class ExecutionGraphRunner:
         settings: Any | None = None,
         cache_root: Path | None = None,
         failure_injections: list[dict[str, Any]] | None = None,
+        progress_observer: Callable[[dict[str, Any]], dict[str, str] | None] | None = None,
     ) -> None:
         self.registry = registry
         self.run_root = Path(run_root)
@@ -278,6 +309,7 @@ class ExecutionGraphRunner:
         self.tool_registry = tool_registry
         self.skill_runtime_factory = skill_runtime_factory
         self.settings = settings
+        self.progress_observer = progress_observer
         self.cache_root = Path(cache_root) if cache_root is not None else self.run_root / "cache"
         self.scheduler = ExecutionGraphScheduler()
         self._pause_requested = Event()
@@ -592,22 +624,48 @@ class ExecutionGraphRunner:
                             f"execution node failed: {outcome.node.node_id}: {outcome.state.error}"
                         ) from outcome.error
                     remaining = len(frontier_outcomes) - outcome_index - 1
+                    fallback_current = (
+                        f"Subagent {outcome.node.node_id} returned "
+                        f"{outcome.state.status}"
+                        + (
+                            f"; artifacts: {', '.join(outcome.state.output_artifact_ids)}"
+                            if outcome.state.output_artifact_ids
+                            else ""
+                        )
+                    )
+                    fallback_next = (
+                        "Process the remaining ready node result(s)"
+                        if remaining
+                        else "Evaluate the Board and the next graph decision"
+                    )
+                    observed = self._observe_main_agent_progress(
+                        {
+                            "event": "subagent_completed",
+                            "run_id": snapshot.run_id,
+                            "thread_id": snapshot.thread_id,
+                            "request_id": snapshot.request_id,
+                            "graph_revision": graph.revision,
+                            "objective": graph.objective,
+                            "domain_id": graph.domain_id,
+                            "node_id": outcome.node.node_id,
+                            "capability": outcome.node.capability,
+                            "status": outcome.state.status,
+                            "output_artifact_ids": list(outcome.state.output_artifact_ids),
+                            "messages": list(outcome.output.messages or [])
+                            if outcome.output is not None
+                            else [],
+                            "remaining_ready_nodes": [
+                                item.node.node_id
+                                for item in frontier_outcomes[outcome_index + 1 :]
+                            ],
+                        }
+                    )
                     self._emit_main_agent_progress(
                         phase="subagent_result",
-                        current_action=(
-                            f"Subagent {outcome.node.node_id} returned "
-                            f"{outcome.state.status}"
-                            + (
-                                f"; artifacts: {', '.join(outcome.state.output_artifact_ids)}"
-                                if outcome.state.output_artifact_ids
-                                else ""
-                            )
-                        ),
-                        next_action=(
-                            "Process the remaining ready node result(s)"
-                            if remaining
-                            else "Evaluate the Board and the next graph decision"
-                        ),
+                        current_action=(observed or {}).get("current", fallback_current),
+                        next_action=(observed or {}).get("next", fallback_next),
+                        source="llm" if observed else "runtime",
+                        node_id=outcome.node.node_id,
                     )
                 snapshot.updated_at = utc_now()
                 self._refresh_compound_statuses(snapshot)
@@ -1240,6 +1298,8 @@ class ExecutionGraphRunner:
                             memory_store=self.memory_store,
                             settings=self.settings,
                             event_callback=self.event_callback,
+                            progress_observer=self.progress_observer,
+                            progress_emitter=self._emit_observer_progress,
                             authorize_tool_call=lambda: self._authorize_tool_call(snapshot),
                             tool_semaphore=self._tool_semaphore,
                             approval_store=self.approvals,
@@ -2561,8 +2621,10 @@ class ExecutionGraphRunner:
         current_action: str,
         next_action: str,
         status: str = "running",
+        source: str = "runtime",
+        node_id: str | None = None,
     ) -> None:
-        """Publish an operational graph update without exposing hidden reasoning."""
+        """Publish a factual or Main Agent-generated graph update."""
         current = str(current_action).strip()
         next_step = str(next_action).strip()
         self._emit(
@@ -2571,10 +2633,30 @@ class ExecutionGraphRunner:
             progress_kind="main_agent_graph",
             phase=phase,
             status=status,
+            progress_source=source,
+            node_id=node_id,
             current_action=current,
             next_action=next_step,
             message=f"当前：{current}；下一步：{next_step}",
         )
+
+    def _emit_observer_progress(self, payload: dict[str, Any]) -> None:
+        self._emit_main_agent_progress(
+            phase=str(payload.get("phase") or "tool_result"),
+            status=str(payload.get("status") or "running"),
+            source=str(payload.get("progress_source") or "llm"),
+            node_id=str(payload.get("node_id") or "") or None,
+            current_action=str(payload.get("current_action") or ""),
+            next_action=str(payload.get("next_action") or ""),
+        )
+
+    def _observe_main_agent_progress(self, facts: dict[str, Any]) -> dict[str, str] | None:
+        if self.progress_observer is None:
+            return None
+        try:
+            return self.progress_observer(facts)
+        except Exception:
+            return None
 
     @staticmethod
     def _node_ids(snapshot: ExecutionRunSnapshot, status: str) -> set[str]:

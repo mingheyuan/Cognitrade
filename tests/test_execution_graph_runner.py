@@ -108,6 +108,10 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
                 registry=self.registry,
                 run_root=Path(temporary_directory),
                 event_callback=events.append,
+                progress_observer=lambda facts: {
+                    "current": f"已收到 {facts['event']}：{facts['node_id']}",
+                    "next": "继续处理当前运行事实",
+                },
             )
             result = runner.run(
                 graph=self._legal_graph(),
@@ -139,6 +143,9 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
             self.assertTrue(main_agent_progress)
             self.assertTrue(all(event.get("current_action") for event in main_agent_progress))
             self.assertTrue(all(event.get("next_action") for event in main_agent_progress))
+            self.assertTrue(
+                any(event.get("progress_source") == "llm" for event in main_agent_progress)
+            )
             frontiers = [event["node_ids"] for event in events if event["event_type"] == "graph_frontier_ready"]
             self.assertIn(
                 ["legal_risk_reviewer", "legal_obligation_analyzer"],

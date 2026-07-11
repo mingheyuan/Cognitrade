@@ -14,6 +14,7 @@ artifact_types:
   - artifact_type: distillation_result
   - artifact_type: distillation_review
   - artifact_type: research_report
+  - artifact_type: main_agent_synthesis
 skills:
   - skill_name: market_snapshot_skill
     version: "1"

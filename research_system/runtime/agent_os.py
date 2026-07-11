@@ -1100,6 +1100,7 @@ class AgentOS:
             settings=self.settings,
             cache_root=self.settings.memory_root / "agent_os_cache",
             event_callback=event_callback,
+            progress_observer=self.main_agent.observe_graph_progress,
         )
 
     def _runner_board(self, run_id: str):
@@ -1363,10 +1364,54 @@ class AgentOS:
             ),
             None,
         )
+        synthesis = None
+        synthesis_artifact = None
+        if (
+            result.snapshot.status == "completed"
+            and report is not None
+            and result.snapshot.graph.domain_id == "finance_ashare"
+        ):
+            request_payload = read_json(runner.run_root / "request.json") or {}
+            request_text = str(
+                request_payload.get("user_query")
+                or request_payload.get("query")
+                or result.snapshot.graph.objective
+                or ""
+            )
+            synthesis = self.main_agent.compose_research_synthesis(
+                request=request_text,
+                report=dict(report.content),
+            )
+            if synthesis:
+                synthesis_artifact = runner.board.add(
+                    ArtifactRecord(
+                        artifact_type="main_agent_synthesis",
+                        schema_version="1",
+                        run_id=result.snapshot.run_id,
+                        thread_id=result.snapshot.thread_id,
+                        request_id=result.snapshot.request_id,
+                        producer=ArtifactProducer(
+                            executor="main_agent",
+                            capability="core.research.synthesize",
+                            domain_id=result.snapshot.graph.domain_id,
+                            responsibility_node_id="main_agent",
+                        ),
+                        content={
+                            **synthesis,
+                            "source_artifact_id": report.artifact_id,
+                            "model_generated": True,
+                        },
+                        source_refs=list(report.source_refs),
+                        parent_artifact_ids=[report.artifact_id],
+                        confidence=report.confidence,
+                        risk_flags=[*report.risk_flags, "main_agent_synthesis"],
+                    )
+                )
         content = report.content if report is not None else {}
         if result.snapshot.status == "completed":
             message = str(
-                content.get("conclusion")
+                (synthesis or {}).get("assistant_message")
+                or content.get("conclusion")
                 or content.get("summary")
                 or "Agent OS graph run completed."
             )
@@ -1401,12 +1446,26 @@ class AgentOS:
                 ),
                 content={
                     "message": message,
-                    "source_artifact_ids": [report.artifact_id] if report is not None else [],
+                    "source_artifact_ids": [
+                        artifact_id
+                        for artifact_id in (
+                            report.artifact_id if report is not None else None,
+                            synthesis_artifact.artifact_id if synthesis_artifact is not None else None,
+                        )
+                        if artifact_id
+                    ],
                     "mode": "graph",
                     "delivery_status": result.snapshot.status,
                 },
                 source_refs=source_refs,
-                parent_artifact_ids=[report.artifact_id] if report is not None else [],
+                parent_artifact_ids=[
+                    artifact_id
+                    for artifact_id in (
+                        report.artifact_id if report is not None else None,
+                        synthesis_artifact.artifact_id if synthesis_artifact is not None else None,
+                    )
+                    if artifact_id
+                ],
                 confidence=(
                     report.confidence
                     if result.snapshot.status == "completed" and report is not None
@@ -1423,11 +1482,26 @@ class AgentOS:
             delivery_status=result.snapshot.status,
             message=message,
             artifact_ids=[assistant.artifact_id],
-            source_artifact_ids=[report.artifact_id] if report is not None else [],
+            source_artifact_ids=[
+                artifact_id
+                for artifact_id in (
+                    report.artifact_id if report is not None else None,
+                    synthesis_artifact.artifact_id if synthesis_artifact is not None else None,
+                )
+                if artifact_id
+            ],
         )
         return result.model_copy(
             update={
-                "artifact_ids": [*result.artifact_ids, assistant.artifact_id],
+                "artifact_ids": [
+                    *result.artifact_ids,
+                    *(
+                        [synthesis_artifact.artifact_id]
+                        if synthesis_artifact is not None
+                        else []
+                    ),
+                    assistant.artifact_id,
+                ],
             }
         )
 

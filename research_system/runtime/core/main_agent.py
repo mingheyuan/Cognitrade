@@ -474,6 +474,87 @@ class MainAgent:
         )
         return decision
 
+    def observe_graph_progress(self, facts: dict[str, Any]) -> dict[str, str] | None:
+        """Ask the Main Agent for a short Chinese status update from runtime facts."""
+        provider = self.llm_provider
+        if provider is None or not bool(getattr(provider, "available", False)):
+            return None
+        complete = getattr(provider, "complete", None)
+        if not callable(complete):
+            return None
+        prompt = json.dumps(facts, ensure_ascii=False, default=str)[:24_000]
+        try:
+            raw = complete(
+                system_prompt=(
+                    "你是 Cognitrade Agent OS 的 Main Agent。"
+                    "你收到的是已经发生的 Tool 或 Subagent 运行事实。"
+                    "请只根据这些事实，用中文生成一条面向用户的公开进度摘要。"
+                    "不要输出隐藏思维链、猜测或未发生的结果。"
+                    "只返回 JSON：{\"current\":\"当前事实\",\"next\":\"下一步实际动作\"}。"
+                ),
+                user_prompt=f"运行事实：\n{prompt}",
+                temperature=0.2,
+            )
+        except Exception:
+            return None
+        payload = self._parse_json_object(raw)
+        if not isinstance(payload, dict):
+            return None
+        current = str(payload.get("current") or "").strip()
+        next_action = str(payload.get("next") or "").strip()
+        if not current or not next_action:
+            return None
+        return {"current": current[:500], "next": next_action[:500]}
+
+    def compose_research_synthesis(
+        self,
+        *,
+        request: str,
+        report: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Create a user-facing Chinese synthesis without changing source facts."""
+        provider = self.llm_provider
+        if provider is None or not bool(getattr(provider, "available", False)):
+            return None
+        complete = getattr(provider, "complete", None)
+        if not callable(complete):
+            return None
+        facts = json.dumps(report, ensure_ascii=False, default=str)[:36_000]
+        try:
+            raw = complete(
+                system_prompt=(
+                    "你是 Cognitrade Agent OS 的 Main Agent，负责交付研究结果。"
+                    "请根据提供的结构化证据、方法论输出、风险和数据缺口，独立组织一段中文结论。"
+                    "不要照抄固定模板，不要补造缺失数据，不要给出买卖指令。"
+                    "必须保留不确定性、降级项和不构成投资建议的边界。"
+                    "只返回 JSON："
+                    "{\"conclusion\":\"中文最终结论\","
+                    "\"assistant_message\":\"给用户的中文回答\","
+                    "\"follow_up\":[\"下一步研究动作\"]}。"
+                ),
+                user_prompt=f"用户请求：{request}\n结构化研究事实：\n{facts}",
+                temperature=0.2,
+            )
+        except Exception:
+            return None
+        payload = self._parse_json_object(raw)
+        if not isinstance(payload, dict):
+            return None
+        conclusion = str(payload.get("conclusion") or "").strip()
+        assistant_message = str(payload.get("assistant_message") or conclusion).strip()
+        follow_up = [
+            str(item).strip()[:500]
+            for item in list(payload.get("follow_up") or [])
+            if str(item).strip()
+        ][:5]
+        if not conclusion or not assistant_message:
+            return None
+        return {
+            "conclusion": conclusion[:2_000],
+            "assistant_message": assistant_message[:4_000],
+            "follow_up": follow_up,
+        }
+
     def _materialize_intake_clarification(
         self,
         *,
@@ -1067,6 +1148,25 @@ class MainAgent:
         current = str(progress.current if progress else "").strip() or fallback_current
         next_action = str(progress.next if progress else "").strip() or fallback_next
         return current[:500], next_action[:500]
+
+    @staticmethod
+    def _parse_json_object(raw: Any) -> dict[str, Any] | None:
+        if isinstance(raw, dict):
+            return dict(raw)
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        decoder = json.JSONDecoder()
+        for index, character in enumerate(text):
+            if character != "{":
+                continue
+            try:
+                payload, _ = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                return payload
+        return None
 
     @staticmethod
     def _trim_tool_output(output: dict[str, Any]) -> dict[str, Any]:

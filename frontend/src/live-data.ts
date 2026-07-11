@@ -108,13 +108,28 @@ export function reportFromDetail(detail?: RunDetail | null): ResearchReport {
   const reportArtifact = [...artifacts].reverse().find((artifact) => (
     asString(asRecord(artifact).artifact_type) === 'research_report'
   ))
-  const content = asRecord(asRecord(reportArtifact).content)
+  const synthesisArtifact = [...artifacts].reverse().find((artifact) => (
+    asString(asRecord(artifact).artifact_type) === 'main_agent_synthesis'
+  ))
+  const reportContent = asRecord(asRecord(reportArtifact).content)
+  const synthesisContent = asRecord(asRecord(synthesisArtifact).content)
+  const content = {
+    ...reportContent,
+    ...synthesisContent,
+    ...(synthesisContent.conclusion ? {
+      assessment: {
+        ...asRecord(reportContent.assessment),
+        summary: synthesisContent.conclusion,
+      },
+    } : {}),
+  }
   if (Object.keys(content).length > 0) {
     const artifactId = asString(asRecord(reportArtifact).artifact_id)
+    const synthesisId = asString(asRecord(synthesisArtifact).artifact_id)
     return {
       ...content,
       protocol: 'agent_os',
-      final_artifact_ids: artifactId ? [artifactId] : [],
+      final_artifact_ids: [artifactId, synthesisId].filter(Boolean),
     } as ResearchReport
   }
   return asRecord(detail?.replay.result?.report) as ResearchReport
