@@ -126,6 +126,15 @@ class AgentToolCallRequest(BaseModel):
     call_id: str | None = None
 
 
+class AgentPublicProgress(BaseModel):
+    """Optional user-facing progress summary, never a hidden reasoning trace."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    current: str = ""
+    next: str = ""
+
+
 class AgentTurnResponse(BaseModel):
     """Provider-neutral response used by the finite Main Agent Tool loop."""
 
@@ -137,6 +146,7 @@ class AgentTurnResponse(BaseModel):
     question: str | None = None
     missing_fields: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+    public_progress: AgentPublicProgress | None = None
 
 
 CoreToolDefinition = ToolDefinition
@@ -216,6 +226,7 @@ class MainAgentRunResult(BaseModel):
 
 
 __all__ = [
+    "AgentPublicProgress",
     "AgentToolCallRequest",
     "AgentTurnResponse",
     "CoreRunStatus",

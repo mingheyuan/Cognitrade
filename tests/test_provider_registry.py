@@ -200,3 +200,22 @@ class ProviderRegistryTests(unittest.TestCase):
 
         self.assertEqual(provider.complete(system_prompt="sys", user_prompt="user"), "done")
         self.assertEqual(responses.create_calls[0]["reasoning"], {"effort": "xhigh"})
+
+    def test_public_progress_block_is_extracted_without_leaking_into_answer_text(self) -> None:
+        text = (
+            '<progress>{"current":"Reading the requested file",'
+            '"next":"Summarize the returned content"}</progress>\n'
+            "The file contains the requested content."
+        )
+
+        self.assertEqual(
+            OpenAIProvider._extract_public_progress(text),
+            {
+                "current": "Reading the requested file",
+                "next": "Summarize the returned content",
+            },
+        )
+        self.assertEqual(
+            OpenAIProvider._strip_public_progress(text),
+            "The file contains the requested content.",
+        )

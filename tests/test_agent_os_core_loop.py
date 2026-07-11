@@ -47,11 +47,19 @@ class _NativeToolProvider:
                         "call_id": "model-call-1",
                     }
                 ],
+                "public_progress": {
+                    "current": "The request requires reading the requested workspace file.",
+                    "next": "Execute core.file.read and use its returned content.",
+                },
             }
         tool_rows = [row for row in kwargs["messages"] if row.get("role") == "tool"]
         return {
             "kind": "message",
             "message": f"模型看到了 {tool_rows[-1]['output']['content']}",
+            "public_progress": {
+                "current": "The file result is available to the Main Agent.",
+                "next": "Deliver the answer with the retrieved content.",
+            },
         }
 
 
@@ -318,6 +326,13 @@ class AgentOSCoreLoopTests(unittest.TestCase):
             self.assertTrue(all(event.get("current_action") for event in loop_progress))
             self.assertTrue(all(event.get("next_action") for event in loop_progress))
             self.assertTrue(any(event.get("phase") == "tool_result" for event in loop_progress))
+            self.assertTrue(
+                any(
+                    event.get("current_action")
+                    == "The request requires reading the requested workspace file."
+                    for event in loop_progress
+                )
+            )
             self.assertIn("assistant_message_ready", event_types)
             tool_result_event = next(
                 event for event in events if event["event_type"] == "main_agent_tool_loop_result"

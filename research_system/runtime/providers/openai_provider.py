@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import json
+import re
 from typing import Any, TypeVar
 
 from openai import APITimeoutError, OpenAI
@@ -29,6 +30,10 @@ class StructuredOutputError(LLMProviderError):
 class OpenAIProvider:
     _CONTINUATION_PROMPT = "Continue exactly from where you stopped. Do not repeat any previous text. Emit only the continuation."
     _MAX_CONTINUATION_ATTEMPTS = 3
+    _PUBLIC_PROGRESS_PATTERN = re.compile(
+        r"<progress>\s*(\{.*?\})\s*</progress>",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -181,10 +186,17 @@ class OpenAIProvider:
                         "call_id": str(call_id or "").strip() or None,
                     }
                 )
-            if calls:
-                return {"kind": "tool_calls", "tool_calls": calls}
             text = self.response_support.coerce_responses_text(response)
-            return {"kind": "message", "message": text}
+            public_progress = self._extract_public_progress(text)
+            if calls:
+                payload: dict[str, Any] = {"kind": "tool_calls", "tool_calls": calls}
+                if public_progress is not None:
+                    payload["public_progress"] = public_progress
+                return payload
+            payload = {"kind": "message", "message": self._strip_public_progress(text)}
+            if public_progress is not None:
+                payload["public_progress"] = public_progress
+            return payload
         except LLMProviderError:
             raise
         except APITimeoutError as exc:
@@ -228,6 +240,27 @@ class OpenAIProvider:
                 continue
             normalized.append({"role": role, "content": str(row.get("content") or "")})
         return normalized
+
+    @classmethod
+    def _extract_public_progress(cls, text: str) -> dict[str, str] | None:
+        match = cls._PUBLIC_PROGRESS_PATTERN.search(str(text or ""))
+        if match is None:
+            return None
+        try:
+            payload = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        current = str(payload.get("current") or "").strip()
+        next_action = str(payload.get("next") or "").strip()
+        if not current and not next_action:
+            return None
+        return {"current": current[:500], "next": next_action[:500]}
+
+    @classmethod
+    def _strip_public_progress(cls, text: str) -> str:
+        return cls._PUBLIC_PROGRESS_PATTERN.sub("", str(text or "")).strip()
 
     def stream_complete(
         self,

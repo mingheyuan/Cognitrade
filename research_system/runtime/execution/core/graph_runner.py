@@ -490,8 +490,8 @@ class ExecutionGraphRunner:
         )
         self._emit_main_agent_progress(
             phase="graph_start",
-            current_action="正在启动受治理的 ExecutionGraph",
-            next_action="展开当前任务图并计算第一批可执行叶子节点",
+            current_action=f"ExecutionGraph {graph.graph_id} started at revision {graph.revision}",
+            next_action="Expand lazy compounds and calculate the ready frontier",
         )
 
         try:
@@ -557,10 +557,13 @@ class ExecutionGraphRunner:
                 self._emit_main_agent_progress(
                     phase="frontier_ready",
                     current_action=(
-                        "已确定本轮就绪节点："
+                        "Ready frontier: "
                         + ", ".join(node.node_id for node in frontier)
                     ),
-                    next_action="并发执行就绪 Subagent，并等待 ArtifactBoard 结果",
+                    next_action=(
+                        "Execute ready node(s): "
+                        + ", ".join(node.node_id for node in frontier)
+                    ),
                 )
                 frontier_outcomes = self._execute_frontier(snapshot, frontier)
                 for outcome_index, outcome in enumerate(frontier_outcomes):
@@ -591,11 +594,19 @@ class ExecutionGraphRunner:
                     remaining = len(frontier_outcomes) - outcome_index - 1
                     self._emit_main_agent_progress(
                         phase="subagent_result",
-                        current_action=f"已收到 Subagent {outcome.node.node_id} 的结果",
+                        current_action=(
+                            f"Subagent {outcome.node.node_id} returned "
+                            f"{outcome.state.status}"
+                            + (
+                                f"; artifacts: {', '.join(outcome.state.output_artifact_ids)}"
+                                if outcome.state.output_artifact_ids
+                                else ""
+                            )
+                        ),
                         next_action=(
-                            "继续处理本轮其他就绪 Subagent 的结果"
+                            "Process the remaining ready node result(s)"
                             if remaining
-                            else "检查 ArtifactBoard 和质量状态，决定继续、重规划或结束"
+                            else "Evaluate the Board and the next graph decision"
                         ),
                     )
                 snapshot.updated_at = utc_now()
@@ -625,8 +636,8 @@ class ExecutionGraphRunner:
             )
             self._emit_main_agent_progress(
                 phase="delivery",
-                current_action=f"ExecutionGraph 已结束，状态为 {snapshot.status}",
-                next_action="整理最终 Artifact 并交付用户",
+                current_action=f"ExecutionGraph finished with status {snapshot.status}",
+                next_action="Persist the final Artifact and finish delivery",
                 status=snapshot.status,
             )
             return self._result(snapshot)
@@ -1954,6 +1965,22 @@ class ExecutionGraphRunner:
                 actor=decision.actor,
                 decision=decision.model_dump(mode="json"),
             )
+            self._emit_main_agent_progress(
+                phase="planner_decision",
+                current_action=(
+                    f"PlanAgent decision: {decision.action}"
+                    + (f"; {decision.reason}" if decision.reason else "")
+                ),
+                next_action=(
+                    "Apply graph patch operations: "
+                    + ", ".join(
+                        f"{operation.op_type}:{operation.node.node_id if operation.node else operation.target_node_id}"
+                        for operation in patch.operations
+                    )
+                    if patch is not None and patch.operations
+                    else "Continue with the current graph frontier"
+                ),
+            )
             if patch is None:
                 self._apply_non_patch_plan_decision(snapshot, decision)
                 return graph
@@ -1971,8 +1998,14 @@ class ExecutionGraphRunner:
             )
             self._emit_main_agent_progress(
                 phase="graph_expansion",
-                current_action=f"已根据当前任务和 Board 扩展子图 {compound.node_id}",
-                next_action="重新计算就绪叶子节点并进入统一调度",
+                current_action=(
+                    f"Applied compound expansion for {compound.node_id}: "
+                    + ", ".join(
+                        f"{operation.op_type}:{operation.node.node_id if operation.node else operation.target_node_id}"
+                        for operation in patch.operations
+                    )
+                ),
+                next_action="Recompute the ready frontier from the updated graph",
             )
         return graph
 
@@ -2052,6 +2085,22 @@ class ExecutionGraphRunner:
             message=(
                 f"PlanAgent {decision.action}: "
                 f"{decision.reason or 'updated the execution frontier.'}"
+            ),
+        )
+        self._emit_main_agent_progress(
+            phase="planner_decision",
+            current_action=(
+                f"PlanAgent decision: {decision.action}"
+                + (f"; {decision.reason}" if decision.reason else "")
+            ),
+            next_action=(
+                "Apply graph patch operations: "
+                + ", ".join(
+                    f"{operation.op_type}:{operation.node.node_id if operation.node else operation.target_node_id}"
+                    for operation in patch.operations
+                )
+                if patch is not None and patch.operations
+                else "Continue with the current graph frontier"
             ),
         )
         if patch is None:

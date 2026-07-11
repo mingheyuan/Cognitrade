@@ -639,8 +639,8 @@ class MainAgent:
                 state=state,
                 turn=max(1, state.turn_count + 1),
                 phase="core_route",
-                current_action="正在处理 Core Agent 请求",
-                next_action="执行必要的 Core Tool 并准备直接回答",
+                current_action="Main Agent entered the deterministic Core path",
+                next_action="Execute the Core path and collect its result",
             )
             message = self._answer(
                 request=request,
@@ -654,8 +654,15 @@ class MainAgent:
                 state=state,
                 turn=max(1, state.turn_count + 1),
                 phase="core_tool_result",
-                current_action="已完成 Core Tool 和基础请求处理",
-                next_action="组装回答并交付给用户",
+                current_action=(
+                    "Core path completed"
+                    + (
+                        f" with Tool(s): {', '.join(item.tool_name for item in tool_results)}"
+                        if tool_results
+                        else " without Tool calls"
+                    )
+                ),
+                next_action="Persist the assistant message and finish the Run",
                 status="completed",
             )
             return message, state
@@ -666,8 +673,8 @@ class MainAgent:
                 state=state,
                 turn=max(1, state.turn_count + 1),
                 phase="core_route",
-                current_action="正在处理 Core Agent 请求",
-                next_action="执行必要的 Core Tool 并准备直接回答",
+                current_action="Main Agent entered the deterministic Core path",
+                next_action="Execute the Core path and collect its result",
             )
             message = self._answer(
                 request=request,
@@ -681,8 +688,15 @@ class MainAgent:
                 state=state,
                 turn=max(1, state.turn_count + 1),
                 phase="core_tool_result",
-                current_action="已完成 Core Tool 和基础请求处理",
-                next_action="组装回答并交付给用户",
+                current_action=(
+                    "Core path completed"
+                    + (
+                        f" with Tool(s): {', '.join(item.tool_name for item in tool_results)}"
+                        if tool_results
+                        else " without Tool calls"
+                    )
+                ),
+                next_action="Persist the assistant message and finish the Run",
                 status="completed",
             )
             return message, state
@@ -734,8 +748,8 @@ class MainAgent:
                 state=state,
                 turn=turn_index + 1,
                 phase="model_turn",
-                current_action="正在分析用户请求和当前上下文",
-                next_action="决定直接回答、调用 Core Tool，或请求补充信息",
+                current_action=f"Main Agent model call {turn_index + 1} started",
+                next_action="Wait for the model response",
             )
             try:
                 response = self._provider_tool_turn(
@@ -772,14 +786,19 @@ class MainAgent:
                 question = str(response.question or response.message or "").strip()
                 if not question:
                     question = "Please clarify the request before I continue."
+                current_action, next_action = self._response_progress(
+                    response,
+                    fallback_current=f"Model requested clarification: {question[:240]}",
+                    fallback_next="Wait for the user response before resuming this Run",
+                )
                 self._emit_loop_progress(
                     root,
                     event_callback,
                     state=state,
                     turn=turn_index + 1,
                     phase="clarification",
-                    current_action="已识别出继续执行所需的缺失信息",
-                    next_action="等待用户补充后恢复同一个 Main Agent Run",
+                    current_action=current_action,
+                    next_action=next_action,
                     status="paused",
                 )
                 self._emit(
@@ -810,14 +829,19 @@ class MainAgent:
             if response.kind != "tool_calls" or not response.tool_calls:
                 message = response.message or response.question
                 if message:
+                    current_action, next_action = self._response_progress(
+                        response,
+                        fallback_current=f"Model returned a final answer: {str(message)[:240]}",
+                        fallback_next="Persist the assistant message and finish the Run",
+                    )
                     self._emit_loop_progress(
                         root,
                         event_callback,
                         state=state,
                         turn=turn_index + 1,
                         phase="answer",
-                        current_action="已生成当前请求的最终回答",
-                        next_action="将回答和相关 Artifact 交付给用户",
+                        current_action=current_action,
+                        next_action=next_action,
                         status="completed",
                     )
                     self._emit(
@@ -860,17 +884,25 @@ class MainAgent:
                     f"{len(response.tool_calls)} Tool(s)."
                 ),
             )
+            current_action, next_action = self._response_progress(
+                response,
+                fallback_current=(
+                    "Model requested Tool(s): "
+                    + ", ".join(item.tool_name for item in response.tool_calls)
+                ),
+                fallback_next=(
+                    "Execute Tool(s): "
+                    + ", ".join(item.tool_name for item in response.tool_calls)
+                ),
+            )
             self._emit_loop_progress(
                 root,
                 event_callback,
                 state=state,
                 turn=turn_index + 1,
                 phase="tool_dispatch",
-                current_action=(
-                    "已选择工具："
-                    + ", ".join(item.tool_name for item in response.tool_calls)
-                ),
-                next_action="执行工具并检查返回结果，再决定是否继续循环",
+                current_action=current_action,
+                next_action=next_action,
             )
 
             transcript.append(
@@ -936,11 +968,14 @@ class MainAgent:
                     turn=turn_index + 1,
                     phase="tool_result",
                     current_action=(
-                        f"已收到 Tool {result.tool_name} 的结果"
-                        if result.status == "completed"
-                        else f"Tool {result.tool_name} 返回了 {result.status}"
+                        f"Tool {result.tool_name} returned {result.status}"
+                        + (
+                            f": {self._tool_output_summary(result)[:240]}"
+                            if result.status == "completed"
+                            else f": {result.error or result.status}"
+                        )
                     ),
-                    next_action="根据结果决定直接回答、继续调用工具，或升级到专业 ExecutionGraph",
+                    next_action=f"Write the Tool {result.tool_name} result into the next Main Agent turn",
                     status=result.status,
                 )
 
@@ -953,8 +988,8 @@ class MainAgent:
             state=state,
             turn=state.turn_count,
             phase="loop_limit",
-            current_action="Tool 循环已达到治理上限",
-            next_action="返回受限结果并等待用户决定是否继续",
+            current_action=f"Tool loop limit reached after {state.turn_count} turn(s)",
+            next_action="Return the bounded response and finish the Run",
             status="bounded",
         )
         state = state.model_copy(
@@ -991,7 +1026,11 @@ class MainAgent:
                 system_prompt=(
                     "You are the single Main Agent of Cognitrade Agent OS. "
                     "Use only the supplied tools. Return a final user-facing answer "
-                    "when no more tool calls are needed. Do not invent professional facts."
+                    "when no more tool calls are needed. Do not invent professional facts. "
+                    "When useful, include one public progress block in the exact form "
+                    '<progress>{"current":"...","next":"..."}</progress>. '
+                    "Keep it short, describe only the public operational status, and never "
+                    "include hidden reasoning or private chain-of-thought."
                 ),
                 user_prompt=request.user_query,
                 messages=list(transcript),
@@ -1002,7 +1041,10 @@ class MainAgent:
             raw = native_turn(
                 system_prompt=(
                     "You are the single Main Agent of Cognitrade Agent OS. "
-                    "Use only the supplied tools and answer the user directly."
+                    "Use only the supplied tools and answer the user directly. "
+                    "When useful, include one public progress block in the exact form "
+                    '<progress>{"current":"...","next":"..."}</progress>. '
+                    "Keep it short and operational; never include hidden reasoning."
                 ),
                 user_prompt=request.user_query,
                 tools=definitions,
@@ -1013,6 +1055,18 @@ class MainAgent:
         if isinstance(raw, str):
             return AgentTurnResponse(message=raw)
         return AgentTurnResponse.model_validate(raw)
+
+    @staticmethod
+    def _response_progress(
+        response: AgentTurnResponse,
+        *,
+        fallback_current: str,
+        fallback_next: str,
+    ) -> tuple[str, str]:
+        progress = response.public_progress
+        current = str(progress.current if progress else "").strip() or fallback_current
+        next_action = str(progress.next if progress else "").strip() or fallback_next
+        return current[:500], next_action[:500]
 
     @staticmethod
     def _trim_tool_output(output: dict[str, Any]) -> dict[str, Any]:
@@ -1053,7 +1107,7 @@ class MainAgent:
         next_action: str,
         status: str = "running",
     ) -> None:
-        """Persist an operational loop update without exposing hidden reasoning."""
+        """Persist factual loop state without exposing hidden reasoning."""
         current = str(current_action).strip()
         next_step = str(next_action).strip()
         MainAgent._emit(
