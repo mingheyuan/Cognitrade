@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
-from research_system.schemas.protocol import ClarificationPayload, RequestEnvelope
-from research_system.schemas.task_intake import TaskIntakeDecision
+from research_system.schemas.protocol import RequestEnvelope
+from research_system.schemas.task_intake import IntakeClarification, TaskIntakeDecision
 
 
 class PackIntakeService:
@@ -101,9 +101,9 @@ class PackIntakeService:
         if len(candidates) > 1:
             return TaskIntakeDecision(
                 status="needs_clarification",
-                clarification=ClarificationPayload(
-                    question="More than one installed professional pack can handle this request. Please specify the domain.",
+                clarification=IntakeClarification(
                     missing_fields=["domain_id"],
+                    context={"reason": "ambiguous_domain_pack"},
                 ),
                 trace={"source": "ambiguous_domain_pack"},
             )
@@ -111,9 +111,9 @@ class PackIntakeService:
             return clarifications[0]
         return TaskIntakeDecision(
             status="needs_clarification",
-            clarification=ClarificationPayload(
-                question="Please specify a professional domain or provide a request that an installed DomainPack can handle.",
+            clarification=IntakeClarification(
                 missing_fields=["domain_id", "intent"],
+                context={"reason": "no_domain_pack_match"},
             ),
             trace={"source": "no_domain_pack_match", "explicit_intent": explicit_intent or None},
         )

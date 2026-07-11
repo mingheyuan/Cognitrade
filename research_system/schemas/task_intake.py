@@ -3,8 +3,17 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from research_system.schemas.protocol import RequestEnvelope
 
-from research_system.schemas.protocol import ClarificationPayload, RequestEnvelope
+
+class IntakeClarification(BaseModel):
+    """Structured missing-input context; Main Agent owns user-facing wording."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str | None = None
+    missing_fields: list[str] = Field(default_factory=list)
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskIntakeDecision(BaseModel):
@@ -19,7 +28,7 @@ class TaskIntakeDecision(BaseModel):
     constraints: dict[str, Any] = Field(default_factory=dict)
     candidate_capabilities: list[str] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    clarification: ClarificationPayload | None = None
+    clarification: IntakeClarification | None = None
     trace: dict[str, Any] = Field(default_factory=dict)
 
     def apply_to(self, request: RequestEnvelope) -> RequestEnvelope:
@@ -35,4 +44,4 @@ class TaskIntakeDecision(BaseModel):
         )
 
 
-__all__ = ["TaskIntakeDecision"]
+__all__ = ["IntakeClarification", "TaskIntakeDecision"]

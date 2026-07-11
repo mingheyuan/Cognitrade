@@ -438,6 +438,10 @@ class MainAgent:
             if not isinstance(payload, dict):
                 raise RuntimeError("core.request.intake returned no decision")
             decision = RequestIntakeDecision.model_validate(payload)
+        decision = self._materialize_intake_clarification(
+            request=request,
+            decision=decision,
+        )
         write_json(
             paths.root / "agent_os_request.json",
             {
@@ -469,6 +473,82 @@ class MainAgent:
             ),
         )
         return decision
+
+    def _materialize_intake_clarification(
+        self,
+        *,
+        request: RequestEnvelope,
+        decision: RequestIntakeDecision,
+    ) -> RequestIntakeDecision:
+        """Turn structured Intake gaps into one Main Agent user-facing question."""
+
+        if decision.status != "needs_clarification" or decision.clarification_question:
+            return decision
+        question = self._generate_intake_clarification(request=request, decision=decision)
+        return decision.model_copy(update={"clarification_question": question})
+
+    def _generate_intake_clarification(
+        self,
+        *,
+        request: RequestEnvelope,
+        decision: RequestIntakeDecision,
+    ) -> str:
+        provider = self.llm_provider
+        if provider is not None and bool(getattr(provider, "available", False)):
+            try:
+                response = provider.complete(
+                    system_prompt=(
+                        "You are the single Main Agent of Cognitrade Agent OS. "
+                        "Turn the structured request-intake gaps into one concise "
+                        "user-facing clarification question. Answer in the user's "
+                        "language. Do not guess missing entities, do not perform the "
+                        "professional task, and do not mention internal field names "
+                        "or implementation details. If the request is ambiguous, "
+                        "briefly present the relevant choices. Return only the question."
+                    ),
+                    user_prompt=json.dumps(
+                        {
+                            "user_query": request.user_query,
+                            "conversation_context": request.conversation_context[-8:],
+                            "intent": decision.intent,
+                            "domain_id": decision.domain_id,
+                            "slots": decision.slots,
+                            "constraints": decision.constraints,
+                            "missing_fields": decision.missing_fields,
+                            "clarification_context": decision.clarification_context,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    temperature=0.2,
+                ).strip()
+                if response:
+                    return response
+            except Exception:
+                pass
+        return self._fallback_intake_clarification(request=request, decision=decision)
+
+    @staticmethod
+    def _fallback_intake_clarification(
+        *,
+        request: RequestEnvelope,
+        decision: RequestIntakeDecision,
+    ) -> str:
+        """Generic no-LLM fallback; domain wording remains outside the Pack."""
+
+        labels = {
+            "symbols": "标的名称或代码",
+            "sector": "板块或行业",
+            "review_target_run_id": "需要复核的历史运行",
+            "intent_or_target": "任务目标或研究对象",
+        }
+        missing = [labels.get(field, field) for field in decision.missing_fields]
+        requested = "、".join(dict.fromkeys(missing)) or "必要信息"
+        scope = str(decision.slots.get("sector") or "").strip()
+        if scope and "symbols" in decision.missing_fields:
+            requested = f"具体的{scope}标的名称或代码"
+        if any("\u4e00" <= char <= "\u9fff" for char in request.user_query):
+            return f"为了继续处理，请补充{requested}。"
+        return f"To continue, please provide: {requested}."
 
     @staticmethod
     def _control_status(root: Path) -> str | None:

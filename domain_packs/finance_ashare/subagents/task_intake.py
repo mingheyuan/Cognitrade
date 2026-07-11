@@ -16,6 +16,9 @@ _SECTOR_ALIASES = {
     "semiconductor": "semiconductor",
 }
 _COMPARE_KEYWORDS = ("compare", "comparison", "\u5bf9\u6bd4", "\u6bd4\u8f83", "\u54ea\u4e2a\u597d", "\u6392\u4e00\u4e0b")
+_MULTI_TARGET_PATTERN = re.compile(
+    r"(?:\d+|[一二两三四五六七八九十]+)\s*(?:家|只|支|个)\s*(?:银行|公司|股票|标的|证券|个股)?"
+)
 _SCREEN_KEYWORDS = ("screen", "watchlist", "candidate", "\u9009\u80a1", "\u7b5b\u9009", "\u63a8\u8350")
 _SECTOR_KEYWORDS = ("sector", "industry", "\u677f\u5757", "\u884c\u4e1a")
 _REVIEW_KEYWORDS = ("review thesis", "thesis review", "\u590d\u6838", "\u4e0a\u4e00\u8f6e\u5224\u65ad")
@@ -44,9 +47,14 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
     slots = dict(request.get("slots") or {})
     constraints = dict(request.get("constraints") or {})
     runtime_context = dict(request.get("_runtime_context") or {})
-    resolution = _symbols(query, slots=slots, constraints=constraints)
-    symbols = resolution.symbols
     sector = _sector(query, slots=slots, constraints=constraints)
+    resolution = _symbols(
+        query,
+        slots=slots,
+        constraints=constraints,
+        allow_network=not sector and not _looks_like_multi_target_request(query),
+    )
+    symbols = resolution.symbols
     if symbols:
         slots["symbols"] = symbols
     if sector:
@@ -55,36 +63,48 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
     intent = explicit_intent or _infer_intent(query=query, symbols=symbols, sector=sector)
     if intent is None:
         return _clarify(
-            "Please provide an A-share code or company name, a sector, or state whether you want screening, comparison, or thesis review.",
             ["intent_or_target"],
             query=query,
+            slots=slots,
+            constraints=constraints,
+            context={"reason": "intent_or_target_missing"},
         )
     if intent == "stock_compare" and len(symbols) < 2:
+        constraints.setdefault("requested_target_count", 2)
         return _clarify(
-            "Please provide at least two A-share codes or company names to compare.",
             ["symbols"],
             query=query,
             intent=intent,
+            slots=slots,
+            constraints=constraints,
+            context={
+                "reason": "comparison_targets_missing",
+                "target_scope": sector,
+            },
         )
     if intent == "stock_check" and not symbols and not slots.get("snapshots"):
         if _is_contextual_continuation(query, request, runtime_context):
             constraints["continuation"] = True
         else:
             return _clarify(
-                "Please provide an A-share code or supported company name for the analysis.",
                 ["symbols"],
                 query=query,
                 intent=intent,
+                slots=slots,
+                constraints=constraints,
+                context={"reason": "analysis_target_missing"},
             )
     if intent == "stock_screen" and not symbols and not sector:
         constraints.setdefault("candidate_pool_size", 8)
         slots["universe_scope"] = "ashare_liquidity_ranked"
     if intent == "sector_research" and not sector:
         return _clarify(
-            "Please specify the sector or industry to research.",
             ["sector"],
             query=query,
             intent=intent,
+            slots=slots,
+            constraints=constraints,
+            context={"reason": "sector_missing"},
         )
     if intent == "review_thesis":
         review_target_run_id = _review_target_run_id(
@@ -95,10 +115,12 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
         )
         if not review_target_run_id:
             return _clarify(
-                "Please select the prior run whose thesis should be reviewed.",
                 ["review_target_run_id"],
                 query=query,
                 intent=intent,
+                slots=slots,
+                constraints=constraints,
+                context={"reason": "review_target_missing"},
             )
         constraints["review_target_run_id"] = review_target_run_id
     return {
@@ -118,7 +140,13 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _symbols(query: str, *, slots: dict[str, Any], constraints: dict[str, Any]):
+def _symbols(
+    query: str,
+    *,
+    slots: dict[str, Any],
+    constraints: dict[str, Any],
+    allow_network: bool = True,
+):
     values: list[object] = [*(slots.get("symbols") or [])]
     if constraints.get("symbol"):
         values.append(constraints["symbol"])
@@ -127,7 +155,7 @@ def _symbols(query: str, *, slots: dict[str, Any], constraints: dict[str, Any]):
     return _SECURITY_MASTER.resolve(
         f"{query} {supplied_text}".strip(),
         supplied_symbols=values,
-        allow_network=True,
+        allow_network=allow_network,
     )
 
 
@@ -200,11 +228,19 @@ def _infer_intent(*, query: str, symbols: list[str], sector: str | None) -> str 
         return "stock_compare"
     if _contains(query, lowered, _SCREEN_KEYWORDS):
         return "stock_screen"
+    if _looks_like_multi_target_request(query):
+        return "stock_compare"
     if _contains(query, lowered, _SECTOR_KEYWORDS) or sector:
         return "sector_research"
     if _contains(query, lowered, _ANALYSIS_KEYWORDS):
         return "stock_check"
     return "stock_check" if symbols else None
+
+
+def _looks_like_multi_target_request(query: str) -> bool:
+    """Treat an explicit quantity of targets as comparison intent, even without 'compare'."""
+
+    return _MULTI_TARGET_PATTERN.search(query) is not None
 
 
 def _is_contextual_continuation(
@@ -235,10 +271,27 @@ def _contains(query: str, lowered: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword in query or keyword in lowered for keyword in keywords)
 
 
-def _clarify(question: str, missing_fields: list[str], *, query: str, intent: str | None = None) -> dict[str, Any]:
+def _clarify(
+    missing_fields: list[str],
+    *,
+    query: str,
+    intent: str | None = None,
+    slots: dict[str, Any] | None = None,
+    constraints: dict[str, Any] | None = None,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "status": "needs_clarification",
         "intent": intent,
-        "clarification": {"question": question, "missing_fields": missing_fields},
+        "slots": dict(slots or {}),
+        "constraints": dict(constraints or {}),
+        "clarification": {
+            "missing_fields": list(missing_fields),
+            "context": {
+                "query": query,
+                "intent": intent,
+                **dict(context or {}),
+            },
+        },
         "trace": {"source": "finance_ashare.task_intake", "query": query},
     }

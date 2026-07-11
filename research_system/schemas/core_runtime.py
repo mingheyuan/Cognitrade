@@ -78,6 +78,7 @@ class RequestIntakeDecision(BaseModel):
     constraints: dict[str, Any] = Field(default_factory=dict)
     missing_fields: list[str] = Field(default_factory=list)
     clarification_question: str | None = None
+    clarification_context: dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     trace: dict[str, Any] = Field(default_factory=dict)
 
@@ -112,6 +113,7 @@ class IntakeClassificationProposal(BaseModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     missing_fields: list[str] = Field(default_factory=list)
     clarification_question: str | None = None
+    clarification_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentToolCallRequest(BaseModel):

@@ -68,6 +68,13 @@ class RequestIntakeService:
                 confidence=0.95,
                 trace={"source": "core_conversation_first"},
             )
+        if not explicit_intent:
+            model_decision = self._resolve_model_candidate(
+                request,
+                runtime_context=runtime_context,
+            )
+            if model_decision is not None:
+                return model_decision
         if explicit_intent.startswith("domain:") or explicit_intent in self._supported_intents():
             decision = self.pack_intake.resolve(request, runtime_context=runtime_context)
             if decision.status == "accepted":
@@ -95,8 +102,12 @@ class RequestIntakeService:
                     recommended_mode="graph",
                     intent=decision.intent,
                     domain_id=decision.domain_id,
+                    slots=decision.slots,
                     missing_fields=(decision.clarification.missing_fields if decision.clarification else []),
                     clarification_question=(decision.clarification.question if decision.clarification else None),
+                    clarification_context=(
+                        decision.clarification.context if decision.clarification else {}
+                    ),
                     constraints=decision.constraints,
                     trace={"source": "pack_intake", **dict(decision.trace)},
                 )
@@ -132,18 +143,15 @@ class RequestIntakeService:
                 intent=pack_decision.intent,
                 domain_id=pack_decision.domain_id,
                 candidate_domains=[pack_decision.domain_id] if pack_decision.domain_id else [],
+                slots=pack_decision.slots,
                 missing_fields=(pack_decision.clarification.missing_fields if pack_decision.clarification else []),
                 clarification_question=(pack_decision.clarification.question if pack_decision.clarification else None),
+                clarification_context=(
+                    pack_decision.clarification.context if pack_decision.clarification else {}
+                ),
                 constraints=pack_decision.constraints,
                 trace={"source": "pack_intake", **dict(pack_decision.trace)},
             )
-
-        model_decision = self._resolve_model_candidate(
-            request,
-            runtime_context=runtime_context,
-        )
-        if model_decision is not None:
-            return model_decision
 
         if self._looks_like_core_task(query, request):
             return RequestIntakeDecision(
@@ -364,6 +372,8 @@ class RequestIntakeService:
                 intent=decision.intent or intent,
                 domain_id=matching_domains[0],
                 candidate_domains=[matching_domains[0]],
+                slots=decision.slots,
+                constraints=decision.constraints,
                 missing_fields=(
                     decision.clarification.missing_fields
                     if decision.clarification
@@ -373,6 +383,11 @@ class RequestIntakeService:
                     decision.clarification.question
                     if decision.clarification
                     else proposal.clarification_question
+                ),
+                clarification_context=(
+                    decision.clarification.context
+                    if decision.clarification
+                    else dict(proposal.clarification_context)
                 ),
                 confidence=proposal.confidence,
                 trace={**trace, "pack_intake_trace": dict(decision.trace)},

@@ -676,7 +676,7 @@ class AgentOS:
         status: str,
     ) -> None:
         paths = self.run_store.load_run_paths(run_id)
-        question = decision.clarification_question or "Please clarify the request."
+        question = decision.clarification_question or "请补充请求所需的信息后继续。"
         missing_fields = list(decision.missing_fields)
         write_json(
             paths.root / "clarification_pending.json",
@@ -748,7 +748,7 @@ class AgentOS:
             "thread_id": str(request.thread_id or f"run:{run_id}"),
             "request_id": request.request_id,
             "actor": "main_agent",
-            "question": decision.clarification_question or "Please clarify the request.",
+            "question": decision.clarification_question or "请补充请求所需的信息后继续。",
             "missing_fields": list(decision.missing_fields),
         }
         event = EventEnvelope.model_validate(event).model_dump(mode="json")
@@ -763,7 +763,7 @@ class AgentOS:
         request: RequestEnvelope,
         decision: RequestIntakeDecision,
     ) -> ResponseEnvelope:
-        question = decision.clarification_question or "Please clarify the request."
+        question = decision.clarification_question or "请补充请求所需的信息后继续。"
         missing_fields = list(decision.missing_fields)
         response = ResponseEnvelope(
             request_id=request.request_id,

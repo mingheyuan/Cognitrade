@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
+from research_system.runtime.agent_os import AgentOS
 from research_system.runtime.intake.task_intake import TaskIntakeService
 from research_system.runtime.intake.request_intake import RequestIntakeService
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
@@ -92,6 +94,52 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
         self.assertEqual(decision.status, "needs_clarification")
         self.assertEqual(decision.intent, "stock_compare")
         self.assertEqual(decision.clarification.missing_fields, ["symbols"])
+
+    def test_finance_pack_does_not_treat_unnamed_multiple_banks_as_sector_research(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        service = TaskIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
+
+        decision = service.resolve(RequestEnvelope(user_query="看看两家银行"))
+
+        self.assertEqual(decision.status, "needs_clarification")
+        self.assertEqual(decision.intent, "stock_compare")
+        self.assertEqual(decision.clarification.missing_fields, ["symbols"])
+        self.assertIsNone(decision.clarification.question)
+        self.assertEqual(
+            decision.clarification.context["reason"],
+            "comparison_targets_missing",
+        )
+
+    def test_main_agent_composes_pack_clarification_from_structured_context(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            settings = Settings.from_env(repository_root).model_copy(
+                update={
+                    "runs_root": root / "runs",
+                    "memory_root": root / "memory",
+                    "domain_packs_root": repository_root / "domain_packs",
+                }
+            )
+            agent_os = AgentOS(settings)
+            agent_os.main_agent.llm_provider = None
+            agent_os.request_intake.llm_provider = None
+
+            response = agent_os.handle_request(RequestEnvelope(user_query="看看两家银行"))
+
+            self.assertEqual(response.status, "needs_clarification")
+            self.assertEqual(response.intent, "stock_compare")
+            self.assertIn("银行", response.message)
+            self.assertIn("代码", response.message)
+            self.assertEqual(response.clarification.missing_fields, ["symbols"])
+            request_state = json.loads(
+                (settings.runs_root / str(response.run_id) / "agent_os_request.json")
+                .read_text(encoding="utf-8")
+            )
+            self.assertIsNone(
+                request_state["request_intake"]["clarification_context"]
+                .get("question")
+            )
 
     def test_versioned_api_uses_pack_intake_when_intent_is_omitted(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
