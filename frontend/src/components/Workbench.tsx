@@ -25,6 +25,7 @@ import {
   candidatesFromReport,
   evidenceFromReport,
   formatDate,
+  hasFinalDelivery,
   intentFromDetail,
   isActiveStatus,
   queryFromDetail,
@@ -217,6 +218,9 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
     : 0
   const reportHasDegradedEvidence = Boolean(report.degraded) || degradedEvidenceCount > 0
   const hasMainAgentSynthesis = report.synthesis_available === true
+  const synthesisPending = artifactBackedReport
+    && !hasMainAgentSynthesis
+    && !hasFinalDelivery(selectedRun)
   const displayConclusion = hasMainAgentSynthesis
     ? localizeAssessment(assessmentFactors, assessmentSummary || conclusion)
     : ''
@@ -405,10 +409,16 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
               <section className="thesis-callout">
                 <div className="thesis-icon"><Lightbulb size={17} /></div>
                 <div>
-                  <span>{hasMainAgentSynthesis ? '最终结论 · Main Agent synthesis' : 'Pack 原始摘要 · 需重新运行'}</span>
-                  <p>{displayConclusion || (artifactBackedReport
-                    ? '该历史运行没有保存 Main Agent 动态结论；当前仅有 Pack 原始产物，请重新运行。'
-                    : '该运行未返回可展示的最终结论。请检查运行状态、质量门禁或错误信息。')}</p>
+                  <span>{hasMainAgentSynthesis
+                    ? '最终结论 · Main Agent synthesis'
+                    : synthesisPending
+                      ? 'Main Agent 正在生成动态结论'
+                      : 'Pack 原始摘要 · 需要重试'}</span>
+                  <p>{displayConclusion || (synthesisPending
+                    ? 'Pack 已完成证据整理，Main Agent 正在结合证据生成最终回答。'
+                    : artifactBackedReport
+                      ? '该运行已完成交付，但没有保存 Main Agent 动态结论，请重试。'
+                      : '该运行未返回可展示的最终结论。请检查运行状态、质量门禁或错误信息。')}</p>
                 </div>
               </section>
 

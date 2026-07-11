@@ -28,6 +28,8 @@ import {
   dashboardCandidates,
   dashboardItems,
   dashboardSectorSignals,
+  hasFinalDelivery,
+  isActiveStatus,
   reportFromDetail,
   runListItem,
   statusTone,
@@ -61,6 +63,11 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
     submitting,
   } = useCognitrade()
   const selectedReport = reportFromDetail(selectedRun)
+  const selectedStatus = String(runs.find((run) => run.run_id === selectedRunId)?.status || '')
+  const synthesisPending = selectedReport.protocol === 'agent_os'
+    && selectedReport.synthesis_available === false
+    && !hasFinalDelivery(selectedRun)
+    && (submitting || isActiveStatus(selectedStatus) || Boolean(selectedRun))
   const candidates = dashboardCandidates(overviewDashboard)
   const sectorSignals = dashboardSectorSignals(overviewDashboard)
   const verifiedPolicyMemory = dashboardItems(methodologyDashboard, 'verified_policy_memory')
@@ -96,8 +103,10 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
           {selectedRun ? (
             <>
               <div className="focus-company"><span className="company-mark company-mark--small">C</span><div><strong>{INTENT_LABELS[asString(selectedRun.replay.result?.intent)] || '研究报告'}</strong><small>{selectedRun.runId}</small></div></div>
-              <p>{selectedReport.synthesis_available === false
-                ? '该历史运行没有保存 Main Agent 动态结论，请重新运行。'
+              <p>{synthesisPending
+                ? 'Pack 已完成证据整理，Main Agent 正在生成最终回答。'
+                : selectedReport.synthesis_available === false
+                  ? '该运行已完成交付，但没有保存 Main Agent 动态结论，请重试。'
                 : asString(selectedReport.conclusion || selectedRun.replay.display_summary, '后端未提供结论')}</p>
               <div className="focus-score-row">
                 <span><small>事件</small><strong>{events}</strong></span>
