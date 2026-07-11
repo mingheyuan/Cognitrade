@@ -96,7 +96,9 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
           {selectedRun ? (
             <>
               <div className="focus-company"><span className="company-mark company-mark--small">C</span><div><strong>{INTENT_LABELS[asString(selectedRun.replay.result?.intent)] || '研究报告'}</strong><small>{selectedRun.runId}</small></div></div>
-              <p>{asString(selectedReport.conclusion || selectedRun.replay.display_summary, '后端未提供结论')}</p>
+              <p>{selectedReport.synthesis_available === false
+                ? '该历史运行没有保存 Main Agent 动态结论，请重新运行。'
+                : asString(selectedReport.conclusion || selectedRun.replay.display_summary, '后端未提供结论')}</p>
               <div className="focus-score-row">
                 <span><small>事件</small><strong>{events}</strong></span>
                 <span><small>步骤</small><strong>{selectedRun.steps.steps.length}</strong></span>

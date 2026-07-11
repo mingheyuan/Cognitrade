@@ -61,6 +61,8 @@ export type EvidenceRecord = {
 
 export type ResearchReport = {
   conclusion?: string
+  conclusion_source?: 'main_agent_synthesis' | 'pack_report' | string
+  synthesis_available?: boolean
   evidence?: EvidenceRecord[]
   risk?: string | string[]
   follow_up?: string | string[]

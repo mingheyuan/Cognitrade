@@ -211,6 +211,23 @@ class ApiV1SseOpenApiTests(unittest.TestCase):
         self.assertIn("event: graph_run_finished\n", frame)
         self.assertIn(f"id: {EVENT_ID}\n", frame)
 
+    def test_graph_stream_waits_for_final_assistant_delivery(self) -> None:
+        root = self.write_terminal_run(
+            events=[run_event(event_type="graph_run_finished").model_dump(mode="json")]
+        )
+        (root / "artifact_board.jsonl").write_text("{}\n", encoding="utf-8")
+
+        self.assertFalse(RunEventSource._is_terminal(root))
+
+        final_event = run_event(
+            event_id=SECOND_EVENT_ID,
+            event_type="assistant_message_ready",
+        ).model_dump(mode="json")
+        final_event["delivery_status"] = "completed"
+        append_jsonl(root / "execution_events.jsonl", final_event)
+
+        self.assertTrue(RunEventSource._is_terminal(root))
+
     def test_running_stream_emits_configured_heartbeat(self) -> None:
         self.write_terminal_run(status="running")
         source = RunEventSource(

@@ -216,18 +216,21 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
     ? report.evidence.filter((item) => Boolean(asRecord(asRecord(item).metadata).degraded)).length
     : 0
   const reportHasDegradedEvidence = Boolean(report.degraded) || degradedEvidenceCount > 0
-  const displayConclusion = localizeAssessment(assessmentFactors, assessmentSummary || conclusion)
+  const hasMainAgentSynthesis = report.synthesis_available === true
+  const displayConclusion = hasMainAgentSynthesis
+    ? localizeAssessment(assessmentFactors, assessmentSummary || conclusion)
+    : ''
   const activityEvents = activityFromEvents([
     ...(selectedRun?.events.events || []),
     ...liveEvents,
   ])
-  const assistantMessage = assistantMessageFromDetail(selectedRun)
-    || asString(report.conclusion)
+  const assistantMessage = (hasMainAgentSynthesis ? assistantMessageFromDetail(selectedRun) : '')
+    || (hasMainAgentSynthesis ? asString(report.conclusion) : '')
     || liveAnswer
     || asString(lastResponse?.message)
   const showMainAgentAnswer = Boolean(
     assistantMessage
-      && !(asString(report.protocol) === 'agent_os' && assistantMessage.trim() === conclusion.trim()),
+      && !(asString(report.protocol) === 'agent_os' && !hasMainAgentSynthesis),
   )
   const activityFeed = activityEvents.length > 0 ? (
     <section className="agent-progress-feed" aria-label="Agent OS 运行轨迹">
@@ -402,8 +405,10 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
               <section className="thesis-callout">
                 <div className="thesis-icon"><Lightbulb size={17} /></div>
                 <div>
-                  <span>最终结论 · Evidence-based assessment</span>
-                  <p>{displayConclusion || (artifactBackedReport ? '该运行已生成 Agent OS 最终 artifact，但 /api/v1 只返回 artifact ID，尚无版本化接口读取内容。' : '该运行未返回 report.conclusion。请检查运行状态、质量门禁或错误信息。')}</p>
+                  <span>{hasMainAgentSynthesis ? '最终结论 · Main Agent synthesis' : 'Pack 原始摘要 · 需重新运行'}</span>
+                  <p>{displayConclusion || (artifactBackedReport
+                    ? '该历史运行没有保存 Main Agent 动态结论；当前仅有 Pack 原始产物，请重新运行。'
+                    : '该运行未返回可展示的最终结论。请检查运行状态、质量门禁或错误信息。')}</p>
                 </div>
               </section>
 

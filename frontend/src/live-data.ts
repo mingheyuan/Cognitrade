@@ -113,6 +113,7 @@ export function reportFromDetail(detail?: RunDetail | null): ResearchReport {
   ))
   const reportContent = asRecord(asRecord(reportArtifact).content)
   const synthesisContent = asRecord(asRecord(synthesisArtifact).content)
+  const synthesisAvailable = Object.keys(synthesisContent).length > 0
   const content = {
     ...reportContent,
     ...synthesisContent,
@@ -129,6 +130,8 @@ export function reportFromDetail(detail?: RunDetail | null): ResearchReport {
     return {
       ...content,
       protocol: 'agent_os',
+      conclusion_source: synthesisAvailable ? 'main_agent_synthesis' : 'pack_report',
+      synthesis_available: synthesisAvailable,
       final_artifact_ids: [artifactId, synthesisId].filter(Boolean),
     } as ResearchReport
   }
@@ -221,6 +224,19 @@ export function assistantMessageFromDetail(detail?: RunDetail | null): string {
   )
 }
 
+export function hasFinalDelivery(detail?: RunDetail | null): boolean {
+  const events = Array.isArray(detail?.events.events) ? detail.events.events : []
+  if (events.some((event) => (
+    asString(event.event_type) === 'assistant_message_ready'
+      && asString(event.delivery_status) !== 'paused'
+  ))) return true
+  const artifacts = Array.isArray(detail?.replay.artifacts) ? detail.replay.artifacts : []
+  return artifacts.some((artifact) => {
+    if (asString(asRecord(artifact).artifact_type) !== 'assistant_message') return false
+    return Boolean(asString(asRecord(asRecord(artifact).content).message))
+  })
+}
+
 function eventId(event: RunEvent, index: number): string {
   return asString(event.event_id) || `${event.created_at || ''}:${event.event_type || ''}:${event.node_id || ''}:${index}`
 }
@@ -232,62 +248,62 @@ function eventSummary(event: RunEvent): string {
   const status = asString(event.status)
   const decision = asRecord(event.decision)
   const reason = asString(event.message || event.reason || decision.reason)
-  if (eventType === 'assistant_message_ready') return 'Main Agent produced the final delivery artifact.'
+  if (eventType === 'assistant_message_ready') return 'Main Agent 已生成最终交付产物。'
   if (eventType === 'agent_progress' && asString(event.progress_kind) === 'main_agent_graph') {
-    return 'Main Agent updated the governed execution plan.'
+    return 'Main Agent 更新了受治理的执行计划。'
   }
   if (eventType === 'agent_progress' && asString(event.progress_kind) === 'main_agent_loop') {
-    return `Main Agent loop ${turn ?? '?'} progress update.`
+    return `Main Agent 第 ${turn ?? '?'} 轮进度更新。`
   }
-  if (eventType === 'main_agent_plan_started') return 'Main Agent is building the ExecutionGraph from the active capability catalog.'
-  if (eventType === 'graph_compound_expanded') return 'PlanAgent expanded the dynamic task graph.'
-  if (eventType === 'graph_compound_expansion_completed') return 'PlanAgent completed the current graph expansion.'
-  if (eventType === 'agent_progress' && reason.startsWith('research_report:')) return 'Report Composer produced the final research report artifact.'
+  if (eventType === 'main_agent_plan_started') return 'Main Agent 正在根据当前能力目录构建 ExecutionGraph。'
+  if (eventType === 'graph_compound_expanded') return 'PlanAgent 已扩展动态任务图。'
+  if (eventType === 'graph_compound_expansion_completed') return 'PlanAgent 已完成当前图扩展。'
+  if (eventType === 'agent_progress' && reason.startsWith('research_report:')) return 'Report Composer 已生成最终研究报告产物。'
   if (eventType === 'main_agent_tool_loop_result') {
     return [
-      `Loop ${turn ?? '?'} Tool ${toolName || 'call'} ${status || 'finished'}.`,
+      `第 ${turn ?? '?'} 轮调用 Tool ${toolName || 'call'}，状态：${status || '已完成'}。`,
       asString(event.output_summary),
     ].filter(Boolean).join(' ')
   }
   if (reason) return reason
   if (eventType === 'main_agent_started' || eventType === 'main_agent_resumed') {
-    return `Main Agent ${eventType === 'main_agent_resumed' ? 'resumed' : 'started'} in ${asString(event.mode, 'core')} mode.`
+    return `Main Agent 已${eventType === 'main_agent_resumed' ? '恢复' : '启动'}，当前模式：${asString(event.mode, 'core')}。`
   }
   if (eventType === 'main_agent_turn_started') {
-    return `Main Agent started loop ${turn ?? '?'} and is evaluating the next action.`
+    return `Main Agent 开始第 ${turn ?? '?'} 轮循环，正在评估下一步动作。`
   }
   if (eventType === 'main_agent_tool_calls_requested') {
     const names = asStringList(event.tool_names || event.tools)
-    return `Main Agent loop ${turn ?? '?'} selected ${names.join(', ') || 'the next Tool'}.`
+    return `Main Agent 第 ${turn ?? '?'} 轮选择了 ${names.join('、') || '下一项 Tool'}。`
   }
-  if (eventType === 'tool_call_started') return `Tool ${toolName || 'call'} started.`
+  if (eventType === 'tool_call_started') return `Tool ${toolName || 'call'} 已开始。`
   if (eventType === 'tool_call_completed') {
-    return `Tool ${toolName || 'call'} completed${asString(event.output_summary) ? `: ${asString(event.output_summary)}` : '.'}`
+    return `Tool ${toolName || 'call'} 已完成${asString(event.output_summary) ? `：${asString(event.output_summary)}` : '。'}`
   }
   if (eventType === 'tool_call_rejected' || eventType === 'tool_call_failed') {
-    return `Tool ${toolName || 'call'} ${status || 'failed'}${asString(event.error) ? `: ${asString(event.error)}` : '.'}`
+    return `Tool ${toolName || 'call'} ${status || '失败'}${asString(event.error) ? `：${asString(event.error)}` : '。'}`
   }
   if (eventType === 'plan_decision') {
-    return `PlanAgent ${asString(decision.action, 'continued')}: ${asString(decision.reason, 'updated the execution frontier.')}`
+    return `PlanAgent ${asString(decision.action, '继续执行')}：${asString(decision.reason, '已更新执行前沿。')}`
   }
-  if (eventType === 'graph_run_started') return 'Main Agent started the governed ExecutionGraph.'
+  if (eventType === 'graph_run_started') return 'Main Agent 已启动受治理的 ExecutionGraph。'
   if (eventType === 'graph_frontier_ready') {
     const nodeIds = asStringList(event.node_ids)
-    return `Execution frontier ready${nodeIds.length ? `: ${nodeIds.join(', ')}` : '.'}`
+    return `执行前沿已就绪${nodeIds.length ? `：${nodeIds.join('、')}` : '。'}`
   }
   if (eventType === 'graph_replan_applied' || eventType === 'graph_patch_applied') {
-    return 'PlanAgent applied a versioned graph update.'
+    return 'PlanAgent 已应用版本化图更新。'
   }
-  if (eventType === 'graph_node_started') return `Subagent ${asString(event.node_id, 'node')} started.`
-  if (eventType === 'graph_node_completed') return `Subagent ${asString(event.node_id, 'node')} completed.`
-  if (eventType === 'graph_node_failed') return `Subagent ${asString(event.node_id, 'node')} failed${asString(event.error) ? `: ${asString(event.error)}` : '.'}`
-  if (eventType === 'main_agent_completed') return 'Main Agent completed the request.'
+  if (eventType === 'graph_node_started') return `Subagent ${asString(event.node_id, 'node')} 已开始。`
+  if (eventType === 'graph_node_completed') return `Subagent ${asString(event.node_id, 'node')} 已完成。`
+  if (eventType === 'graph_node_failed') return `Subagent ${asString(event.node_id, 'node')} 失败${asString(event.error) ? `：${asString(event.error)}` : '。'}`
+  if (eventType === 'main_agent_completed') return 'Main Agent 已完成请求。'
   if (eventType === 'main_agent_model_turn_failed') {
-    return `Main Agent model loop ${turn ?? '?'} failed${asString(event.error) ? `: ${asString(event.error)}` : '.'}`
+    return `Main Agent 第 ${turn ?? '?'} 轮模型调用失败${asString(event.error) ? `：${asString(event.error)}` : '。'}`
   }
-  if (eventType === 'main_agent_failed') return `Main Agent failed${asString(event.error) ? `: ${asString(event.error)}` : '.'}`
-  if (eventType === 'graph_run_finished') return `ExecutionGraph finished with status ${asString(event.status, 'unknown')}.`
-  return eventType ? eventType.replaceAll('_', ' ') : ''
+  if (eventType === 'main_agent_failed') return `Main Agent 失败${asString(event.error) ? `：${asString(event.error)}` : '。'}`
+  if (eventType === 'graph_run_finished') return `ExecutionGraph 已完成，状态：${asString(event.status, 'unknown')}。`
+  return eventType ? `运行事件：${eventType.replaceAll('_', ' ')}` : ''
 }
 
 const USER_VISIBLE_EVENT_TYPES = new Set([
@@ -351,6 +367,25 @@ function activityKind(event: RunEvent): AgentActivityItem['kind'] {
   return 'system'
 }
 
+function localizeAgentAction(value: string): string {
+  const action = value.trim()
+  if (!action) return ''
+  let match = action.match(/^ExecutionGraph (\S+) started at revision (\d+)$/)
+  if (match) return `ExecutionGraph ${match[1]} 已在第 ${match[2]} 个修订版本启动`
+  if (action === 'Expand lazy compounds and calculate the ready frontier') return '展开延迟 compound 节点并计算可执行前沿'
+  if (action === 'Recompute the ready frontier from the updated graph') return '重新计算更新后的可执行前沿'
+  if (action === 'Persist the final Artifact and finish delivery') return '持久化最终 Artifact 并完成交付'
+  if (action === 'Continue with the current graph frontier') return '继续当前图前沿'
+  if (action === 'Process the remaining ready node result(s)') return '处理剩余可执行节点的结果'
+  if (action === 'Evaluate the Board and the next graph decision') return '评估 Board 并决定下一步图操作'
+  return action
+    .replace(/^Ready frontier:\s*/, '当前可执行前沿：')
+    .replace(/^Execute ready node\(s\):\s*/, '执行可执行节点：')
+    .replace(/^Apply graph patch operations:\s*/, '应用图补丁操作：')
+    .replace(/^PlanAgent decision:\s*/, 'PlanAgent 决策：')
+    .replace(/^ExecutionGraph finished with status\s+/, 'ExecutionGraph 已以 ')
+}
+
 export function activityFromEvents(events: RunEvent[]): AgentActivityItem[] {
   const seen = new Set<string>()
   const rows: AgentActivityItem[] = []
@@ -373,8 +408,8 @@ export function activityFromEvents(events: RunEvent[]): AgentActivityItem[] {
       actor: displayActor(asString(event.actor, 'Agent OS')),
       nodeId: asString(event.node_id, 'main_agent'),
       message,
-      currentAction: asString(event.current_action),
-      nextAction: asString(event.next_action),
+      currentAction: localizeAgentAction(asString(event.current_action)),
+      nextAction: localizeAgentAction(asString(event.next_action)),
       kind: activityKind(event),
       turn: asNumber(event.turn),
       status: asString(event.status),

@@ -183,13 +183,30 @@ class RunEventSource:
     @staticmethod
     def _is_terminal(root: Path) -> bool:
         graph_state = read_json(root / "execution_snapshot.json") or {}
-        if str(graph_state.get("status") or "") in _TERMINAL_STATUSES:
-            return True
+        terminal = str(graph_state.get("status") or "") in _TERMINAL_STATUSES
         core_state = read_json(root / "main_agent_state.json") or {}
-        if str(core_state.get("status") or "") in _TERMINAL_STATUSES:
-            return True
+        terminal = terminal or str(core_state.get("status") or "") in _TERMINAL_STATUSES
         run_state = read_json(root / "run_state.json") or {}
-        return str(run_state.get("status") or "") in _TERMINAL_STATUSES
+        terminal = terminal or str(run_state.get("status") or "") in _TERMINAL_STATUSES
+        if not terminal:
+            return False
+
+        # Graph execution can finish before Main Agent has composed and emitted
+        # the final assistant message. Keep SSE open until delivery is durable.
+        # Minimal legacy/test run folders without a Board retain the old terminal
+        # behavior because they have no deferred delivery phase to observe.
+        board_path = root / "artifact_board.jsonl"
+        if not board_path.exists():
+            return True
+        events = RunEventSource._read_events(root / "execution_events.jsonl")
+        if any(
+            str(event.get("event_type") or "") == "assistant_message_ready"
+            and str(event.get("delivery_status") or "") != "paused"
+            for event in events
+        ):
+            return True
+        response = read_json(root / "response.json")
+        return isinstance(response, dict) and bool(str(response.get("message") or "").strip())
 
 
 __all__ = ["RunEventSource", "format_sse_event"]

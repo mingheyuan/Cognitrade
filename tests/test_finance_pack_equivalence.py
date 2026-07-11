@@ -222,6 +222,8 @@ class FinancePackEquivalenceTests(unittest.TestCase):
 
         self.assertIn("screening", screen_report.content)
         self.assertIn("sector_analysis", sector_report.content)
+        self.assertNotIn("Sector research assembled", sector_report.content["conclusion"])
+        self.assertIn("AI", sector_report.content["conclusion"])
         self.assertIn("thesis_review", thesis_report.content)
 
 

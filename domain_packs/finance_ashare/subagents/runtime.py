@@ -457,9 +457,11 @@ def compose_sector_report(context):
     return ArtifactDraft(
         artifact_type="research_report",
         content={
-            "conclusion": (
-                f"Sector research assembled {len(findings)} traceable evidence item(s) and "
-                f"{len(heatmap)} source-derived heatmap row(s) for {sector}."
+            "conclusion": _sector_pack_summary(
+                sector=sector,
+                analysis=analysis.content,
+                findings=findings,
+                heatmap=heatmap,
             ),
             "evidence": evidence,
             "risk": list(analysis.content.get("risks") or ["Sector evidence requires refresh before acting."]),
@@ -473,6 +475,50 @@ def compose_sector_report(context):
         confidence=analysis.confidence,
         risk_flags=["decision_support_only", "sector_analysis_requires_professional_review"],
     )
+
+
+def _sector_pack_summary(*, sector: str, analysis: dict, findings: list, heatmap: list) -> str:
+    """Provide a factual Pack fallback when Main Agent synthesis is unavailable."""
+
+    fragments: list[str] = []
+    for row in heatmap:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or sector).strip()
+        score = _to_float(row.get("score"))
+        if score is not None:
+            fragments.append(f"{name} 热力评分 {score:g}")
+
+    breadth = analysis.get("breadth") if isinstance(analysis.get("breadth"), dict) else {}
+    if breadth:
+        fragments.append(f"覆盖度字段 {len(breadth)} 项")
+
+    relative_strength = (
+        analysis.get("relative_strength")
+        if isinstance(analysis.get("relative_strength"), dict)
+        else {}
+    )
+    if relative_strength:
+        fragments.append(f"相对强弱字段 {len(relative_strength)} 项")
+
+    catalysts = analysis.get("catalysts") if isinstance(analysis.get("catalysts"), dict) else {}
+    policy_signal_count = sum(
+        len(value) for key, value in catalysts.items()
+        if key in {"policy_signals", "regulatory_signals"} and isinstance(value, list)
+    )
+    if policy_signal_count:
+        fragments.append(f"政策或监管信号 {policy_signal_count} 条")
+
+    degraded_count = sum(
+        1 for item in findings
+        if isinstance(item, dict) and bool(item.get("degraded"))
+    )
+    if degraded_count:
+        fragments.append(f"降级数据源 {degraded_count} 个")
+
+    if not fragments:
+        return f"{sector}：当前证据未形成可解释的板块信号，已保留 {len(findings)} 条来源快照供复核。"
+    return f"{sector}：" + "；".join(fragments) + "。"
 
 
 def compose_thesis_review_report(context):

@@ -16,7 +16,7 @@ import {
   saveApiConnection,
   type ApiConnectionSettings,
 } from './api-client'
-import { isActiveStatus } from './live-data'
+import { hasFinalDelivery, isActiveStatus } from './live-data'
 import type {
   AgentOSDashboardView,
   ResearchIntent,
@@ -183,7 +183,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
                 setLiveAnswer(event.message)
               }
               const eventType = String(event.event_type || '')
-              const isTerminal = ['graph_run_finished', 'graph_run_gated_by_approval', 'main_agent_completed', 'main_agent_failed', 'graph_run_cancelled', 'graph_run_timed_out'].includes(eventType)
+              const isTerminal = ['main_agent_completed', 'main_agent_failed'].includes(eventType)
                 || (eventType === 'assistant_message_ready' && String(event.delivery_status || '') !== 'paused')
               if (isTerminal) {
                 terminalEventSeen = true
@@ -238,20 +238,28 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
   }, [client, runs])
 
   const selectedStatus = runs.find((run) => run.run_id === selectedRunId)?.status
+  const selectedNeedsDelivery = Boolean(
+    selectedRunId
+      && (
+        isActiveStatus(String(selectedStatus || ''))
+        || (['completed', 'gated', 'failed', 'cancelled', 'timed_out'].includes(String(selectedStatus || ''))
+          && !hasFinalDelivery(selectedRun))
+      ),
+  )
   useEffect(() => {
-    if (!selectedRunId || !isActiveStatus(String(selectedStatus || ''))) return
+    if (!selectedRunId || !selectedNeedsDelivery) return
     void subscribeToRun(selectedRunId)
     return () => streamAbort.current?.abort()
-  }, [selectedRunId, selectedStatus, subscribeToRun])
+  }, [selectedNeedsDelivery, selectedRunId, subscribeToRun])
 
   useEffect(() => {
-    if (!selectedRunId || !isActiveStatus(String(selectedStatus || ''))) return
+    if (!selectedRunId || !selectedNeedsDelivery) return
     const timer = window.setInterval(() => {
       void loadRun(selectedRunId, true)
       void client.listRuns(50).then(setRuns).catch(() => undefined)
     }, 2000)
     return () => window.clearInterval(timer)
-  }, [client, loadRun, selectedRunId, selectedStatus])
+  }, [client, loadRun, selectedNeedsDelivery, selectedRunId])
 
   const configure = useCallback((nextSettings: ApiConnectionSettings) => {
     setSettings(saveApiConnection(nextSettings))
@@ -313,6 +321,12 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
           void subscribeToRun(response.run_id)
         }
         await refresh()
+        if (response.run_id) {
+          // Refresh updates the history list asynchronously; reload the submitted run
+          // afterward so an older selected run cannot replace the new result.
+          setSelectedRunId(response.run_id)
+          await loadRun(response.run_id, true)
+        }
         return response
       } catch (runError) {
         setConnectionState(connectionFromError(runError))
