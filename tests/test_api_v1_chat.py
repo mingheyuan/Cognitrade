@@ -14,8 +14,10 @@ from api_test_support import (
 )
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
+from research_system.api.chat_service import ChatService
 from research_system.cli.memory.chat_thread_store import ChatThreadStore
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
+from research_system.schemas.protocol import ProgressState, ResponseEnvelope
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -195,6 +197,33 @@ class ApiV1ChatTests(unittest.TestCase):
         turns = ChatThreadStore(self.settings).read_all_turns(thread_id=thread_id)
         self.assertEqual([turn["turn_type"] for turn in turns], ["research_query", "research_result"])
         self.assertEqual([turn["run_id"] for turn in turns], [response.json()["run_id"], response.json()["run_id"]])
+
+    def test_background_completion_is_appended_to_the_same_chat_thread_once(self) -> None:
+        thread_id = self.create_thread()
+        service = ChatService(self.settings)
+        response = ResponseEnvelope(
+            request_id="request-background-complete",
+            run_id="run-background-complete",
+            mode="graph",
+            intent="stock_check",
+            status="completed",
+            message="Final research result.",
+            progress=ProgressState(
+                current_phase="execution_graph",
+                active_agent="main_agent",
+                latest_event="graph_run_finished",
+                status_message="completed",
+                percent=100,
+            ),
+        )
+
+        service.record_run_completion(thread_id=thread_id, response=response)
+        service.record_run_completion(thread_id=thread_id, response=response)
+
+        turns = ChatThreadStore(self.settings).read_all_turns(thread_id=thread_id)
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0]["content"], "Final research result.")
+        self.assertTrue(turns[0]["metadata"]["background_completed"])
 
     def test_archive_does_not_create_an_implicit_replacement_thread(self) -> None:
         thread_id = self.create_thread()

@@ -28,6 +28,7 @@ class Settings(BaseModel):
     qdrant_hybrid_candidate_limit: int = 50
     qdrant_vector_weight: float = 0.55
     qdrant_lexical_weight: float = 0.45
+    memory_vector_search_enabled: bool = False
     router_redis_url: str | None = None
     router_redis_active_key: str = "cognitrade:router:intent_rules:active"
     router_redis_key_prefix: str = "cognitrade:router:intent_rules:"
@@ -35,6 +36,13 @@ class Settings(BaseModel):
     router_redis_timeout_seconds: float = 0.2
     router_rules_cache_ttl_seconds: float = 2.0
     router_seed_defaults: bool = True
+    tool_resource_lease_backend: str = "file"
+    tool_resource_lease_redis_url: str | None = None
+    tool_resource_lease_key_prefix: str = "cognitrade:tool:lease:"
+    tool_resource_lease_redis_timeout_seconds: float = 0.5
+    tool_resource_lease_root: Path | None = None
+    domain_pack_require_integrity: bool = False
+    domain_pack_trusted_digests: dict[str, list[str]] = Field(default_factory=dict)
     provider_probe_timeout_seconds: float = 1.0
     provider_policy_path: Path
     data_sources_path: Path
@@ -47,6 +55,7 @@ class Settings(BaseModel):
     log_level: str = "INFO"
     llm_request_timeout_seconds: int = 25
     max_llm_calls_per_turn: int = 1
+    max_agent_tool_loop_turns: int = 4
     max_subagent_calls_per_turn: int = 32
     max_child_threads_per_turn: int = 8
     subagent_discovery_shadow_llm_enabled: bool = False
@@ -57,6 +66,7 @@ class Settings(BaseModel):
     subagent_discovery_hybrid_llm_min_confidence: float = 0.7
     artifacts_retention_days: int = 30
     max_artifacts_size_mb: int = 1024
+    memory_expiration_interval_seconds: float = 300.0
     run_timeout_seconds: int = 120
     external_wait_timeout_seconds: int = 30
     retrieval_policy_path: Path
@@ -118,12 +128,16 @@ class Settings(BaseModel):
             raise ValueError("embedding_dimensions must be positive")
         if self.external_wait_timeout_seconds <= 0:
             raise ValueError("external_wait_timeout_seconds must be positive")
+        if self.memory_expiration_interval_seconds <= 0:
+            raise ValueError("memory_expiration_interval_seconds must be positive")
         if self.llm_request_timeout_seconds <= 0:
             raise ValueError("llm_request_timeout_seconds must be positive")
         if self.qdrant_hybrid_candidate_limit <= 0:
             raise ValueError("qdrant_hybrid_candidate_limit must be positive")
         if self.max_llm_calls_per_turn <= 0:
             raise ValueError("max_llm_calls_per_turn must be positive")
+        if self.max_agent_tool_loop_turns <= 0:
+            raise ValueError("max_agent_tool_loop_turns must be positive")
         if self.max_subagent_calls_per_turn <= 0:
             raise ValueError("max_subagent_calls_per_turn must be positive")
         if self.max_child_threads_per_turn <= 0:
@@ -136,6 +150,23 @@ class Settings(BaseModel):
             raise ValueError("router_redis_timeout_seconds must be positive")
         if self.router_rules_cache_ttl_seconds < 0:
             raise ValueError("router_rules_cache_ttl_seconds must be non-negative")
+        if self.tool_resource_lease_backend not in {"file", "redis"}:
+            raise ValueError("tool_resource_lease_backend must be 'file' or 'redis'")
+        if self.tool_resource_lease_backend == "redis" and not self.tool_resource_lease_redis_url:
+            raise ValueError(
+                "tool_resource_lease_redis_url is required for the Redis lease backend"
+            )
+        if self.tool_resource_lease_redis_timeout_seconds <= 0:
+            raise ValueError("tool_resource_lease_redis_timeout_seconds must be positive")
+        for domain_id, digests in self.domain_pack_trusted_digests.items():
+            if not str(domain_id).strip():
+                raise ValueError("domain_pack_trusted_digests contains an empty domain id")
+            for digest in digests:
+                normalized = str(digest).strip().lower()
+                if len(normalized) != 64 or any(char not in "0123456789abcdef" for char in normalized):
+                    raise ValueError(
+                        f"domain_pack_trusted_digests contains an invalid SHA-256 digest: {domain_id}"
+                    )
         if self.provider_probe_timeout_seconds <= 0:
             raise ValueError("provider_probe_timeout_seconds must be positive")
         if self.qdrant_vector_weight < 0 or self.qdrant_lexical_weight < 0:

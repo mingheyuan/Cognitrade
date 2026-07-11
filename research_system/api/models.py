@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -16,6 +16,25 @@ class RunApprovalRequest(ApiRequestModel):
     node_id: str = Field(min_length=1, max_length=128)
     capability: str = Field(min_length=1, max_length=256)
     approval_id: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=2_000)
+
+
+class RunApprovalRejectRequest(ApiRequestModel):
+    reason: str = Field(min_length=1, max_length=2_000)
+
+
+class MemoryPromotionRequest(ApiRequestModel):
+    target_layer: Literal["domain", "policy"]
+    evaluation_id: str = Field(min_length=1, max_length=128)
+    evaluator: str = Field(min_length=1, max_length=256)
+    verdict: Literal["pass", "fail", "needs_review"]
+    score: float | None = Field(default=None, ge=0.0, le=1.0)
+    evidence_refs: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    content: dict[str, Any] | None = None
+
+
+class MemoryRevokeRequest(ApiRequestModel):
     reason: str = Field(min_length=1, max_length=2_000)
 
 
@@ -42,6 +61,9 @@ __all__ = [
     "ApiRequestModel",
     "ChatResearchRequest",
     "ChatThreadRenameRequest",
+    "MemoryPromotionRequest",
+    "MemoryRevokeRequest",
     "RerunRequest",
     "RunApprovalRequest",
+    "RunApprovalRejectRequest",
 ]

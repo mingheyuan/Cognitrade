@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -12,6 +13,11 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_SCRIPT = REPO_ROOT / "scripts" / "deploy.sh"
 COMPOSE_FILE = REPO_ROOT / "compose.yaml"
+# Windows' ``bash.exe`` is commonly only the WSL launcher; it cannot execute a
+# Windows path unless the test itself runs inside WSL. Run these POSIX tests in
+# Unix CI (or from a Linux/WSL Python process).
+HAS_BASH = os.name != "nt" and shutil.which("bash") is not None
+POSIX_DEPLOY_NOTE = "POSIX deploy.sh tests require bash; run them in Unix CI or WSL"
 
 
 class DeployScriptTests(unittest.TestCase):
@@ -32,6 +38,7 @@ class DeployScriptTests(unittest.TestCase):
             check=False,
         )
 
+    @unittest.skipUnless(HAS_BASH, POSIX_DEPLOY_NOTE)
     def test_script_is_executable_and_has_valid_bash_syntax(self) -> None:
         self.assertTrue(os.access(DEPLOY_SCRIPT, os.X_OK))
         result = subprocess.run(
@@ -43,6 +50,7 @@ class DeployScriptTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout)
 
+    @unittest.skipUnless(HAS_BASH, POSIX_DEPLOY_NOTE)
     def test_help_works_outside_repository(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             result = self.run_script("--help", cwd=Path(temporary))
@@ -60,6 +68,7 @@ class DeployScriptTests(unittest.TestCase):
         self.assertEqual(services["web"]["ports"], ["${COGNITRADE_WEB_HOST:-127.0.0.1}:${COGNITRADE_WEB_PORT:-8080}:8080"])
         self.assertEqual(services["web"]["build"]["args"]["VITE_COGNITRADE_API_BASE_URL"], "/api/v1")
 
+    @unittest.skipUnless(HAS_BASH, POSIX_DEPLOY_NOTE)
     def test_init_generates_secure_token_and_runtime_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             env_file = Path(temporary) / "deploy.env"
@@ -82,6 +91,7 @@ class DeployScriptTests(unittest.TestCase):
         self.assertEqual(values["COGNITRADE_WEB_PORT"], "18080")
         self.assertEqual(values["COGNITRADE_WORKSPACE_VOLUME"], "cognitrade_workspace")
 
+    @unittest.skipUnless(HAS_BASH, POSIX_DEPLOY_NOTE)
     def test_init_preserves_existing_token(self) -> None:
         token = "a" * 64
         with tempfile.TemporaryDirectory() as temporary:
@@ -106,11 +116,13 @@ class DeployScriptTests(unittest.TestCase):
         self.assertEqual(values["COGNITRADE_API_TOKEN"], token)
         self.assertEqual(values["COGNITRADE_API_ALLOW_UNAUTHENTICATED"], "false")
 
+    @unittest.skipUnless(HAS_BASH, POSIX_DEPLOY_NOTE)
     def test_invalid_web_port_is_rejected(self) -> None:
         result = self.run_script("init", "--web-port", "70000")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("between 1 and 65535", result.stdout)
 
+    @unittest.skipUnless(HAS_BASH, POSIX_DEPLOY_NOTE)
     def test_check_accepts_a_valid_compose_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             temporary_path = Path(temporary)
@@ -144,6 +156,7 @@ class DeployScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("deployment preflight passed", result.stdout)
 
+    @unittest.skipUnless(HAS_BASH, POSIX_DEPLOY_NOTE)
     def test_dry_run_does_not_create_environment_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             env_file = Path(temporary) / "deploy.env"

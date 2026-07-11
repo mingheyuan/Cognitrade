@@ -10,6 +10,7 @@ from unittest.mock import patch
 from research_system.cli.flow.chat_dispatch import (
     answer_basic_chat,
     decide_chat_dispatch,
+    print_streamed_agent_os_chat_answer,
     print_streamed_basic_chat_answer,
     should_answer_basic_chat,
 )
@@ -40,6 +41,28 @@ class ProviderStreamingStub:
 
 
 class ChatDispatchTests(unittest.TestCase):
+    def test_production_basic_chat_answer_uses_agent_os_core_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = Settings.from_env(root).model_copy(
+                update={
+                    "runs_root": root / "runs",
+                    "memory_root": root / "memory",
+                    "domain_packs_root": root / "empty_packs",
+                }
+            )
+            updates = []
+            answer = print_streamed_agent_os_chat_answer(
+                settings=settings,
+                state=type("State", (), {"thread_id": "chat-thread"})(),
+                query="你是谁？",
+                llm_provider=ProviderUnavailableStub(),
+                emit_text=lambda _writer, update: updates.append(update),
+            )
+
+        self.assertIn("Agent OS", answer)
+        self.assertTrue(updates)
+
     def test_basic_identity_question_is_answered_without_research_routing(self) -> None:
         settings = Settings.from_env(Path("."))
         reply = answer_basic_chat(

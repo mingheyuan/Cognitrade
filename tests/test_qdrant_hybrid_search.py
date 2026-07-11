@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from research_system.adapters.storage.qdrant_adapter import QdrantAdapter
+from research_system.schemas.memory import MemoryRecord
 
 
 class _FakeEmbeddingProvider:
@@ -158,6 +159,24 @@ class QdrantHybridSearchTests(unittest.TestCase):
 
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0]["id"], "doc-b")
+
+    def test_memory_payload_uses_memory_identity_and_namespace(self) -> None:
+        adapter = self._build_adapter(points=[])
+        memory = MemoryRecord(
+            memory_id="memory-1",
+            layer="domain",
+            domain_id="finance_ashare",
+            memory_type="research_case",
+            content={"summary": "cashflow resilience"},
+            source_artifact_ids=["artifact-1"],
+            status="verified",
+        )
+
+        payload = adapter.to_memory_payload(memory)
+
+        self.assertEqual(payload["record_type"], "memory")
+        self.assertEqual(payload["memory_id"], "memory-1")
+        self.assertNotEqual(adapter._memory_point_id("memory-1"), adapter._point_id("memory-1"))
 
 
 if __name__ == "__main__":

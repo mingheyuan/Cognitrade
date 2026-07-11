@@ -3,15 +3,15 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from research_system.skills.capital_flow_snapshot.skill import CapitalFlowSnapshotSkill
-from research_system.skills.events_snapshot.skill import EventsSnapshotSkill
-from research_system.skills.fundamental_snapshot.skill import FundamentalSnapshotSkill
-from research_system.skills.lhb_snapshot.skill import LHBSnapshotSkill
-from research_system.skills.market_snapshot.skill import MarketSnapshotSkill
-from research_system.skills.notice_snapshot.skill import NoticeSnapshotSkill
-from research_system.skills.policy_snapshot.skill import PolicySnapshotSkill
-from research_system.skills.sector_snapshot.skill import SectorSnapshotSkill
-from research_system.skills.sentiment_snapshot.skill import SentimentSnapshotSkill
+from domain_packs.finance_ashare.skills.capital_flow_snapshot.skill import CapitalFlowSnapshotSkill
+from domain_packs.finance_ashare.skills.events_snapshot.skill import EventsSnapshotSkill
+from domain_packs.finance_ashare.skills.fundamental_snapshot.skill import FundamentalSnapshotSkill
+from domain_packs.finance_ashare.skills.lhb_snapshot.skill import LHBSnapshotSkill
+from domain_packs.finance_ashare.skills.market_snapshot.skill import MarketSnapshotSkill
+from domain_packs.finance_ashare.skills.notice_snapshot.skill import NoticeSnapshotSkill
+from domain_packs.finance_ashare.skills.policy_snapshot.skill import PolicySnapshotSkill
+from domain_packs.finance_ashare.skills.sector_snapshot.skill import SectorSnapshotSkill
+from domain_packs.finance_ashare.skills.sentiment_snapshot.skill import SentimentSnapshotSkill
 
 from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
 

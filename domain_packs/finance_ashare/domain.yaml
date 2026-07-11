@@ -14,6 +14,114 @@ artifact_types:
   - artifact_type: distillation_result
   - artifact_type: distillation_review
   - artifact_type: research_report
+skills:
+  - skill_name: market_snapshot_skill
+    version: "1"
+    description: Collect A-share market snapshots with provider provenance.
+    implementation: skills.market_snapshot.skill:MarketSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: fundamental_snapshot_skill
+    version: "1"
+    description: Collect A-share fundamental snapshots with provider provenance.
+    implementation: skills.fundamental_snapshot.skill:FundamentalSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: notice_snapshot_skill
+    version: "1"
+    description: Collect A-share notice snapshots with provider provenance.
+    implementation: skills.notice_snapshot.skill:NoticeSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: sector_snapshot_skill
+    version: "1"
+    description: Collect sector snapshots, constituents and catalyst evidence.
+    implementation: skills.sector_snapshot.skill:SectorSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: lhb_snapshot_skill
+    version: "1"
+    description: Collect A-share Dragon-Tiger list snapshots.
+    implementation: skills.lhb_snapshot.skill:LHBSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: capital_flow_snapshot_skill
+    version: "1"
+    description: Collect A-share capital-flow snapshots.
+    implementation: skills.capital_flow_snapshot.skill:CapitalFlowSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: sentiment_snapshot_skill
+    version: "1"
+    description: Collect A-share sentiment snapshots.
+    implementation: skills.sentiment_snapshot.skill:SentimentSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: events_snapshot_skill
+    version: "1"
+    description: Collect A-share event snapshots.
+    implementation: skills.events_snapshot.skill:EventsSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: policy_snapshot_skill
+    version: "1"
+    description: Collect sector policy snapshots.
+    implementation: skills.policy_snapshot.skill:PolicySnapshotSkill
+    allowed_callers: [subagent]
+intake:
+  implementation: subagents.task_intake:resolve_request
+  minimum_confidence: 0.65
+  intents:
+    - intent_id: stock_check
+      description: Analyze one or more A-share companies with evidence-backed financial context.
+      required_slots: [symbols]
+      candidate_capabilities:
+        - finance.query.normalize
+        - finance.ashare.snapshot.collect
+        - evidence.select
+        - finance.analysis.evaluate
+        - finance.report.compose
+      output_artifact_types: [research_report]
+    - intent_id: stock_compare
+      description: Compare two or more A-share companies on a consistent evidence basis.
+      required_slots: [symbols]
+      candidate_capabilities:
+        - finance.query.normalize
+        - finance.ashare.snapshot.collect
+        - evidence.select
+        - finance.analysis.evaluate
+        - finance.report.compose
+      output_artifact_types: [research_report]
+    - intent_id: stock_screen
+      description: Screen an A-share universe and produce traceable candidates.
+      required_slots: []
+      optional_slots: [symbols, sector]
+      candidate_capabilities:
+        - finance.query.normalize
+        - finance.ashare.snapshot.collect
+        - finance.stock.screen
+        - finance.screen.report.compose
+      output_artifact_types: [research_report]
+    - intent_id: sector_research
+      description: Research a sector or industry using current evidence.
+      required_slots: [sector]
+      candidate_capabilities:
+        - finance.query.normalize
+        - finance.ashare.snapshot.collect
+        - finance.sector.research
+        - finance.sector.report.compose
+      output_artifact_types: [research_report]
+    - intent_id: review_thesis
+      description: Review a prior research thesis and identify support, gaps, and risks.
+      required_slots: [review_target_run_id]
+      candidate_capabilities:
+        - finance.query.normalize
+        - evidence.select
+        - finance.thesis.review
+        - finance.thesis.report.compose
+      output_artifact_types: [research_report]
+    - intent_id: distill_kol_logic
+      description: Distill a research methodology from source records and review it.
+      required_slots: [source_records]
+      candidate_capabilities:
+        - finance.query.normalize
+        - finance.distillation.sources.collect
+        - finance.kol.logic.distill
+        - finance.distillation.review
+        - finance.distillation.report.compose
+      output_artifact_types: [distillation_result, distillation_review]
 capabilities:
   - subagent_type: query_normalizer
     capability: finance.query.normalize
@@ -35,6 +143,8 @@ capabilities:
       - artifact_type: stock_snapshot_bundle
     tools:
       - financial_data_provider
+    permissions:
+      - finance:data:read
     side_effect_level: read_only
     parallel_safe: true
     max_concurrency: 8
@@ -210,6 +320,7 @@ planner_policies:
       - finance.distillation.report.compose
 evaluations:
   - evaluations/finance_research.yaml
+  - evaluations/finance_research_failure.yaml
 governance:
   max_nodes: 128
   max_depth: 12
@@ -217,6 +328,7 @@ governance:
   max_retries_per_node: 2
   required_gate_ids: []
   allowed_tools: [financial_data_provider]
+  allowed_permissions: [finance:data:read]
 metadata:
   dashboard_views:
     overview:

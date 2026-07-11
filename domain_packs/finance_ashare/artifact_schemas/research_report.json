@@ -4,6 +4,7 @@
   "required": ["conclusion", "evidence", "risk", "follow_up"],
   "properties": {
     "conclusion": {"type": "string"},
+    "assessment": {"type": "object"},
     "evidence": {"type": "array"},
     "risk": {"type": "array"},
     "follow_up": {"type": "array"}

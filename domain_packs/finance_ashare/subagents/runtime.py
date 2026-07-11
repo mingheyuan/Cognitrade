@@ -106,49 +106,46 @@ def collect_snapshot(context):
         "enrichment_targets": [],
         "degraded": False,
     }
-    if not snapshots and intent in {"stock_screen", "sector_research"}:
-        collected = collect_snapshot_bundle(
-            query=query_text,
-            symbols=symbols,
-            snapshot_types=requested_types,
-            intent=intent,
-            sector=sector,
-            candidate_pool_size=int(inputs.get("candidate_pool_size") or 8),
-            enrichment_top_n=int(inputs.get("enrichment_top_n") or 2),
-            skip_enrichment=bool(inputs.get("skip_enrichment")),
-            cancellation=getattr(context, "cancellation", None),
-        )
+    provider_source_refs: list[dict] = []
+    if not snapshots:
+        provider_arguments = {
+            "query": query_text,
+            "symbols": symbols,
+            "snapshot_types": requested_types,
+            "intent": intent,
+            "sector": sector,
+            "candidate_pool_size": int(inputs.get("candidate_pool_size") or 8),
+            "enrichment_top_n": int(inputs.get("enrichment_top_n") or 2),
+        }
+        call_tool = getattr(context, "call_tool", None)
+        if callable(call_tool):
+            tool_result = call_tool("financial_data_provider", provider_arguments)
+            if tool_result.status != "completed":
+                raise RuntimeError(tool_result.error or "financial_data_provider failed")
+            collected = tool_result.output
+            provider_source_refs = list(tool_result.source_refs)
+        else:
+            # Direct Pack unit tests may use a minimal context; production Graph
+            # execution always takes the governed Tool Registry branch above.
+            direct_snapshots = _collect_provider_snapshots(
+                query=query_text,
+                symbols=symbols,
+                snapshot_types=requested_types,
+                sector=sector,
+                cancellation=getattr(context, "cancellation", None),
+            )
+            collected = {
+                "snapshots": direct_snapshots,
+                "symbols": symbols,
+                "candidate_universe": [],
+                "collection": collection,
+            }
         snapshots = list(collected.get("snapshots") or [])
         symbols = _unique_strings([*symbols, *(collected.get("symbols") or [])])
         candidate_universe = [
             dict(row) for row in collected.get("candidate_universe") or [] if isinstance(row, dict)
         ]
         collection = dict(collected.get("collection") or collection)
-    elif not snapshots and symbols:
-        snapshots = _collect_provider_snapshots(
-            query=query_text,
-            symbols=symbols,
-            snapshot_types=requested_types,
-            sector=sector,
-            cancellation=getattr(context, "cancellation", None),
-        )
-    elif not snapshots and sector:
-        snapshots = _collect_provider_snapshots(
-            query=query_text,
-            symbols=symbols,
-            snapshot_types=requested_types,
-            sector=sector,
-            cancellation=getattr(context, "cancellation", None),
-        )
-    elif inputs.get("snapshot_types"):
-        snapshots = _collect_missing_snapshot_types(
-            query=query_text,
-            symbols=symbols,
-            sector=sector,
-            snapshots=snapshots,
-            requested_types=requested_types,
-            cancellation=getattr(context, "cancellation", None),
-        )
     for snapshot in snapshots:
         if isinstance(snapshot, dict):
             symbol = str(snapshot.get("symbol") or "").strip()
@@ -166,7 +163,11 @@ def collect_snapshot(context):
     collection["degraded"] = not bool(snapshots)
     source_refs = list(inputs.get("source_refs") or [])
     if not source_refs:
-        source_refs = _snapshot_source_refs(snapshots) or [{"type": "user_supplied", "id": query.artifact_id}]
+        source_refs = (
+            provider_source_refs
+            or _snapshot_source_refs(snapshots)
+            or [{"type": "user_supplied", "id": query.artifact_id}]
+        )
     return ArtifactDraft(
         artifact_type="stock_snapshot_bundle",
         content={
@@ -265,6 +266,7 @@ def compose_report(context):
     report_evidence = [_report_evidence_item(item, index) for index, item in enumerate(items)]
     methodologies = list(analysis.content.get("methodologies") or [])
     scorecards = list(analysis.content.get("scorecards") or [])
+    assessment = _build_assessment(methodologies)
     available = [item for item in report_evidence if not item["metadata"].get("degraded")]
     degraded = [item for item in report_evidence if item["metadata"].get("degraded")]
     if not report_evidence:
@@ -273,7 +275,8 @@ def compose_report(context):
         follow_up = ["Provide one or more six-digit A-share codes, or supply source snapshots."]
     else:
         summaries = [str(item["summary"]) for item in available[:4] if item.get("summary")]
-        conclusion = "Collected provider-backed evidence: " + ("; ".join(summaries) or "snapshot details are available below.")
+        evidence_summary = "; ".join(summaries) or "snapshot details are available below."
+        conclusion = f"Preliminary assessment: {assessment['summary']} Evidence: {evidence_summary}"
         methodology_summary = str(analysis.content.get("summary") or "")
         if methodology_summary:
             conclusion = f"{conclusion} Methodology: {methodology_summary}"
@@ -288,6 +291,7 @@ def compose_report(context):
         artifact_type="research_report",
         content={
             "conclusion": conclusion,
+            "assessment": assessment,
             "evidence": report_evidence,
             "methodologies": methodologies,
             "scorecard": scorecards[0] if scorecards else None,
@@ -302,6 +306,92 @@ def compose_report(context):
         ),
         risk_flags=["decision_support_only"],
     )
+
+
+def _build_assessment(methodologies: list[dict]) -> dict:
+    """Summarize observable model outputs without turning them into a recommendation."""
+
+    by_symbol: dict[str, dict[str, dict]] = {}
+    for methodology in methodologies:
+        if not isinstance(methodology, dict):
+            continue
+        symbol = str(methodology.get("target_symbol") or "unknown")
+        kind = str(methodology.get("methodology_type") or "methodology")
+        by_symbol.setdefault(symbol, {})[kind] = methodology
+
+    factors: list[dict] = []
+    summaries: list[str] = []
+    for symbol, views in by_symbol.items():
+        signals: list[str] = []
+        dcf = views.get("dcf") or {}
+        dcf_outputs = dcf.get("outputs") if isinstance(dcf.get("outputs"), dict) else {}
+        gap = _number(dcf_outputs.get("market_to_intrinsic_gap"))
+        if gap is not None:
+            if gap <= -0.2:
+                signal = "DCF proxy is above the latest market price"
+            elif gap >= 0.2:
+                signal = "DCF proxy is below the latest market price"
+            else:
+                signal = "DCF proxy is close to the latest market price"
+            signals.append(signal)
+            factors.append({
+                "symbol": symbol,
+                "methodology": "DCF",
+                "signal": signal,
+                "value": gap,
+                "confidence": dcf.get("confidence"),
+                "basis": "market_to_intrinsic_gap",
+                "warnings": list(dcf.get("warnings") or []),
+            })
+
+        resilience = views.get("cashflow_resilience") or {}
+        resilience_outputs = resilience.get("outputs") if isinstance(resilience.get("outputs"), dict) else {}
+        cashflow_state = str(resilience_outputs.get("cashflow_state") or "")
+        debt_state = str(resilience_outputs.get("debt_capacity_state") or "")
+        if cashflow_state or debt_state:
+            signal = ", ".join(
+                value for value in (
+                    f"cashflow {cashflow_state}" if cashflow_state else "",
+                    f"debt capacity {debt_state}" if debt_state else "",
+                ) if value
+            )
+            signals.append(signal)
+            factors.append({
+                "symbol": symbol,
+                "methodology": "Cashflow resilience",
+                "signal": signal,
+                "value": resilience_outputs.get("resilience_score"),
+                "confidence": resilience.get("confidence"),
+                "basis": "cashflow_state/debt_capacity_state",
+                "warnings": list(resilience.get("warnings") or []),
+            })
+
+        comps = views.get("comps") or {}
+        comps_outputs = comps.get("outputs") if isinstance(comps.get("outputs"), dict) else {}
+        relative_view = str(comps_outputs.get("relative_view") or "")
+        if relative_view:
+            signals.append(f"relative view {relative_view}")
+            factors.append({
+                "symbol": symbol,
+                "methodology": "Comps",
+                "signal": relative_view,
+                "value": comps_outputs.get("score_gap_vs_peer_median"),
+                "confidence": comps.get("confidence"),
+                "basis": "relative_view",
+                "warnings": list(comps.get("warnings") or []),
+            })
+
+        if signals:
+            summaries.append(f"{symbol}: " + "; ".join(signals))
+
+    if not summaries:
+        summary = "No methodology-based assessment was available from the collected evidence."
+    else:
+        summary = (
+            "; ".join(summaries)
+            + ". This is a preliminary, assumption-sensitive evidence view, not an investment recommendation."
+        )
+    return {"status": "preliminary", "summary": summary, "factors": factors}
 
 
 def compose_screening_report(context):

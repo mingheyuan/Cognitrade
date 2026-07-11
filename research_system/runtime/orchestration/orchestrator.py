@@ -27,6 +27,7 @@ from research_system.runtime.orchestration.orchestrator_runtime_io_support impor
 from research_system.runtime.platform.settings import Settings
 from research_system.schemas.execution_graph import ExecutionGraph
 from research_system.schemas.protocol import ProgressState, RequestEnvelope, ResponseEnvelope
+from research_system.schemas.runtime import RunEvent
 
 class OrchestratorError(Exception):
     pass
@@ -53,6 +54,7 @@ class ResearchOrchestrator:
     ) -> None:
         self.settings = settings
         self.event_listener = event_listener
+        self._agent_os_runtime: AgentOS | None = None
         self.dependencies = dependencies or build_orchestrator_dependencies(settings)
         self._bind_dependencies(self.dependencies)
         self.assembly = OrchestratorAssemblySupport(self)
@@ -166,7 +168,102 @@ class ResearchOrchestrator:
         return self._admin().require_skill_source_registry()
 
     def run(self, request: RequestEnvelope) -> ResponseEnvelope:
-        return self._run_coordinator().run(request)
+        """Compatibility facade for the canonical Agent OS request entry.
+
+        Administrative and proposal methods remain on this facade during the
+        transition, but normal research execution must not use the former
+        router/coordinator path.
+        """
+        self._emit_agent_os_compat_event(
+            request=request,
+            event_type="request_received",
+            message="Request received by Agent OS.",
+            run_id="pending",
+        )
+        response = self._agent_os().handle_request(
+            request,
+            event_callback=self._agent_os_event_listener(request),
+        )
+        if response.run_id:
+            self._emit_agent_os_compat_event(
+                request=request,
+                event_type="run_accepted",
+                message="Run accepted by Agent OS.",
+                run_id=response.run_id,
+            )
+        return self._with_compat_report(response)
+
+    def _agent_os(self) -> AgentOS:
+        if self._agent_os_runtime is None:
+            self._agent_os_runtime = AgentOS(self.settings)
+        return self._agent_os_runtime
+
+    def _agent_os_event_listener(self, request: RequestEnvelope):
+        def listener(event: dict) -> None:
+            if self.event_listener is None:
+                return
+            self.event_listener(
+                RunEvent(
+                    event_id=str(event.get("event_id") or ""),
+                    request_id=str(event.get("request_id") or request.request_id),
+                    run_id=str(event.get("run_id") or ""),
+                    intent=str(event.get("intent") or request.intent or ""),
+                    event_type=str(event.get("event_type") or "agent_progress"),
+                    phase=event.get("phase"),
+                    agent=event.get("agent") or event.get("actor"),
+                    message=str(event.get("message") or event.get("event_type") or ""),
+                    payload=dict(event),
+                )
+            )
+
+        return listener
+
+    def _emit_agent_os_compat_event(
+        self,
+        *,
+        request: RequestEnvelope,
+        event_type: str,
+        message: str,
+        run_id: str,
+    ) -> None:
+        if self.event_listener is None:
+            return
+        self.event_listener(
+            RunEvent(
+                request_id=request.request_id,
+                run_id=run_id,
+                intent=str(request.intent or ""),
+                event_type=event_type,
+                agent="main_agent",
+                message=message,
+            )
+        )
+
+    @staticmethod
+    def _with_compat_report(response: ResponseEnvelope) -> ResponseEnvelope:
+        if response.mode != "graph" or not response.result:
+            return response
+        result = dict(response.result)
+        if "report" in result:
+            return response
+        report_artifact = next(
+            (
+                artifact
+                for artifact in reversed(response.artifacts)
+                if artifact.get("artifact_type") == "research_report"
+            ),
+            None,
+        )
+        report_content = report_artifact.get("content") if report_artifact else None
+        if isinstance(report_content, dict):
+            result["report"] = {"protocol": "agent_os", **report_content}
+        else:
+            result["report"] = {
+                "protocol": "agent_os",
+                "artifact_ids": list(result.get("artifact_ids") or []),
+                "final_artifact_ids": list(result.get("final_artifact_ids") or []),
+            }
+        return response.model_copy(update={"result": result})
 
     def replay(self, run_id: str) -> dict:
         return self._admin().replay(run_id)
@@ -297,7 +394,6 @@ class ResearchOrchestrator:
         response_status = {
             "ready": "accepted",
             "paused": "running",
-            "gated": "failed",
         }.get(status, status)
         return ResponseEnvelope(
             request_id=snapshot.request_id,

@@ -5,16 +5,52 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
+from research_system.runtime.domain_packs.skill_runtime import PackSkillRuntime
 from research_system.runtime.execution.core.execution_graph import ExecutionGraphScheduler
 from research_system.runtime.execution.core.graph_runner import ExecutionGraphRunner
 from research_system.runtime.planning.capability_planner import CapabilityPlanner
-from research_system.schemas.domain_pack import CapabilityPlanningRequest
+from research_system.schemas.domain_pack import (
+    ArtifactTypeDefinition,
+    CapabilityDefinition,
+    CapabilityPlanningRequest,
+    DomainPackManifest,
+    IntentDefinition,
+    PackIntakeDefinition,
+)
 from research_system.schemas.artifacts import ArtifactDraft
+from research_system.runtime.platform.settings import Settings
 
 
 class DomainPackTests(unittest.TestCase):
     def setUp(self) -> None:
         self.registry = DomainPackRegistry.load(Path(__file__).resolve().parents[1] / "domain_packs")
+
+    def test_pack_intake_rejects_unknown_capability_or_artifact(self) -> None:
+        with self.assertRaises(ValueError):
+            DomainPackManifest(
+                domain_id="test",
+                version="1",
+                description="test",
+                artifact_types=[ArtifactTypeDefinition(artifact_type="input")],
+                capabilities=[
+                    CapabilityDefinition(
+                        subagent_type="worker",
+                        capability="test.worker",
+                        consumes=[{"artifact_type": "input"}],
+                        produces=[{"artifact_type": "input"}],
+                    )
+                ],
+                intake=PackIntakeDefinition(
+                    implementation="subagents.runtime:resolve",
+                    intents=[
+                        IntentDefinition(
+                            intent_id="test_intent",
+                            candidate_capabilities=["test.missing"],
+                            output_artifact_types=["missing_artifact"],
+                        )
+                    ],
+                ),
+            )
 
     def test_loads_finance_and_non_finance_packs(self) -> None:
         self.assertEqual(
@@ -27,6 +63,44 @@ class DomainPackTests(unittest.TestCase):
                 produces="legal_review_report",
             )
         )
+        self.assertEqual(
+            {
+                skill.skill_name
+                for skill in self.registry.skill_definitions(domain_id="finance_ashare")
+            },
+            {
+                "market_snapshot_skill",
+                "fundamental_snapshot_skill",
+                "notice_snapshot_skill",
+                "sector_snapshot_skill",
+                "lhb_snapshot_skill",
+                "capital_flow_snapshot_skill",
+                "sentiment_snapshot_skill",
+                "events_snapshot_skill",
+                "policy_snapshot_skill",
+            },
+        )
+        self.assertEqual(self.registry.skill_definitions(domain_id="legal_contract"), [])
+
+    def test_pack_skill_resolves_from_pack_root(self) -> None:
+        skill_class = self.registry.resolve_skill(
+            domain_id="finance_ashare",
+            skill_name="market_snapshot_skill",
+        )
+        self.assertTrue(skill_class.__module__.startswith("cognitrade_domain_pack_finance_ashare_"))
+        self.assertNotIn("research_system.skills", skill_class.__module__)
+        self.assertEqual(skill_class.skill_name, "market_snapshot_skill")
+
+    def test_pack_skill_runtime_executes_declared_skill_in_pack_scope(self) -> None:
+        settings = Settings.from_env(Path(__file__).resolve().parents[1])
+        runtime = PackSkillRuntime(
+            registry=self.registry,
+            settings=settings,
+            domain_id="finance_ashare",
+        )
+        result = runtime.run("market_snapshot_skill", query="market status", symbol=None)
+        self.assertEqual(result["snapshot_type"], "market")
+        self.assertEqual(result["degrade_reason"], "symbol_missing")
 
     def test_capability_planner_builds_non_finance_graph_without_domain_branches(self) -> None:
         graph = CapabilityPlanner(self.registry).build_graph(

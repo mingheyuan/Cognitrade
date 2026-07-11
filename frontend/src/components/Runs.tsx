@@ -80,7 +80,7 @@ export function Runs({ onOpenRun }: RunsProps) {
           </div>
           <div className="active-run-events"><span>{activeRun.time}</span><strong>{activeRun.intentLabel}</strong><p>{activeRun.summary}</p><button onClick={() => onOpenRun(activeRun.id)}>查看运行<ArrowRight size={13} /></button></div>
         </section>
-      ) : <section className="active-run-card active-run-card--empty"><CheckCircle2 size={20} /><div><h2>当前没有活动运行</h2><p>后端历史中没有 received/running/waiting/gated 状态。</p></div></section>}
+      ) : <section className="active-run-card active-run-card--empty"><CheckCircle2 size={20} /><div><h2>当前没有活动运行</h2><p>后端历史中没有 received/running/waiting 状态。</p></div></section>}
 
       <section className="runs-stat-grid">
         <article><span>已加载运行</span><strong>{items.length}</strong><small>GET /runs?limit=50</small></article>

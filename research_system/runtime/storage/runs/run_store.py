@@ -40,10 +40,19 @@ class RunStore:
         intent: str,
         *,
         run_id: str | None = None,
+        reuse_existing: bool = False,
     ) -> tuple[str, RunPaths, RunStateSnapshot]:
         run_id = str(run_id or "").strip() or generate_ulid()
         root = self.runs_root / run_id
         if root.exists():
+            if reuse_existing:
+                paths = RunPaths(root)
+                existing_request = read_json(paths.request)
+                if not isinstance(existing_request, dict) or existing_request.get("request_id") != request.request_id:
+                    raise FileExistsError(f"run already exists with a different request: {run_id}")
+                existing_state = read_json(paths.run_state)
+                if isinstance(existing_state, dict):
+                    return run_id, paths, RunStateSnapshot.model_validate(existing_state)
             raise FileExistsError(f"run already exists: {run_id}")
         paths = RunPaths(root)
         paths.root.mkdir(parents=True, exist_ok=True)
@@ -103,6 +112,29 @@ class RunStore:
         if not root.exists():
             raise FileNotFoundError(f"run not found: {run_id}")
         return RunPaths(root)
+
+    def find_run_by_idempotency_key(
+        self,
+        idempotency_key: str,
+        *,
+        tenant_id: str | None = None,
+        user_id: str | None = None,
+    ) -> str | None:
+        key = str(idempotency_key or "").strip()
+        if not key:
+            return None
+        for run_dir in sorted(self.runs_root.iterdir(), reverse=True):
+            if not run_dir.is_dir():
+                continue
+            payload = read_json(run_dir / "request.json")
+            if not isinstance(payload, dict) or payload.get("idempotency_key") != key:
+                continue
+            if tenant_id is not None and payload.get("tenant_id") != tenant_id:
+                continue
+            if user_id is not None and payload.get("user_id") != user_id:
+                continue
+            return run_dir.name
+        return None
 
     def _child_thread_count(self, run_dir: Path) -> int:
         threads_root = run_dir / "threads"

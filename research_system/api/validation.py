@@ -76,7 +76,11 @@ def safe_identifier(value: str, *, field_name: str) -> str:
     return normalized
 
 
-def validate_research_request(request: RequestEnvelope) -> RequestEnvelope:
+def validate_research_request(
+    request: RequestEnvelope,
+    *,
+    supported_intents: Iterable[str] | None = None,
+) -> RequestEnvelope:
     query = str(request.user_query or "").strip()
     if not query:
         raise ApiError(
@@ -94,19 +98,38 @@ def validate_research_request(request: RequestEnvelope) -> RequestEnvelope:
         )
 
     intent = str(request.intent or "").strip() or None
-    if intent is not None and not intent.startswith("domain:") and intent not in SUPPORTED_RESEARCH_INTENTS:
+    allowed_intents = frozenset(
+        str(item).strip()
+        for item in (
+            supported_intents
+            if supported_intents is not None
+            else SUPPORTED_RESEARCH_INTENTS
+        )
+        if str(item).strip()
+    )
+    is_core_intent = bool(intent and intent.startswith("core."))
+    if (
+        intent is not None
+        and not intent.startswith("domain:")
+        and not is_core_intent
+        and intent not in allowed_intents
+    ):
         raise ApiError(
             status_code=422,
             code="invalid_intent",
             message=f"Unsupported research intent: {intent}",
-            details={"intent": intent, "supported_intents": sorted(SUPPORTED_RESEARCH_INTENTS)},
+            details={"intent": intent, "supported_intents": sorted(allowed_intents)},
         )
 
     constraints = dict(request.constraints or {})
-    if intent is None or intent.startswith("domain:"):
+    if intent is None or intent.startswith("domain:") or is_core_intent:
         return request.model_copy(update={"intent": intent, "user_query": query, "constraints": constraints})
 
-    allowed_fields = _CONSTRAINTS_BY_INTENT[intent]
+    allowed_fields = _CONSTRAINTS_BY_INTENT.get(intent)
+    if allowed_fields is None:
+        # Constraint ownership belongs to an installed Pack. Core only performs
+        # generic shape validation for an intent it does not define.
+        return request.model_copy(update={"intent": intent, "user_query": query, "constraints": constraints})
     unknown_fields = sorted(str(key) for key in constraints if str(key) not in allowed_fields)
     if unknown_fields:
         raise ApiError(

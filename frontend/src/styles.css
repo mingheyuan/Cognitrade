@@ -912,8 +912,164 @@ select:focus-visible {
   font-size: 12px;
 }
 
+.agent-progress-feed {
+  max-width: 860px;
+  margin: 18px 0 24px 41px;
+  padding: 12px 14px 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.agent-progress-feed__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.agent-progress-feed__heading span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-progress-feed__heading small {
+  color: var(--muted-dim);
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.agent-progress-feed ol {
+  display: grid;
+  gap: 0;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-progress-feed li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  gap: 9px;
+  padding: 8px 0 9px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.agent-progress-feed__dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--blue);
+  box-shadow: 0 0 0 3px rgba(115, 168, 221, 0.1);
+}
+
+.agent-progress-feed__dot.is-main_agent {
+  background: var(--mint);
+  box-shadow: 0 0 0 3px rgba(125, 226, 189, 0.1);
+}
+
+.agent-progress-feed__dot.is-planner {
+  background: var(--yellow, #e8c87a);
+  box-shadow: 0 0 0 3px rgba(232, 200, 122, 0.1);
+}
+
+.agent-progress-feed__dot.is-tool {
+  background: var(--purple, #b29cff);
+  box-shadow: 0 0 0 3px rgba(178, 156, 255, 0.1);
+}
+
+.agent-progress-feed__dot.is-subagent {
+  background: var(--blue);
+}
+
+.agent-progress-feed li strong {
+  display: block;
+  color: var(--text-soft);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.agent-progress-feed li p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.agent-progress-feed li time {
+  color: var(--muted-dim);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
 .assistant-message {
   min-width: 0;
+}
+
+.assistant-message--live {
+  max-width: 860px;
+  padding: 14px 16px;
+  border: 1px solid rgba(125, 226, 189, 0.22);
+  border-radius: 8px;
+  background: rgba(125, 226, 189, 0.05);
+}
+
+.main-agent-answer {
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(125, 226, 189, 0.22);
+  border-radius: 8px;
+  background: rgba(125, 226, 189, 0.05);
+}
+
+.main-agent-answer__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 7px;
+  color: var(--mint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.main-agent-answer__heading span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.main-agent-answer__heading small {
+  color: var(--muted-dim);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.main-agent-answer p {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 14px;
+  line-height: 1.72;
+  white-space: pre-wrap;
+}
+
+.live-answer-copy {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 14px;
+  line-height: 1.72;
+  white-space: pre-wrap;
 }
 
 .assistant-response-header {
@@ -1108,6 +1264,53 @@ select:focus-visible {
   color: var(--text-soft);
   font-size: 12px;
   line-height: 1.65;
+}
+
+.assessment-summary {
+  margin-top: 9px !important;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+  color: var(--muted) !important;
+  font-size: 11px !important;
+}
+
+.report-table-wrap {
+  overflow-x: auto;
+  margin-top: 12px;
+}
+
+.report-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--muted);
+  font-size: 11px;
+  table-layout: auto;
+}
+
+.report-table th,
+.report-table td {
+  padding: 10px 9px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+}
+
+.report-table th {
+  color: var(--muted-dim);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.report-table td strong {
+  color: var(--text-soft);
+  font-weight: 600;
+}
+
+.report-table tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 .thesis-confidence {
@@ -4588,6 +4791,10 @@ select:focus-visible {
   }
 
   .live-research-strip {
+    margin-left: 34px;
+  }
+
+  .agent-progress-feed {
     margin-left: 34px;
   }
 

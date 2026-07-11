@@ -9,12 +9,47 @@ from fastapi.testclient import TestClient
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
 from research_system.runtime.intake.task_intake import TaskIntakeService
+from research_system.runtime.intake.request_intake import RequestIntakeService
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.platform.settings import Settings
 from research_system.schemas.protocol import RequestEnvelope
+from research_system.schemas.core_runtime import IntakeClassificationProposal
+
+
+class _ModelIntakeProvider:
+    available = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def parse(self, **_kwargs):
+        self.calls += 1
+        return IntakeClassificationProposal(
+            request_kind="domain_task",
+            domain_id="finance_ashare",
+            intent="stock_screen",
+            confidence=0.92,
+        )
 
 
 class AgentOSTaskIntakeTests(unittest.TestCase):
+    def test_request_intake_uses_model_candidate_before_core_fallback(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        provider = _ModelIntakeProvider()
+        service = RequestIntakeService(
+            DomainPackRegistry.load(repository_root / "domain_packs"),
+            llm_provider=provider,
+        )
+
+        decision = service.resolve(RequestEnvelope(user_query="find interesting companies"))
+
+        self.assertEqual(decision.status, "accepted")
+        self.assertEqual(decision.request_kind, "domain_task")
+        self.assertEqual(decision.domain_id, "finance_ashare")
+        self.assertEqual(decision.intent, "stock_screen")
+        self.assertEqual(decision.trace["source"], "model_classification")
+        self.assertEqual(provider.calls, 1)
+
     def test_finance_pack_resolves_company_aliases_and_comparison_intent(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         service = TaskIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
@@ -26,6 +61,27 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
         self.assertEqual(decision.status, "accepted")
         self.assertEqual(decision.intent, "stock_compare")
         self.assertEqual(decision.slots["symbols"], ["000001", "600036"])
+
+    def test_pack_intake_exposes_declared_capability_candidates(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        service = TaskIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
+
+        decision = service.resolve(
+            RequestEnvelope(user_query="筛选最近值得关注的股票")
+        )
+
+        self.assertEqual(decision.status, "accepted")
+        self.assertEqual(decision.intent, "stock_screen")
+        self.assertEqual(
+            decision.candidate_capabilities,
+            [
+                "finance.query.normalize",
+                "finance.ashare.snapshot.collect",
+                "finance.stock.screen",
+                "finance.screen.report.compose",
+            ],
+        )
+        self.assertEqual(decision.trace["intent_definition"], "stock_screen")
 
     def test_finance_pack_returns_clarification_for_incomplete_target(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -71,7 +127,7 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
         self.assertEqual(response.json()["intent"], "stock_compare")
         self.assertEqual(response.json()["status"], "completed")
 
-    def test_versioned_api_returns_clarification_without_creating_a_run(self) -> None:
+    def test_versioned_api_persists_a_resumable_clarification_run(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -90,10 +146,11 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
                     headers={"Authorization": "Bearer task-intake-test"},
                     json={"user_query": "analyze a company"},
                 )
-
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["status"], "needs_clarification")
-        self.assertIsNone(response.json()["run_id"])
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["status"], "needs_clarification")
+                run_id = response.json()["run_id"]
+                self.assertTrue(run_id)
+                self.assertTrue((root / "runs" / run_id / "clarification_pending.json").is_file())
 
     def test_explicit_thesis_review_without_target_is_a_pack_clarification(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]

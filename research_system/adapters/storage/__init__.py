@@ -4,6 +4,14 @@ from research_system.adapters.storage.redis_route_store import (
     RedisRouteTableBackend,
     RouteTableBackendError,
 )
+from research_system.adapters.storage.resource_lease import (
+    FileResourceLeaseStore,
+    RedisResourceLeaseStore,
+    ResourceLease,
+    ResourceLeaseStore,
+    ResourceLeaseStoreError,
+    build_resource_lease_store,
+)
 
 __all__ = [
     "LocalMemoryAdapter",
@@ -11,4 +19,10 @@ __all__ = [
     "QdrantUnavailableError",
     "RedisRouteTableBackend",
     "RouteTableBackendError",
+    "FileResourceLeaseStore",
+    "RedisResourceLeaseStore",
+    "ResourceLease",
+    "ResourceLeaseStore",
+    "ResourceLeaseStoreError",
+    "build_resource_lease_store",
 ]

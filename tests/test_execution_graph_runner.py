@@ -10,7 +10,10 @@ from research_system.runtime.execution.core.graph_runner import (
     ExecutionGraphRunner,
     GraphGovernanceError,
 )
-from research_system.runtime.planning.capability_planner import CapabilityPlanner
+from research_system.runtime.planning.capability_planner import (
+    CapabilityDynamicPlanner,
+    CapabilityPlanner,
+)
 from research_system.schemas.artifacts import ArtifactDraft
 from research_system.schemas.domain_pack import CapabilityPlanningRequest
 from research_system.schemas.execution_graph import (
@@ -140,6 +143,14 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
             self.assertEqual(report.artifact_version, 1)
             self.assertGreaterEqual(len(runner.board.lineage(report.artifact_id)), 4)
             self.assertEqual(result.snapshot.gate_evaluations[0].verdict, "pass")
+            self.assertEqual(
+                result.snapshot.gate_evaluations[0].evaluator,
+                "legal.contract.citation.verify",
+            )
+            self.assertTrue(result.snapshot.gate_evaluations[0].evidence_refs)
+            self.assertTrue(
+                any(event["event_type"] == "gate_evaluator_completed" for event in events)
+            )
             self.assertEqual(runner.replay().model_dump(mode="json"), result.snapshot.model_dump(mode="json"))
             for artifact in runner.board.list_artifacts(run_id="legal-run", status="active"):
                 self.assertTrue(artifact.source_refs)
@@ -172,7 +183,16 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
             completed = runner.resume()
             self.assertEqual(completed.snapshot.status, "completed")
 
-            runner.rerun_from("legal_risk_reviewer")
+            prepared = runner.rerun_from("legal_risk_reviewer")
+            self.assertTrue(prepared.invalidated_artifact_ids)
+            self.assertEqual(
+                runner.board.list_artifacts(
+                    run_id="legal-run",
+                    artifact_type="legal_review_report",
+                    status="active",
+                ),
+                [],
+            )
             rerun = runner.resume()
 
             self.assertEqual(rerun.snapshot.status, "completed")
@@ -183,6 +203,38 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
             )
             self.assertEqual(len(active_reports), 1)
             self.assertEqual(active_reports[0].artifact_version, 2)
+
+    def test_run_timeout_is_distinct_from_cancellation(self) -> None:
+        graph = self._legal_graph().model_copy(
+            update={
+                "governance": self.registry.get("legal_contract").governance.model_copy(
+                    update={"timeout_seconds": 0.000001}
+                )
+            }
+        )
+        with TemporaryDirectory() as temporary_directory:
+            events: list[dict] = []
+            runner = ExecutionGraphRunner(
+                registry=self.registry,
+                run_root=Path(temporary_directory),
+                event_callback=events.append,
+            )
+            result = runner.run(
+                graph=graph,
+                run_id="timeout-run",
+                thread_id="timeout-thread",
+                request_id="timeout-request",
+                seed_artifacts=[
+                    ArtifactDraft(
+                        artifact_type="contract_document",
+                        content={"text": "Supplier shall deliver."},
+                        source_refs=[{"type": "contract", "id": "contract-1"}],
+                    )
+                ],
+            )
+
+            self.assertEqual(result.snapshot.status, "timed_out")
+            self.assertTrue(any(event["event_type"] == "graph_run_timed_out" for event in events))
 
     def test_governance_rejects_tool_and_approval_bypass(self) -> None:
         graph = self._legal_graph()
@@ -204,18 +256,42 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
         graph = self._legal_graph()
         risk_node = next(node for node in graph.nodes if node.node_id == "legal_risk_reviewer")
         risk_node.side_effect_level = "write_external"
+        risk_node.idempotency_key = "approval-gated-test"
         with TemporaryDirectory() as temporary_directory:
             runner = ExecutionGraphRunner(
                 registry=self.registry,
                 run_root=Path(temporary_directory),
             )
-            with self.assertRaisesRegex(GraphGovernanceError, "human approval"):
-                runner.run(
-                    graph=graph,
-                    run_id="run",
-                    thread_id="thread",
-                    request_id="request",
-                )
+            waiting = runner.run(
+                graph=graph,
+                run_id="run",
+                thread_id="thread",
+                request_id="request",
+                seed_artifacts=[
+                    ArtifactDraft(
+                        artifact_type="contract_document",
+                        content={"text": "Supplier shall deliver."},
+                        source_refs=[{"type": "contract", "id": "contract-1"}],
+                    )
+                ],
+            )
+            self.assertEqual(waiting.snapshot.status, "waiting_approval")
+            approval_id = next(
+                node.approval_id
+                for node in waiting.snapshot.graph.nodes
+                if node.node_id == "legal_risk_reviewer"
+            )
+            self.assertIsNotNone(approval_id)
+            runner.approvals.approve(
+                approval_id=approval_id,
+                run_id="run",
+                node_id="legal_risk_reviewer",
+                capability="legal.contract.risk.review",
+                approved_by="reviewer",
+                reason="Approved test operation.",
+            )
+            completed = runner.resume()
+            self.assertEqual(completed.snapshot.status, "completed")
 
     def test_dynamic_planner_expands_arbitrary_subgraph_from_board_at_safe_point(self) -> None:
         planner = _LegalLazyPlanner()
@@ -262,6 +338,255 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
             self.assertEqual(
                 {node.node_id for node in result.snapshot.graph.nodes},
                 {"professional_review", "extract", "risks", "obligations", "report"},
+            )
+
+    def test_isolated_capability_failure_replans_to_a_catalog_fallback(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            pack_root = root / "packs" / "fallback_test"
+            for directory in DomainPackRegistry.REQUIRED_DIRECTORIES:
+                (pack_root / directory).mkdir(parents=True, exist_ok=True)
+            (pack_root / "domain.yaml").write_text(
+                """
+domain_id: fallback_test
+version: 1.0.0
+description: Failure replacement test pack.
+artifact_types:
+  - artifact_type: control_input
+  - artifact_type: control_output
+capabilities:
+  - subagent_type: primary_worker
+    capability: fallback.primary
+    implementation: subagents.runtime:primary
+    consumes: [{artifact_type: control_input}]
+    produces: [{artifact_type: control_output}]
+    reliability: 0.99
+    failure_mode: isolate
+  - subagent_type: fallback_worker
+    capability: fallback.secondary
+    implementation: subagents.runtime:fallback
+    consumes: [{artifact_type: control_input}]
+    produces: [{artifact_type: control_output}]
+    reliability: 0.80
+    cost_class: medium
+planner_policies:
+  intent_outputs:
+    fallback_check: [control_output]
+report_contracts:
+  - contract_id: fallback.output.v1
+    artifact_type: control_output
+    required_sections: [value]
+    required_source_refs: true
+governance:
+  max_nodes: 8
+  max_depth: 4
+  max_concurrency: 2
+  max_retries_per_node: 0
+""".strip(),
+                encoding="utf-8",
+            )
+            (pack_root / "artifact_schemas" / "control_input.json").write_text(
+                '{"type":"object","required":["value"]}',
+                encoding="utf-8",
+            )
+            (pack_root / "artifact_schemas" / "control_output.json").write_text(
+                '{"type":"object","required":["value"]}',
+                encoding="utf-8",
+            )
+            (pack_root / "subagents" / "runtime.py").write_text(
+                """
+from research_system.schemas.artifacts import ArtifactDraft
+
+def primary(context):
+    raise RuntimeError("primary provider unavailable")
+
+def fallback(context):
+    source = context.require_artifact("control_input")
+    return ArtifactDraft(
+        artifact_type="control_output",
+        content={"value": "fallback"},
+        source_refs=list(source.source_refs),
+        confidence=0.8,
+    )
+""".strip(),
+                encoding="utf-8",
+            )
+
+            registry = DomainPackRegistry.load(root / "packs")
+            planner = CapabilityPlanner(registry)
+            graph = planner.build_lazy_graph(
+                CapabilityPlanningRequest(
+                    domain_id="fallback_test",
+                    objective="Recover from a failed provider.",
+                    available_artifact_types=["control_input"],
+                    required_artifact_types=["control_output"],
+                )
+            )
+            events: list[dict] = []
+            runner = ExecutionGraphRunner(
+                registry=registry,
+                run_root=root / "run",
+                event_callback=events.append,
+                dynamic_planner=CapabilityDynamicPlanner(planner),
+            )
+            result = runner.run(
+                graph=graph,
+                run_id="fallback-run",
+                thread_id="fallback-thread",
+                request_id="fallback-request",
+                seed_artifacts=[
+                    ArtifactDraft(
+                        artifact_type="control_input",
+                        content={"value": "input"},
+                        source_refs=[{"type": "test", "id": "input-1"}],
+                    )
+                ],
+            )
+
+            self.assertEqual(result.snapshot.status, "completed")
+            output = runner.board.get(result.final_artifact_ids[0])
+            self.assertIsNotNone(output)
+            assert output is not None
+            self.assertEqual(output.content["value"], "fallback")
+            self.assertTrue(
+                any(event["event_type"] == "graph_replan_applied" for event in events)
+            )
+            self.assertEqual(
+                result.snapshot.graph.nodes[-1].capability,
+                "fallback.secondary",
+            )
+
+    def test_subagent_control_request_is_audited_and_drives_safe_point_replan(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            pack_root = root / "packs" / "control_test"
+            for directory in DomainPackRegistry.REQUIRED_DIRECTORIES:
+                (pack_root / directory).mkdir(parents=True, exist_ok=True)
+            (pack_root / "domain.yaml").write_text(
+                """
+domain_id: control_test
+version: 1.0.0
+description: Control request protocol test pack.
+artifact_types:
+  - artifact_type: control_input
+  - artifact_type: control_output
+  - artifact_type: extra_evidence
+capabilities:
+  - subagent_type: control_worker
+    capability: control.primary
+    implementation: subagents.runtime:control_worker
+    consumes: [{artifact_type: control_input}]
+    produces: [{artifact_type: control_output}]
+  - subagent_type: evidence_worker
+    capability: control.evidence
+    implementation: subagents.runtime:evidence_worker
+    consumes: [{artifact_type: control_input}]
+    produces: [{artifact_type: extra_evidence}]
+planner_policies:
+  intent_outputs:
+    control_check: [control_output]
+report_contracts:
+  - contract_id: control.output.v1
+    artifact_type: control_output
+    required_sections: [value]
+    required_source_refs: true
+governance:
+  max_nodes: 8
+  max_depth: 4
+  max_concurrency: 2
+  max_retries_per_node: 0
+""".strip(),
+                encoding="utf-8",
+            )
+            for artifact_type, schema in {
+                "control_input": '{"type":"object","required":["value"]}',
+                "control_output": '{"type":"object","required":["value"]}',
+                "extra_evidence": '{"type":"object","required":["evidence"]}',
+            }.items():
+                (pack_root / "artifact_schemas" / f"{artifact_type}.json").write_text(
+                    schema,
+                    encoding="utf-8",
+                )
+            (pack_root / "subagents" / "runtime.py").write_text(
+                """
+from research_system.schemas.artifacts import ArtifactDraft
+
+def control_worker(context):
+    source = context.require_artifact("control_input")
+    return {
+        "artifacts": [ArtifactDraft(
+            artifact_type="control_output",
+            content={"value": source.content["value"]},
+            source_refs=list(source.source_refs),
+            confidence=0.9,
+        )],
+        "control_requests": [{
+            "request_id": "control-request-1",
+            "kind": "request_replan",
+            "reason": "The initial result requires corroborating evidence.",
+            "requested_artifact_types": ["extra_evidence"],
+        }],
+    }
+
+def evidence_worker(context):
+    source = context.require_artifact("control_input")
+    return ArtifactDraft(
+        artifact_type="extra_evidence",
+        content={"evidence": source.content["value"]},
+        source_refs=list(source.source_refs),
+        confidence=0.8,
+    )
+""".strip(),
+                encoding="utf-8",
+            )
+
+            registry = DomainPackRegistry.load(root / "packs")
+            planner = CapabilityPlanner(registry)
+            graph = planner.build_lazy_graph(
+                CapabilityPlanningRequest(
+                    domain_id="control_test",
+                    objective="Run a controlled evidence check.",
+                    available_artifact_types=["control_input"],
+                    required_artifact_types=["control_output"],
+                    metadata={"intent": "control_check"},
+                )
+            )
+            events: list[dict] = []
+            runner = ExecutionGraphRunner(
+                registry=registry,
+                run_root=root / "run",
+                event_callback=events.append,
+                dynamic_planner=CapabilityDynamicPlanner(planner),
+            )
+            result = runner.run(
+                graph=graph,
+                run_id="control-run",
+                thread_id="control-thread",
+                request_id="control-request",
+                seed_artifacts=[
+                    ArtifactDraft(
+                        artifact_type="control_input",
+                        content={"value": "fact"},
+                        source_refs=[{"type": "source", "id": "source-1"}],
+                    )
+                ],
+            )
+
+            self.assertEqual(result.snapshot.status, "completed")
+            self.assertFalse(result.snapshot.pending_control_requests)
+            self.assertIn(
+                "evidence_worker",
+                {node.executor for node in result.snapshot.graph.nodes},
+            )
+            requests = [
+                event
+                for event in events
+                if event["event_type"] == "subagent_control_request"
+            ]
+            self.assertEqual(len(requests), 1)
+            self.assertEqual(
+                requests[0]["request"]["requested_artifact_types"],
+                ["extra_evidence"],
             )
 
     def test_governed_global_cache_rebinds_artifact_lineage_to_current_run(self) -> None:

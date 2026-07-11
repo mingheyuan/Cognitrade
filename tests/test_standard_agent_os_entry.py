@@ -8,11 +8,54 @@ from research_system.runtime.orchestration.orchestrator import ResearchOrchestra
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.planning.planner import RuntimePlanner
 from research_system.runtime.platform.settings import Settings
-from research_system.runtime.storage.jsonl import read_jsonl
+from research_system.runtime.storage.jsonl import read_json, read_jsonl
 from research_system.schemas.protocol import RequestEnvelope
 
 
 class StandardAgentOSEntryTests(unittest.TestCase):
+    @staticmethod
+    def _snapshots() -> list[dict]:
+        return [
+            {
+                "snapshot_type": "market",
+                "symbol": "600000",
+                "facts": {
+                    "market_overview": {
+                        "latest_price": 10.2,
+                        "pct_change": 1.5,
+                        "amount": 1_200_000_000,
+                        "pe": 8.4,
+                    }
+                },
+                "source": {"provider_id": "test_market"},
+            },
+            {
+                "snapshot_type": "fundamental",
+                "symbol": "600000",
+                "facts": {
+                    "financial_abstract": {
+                        "roe": 0.12,
+                        "operating_cash_flow": 123,
+                        "revenue_growth": 0.08,
+                        "net_profit": 100,
+                    }
+                },
+                "source": {"provider_id": "test_fundamental"},
+            },
+            {
+                "snapshot_type": "notice",
+                "symbol": "600000",
+                "facts": {"notice_count": 2},
+                "source": {"provider_id": "test_notice"},
+            },
+            {
+                "snapshot_type": "sector",
+                "sector": "semiconductor",
+                "facts": {"research_heat": 73, "theme": "AI hardware"},
+                "source": {"provider_id": "test_sector"},
+            },
+        ]
+
     def test_execution_graph_entry_rejects_intents_without_a_domain_pack(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         planner = RuntimePlanner(settings=Settings.from_env(repository_root))
@@ -171,7 +214,7 @@ class StandardAgentOSEntryTests(unittest.TestCase):
                     RequestEnvelope(
                         intent="domain:finance_ashare",
                         user_query="Review supplied evidence.",
-                        slots={"symbols": ["600000"]},
+                        slots={"symbols": ["600000"], "snapshots": self._snapshots()},
                     )
                 )
                 self.assertFalse(hasattr(orchestrator, "supervisor"))
@@ -197,7 +240,7 @@ class StandardAgentOSEntryTests(unittest.TestCase):
                     RequestEnvelope(
                         intent="stock_check",
                         user_query="Check 600000.",
-                        slots={"symbols": ["600000"]},
+                        slots={"symbols": ["600000"], "snapshots": self._snapshots()},
                     )
                 )
 
@@ -206,6 +249,10 @@ class StandardAgentOSEntryTests(unittest.TestCase):
             self.assertTrue((run_root / "execution_graph.json").is_file())
             self.assertTrue((run_root / "execution_snapshot.json").is_file())
             self.assertTrue((run_root / "artifact_board.jsonl").is_file())
+            graph = read_json(run_root / "execution_graph.json")
+            self.assertEqual(graph["metadata"]["planner"], "capability_contract_lazy")
+            self.assertGreaterEqual(graph["revision"], 2)
+            self.assertIn("query_normalizer", {node["executor"] for node in graph["nodes"] if node["node_kind"] == "subagent"})
 
     def test_intent_specific_finance_artifacts_are_executed_and_written_to_board(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -232,7 +279,12 @@ class StandardAgentOSEntryTests(unittest.TestCase):
                                 intent=intent,
                                 user_query=f"Run {intent}.",
                                 slots={
-                                    "symbols": ["600000"],
+                                    "symbols": (
+                                        ["600000", "000001"]
+                                        if intent == "stock_compare"
+                                        else ["600000"]
+                                    ),
+                                    "snapshots": self._snapshots(),
                                     "sector": "semiconductor",
                                     "source_records": [
                                         {
@@ -281,7 +333,12 @@ class StandardAgentOSEntryTests(unittest.TestCase):
                                 intent=intent,
                                 user_query=f"Run {intent}.",
                                 slots={
-                                    "symbols": ["600000"],
+                                    "symbols": (
+                                        ["600000", "000001"]
+                                        if intent == "stock_compare"
+                                        else ["600000"]
+                                    ),
+                                    "snapshots": self._snapshots(),
                                     "sector": "semiconductor",
                                     "source_records": [
                                         {
@@ -312,7 +369,7 @@ class StandardAgentOSEntryTests(unittest.TestCase):
                     RequestEnvelope(
                         intent="stock_check",
                         user_query="Run stock_check.",
-                        slots={"symbols": ["600000"]},
+                        slots={"symbols": ["600000"], "snapshots": self._snapshots()},
                         constraints={"execution_protocol": "legacy"},
                     )
                 )
@@ -335,7 +392,7 @@ class StandardAgentOSEntryTests(unittest.TestCase):
                     RequestEnvelope(
                         intent="stock_screen",
                         user_query="Screen the supplied candidates.",
-                        slots={"symbols": ["600000"]},
+                        slots={"symbols": ["600000"], "snapshots": self._snapshots()},
                     )
                 )
                 self.assertEqual(response.status, "completed")

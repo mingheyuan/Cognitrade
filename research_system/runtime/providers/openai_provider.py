@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
 from typing import Any, TypeVar
 
 from openai import APITimeoutError, OpenAI
@@ -111,6 +112,122 @@ class OpenAIProvider:
             raise LLMProviderError(f"llm_request_timeout: {self.request_timeout_seconds}s") from exc
         except Exception as exc:
             raise LLMProviderError(f"llm_request_failed: {exc.__class__.__name__}: {exc}") from exc
+
+    def complete_with_tools(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        tools: list[dict[str, Any]],
+        messages: list[dict[str, Any]] | None = None,
+        temperature: float = 0.2,
+        reasoning_effort: str | None = None,
+    ) -> dict[str, Any]:
+        """Execute one provider-native Agent turn.
+
+        The Agent OS owns the loop and governance. This adapter only translates
+        the provider response into a stable ``message`` or ``tool_calls``
+        payload, so the same Main Agent can run with a test provider or a
+        different model backend.
+        """
+        client = self._client_instance()
+        input_messages = self._tool_input_messages(user_prompt, messages or [])
+        provider_tools = [
+            {
+                "type": "function",
+                "name": str(item.get("name") or "").strip(),
+                "description": str(item.get("description") or ""),
+                "parameters": dict(item.get("input_schema") or {"type": "object"}),
+            }
+            for item in tools
+            if str(item.get("name") or "").strip()
+        ]
+        effective_reasoning_effort = reasoning_effort or self.settings.openai_reasoning_effort
+        try:
+            response = client.responses.create(
+                model=self.settings.default_model,
+                instructions=system_prompt,
+                input=input_messages,
+                tools=provider_tools,
+                temperature=temperature,
+                reasoning={"effort": effective_reasoning_effort} if effective_reasoning_effort else None,
+                store=not self.settings.openai_disable_response_storage,
+                timeout=self.request_timeout_seconds,
+            )
+            calls: list[dict[str, Any]] = []
+            for item in list(getattr(response, "output", None) or []):
+                item_type = getattr(item, "type", None)
+                if isinstance(item, dict):
+                    item_type = item.get("type")
+                if item_type != "function_call":
+                    continue
+                name = getattr(item, "name", None) if not isinstance(item, dict) else item.get("name")
+                raw_arguments = (
+                    getattr(item, "arguments", None)
+                    if not isinstance(item, dict)
+                    else item.get("arguments")
+                )
+                if isinstance(raw_arguments, str):
+                    arguments = json.loads(raw_arguments or "{}")
+                elif isinstance(raw_arguments, dict):
+                    arguments = raw_arguments
+                else:
+                    arguments = {}
+                call_id = getattr(item, "call_id", None) if not isinstance(item, dict) else item.get("call_id")
+                calls.append(
+                    {
+                        "tool_name": str(name or "").strip(),
+                        "arguments": dict(arguments),
+                        "call_id": str(call_id or "").strip() or None,
+                    }
+                )
+            if calls:
+                return {"kind": "tool_calls", "tool_calls": calls}
+            text = self.response_support.coerce_responses_text(response)
+            return {"kind": "message", "message": text}
+        except LLMProviderError:
+            raise
+        except APITimeoutError as exc:
+            raise LLMProviderError(f"llm_request_timeout: {self.request_timeout_seconds}s") from exc
+        except Exception as exc:
+            raise LLMProviderError(f"llm_tool_turn_failed: {exc.__class__.__name__}: {exc}") from exc
+
+    @staticmethod
+    def _tool_input_messages(user_prompt: str, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not messages:
+            return [{"role": "user", "content": user_prompt}]
+        normalized: list[dict[str, Any]] = []
+        for row in messages:
+            role = str(row.get("role") or "user")
+            if role == "tool":
+                normalized.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": str(row.get("call_id") or "unknown"),
+                        "output": json.dumps(
+                            {
+                                "status": row.get("status"),
+                                "output": row.get("output"),
+                                "error": row.get("error"),
+                            },
+                            ensure_ascii=False,
+                        ),
+                    }
+                )
+                continue
+            if row.get("tool_calls"):
+                normalized.append(
+                    {
+                        "role": "assistant",
+                        "content": json.dumps(
+                            {"tool_calls": row.get("tool_calls")},
+                            ensure_ascii=False,
+                        ),
+                    }
+                )
+                continue
+            normalized.append({"role": role, "content": str(row.get("content") or "")})
+        return normalized
 
     def stream_complete(
         self,

@@ -16,6 +16,8 @@ ResponseStatus = Literal[
     "accepted",
     "needs_clarification",
     "running",
+    "waiting_approval",
+    "gated",
     "completed",
     "cancelled",
     "failed",
@@ -45,6 +47,10 @@ class RequestEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     request_id: str = Field(default_factory=generate_ulid)
+    thread_id: str | None = None
+    user_id: str | None = None
+    tenant_id: str | None = None
+    idempotency_key: str | None = None
     intent: str | None = None
     user_query: str
     conversation_context: list[dict[str, Any]] = Field(default_factory=list)
@@ -59,6 +65,7 @@ class ResponseEnvelope(BaseModel):
 
     request_id: str
     run_id: str | None = None
+    mode: Literal["core", "task", "graph"] | None = None
     intent: str | None = None
     status: ResponseStatus
     message: str

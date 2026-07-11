@@ -12,6 +12,7 @@ export type RunStatus =
   | 'needs_clarification'
   | 'ready'
   | 'running'
+  | 'waiting_approval'
   | 'waiting_external'
   | 'gated'
   | 'completed'
@@ -22,6 +23,10 @@ export type RunStatus =
 
 export type ResearchRequest = {
   request_id?: string
+  thread_id?: string
+  user_id?: string
+  tenant_id?: string
+  idempotency_key?: string
   intent?: ResearchIntent
   user_query: string
   conversation_context?: Array<Record<string, unknown>>
@@ -79,6 +84,7 @@ export type ResearchResult = {
 export type ResearchResponse = {
   request_id: string
   run_id?: string | null
+  mode?: 'core' | 'task' | 'graph' | null
   intent?: ResearchIntent | null
   status: RunStatus
   message: string

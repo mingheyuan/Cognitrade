@@ -65,7 +65,7 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
   const sectorSignals = dashboardSectorSignals(overviewDashboard)
   const verifiedPolicyMemory = dashboardItems(methodologyDashboard, 'verified_policy_memory')
   const completed = runs.filter((run) => run.status === 'completed').length
-  const active = runs.filter((run) => ['received', 'ready', 'running', 'waiting_external', 'gated'].includes(String(run.status))).length
+  const active = runs.filter((run) => ['received', 'ready', 'running', 'waiting_external', 'waiting_approval'].includes(String(run.status))).length
   const events = Number(selectedRun?.metrics.counts?.events || selectedRun?.events.events.length || 0)
   const latestRuns = runs.slice(0, 5).map(runListItem)
   const today = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'full' }).format(new Date())

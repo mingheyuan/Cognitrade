@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from research_system.cli.flow.chat_event_adapter import build_chat_presenter, chat_event_listener
 from research_system.cli.commands.research_request_payloads import build_research_request
+from research_system.runtime.agent_os import AgentOS
 from research_system.runtime.orchestrator import ResearchOrchestrator
 from research_system.runtime.platform.settings import Settings
 from research_system.schemas.runtime import RunEvent
@@ -32,6 +33,5 @@ def run_chat_research(
         dispatch=dispatch,
         conversation_context=conversation_context or [],
     )
-    with ResearchOrchestrator(settings, event_listener=_listener) as orchestrator:
-        response = orchestrator.run(request)
-        return response.model_dump(mode="json")
+    response = AgentOS(settings).handle_request(request, event_callback=_listener)
+    return response.model_dump(mode="json")

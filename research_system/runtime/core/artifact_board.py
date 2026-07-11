@@ -6,12 +6,13 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from research_system.runtime.storage.jsonl import append_jsonl, read_jsonl
+from research_system.runtime.storage.jsonl import read_json, read_jsonl
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 
 
 _LOCKS_GUARD = RLock()
 _LOCKS: dict[str, RLock] = {}
+_UNSET = object()
 
 
 def _path_lock(path: Path) -> RLock:
@@ -24,14 +25,81 @@ class ArtifactBoard:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.default_thread_id: str | None = None
+        self.invalidated_artifact_ids: set[str] = set()
         self._lock = _path_lock(path)
 
     def bind_thread(self, thread_id: str) -> None:
         self.default_thread_id = str(thread_id or "").strip() or None
 
+    def bind_invalidated_artifacts(self, artifact_ids: list[str] | set[str]) -> None:
+        """Hide stale outputs from active reads while keeping them replayable."""
+        self.invalidated_artifact_ids = {
+            str(artifact_id).strip()
+            for artifact_id in artifact_ids
+            if str(artifact_id).strip()
+        }
+
+    def _refresh_invalidated_artifacts(self) -> None:
+        snapshot = read_json(self.path.parent / "execution_snapshot.json")
+        if not isinstance(snapshot, dict):
+            return
+        self.invalidated_artifact_ids.update(
+            str(artifact_id).strip()
+            for artifact_id in list(snapshot.get("invalidated_artifact_ids") or [])
+            if str(artifact_id).strip()
+        )
+
     def add(self, artifact: ArtifactRecord) -> ArtifactRecord:
-        if self.default_thread_id and not str(artifact.thread_id or "").strip():
-            artifact = artifact.model_copy(update={"thread_id": self.default_thread_id})
+        return self.add_many([artifact])[0]
+
+    def add_many(self, artifacts: list[ArtifactRecord]) -> list[ArtifactRecord]:
+        """Validate and append one node's output batch under one Board lock."""
+        if not artifacts:
+            return []
+        if self.default_thread_id:
+            artifacts = [
+                item.model_copy(update={"thread_id": self.default_thread_id})
+                if not str(item.thread_id or "").strip()
+                else item
+                for item in artifacts
+            ]
+        with self._lock:
+            prepared = [self._prepare(item) for item in artifacts]
+            batch_ids = {item.artifact_id for item in prepared}
+            if len(batch_ids) != len(prepared):
+                raise ValueError("artifact batch contains duplicate artifact IDs")
+            existing = {item.artifact_id: item for item in self._read_all()}
+            known_ids = set(existing) | batch_ids
+            normalized: list[ArtifactRecord] = []
+            for artifact in prepared:
+                if artifact.supersedes_artifact_id:
+                    previous = existing.get(artifact.supersedes_artifact_id)
+                    if previous is None:
+                        raise ValueError(
+                            f"unknown superseded artifact: {artifact.supersedes_artifact_id}"
+                        )
+                    if previous.artifact_type != artifact.artifact_type:
+                        raise ValueError("an artifact can only supersede the same artifact type")
+                    if artifact.artifact_version <= previous.artifact_version:
+                        artifact = artifact.model_copy(
+                            update={"artifact_version": previous.artifact_version + 1}
+                        )
+                for parent_id in artifact.parent_artifact_ids:
+                    if parent_id not in known_ids:
+                        raise ValueError(f"unknown parent artifact: {parent_id}")
+                normalized.append(artifact)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as handle:
+                for artifact in normalized:
+                    handle.write(json.dumps(artifact.model_dump(mode="json"), ensure_ascii=True))
+                    handle.write("\n")
+            return normalized
+
+    def _read_all(self) -> list[ArtifactRecord]:
+        return [ArtifactRecord.model_validate(row) for row in read_jsonl(self.path)]
+
+    @staticmethod
+    def _prepare(artifact: ArtifactRecord) -> ArtifactRecord:
         content_hash = hashlib.sha256(
             json.dumps(
                 artifact.content,
@@ -44,7 +112,9 @@ class ArtifactBoard:
         if not producer.responsibility_node_id:
             producer = producer.model_copy(
                 update={
-                    "responsibility_node_id": producer.node_id or producer.executor or "task_intake"
+                    "responsibility_node_id": producer.node_id
+                    or producer.executor
+                    or "task_intake"
                 }
             )
         risk_flags = list(artifact.risk_flags)
@@ -53,7 +123,7 @@ class ArtifactBoard:
             confidence = 0.5
             if "confidence_defaulted" not in risk_flags:
                 risk_flags.append("confidence_defaulted")
-        artifact = artifact.model_copy(
+        return artifact.model_copy(
             update={
                 "content_hash": content_hash,
                 "producer": producer,
@@ -61,29 +131,11 @@ class ArtifactBoard:
                 "risk_flags": risk_flags,
             }
         )
-        with self._lock:
-            if artifact.supersedes_artifact_id:
-                previous = self.get(artifact.supersedes_artifact_id)
-                if previous is None:
-                    raise ValueError(
-                        f"unknown superseded artifact: {artifact.supersedes_artifact_id}"
-                    )
-                if previous.artifact_type != artifact.artifact_type:
-                    raise ValueError("an artifact can only supersede the same artifact type")
-                if artifact.artifact_version <= previous.artifact_version:
-                    artifact = artifact.model_copy(
-                        update={"artifact_version": previous.artifact_version + 1}
-                    )
-            for parent_id in artifact.parent_artifact_ids:
-                if self.get(parent_id) is None:
-                    raise ValueError(f"unknown parent artifact: {parent_id}")
-            append_jsonl(self.path, artifact.model_dump(mode="json"))
-        return artifact
 
     def list_artifacts(
         self,
         *,
-        thread_id: str | None = None,
+        thread_id: str | None | object = _UNSET,
         artifact_type: str | None = None,
         executor: str | None = None,
         capability: str | None = None,
@@ -91,15 +143,21 @@ class ArtifactBoard:
         run_id: str | None = None,
         node_id: str | None = None,
         schema_version: str | None = None,
+        include_invalidated: bool = False,
     ) -> list[ArtifactRecord]:
+        self._refresh_invalidated_artifacts()
         with self._lock:
-            rows = [ArtifactRecord.model_validate(row) for row in read_jsonl(self.path)]
+            rows = self._read_all()
         superseded_ids = {
             row.supersedes_artifact_id
             for row in rows
             if row.supersedes_artifact_id
         }
-        effective_thread_id = str(thread_id or self.default_thread_id or "").strip() or None
+        effective_thread_id = (
+            self.default_thread_id
+            if thread_id is _UNSET
+            else str(thread_id or "").strip() or None
+        )
         filtered: list[ArtifactRecord] = []
         for row in rows:
             if effective_thread_id is not None and row.thread_id != effective_thread_id:
@@ -113,6 +171,12 @@ class ArtifactBoard:
             if status is not None and row.status != status:
                 continue
             if status == "active" and row.artifact_id in superseded_ids:
+                continue
+            if (
+                status == "active"
+                and row.artifact_id in self.invalidated_artifact_ids
+                and not include_invalidated
+            ):
                 continue
             if run_id is not None and row.run_id != run_id:
                 continue

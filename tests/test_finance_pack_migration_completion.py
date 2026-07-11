@@ -39,6 +39,20 @@ class _SecurityMaster:
 
 
 class FinancePackMigrationCompletionTests(unittest.TestCase):
+    def test_normal_finance_collector_uses_pack_owned_skill_implementations(self) -> None:
+        skill_types = [
+            *snapshot_collector._SYMBOL_SKILLS.values(),
+            snapshot_collector.SectorSnapshotSkill,
+            snapshot_collector.PolicySnapshotSkill,
+        ]
+        self.assertTrue(skill_types)
+        for skill_type in skill_types:
+            self.assertTrue(
+                skill_type.__module__.startswith("domain_packs.finance_ashare.skills"),
+                skill_type,
+            )
+            self.assertNotIn("research_system.skills", skill_type.__module__)
+
     def test_security_master_resolves_provider_backed_company_names(self) -> None:
         master = AShareSecurityMaster(
             universe_loader=lambda: [

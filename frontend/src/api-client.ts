@@ -23,6 +23,11 @@ export type ApiConnectionSettings = {
   token: string
 }
 
+export type ChatThreadRecord = {
+  thread_id: string
+  [key: string]: unknown
+}
+
 export class CognitradeApiError extends Error {
   readonly status: number
   readonly code?: string
@@ -81,6 +86,17 @@ export class CognitradeApiClient {
     return this.request('/runs', { method: 'POST', body: JSON.stringify(payload) })
   }
 
+  createChatThread(): Promise<ChatThreadRecord> {
+    return this.request('/chat/threads', { method: 'POST' })
+  }
+
+  submitChatRun(threadId: string, payload: ResearchRequest): Promise<ResearchResponse> {
+    return this.request(`/chat/threads/${encodeURIComponent(threadId)}/runs`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  }
+
   cancelRun(runId: string): Promise<Record<string, unknown>> {
     return this.request(`/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' })
   }
@@ -98,6 +114,57 @@ export class CognitradeApiClient {
 
   getEvents(runId: string): Promise<RunEventsPayload> {
     return this.request(`/runs/${encodeURIComponent(runId)}/events`)
+  }
+
+  async streamRunEvents(
+    runId: string,
+    onEvent: (event: RunEventsPayload['events'][number]) => void,
+    signal?: AbortSignal,
+    lastEventId?: string,
+  ): Promise<void> {
+    const headers = new Headers({ Accept: 'text/event-stream' })
+    if (this.settings.token) headers.set('Authorization', `Bearer ${this.settings.token}`)
+    if (lastEventId) headers.set('Last-Event-ID', lastEventId)
+    let response: Response
+    try {
+      response = await fetch(
+        `${this.settings.baseUrl}/runs/${encodeURIComponent(runId)}/events/stream`,
+        { headers, signal },
+      )
+    } catch (error) {
+      if (signal?.aborted) return
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new CognitradeApiError(`无法连接 Cognitrade API：${reason}`, 0, 'network_error')
+    }
+    if (!response.ok) {
+      const body = await response.text()
+      throw new CognitradeApiError(
+        body || `API 请求失败（HTTP ${response.status}）`,
+        response.status,
+        undefined,
+      )
+    }
+    if (!response.body) return
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    try {
+      while (true) {
+        const chunk = await reader.read()
+        buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done })
+        const frames = buffer.split(/\r?\n\r?\n/)
+        buffer = frames.pop() || ''
+        for (const frame of frames) {
+          const event = parseSseFrame(frame)
+          if (event) onEvent(event)
+        }
+        if (chunk.done) break
+      }
+      const finalEvent = parseSseFrame(buffer)
+      if (finalEvent) onEvent(finalEvent)
+    } finally {
+      reader.releaseLock()
+    }
   }
 
   getSteps(runId: string): Promise<RunStepsPayload> {
@@ -152,5 +219,23 @@ export class CognitradeApiClient {
       body?.error?.code,
       body?.error?.request_id || response.headers.get('X-Request-ID') || undefined,
     )
+  }
+}
+
+function parseSseFrame(frame: string): RunEventsPayload['events'][number] | null {
+  let eventType = 'message'
+  let eventId = ''
+  const data: string[] = []
+  for (const line of frame.split(/\r?\n/)) {
+    if (line.startsWith('event:')) eventType = line.slice(6).trim()
+    else if (line.startsWith('id:')) eventId = line.slice(3).trim()
+    else if (line.startsWith('data:')) data.push(line.slice(5).trimStart())
+  }
+  if (!data.length) return null
+  try {
+    const payload = JSON.parse(data.join('\n')) as Record<string, unknown>
+    return { ...payload, event_id: eventId || payload.event_id, event_type: eventType } as RunEventsPayload['events'][number]
+  } catch {
+    return { event_id: eventId || undefined, event_type: eventType, message: data.join('\n') }
   }
 }

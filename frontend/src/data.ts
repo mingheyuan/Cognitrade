@@ -16,5 +16,5 @@ export const ACTIVE_RUN_STATUSES = new Set([
   'ready',
   'running',
   'waiting_external',
-  'gated',
+  'waiting_approval',
 ])

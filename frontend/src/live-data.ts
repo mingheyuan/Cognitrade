@@ -161,6 +161,7 @@ export function statusLabel(status?: string | null): string {
     ready: '已就绪',
     running: '运行中',
     waiting_external: '等待外部',
+    waiting_approval: '等待审批',
     gated: '质量门禁',
     completed: '已完成',
     cancelled: '已取消',
@@ -169,6 +170,218 @@ export function statusLabel(status?: string | null): string {
     unknown: '未知',
   }
   return labels[String(status || 'unknown')] || String(status || '未知')
+}
+
+export type AgentProgressItem = {
+  id: string
+  actor: string
+  nodeId: string
+  message: string
+  createdAt: string
+}
+
+export type AgentActivityItem = {
+  id: string
+  actor: string
+  nodeId: string
+  message: string
+  kind: 'main_agent' | 'planner' | 'tool' | 'subagent' | 'system'
+  turn: number | null
+  status: string
+  createdAt: string
+}
+
+export function assistantMessageFromDetail(detail?: RunDetail | null): string {
+  const artifacts = Array.isArray(detail?.replay.artifacts) ? detail.replay.artifacts : []
+  const assistantArtifact = [...artifacts].reverse().find((artifact) => (
+    asString(asRecord(artifact).artifact_type) === 'assistant_message'
+  ))
+  const artifactContent = asRecord(asRecord(assistantArtifact).content)
+  return asString(
+    artifactContent.message
+      || asRecord(detail?.replay.snapshot).assistant_message
+      || asRecord(detail?.replay.result).message,
+  )
+}
+
+function eventId(event: RunEvent, index: number): string {
+  return asString(event.event_id) || `${event.created_at || ''}:${event.event_type || ''}:${event.node_id || ''}:${index}`
+}
+
+function eventSummary(event: RunEvent): string {
+  const eventType = asString(event.event_type)
+  const turn = asNumber(event.turn)
+  const toolName = asString(event.tool_name || event.tool)
+  const status = asString(event.status)
+  const decision = asRecord(event.decision)
+  const reason = asString(event.message || event.reason || decision.reason)
+  if (eventType === 'assistant_message_ready') return 'Main Agent produced the final delivery artifact.'
+  if (eventType === 'main_agent_plan_started') return 'Main Agent is building the ExecutionGraph from the active capability catalog.'
+  if (eventType === 'graph_compound_expanded') return 'PlanAgent expanded the dynamic task graph.'
+  if (eventType === 'graph_compound_expansion_completed') return 'PlanAgent completed the current graph expansion.'
+  if (eventType === 'agent_progress' && reason.startsWith('research_report:')) return 'Report Composer produced the final research report artifact.'
+  if (eventType === 'main_agent_tool_loop_result') {
+    return [
+      `Loop ${turn ?? '?'} Tool ${toolName || 'call'} ${status || 'finished'}.`,
+      asString(event.output_summary),
+    ].filter(Boolean).join(' ')
+  }
+  if (reason) return reason
+  if (eventType === 'main_agent_started' || eventType === 'main_agent_resumed') {
+    return `Main Agent ${eventType === 'main_agent_resumed' ? 'resumed' : 'started'} in ${asString(event.mode, 'core')} mode.`
+  }
+  if (eventType === 'main_agent_turn_started') {
+    return `Main Agent started loop ${turn ?? '?'} and is evaluating the next action.`
+  }
+  if (eventType === 'main_agent_tool_calls_requested') {
+    const names = asStringList(event.tool_names || event.tools)
+    return `Main Agent loop ${turn ?? '?'} selected ${names.join(', ') || 'the next Tool'}.`
+  }
+  if (eventType === 'tool_call_started') return `Tool ${toolName || 'call'} started.`
+  if (eventType === 'tool_call_completed') {
+    return `Tool ${toolName || 'call'} completed${asString(event.output_summary) ? `: ${asString(event.output_summary)}` : '.'}`
+  }
+  if (eventType === 'tool_call_rejected' || eventType === 'tool_call_failed') {
+    return `Tool ${toolName || 'call'} ${status || 'failed'}${asString(event.error) ? `: ${asString(event.error)}` : '.'}`
+  }
+  if (eventType === 'plan_decision') {
+    return `PlanAgent ${asString(decision.action, 'continued')}: ${asString(decision.reason, 'updated the execution frontier.')}`
+  }
+  if (eventType === 'graph_run_started') return 'Main Agent started the governed ExecutionGraph.'
+  if (eventType === 'graph_frontier_ready') {
+    const nodeIds = asStringList(event.node_ids)
+    return `Execution frontier ready${nodeIds.length ? `: ${nodeIds.join(', ')}` : '.'}`
+  }
+  if (eventType === 'graph_replan_applied' || eventType === 'graph_patch_applied') {
+    return 'PlanAgent applied a versioned graph update.'
+  }
+  if (eventType === 'graph_node_started') return `Subagent ${asString(event.node_id, 'node')} started.`
+  if (eventType === 'graph_node_completed') return `Subagent ${asString(event.node_id, 'node')} completed.`
+  if (eventType === 'graph_node_failed') return `Subagent ${asString(event.node_id, 'node')} failed${asString(event.error) ? `: ${asString(event.error)}` : '.'}`
+  if (eventType === 'main_agent_completed') return 'Main Agent completed the request.'
+  if (eventType === 'main_agent_model_turn_failed') {
+    return `Main Agent model loop ${turn ?? '?'} failed${asString(event.error) ? `: ${asString(event.error)}` : '.'}`
+  }
+  if (eventType === 'main_agent_failed') return `Main Agent failed${asString(event.error) ? `: ${asString(event.error)}` : '.'}`
+  if (eventType === 'graph_run_finished') return `ExecutionGraph finished with status ${asString(event.status, 'unknown')}.`
+  return eventType ? eventType.replaceAll('_', ' ') : ''
+}
+
+const USER_VISIBLE_EVENT_TYPES = new Set([
+  'main_agent_started',
+  'main_agent_resumed',
+  'main_agent_plan_started',
+  'main_agent_turn_started',
+  'main_agent_tool_calls_requested',
+  'main_agent_tool_loop_result',
+  'main_agent_model_turn_failed',
+  'main_agent_completed',
+  'main_agent_failed',
+  'main_agent_clarification_requested',
+  'plan_decision',
+  'graph_run_started',
+  'graph_frontier_ready',
+  'graph_compound_expanded',
+  'graph_compound_expansion_completed',
+  'graph_patch_applied',
+  'graph_replan_applied',
+  'graph_node_started',
+  'graph_node_completed',
+  'graph_node_failed',
+  'graph_run_finished',
+  'graph_run_gated_by_approval',
+  'agent_progress',
+  'tool_call_started',
+  'tool_call_completed',
+  'tool_call_failed',
+  'tool_call_rejected',
+  'assistant_message_ready',
+  'clarification_requested',
+  'clarification_resolved',
+  'approval_requested',
+  'approval_granted',
+  'approval_rejected',
+  'run_failed',
+  'run_cancelled',
+  'run_timed_out',
+])
+
+function isUserVisibleEvent(event: RunEvent): boolean {
+  return USER_VISIBLE_EVENT_TYPES.has(asString(event.event_type))
+}
+
+function displayActor(actor: string): string {
+  if (actor === 'execution_graph_runner' || actor === 'graph_runner') return 'Agent OS'
+  if (actor === 'main_agent.plan_agent') return 'PlanAgent'
+  if (actor === 'main_agent') return 'Main Agent'
+  if (actor.startsWith('subagent:')) return `Subagent ${actor.slice('subagent:'.length)}`
+  return actor || 'Agent OS'
+}
+
+function activityKind(event: RunEvent): AgentActivityItem['kind'] {
+  const eventType = asString(event.event_type)
+  const actor = asString(event.actor)
+  if (actor.includes('plan_agent') || eventType === 'plan_decision' || eventType.includes('replan')) return 'planner'
+  if (eventType.includes('tool_call') || eventType.includes('tool_loop')) return 'tool'
+  if (actor.includes('subagent') || eventType.includes('graph_node')) return 'subagent'
+  if (actor.includes('main_agent') || eventType.startsWith('main_agent') || eventType === 'assistant_message_ready') return 'main_agent'
+  return 'system'
+}
+
+export function activityFromEvents(events: RunEvent[]): AgentActivityItem[] {
+  const seen = new Set<string>()
+  const rows: AgentActivityItem[] = []
+  events.forEach((event, index) => {
+    if (!isUserVisibleEvent(event)) return
+    const rawMessage = asString(event.message)
+    if (
+      event.event_type === 'agent_progress'
+      && (/^Subagent .* started\.?$/.test(rawMessage)
+        || /^Subagent .* completed\.?$/.test(rawMessage)
+        || /^Subagent .* completed and committed \d+ Artifact\(s\)\.?$/.test(rawMessage))
+    ) return
+    const message = eventSummary(event)
+    if (!message) return
+    const id = eventId(event, index)
+    if (seen.has(id)) return
+    seen.add(id)
+    rows.push({
+      id,
+      actor: displayActor(asString(event.actor, 'Agent OS')),
+      nodeId: asString(event.node_id, 'main_agent'),
+      message,
+      kind: activityKind(event),
+      turn: asNumber(event.turn),
+      status: asString(event.status),
+      createdAt: asString(event.created_at),
+    })
+  })
+  if (rows.length <= 100) return rows
+  const planningIds = new Set(
+    rows.filter((row) => row.kind === 'main_agent' || row.kind === 'planner').map((row) => row.id),
+  )
+  return rows.filter((row, index) => planningIds.has(row.id) || index >= rows.length - 80)
+}
+
+export function progressFromEvents(events: RunEvent[]): AgentProgressItem[] {
+  const seen = new Set<string>()
+  const rows: AgentProgressItem[] = []
+  for (const event of events) {
+    if (event.event_type !== 'agent_progress') continue
+    const message = asString(event.message)
+    if (!message) continue
+    const id = asString(event.event_id) || `${event.created_at || ''}:${event.node_id || ''}:${message}`
+    if (seen.has(id)) continue
+    seen.add(id)
+    rows.push({
+      id,
+      actor: asString(event.actor, 'Agent OS'),
+      nodeId: asString(event.node_id, 'main_agent'),
+      message,
+      createdAt: asString(event.created_at),
+    })
+  }
+  return rows.slice(-8)
 }
 
 export function runListItem(row: RunHistoryRecord): RunListItem {

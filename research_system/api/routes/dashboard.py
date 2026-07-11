@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from starlette.concurrency import run_in_threadpool
 
 from research_system.api.agent_os_dashboard_service import AgentOSDashboardService
-from research_system.api.dependencies import get_agent_os
+from research_system.api.dependencies import ApiPrincipal, get_agent_os, require_principal
 from research_system.api.errors import ApiError
 from research_system.api.validation import safe_identifier
 
@@ -16,11 +16,26 @@ def _dashboard_service(agent_os=Depends(get_agent_os)) -> AgentOSDashboardServic
     return AgentOSDashboardService(agent_os)
 
 
+def _scope_kwargs(
+    service: AgentOSDashboardService,
+    principal: ApiPrincipal | None,
+) -> dict[str, str]:
+    if principal is None or not principal.authenticated:
+        return {}
+    if not getattr(service, "identity_scoped", False):
+        return {}
+    return {
+        "user_id": str(principal.user_id or ""),
+        "tenant_id": str(principal.tenant_id or ""),
+    }
+
+
 @router.get("/dashboard/{domain_id}/{view_id}")
 async def dashboard_view(
     domain_id: str,
     view_id: str,
     service: AgentOSDashboardService = Depends(_dashboard_service),
+    principal: ApiPrincipal = Depends(require_principal),
 ) -> dict:
     resolved_domain = safe_identifier(domain_id, field_name="domain_id")
     resolved_view = safe_identifier(view_id, field_name="view_id")
@@ -29,6 +44,7 @@ async def dashboard_view(
             service.view,
             domain_id=resolved_domain,
             view_id=resolved_view,
+            **_scope_kwargs(service, principal),
         )
     except KeyError as exc:
         raise ApiError(

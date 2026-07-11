@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from research_system.runtime.agent_os import AgentOS
 from research_system.runtime.platform.settings import Settings
 
 
@@ -41,14 +42,13 @@ class CliCommandRuntime:
         timeout_seconds: float | None = None,
     ) -> object:
         if command == "run":
-            with self.orchestrator_cls(settings) as orchestrator:
-                request = self.build_research_request_fn(
-                    query=query or "",
-                    intent=intent,
-                    review_target_run_id=run_id,
-                )
-                response = orchestrator.run(request)
-                return response.model_dump(mode="json")
+            request = self.build_research_request_fn(
+                query=query or "",
+                intent=intent,
+                review_target_run_id=run_id,
+            )
+            response = AgentOS(settings).handle_request(request)
+            return response.model_dump(mode="json")
         return self.execute_cli_payload_command_fn(
             settings,
             command=command,

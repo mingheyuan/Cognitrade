@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react'
 import {
@@ -20,6 +21,7 @@ import type {
   AgentOSDashboardView,
   ResearchIntent,
   ResearchResponse,
+  RunEvent,
   RunDetail,
   RunHistoryRecord,
   SystemStatus,
@@ -36,12 +38,16 @@ type CognitradeContextValue = {
   screeningDashboard: AgentOSDashboardView | null
   methodologyDashboard: AgentOSDashboardView | null
   selectedRunId: string
+  chatThreadId: string
   selectedRun: RunDetail | null
   screeningRun: RunDetail | null
   selectedRunLoading: boolean
   submitting: boolean
   submittedQuery: string
   lastResponse: ResearchResponse | null
+  liveProgress: string
+  liveAnswer: string
+  liveEvents: RunEvent[]
   error: string
   configure: (settings: ApiConnectionSettings) => void
   refresh: () => Promise<void>
@@ -54,6 +60,7 @@ type CognitradeContextValue = {
 }
 
 const CognitradeContext = createContext<CognitradeContextValue | null>(null)
+const CHAT_THREAD_STORAGE_KEY = 'cognitrade.chat.thread-id'
 function errorMessage(error: unknown): string {
   if (error instanceof CognitradeApiError) {
     const requestId = error.requestId ? ` · request ${error.requestId}` : ''
@@ -77,13 +84,21 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
   const [screeningDashboard, setScreeningDashboard] = useState<AgentOSDashboardView | null>(null)
   const [methodologyDashboard, setMethodologyDashboard] = useState<AgentOSDashboardView | null>(null)
   const [selectedRunId, setSelectedRunId] = useState('')
+  const [chatThreadId, setChatThreadId] = useState(
+    () => localStorage.getItem(CHAT_THREAD_STORAGE_KEY) || '',
+  )
   const [selectedRun, setSelectedRun] = useState<RunDetail | null>(null)
   const [screeningRun, setScreeningRun] = useState<RunDetail | null>(null)
   const [selectedRunLoading, setSelectedRunLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [submittedQuery, setSubmittedQuery] = useState('')
   const [lastResponse, setLastResponse] = useState<ResearchResponse | null>(null)
+  const [liveProgress, setLiveProgress] = useState('')
+  const [liveAnswer, setLiveAnswer] = useState('')
+  const [liveEvents, setLiveEvents] = useState<RunEvent[]>([])
   const [error, setError] = useState('')
+  const streamAbort = useRef<AbortController | null>(null)
+  const streamCursors = useRef<Record<string, string>>({})
   const client = useMemo(() => new CognitradeApiClient(settings), [settings])
 
   const loadRun = useCallback(
@@ -135,6 +150,69 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
     }
   }, [client])
 
+  const subscribeToRun = useCallback(
+    async (runId: string) => {
+      if (!runId) return
+      streamAbort.current?.abort()
+      const controller = new AbortController()
+      streamAbort.current = controller
+      let reconnectAttempt = 0
+      let terminalEventSeen = false
+      setLiveEvents([])
+      setLiveProgress('正在连接 Agent OS 事件流…')
+
+      while (!controller.signal.aborted) {
+        try {
+          await client.streamRunEvents(
+            runId,
+            (event) => {
+              const eventId = String(event.event_id || '').trim()
+              if (eventId) streamCursors.current[runId] = eventId
+              setLiveEvents((current) => {
+                if (eventId && current.some((item) => item.event_id === eventId)) return current
+                return [...current, event].slice(-120)
+              })
+              const eventMessage = String(event.message || '')
+              const isFinalMessageEvent = ['assistant_message_delta', 'assistant_message_ready'].includes(String(event.event_type || ''))
+              const isReportProgressEvent = String(event.event_type || '') === 'agent_progress' && eventMessage.startsWith('research_report:')
+              if (event.message && !isFinalMessageEvent && !isReportProgressEvent) setLiveProgress(event.message)
+              if (event.event_type === 'assistant_message_delta' && event.message) {
+                setLiveAnswer((current) => `${current}${event.message}`)
+              }
+              if (event.event_type === 'assistant_message_ready' && event.message) {
+                setLiveAnswer(event.message)
+              }
+              const eventType = String(event.event_type || '')
+              const isTerminal = ['graph_run_finished', 'graph_run_gated_by_approval', 'main_agent_completed', 'main_agent_failed', 'graph_run_cancelled', 'graph_run_timed_out'].includes(eventType)
+                || (eventType === 'assistant_message_ready' && String(event.delivery_status || '') !== 'paused')
+              if (isTerminal) {
+                terminalEventSeen = true
+                void loadRun(runId, true)
+                void client.listRuns(50).then(setRuns).catch(() => undefined)
+              }
+            },
+            controller.signal,
+            streamCursors.current[runId],
+          )
+          if (terminalEventSeen) return
+          reconnectAttempt += 1
+          if (reconnectAttempt > 5) return
+          await waitForStreamReconnect(reconnectAttempt, controller.signal)
+        } catch (streamError) {
+          if (controller.signal.aborted) return
+          reconnectAttempt += 1
+          if (reconnectAttempt > 5) {
+            setError(errorMessage(streamError))
+            return
+          }
+          setLiveProgress(`Agent OS 事件流断开，正在重连 (${reconnectAttempt}/5)`)
+          await waitForStreamReconnect(reconnectAttempt, controller.signal)
+        }
+      }
+    },
+    [client, loadRun],
+  )
+
   useEffect(() => {
     queueMicrotask(() => void refresh())
   }, [refresh])
@@ -162,6 +240,12 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
   const selectedStatus = runs.find((run) => run.run_id === selectedRunId)?.status
   useEffect(() => {
     if (!selectedRunId || !isActiveStatus(String(selectedStatus || ''))) return
+    void subscribeToRun(selectedRunId)
+    return () => streamAbort.current?.abort()
+  }, [selectedRunId, selectedStatus, subscribeToRun])
+
+  useEffect(() => {
+    if (!selectedRunId || !isActiveStatus(String(selectedStatus || ''))) return
     const timer = window.setInterval(() => {
       void loadRun(selectedRunId, true)
       void client.listRuns(50).then(setRuns).catch(() => undefined)
@@ -174,21 +258,59 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
     setError('')
   }, [])
 
+  const createChatThread = useCallback(async () => {
+    const created = await client.createChatThread()
+    const nextThreadId = String(created.thread_id || '').trim()
+    if (!nextThreadId) throw new Error('Chat API returned no thread_id')
+    localStorage.setItem(CHAT_THREAD_STORAGE_KEY, nextThreadId)
+    setChatThreadId(nextThreadId)
+    return nextThreadId
+  }, [client])
+
+  const ensureChatThread = useCallback(async () => {
+    if (chatThreadId) return chatThreadId
+    return createChatThread()
+  }, [chatThreadId, createChatThread])
+
   const createRun = useCallback(
     async (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => {
       setSubmitting(true)
       setSubmittedQuery(query)
+      setLiveProgress('正在提交到 Agent OS…')
+      setLiveAnswer('')
+      setLiveEvents([])
       setError('')
       try {
-        const response = await client.createRun({
-          user_query: query,
-          ...(intent ? { intent } : {}),
-          ...(constraints && Object.keys(constraints).length ? { constraints } : {}),
-        })
+        let activeThreadId = await ensureChatThread()
+        const nextConstraints = {
+          ...(constraints || {}),
+          background: true,
+        }
+        let response: ResearchResponse
+        try {
+          response = await client.submitChatRun(activeThreadId, {
+            user_query: query,
+            ...(intent ? { intent } : {}),
+            constraints: nextConstraints,
+          })
+        } catch (submitError) {
+          if (!(submitError instanceof CognitradeApiError) || submitError.status !== 404) {
+            throw submitError
+          }
+          localStorage.removeItem(CHAT_THREAD_STORAGE_KEY)
+          setChatThreadId('')
+          activeThreadId = await createChatThread()
+          response = await client.submitChatRun(activeThreadId, {
+            user_query: query,
+            ...(intent ? { intent } : {}),
+            constraints: nextConstraints,
+          })
+        }
         setLastResponse(response)
         if (response.run_id) {
           setSelectedRunId(response.run_id)
           await loadRun(response.run_id)
+          void subscribeToRun(response.run_id)
         }
         await refresh()
         return response
@@ -200,7 +322,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
         setSubmitting(false)
       }
     },
-    [client, loadRun, refresh],
+    [client, createChatThread, ensureChatThread, loadRun, refresh, subscribeToRun],
   )
 
   const cancelRun = useCallback(
@@ -248,12 +370,16 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
       screeningDashboard,
       methodologyDashboard,
       selectedRunId,
+      chatThreadId,
       selectedRun,
       screeningRun,
       selectedRunLoading,
       submitting,
       submittedQuery,
       lastResponse,
+      liveProgress,
+      liveAnswer,
+      liveEvents,
       error,
       configure,
       refresh,
@@ -273,12 +399,16 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
       screeningDashboard,
       methodologyDashboard,
       selectedRunId,
+      chatThreadId,
       selectedRun,
       screeningRun,
       selectedRunLoading,
       submitting,
       submittedQuery,
       lastResponse,
+      liveProgress,
+      liveAnswer,
+      liveEvents,
       error,
       configure,
       refresh,
@@ -290,6 +420,17 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
   )
 
   return <CognitradeContext.Provider value={value}>{children}</CognitradeContext.Provider>
+}
+
+async function waitForStreamReconnect(attempt: number, signal: AbortSignal): Promise<void> {
+  const delay = Math.min(5000, 250 * 2 ** Math.max(0, attempt - 1))
+  await new Promise<void>((resolve) => {
+    const timer = window.setTimeout(resolve, delay)
+    signal.addEventListener('abort', () => {
+      window.clearTimeout(timer)
+      resolve()
+    }, { once: true })
+  })
 }
 
 export function useCognitrade(): CognitradeContextValue {

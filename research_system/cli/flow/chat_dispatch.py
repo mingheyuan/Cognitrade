@@ -8,7 +8,9 @@ from research_system.cli.runtime.chat_llm_runtime import (
     stream_text_with_runtime,
 )
 from research_system.cli.state.chat_updates import answer_update, stream_append_update, stream_done_update, thinking_update
+from research_system.runtime.agent_os import AgentOS
 from research_system.runtime.providers.provider_registry import OpenAIProvider
+from research_system.schemas.protocol import RequestEnvelope
 from research_system.services.routing.router.task_router import ChatDispatchDecision, TaskRouter
 
 _BASIC_CHAT_SYSTEM_PROMPT = (
@@ -151,6 +153,37 @@ def print_streamed_basic_chat_answer(
     )
     emit_text(output_writer, answer_update(answer))
     return answer
+
+
+def print_streamed_agent_os_chat_answer(
+    *,
+    settings,
+    state,
+    query: str,
+    llm_provider: OpenAIProvider,
+    emit_text,
+    output_writer=None,
+    conversation_context: list[dict] | None = None,
+) -> str:
+    """Route the production CLI basic-chat path through Main Agent Core Loop."""
+    del llm_provider
+
+    def on_event(event: dict) -> None:
+        event_type = str(event.get("event_type") or "")
+        if event_type in {"main_agent_completed", "main_agent_failed", "main_agent_cancelled"}:
+            return
+        message = str(event.get("message") or "").strip()
+        if message:
+            emit_text(output_writer, thinking_update(message))
+
+    request = RequestEnvelope(
+        thread_id=str(getattr(state, "thread_id", "") or "") or None,
+        user_query=query,
+        conversation_context=list(conversation_context or []),
+    )
+    response = AgentOS(settings).handle_request(request, event_callback=on_event)
+    emit_text(output_writer, answer_update(response.message))
+    return response.message
 
 
 def _build_basic_chat_prompt(*, query: str, conversation_context: list[dict] | None) -> str:

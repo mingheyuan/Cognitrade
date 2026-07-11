@@ -89,7 +89,7 @@ export function RunInspector({ selectedEvidence, onSelectEvidence }: RunInspecto
               return (
                 <li key={asString(step.node_id || step.action_id, `step-${index}`)} className={active ? 'is-active' : complete ? 'is-complete' : ''}>
                   <span className="timeline-marker">{complete ? <Check size={11} /> : active ? <Activity size={11} /> : <Circle size={8} />}</span>
-                  <span className="timeline-copy"><strong>{asString(step.objective || step.node_id, `步骤 ${index + 1}`)}</strong><small>{asString(step.agent || step.phase, '未指定 Agent')}</small></span>
+                  <span className="timeline-copy"><strong>{asString(step.objective || step.node_id, `步骤 ${index + 1}`)}</strong><small>{asString(step.agent || step.executor || step.capability || step.phase, '未指定 Agent')}</small></span>
                   <time>{stepStatus}</time>
                 </li>
               )

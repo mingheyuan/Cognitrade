@@ -83,3 +83,34 @@ def compose_report(context):
         confidence=min(risks.confidence or 0.0, obligations.confidence or 0.0),
         risk_flags=["not_legal_advice"],
     )
+
+
+def verify_citations(context):
+    """Gate evaluator: every material finding must retain its clause identity."""
+
+    report = context.require_artifact("legal_review_report")
+    findings = list(report.content.get("findings") or [])
+    obligations = list(report.content.get("obligations") or [])
+    uncited_findings = [
+        finding
+        for finding in findings
+        if not str(finding.get("clause_id") or "").strip()
+    ]
+    uncited_obligations = [
+        obligation
+        for obligation in obligations
+        if not str(obligation.get("clause_id") or "").strip()
+    ]
+    missing = len(uncited_findings) + len(uncited_obligations)
+    if missing:
+        return {
+            "verdict": "fail",
+            "reason": f"{missing} material legal finding or obligation has no clause citation.",
+            "evidence_refs": list(report.source_refs),
+        }
+    return {
+        "verdict": "pass",
+        "reason": "Every material legal finding and obligation retains a clause citation.",
+        "evidence_refs": list(report.source_refs),
+        "score": 1.0,
+    }

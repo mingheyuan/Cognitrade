@@ -59,7 +59,11 @@ EXPECTED_API_V1_OPERATIONS = {
     ("GET", "/api/v1/admin/domain-packs/{domain_id}"),
     ("GET", "/api/v1/admin/runs/{run_id}/approvals"),
     ("POST", "/api/v1/admin/runs/{run_id}/approvals"),
+    ("POST", "/api/v1/admin/runs/{run_id}/approvals/{approval_id}/reject"),
     ("GET", "/api/v1/admin/memory"),
+    ("POST", "/api/v1/admin/memory/expire"),
+    ("POST", "/api/v1/admin/memory/{memory_id}/promote"),
+    ("POST", "/api/v1/admin/memory/{memory_id}/revoke"),
     ("GET", "/api/v1/system/status"),
     ("POST", "/api/v1/system/doctor"),
     ("POST", "/api/v1/admin/system/checks"),
@@ -250,7 +254,7 @@ class ApiV1SseOpenApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["error"]["code"], "event_cursor_not_found")
 
-    def test_openapi_operations_exactly_match_the_36_documented_routes(self) -> None:
+    def test_openapi_operations_exactly_match_the_documented_routes(self) -> None:
         schema = self.app.openapi()
         actual_operations = {
             (method.upper(), path)
@@ -260,9 +264,9 @@ class ApiV1SseOpenApiTests(unittest.TestCase):
             and method.lower() in {"get", "post", "patch", "put", "delete"}
         }
 
-        self.assertEqual(len(EXPECTED_API_V1_OPERATIONS), 36)
+        self.assertEqual(len(EXPECTED_API_V1_OPERATIONS), 40)
         self.assertEqual(actual_operations, EXPECTED_API_V1_OPERATIONS)
-        self.assertEqual(len(actual_operations), 36)
+        self.assertEqual(len(actual_operations), 40)
         bearer = schema["components"]["securitySchemes"]["BearerAuth"]
         self.assertEqual(bearer["type"], "http")
         self.assertEqual(bearer["scheme"], "bearer")

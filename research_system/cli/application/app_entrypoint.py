@@ -10,7 +10,10 @@ from research_system.cli.runtime.app import (
 from research_system.cli.application.app_entry_support import build_app_settings, execute_app_main_command
 from research_system.cli.application.app_parser_support import build_app_parser
 from research_system.cli.flow.chat_controller import handle_chat_line as controller_handle_chat_line
-from research_system.cli.flow.chat_dispatch import decide_chat_dispatch, print_streamed_basic_chat_answer
+from research_system.cli.flow.chat_dispatch import (
+    decide_chat_dispatch,
+    print_streamed_agent_os_chat_answer,
+)
 from research_system.cli.flow.chat_result import print_chat_result_payload
 from research_system.cli.commands.research_request_payloads import build_research_request
 from research_system.cli.runtime.chat_research_runner_impl import run_chat_research
@@ -132,7 +135,7 @@ def handle_chat_line(
         payload_printer=print_payload_fn,
         dispatch_transcript_update_fn=dispatch_transcript_update,
         chat_dispatch_fn=decide_chat_dispatch,
-        basic_answer_stream_print_fn=print_streamed_basic_chat_answer,
+        basic_answer_stream_print_fn=print_streamed_agent_os_chat_answer,
         run_chat_research_fn=run_chat_research,
         print_chat_result_payload_fn=print_chat_result_payload,
     )

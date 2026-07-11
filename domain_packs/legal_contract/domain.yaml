@@ -55,6 +55,13 @@ capabilities:
     latency_class: medium
     reliability: 0.9
     cache_scope: global
+  - subagent_type: legal_citation_gate_evaluator
+    capability: legal.contract.citation.verify
+    implementation: subagents.runtime:verify_citations
+    consumes:
+      - artifact_type: legal_review_report
+    side_effect_level: none
+    reliability: 0.99
 quality_gates:
   - gate_id: legal.citation_required
     artifact_type: legal_review_report
@@ -71,6 +78,7 @@ planner_policies:
   require_clause_citations: true
 evaluations:
   - evaluations/legal_contract.yaml
+  - evaluations/legal_contract_failure.yaml
 governance:
   max_nodes: 64
   max_depth: 8

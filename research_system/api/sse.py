@@ -12,7 +12,7 @@ from research_system.runtime.platform.settings import Settings
 from research_system.runtime.storage.jsonl import read_json
 
 
-_TERMINAL_STATUSES = {"completed", "cancelled", "failed", "gated"}
+_TERMINAL_STATUSES = {"completed", "cancelled", "failed", "timed_out", "gated"}
 _TERMINAL_DRAIN_POLLS = 4
 
 
@@ -28,13 +28,27 @@ def format_sse_event(event: dict[str, Any]) -> str:
 
 
 class RunEventSource:
+    identity_scoped = True
+
     def __init__(self, settings: Settings, config: ApiConfig) -> None:
         self.settings = settings
         self.poll_interval_seconds = config.sse_poll_interval_seconds
         self.heartbeat_seconds = config.sse_heartbeat_seconds
 
-    def prepare(self, run_id: str, *, last_event_id: str | None = None) -> int:
+    def prepare(
+        self,
+        run_id: str,
+        *,
+        last_event_id: str | None = None,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> int:
         root = self._run_root(run_id)
+        self._assert_run_scope(
+            root,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         rows = self._read_events(root / "execution_events.jsonl")
         normalized_last_id = str(last_event_id or "").strip()
         if not normalized_last_id:
@@ -48,8 +62,20 @@ class RunEventSource:
             message=f"Last-Event-ID was not found for run {run_id}",
         )
 
-    async def stream(self, run_id: str, *, cursor: int = 0) -> AsyncIterator[str]:
+    async def stream(
+        self,
+        run_id: str,
+        *,
+        cursor: int = 0,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> AsyncIterator[str]:
         root = self._run_root(run_id)
+        self._assert_run_scope(
+            root,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         next_index = max(cursor, 0)
         last_heartbeat = time.monotonic()
         terminal_quiet_polls = 0
@@ -95,6 +121,46 @@ class RunEventSource:
         return root
 
     @staticmethod
+    def _assert_run_scope(
+        root: Path,
+        *,
+        user_id: str | None,
+        tenant_id: str | None,
+    ) -> None:
+        if user_id is None and tenant_id is None:
+            return
+        request = read_json(root / "request.json")
+        if not isinstance(request, dict):
+            # Existing single-token runs predate identity metadata. They remain
+            # readable only through the default local API principal.
+            if user_id == "api_token" and tenant_id == "api_token":
+                return
+            raise ApiError(
+                status_code=404,
+                code="resource_not_found",
+                message="The requested run was not found",
+            )
+        if (
+            request.get("user_id") in (None, "")
+            and request.get("tenant_id") in (None, "")
+            and user_id == "api_token"
+            and tenant_id == "api_token"
+        ):
+            return
+        if user_id is not None and request.get("user_id") != user_id:
+            raise ApiError(
+                status_code=404,
+                code="resource_not_found",
+                message="The requested run was not found",
+            )
+        if tenant_id is not None and request.get("tenant_id") != tenant_id:
+            raise ApiError(
+                status_code=404,
+                code="resource_not_found",
+                message="The requested run was not found",
+            )
+
+    @staticmethod
     def _read_events(path: Path) -> list[dict[str, Any]]:
         if not path.exists():
             return []
@@ -116,8 +182,14 @@ class RunEventSource:
 
     @staticmethod
     def _is_terminal(root: Path) -> bool:
-        state = read_json(root / "execution_snapshot.json") or {}
-        return str(state.get("status") or "") in _TERMINAL_STATUSES
+        graph_state = read_json(root / "execution_snapshot.json") or {}
+        if str(graph_state.get("status") or "") in _TERMINAL_STATUSES:
+            return True
+        core_state = read_json(root / "main_agent_state.json") or {}
+        if str(core_state.get("status") or "") in _TERMINAL_STATUSES:
+            return True
+        run_state = read_json(root / "run_state.json") or {}
+        return str(run_state.get("status") or "") in _TERMINAL_STATUSES
 
 
 __all__ = ["RunEventSource", "format_sse_event"]

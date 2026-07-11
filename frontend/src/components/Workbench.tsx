@@ -6,6 +6,7 @@ import {
   Database,
   FileSearch,
   Lightbulb,
+  ListChecks,
   MessageSquareText,
   RefreshCw,
   ShieldAlert,
@@ -19,10 +20,13 @@ import {
   asNumber,
   asRecord,
   asString,
+  activityFromEvents,
+  assistantMessageFromDetail,
   candidatesFromReport,
   evidenceFromReport,
   formatDate,
   intentFromDetail,
+  isActiveStatus,
   queryFromDetail,
   reportFollowUps,
   reportFromDetail,
@@ -57,6 +61,72 @@ function methodologySummary(raw: Record<string, unknown>): string {
     : 'No displayable model output was returned.'
 }
 
+function methodologySignal(raw: Record<string, unknown>): string {
+  const outputs = asRecord(raw.outputs)
+  const type = asString(raw.methodology_type)
+  if (type === 'comps') return localizeSignal(asString(outputs.relative_view, 'insufficient peer signal'))
+  if (type === 'dcf') return asString(outputs.market_to_intrinsic_gap, 'not available')
+  if (type === 'cashflow_resilience') {
+    return [outputs.cashflow_state, outputs.debt_capacity_state].filter(Boolean).map((value) => localizeSignal(String(value))).join(' / ') || 'not available'
+  }
+  return methodologySummary(raw)
+}
+
+function methodologyMetric(raw: Record<string, unknown>): string {
+  const outputs = asRecord(raw.outputs)
+  const type = asString(raw.methodology_type)
+  if (type === 'dcf') return asString(raw.valuation_band && asRecord(raw.valuation_band).base, '—')
+  if (type === 'cashflow_resilience') return asString(outputs.resilience_score, '—')
+  return asString(outputs.score_gap_vs_peer_median, '—')
+}
+
+function localizeSignal(value: string): string {
+  const labels: Record<string, string> = {
+    'DCF proxy is above the latest market price': 'DCF 估值代理高于当前市场价格',
+    'DCF proxy is below the latest market price': 'DCF 估值代理低于当前市场价格',
+    'DCF proxy is close to the latest market price': 'DCF 估值代理接近当前市场价格',
+    'cashflow resilient, debt capacity comfortable': '现金流韧性良好，债务承受能力良好',
+    'above the latest market price': '高于当前市场价格',
+    'below the latest market price': '低于当前市场价格',
+    'close to the latest market price': '接近当前市场价格',
+    'insufficient_peer_signal': '同行样本不足，无法形成有效相对估值',
+    resilient: '现金流韧性良好',
+    comfortable: '债务承受能力良好',
+  }
+  return labels[value] || value
+}
+
+function localizeMethodology(value: string): string {
+  return {
+    comps: '可比估值',
+    dcf: 'DCF 估值',
+    cashflow_resilience: '现金流韧性',
+  }[value] || value
+}
+
+function localizeAssessment(factors: Array<Record<string, unknown>>, fallback: string): string {
+  if (!factors.length) return fallback
+  const grouped = new Map<string, string[]>()
+  for (const factor of factors) {
+    const symbol = asString(factor.symbol, '当前标的')
+    const signals = grouped.get(symbol) || []
+    signals.push(localizeSignal(asString(factor.signal, '暂无判断')))
+    grouped.set(symbol, signals)
+  }
+  const rows = Array.from(grouped.entries()).map(([symbol, signals]) => `${symbol}：${signals.join('；')}`)
+  return `${rows.join('；')}。这是基于当前数据和模型假设的初步判断，不构成投资建议。`
+}
+
+function localizeWarning(value: string): string {
+  const labels: Record<string, string> = {
+    total_assets_missing: '总资产缺失',
+    total_liabilities_missing: '总负债缺失',
+    leverage_assumed: '杠杆率为假设值',
+    peer_group_missing: '同行样本缺失',
+  }
+  return labels[value] ? `${labels[value]} (${value})` : value
+}
+
 export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
   const {
     selectedRunId,
@@ -66,6 +136,9 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
     submittedQuery,
     runs,
     lastResponse,
+    liveProgress,
+    liveAnswer,
+    liveEvents,
   } = useCognitrade()
   const report = reportFromDetail(selectedRun)
   const evidences = evidenceFromReport(report)
@@ -84,6 +157,54 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
   const thesisReview = asRecord(report.thesis_review)
   const artifactBackedReport = asString(report.protocol) === 'agent_os' && Array.isArray(report.final_artifact_ids)
   const updatedAt = selectedRun?.events.events.at(-1)?.created_at
+  const snapshot = asRecord(selectedRun?.replay.snapshot)
+  const clarification = asRecord(selectedRun?.replay.result?.clarification)
+  const clarificationQuestion = asString(
+    clarification.question
+      || snapshot.clarification_question
+      || lastResponse?.clarification?.question,
+  )
+  const isClarification = status === 'needs_clarification' || Boolean(clarificationQuestion)
+  const assessment = asRecord(report.assessment)
+  const assessmentSummary = asString(assessment.summary)
+  const assessmentFactors = Array.isArray(assessment.factors) ? assessment.factors.map(asRecord) : []
+  const degradedEvidenceCount = Array.isArray(report.evidence)
+    ? report.evidence.filter((item) => Boolean(asRecord(asRecord(item).metadata).degraded)).length
+    : 0
+  const reportHasDegradedEvidence = Boolean(report.degraded) || degradedEvidenceCount > 0
+  const displayConclusion = localizeAssessment(assessmentFactors, assessmentSummary || conclusion)
+  const activityEvents = activityFromEvents([
+    ...(selectedRun?.events.events || []),
+    ...liveEvents,
+  ])
+  const assistantMessage = assistantMessageFromDetail(selectedRun)
+    || asString(report.conclusion)
+    || liveAnswer
+    || asString(lastResponse?.message)
+  const showMainAgentAnswer = Boolean(
+    assistantMessage
+      && !(asString(report.protocol) === 'agent_os' && assistantMessage.trim() === conclusion.trim()),
+  )
+  const activityFeed = activityEvents.length > 0 ? (
+    <section className="agent-progress-feed" aria-label="Agent OS 运行轨迹">
+      <div className="agent-progress-feed__heading">
+        <span><ListChecks size={14} /> 可审计分析过程</span>
+        <small>{activityEvents.length} 条 Agent OS 更新</small>
+      </div>
+      <ol>
+        {activityEvents.map((item) => (
+          <li key={item.id}>
+            <span className={`agent-progress-feed__dot is-${item.kind}`} />
+            <div>
+              <strong>{item.actor}</strong>
+              <p>{item.message}</p>
+            </div>
+            {item.createdAt && <time>{formatDate(item.createdAt)}</time>}
+          </li>
+        ))}
+      </ol>
+    </section>
+  ) : null
 
   return (
     <div className="workbench-column">
@@ -119,12 +240,38 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
           <section className="live-research-strip" aria-live="polite">
             <span className="live-agent-orbit"><Sparkles size={15} /></span>
             <div>
-              <strong>后端正在执行研究任务</strong>
-              <span>POST /api/v1/runs 当前为同步接口，完成后将加载真实 run、报告和证据。</span>
+              <strong>Agent OS 正在分析</strong>
+              <span>{liveProgress || '正在创建动态任务图并调度受治理 Subagent。'}</span>
             </div>
             <RefreshCw size={16} className="spin-icon" />
           </section>
         )}
+
+        {!submitting && isActiveStatus(status) && liveProgress && activityEvents.length > 0 && (
+          <section className="live-research-strip" aria-live="polite">
+            <span className="live-agent-orbit"><Sparkles size={15} /></span>
+            <div>
+              <strong>Agent OS 分析进度</strong>
+              <span>{liveProgress}</span>
+            </div>
+            <Activity size={16} />
+          </section>
+        )}
+
+        {liveAnswer && (!selectedRun || selectedRunLoading || isActiveStatus(status)) && (
+          <article className="message-row message-row--assistant" aria-live="polite">
+            <div className="message-avatar message-avatar--assistant"><span>C</span></div>
+            <div className="assistant-message assistant-message--live">
+              <div className="assistant-response-header">
+                <span className="assistant-label">COGNITRADE LIVE ANSWER</span>
+                <Activity size={14} />
+              </div>
+              <p className="live-answer-copy">{liveAnswer}</p>
+            </div>
+          </article>
+        )}
+
+        {(!selectedRun || isActiveStatus(status)) && activityFeed}
 
         {lastResponse?.status === 'needs_clarification' && lastResponse.clarification && (
           <section className="live-research-strip" role="status">
@@ -147,6 +294,27 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
         )}
 
         {selectedRun && (
+          isClarification ? (
+            <article className="message-row message-row--assistant">
+              <div className="message-avatar message-avatar--assistant"><span>C</span></div>
+              <div className="assistant-message">
+                <div className="assistant-response-header">
+                  <div>
+                    <span className="assistant-label">COGNITRADE CLARIFICATION</span>
+                    <span className="confidence-label"><MessageSquareText size={13} /> Main Agent</span>
+                  </div>
+                  <time>{updatedAt ? formatDate(updatedAt) : statusLabel(status)}</time>
+                </div>
+                <section className="thesis-callout">
+                  <div className="thesis-icon"><MessageSquareText size={17} /></div>
+                  <div><span>需要补充信息</span><p>{clarificationQuestion || 'Main Agent 正在等待下一条信息。'}</p></div>
+                </section>
+                <footer className="report-footer">
+                  <div><ShieldAlert size={14} /><span>补充信息后，Agent OS 将继续当前运行。</span></div>
+                </footer>
+              </div>
+            </article>
+          ) : (
           <article className="message-row message-row--assistant">
             <div className="message-avatar message-avatar--assistant"><span>C</span></div>
             <div className="assistant-message">
@@ -158,26 +326,61 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
                 <time>{updatedAt ? formatDate(updatedAt) : statusLabel(status)}</time>
               </div>
 
+              {showMainAgentAnswer && (
+                <section className="main-agent-answer" aria-label="Main Agent answer">
+                  <div className="main-agent-answer__heading">
+                    <span><Sparkles size={14} /> Main Agent</span>
+                    <small>{statusLabel(status)}</small>
+                  </div>
+                  <p>{assistantMessage}</p>
+                </section>
+              )}
+
               <section className="report-hero live-report-hero">
                 <div className="company-identity">
                   <span className="company-mark">C</span>
                   <div><span>{selectedRunId}</span><h2>{INTENT_LABELS[intent] || intent || '研究报告'}</h2><small>真实 API 回放</small></div>
                 </div>
                 <div className="research-verdict">
-                  <span>运行状态</span><strong>{statusLabel(status)}</strong><small>{asString(selectedRun.replay.summary?.message, '后端未提供摘要')}</small>
+                  <span>运行状态</span><strong>{statusLabel(status)}</strong><small>{asString(selectedRun.replay.summary?.message, displayConclusion || '报告已生成')}</small>
                 </div>
                 <div className="research-verdict">
-                  <span>数据模式</span><strong>{report.degraded ? '降级' : '标准'}</strong><small>{asString(report.degrade_reason || report.degraded_note, '未报告降级原因')}</small>
+                  <span>数据模式</span><strong>{reportHasDegradedEvidence ? '部分降级' : '标准'}</strong><small>{reportHasDegradedEvidence ? `${degradedEvidenceCount || '部分'} 条证据源不可用或不完整` : '所有返回证据均可用'}</small>
                 </div>
               </section>
 
               <section className="thesis-callout">
                 <div className="thesis-icon"><Lightbulb size={17} /></div>
-                <div><span>核心结论</span><p>{conclusion || (artifactBackedReport ? '该运行已生成 Agent OS 最终 artifact，但 /api/v1 只返回 artifact ID，尚无版本化接口读取内容。' : '该运行未返回 report.conclusion。请检查运行状态、质量门禁或错误信息。')}</p></div>
+                <div>
+                  <span>最终结论 · Evidence-based assessment</span>
+                  <p>{displayConclusion || (artifactBackedReport ? '该运行已生成 Agent OS 最终 artifact，但 /api/v1 只返回 artifact ID，尚无版本化接口读取内容。' : '该运行未返回 report.conclusion。请检查运行状态、质量门禁或错误信息。')}</p>
+                </div>
               </section>
 
+              {assessmentFactors.length > 0 && (
+                <section className="report-section assessment-section">
+                  <div className="report-section-heading"><div><span className="section-index">01</span><div><h3>分析判断</h3><p>由 Pack 方法论输出的可追溯判断依据</p></div></div></div>
+                  <div className="report-table-wrap">
+                    <table className="report-table">
+                      <thead><tr><th>标的</th><th>方法</th><th>信号</th><th>依据</th><th>置信度</th></tr></thead>
+                      <tbody>
+                        {assessmentFactors.map((factor, index) => (
+                          <tr key={`${asString(factor.symbol, String(index))}-${asString(factor.methodology, String(index))}`}>
+                            <td>{asString(factor.symbol, '—')}</td>
+                            <td>{localizeMethodology(asString(factor.methodology, '—'))}</td>
+                            <td><strong>{localizeSignal(asString(factor.signal, '—'))}</strong></td>
+                            <td>{asString(factor.basis, '—')}</td>
+                            <td>{asNumber(factor.confidence)?.toFixed(2) ?? '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              )}
+
               <section className="report-section">
-                <div className="report-section-heading"><div><span className="section-index">01</span><div><h3>运行指标</h3><p>来自 `/metrics` 的实时持久化统计</p></div></div></div>
+                  <div className="report-section-heading"><div><span className="section-index">02</span><div><h3>运行指标</h3><p>来自 `/metrics` 的实时持久化统计</p></div></div></div>
                 <div className="metric-grid">
                   <MetricCard label="事件" value={Number(counts.events || selectedRun.events.events.length)} note="events.jsonl" />
                   <MetricCard label="步骤" value={selectedRun.steps.steps.length} note="执行图顶层节点" />
@@ -187,7 +390,7 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
               </section>
 
               <section className="report-section">
-                <div className="report-section-heading"><div><span className="section-index">02</span><div><h3>关键证据</h3><p>直接渲染 report.evidence</p></div></div></div>
+                <div className="report-section-heading"><div><span className="section-index">03</span><div><h3>关键证据</h3><p>直接渲染 report.evidence</p></div></div></div>
                 {evidences.length ? (
                   <div className="live-evidence-grid">
                     {evidences.map((evidence) => (
@@ -200,7 +403,7 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
               </section>
 
               <section className="report-section">
-                <div className="report-section-heading"><div><span className="section-index">03</span><div><h3>风险与下一步</h3><p>保持后端原始语义，不生成界面假设</p></div></div></div>
+                <div className="report-section-heading"><div><span className="section-index">04</span><div><h3>风险与下一步</h3><p>保持后端原始语义，不生成界面假设</p></div></div></div>
                 <div className="thesis-columns">
                   <article className="argument-card argument-card--bear">
                     <div className="argument-title"><span><AlertTriangle size={15} /></span><div><strong>风险</strong><small>{risks.length} 项</small></div></div>
@@ -215,7 +418,7 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
 
               {(specialistCandidates.length > 0 || sectorHeatmap.length > 0 || Object.keys(thesisReview).length > 0) && (
                 <section className="report-section">
-                  <div className="report-section-heading"><div><span className="section-index">04</span><div><h3>专属交付</h3><p>直接读取对应 intent 的专业 Artifact，不使用通用报告占位。</p></div></div></div>
+                  <div className="report-section-heading"><div><span className="section-index">05</span><div><h3>专属交付</h3><p>直接读取对应 intent 的专业 Artifact，不使用通用报告占位。</p></div></div></div>
                   <div className="live-key-value-grid">
                     {specialistCandidates.slice(0, 8).map((candidate) => (
                       <div key={`candidate-${candidate.code}`}>
@@ -251,21 +454,30 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
 
               {methodologies.length > 0 && (
                 <section className="report-section">
-                  <div className="report-section-heading"><div><span className="section-index">04</span><div><h3>Methodology Views</h3><p>Comps, DCF, and cashflow resilience are produced by the Finance Pack.</p></div></div></div>
-                  <div className="live-key-value-grid">
+                  <div className="report-section-heading"><div><span className="section-index">06</span><div><h3>Methodology 输出表</h3><p>Comps、DCF 和现金流韧性均来自 Finance Pack Artifact。</p></div></div></div>
+                  <div className="report-table-wrap">
+                    <table className="report-table">
+                      <thead><tr><th>标的</th><th>方法</th><th>主要信号</th><th>核心数值</th><th>置信度</th><th>警告</th></tr></thead>
+                      <tbody>
                     {methodologies.slice(0, 12).map((methodology, index) => (
-                      <div key={`${asString(methodology.methodology_type, 'method')}-${asString(methodology.target_symbol, String(index))}`}>
-                        <span>{asString(methodology.target_symbol, 'symbol')} | {asString(methodology.methodology_type, 'methodology')}</span>
-                        <strong>{methodologySummary(methodology)}</strong>
-                      </div>
+                      <tr key={`${asString(methodology.methodology_type, 'method')}-${asString(methodology.target_symbol, String(index))}`}>
+                        <td>{asString(methodology.target_symbol, '—')}</td>
+                        <td>{localizeMethodology(asString(methodology.methodology_type, 'methodology'))}</td>
+                        <td><strong>{methodologySignal(methodology)}</strong></td>
+                        <td>{methodologyMetric(methodology)}</td>
+                        <td>{asNumber(methodology.confidence)?.toFixed(2) ?? '—'}</td>
+                        <td>{Array.isArray(methodology.warnings) && methodology.warnings.length ? methodology.warnings.map((warning) => localizeWarning(String(warning))).join(', ') : '—'}</td>
+                      </tr>
                     ))}
+                      </tbody>
+                    </table>
                   </div>
                 </section>
               )}
 
               {Object.keys(scorecard).length > 0 && (
                 <section className="report-section">
-                  <div className="report-section-heading"><div><span className="section-index">05</span><div><h3>结构化评分卡</h3><p>原样展示后端 scorecard 字段</p></div></div></div>
+                  <div className="report-section-heading"><div><span className="section-index">07</span><div><h3>结构化评分卡</h3><p>原样展示后端 scorecard 字段</p></div></div></div>
                   <div className="live-key-value-grid">
                     {Object.entries(scorecard).slice(0, 12).map(([key, value]) => (
                       <div key={key}><span>{key}</span><strong>{typeof value === 'object' ? JSON.stringify(value) : String(value)}</strong></div>
@@ -274,8 +486,8 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
                 </section>
               )}
 
-              {(selectedRun.replay.summary?.status === 'failed' || report.degraded) && (
-                <div className="model-warning"><CircleAlert size={15} /><p>{report.degraded ? `本次研究发生降级：${asString(report.degrade_reason, '原因未提供')}` : '本次运行未通过质量门禁，请查看事件与步骤。'}</p></div>
+              {(selectedRun.replay.summary?.status === 'failed' || reportHasDegradedEvidence) && (
+                <div className="model-warning"><CircleAlert size={15} /><p>{reportHasDegradedEvidence ? `本次研究有 ${degradedEvidenceCount || '部分'} 条证据源降级，请查看关键证据与风险。` : '本次运行未通过质量门禁，请查看事件与步骤。'}</p></div>
               )}
 
               <footer className="report-footer">
@@ -284,7 +496,10 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
               </footer>
             </div>
           </article>
+          )
         )}
+
+        {selectedRun && !isClarification && !isActiveStatus(status) && activityFeed}
       </main>
 
       <div className="composer-dock">

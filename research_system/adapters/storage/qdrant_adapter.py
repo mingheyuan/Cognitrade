@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import json
 import re
 import uuid
 from collections import Counter
@@ -12,6 +13,7 @@ from qdrant_client.local.persistence import CollectionPersistence
 
 from research_system.runtime.platform.settings import Settings
 from research_system.schemas.artifacts import ArtifactRecord
+from research_system.schemas.memory import MemoryRecord
 
 _SEARCH_STOPWORDS = {
     "a",
@@ -133,6 +135,36 @@ class QdrantAdapter:
                     payload=payload,
                 )
             ],
+        )
+
+    def upsert_memory(self, memory: MemoryRecord) -> None:
+        """Index a verified or candidate memory in the shared hybrid collection."""
+        if self.client is None:
+            return
+        payload = self.to_memory_payload(memory)
+        self.client.upsert(
+            collection_name=self.collection_name,
+            points=[
+                models.PointStruct(
+                    id=self._memory_point_id(memory.memory_id),
+                    vector=self._vectorize_text(payload["content"]),
+                    payload=payload,
+                )
+            ],
+        )
+
+    def search_memory(
+        self,
+        *,
+        query_text: str,
+        top_k: int = 10,
+        metadata_filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        filters = {"record_type": "memory", **dict(metadata_filters or {})}
+        return self.search(
+            query_text=query_text,
+            top_k=top_k,
+            metadata_filters=filters,
         )
 
     def search(
@@ -430,6 +462,15 @@ class QdrantAdapter:
     def _build_filter(self, filters: dict[str, Any]) -> models.Filter | None:
         allowed_keys = {
             "record_type",
+            "memory_layer",
+            "memory_id",
+            "memory_type",
+            "status",
+            "scope",
+            "domain_id",
+            "tenant_id",
+            "user_id",
+            "thread_id",
             "source_type",
             "symbol",
             "sector",
@@ -677,10 +718,40 @@ class QdrantAdapter:
 
     def _candidate_key(self, point: Any) -> str:
         payload = getattr(point, "payload", {}) or {}
-        artifact_id = str(payload.get("artifact_id") or "").strip()
-        if artifact_id:
-            return artifact_id
+        record_id = str(
+            payload.get("artifact_id") or payload.get("memory_id") or ""
+        ).strip()
+        if record_id:
+            return record_id
         return str(getattr(point, "id", "") or "")
+
+    def to_memory_payload(self, memory: MemoryRecord) -> dict[str, Any]:
+        return {
+            "artifact_id": memory.memory_id,
+            "memory_id": memory.memory_id,
+            "record_type": "memory",
+            "memory_layer": memory.layer,
+            "memory_type": memory.memory_type,
+            "domain_id": memory.domain_id,
+            "scope": memory.scope,
+            "tenant_id": memory.tenant_id,
+            "user_id": memory.user_id,
+            "thread_id": memory.thread_id,
+            "status": memory.status,
+            "source_run_ids": list(memory.source_run_ids),
+            "source_artifact_ids": list(memory.source_artifact_ids),
+            "content": self._memory_payload_text(memory.content),
+            "memory_content": memory.content,
+            "created_at": memory.created_at.isoformat(),
+            "expires_at": memory.expires_at.isoformat() if memory.expires_at else None,
+        }
+
+    @staticmethod
+    def _memory_payload_text(content: dict[str, Any]) -> str:
+        return json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
+
+    def _memory_point_id(self, memory_id: str) -> str:
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"memory:{memory_id}"))
 
     def _vectorize_text(self, text: str) -> list[float]:
         normalized = str(text or "").strip()

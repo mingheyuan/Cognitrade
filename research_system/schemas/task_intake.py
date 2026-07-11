@@ -17,6 +17,8 @@ class TaskIntakeDecision(BaseModel):
     domain_id: str | None = None
     slots: dict[str, Any] = Field(default_factory=dict)
     constraints: dict[str, Any] = Field(default_factory=dict)
+    candidate_capabilities: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     clarification: ClarificationPayload | None = None
     trace: dict[str, Any] = Field(default_factory=dict)
 

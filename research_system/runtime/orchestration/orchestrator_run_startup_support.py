@@ -119,6 +119,7 @@ class OrchestratorRunStartupSupport:
         execution_graph = self.host.planner.build_initial_execution_graph(
             intent=intent,
             request=request,
+            lazy=True,
         )
         persist_execution_graph(context=context, graph=execution_graph)
         self.host._emit_event(

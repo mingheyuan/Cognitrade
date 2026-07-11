@@ -1,3 +1,32 @@
 evaluation_id: finance.research.smoke.v1
-required_artifact_type: research_report
+mode: execution
+objective: Execute the Finance Pack report composition smoke path.
+available_artifact_types: [stock_snapshot_bundle]
+required_artifact_types: [research_report]
+seed_artifacts:
+  - artifact_type: stock_snapshot_bundle
+    content:
+      query: Evaluation fixture for a single A-share symbol.
+      symbols: ["600000"]
+      snapshots:
+        - snapshot_type: market
+          symbol: 600000
+          facts:
+            market_overview:
+              latest_price: 10.0
+      candidate_universe: []
+      collection:
+        universe_source: evaluation_fixture
+        candidate_count: 1
+        requested_snapshot_types: [market]
+        collected_snapshot_types: [market]
+        enrichment_targets: []
+        degraded: false
+    source_refs:
+      - type: evaluation_fixture
+        id: finance-research-smoke
 required_gate_id: finance.sources_required
+expected_status: completed
+expected_gate_verdicts:
+  finance.sources_required: pass
+required_event_types: [graph_node_completed]

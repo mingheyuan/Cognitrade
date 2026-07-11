@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -40,6 +41,8 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "qdrant_hybrid_candidate_limit": int(env_values.get("QDRANT_HYBRID_CANDIDATE_LIMIT", "50")),
         "qdrant_vector_weight": float(env_values.get("QDRANT_VECTOR_WEIGHT", "0.55")),
         "qdrant_lexical_weight": float(env_values.get("QDRANT_LEXICAL_WEIGHT", "0.45")),
+        "memory_vector_search_enabled": env_values.get("MEMORY_VECTOR_SEARCH_ENABLED", "false").strip().lower()
+        in {"1", "true", "yes", "on"},
         "router_redis_url": env_values.get("ROUTER_REDIS_URL"),
         "router_redis_active_key": env_values.get("ROUTER_REDIS_ACTIVE_KEY", "cognitrade:router:intent_rules:active"),
         "router_redis_key_prefix": env_values.get("ROUTER_REDIS_KEY_PREFIX", "cognitrade:router:intent_rules:"),
@@ -47,6 +50,19 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "router_redis_timeout_seconds": float(env_values.get("ROUTER_REDIS_TIMEOUT_SECONDS", "0.2")),
         "router_rules_cache_ttl_seconds": float(env_values.get("ROUTER_RULES_CACHE_TTL_SECONDS", "2.0")),
         "router_seed_defaults": env_values.get("ROUTER_SEED_DEFAULTS", "true").strip().lower() not in {"0", "false", "no"},
+        "tool_resource_lease_backend": env_values.get("TOOL_RESOURCE_LEASE_BACKEND", "file").strip().lower(),
+        "tool_resource_lease_redis_url": env_values.get("TOOL_RESOURCE_LEASE_REDIS_URL") or env_values.get("ROUTER_REDIS_URL"),
+        "tool_resource_lease_key_prefix": env_values.get("TOOL_RESOURCE_LEASE_KEY_PREFIX", "cognitrade:tool:lease:"),
+        "tool_resource_lease_redis_timeout_seconds": float(env_values.get("TOOL_RESOURCE_LEASE_REDIS_TIMEOUT_SECONDS", "0.5")),
+        "tool_resource_lease_root": Path(env_values["TOOL_RESOURCE_LEASE_ROOT"]).resolve()
+        if env_values.get("TOOL_RESOURCE_LEASE_ROOT")
+        else None,
+        "domain_pack_require_integrity": env_values.get("DOMAIN_PACK_REQUIRE_INTEGRITY", "false").strip().lower()
+        in {"1", "true", "yes", "on"},
+        "domain_pack_trusted_digests": _parse_json_mapping(
+            env_values.get("DOMAIN_PACK_TRUSTED_DIGESTS", "{}"),
+            field_name="DOMAIN_PACK_TRUSTED_DIGESTS",
+        ),
         "provider_probe_timeout_seconds": float(env_values.get("PROVIDER_PROBE_TIMEOUT_SECONDS", "1.0")),
         "provider_policy_path": config_root / "provider_policy.yml",
         "data_sources_path": config_root / "data_sources.yml",
@@ -76,6 +92,9 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "subagent_discovery_hybrid_llm_min_confidence": float(env_values.get("SUBAGENT_DISCOVERY_HYBRID_LLM_MIN_CONFIDENCE", "0.7")),
         "artifacts_retention_days": int(env_values.get("ARTIFACTS_RETENTION_DAYS", "30")),
         "max_artifacts_size_mb": int(env_values.get("MAX_ARTIFACTS_SIZE_MB", "1024")),
+        "memory_expiration_interval_seconds": float(
+            env_values.get("MEMORY_EXPIRATION_INTERVAL_SECONDS", "300")
+        ),
         "run_timeout_seconds": int(env_values.get("RUN_TIMEOUT_SECONDS", "120")),
         "external_wait_timeout_seconds": int(env_values.get("EXTERNAL_WAIT_TIMEOUT_SECONDS", "30")),
         "retrieval_policy_path": config_root / "retrieval_policy.yml",
@@ -99,6 +118,28 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "scraper_root": root / "scraper",
         "domain_packs_root": root / "domain_packs",
     }
+
+
+def _parse_json_mapping(value: str, *, field_name: str) -> dict[str, list[str]]:
+    raw = str(value or "{}").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{field_name} must be a JSON object") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{field_name} must be a JSON object")
+    normalized: dict[str, list[str]] = {}
+    for key, item in payload.items():
+        if isinstance(item, str):
+            values = [item]
+        elif isinstance(item, list):
+            values = [str(value) for value in item]
+        else:
+            raise ValueError(f"{field_name}.{key} must be a digest string or list")
+        normalized[str(key)] = values
+    return normalized
 
 
 def build_settings_from_env(settings_type: type[SettingsT], repo_root: Path | None = None) -> SettingsT:

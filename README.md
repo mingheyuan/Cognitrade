@@ -34,7 +34,9 @@ python -m research_system.cli.app domain-cancel <run_id> --json
 
 Each pack must provide `domain.yaml` plus `ontology`, `artifact_schemas`,
 `subagents`, `tools`, `planner_policies`, `quality_gates`, `report_contracts`,
-and `evaluations`. The loader rejects incomplete packs before planning.
+and `evaluations`. A pack may also declare versioned `skills` in
+`domain.yaml`, with implementations under its own `skills` directory.
+The loader rejects incomplete packs before planning.
 
 当前目录是项目运行根目录。
 
@@ -260,7 +262,15 @@ LLM_REQUEST_TIMEOUT_SECONDS=25
 RUN_TIMEOUT_SECONDS=120
 EXTERNAL_WAIT_TIMEOUT_SECONDS=30
 
+# Tool resource leases: file is the local default; use Redis for multi-host workers.
+TOOL_RESOURCE_LEASE_BACKEND=file
+TOOL_RESOURCE_LEASE_REDIS_URL=
+TOOL_RESOURCE_LEASE_KEY_PREFIX=cognitrade:tool:lease:
+TOOL_RESOURCE_LEASE_REDIS_TIMEOUT_SECONDS=0.5
+MEMORY_VECTOR_SEARCH_ENABLED=false
+
 COGNITRADE_API_TOKEN=
+COGNITRADE_API_PRINCIPALS=
 COGNITRADE_API_ALLOW_UNAUTHENTICATED=false
 COGNITRADE_API_CORS_ORIGINS=http://127.0.0.1:4173,http://localhost:4173
 COGNITRADE_API_HOST=127.0.0.1
@@ -275,6 +285,8 @@ COGNITRADE_API_PORT=8000
 - `ROUTER_*` 用于 Redis 动态路由控制面；未配置时会退回本地 `router_defaults.yml`
 - `COGNITRADE_PROVIDERS_*` 用于 provider chain 覆盖，优先级高于默认 `provider_policy.yml`
 - `COGNITRADE_API_TOKEN` 默认必填；API 会从 `.env` 和进程环境读取，环境变量优先
+- `COGNITRADE_API_PRINCIPALS` 可配置 JSON 主体映射，例如
+  `[{"token":"...","actor_id":"analyst-a","user_id":"user-a","tenant_id":"tenant-a","roles":["user"]}]`；配置后主体身份以映射为准，不能由 `X-User-ID` 或 `X-Tenant-ID` 改写
 - 未配置 token 时，`COGNITRADE_API_ALLOW_UNAUTHENTICATED=true` 仅允许 loopback host；配置 token 后仍强制认证
 - `COGNITRADE_API_CORS_ORIGINS` 是逗号分隔的显式浏览器 origin 白名单，不允许 `*`
 
@@ -407,21 +419,24 @@ python -m research_system.cli.app reindex-qdrant --json
 
 ## 运行产物
 
-每次 `run` 会生成：
+Agent OS 的标准入口会生成：
 
 ```text
 workspace/runs/<run_id>/
 ├─ request.json
-├─ task_plan.json
-├─ run_state.json
-├─ run_control.json
-├─ checkpoint.json
-├─ events.jsonl
-├─ logs.jsonl
-├─ blackboard.jsonl
-├─ result.json
+├─ agent_os_request.json
+├─ execution_graph.json          # Graph Mode
+├─ execution_snapshot.json       # Graph Mode
+├─ main_agent_state.json         # Core / Task Mode
+├─ execution_events.jsonl
+├─ artifact_board.jsonl          # Graph Mode canonical data plane
+├─ response.json
 └─ summary.json
 ```
+
+`execution_events.jsonl` 和 `artifact_board.jsonl` 是 Agent OS 的运行事件与共享事实真源。
+旧运行历史或兼容 facade 产生的 `task_plan.json`、`events.jsonl`、`blackboard.jsonl` 不属于正常入口，
+也不能作为新的 Subagent 输入。
 
 和 chat / memory 相关的持久化产物主要在：
 

@@ -21,6 +21,20 @@ _SECTOR_KEYWORDS = ("sector", "industry", "\u677f\u5757", "\u884c\u4e1a")
 _REVIEW_KEYWORDS = ("review thesis", "thesis review", "\u590d\u6838", "\u4e0a\u4e00\u8f6e\u5224\u65ad")
 _DISTILL_KEYWORDS = ("distill", "kol", "\u84b8\u998f", "\u63d0\u70bc")
 _PREVIOUS_RUN_KEYWORDS = ("previous", "prior", "last run", "latest run", "上一轮", "上次", "最近一次")
+_ANALYSIS_KEYWORDS = (
+    "analyze",
+    "analysis",
+    "research",
+    "company",
+    "stock",
+    "share",
+    "equity",
+    "分析",
+    "研究",
+    "公司",
+    "股票",
+    "个股",
+)
 _RUN_ID_PATTERN = re.compile(r"(?:run|运行)(?:\s*id)?\s*[#：:=]?\s*([A-Za-z0-9][A-Za-z0-9_-]{5,127})", re.IGNORECASE)
 
 
@@ -53,12 +67,15 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
             intent=intent,
         )
     if intent == "stock_check" and not symbols and not slots.get("snapshots"):
-        return _clarify(
-            "Please provide an A-share code or supported company name for the analysis.",
-            ["symbols"],
-            query=query,
-            intent=intent,
-        )
+        if _is_contextual_continuation(query, request, runtime_context):
+            constraints["continuation"] = True
+        else:
+            return _clarify(
+                "Please provide an A-share code or supported company name for the analysis.",
+                ["symbols"],
+                query=query,
+                intent=intent,
+            )
     if intent == "stock_screen" and not symbols and not sector:
         constraints.setdefault("candidate_pool_size", 8)
         slots["universe_scope"] = "ashare_liquidity_ranked"
@@ -120,7 +137,7 @@ def _sector(query: str, *, slots: dict[str, Any], constraints: dict[str, Any]) -
         return supplied
     lowered = query.casefold()
     for alias, sector in _SECTOR_ALIASES.items():
-        if alias.casefold() in lowered:
+        if _contains_sector_alias(query, lowered, alias):
             return sector
     match = re.search(r"([A-Za-z0-9\u4e00-\u9fff]{2,20})(?:\u677f\u5757|\u884c\u4e1a)", query)
     if not match:
@@ -128,6 +145,18 @@ def _sector(query: str, *, slots: dict[str, Any], constraints: dict[str, Any]) -
     candidate = match.group(1).strip()
     candidate = re.sub(r"^(?:请|帮我|分析|研究|梳理|看看|复盘|关于|筛选)", "", candidate)
     return candidate or None
+
+
+def _contains_sector_alias(query: str, lowered: str, alias: str) -> bool:
+    """Match English sector aliases as words, not arbitrary substrings."""
+
+    normalized_alias = alias.casefold()
+    if normalized_alias.isascii():
+        return re.search(
+            rf"(?<![a-z0-9]){re.escape(normalized_alias)}(?![a-z0-9])",
+            lowered,
+        ) is not None
+    return normalized_alias in query.casefold()
 
 
 def _review_target_run_id(
@@ -173,7 +202,33 @@ def _infer_intent(*, query: str, symbols: list[str], sector: str | None) -> str 
         return "stock_screen"
     if _contains(query, lowered, _SECTOR_KEYWORDS) or sector:
         return "sector_research"
+    if _contains(query, lowered, _ANALYSIS_KEYWORDS):
+        return "stock_check"
     return "stock_check" if symbols else None
+
+
+def _is_contextual_continuation(
+    query: str,
+    request: dict[str, Any],
+    runtime_context: dict[str, Any],
+) -> bool:
+    context = list(request.get("conversation_context") or [])
+    if not context:
+        context = list(runtime_context.get("conversation_context") or [])
+    if not context:
+        return False
+    lowered = query.casefold()
+    markers = (
+        "continue",
+        "previous",
+        "prior",
+        "last conclusion",
+        "继续",
+        "上一轮",
+        "上次",
+        "前面的结论",
+    )
+    return any(marker in lowered or marker in query for marker in markers)
 
 
 def _contains(query: str, lowered: str, keywords: tuple[str, ...]) -> bool:

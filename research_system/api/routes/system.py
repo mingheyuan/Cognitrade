@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from starlette.concurrency import run_in_threadpool
 
-from research_system.api.dependencies import get_mutation_lock, get_repo_root, get_settings
+from research_system.api.dependencies import get_mutation_lock, get_repo_root, get_settings, require_role
 from research_system.runtime.diagnostics.doctoring.doctor import build_status, run_doctor
 from research_system.runtime.platform.checks import run_checks
 
@@ -23,6 +23,7 @@ async def system_doctor(settings=Depends(get_settings)) -> dict:
 
 @router.post("/admin/system/checks")
 async def system_checks(
+    principal=Depends(require_role("admin")),
     repo_root=Depends(get_repo_root),
     mutation_lock=Depends(get_mutation_lock),
 ) -> dict:

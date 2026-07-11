@@ -7,9 +7,11 @@ from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from research_system.api.dependencies import (
+    ApiPrincipal,
     get_event_source,
     get_mutation_lock,
     get_run_service,
+    require_principal,
 )
 from research_system.api.errors import ApiError
 from research_system.api.models import RerunRequest
@@ -23,6 +25,7 @@ RunStatusFilter = Literal[
     "needs_clarification",
     "ready",
     "running",
+    "waiting_approval",
     "waiting_external",
     "gated",
     "completed",
@@ -34,9 +37,40 @@ RunStatusFilter = Literal[
 router = APIRouter(tags=["research-runs"])
 
 
-async def _call_run_resource(operation, *args, nested: bool = False, **kwargs):
+def _scope_kwargs(target, principal: ApiPrincipal | None) -> dict[str, str]:
+    service = getattr(target, "__self__", target)
+    if principal is None or not principal.authenticated:
+        return {}
+    if not getattr(service, "identity_scoped", False):
+        return {}
+    return {
+        "user_id": str(principal.user_id or ""),
+        "tenant_id": str(principal.tenant_id or ""),
+    }
+
+
+def _supported_intents(run_service) -> list[str] | None:
+    agent_os = getattr(run_service, "agent_os", None)
+    resolver = getattr(agent_os, "supported_intents", None)
+    if callable(resolver):
+        return list(resolver())
+    return None
+
+
+async def _call_run_resource(
+    operation,
+    *args,
+    nested: bool = False,
+    principal: ApiPrincipal | None = None,
+    **kwargs,
+):
     try:
-        return await run_in_threadpool(operation, *args, **kwargs)
+        return await run_in_threadpool(
+            operation,
+            *args,
+            **_scope_kwargs(operation, principal),
+            **kwargs,
+        )
     except FileNotFoundError as exc:
         raise ApiError(
             status_code=404,
@@ -58,8 +92,17 @@ async def create_run(
     payload: RequestEnvelope,
     run_service=Depends(get_run_service),
     mutation_lock=Depends(get_mutation_lock),
+    principal: ApiPrincipal = Depends(require_principal),
 ) -> ResponseEnvelope:
-    validated = validate_research_request(payload)
+    identity = (
+        {"user_id": principal.user_id, "tenant_id": principal.tenant_id}
+        if principal.authenticated
+        else {}
+    )
+    validated = validate_research_request(
+        payload.model_copy(update=identity),
+        supported_intents=_supported_intents(run_service),
+    )
     async with mutation_lock:
         return await run_in_threadpool(run_service.run, validated)
 
@@ -69,23 +112,35 @@ async def list_runs(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     status: RunStatusFilter | None = None,
     run_service=Depends(get_run_service),
+    principal: ApiPrincipal = Depends(require_principal),
 ) -> list[dict]:
-    rows = await run_in_threadpool(run_service.history)
+    rows = await run_in_threadpool(
+        run_service.history,
+        **_scope_kwargs(run_service, principal),
+    )
     if status is not None:
         rows = [row for row in rows if str(row.get("status") or "") == status]
     return rows[:limit]
 
 
 @router.get("/runs/{run_id}/replay")
-async def replay_run(run_id: str, run_service=Depends(get_run_service)) -> dict:
+async def replay_run(
+    run_id: str,
+    run_service=Depends(get_run_service),
+    principal: ApiPrincipal = Depends(require_principal),
+) -> dict:
     resolved = safe_identifier(run_id, field_name="run_id")
-    return await _call_run_resource(run_service.replay, resolved)
+    return await _call_run_resource(run_service.replay, resolved, principal=principal)
 
 
 @router.get("/runs/{run_id}/events")
-async def run_events(run_id: str, run_service=Depends(get_run_service)) -> dict:
+async def run_events(
+    run_id: str,
+    run_service=Depends(get_run_service),
+    principal: ApiPrincipal = Depends(require_principal),
+) -> dict:
     resolved = safe_identifier(run_id, field_name="run_id")
-    return await _call_run_resource(run_service.events, resolved)
+    return await _call_run_resource(run_service.events, resolved, principal=principal)
 
 
 @router.get("/runs/{run_id}/events/stream")
@@ -93,11 +148,21 @@ async def stream_run_events(
     run_id: str,
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
     event_source=Depends(get_event_source),
+    principal: ApiPrincipal = Depends(require_principal),
 ) -> StreamingResponse:
     resolved = safe_identifier(run_id, field_name="run_id")
-    cursor = await run_in_threadpool(event_source.prepare, resolved, last_event_id=last_event_id)
+    cursor = await run_in_threadpool(
+        event_source.prepare,
+        resolved,
+        last_event_id=last_event_id,
+        **_scope_kwargs(event_source, principal),
+    )
     return StreamingResponse(
-        event_source.stream(resolved, cursor=cursor),
+        event_source.stream(
+            resolved,
+            cursor=cursor,
+            **_scope_kwargs(event_source, principal),
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -108,32 +173,60 @@ async def stream_run_events(
 
 
 @router.get("/runs/{run_id}/trace")
-async def run_trace(run_id: str, run_service=Depends(get_run_service)) -> dict:
+async def run_trace(
+    run_id: str,
+    run_service=Depends(get_run_service),
+    principal: ApiPrincipal = Depends(require_principal),
+) -> dict:
     resolved = safe_identifier(run_id, field_name="run_id")
-    return await _call_run_resource(run_service.trace, resolved)
+    return await _call_run_resource(run_service.trace, resolved, principal=principal)
 
 
 @router.get("/runs/{run_id}/steps")
-async def run_steps(run_id: str, run_service=Depends(get_run_service)) -> dict:
+async def run_steps(
+    run_id: str,
+    run_service=Depends(get_run_service),
+    principal: ApiPrincipal = Depends(require_principal),
+) -> dict:
     resolved = safe_identifier(run_id, field_name="run_id")
-    return await _call_run_resource(run_service.steps, resolved)
+    return await _call_run_resource(run_service.steps, resolved, principal=principal)
 
 
 @router.get("/runs/{run_id}/metrics")
-async def run_metrics(run_id: str, run_service=Depends(get_run_service)) -> dict:
+async def run_metrics(
+    run_id: str,
+    run_service=Depends(get_run_service),
+    principal: ApiPrincipal = Depends(require_principal),
+) -> dict:
     resolved = safe_identifier(run_id, field_name="run_id")
-    return await _call_run_resource(run_service.metrics, resolved)
+    return await _call_run_resource(run_service.metrics, resolved, principal=principal)
 
 
 @router.get("/runs/{run_id}/threads/{thread_id}")
-async def run_thread(run_id: str, thread_id: str, run_service=Depends(get_run_service)) -> dict:
+async def run_thread(
+    run_id: str,
+    thread_id: str,
+    run_service=Depends(get_run_service),
+    principal: ApiPrincipal = Depends(require_principal),
+) -> dict:
     resolved_run = safe_identifier(run_id, field_name="run_id")
     resolved_thread = safe_identifier(thread_id, field_name="thread_id")
-    return await _call_run_resource(run_service.thread, resolved_run, resolved_thread, nested=True)
+    return await _call_run_resource(
+        run_service.thread,
+        resolved_run,
+        resolved_thread,
+        nested=True,
+        principal=principal,
+    )
 
 
 @router.get("/runs/{run_id}/threads/{thread_id}/replay")
-async def replay_run_thread(run_id: str, thread_id: str, run_service=Depends(get_run_service)) -> dict:
+async def replay_run_thread(
+    run_id: str,
+    thread_id: str,
+    run_service=Depends(get_run_service),
+    principal: ApiPrincipal = Depends(require_principal),
+) -> dict:
     resolved_run = safe_identifier(run_id, field_name="run_id")
     resolved_thread = safe_identifier(thread_id, field_name="thread_id")
     return await _call_run_resource(
@@ -141,11 +234,17 @@ async def replay_run_thread(run_id: str, thread_id: str, run_service=Depends(get
         resolved_run,
         resolved_thread,
         nested=True,
+        principal=principal,
     )
 
 
 @router.get("/runs/{run_id}/threads/{thread_id}/metrics")
-async def run_thread_metrics(run_id: str, thread_id: str, run_service=Depends(get_run_service)) -> dict:
+async def run_thread_metrics(
+    run_id: str,
+    thread_id: str,
+    run_service=Depends(get_run_service),
+    principal: ApiPrincipal = Depends(require_principal),
+) -> dict:
     resolved_run = safe_identifier(run_id, field_name="run_id")
     resolved_thread = safe_identifier(thread_id, field_name="thread_id")
     return await _call_run_resource(
@@ -153,26 +252,46 @@ async def run_thread_metrics(run_id: str, thread_id: str, run_service=Depends(ge
         resolved_run,
         resolved_thread,
         nested=True,
+        principal=principal,
     )
 
 
 @router.get("/runs/{run_id}/subagents/{invocation_id}")
-async def run_subagent(run_id: str, invocation_id: str, run_service=Depends(get_run_service)) -> dict:
+async def run_subagent(
+    run_id: str,
+    invocation_id: str,
+    run_service=Depends(get_run_service),
+    principal: ApiPrincipal = Depends(require_principal),
+) -> dict:
     resolved_run = safe_identifier(run_id, field_name="run_id")
     resolved_invocation = safe_identifier(invocation_id, field_name="invocation_id")
-    return await _call_run_resource(run_service.subagent, resolved_run, resolved_invocation, nested=True)
+    return await _call_run_resource(
+        run_service.subagent,
+        resolved_run,
+        resolved_invocation,
+        nested=True,
+        principal=principal,
+    )
 
 
 @router.get("/runs/{run_id}/recovery")
-async def run_recovery(run_id: str, run_service=Depends(get_run_service)) -> dict:
+async def run_recovery(
+    run_id: str,
+    run_service=Depends(get_run_service),
+    principal: ApiPrincipal = Depends(require_principal),
+) -> dict:
     resolved = safe_identifier(run_id, field_name="run_id")
-    return await _call_run_resource(run_service.resume, resolved)
+    return await _call_run_resource(run_service.resume, resolved, principal=principal)
 
 
 @router.post("/runs/{run_id}/cancel")
-async def cancel_run(run_id: str, run_service=Depends(get_run_service)) -> dict:
+async def cancel_run(
+    run_id: str,
+    run_service=Depends(get_run_service),
+    principal: ApiPrincipal = Depends(require_principal),
+) -> dict:
     resolved = safe_identifier(run_id, field_name="run_id")
-    return await _call_run_resource(run_service.cancel, resolved)
+    return await _call_run_resource(run_service.cancel, resolved, principal=principal)
 
 
 @router.post("/runs/{run_id}/reruns", response_model=ResponseEnvelope)
@@ -181,10 +300,16 @@ async def rerun_from_node(
     payload: RerunRequest,
     run_service=Depends(get_run_service),
     mutation_lock=Depends(get_mutation_lock),
+    principal: ApiPrincipal = Depends(require_principal),
 ) -> ResponseEnvelope:
     resolved = safe_identifier(run_id, field_name="run_id")
     async with mutation_lock:
-        return await _call_run_resource(run_service.rerun_from, resolved, from_node=payload.from_node)
+        return await _call_run_resource(
+            run_service.rerun_from,
+            resolved,
+            from_node=payload.from_node,
+            principal=principal,
+        )
 
 
 __all__ = ["router"]

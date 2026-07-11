@@ -118,7 +118,7 @@ function App() {
           <button onClick={() => setToast('')} aria-label="关闭提示"><X size={14} /></button>
         </div>
       )}
-      {submitting && <div className="global-run-indicator"><span /><strong>后端正在同步执行研究任务</strong><small>当前 v1 会在运行结束后返回 run_id</small></div>}
+      {submitting && <div className="global-run-indicator"><span /><strong>Agent OS 正在后台执行研究任务</strong><small>可通过实时事件流查看分析进度</small></div>}
     </div>
   )
 }

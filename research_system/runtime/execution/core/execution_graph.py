@@ -266,8 +266,22 @@ def apply_execution_graph_patch(
     nodes = {node.node_id: node.model_copy(deep=True) for node in graph.nodes}
     order = [node.node_id for node in graph.nodes]
     notes = list(graph.notes or [])
+    reset_ids: set[str] = set()
 
     for operation in patch.operations:
+        target_node_id = str(operation.target_node_id or "")
+        if operation.op_type in {
+            "remove_node",
+            "rewire_dependency",
+            "replace_subgraph",
+            "rerun_from",
+        } and target_node_id in nodes:
+            reset_ids.add(target_node_id)
+            reset_ids.update(
+                _dependency_descendants_from_nodes(nodes, target_node_id)
+            )
+            if operation.op_type in {"replace_subgraph", "rerun_from"}:
+                reset_ids.update(_descendants_from_nodes(nodes, target_node_id))
         if operation.op_type == "insert_node":
             assert operation.node is not None
             if operation.node.node_id in nodes:
@@ -291,7 +305,7 @@ def apply_execution_graph_patch(
                 [node.model_copy(deep=True) for node in operation.replacement_nodes],
             )
         elif operation.op_type == "rerun_from":
-            _reset_execution_subgraph(nodes, str(operation.target_node_id or ""))
+            _reset_execution_subgraph(nodes, target_node_id)
             detail = str(operation.target_node_id or operation.op_type)
             notes.append(f"patch:{operation.op_type}:{detail}")
         elif operation.op_type == "mark_terminal":
@@ -310,6 +324,8 @@ def apply_execution_graph_patch(
             raise ValueError(f"unsupported execution graph patch operation: {operation.op_type}")
         if operation.reason:
             notes.append(f"patch_reason:{operation.op_type}:{operation.reason}")
+
+    _reset_execution_nodes(nodes, reset_ids)
 
     metadata = dict(graph.metadata or {})
     patch_history = list(metadata.get("patch_history") or [])
@@ -462,7 +478,17 @@ def _reset_execution_subgraph(
                 reset_ids.add(node.node_id)
                 changed = True
     for node_id in reset_ids:
-        node = nodes[node_id]
+        _reset_execution_nodes(nodes, {node_id})
+
+
+def _reset_execution_nodes(
+    nodes: dict[str, ExecutionNode],
+    reset_ids: set[str],
+) -> None:
+    for node_id in reset_ids:
+        node = nodes.get(node_id)
+        if node is None:
+            continue
         nodes[node_id] = node.model_copy(
             update={
                 "status": "pending",
@@ -471,6 +497,44 @@ def _reset_execution_subgraph(
                 "output_artifact_ids": [],
             }
         )
+
+
+def _dependency_descendants_from_nodes(
+    nodes: dict[str, ExecutionNode],
+    node_id: str,
+) -> set[str]:
+    downstream: dict[str, set[str]] = {}
+    for node in nodes.values():
+        for dependency_id in node.depends_on:
+            downstream.setdefault(dependency_id, set()).add(node.node_id)
+    result: set[str] = set()
+    stack = list(downstream.get(node_id, set()))
+    while stack:
+        downstream_id = stack.pop()
+        if downstream_id in result:
+            continue
+        result.add(downstream_id)
+        stack.extend(downstream.get(downstream_id, set()))
+    return result
+
+
+def _descendants_from_nodes(
+    nodes: dict[str, ExecutionNode],
+    node_id: str,
+) -> set[str]:
+    children: dict[str, set[str]] = {}
+    for node in nodes.values():
+        if node.parent_node_id:
+            children.setdefault(node.parent_node_id, set()).add(node.node_id)
+    result: set[str] = set()
+    stack = list(children.get(node_id, set()))
+    while stack:
+        child_id = stack.pop()
+        if child_id in result:
+            continue
+        result.add(child_id)
+        stack.extend(children.get(child_id, set()))
+    return result
 
 
 def _execution_sink_ids(nodes: list[ExecutionNode]) -> list[str]:
@@ -485,6 +549,32 @@ def _execution_sink_ids(nodes: list[ExecutionNode]) -> list[str]:
     return sinks or [nodes[-1].node_id]
 
 
+def affected_node_ids_for_patch(
+    graph: ExecutionGraph,
+    patch: ExecutionGraphPatch,
+) -> set[str]:
+    """Return old nodes whose outputs cannot remain current after a patch."""
+    scheduler = ExecutionGraphScheduler()
+    node_ids = {node.node_id for node in graph.nodes}
+    affected: set[str] = set()
+    for operation in patch.operations:
+        target = str(operation.target_node_id or "").strip()
+        if not target or target not in node_ids:
+            continue
+        if operation.op_type in {
+            "remove_node",
+            "rewire_dependency",
+            "replace_subgraph",
+            "rerun_from",
+            "mark_terminal",
+        }:
+            affected.add(target)
+            affected.update(scheduler.dependency_descendants(graph, target))
+        if operation.op_type in {"remove_node", "replace_subgraph", "rerun_from"}:
+            affected.update(scheduler.descendants(graph, target))
+    return affected & node_ids
+
+
 def _unique(values: Iterable[str]) -> list[str]:
     result: list[str] = []
     for value in values:
@@ -497,5 +587,6 @@ def _unique(values: Iterable[str]) -> list[str]:
 __all__ = [
     "ExecutionGraphScheduler",
     "ExecutionGraphValidationResult",
+    "affected_node_ids_for_patch",
     "apply_execution_graph_patch",
 ]

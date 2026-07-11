@@ -1,3 +1,17 @@
 evaluation_id: legal.contract.smoke.v1
-required_artifact_type: legal_review_report
+mode: execution
+objective: Execute the legal contract review smoke path.
+available_artifact_types: [contract_document]
+required_artifact_types: [legal_review_report]
+seed_artifacts:
+  - artifact_type: contract_document
+    content:
+      text: Supplier shall deliver. Customer may terminate for convenience.
+    source_refs:
+      - type: evaluation_fixture
+        id: legal-contract-smoke
 required_gate_id: legal.citation_required
+expected_status: completed
+expected_gate_verdicts:
+  legal.citation_required: pass
+required_event_types: [graph_node_completed]

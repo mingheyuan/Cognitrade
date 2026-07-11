@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from research_system.runtime.execution.core.execution_graph import (
     ExecutionGraphScheduler,
+    affected_node_ids_for_patch,
     apply_execution_graph_patch,
 )
 from research_system.schemas.execution_graph import (
@@ -187,6 +188,50 @@ class ExecutionGraphTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "stale execution graph patch"):
             apply_execution_graph_patch(updated, patch)
 
+    def test_patch_validation_is_atomic_when_a_later_operation_is_invalid(self) -> None:
+        graph = ExecutionGraph(
+            domain_id="test_domain",
+            objective="Keep an invalid patch from partially applying.",
+            nodes=[_leaf("collect"), _leaf("report", depends_on=["collect"])],
+        )
+        patch = ExecutionGraphPatch(
+            base_revision=1,
+            operations=[
+                ExecutionGraphPatchOperation(
+                    op_type="insert_node",
+                    node=_leaf("review", depends_on=["collect"]),
+                ),
+                ExecutionGraphPatchOperation(
+                    op_type="rewire_dependency",
+                    target_node_id="report",
+                    new_depends_on=["missing"],
+                ),
+            ],
+        )
+
+        with self.assertRaisesRegex(ValueError, "unknown execution graph dependency"):
+            apply_execution_graph_patch(graph, patch)
+        self.assertEqual([node.node_id for node in graph.nodes], ["collect", "report"])
+
+    def test_same_patch_id_is_rejected_as_a_duplicate_without_reapplying(self) -> None:
+        graph = ExecutionGraph(
+            domain_id="test_domain",
+            objective="Apply a patch once.",
+            nodes=[_leaf("collect")],
+        )
+        patch = ExecutionGraphPatch(
+            base_revision=1,
+            operations=[
+                ExecutionGraphPatchOperation(
+                    op_type="insert_node",
+                    node=_leaf("report", depends_on=["collect"]),
+                )
+            ],
+        )
+        updated = apply_execution_graph_patch(graph, patch)
+        with self.assertRaisesRegex(ValueError, "stale execution graph patch"):
+            apply_execution_graph_patch(updated, patch)
+
     def test_patch_rerun_and_terminal_operations_change_canonical_node_state(self) -> None:
         graph = ExecutionGraph(
             domain_id="test_domain",
@@ -236,6 +281,40 @@ class ExecutionGraphTests(unittest.TestCase):
             next(node for node in terminal.nodes if node.node_id == "review").status,
             "skipped",
         )
+
+    def test_structural_patch_resets_completed_downstream_nodes(self) -> None:
+        graph = ExecutionGraph(
+            domain_id="test_domain",
+            objective="Invalidate downstream work when inputs change.",
+            nodes=[
+                _leaf("collect").model_copy(update={"status": "completed", "attempt_count": 1}),
+                _leaf("report", depends_on=["collect"]).model_copy(
+                    update={"status": "completed", "attempt_count": 1}
+                ),
+            ],
+        )
+        patch = ExecutionGraphPatch(
+            base_revision=1,
+            operations=[
+                ExecutionGraphPatchOperation(
+                    op_type="insert_node",
+                    node=_leaf("review", depends_on=["collect"]),
+                ),
+                ExecutionGraphPatchOperation(
+                    op_type="rewire_dependency",
+                    target_node_id="report",
+                    remove_depends_on=["collect"],
+                    new_depends_on=["review"],
+                ),
+            ],
+        )
+
+        self.assertEqual(affected_node_ids_for_patch(graph, patch), {"report"})
+        updated = apply_execution_graph_patch(graph, patch)
+        node_map = {node.node_id: node for node in updated.nodes}
+        self.assertEqual(node_map["collect"].status, "completed")
+        self.assertEqual(node_map["report"].status, "pending")
+        self.assertEqual(node_map["report"].attempt_count, 0)
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,18 +6,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from research_system.runtime.core.id_utils import generate_ulid
+from research_system.schemas.state_machine import NodeStatus
 
 
 ExecutionNodeKind = Literal["compound", "subagent"]
-ExecutionNodeStatus = Literal[
-    "pending",
-    "running",
-    "waiting",
-    "completed",
-    "skipped",
-    "failed",
-    "cancelled",
-]
+ExecutionNodeStatus = NodeStatus
 ExecutionFailureMode = Literal["halt", "isolate"]
 ExecutionGraphStrategy = Literal[
     "template",
@@ -47,6 +40,9 @@ class ExecutionGovernance(BaseModel):
     max_depth: int = Field(default=16, ge=1)
     max_concurrency: int = Field(default=32, ge=1)
     max_retries_per_node: int = Field(default=3, ge=0)
+    max_graph_patches: int = Field(default=32, ge=0)
+    max_tool_calls: int = Field(default=256, ge=0)
+    max_concurrent_tool_calls: int = Field(default=32, ge=1)
     token_budget: int | None = Field(default=None, ge=1)
     cost_budget: float | None = Field(default=None, ge=0.0)
     timeout_seconds: float | None = Field(default=None, gt=0.0)
@@ -257,9 +253,20 @@ class ExecutionGraphPatch(BaseModel):
     notes: list[str] = Field(default_factory=list)
     policy_source: Literal["rule", "llm", "hybrid", "explicit"] = "rule"
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    actor: str = "main_agent.plan_agent"
     termination_reason: str | None = None
     requested_at_safe_point: bool = True
     cancel_in_flight_node_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_patch(self) -> "ExecutionGraphPatch":
+        if not self.operations:
+            raise ValueError("execution graph patch requires at least one operation")
+        if len(self.cancel_in_flight_node_ids) != len(set(self.cancel_in_flight_node_ids)):
+            raise ValueError("execution graph patch contains duplicate cancellation targets")
+        if not self.actor.strip():
+            raise ValueError("execution graph patch actor is required")
+        return self
 
 
 __all__ = [

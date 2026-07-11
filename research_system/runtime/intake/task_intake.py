@@ -7,7 +7,7 @@ from research_system.schemas.protocol import ClarificationPayload, RequestEnvelo
 from research_system.schemas.task_intake import TaskIntakeDecision
 
 
-class TaskIntakeService:
+class PackIntakeService:
     """Resolve requests through installed DomainPack-owned intake policies."""
 
     def __init__(self, registry: DomainPackRegistry) -> None:
@@ -34,10 +34,17 @@ class TaskIntakeService:
         candidates: list[TaskIntakeDecision] = []
         clarifications: list[TaskIntakeDecision] = []
         for manifest in self.registry.list():
-            supported = set(manifest.planner_policies.get("supported_intents") or [])
+            declared_intents = {item.intent_id: item for item in manifest.intake.intents}
+            supported = set(declared_intents)
+            if not supported:
+                supported = set(manifest.planner_policies.get("supported_intents") or [])
             if explicit_intent and explicit_intent not in supported:
                 continue
-            implementation = str(manifest.planner_policies.get("task_intake") or "").strip()
+            implementation = str(
+                manifest.intake.implementation
+                or manifest.planner_policies.get("task_intake")
+                or ""
+            ).strip()
             if not implementation:
                 continue
             resolver = self.registry.resolve_callable(
@@ -53,10 +60,36 @@ class TaskIntakeService:
                 raise ValueError(
                     f"Task Intake decision escapes its DomainPack: {manifest.domain_id}"
                 )
-            decision = decision.model_copy(update={"domain_id": manifest.domain_id})
+            decision = decision.model_copy(
+                update={
+                    "domain_id": (
+                        manifest.domain_id
+                        if decision.status == "accepted" or decision.intent
+                        else decision.domain_id
+                    )
+                }
+            )
             if decision.intent and decision.intent not in supported:
                 raise ValueError(
                     f"Task Intake decision returns an unsupported intent: {manifest.domain_id}:{decision.intent}"
+                )
+            intent_definition = declared_intents.get(str(decision.intent or ""))
+            if intent_definition is not None:
+                decision = decision.model_copy(
+                    update={
+                        "candidate_capabilities": list(
+                            decision.candidate_capabilities
+                            or intent_definition.candidate_capabilities
+                        ),
+                        "confidence": max(
+                            decision.confidence,
+                            manifest.intake.minimum_confidence,
+                        ),
+                        "trace": {
+                            **dict(decision.trace),
+                            "intent_definition": intent_definition.intent_id,
+                        },
+                    }
                 )
             if decision.status == "accepted":
                 candidates.append(decision)
@@ -86,4 +119,8 @@ class TaskIntakeService:
         )
 
 
-__all__ = ["TaskIntakeService"]
+class TaskIntakeService(PackIntakeService):
+    """Compatibility name for callers of the pre-Agent OS Pack intake API."""
+
+
+__all__ = ["PackIntakeService", "TaskIntakeService"]

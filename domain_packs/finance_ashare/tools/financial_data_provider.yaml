@@ -1,3 +1,26 @@
 tool_id: financial_data_provider
+version: "1"
 side_effect_level: read_only
 description: Provider abstraction owned by the finance pack.
+input_schema:
+  type: object
+  required: [query, intent]
+  properties:
+    query: {type: string}
+    intent: {type: string}
+    symbols: {type: array, items: {type: string}}
+    snapshot_types: {type: array, items: {type: string}}
+    sector: {type: [string, "null"]}
+    candidate_pool_size: {type: integer, minimum: 1}
+    enrichment_top_n: {type: integer, minimum: 0}
+output_schema:
+  type: object
+  required: [snapshots, symbols, source_refs]
+  properties:
+    snapshots: {type: array}
+    symbols: {type: array, items: {type: string}}
+    source_refs: {type: array}
+permissions: [finance:data:read]
+parallel_safe: true
+max_concurrency: 8
+implementation: tools.financial_data_provider:invoke

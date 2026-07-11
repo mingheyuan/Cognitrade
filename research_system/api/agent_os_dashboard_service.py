@@ -5,15 +5,25 @@ from typing import Any
 
 from research_system.runtime.agent_os import AgentOS
 from research_system.runtime.core.artifact_board import ArtifactBoard
+from research_system.runtime.storage.jsonl import read_json
 
 
 class AgentOSDashboardService:
     """Read-only DomainPack dashboard projections from canonical Agent OS state."""
 
+    identity_scoped = True
+
     def __init__(self, agent_os: AgentOS) -> None:
         self.agent_os = agent_os
 
-    def view(self, *, domain_id: str, view_id: str) -> dict[str, Any]:
+    def view(
+        self,
+        *,
+        domain_id: str,
+        view_id: str,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
         manifest = self.agent_os.registry.get(domain_id)
         views = manifest.metadata.get("dashboard_views") or {}
         config = views.get(view_id) if isinstance(views, dict) else None
@@ -32,6 +42,8 @@ class AgentOSDashboardService:
             resources[str(resource_id)] = self._resource(
                 domain_id=domain_id,
                 resource_config=resource_config,
+                user_id=user_id,
+                tenant_id=tenant_id,
             )
         return {
             "domain_id": domain_id,
@@ -45,12 +57,24 @@ class AgentOSDashboardService:
         *,
         domain_id: str,
         resource_config: dict[str, Any],
+        user_id: str | None,
+        tenant_id: str | None,
     ) -> dict[str, Any]:
         source = str(resource_config.get("source") or "").strip()
         if source == "artifacts":
-            return self._artifact_resource(domain_id=domain_id, config=resource_config)
+            return self._artifact_resource(
+                domain_id=domain_id,
+                config=resource_config,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
         if source == "memory":
-            return self._memory_resource(domain_id=domain_id, config=resource_config)
+            return self._memory_resource(
+                domain_id=domain_id,
+                config=resource_config,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
         if source == "manifest":
             return {
                 "source": "manifest",
@@ -58,14 +82,26 @@ class AgentOSDashboardService:
             }
         raise ValueError(f"unsupported dashboard resource source: {source or '<missing>'}")
 
-    def _artifact_resource(self, *, domain_id: str, config: dict[str, Any]) -> dict[str, Any]:
+    def _artifact_resource(
+        self,
+        *,
+        domain_id: str,
+        config: dict[str, Any],
+        user_id: str | None,
+        tenant_id: str | None,
+    ) -> dict[str, Any]:
         artifact_type = str(config.get("artifact_type") or "").strip()
         if not artifact_type:
             raise ValueError("artifact dashboard resource requires artifact_type")
         selection = str(config.get("selection") or "all").strip()
         content_path = str(config.get("content_path") or "").strip()
         item_key = str(config.get("item_key") or "").strip()
-        artifacts = self._artifacts(domain_id=domain_id, artifact_type=artifact_type)
+        artifacts = self._artifacts(
+            domain_id=domain_id,
+            artifact_type=artifact_type,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         if selection == "latest_artifact":
             artifacts = artifacts[:1]
         elif selection not in {"all", "latest_per_item_key"}:
@@ -100,12 +136,26 @@ class AgentOSDashboardService:
             "items": items,
         }
 
-    def _memory_resource(self, *, domain_id: str, config: dict[str, Any]) -> dict[str, Any]:
+    def _memory_resource(
+        self,
+        *,
+        domain_id: str,
+        config: dict[str, Any],
+        user_id: str | None,
+        tenant_id: str | None,
+    ) -> dict[str, Any]:
         layer = str(config.get("layer") or "policy").strip()
         if layer not in {"episodic", "domain", "policy"}:
             raise ValueError(f"unsupported dashboard memory layer: {layer}")
         statuses = {str(value) for value in list(config.get("statuses") or [])}
-        records = self.agent_os.memory.list(layer=layer, domain_id=domain_id)
+        scoped = user_id is not None or tenant_id is not None
+        records = self.agent_os.memory.list(
+            layer=layer,
+            domain_id=domain_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            include_scoped=not scoped,
+        )
         if statuses:
             records = [record for record in records if record.status in statuses]
         records.sort(key=lambda record: record.created_at, reverse=True)
@@ -136,16 +186,30 @@ class AgentOSDashboardService:
             ],
         }
 
-    def _artifacts(self, *, domain_id: str, artifact_type: str) -> list[Any]:
+    def _artifacts(
+        self,
+        *,
+        domain_id: str,
+        artifact_type: str,
+        user_id: str | None,
+        tenant_id: str | None,
+    ) -> list[Any]:
         artifacts: list[Any] = []
         for row in self.agent_os.run_store.list_runs():
             run_id = str(row.get("run_id") or "").strip()
             if not run_id:
                 continue
             try:
-                board_path = self.agent_os.run_store.load_run_paths(run_id).artifact_board
+                paths = self.agent_os.run_store.load_run_paths(run_id)
             except FileNotFoundError:
                 continue
+            if not self._run_matches_scope(
+                paths.root,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            ):
+                continue
+            board_path = paths.artifact_board
             if not board_path.exists():
                 continue
             for artifact in ArtifactBoard(board_path).list_artifacts(
@@ -156,6 +220,31 @@ class AgentOSDashboardService:
                 if artifact.producer.domain_id == domain_id:
                     artifacts.append(artifact)
         return sorted(artifacts, key=lambda artifact: artifact.created_at, reverse=True)
+
+    @staticmethod
+    def _run_matches_scope(
+        root,
+        *,
+        user_id: str | None,
+        tenant_id: str | None,
+    ) -> bool:
+        if user_id is None and tenant_id is None:
+            return True
+        request = read_json(root / "request.json")
+        if not isinstance(request, dict):
+            return user_id == "api_token" and tenant_id == "api_token"
+        if (
+            request.get("user_id") in (None, "")
+            and request.get("tenant_id") in (None, "")
+            and user_id == "api_token"
+            and tenant_id == "api_token"
+        ):
+            return True
+        if user_id is not None and request.get("user_id") != user_id:
+            return False
+        if tenant_id is not None and request.get("tenant_id") != tenant_id:
+            return False
+        return True
 
     @staticmethod
     def _content_value(value: Any, path: str) -> Any:

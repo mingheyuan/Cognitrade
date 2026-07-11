@@ -19,6 +19,8 @@ __all__ = [
     "MemoryServiceQuerySupport",
     "MemoryService",
     "LayeredMemoryStore",
+    "MemoryExpirationScheduler",
+    "MemoryRetrievalBackend",
     "MemoryPromotionError",
     "MemoryServiceWriteSupport",
     "MethodologyMemoryWriter",
@@ -79,6 +81,11 @@ _EXPORTS = {
     ),
     "MemoryService": ("research_system.services.memory.core.service", "MemoryService"),
     "LayeredMemoryStore": ("research_system.services.memory.layers", "LayeredMemoryStore"),
+    "MemoryExpirationScheduler": (
+        "research_system.services.memory.maintenance",
+        "MemoryExpirationScheduler",
+    ),
+    "MemoryRetrievalBackend": ("research_system.services.memory.layers", "MemoryRetrievalBackend"),
     "MemoryPromotionError": ("research_system.services.memory.layers", "MemoryPromotionError"),
     "MemoryServiceWriteSupport": (
         "research_system.services.memory.write.write_support",

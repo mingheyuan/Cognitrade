@@ -89,6 +89,8 @@ class FinancePackEquivalenceTests(unittest.TestCase):
         self.assertEqual(snapshots.source_refs[0]["type"], "financial_data_provider")
         self.assertEqual(len(report.content["evidence"]), 2)
         self.assertIn("600000 market snapshot", report.content["conclusion"])
+        self.assertTrue(report.content["assessment"]["summary"])
+        self.assertTrue(report.content["assessment"]["factors"])
 
     def test_analysis_pack_recreates_valuation_and_bank_compare_contracts(self) -> None:
         registry = DomainPackRegistry.load(Path(__file__).resolve().parents[1] / "domain_packs")

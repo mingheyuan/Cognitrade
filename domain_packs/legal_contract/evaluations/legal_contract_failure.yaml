@@ -1,0 +1,19 @@
+evaluation_id: legal.contract.failure.v1
+mode: execution
+objective: Verify a halted legal capability failure is observable.
+available_artifact_types: [contract_document]
+required_artifact_types: [legal_review_report]
+seed_artifacts:
+  - artifact_type: contract_document
+    content:
+      text: Supplier shall deliver. Customer may terminate for convenience.
+    source_refs:
+      - type: evaluation_fixture
+        id: legal-contract-failure
+expected_status: failed
+failure_injections:
+  - kind: capability
+    target: legal.contract.clause.extract
+    count: 2
+    reason: deterministic legal capability failure
+required_event_types: [evaluation_failure_injected]

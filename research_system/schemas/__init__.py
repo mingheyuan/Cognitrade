@@ -8,6 +8,7 @@ __all__ = [
     "domain_pack",
     "execution_graph",
     "execution_runtime",
+    "events",
     "governance",
     "memory",
     "proposals",
@@ -20,6 +21,7 @@ __all__ = [
     "subagent_runtime_registration_hints",
     "subagents",
     "task_requests",
+    "tools",
     "valuation",
 ]
 
@@ -29,6 +31,7 @@ _EXPORTS = {
     "domain_pack": "research_system.schemas.domain_pack",
     "execution_graph": "research_system.schemas.execution_graph",
     "execution_runtime": "research_system.schemas.execution_runtime",
+    "events": "research_system.schemas.events",
     "governance": "research_system.schemas.governance",
     "memory": "research_system.schemas.memory",
     "proposals": "research_system.schemas.proposals",
@@ -41,6 +44,7 @@ _EXPORTS = {
     "subagent_runtime_registration_hints": "research_system.schemas.subagent_runtime_registration_hints",
     "subagents": "research_system.schemas.subagents",
     "task_requests": "research_system.schemas.task_requests",
+    "tools": "research_system.schemas.tools",
     "valuation": "research_system.schemas.valuation",
 }
 

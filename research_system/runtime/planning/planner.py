@@ -15,7 +15,11 @@ class RuntimePlanner:
         self.llm_provider = llm_provider
         self.settings = settings
         self.domain_pack_registry = (
-            DomainPackRegistry.load(settings.domain_packs_root)
+            DomainPackRegistry.load(
+                settings.domain_packs_root,
+                require_integrity=getattr(settings, "domain_pack_require_integrity", False),
+                trusted_digests=getattr(settings, "domain_pack_trusted_digests", {}),
+            )
             if settings is not None
             else None
         )
@@ -30,6 +34,7 @@ class RuntimePlanner:
         *,
         intent: str,
         request: RequestEnvelope,
+        lazy: bool = False,
     ) -> ExecutionGraph:
         domain_id = self._domain_id(intent=intent, request=request)
         if domain_id is None:
@@ -42,34 +47,37 @@ class RuntimePlanner:
         required = list(request.slots.get("required_artifact_types") or [])
         if not required:
             required = [contract.artifact_type for contract in manifest.report_contracts]
-        graph = self.capability_planner.build_graph(
-            CapabilityPlanningRequest(
-                domain_id=domain_id,
-                objective=request.user_query,
-                available_artifact_types=list(
-                    request.slots.get("available_artifact_types") or ["user_request"]
-                ),
-                required_artifact_types=required,
-                allowed_tools=list(manifest.governance.allowed_tools),
-                allowed_permissions=list(manifest.governance.allowed_permissions),
-                preferred_capabilities=list(
-                    request.slots.get("preferred_capabilities") or []
-                ),
-                token_budget=manifest.governance.token_budget,
-                cost_budget=manifest.governance.cost_budget,
-                metadata={
-                    "entry_protocol": "agent_os",
+        planning_request = CapabilityPlanningRequest(
+            domain_id=domain_id,
+            objective=request.user_query,
+            available_artifact_types=list(
+                request.slots.get("available_artifact_types") or ["user_request"]
+            ),
+            required_artifact_types=required,
+            allowed_tools=list(manifest.governance.allowed_tools),
+            allowed_permissions=list(manifest.governance.allowed_permissions),
+            preferred_capabilities=list(
+                request.slots.get("preferred_capabilities") or []
+            ),
+            token_budget=manifest.governance.token_budget,
+            cost_budget=manifest.governance.cost_budget,
+            metadata={
+                "entry_protocol": "agent_os",
+                "intent": intent,
+                "intent_inputs": {
                     "intent": intent,
-                    "intent_inputs": {
-                        "intent": intent,
-                        **dict(request.slots),
-                        **dict(request.constraints),
-                    },
-                    "request_constraints": dict(request.constraints),
-                    "conversation_context": list(request.conversation_context),
-                    "chat_dispatch": dict(request.constraints.get("chat_dispatch") or {}),
+                    **dict(request.slots),
+                    **dict(request.constraints),
                 },
-            )
+                "request_constraints": dict(request.constraints),
+                "conversation_context": list(request.conversation_context),
+                "chat_dispatch": dict(request.constraints.get("chat_dispatch") or {}),
+            },
+        )
+        graph = (
+            self.capability_planner.build_lazy_graph(planning_request)
+            if lazy
+            else self.capability_planner.build_graph(planning_request)
         )
         if graph.governance.timeout_seconds is None and self.settings is not None:
             graph.governance.timeout_seconds = float(self.settings.run_timeout_seconds)
@@ -86,7 +94,10 @@ class RuntimePlanner:
         matches = [
             manifest.domain_id
             for manifest in self.domain_pack_registry.list()
-            if intent in set(manifest.planner_policies.get("supported_intents") or [])
+            if intent in {
+                *(item.intent_id for item in manifest.intake.intents),
+                *(manifest.planner_policies.get("supported_intents") or []),
+            }
         ]
         if len(matches) > 1:
             raise ValueError(

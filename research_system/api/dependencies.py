@@ -25,6 +25,9 @@ _BEARER_AUTH = HTTPBearer(
 class ApiPrincipal:
     actor_id: str
     authenticated: bool
+    user_id: str | None = None
+    tenant_id: str | None = None
+    roles: tuple[str, ...] = ()
 
 
 @dataclass
@@ -93,8 +96,44 @@ def require_principal(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_BEARER_AUTH)] = None,
 ) -> ApiPrincipal:
     config = get_api_runtime(request).config
+    return _authenticate_principal(request, config, credentials)
+
+
+def get_workspace_principal(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_BEARER_AUTH)] = None,
+) -> ApiPrincipal:
+    """Authenticate the legacy workspace API when the application is serving normally.
+
+    A TestClient can call the unversioned workspace routes without entering the
+    lifespan. That embedded mode has no runtime config and is treated as local
+    development; normal server requests always use the configured principal.
+    """
+    runtime = getattr(request.app.state, "api_runtime", None)
+    if not isinstance(runtime, ApiRuntimeState):
+        return ApiPrincipal(
+            actor_id="local_workspace",
+            authenticated=False,
+            user_id=request.headers.get("X-User-ID") or None,
+            tenant_id=request.headers.get("X-Tenant-ID") or None,
+            roles=("admin", "user"),
+        )
+    return _authenticate_principal(request, runtime.config, credentials)
+
+
+def _authenticate_principal(
+    request: Request,
+    config: ApiConfig,
+    credentials: HTTPAuthorizationCredentials | None,
+) -> ApiPrincipal:
     if not config.authentication_enabled:
-        return ApiPrincipal(actor_id="local_development", authenticated=False)
+        return ApiPrincipal(
+            actor_id="local_development",
+            authenticated=False,
+            user_id=request.headers.get("X-User-ID") or None,
+            tenant_id=request.headers.get("X-Tenant-ID") or None,
+            roles=("admin", "user"),
+        )
 
     if (
         credentials is None
@@ -107,14 +146,79 @@ def require_principal(
             message="A Bearer token is required",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if not secrets.compare_digest(credentials.credentials.strip(), config.api_token or ""):
+    token = credentials.credentials.strip()
+    binding = config.principal_for_token(token)
+    valid_primary_token = secrets.compare_digest(token, config.api_token or "")
+    valid_admin_token = any(
+        secrets.compare_digest(token, admin_token)
+        for admin_token in config.admin_tokens
+    )
+    valid_bound_token = binding is not None
+    if not (valid_primary_token or valid_admin_token or valid_bound_token):
         raise ApiError(
             status_code=401,
             code="invalid_token",
             message="The Bearer token is invalid",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return ApiPrincipal(actor_id="api_token", authenticated=True)
+    if binding is not None:
+        header_user_id = request.headers.get("X-User-ID") or ""
+        header_tenant_id = request.headers.get("X-Tenant-ID") or ""
+        if header_user_id and header_user_id != binding.user_id:
+            raise ApiError(
+                status_code=403,
+                code="identity_header_conflict",
+                message="The request identity does not match the authenticated principal",
+            )
+        if header_tenant_id and header_tenant_id != binding.tenant_id:
+            raise ApiError(
+                status_code=403,
+                code="identity_header_conflict",
+                message="The request identity does not match the authenticated principal",
+            )
+        return ApiPrincipal(
+            actor_id=binding.actor_id,
+            authenticated=True,
+            user_id=binding.user_id,
+            tenant_id=binding.tenant_id,
+            roles=binding.roles,
+        )
+
+    user_id = request.headers.get("X-User-ID") or "api_token"
+    tenant_id = request.headers.get("X-Tenant-ID") or "api_token"
+    if config.has_explicit_admin_tokens():
+        roles = (
+            ("admin", "user")
+            if any(secrets.compare_digest(token, admin_token) for admin_token in config.admin_tokens)
+            else ("user",)
+        )
+    else:
+        roles = ("admin", "user")
+    return ApiPrincipal(
+        actor_id="api_token",
+        authenticated=True,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        roles=roles,
+    )
+
+
+def require_role(role: str):
+    required_role = str(role or "").strip()
+    if not required_role:
+        raise ValueError("required API role must not be empty")
+
+    def dependency(principal: Annotated[ApiPrincipal, Depends(require_principal)]) -> ApiPrincipal:
+        if required_role not in principal.roles:
+            raise ApiError(
+                status_code=403,
+                code="insufficient_role",
+                message="The authenticated principal lacks the required role",
+                details={"required_role": required_role},
+            )
+        return principal
+
+    return dependency
 
 
 __all__ = [
@@ -127,5 +231,7 @@ __all__ = [
     "get_mutation_lock",
     "get_repo_root",
     "get_settings",
+    "get_workspace_principal",
     "require_principal",
+    "require_role",
 ]

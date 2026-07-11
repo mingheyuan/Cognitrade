@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -17,6 +18,7 @@ from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.schemas.execution_graph import ExecutionGraph, ExecutionNode
 from research_system.schemas.execution_runtime import ExecutionRunSnapshot, NodeExecutionState
 from research_system.services.memory.layers import LayeredMemoryStore
+from research_system.schemas.memory import utc_now
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -187,6 +189,64 @@ class ApiV1AdminSystemTests(unittest.TestCase):
         self.assertEqual([row["memory_id"] for row in response.json()], [record.memory_id])
         self.assertEqual(response.json()[0]["source_artifact_ids"], ["artifact-test"])
 
+    def test_memory_admin_can_promote_and_revoke_with_audited_evaluation(self) -> None:
+        memory = LayeredMemoryStore(self.settings.memory_root / "agent_os")
+        record = memory.add_episode(
+            domain_id="finance_ashare",
+            memory_type="research_result",
+            content={"conclusion": "verified"},
+            source_run_id=RUN_ID,
+            source_artifact_ids=["artifact-test"],
+            gated=True,
+            gate_evaluations=[{"gate_id": "delivery", "verdict": "pass"}],
+        )
+
+        promoted = self.client.post(
+            f"/api/v1/admin/memory/{record.memory_id}/promote",
+            headers=auth_headers(),
+            json={
+                "target_layer": "domain",
+                "evaluation_id": "eval-admin-domain",
+                "evaluator": "admin-review",
+                "verdict": "pass",
+                "score": 0.8,
+                "evidence_refs": ["artifact-test"],
+                "notes": ["Reviewed by an administrator."],
+            },
+        )
+        self.assertEqual(promoted.status_code, 200, promoted.text)
+        self.assertEqual(promoted.json()["layer"], "domain")
+
+        revoked = self.client.post(
+            f"/api/v1/admin/memory/{promoted.json()['memory_id']}/revoke",
+            headers=auth_headers(),
+            json={"reason": "Methodology review superseded this record."},
+        )
+        self.assertEqual(revoked.status_code, 200, revoked.text)
+        self.assertEqual(revoked.json()["status"], "revoked")
+
+    def test_memory_expiration_is_a_governed_admin_operation(self) -> None:
+        memory = LayeredMemoryStore(self.settings.memory_root / "agent_os")
+        record = memory.add_episode(
+            domain_id="finance_ashare",
+            memory_type="temporary_case",
+            content={"summary": "expires"},
+            source_run_id=RUN_ID,
+            source_artifact_ids=["artifact-expiring"],
+            gated=True,
+            expires_at=utc_now() - timedelta(seconds=1),
+        )
+
+        expired = self.client.post(
+            "/api/v1/admin/memory/expire",
+            headers=auth_headers(),
+        )
+
+        self.assertEqual(expired.status_code, 200, expired.text)
+        self.assertEqual(expired.json()["expired_count"], 1)
+        self.assertEqual(expired.json()["memory_ids"], [record.memory_id])
+        self.assertEqual(memory.get(record.memory_id).status, "expired")
+
     def test_cleanup_and_reindex_use_agent_os_storage(self) -> None:
         root = self.settings.runs_root / RUN_ID
         board = ArtifactBoard(root / "artifact_board.jsonl")
@@ -250,6 +310,29 @@ class ApiV1AdminSystemTests(unittest.TestCase):
         self.assertEqual(status.json(), status_payload)
         self.assertEqual(doctor.json(), doctor_payload)
         self.assertEqual(checks.json(), checks_payload)
+
+    def test_admin_side_effects_require_an_explicit_admin_token_when_configured(self) -> None:
+        app = create_app(
+            settings=self.settings,
+            api_config=ApiConfig(
+                api_token=API_TOKEN,
+                admin_tokens=("admin-token",),
+            ),
+            repo_root=REPO_ROOT,
+        )
+        with TestClient(app, raise_server_exceptions=False) as client:
+            ordinary = client.post(
+                "/api/v1/admin/artifacts/cleanup",
+                headers=auth_headers(),
+            )
+            admin = client.post(
+                "/api/v1/admin/artifacts/cleanup",
+                headers=auth_headers("admin-token"),
+            )
+
+        self.assertEqual(ordinary.status_code, 403, ordinary.text)
+        self.assertEqual(ordinary.json()["error"]["code"], "insufficient_role")
+        self.assertEqual(admin.status_code, 200, admin.text)
 
 
 if __name__ == "__main__":
