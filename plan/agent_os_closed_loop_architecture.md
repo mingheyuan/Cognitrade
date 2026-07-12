@@ -10,6 +10,36 @@
 
 DomainPack 只提供可安装的专业能力，不拥有完整运行时，也不能绕过 Agent OS 的治理边界。
 
+## 1.1 Agent OS 的架构定位与演进判断
+
+Cognitrade 的目标不是把多个固定 Agent 串成更复杂的流程，而是形成一种“动态编排型 Agent OS”（Adaptive Agent Runtime）：由一个 Main Agent 负责理解请求、决定执行深度、选择能力，并在运行过程中根据 Artifact、Tool 和 Subagent 的真实产出继续执行、修改图、重试、局部重跑或结束交付。
+
+动态 ExecutionGraph 本身不是 Agent 的全部，也不是固定工作流模板。它是 Main Agent 在任务复杂度达到阈值后临时物化的编排与执行载体。简单请求可以留在 Core Agent Loop；只有当请求需要 DomainPack、多 Subagent、并发、专业 Artifact、Gate、审批、暂停恢复或可回放治理时，才升级到 Graph Mode。
+
+这一方向具备成为下一代 Agent 系统运行时的可能，但成立条件不是“使用了动态图”这一项，而是以下能力同时成立：
+
+- Main Agent 是唯一 Root，PlanAgent 是其规划角色，不注册第二个主 Agent；
+- Subagent 通过 Capability、输入输出 Schema 和 Artifact 契约被选择，可以被兼容实现替换；
+- Tool、Skill 和 Subagent 都是受治理的可调用能力，但只有需要独立生命周期、预算、并发、取消或用户可见状态的能力才提升为 Graph leaf；
+- Graph 根据当前请求、已安装 Pack、Board、Memory、示例和治理预算实时生成，固定模板最多只能提供规划先验；
+- 每轮产出都回到同一个 ArtifactBoard，由 Main Agent 结合运行事实决定继续、补图、改图、换能力、重跑或交付；
+- 权限、预算、并发、取消、来源追踪、质量 Gate、人工审批、审计和回放始终由 Agent OS 固定控制；
+- 经过评测的运行经验才能进入 Policy Memory，未经验证的 Subagent 产出不能直接改变长期方法论。
+
+因此，准确的架构表述是：
+
+> 单一 Main Agent + 能力契约 + 按需动态 Graph + 统一 Artifact 数据面 + 可治理运行时。
+
+它区别于传统 Tool Agent、ReAct Loop 和固定 DAG 的地方，不是增加了更多 Agent，而是让任务分解、专家组合和执行图都可以根据运行事实演进，同时让安全边界和证据链保持不可绕过。
+
+当前 Cognitrade 已具备该方向的核心雏形：Main Agent、Core Agent Loop、Capability Planner、动态 ExecutionGraph、统一 Runner、ArtifactBoard、DomainPack、Gate、Memory 和审计事件。当前仍属于“动态 Graph + DomainPack 的受治理运行时”，还不能宣称已经实现完全自演化的 Agent OS。后续必须继续验证：
+
+1. Planner 能否生成此前不存在的任务图，而不是只在固定 intent 图之间切换；
+2. 替换 Subagent 后，只要契约兼容，上下游是否无需修改；
+3. Planner 是否能依据 Board 的中间结果安全地改变任意子图；
+4. 评测和 Policy Memory 是否能证明某种规划策略有效后再复用；
+5. 在成本、延迟、失败、并发和高风险交付约束下，系统是否仍能稳定完成闭环。
+
 ## 2. 核心原则
 
 ### 2.1 ExecutionGraph 是运行状态

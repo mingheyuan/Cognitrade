@@ -5,6 +5,7 @@ artifact_types:
   - artifact_type: user_request
   - artifact_type: normalized_query
   - artifact_type: stock_snapshot_bundle
+  - artifact_type: snapshot
   - artifact_type: evidence_set
   - artifact_type: financial_analysis
   - artifact_type: screening_result
@@ -15,6 +16,14 @@ artifact_types:
   - artifact_type: distillation_review
   - artifact_type: research_report
   - artifact_type: main_agent_synthesis
+  - artifact_type: valuation_model
+  - artifact_type: investor_panel_review
+  - artifact_type: risk_scan
+  - artifact_type: report_presentation
+  - artifact_type: institutional_analysis
+  - artifact_type: research_workflow
+  - artifact_type: deep_analysis
+  - artifact_type: uzi_dimension_coverage
 skills:
   - skill_name: market_snapshot_skill
     version: "1"
@@ -61,6 +70,81 @@ skills:
     description: Collect sector policy snapshots.
     implementation: skills.policy_snapshot.skill:PolicySnapshotSkill
     allowed_callers: [subagent]
+  - skill_name: uzi_kline_snapshot_skill
+    version: "1"
+    description: Collect UZI price-history dimensions through the Finance Pack market provider.
+    implementation: skills.uzi_source_snapshot.skill:KlineSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: uzi_macro_snapshot_skill
+    version: "1"
+    description: Collect benchmark and macro market context.
+    implementation: skills.uzi_source_snapshot.skill:MacroSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: uzi_peers_snapshot_skill
+    version: "1"
+    description: Collect comparable-company evidence where the configured provider supports it.
+    implementation: skills.uzi_source_snapshot.skill:PeersSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: uzi_chain_snapshot_skill
+    version: "1"
+    description: Collect industry-chain evidence with explicit provider gaps.
+    implementation: skills.uzi_source_snapshot.skill:ChainSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: uzi_research_snapshot_skill
+    version: "1"
+    description: Collect source-backed research reports.
+    implementation: skills.uzi_source_snapshot.skill:ResearchSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: uzi_industry_snapshot_skill
+    version: "1"
+    description: Resolve the company industry and related sector evidence.
+    implementation: skills.uzi_source_snapshot.skill:IndustrySnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: uzi_materials_snapshot_skill
+    version: "1"
+    description: Collect materials and input-cost evidence when configured.
+    implementation: skills.uzi_source_snapshot.skill:MaterialsSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: uzi_futures_snapshot_skill
+    version: "1"
+    description: Collect futures-linked evidence when configured.
+    implementation: skills.uzi_source_snapshot.skill:FuturesSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: uzi_valuation_snapshot_skill
+    version: "1"
+    description: Collect valuation facts from the market provider.
+    implementation: skills.uzi_source_snapshot.skill:ValuationSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: uzi_governance_snapshot_skill
+    version: "1"
+    description: Collect governance and disclosure facts.
+    implementation: skills.uzi_source_snapshot.skill:GovernanceSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: uzi_moat_snapshot_skill
+    version: "1"
+    description: Collect moat evidence when a configured source is available.
+    implementation: skills.uzi_source_snapshot.skill:MoatSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: uzi_trap_snapshot_skill
+    version: "1"
+    description: Collect trap and promotion-risk evidence with explicit gaps.
+    implementation: skills.uzi_source_snapshot.skill:TrapSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: uzi_contests_snapshot_skill
+    version: "1"
+    description: Collect public portfolio and contest evidence when configured.
+    implementation: skills.uzi_source_snapshot.skill:ContestsSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: uzi_fund_holders_snapshot_skill
+    version: "1"
+    description: Collect reported fund-holder evidence for a symbol.
+    implementation: skills.uzi_source_snapshot.skill:FundHoldersSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: uzi_similar_stocks_snapshot_skill
+    version: "1"
+    description: Collect industry-based similar-stock evidence.
+    implementation: skills.uzi_source_snapshot.skill:SimilarStocksSnapshotSkill
+    allowed_callers: [subagent]
 intake:
   implementation: subagents.task_intake:resolve_request
   minimum_confidence: 0.65
@@ -72,8 +156,7 @@ intake:
         - finance.query.normalize
         - finance.ashare.snapshot.collect
         - evidence.select
-        - finance.analysis.evaluate
-        - finance.report.compose
+        - finance.uzi.report.compose
       output_artifact_types: [research_report]
     - intent_id: stock_compare
       description: Compare two or more A-share companies on a consistent evidence basis.
@@ -82,8 +165,7 @@ intake:
         - finance.query.normalize
         - finance.ashare.snapshot.collect
         - evidence.select
-        - finance.analysis.evaluate
-        - finance.report.compose
+        - finance.uzi.report.compose
       output_artifact_types: [research_report]
     - intent_id: stock_screen
       description: Screen an A-share universe and produce traceable candidates.
@@ -141,6 +223,9 @@ capabilities:
     consumes:
       - artifact_type: normalized_query
     produces:
+      - artifact_type: snapshot
+        required: false
+        multiple: true
       - artifact_type: stock_snapshot_bundle
     tools:
       - financial_data_provider
@@ -157,7 +242,12 @@ capabilities:
     capability: evidence.select
     implementation: subagents.runtime:select_evidence
     consumes:
-      - artifact_type: stock_snapshot_bundle
+      - &finance_snapshot_input
+        artifact_type: snapshot
+        required: true
+        multiple: true
+        selector:
+           dimensions: [market, fundamental, notice, capital_flow, sentiment, events, lhb, kline, macro, peers, chain, research, industry, materials, futures, valuation, governance, moat, trap, contests, sector, policy]
     produces:
       - artifact_type: evidence_set
     requires_llm: true
@@ -169,16 +259,141 @@ capabilities:
     capability: finance.analysis.evaluate
     implementation: subagents.runtime:analyze_financials
     consumes:
-      - artifact_type: stock_snapshot_bundle
+      - *finance_snapshot_input
     produces:
       - artifact_type: financial_analysis
     reliability: 0.92
     cache_scope: run
+  - subagent_type: uzi_valuation_analyst
+    capability: finance.uzi.valuation.evaluate
+    capability_version: "1"
+    methodology_version: "3.9.1-adapted"
+    implementation: subagents.runtime:evaluate_uzi_valuation
+    consumes:
+      - *finance_snapshot_input
+    produces:
+      - artifact_type: valuation_model
+    cost_class: low
+    latency_class: low
+    reliability: 0.9
+    parallel_safe: true
+    cache_scope: run
+    freshness_ttl_seconds: 86400
+    data_period_policy: {kind: latest_available_financial_period}
+    tags: [profile:quick, profile:lite, profile:medium, profile:deep]
+  - subagent_type: uzi_panel_reviewer
+    capability: finance.uzi.panel.review
+    capability_version: "1"
+    methodology_version: "3.9.1-adapted"
+    implementation: subagents.runtime:evaluate_uzi_panel
+    consumes:
+      - *finance_snapshot_input
+    produces:
+      - artifact_type: investor_panel_review
+    cost_class: medium
+    latency_class: low
+    reliability: 0.86
+    parallel_safe: true
+    cache_scope: global
+    freshness_ttl_seconds: 86400
+    tags: [profile:quick, profile:lite, profile:medium, profile:deep]
+  - subagent_type: uzi_risk_scanner
+    capability: finance.uzi.risk.scan
+    capability_version: "1"
+    methodology_version: "3.9.1-adapted"
+    implementation: subagents.runtime:evaluate_uzi_risk
+    consumes:
+      - *finance_snapshot_input
+    produces:
+      - artifact_type: risk_scan
+    cost_class: low
+    latency_class: low
+    reliability: 0.82
+    parallel_safe: true
+    cache_scope: global
+    freshness_ttl_seconds: 3600
+    tags: [profile:quick, profile:lite, profile:medium, profile:deep]
+  - subagent_type: uzi_institutional_analyst
+    capability: finance.uzi.institutional.evaluate
+    capability_version: "1"
+    methodology_version: "3.9.1-adapted"
+    implementation: subagents.runtime:evaluate_uzi_institutional
+    consumes:
+      - *finance_snapshot_input
+      - artifact_type: valuation_model
+        required: false
+    produces:
+      - artifact_type: institutional_analysis
+    cost_class: medium
+    latency_class: medium
+    reliability: 0.82
+    parallel_safe: true
+    cache_scope: global
+    freshness_ttl_seconds: 86400
+    tags: [profile:medium, profile:deep]
+  - subagent_type: uzi_workflow_analyst
+    capability: finance.uzi.workflow.evaluate
+    capability_version: "1"
+    methodology_version: "3.9.1-adapted"
+    implementation: subagents.runtime:evaluate_uzi_workflow
+    consumes:
+      - *finance_snapshot_input
+      - artifact_type: valuation_model
+        required: false
+    produces:
+      - artifact_type: research_workflow
+    cost_class: medium
+    latency_class: medium
+    reliability: 0.82
+    parallel_safe: true
+    cache_scope: global
+    freshness_ttl_seconds: 86400
+    tags: [profile:medium, profile:deep]
+  - subagent_type: uzi_deep_analyst
+    capability: finance.uzi.deep.evaluate
+    capability_version: "1"
+    methodology_version: "3.9.1-adapted"
+    implementation: subagents.runtime:evaluate_uzi_deep
+    consumes:
+      - *finance_snapshot_input
+      - artifact_type: institutional_analysis
+      - artifact_type: research_workflow
+    produces:
+      - artifact_type: deep_analysis
+    cost_class: high
+    latency_class: high
+    reliability: 0.78
+    parallel_safe: true
+    cache_scope: global
+    freshness_ttl_seconds: 43200
+    tags: [profile:deep]
+  - subagent_type: uzi_dimension_coverage_analyzer
+    capability: finance.uzi.dimensions.cover
+    capability_version: "1"
+    methodology_version: "3.9.1-adapted"
+    implementation: subagents.runtime:evaluate_uzi_dimension_coverage
+    consumes:
+      - *finance_snapshot_input
+      - artifact_type: institutional_analysis
+        required: false
+      - artifact_type: research_workflow
+        required: false
+      - artifact_type: deep_analysis
+        required: false
+    produces:
+      - artifact_type: uzi_dimension_coverage
+    cost_class: low
+    latency_class: low
+    reliability: 0.98
+    parallel_safe: true
+    cache_scope: global
+    freshness_ttl_seconds: 3600
+    tags: [profile:medium, profile:deep]
   - subagent_type: stock_screen_analyzer
     capability: finance.stock.screen
     implementation: subagents.runtime:screen_stocks
     consumes:
-      - artifact_type: stock_snapshot_bundle
+      - *finance_snapshot_input
     produces:
       - artifact_type: screening_result
     parallel_safe: true
@@ -189,7 +404,7 @@ capabilities:
     capability: finance.sector.research
     implementation: subagents.runtime:research_sector
     consumes:
-      - artifact_type: stock_snapshot_bundle
+      - *finance_snapshot_input
     produces:
       - artifact_type: sector_analysis
     parallel_safe: true
@@ -260,6 +475,48 @@ capabilities:
     latency_class: high
     reliability: 0.85
     cache_scope: run
+    tags: [legacy:compat]
+  - subagent_type: uzi_report_composer
+    capability: finance.uzi.report.compose
+    capability_version: "1"
+    methodology_version: "3.9.1-adapted"
+    implementation: subagents.runtime:compose_uzi_report
+    consumes:
+      - artifact_type: evidence_set
+      - artifact_type: valuation_model
+      - artifact_type: investor_panel_review
+        required: false
+      - artifact_type: risk_scan
+        required: false
+      - artifact_type: institutional_analysis
+        required: false
+      - artifact_type: research_workflow
+        required: false
+      - artifact_type: deep_analysis
+        required: false
+    produces:
+      - artifact_type: research_report
+      - artifact_type: report_presentation
+    cost_class: low
+    latency_class: low
+    reliability: 0.9
+    cache_scope: run
+    freshness_ttl_seconds: 0
+    tags: [profile:quick, profile:lite, profile:medium, profile:deep]
+  - subagent_type: research_safety_gate_evaluator
+    capability: finance.report.safety.gate
+    implementation: subagents.runtime:evaluate_research_safety_gate
+    cost_class: low
+    latency_class: low
+    reliability: 0.99
+    cache_scope: run
+  - subagent_type: methodology_quality_gate_evaluator
+    capability: finance.methodology.quality.gate
+    implementation: subagents.runtime:evaluate_methodology_quality_gate
+    cost_class: low
+    latency_class: low
+    reliability: 0.99
+    cache_scope: run
   - subagent_type: screening_report_composer
     capability: finance.screen.report.compose
     implementation: subagents.runtime:compose_screening_report
@@ -295,15 +552,359 @@ quality_gates:
     artifact_type: research_report
     blocking: true
     description: Research reports require traceable evidence sources.
+  - gate_id: finance.research_safety
+    artifact_type: research_report
+    evaluator_capability: finance.report.safety.gate
+    blocking: true
+    description: Research reports must pass source and professional risk checks.
+  - gate_id: finance.valuation.input
+    artifact_type: valuation_model
+    evaluator_capability: finance.methodology.quality.gate
+    blocking: true
+    description: Valuation outputs must expose input quality and assumption status.
+    config:
+      allowed_quality_statuses: [available, degraded, assumption_only, data_gap]
+  - gate_id: finance.methodology.input
+    artifact_type: institutional_analysis
+    evaluator_capability: finance.methodology.quality.gate
+    blocking: true
+    description: Institutional method outputs must expose input quality and assumptions.
+    config:
+      allowed_quality_statuses: [available, degraded, assumption_only, data_gap]
+  - gate_id: finance.financial.input
+    artifact_type: financial_analysis
+    evaluator_capability: finance.methodology.quality.gate
+    blocking: true
+    description: Reusable financial methods must expose input quality and assumptions.
+    config:
+      allowed_quality_statuses: [available, degraded, assumption_only, data_gap]
+  - gate_id: finance.workflow.input
+    artifact_type: research_workflow
+    evaluator_capability: finance.methodology.quality.gate
+    blocking: true
+    description: Research workflow outputs must expose source coverage and gaps.
+    config:
+      allowed_quality_statuses: [available, degraded, assumption_only, data_gap]
+  - gate_id: finance.deep.input
+    artifact_type: deep_analysis
+    evaluator_capability: finance.methodology.quality.gate
+    blocking: true
+    description: Deep analysis outputs must expose method and evidence limitations.
+    config:
+      allowed_quality_statuses: [available, degraded, assumption_only, data_gap]
+  - gate_id: finance.dimension.coverage
+    artifact_type: uzi_dimension_coverage
+    evaluator_capability: finance.methodology.quality.gate
+    blocking: true
+    description: Dimension coverage must separate source dimensions from derived products.
+    config:
+      allowed_quality_statuses: [available, degraded, data_gap]
+  - gate_id: finance.panel.lineage
+    artifact_type: investor_panel_review
+    evaluator_capability: finance.methodology.quality.gate
+    blocking: true
+    description: Panel outputs must preserve methodology lineage and evidence status.
+    config:
+      allowed_quality_statuses: [available, degraded, data_gap]
+  - gate_id: finance.risk.evidence
+    artifact_type: risk_scan
+    evaluator_capability: finance.methodology.quality.gate
+    blocking: true
+    description: Risk outputs must distinguish observed signals from data gaps.
+    config:
+      allowed_quality_statuses: [available, degraded, data_gap]
+  - gate_id: finance.screening.quality
+    artifact_type: screening_result
+    evaluator_capability: finance.methodology.quality.gate
+    blocking: true
+    description: Screening outputs must preserve candidate evidence, ranking inputs and data gaps.
+    config:
+      allowed_quality_statuses: [available, degraded, data_gap]
+  - gate_id: finance.sector.analysis
+    artifact_type: sector_analysis
+    evaluator_capability: finance.methodology.quality.gate
+    blocking: true
+    description: Sector analysis must preserve constituent, heatmap and catalyst provenance.
+    config:
+      allowed_quality_statuses: [available, degraded, data_gap]
+  - gate_id: finance.thesis.review
+    artifact_type: thesis_review
+    evaluator_capability: finance.methodology.quality.gate
+    blocking: true
+    description: Thesis review must preserve claim-level evidence, counterevidence and gaps.
+    config:
+      allowed_quality_statuses: [available, degraded, data_gap]
+  - gate_id: finance.presentation.lineage
+    artifact_type: report_presentation
+    evaluator_capability: finance.methodology.quality.gate
+    blocking: true
+    description: Presentation must reference the same active semantic artifacts.
+    config:
+      allowed_quality_statuses: [available, degraded, assumption_only, data_gap]
 report_contracts:
   - contract_id: finance.research_report.v1
     artifact_type: research_report
     required_sections: [conclusion, evidence, risk, follow_up]
     required_source_refs: true
-    required_gate_ids: [finance.sources_required]
+    required_gate_ids: [finance.sources_required, finance.research_safety]
+  - contract_id: finance.report_presentation.v1
+    artifact_type: report_presentation
+    required_sections: [theme, profile, hero, core_conclusion, source_artifact_ids, data_gap]
+    required_source_refs: true
+    required_gate_ids: [finance.presentation.lineage]
 planner_policies:
   task_intake: subagents.task_intake:resolve_request
   prefer_evidence_backed_paths: true
+  default_profile: lite
+  profile_intents: [stock_check, stock_compare, stock_screen, sector_research, review_thesis]
+  profile_output_intents: [stock_check, stock_compare]
+  intent_profiles:
+    stock_screen: quick
+    sector_research: lite
+    review_thesis: quick
+  progress_policy:
+    max_model_updates: 12
+    max_tokens: 1200
+    min_interval_seconds: 1.0
+    timeout_seconds: 8.0
+    fallback: structured
+  snapshot_dimensions:
+    - market
+    - fundamental
+    - notice
+    - lhb
+    - capital_flow
+    - sentiment
+    - events
+    - kline
+    - macro
+    - peers
+    - chain
+    - research
+    - industry
+    - materials
+    - futures
+    - valuation
+    - governance
+    - moat
+    - trap
+    - contests
+  research_profiles:
+    quick:
+      max_cost_class: medium
+      max_latency_class: medium
+      max_duration_seconds: 90
+      allowed_capability_tags: [profile:quick]
+      methods: [dcf, risk]
+    lite:
+      max_cost_class: medium
+      max_latency_class: medium
+      max_duration_seconds: 300
+      allowed_capability_tags: [profile:quick, profile:lite]
+      methods: [dcf, panel, risk]
+    medium:
+      max_cost_class: high
+      max_latency_class: high
+      max_duration_seconds: 900
+      allowed_capability_tags: [profile:quick, profile:lite, profile:medium]
+      methods: [dcf, comps, three_statement, quick_lbo, accretion_dilution, panel, risk, workflow, dimensions]
+    deep:
+      max_cost_class: high
+      max_latency_class: high
+      max_duration_seconds: 1800
+      allowed_capability_tags: [profile:quick, profile:lite, profile:medium, profile:deep]
+      methods: [dcf, comps, three_statement, quick_lbo, accretion_dilution, panel, risk, segmental, workflow, deep_analysis, dimensions]
+  profile_outputs:
+    quick: [research_report, report_presentation, valuation_model, risk_scan]
+    lite: [research_report, report_presentation, valuation_model, investor_panel_review, risk_scan]
+    medium: [research_report, report_presentation, valuation_model, investor_panel_review, risk_scan, institutional_analysis, research_workflow, uzi_dimension_coverage]
+    deep: [research_report, report_presentation, valuation_model, investor_panel_review, risk_scan, institutional_analysis, research_workflow, deep_analysis, uzi_dimension_coverage]
+  methodology_outputs:
+    dcf: [valuation_model]
+    comps: [valuation_model]
+    cashflow_resilience: [financial_analysis]
+    three_statement: [institutional_analysis]
+    lbo: [institutional_analysis]
+    quick_lbo: [institutional_analysis]
+    ma_accretion: [institutional_analysis]
+    accretion_dilution: [institutional_analysis]
+    segmental: [institutional_analysis]
+    panel: [investor_panel_review]
+    risk: [risk_scan]
+    report: [research_report]
+    institutional: [institutional_analysis]
+    workflow: [research_workflow]
+    deep: [deep_analysis]
+    dimensions: [uzi_dimension_coverage]
+  method_catalog:
+    dcf:
+      output_artifact_types: [valuation_model]
+      capability: finance.uzi.valuation.evaluate
+      required_inputs:
+        - artifact_type: snapshot
+          selector: {snapshot_type: fundamental, scope: symbol}
+          required_fields:
+            - {path: facts.financial_abstract.operating_cash_flow, type: number, unit: CNY_100M, aliases: [facts.financial_abstract.free_cash_flow]}
+        - artifact_type: snapshot
+          selector: {snapshot_type: market, scope: symbol}
+          required_fields:
+            - {path: facts.market_overview.latest_price, type: number, unit: CNY}
+      required_gate_ids: [finance.valuation.input]
+      allowed_quality_statuses: [available, degraded, assumption_only]
+      result_equivalence: {level: numeric_tolerance, baseline_fixture: tests/fixtures/uzi_methodology_baseline.json, tolerance: 0.5}
+    comps:
+      output_artifact_types: [valuation_model]
+      capability: finance.uzi.valuation.evaluate
+      required_inputs:
+        - artifact_type: snapshot
+          selector: {snapshot_type: peers, scope: symbol}
+          required_fields:
+            - {path: facts, type: object}
+      required_gate_ids: [finance.valuation.input]
+      allowed_quality_statuses: [available, degraded]
+      result_equivalence: {level: numeric_tolerance, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json, tolerance: 0.1}
+    cashflow_resilience:
+      output_artifact_types: [financial_analysis]
+      capability: finance.analysis.evaluate
+      required_inputs:
+        - artifact_type: snapshot
+          selector: {snapshot_type: fundamental, scope: symbol}
+          required_fields:
+            - {path: facts.financial_abstract.operating_cash_flow, type: number, unit: CNY_100M}
+      required_gate_ids: [finance.financial.input]
+      allowed_quality_statuses: [available, degraded, assumption_only]
+      result_equivalence: {level: semantic, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json}
+    three_statement:
+      output_artifact_types: [institutional_analysis]
+      capability: finance.uzi.institutional.evaluate
+      required_inputs:
+        - artifact_type: snapshot
+          selector: {snapshot_type: fundamental, scope: symbol}
+          required_fields:
+            - {path: facts.financial_abstract.revenue, type: number, unit: CNY_100M}
+      required_gate_ids: [finance.methodology.input]
+      allowed_quality_statuses: [available, degraded, assumption_only]
+      result_equivalence: {level: semantic, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json}
+    lbo:
+      output_artifact_types: [institutional_analysis]
+      capability: finance.uzi.institutional.evaluate
+      required_inputs:
+        - artifact_type: snapshot
+          selector: {snapshot_type: fundamental, scope: symbol}
+          required_fields:
+            - {path: facts.financial_abstract.ebitda, type: number, unit: CNY_100M}
+      required_gate_ids: [finance.methodology.input]
+      allowed_quality_statuses: [available, assumption_only]
+      result_equivalence: {level: numeric_tolerance, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json, tolerance: 0.1}
+    quick_lbo:
+      output_artifact_types: [institutional_analysis]
+      capability: finance.uzi.institutional.evaluate
+      required_inputs:
+        - artifact_type: snapshot
+          selector: {snapshot_type: fundamental, scope: symbol}
+          required_fields:
+            - {path: facts.financial_abstract.ebitda, type: number, unit: CNY_100M}
+      required_gate_ids: [finance.methodology.input]
+      allowed_quality_statuses: [available, assumption_only]
+    ma_accretion:
+      output_artifact_types: [institutional_analysis]
+      capability: finance.uzi.institutional.evaluate
+      required_inputs:
+        - artifact_type: snapshot
+          selector: {snapshot_type: fundamental, scope: symbol}
+          required_fields:
+            - {path: facts.financial_abstract.eps, type: number}
+      required_gate_ids: [finance.methodology.input]
+      allowed_quality_statuses: [available, degraded]
+      result_equivalence: {level: numeric_tolerance, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json, tolerance: 0.1}
+    accretion_dilution:
+      output_artifact_types: [institutional_analysis]
+      capability: finance.uzi.institutional.evaluate
+      required_inputs:
+        - artifact_type: snapshot
+          selector: {snapshot_type: fundamental, scope: symbol}
+          required_fields:
+            - {path: facts.financial_abstract.eps, type: number}
+      required_gate_ids: [finance.methodology.input]
+      allowed_quality_statuses: [available, degraded]
+    segmental:
+      output_artifact_types: [institutional_analysis]
+      capability: finance.uzi.institutional.evaluate
+      required_inputs:
+        - artifact_type: snapshot
+          selector: {snapshot_type: fundamental, scope: symbol}
+          required_fields:
+            - {path: facts.financial_abstract.segments, type: array}
+      required_gate_ids: [finance.methodology.input]
+      allowed_quality_statuses: [available]
+      result_equivalence: {level: semantic, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json}
+    workflow:
+      output_artifact_types: [research_workflow]
+      capability: finance.uzi.workflow.evaluate
+      required_inputs:
+        - artifact_type: snapshot
+          selector: {snapshot_type: fundamental, scope: symbol}
+          required_fields:
+            - {path: facts, type: object}
+      required_gate_ids: [finance.workflow.input]
+      allowed_quality_statuses: [available, degraded, assumption_only]
+      result_equivalence: {level: semantic, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json}
+    deep_analysis:
+      output_artifact_types: [deep_analysis]
+      capability: finance.uzi.deep.evaluate
+      required_inputs:
+        - artifact_type: snapshot
+          selector: {snapshot_type: fundamental, scope: symbol}
+          required_fields:
+            - {path: facts, type: object}
+      required_gate_ids: [finance.deep.input]
+      allowed_quality_statuses: [available, degraded, assumption_only]
+      result_equivalence: {level: semantic, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json}
+    dimensions:
+      output_artifact_types: [uzi_dimension_coverage]
+      capability: finance.uzi.dimensions.cover
+      required_inputs:
+        - artifact_type: snapshot
+          required_fields:
+            - {path: facts, type: object, source_required: false}
+      required_gate_ids: [finance.dimension.coverage]
+      allowed_quality_statuses: [available, degraded, data_gap]
+      result_equivalence: {level: semantic, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json}
+    panel:
+      output_artifact_types: [investor_panel_review]
+      capability: finance.uzi.panel.review
+      required_inputs:
+        - artifact_type: snapshot
+          selector: {snapshot_type: market, scope: symbol}
+          required_fields:
+            - {path: facts.market_overview.latest_price, type: number, unit: CNY}
+        - artifact_type: snapshot
+          selector: {snapshot_type: fundamental, scope: symbol}
+          required_fields:
+            - {path: facts, type: object}
+      required_gate_ids: [finance.panel.lineage]
+      allowed_quality_statuses: [available, degraded]
+      result_equivalence: {level: semantic, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json}
+    risk:
+      output_artifact_types: [risk_scan]
+      capability: finance.uzi.risk.scan
+      required_inputs:
+        - artifact_type: snapshot
+          required_fields:
+            - {path: facts, type: object, source_required: false}
+      required_gate_ids: [finance.risk.evidence]
+      allowed_quality_statuses: [available, degraded, data_gap]
+      result_equivalence: {level: semantic, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json}
+    report:
+      output_artifact_types: [research_report]
+      capability: finance.uzi.report.compose
+      required_inputs:
+        - artifact_type: evidence_set
+          required_fields:
+            - {path: items, type: array}
+      required_gate_ids: [finance.sources_required, finance.research_safety]
+      allowed_quality_statuses: [available, degraded]
+      result_equivalence: {level: semantic, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json}
   supported_intents:
     - stock_check
     - stock_compare
@@ -331,6 +932,12 @@ governance:
   allowed_tools: [financial_data_provider]
   allowed_permissions: [finance:data:read]
 metadata:
+  migration:
+    uzi_source_mapping: migration/uzi_source_mapping.yaml
+    uzi_source_mapping_schema: migration/uzi_source_mapping.schema.json
+    uzi_source_mapping_schema_version: "2"
+    source_commit: 775c76101e8890492d21c2e2827692456fcddb58
+    methodology_version: 3.9.1-adapted
   dashboard_views:
     overview:
       resources:

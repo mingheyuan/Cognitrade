@@ -13,12 +13,80 @@ from research_system.api.agent_os_run_service import AgentOSRunService
 from research_system.runtime.agent_os import AgentOS
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.storage.jsonl import write_json
+from research_system.runtime.storage.jsonl import read_jsonl
+from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.schemas.execution_graph import ExecutionGraph
 from research_system.schemas.execution_runtime import ExecutionRunResult, ExecutionRunSnapshot
 from research_system.schemas.protocol import RequestEnvelope
 
 
 class AgentOSApiTests(unittest.TestCase):
+    def test_graph_delivery_marks_missing_main_agent_synthesis_without_final_event(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            settings = Settings.from_env(repository_root).model_copy(
+                update={
+                    "runs_root": root / "runs",
+                    "memory_root": root / "memory",
+                    "domain_packs_root": repository_root / "domain_packs",
+                }
+            )
+            agent_os = AgentOS(settings)
+            agent_os.main_agent.llm_provider = None
+            request = RequestEnvelope(
+                intent="stock_check",
+                user_query="分析 600000",
+            )
+            run_id, paths, _ = agent_os.run_store.create_run(request, "stock_check")
+            graph = ExecutionGraph(
+                domain_id="finance_ashare",
+                objective=request.user_query,
+                metadata={"intent": "stock_check"},
+            )
+            snapshot = ExecutionRunSnapshot(
+                run_id=run_id,
+                thread_id="thread-1",
+                request_id=request.request_id,
+                graph=graph,
+                status="completed",
+            )
+            runner = agent_os._runner(run_id)
+            runner.board.add(
+                ArtifactRecord(
+                    artifact_type="research_report",
+                    run_id=run_id,
+                    thread_id="thread-1",
+                    request_id=request.request_id,
+                    producer=ArtifactProducer(
+                        executor="uzi_report_composer",
+                        capability="finance.uzi.report.compose",
+                        node_id="report",
+                        domain_id="finance_ashare",
+                    ),
+                    content={"conclusion": "Pack 原始摘要", "evidence": []},
+                    source_refs=[{"type": "test", "id": "source-1"}],
+                    confidence=0.5,
+                )
+            )
+
+            result = agent_os._ensure_graph_assistant_message(
+                ExecutionRunResult(snapshot=snapshot)
+            )
+            assistant = next(
+                artifact
+                for artifact in runner.board.list_artifacts(run_id=run_id, status="active")
+                if artifact.artifact_type == "assistant_message"
+            )
+            events = read_jsonl(paths.root / "execution_events.jsonl")
+
+            self.assertIn(assistant.artifact_id, result.artifact_ids)
+            self.assertEqual(result.snapshot.status, "completed_partial")
+            self.assertEqual(assistant.content["delivery_status"], "synthesis_unavailable")
+            self.assertTrue(assistant.content["synthesis_unavailable"])
+            self.assertFalse(any(event["event_type"] == "assistant_message_ready" for event in events))
+            self.assertTrue(any(event["event_type"] == "assistant_message_status" for event in events))
+
     def test_gated_graph_response_preserves_gated_status(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary_directory:

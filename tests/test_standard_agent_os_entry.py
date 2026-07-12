@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from research_system.runtime.orchestration.orchestrator import ResearchOrchestrator
 from research_system.runtime.core.artifact_board import ArtifactBoard
@@ -12,7 +14,41 @@ from research_system.runtime.storage.jsonl import read_json, read_jsonl
 from research_system.schemas.protocol import RequestEnvelope
 
 
+class _DeterministicProvider:
+    available = True
+    model = "test-deterministic"
+
+    def parse(self, *args, **kwargs):
+        return {}
+
+    def complete(self, *, system_prompt: str, user_prompt: str, **kwargs) -> str:
+        del user_prompt, kwargs
+        if '"current"' in system_prompt and '"next"' in system_prompt:
+            return json.dumps(
+                {"current": "已完成当前受治理步骤。", "next": "继续处理下一执行前沿。"},
+                ensure_ascii=False,
+            )
+        if '"conclusion"' in system_prompt and '"assistant_message"' in system_prompt:
+            return json.dumps(
+                {
+                    "conclusion": "已根据可追溯证据完成本次研究。",
+                    "assistant_message": "已根据可追溯证据完成本次研究。",
+                    "follow_up": ["检查来源质量并在需要时刷新数据。"],
+                },
+                ensure_ascii=False,
+            )
+        return "已完成当前请求。"
+
+
 class StandardAgentOSEntryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._provider_patcher = patch(
+            "research_system.runtime.providers.provider_registry.ProviderRegistry.default",
+            return_value=_DeterministicProvider(),
+        )
+        self._provider_patcher.start()
+        self.addCleanup(self._provider_patcher.stop)
+
     @staticmethod
     def _snapshots() -> list[dict]:
         return [

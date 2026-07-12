@@ -1,0 +1,47 @@
+{
+  "fixture_id": "uzi-finance-replay-600000-20260712-v1",
+  "source_commit": "775c76101e8890492d21c2e2827692456fcddb58",
+  "as_of": "2026-07-12T00:00:00Z",
+  "symbols": ["600000"],
+  "snapshots": [
+    {
+      "snapshot_type": "market",
+      "symbol": "600000",
+      "snapshot_date": "2026-07-12",
+      "facts": {
+        "market_overview": {
+          "latest_price": 10.0,
+          "pe_ttm": 8.0,
+          "pb": 0.8,
+          "amount": 2000000000,
+          "pct_change": 1.2
+        }
+      },
+      "source": {"vendor": "fixture", "provider_id": "replay_market"}
+    },
+    {
+      "snapshot_type": "fundamental",
+      "symbol": "600000",
+      "snapshot_date": "2026-07-12",
+      "facts": {
+        "financial_abstract": {
+          "revenue": 1000,
+          "net_profit": 120,
+          "operating_cash_flow": 160,
+          "roe": 12,
+          "debt_ratio": 55,
+          "revenue_growth": 8,
+          "profit_growth": 10
+        }
+      },
+      "source": {"vendor": "fixture", "provider_id": "replay_fundamental"}
+    },
+    {
+      "snapshot_type": "notice",
+      "symbol": "600000",
+      "snapshot_date": "2026-07-12",
+      "facts": {"notice_count": 3},
+      "source": {"vendor": "fixture", "provider_id": "replay_notice"}
+    }
+  ]
+}

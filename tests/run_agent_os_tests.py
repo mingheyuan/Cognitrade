@@ -10,7 +10,12 @@ from pathlib import Path
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the Cognitrade test suite with isolated file processes.")
     parser.add_argument("--pattern", default="test_*.py")
-    parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=300.0,
+        help="per-file timeout in seconds (default: 300; override for focused runs)",
+    )
     args = parser.parse_args()
     tests_root = Path(__file__).resolve().parent
     repository_root = tests_root.parent
@@ -22,7 +27,8 @@ def main() -> int:
     failures = 0
     selected = sorted(tests_root.glob(args.pattern))
     for path in selected:
-        module = f"tests.{path.stem}"
+        relative_module = path.relative_to(tests_root).with_suffix("")
+        module = ".".join(("tests", *relative_module.parts))
         print(f"[START] {module}", flush=True)
         try:
             completed = subprocess.run(

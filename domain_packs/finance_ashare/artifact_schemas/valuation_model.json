@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["methodology_version", "profile", "models", "primary_symbol", "methodologies"],
+  "properties": {
+    "methodology_version": {"type": "string"},
+    "profile": {"type": "string"},
+    "models": {"type": "array", "items": {"type": "object"}},
+    "primary_symbol": {"type": ["string", "null"]},
+    "methodologies": {"type": "array", "items": {"type": "string"}}
+  }
+}

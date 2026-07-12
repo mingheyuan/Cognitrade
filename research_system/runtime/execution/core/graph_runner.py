@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -118,6 +118,7 @@ class ExecutionNodeContext:
     node: ExecutionNode
     input_artifacts: list[ArtifactRecord]
     artifact_board: ArtifactBoard
+    cache_root: Path
     cancellation: Event
     tool_registry: CoreToolRegistry | None = None
     skill_runtime: Any | None = None
@@ -170,6 +171,7 @@ class ExecutionNodeContext:
             tenant_id=self.tenant_id,
             run_root=Path(self.artifact_board.path).parent,
             actor=f"subagent:{self.node.node_id}",
+            cache_root=self.cache_root,
             artifact_board=self.artifact_board,
             skill_runtime=self.skill_runtime,
             memory_store=self.memory_store,
@@ -324,6 +326,9 @@ class ExecutionGraphRunner:
         self._request_id: str | None = None
         self._graph_revision: int | None = None
         self._tool_semaphore: Semaphore | None = None
+        self._progress_policy: dict[str, Any] = {}
+        self._progress_model_updates = 0
+        self._progress_last_model_at = 0.0
         self._failure_injections = [
             {
                 "kind": str(row.get("kind") or "").strip(),
@@ -447,6 +452,9 @@ class ExecutionGraphRunner:
         self._thread_id = thread_id
         self._request_id = request_id
         self._graph_revision = graph.revision
+        self._progress_policy = dict(graph.metadata.get("progress_policy") or {})
+        self._progress_model_updates = 0
+        self._progress_last_model_at = 0.0
         self.board.bind_thread(thread_id)
         snapshot = self._load_snapshot() if resume else None
         if snapshot is None:
@@ -479,7 +487,7 @@ class ExecutionGraphRunner:
                 request_id=request_id,
             )
             graph = snapshot.graph
-            if snapshot.status in {"completed", "gated", "failed", "cancelled", "timed_out"}:
+            if snapshot.status in {"completed", "completed_partial", "gated", "failed", "cancelled", "timed_out"}:
                 return self._result(snapshot)
             if self._rejected_approval_ids(snapshot):
                 self._mark_approval_rejection(snapshot)
@@ -1292,6 +1300,7 @@ class ExecutionGraphRunner:
                             node=node,
                             input_artifacts=inputs,
                             artifact_board=self.board,
+                            cache_root=self.cache_root,
                             cancellation=cancellation,
                             tool_registry=self.tool_registry,
                             skill_runtime=self._skill_runtime_for(snapshot, node),
@@ -1307,6 +1316,16 @@ class ExecutionGraphRunner:
                         )
                     )
                     output = self._normalize_output(raw_output)
+                    input_contract = self._evaluate_method_input_contract(node, inputs)
+                    if input_contract is not None:
+                        self._annotate_method_input_contract(output, input_contract)
+                        self._emit(
+                            "method_input_contract_evaluated",
+                            node_id=node.node_id,
+                            capability=node.capability,
+                            status=input_contract["status"],
+                            missing_fields=input_contract["missing_fields"],
+                        )
                     elapsed = perf_counter() - started
                     output.usage.duration_seconds += elapsed
                     for message in output.messages:
@@ -1407,11 +1426,26 @@ class ExecutionGraphRunner:
     ) -> list[ArtifactRecord]:
         selected: list[ArtifactRecord] = []
         for port in node.consumes:
-            candidates = self.board.list_artifacts(
-                run_id=snapshot.run_id,
-                artifact_type=port.artifact_type,
-                status="active",
-            )
+            if node.input_artifact_ids:
+                candidates = [
+                    artifact
+                    for artifact_id in node.input_artifact_ids
+                    for artifact in [self.board.get(artifact_id)]
+                    if artifact is not None
+                    and artifact.status == "active"
+                    and artifact.artifact_type == port.artifact_type
+                ]
+            else:
+                candidates = self.board.list_artifacts(
+                    run_id=snapshot.run_id,
+                    artifact_type=port.artifact_type,
+                    status="active",
+                )
+            candidates = [
+                artifact
+                for artifact in candidates
+                if self._artifact_matches_selector(artifact, port.selector)
+            ]
             producer_node_id = str(port.selector.get("producer_node_id") or "").strip()
             if producer_node_id:
                 candidates = [
@@ -1425,6 +1459,42 @@ class ExecutionGraphRunner:
                 )
             selected.extend(candidates if port.multiple else candidates[-1:])
         return list({artifact.artifact_id: artifact for artifact in selected}.values())
+
+    @staticmethod
+    def _artifact_matches_selector(
+        artifact: ArtifactRecord,
+        selector: dict[str, Any] | None,
+    ) -> bool:
+        selector = dict(selector or {})
+        content = artifact.content if isinstance(artifact.content, dict) else {}
+        metadata = artifact.metadata if isinstance(artifact.metadata, dict) else {}
+        for key, expected in selector.items():
+            if key == "producer_node_id":
+                continue
+            if key == "dimensions":
+                actual = str(
+                    content.get("snapshot_type")
+                    or content.get("dimension")
+                    or metadata.get("snapshot_type")
+                    or metadata.get("dimension")
+                    or ""
+                )
+                if actual not in {str(item) for item in list(expected or [])}:
+                    return False
+                continue
+            if key == "quality_status":
+                actual = str(
+                    content.get("quality_status")
+                    or metadata.get("quality_status")
+                    or ""
+                )
+                if actual not in {str(item) for item in list(expected or [])}:
+                    return False
+                continue
+            actual = content.get(key, metadata.get(key, ""))
+            if str(actual or "") != str(expected):
+                return False
+        return True
 
     def _normalize_output(self, output: Any) -> NodeExecutionOutput:
         if isinstance(output, NodeExecutionOutput):
@@ -1449,6 +1519,117 @@ class ExecutionGraphRunner:
                 return NodeExecutionOutput.model_validate(output)
             return NodeExecutionOutput(artifacts=[ArtifactDraft.model_validate(output)])
         raise TypeError(f"unsupported capability output: {type(output).__name__}")
+
+    def _evaluate_method_input_contract(
+        self,
+        node: ExecutionNode,
+        inputs: list[ArtifactRecord],
+    ) -> dict[str, Any] | None:
+        requirements = [
+            item for item in list(node.metadata.get("method_input_requirements") or [])
+            if isinstance(item, dict)
+        ]
+        if not requirements:
+            return None
+        missing_fields: list[str] = []
+        quality_violations: list[str] = []
+        checked_fields: list[str] = []
+        for requirement in requirements:
+            artifact_type = str(requirement.get("artifact_type") or "").strip()
+            selector = dict(requirement.get("selector") or {})
+            candidates = [
+                artifact
+                for artifact in inputs
+                if (not artifact_type or artifact.artifact_type == artifact_type)
+                and self._artifact_matches_selector(artifact, selector)
+            ]
+            fields = [
+                field for field in list(requirement.get("required_fields") or [])
+                if isinstance(field, dict)
+            ]
+            if not candidates:
+                for field in fields:
+                    if bool(field.get("source_required", True)):
+                        missing_fields.append(
+                            f"{artifact_type or 'artifact'}.{field.get('path') or 'required_field'}"
+                        )
+                continue
+            allowed_quality = {
+                str(item).strip().lower()
+                for item in list(requirement.get("allowed_quality_statuses") or ["available"])
+            }
+            for artifact in candidates:
+                quality = self._artifact_content_quality(artifact)
+                if quality not in allowed_quality:
+                    quality_violations.append(f"{artifact.artifact_type}:{quality}")
+            for field in fields:
+                if not bool(field.get("source_required", True)):
+                    continue
+                path = str(field.get("path") or "").strip()
+                aliases = [str(item).strip() for item in list(field.get("aliases") or []) if str(item).strip()]
+                checked_fields.append(path)
+                if not any(
+                    self._field_present(artifact.content, candidate_path)
+                    for artifact in candidates
+                    for candidate_path in [path, *aliases]
+                ):
+                    missing_fields.append(path)
+        missing_fields = list(dict.fromkeys(item for item in missing_fields if item))
+        quality_violations = list(dict.fromkeys(item for item in quality_violations if item))
+        status = "available"
+        if missing_fields:
+            status = "data_gap"
+        elif quality_violations:
+            status = "degraded"
+        return {
+            "status": status,
+            "missing_fields": missing_fields,
+            "quality_violations": quality_violations,
+            "checked_fields": checked_fields,
+        }
+
+    @staticmethod
+    def _field_present(content: dict[str, Any], path: str) -> bool:
+        current: Any = content
+        for part in [item for item in str(path).split(".") if item]:
+            if not isinstance(current, dict) or part not in current:
+                return False
+            current = current[part]
+        return current is not None and current != "" and current != []
+
+    @staticmethod
+    def _artifact_content_quality(artifact: ArtifactRecord) -> str:
+        content = artifact.content if isinstance(artifact.content, dict) else {}
+        declared = str(
+            content.get("quality_status")
+            or artifact.metadata.get("quality_status")
+            or "available"
+        ).strip().lower()
+        if declared in {"available", "degraded", "data_gap", "assumption_only"}:
+            return declared
+        if list(content.get("data_gap") or []):
+            return "degraded"
+        return "available"
+
+    @staticmethod
+    def _annotate_method_input_contract(
+        output: NodeExecutionOutput,
+        contract: dict[str, Any],
+    ) -> None:
+        if contract.get("status") == "available":
+            return
+        for draft in output.artifacts:
+            content = dict(draft.content or {})
+            content["method_input_contract"] = dict(contract)
+            current = str(content.get("quality_status") or "available").strip().lower()
+            if contract.get("status") == "data_gap":
+                content["quality_status"] = "data_gap" if current == "available" else current
+            elif current == "available":
+                content["quality_status"] = "degraded"
+            draft.content = content
+            draft.risk_flags = list(
+                dict.fromkeys([*draft.risk_flags, "method_input_contract_gap"])
+            )
 
     def _commit_outputs(
         self,
@@ -1717,6 +1898,71 @@ class ExecutionGraphRunner:
                     )
         required = set(snapshot.graph.governance.required_gate_ids)
         evaluated = {item.gate_id for item in evaluations}
+        # Method contracts can require gates for artifacts that are not wrapped
+        # in a ReportContract (for example a DCF-only request). Evaluate those
+        # gates directly against their declared artifact type.
+        for gate_id in sorted(required - evaluated):
+            gate = gates.get(gate_id)
+            if gate is None:
+                evaluations.append(
+                    GateEvaluation(
+                        gate_id=gate_id,
+                        artifact_id="missing",
+                        verdict="fail",
+                        reason="required quality gate is not declared by the Pack",
+                        blocking=True,
+                    )
+                )
+                continue
+            artifacts = self.board.list_artifacts(
+                run_id=snapshot.run_id,
+                artifact_type=gate.artifact_type,
+                status="active",
+            )
+            if not artifacts:
+                evaluations.append(
+                    GateEvaluation(
+                        gate_id=gate_id,
+                        artifact_id="missing",
+                        verdict="fail",
+                        reason=f"required gated artifact is missing: {gate.artifact_type}",
+                        blocking=gate.blocking,
+                    )
+                )
+                continue
+            for artifact in artifacts:
+                evaluator_result = (
+                    self._run_gate_evaluator(
+                        snapshot=snapshot,
+                        gate=gate,
+                        artifact=artifact,
+                        artifacts=artifacts,
+                    )
+                    if gate.evaluator_capability
+                    else None
+                )
+                reasons: list[str] = []
+                if artifact.status in {"needs_review", "rejected"}:
+                    reasons.append(f"artifact status is {artifact.status}")
+                if evaluator_result is not None and evaluator_result.verdict != "pass":
+                    reasons.append(evaluator_result.reason)
+                evaluations.append(
+                    GateEvaluation(
+                        gate_id=gate_id,
+                        artifact_id=artifact.artifact_id,
+                        verdict="fail" if reasons else "pass",
+                        reason="; ".join(reasons) or (evaluator_result.reason if evaluator_result else gate.description or "gate passed"),
+                        blocking=gate.blocking,
+                        evidence_refs=(
+                            list(evaluator_result.evidence_refs)
+                            if evaluator_result is not None
+                            else list(artifact.source_refs)
+                        ),
+                        score=evaluator_result.score if evaluator_result is not None else None,
+                        evaluator=gate.evaluator_capability,
+                    )
+                )
+        evaluated = {item.gate_id for item in evaluations}
         for gate_id in sorted(required - evaluated):
             evaluations.append(
                 GateEvaluation(
@@ -1904,6 +2150,42 @@ class ExecutionGraphRunner:
         payload = read_json(path)
         if not isinstance(payload, dict) or not isinstance(payload.get("output"), dict):
             return None
+        expected_context = self._cache_context(snapshot, node, inputs)
+        if payload.get("cache_context") != expected_context:
+            self._emit(
+                "graph_node_cache_rejected",
+                node_id=node.node_id,
+                reason="cache_context_mismatch",
+            )
+            return None
+        ttl = self._node_freshness_ttl(node)
+        if ttl == 0:
+            self._emit(
+                "graph_node_cache_rejected",
+                node_id=node.node_id,
+                reason="freshness_ttl_zero",
+            )
+            return None
+        if ttl is not None:
+            expires_at = self._parse_cache_time(payload.get("expires_at"))
+            if expires_at is None:
+                created_at = self._parse_cache_time(payload.get("created_at"))
+                expires_at = created_at + timedelta(seconds=ttl) if created_at else None
+            if expires_at is None:
+                self._emit(
+                    "graph_node_cache_rejected",
+                    node_id=node.node_id,
+                    reason="cache_freshness_metadata_missing",
+                )
+                return None
+            if expires_at <= datetime.now(timezone.utc):
+                self._emit(
+                    "graph_node_cache_expired",
+                    node_id=node.node_id,
+                    expires_at=expires_at.isoformat(),
+                    freshness_ttl_seconds=ttl,
+                )
+                return None
         output = NodeExecutionOutput.model_validate(payload["output"])
         output.usage = ExecutionUsage()
         output.artifacts = [
@@ -1925,6 +2207,9 @@ class ExecutionGraphRunner:
         path = self._cache_path(snapshot, node, inputs)
         if path is None:
             return
+        ttl = self._node_freshness_ttl(node)
+        if ttl == 0:
+            return
         cache_output = output.model_copy(
             update={
                 "artifacts": [
@@ -1937,6 +2222,8 @@ class ExecutionGraphRunner:
             },
             deep=True,
         )
+        created_at = datetime.now(timezone.utc)
+        expires_at = created_at + timedelta(seconds=ttl) if ttl is not None else None
         write_json(
             path,
             {
@@ -1944,9 +2231,36 @@ class ExecutionGraphRunner:
                 "domain_version": snapshot.graph.metadata.get("domain_version"),
                 "capability": node.capability,
                 "executor": node.executor,
+                "created_at": created_at.isoformat(),
+                "expires_at": expires_at.isoformat() if expires_at else None,
+                "freshness_ttl_seconds": ttl,
+                "cache_scope": node.cache_scope,
+                "cache_context": self._cache_context(snapshot, node, inputs),
                 "output": cache_output.model_dump(mode="json"),
             },
         )
+
+    @staticmethod
+    def _node_freshness_ttl(node: ExecutionNode) -> int | None:
+        value = node.metadata.get("freshness_ttl_seconds")
+        if value is None:
+            return None
+        try:
+            return max(int(value), 0)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_cache_time(value: Any) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
 
     def _cache_path(
         self,
@@ -1961,21 +2275,7 @@ class ExecutionGraphRunner:
             or node.side_effect_level in {"write_local", "write_external"}
         ):
             return None
-        key_payload = {
-            "domain_id": snapshot.graph.domain_id,
-            "domain_version": snapshot.graph.metadata.get("domain_version"),
-            "capability": node.capability,
-            "executor": node.executor,
-            "cache_key": node.cache_key,
-            "inputs": [
-                {
-                    "artifact_type": artifact.artifact_type,
-                    "schema_version": artifact.schema_version,
-                    "content_hash": artifact.content_hash,
-                }
-                for artifact in inputs
-            ],
-        }
+        key_payload = self._cache_context(snapshot, node, inputs)
         digest = hashlib.sha256(
             json.dumps(key_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
@@ -1986,6 +2286,65 @@ class ExecutionGraphRunner:
         else:
             root = self.cache_root / "global"
         return root / f"{digest}.json"
+
+    def _cache_context(
+        self,
+        snapshot: ExecutionRunSnapshot,
+        node: ExecutionNode,
+        inputs: list[ArtifactRecord],
+    ) -> dict[str, Any]:
+        input_payload = [
+            {
+                "artifact_type": artifact.artifact_type,
+                "schema_version": artifact.schema_version,
+                "content_hash": artifact.content_hash,
+                "status": artifact.status,
+                "source_refs": artifact.source_refs,
+            }
+            for artifact in inputs
+        ]
+        input_fingerprint = hashlib.sha256(
+            json.dumps(input_payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        node_inputs = dict(node.inputs or {})
+        assumption_payload = node.metadata.get("assumptions") or node_inputs.get("assumptions") or {}
+        assumption_fingerprint = node.metadata.get("assumption_fingerprint")
+        if not assumption_fingerprint:
+            assumption_fingerprint = hashlib.sha256(
+                json.dumps(assumption_payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+        providers = sorted(
+            {
+                str(ref.get("provider") or ref.get("provider_id") or ref.get("source_id") or "")
+                for artifact in inputs
+                for ref in artifact.source_refs
+                if isinstance(ref, dict)
+                and str(ref.get("provider") or ref.get("provider_id") or ref.get("source_id") or "")
+            }
+        )
+        return {
+            "domain_id": snapshot.graph.domain_id,
+            "domain_version": snapshot.graph.metadata.get("domain_version"),
+            "capability": node.capability,
+            "executor": node.executor,
+            "artifact_type": sorted({port.artifact_type for port in node.produces}),
+            "snapshot_dimension": node.metadata.get("dimension") or node.metadata.get("snapshot_dimension"),
+            "cache_key": node.cache_key,
+            "provider": providers,
+            "profile": node.metadata.get("research_profile") or snapshot.graph.metadata.get("research_profile"),
+            "capability_version": node.metadata.get("capability_version"),
+            "methodology_version": node.metadata.get("methodology_version"),
+            "policy_version": node.metadata.get("policy_version"),
+            "data_period": node.metadata.get("data_period_policy") or {},
+            "input_artifact_fingerprint": input_fingerprint,
+            "assumption_fingerprint": assumption_fingerprint,
+            "universe_or_scope": node.metadata.get("universe_or_scope") or node_inputs.get("universe_or_scope") or {},
+            "node_inputs": hashlib.sha256(
+                json.dumps(node.inputs, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+            "freshness_ttl_seconds": node.metadata.get("freshness_ttl_seconds"),
+            "cache_scope": node.cache_scope,
+        }
 
     def _expand_ready_compounds(self, snapshot: ExecutionRunSnapshot) -> ExecutionGraph:
         graph = snapshot.graph
@@ -2653,6 +3012,29 @@ class ExecutionGraphRunner:
     def _observe_main_agent_progress(self, facts: dict[str, Any]) -> dict[str, str] | None:
         if self.progress_observer is None:
             return None
+        policy = self._progress_policy
+        try:
+            max_updates = max(int(policy.get("max_model_updates") or 0), 0)
+        except (TypeError, ValueError):
+            max_updates = 0
+        if max_updates and self._progress_model_updates >= max_updates:
+            if self._progress_model_updates == max_updates:
+                self._emit(
+                    "main_agent_progress_budget_exhausted",
+                    progress_model_updates=self._progress_model_updates,
+                    max_model_updates=max_updates,
+                )
+            return None
+        try:
+            min_interval = max(float(policy.get("min_interval_seconds") or 0.0), 0.0)
+        except (TypeError, ValueError):
+            min_interval = 0.0
+        now = perf_counter()
+        if min_interval and self._progress_last_model_at:
+            if now - self._progress_last_model_at < min_interval:
+                return None
+        self._progress_model_updates += 1
+        self._progress_last_model_at = now
         try:
             return self.progress_observer(facts)
         except Exception:

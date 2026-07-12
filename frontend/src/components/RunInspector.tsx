@@ -50,7 +50,7 @@ export function RunInspector({ selectedEvidence, onSelectEvidence }: RunInspecto
   const currentEvent = latestEvent(events)
   const status = statusFromDetail(selectedRun)
   const running = submitting || isActiveStatus(status)
-  const progress = submitting ? 0 : status === 'completed' ? 100 : stepProgress(steps)
+  const progress = submitting ? 0 : ['completed', 'completed_partial'].includes(status) ? 100 : stepProgress(steps)
   const counts = selectedRun?.metrics.counts || {}
   const fallbackRate = asNumber(selectedRun?.metrics.rates?.fallback_rate)
 
@@ -59,8 +59,8 @@ export function RunInspector({ selectedEvidence, onSelectEvidence }: RunInspecto
       <section className="inspector-section inspector-run-card">
         <div className="section-heading-row">
           <div><span className="section-kicker">CURRENT RUN</span><h2>{selectedRunId ? statusLabel(status) : '未选择运行'}</h2></div>
-          <span className={`run-state-badge ${status === 'completed' ? 'is-complete' : 'is-running'}`}>
-            {status === 'completed' ? <Check size={12} /> : <Activity size={12} />}{selectedRunId ? statusLabel(status) : '空闲'}
+          <span className={`run-state-badge ${['completed', 'completed_partial'].includes(status) ? 'is-complete' : 'is-running'}`}>
+            {['completed', 'completed_partial'].includes(status) ? <Check size={12} /> : <Activity size={12} />}{selectedRunId ? statusLabel(status) : '空闲'}
           </span>
         </div>
 

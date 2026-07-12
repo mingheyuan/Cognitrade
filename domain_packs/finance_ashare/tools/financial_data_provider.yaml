@@ -23,4 +23,6 @@ output_schema:
 permissions: [finance:data:read]
 parallel_safe: true
 max_concurrency: 8
+timeout_seconds: 300
+max_retries: 1
 implementation: tools.financial_data_provider:invoke

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,6 +15,7 @@ from research_system.runtime.planning.capability_planner import (
     CapabilityDynamicPlanner,
     CapabilityPlanner,
 )
+from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.schemas.artifacts import ArtifactDraft
 from research_system.schemas.domain_pack import CapabilityPlanningRequest
 from research_system.schemas.execution_graph import (
@@ -174,6 +176,48 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
                 self.assertTrue(artifact.schema_version)
                 self.assertIsNotNone(artifact.confidence)
                 self.assertTrue(artifact.producer.responsibility_node_id)
+
+    def test_progress_model_updates_respect_graph_budget(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            calls: list[dict] = []
+            events: list[dict] = []
+            graph = self._legal_graph().model_copy(
+                update={
+                    "metadata": {
+                        "progress_policy": {
+                            "max_model_updates": 1,
+                            "min_interval_seconds": 0,
+                        }
+                    }
+                }
+            )
+            runner = ExecutionGraphRunner(
+                registry=self.registry,
+                run_root=Path(temporary_directory),
+                event_callback=events.append,
+                progress_observer=lambda facts: (
+                    calls.append(facts) or {"current": "已完成一个节点", "next": "继续执行"}
+                ),
+            )
+            result = runner.run(
+                graph=graph,
+                run_id="progress-budget-run",
+                thread_id="progress-budget-thread",
+                request_id="progress-budget-request",
+                seed_artifacts=[
+                    ArtifactDraft(
+                        artifact_type="contract_document",
+                        content={"text": "Supplier shall deliver monthly."},
+                        source_refs=[{"type": "uploaded_contract", "id": "contract-1"}],
+                    )
+                ],
+            )
+
+            self.assertEqual(result.snapshot.status, "completed")
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(
+                any(event["event_type"] == "main_agent_progress_budget_exhausted" for event in events)
+            )
 
     def test_pause_resume_partial_rerun_and_versioned_supersession(self) -> None:
         with TemporaryDirectory() as temporary_directory:
@@ -651,6 +695,68 @@ def evidence_worker(context):
             assert report is not None
             self.assertTrue(
                 all(artifact.run_id == "run-2" for artifact in second.board.lineage(report.artifact_id))
+            )
+
+    def test_global_cache_ttl_expiry_forces_reexecution(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            cache_root = root / "cache"
+            graph = self._legal_graph()
+            for node in graph.nodes:
+                if node.node_kind == "subagent":
+                    node.metadata["freshness_ttl_seconds"] = 60
+
+            seed = ArtifactDraft(
+                artifact_type="contract_document",
+                content={"text": "Supplier shall deliver. Customer may terminate."},
+                source_refs=[{"type": "contract", "id": "contract-1"}],
+            )
+            first = ExecutionGraphRunner(
+                registry=self.registry,
+                run_root=root / "run-1",
+                cache_root=cache_root,
+            )
+            first.run(
+                graph=graph,
+                run_id="run-1",
+                thread_id="thread-1",
+                request_id="request-1",
+                seed_artifacts=[seed],
+            )
+
+            expired_at = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+            for path in (cache_root / "global").rglob("*.json"):
+                payload = read_json(path)
+                if not isinstance(payload, dict) or "output" not in payload:
+                    continue
+                payload["created_at"] = expired_at
+                payload["expires_at"] = expired_at
+                write_json(path, payload)
+
+            events: list[dict] = []
+            second = ExecutionGraphRunner(
+                registry=self.registry,
+                run_root=root / "run-2",
+                cache_root=cache_root,
+                event_callback=events.append,
+            )
+            second_graph = self._legal_graph()
+            for node in second_graph.nodes:
+                if node.node_kind == "subagent":
+                    node.metadata["freshness_ttl_seconds"] = 60
+            second.run(
+                graph=second_graph,
+                run_id="run-2",
+                thread_id="thread-2",
+                request_id="request-2",
+                seed_artifacts=[seed],
+            )
+
+            self.assertFalse(
+                [event for event in events if event["event_type"] == "graph_node_cache_hit"]
+            )
+            self.assertTrue(
+                [event for event in events if event["event_type"] == "graph_node_cache_expired"]
             )
 
     def test_side_effecting_node_uses_approval_and_idempotency_receipt(self) -> None:

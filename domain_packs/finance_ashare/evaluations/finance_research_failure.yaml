@@ -1,9 +1,39 @@
 evaluation_id: finance.research.failure.v1
 mode: execution
 objective: Verify a halted Finance Pack analysis failure is observable.
-available_artifact_types: [stock_snapshot_bundle]
+intent: stock_check
+available_artifact_types: [user_request, snapshot, stock_snapshot_bundle]
 required_artifact_types: [research_report]
 seed_artifacts:
+  - artifact_type: user_request
+    content:
+      query: Analyze 600000 with the Finance Pack failure fixture.
+      symbols: ["600000"]
+    source_refs:
+      - type: evaluation_fixture
+        id: finance-research-failure-request
+  - artifact_type: snapshot
+    content:
+      snapshot_type: market
+      scope: symbol
+      symbol: "600000"
+      quality_status: available
+      facts:
+        market_overview: {latest_price: 10.0}
+    source_refs:
+      - type: evaluation_fixture
+        id: finance-research-failure-market
+  - artifact_type: snapshot
+    content:
+      snapshot_type: fundamental
+      scope: symbol
+      symbol: "600000"
+      quality_status: available
+      facts:
+        financial_abstract: {operating_cash_flow: 160.0, revenue: 1000.0}
+    source_refs:
+      - type: evaluation_fixture
+        id: finance-research-failure-fundamental
   - artifact_type: stock_snapshot_bundle
     content:
       query: Evaluation fixture for failure injection.
@@ -23,7 +53,7 @@ seed_artifacts:
 expected_status: failed
 failure_injections:
   - kind: capability
-    target: finance.analysis.evaluate
+    target: finance.uzi.valuation.evaluate
     count: 3
     reason: deterministic Finance capability failure
 required_event_types: [evaluation_failure_injected]

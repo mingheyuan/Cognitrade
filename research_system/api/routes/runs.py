@@ -29,6 +29,7 @@ RunStatusFilter = Literal[
     "waiting_external",
     "gated",
     "completed",
+    "completed_partial",
     "cancelled",
     "failed",
     "timed_out",
@@ -52,6 +53,22 @@ def _scope_kwargs(target, principal: ApiPrincipal | None) -> dict[str, str]:
 def _supported_intents(run_service) -> list[str] | None:
     agent_os = getattr(run_service, "agent_os", None)
     resolver = getattr(agent_os, "supported_intents", None)
+    if callable(resolver):
+        return list(resolver())
+    return None
+
+
+def _supported_methods(run_service) -> list[str] | None:
+    agent_os = getattr(run_service, "agent_os", None)
+    resolver = getattr(agent_os, "supported_methods", None)
+    if callable(resolver):
+        return list(resolver())
+    return None
+
+
+def _supported_snapshot_types(run_service) -> list[str] | None:
+    agent_os = getattr(run_service, "agent_os", None)
+    resolver = getattr(agent_os, "supported_snapshot_types", None)
     if callable(resolver):
         return list(resolver())
     return None
@@ -102,6 +119,8 @@ async def create_run(
     validated = validate_research_request(
         payload.model_copy(update=identity),
         supported_intents=_supported_intents(run_service),
+        supported_methods=_supported_methods(run_service),
+        supported_snapshot_types=_supported_snapshot_types(run_service),
     )
     async with mutation_lock:
         return await run_in_threadpool(run_service.run, validated)
@@ -121,6 +140,34 @@ async def list_runs(
     if status is not None:
         rows = [row for row in rows if str(row.get("status") or "") == status]
     return rows[:limit]
+
+
+@router.get("/runs/{run_id}")
+async def run_detail(
+    run_id: str,
+    run_service=Depends(get_run_service),
+    principal: ApiPrincipal = Depends(require_principal),
+) -> dict:
+    resolved = safe_identifier(run_id, field_name="run_id")
+    return await _call_run_resource(run_service.detail, resolved, principal=principal)
+
+
+@router.get("/runs/{run_id}/artifacts")
+async def run_artifacts(
+    run_id: str,
+    artifact_type: str | None = None,
+    status: str | None = "active",
+    run_service=Depends(get_run_service),
+    principal: ApiPrincipal = Depends(require_principal),
+) -> dict:
+    resolved = safe_identifier(run_id, field_name="run_id")
+    return await _call_run_resource(
+        run_service.artifacts,
+        resolved,
+        artifact_type=artifact_type,
+        status=status,
+        principal=principal,
+    )
 
 
 @router.get("/runs/{run_id}/replay")

@@ -248,8 +248,14 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
   )
   useEffect(() => {
     if (!selectedRunId || !selectedNeedsDelivery) return
-    void subscribeToRun(selectedRunId)
-    return () => streamAbort.current?.abort()
+    let disposed = false
+    queueMicrotask(() => {
+      if (!disposed) void subscribeToRun(selectedRunId)
+    })
+    return () => {
+      disposed = true
+      streamAbort.current?.abort()
+    }
   }, [selectedNeedsDelivery, selectedRunId, subscribeToRun])
 
   useEffect(() => {

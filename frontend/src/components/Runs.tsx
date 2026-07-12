@@ -28,7 +28,7 @@ export function Runs({ onOpenRun }: RunsProps) {
   const rows = useMemo(
     () => items.filter((run) => {
       const matchesFilter = filter === '全部'
-        || (filter === '已完成' && run.status === 'completed')
+        || (filter === '已完成' && ['completed', 'completed_partial'].includes(run.status))
         || (filter === '运行中' && isActiveStatus(run.status))
         || (filter === '异常' && ['failed', 'timed_out', 'cancelled', 'needs_clarification'].includes(run.status))
       return matchesFilter && (!query.trim() || `${run.title}${run.id}${run.intent}`.toLowerCase().includes(query.trim().toLowerCase()))
@@ -36,7 +36,7 @@ export function Runs({ onOpenRun }: RunsProps) {
     [filter, items, query],
   )
   const activeRun = items.find((run) => isActiveStatus(run.status))
-  const completed = items.filter((run) => run.status === 'completed').length
+  const completed = items.filter((run) => ['completed', 'completed_partial'].includes(run.status)).length
   const failed = items.filter((run) => ['failed', 'timed_out'].includes(run.status)).length
 
   const exportRuns = () => {
@@ -103,7 +103,7 @@ export function Runs({ onOpenRun }: RunsProps) {
                 <tr key={run.id}>
                   <td><strong>{run.title}</strong><small>{run.id}</small></td>
                   <td><span className="intent-table-badge">{run.intent}</span></td>
-                  <td><span className={`status-table-badge status-table-badge--${statusTone(run.status)}`}>{run.status === 'completed' ? <CheckCircle2 size={12} /> : isActiveStatus(run.status) ? <Activity size={12} /> : <CircleAlert size={12} />}{run.statusLabel}</span></td>
+                  <td><span className={`status-table-badge status-table-badge--${statusTone(run.status)}`}>{['completed', 'completed_partial'].includes(run.status) ? <CheckCircle2 size={12} /> : isActiveStatus(run.status) ? <Activity size={12} /> : <CircleAlert size={12} />}{run.statusLabel}</span></td>
                   <td>{run.childThreadCount}</td><td>{run.time}</td>
                   <td><div className="table-row-actions"><button aria-label={`打开${run.id}`} onClick={() => onOpenRun(run.id)}><Play size={13} /></button><button aria-label="派生研究（暂不可用）" disabled title="后端 v1 未提供从 run 派生新研究接口"><GitBranch size={13} /></button><button aria-label={`重新运行${run.id}`} onClick={() => void rerun(run.id)} disabled={submitting}><RotateCcw size={13} /></button></div></td>
                 </tr>

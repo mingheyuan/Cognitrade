@@ -1,0 +1,363 @@
+schema_version: "2"
+source:
+  repository: https://github.com/wbh604/UZI-Skill
+  local_reference: D:\Cognitrade\_tmp_uzi_skill
+  commit: 775c76101e8890492d21c2e2827692456fcddb58
+  methodology_version: 3.9.1
+  version_file: .claude-plugin/plugin.json
+  version_file_sha256: 3D7BDA4C6E82A7B6038A839FC92F767A8A946423D12B635C1451C92AA7ED5532
+  license: MIT
+  license_file: LICENSE
+  license_sha256: 28D4522719947F92BCA76070FEC569FF5CFD5FB2D11B9AE0E517C6FCBB5D4DF9
+  replay_fixtures:
+    - tests/fixtures/uzi_source_snapshot_replay.json
+    - tests/fixtures/uzi_finance_snapshot_replay.json
+    - tests/fixtures/uzi_methodology_baseline.json
+  replay_fixture_sha256:
+    tests/fixtures/uzi_source_snapshot_replay.json: F40C763A44D1661F4B29F9D03FE128587812D5F9F1CAF76E48E9873F76D908B2
+    tests/fixtures/uzi_finance_snapshot_replay.json: 37C80DEC0EE4171794DFEAD614DA06290670DB3BC2996F821BF1608A0D29B091
+    tests/fixtures/uzi_methodology_baseline.json: 147C235E64B4B8277035F60233D392C6418F28D528DDEBE46D27F02D39F54164
+
+source_defaults: &source_defaults
+  source_commit: 775c76101e8890492d21c2e2827692456fcddb58
+  target_artifact_type: snapshot
+  quality_policy:
+    provider_error: data_gap
+    missing_fields: data_gap
+    stale_source: degraded
+    explicit_assumption: assumption_only
+  baseline_fixture: tests/fixtures/uzi_source_snapshot_replay.json
+
+fetchers:
+  - source_id: 0_basic
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_basic.py
+    target_skill: market_snapshot_skill
+    provider: akshare.market
+    field_mapping: {snapshot_type: market, facts: facts.market_overview}
+    migration_status: pack_native
+    result_equivalence: not_equivalent
+  - source_id: 1_financials
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_financials.py
+    target_skill: fundamental_snapshot_skill
+    provider: akshare.fundamental
+    field_mapping: {snapshot_type: fundamental, facts: facts.financial_abstract}
+    migration_status: pack_native
+    result_equivalence: not_equivalent
+  - source_id: 2_kline
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_kline.py
+    target_skill: uzi_kline_snapshot_skill
+    provider: akshare.market_history
+    field_mapping: {snapshot_type: kline, facts: facts.history}
+    migration_status: pack_native
+    result_equivalence: not_equivalent
+  - source_id: 3_macro
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_macro.py
+    target_skill: uzi_macro_snapshot_skill
+    provider: akshare.sector
+    field_mapping: {snapshot_type: macro, facts: facts.benchmark}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+  - source_id: 4_peers
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_peers.py
+    target_skill: uzi_peers_snapshot_skill
+    provider: akshare.fundamental+sector
+    field_mapping: {snapshot_type: peers, facts: facts.comparison}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+  - source_id: 5_chain
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_chain.py
+    target_skill: uzi_chain_snapshot_skill
+    provider: akshare.sector
+    field_mapping: {snapshot_type: chain, facts: facts.chain_snapshot}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+  - source_id: 6_research
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_research.py
+    target_skill: uzi_research_snapshot_skill
+    provider: akshare.catalyst
+    field_mapping: {snapshot_type: research, facts: facts.reports}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+  - source_id: 7_industry
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_industry.py
+    target_skill: uzi_industry_snapshot_skill
+    provider: akshare.market+sector
+    field_mapping: {snapshot_type: industry, facts: facts.resolved_sector}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+  - source_id: 8_materials
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_materials.py
+    target_skill: uzi_materials_snapshot_skill
+    provider: akshare.futures
+    field_mapping: {snapshot_type: materials, facts: facts.contracts}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+  - source_id: 9_futures
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_futures.py
+    target_skill: uzi_futures_snapshot_skill
+    provider: akshare.futures
+    field_mapping: {snapshot_type: futures, facts: facts.contracts}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+  - source_id: 10_valuation
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_valuation.py
+    target_skill: uzi_valuation_snapshot_skill
+    provider: akshare.market
+    field_mapping: {snapshot_type: valuation, facts: facts.valuation}
+    migration_status: pack_native
+    result_equivalence: not_equivalent
+  - source_id: 11_governance
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_governance.py
+    target_skill: uzi_governance_snapshot_skill
+    provider: akshare.fundamental
+    field_mapping: {snapshot_type: governance, facts: facts.banking_metrics}
+    migration_status: pack_native
+    result_equivalence: not_equivalent
+  - source_id: 12_capital_flow
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_capital_flow.py
+    target_skill: capital_flow_snapshot_skill
+    provider: akshare.capital_flow
+    field_mapping: {snapshot_type: capital_flow, facts: facts.capital_flow}
+    migration_status: pack_native
+    result_equivalence: not_equivalent
+  - source_id: 13_policy
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_policy.py
+    target_skill: policy_snapshot_skill
+    provider: akshare.catalyst
+    field_mapping: {snapshot_type: policy, facts: facts.policy_signals}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+  - source_id: 14_moat
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_moat.py
+    target_skill: uzi_moat_snapshot_skill
+    provider: akshare.fundamental
+    field_mapping: {snapshot_type: moat, facts: facts.financial_abstract}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+  - source_id: 15_events
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_events.py
+    target_skill: events_snapshot_skill
+    provider: akshare.catalyst
+    field_mapping: {snapshot_type: events, facts: facts.events}
+    migration_status: pack_native
+    result_equivalence: not_equivalent
+  - source_id: 16_lhb
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_lhb.py
+    target_skill: lhb_snapshot_skill
+    provider: akshare.market
+    field_mapping: {snapshot_type: lhb, facts: facts.lhb}
+    migration_status: pack_native
+    result_equivalence: not_equivalent
+  - source_id: 17_sentiment
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_sentiment.py
+    target_skill: sentiment_snapshot_skill
+    provider: akshare.catalyst
+    field_mapping: {snapshot_type: sentiment, facts: facts.sentiment}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+  - source_id: 18_trap
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_trap_signals.py
+    target_skill: uzi_trap_snapshot_skill
+    provider: akshare.catalyst
+    field_mapping: {snapshot_type: trap, facts: facts.news}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: semantic
+  - source_id: 19_contests
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_contests.py
+    target_skill: uzi_contests_snapshot_skill
+    provider: finance_pack.contests
+    field_mapping: {snapshot_type: contests, facts: facts.contests}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+  - source_id: fund_holders
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_fund_holders.py
+    target_skill: uzi_fund_holders_snapshot_skill
+    provider: akshare.fund_holders
+    field_mapping: {snapshot_type: fund_holders, facts: facts.holders}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+  - source_id: similar_stocks
+    <<: *source_defaults
+    source_path: skills/deep-analysis/scripts/fetch_similar_stocks.py
+    target_skill: uzi_similar_stocks_snapshot_skill
+    provider: akshare.sector
+    field_mapping: {snapshot_type: similar_stocks, facts: facts.similar_stocks}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+
+profiles:
+  lite:
+    source_dimensions: [0_basic, 1_financials, 2_kline, 10_valuation, 12_capital_flow, 15_events, 16_lhb]
+    panel_seats: 10
+    methodology_capabilities: [finance.uzi.valuation.evaluate, finance.uzi.panel.review, finance.uzi.risk.scan]
+  medium:
+    source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests]
+    panel_seats: 51
+  deep:
+    source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests]
+    panel_seats: 51
+
+panel:
+  source_path: domain_packs/finance_ashare/subagents/uzi_panel_registry.py
+  source_commit: 775c76101e8890492d21c2e2827692456fcddb58
+  registry_version: 3.9.1-adapted
+  provider: finance_pack.panel_registry
+  target_artifact_type: investor_panel_review
+  field_mapping: {id: id, name: name, group: group, fields: fields}
+  quality_policy:
+    missing_source_fields: data_gap
+    skipped_seat: data_gap
+    methodology_perspective: available
+  migration_status: pack_native
+  result_equivalence: not_equivalent
+  baseline_fixture: tests/fixtures/uzi_source_snapshot_replay.json
+  profile_seats: {lite: 10, medium: 51, deep: 51}
+  member_ids: [buffett, graham, fisher, munger, templeton, klarman, lynch, oneill, thiel, wood, andreessen, gurley, naval, gerstner, chamath, soros, dalio, marks, druck, robertson, burry, chanos, livermore, minervini, darvas, gann, duan, zhangkun, zhushaoxing, xiezhiyu, fengliu, dengxiaofeng, zhang_lei, zhang_mz, sun_ge, zhao_lg, fs_wyj, yangjia, chen_xq, hu_jl, fang_xx, zuoshou, xiao_ey, jiao_yy, mao_lb, xiao_xian, lasa, chengdu, sunan, ningbo_st, liuyi_zl, liu_sh, gu_bl, bj_cj, wang_zr, xin_dd, ghzw, simons, thorp, shaw, asness, jensen_huang, musk, altman, saylor, serenity]
+
+derived_defaults: &derived_defaults
+  source_commit: 775c76101e8890492d21c2e2827692456fcddb58
+  provider: finance_pack.artifact_board
+  quality_policy:
+    missing_inputs: data_gap
+    proxy_inputs: assumption_only
+    stale_inputs: degraded
+
+derived_methods:
+  - source_id: dcf
+    <<: *derived_defaults
+    source_path: domain_packs/finance_ashare/subagents/uzi_methodology.py
+    target_capability: finance.uzi.valuation.evaluate
+    target_artifact_type: valuation_model
+    field_mapping: {fundamental: facts.financial_abstract, market: facts.market_overview}
+    migration_status: equivalent
+    result_equivalence: numeric_tolerance
+    baseline_fixture: tests/fixtures/uzi_methodology_baseline.json
+  - source_id: comps
+    <<: *derived_defaults
+    source_path: domain_packs/finance_ashare/subagents/uzi_methodology.py
+    target_capability: finance.uzi.valuation.evaluate
+    target_artifact_type: valuation_model
+    field_mapping: {peers: facts.comparison, market: facts.market_overview}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: cashflow_resilience
+    <<: *derived_defaults
+    source_path: domain_packs/finance_ashare/subagents/runtime.py
+    target_capability: finance.analysis.evaluate
+    target_artifact_type: financial_analysis
+    field_mapping: {fundamental: facts.financial_abstract.operating_cash_flow}
+    migration_status: pack_native
+    result_equivalence: not_equivalent
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: panel
+    <<: *derived_defaults
+    source_path: domain_packs/finance_ashare/subagents/uzi_panel_rules.py
+    target_capability: finance.uzi.panel.review
+    target_artifact_type: investor_panel_review
+    field_mapping: {snapshots: artifact_board.snapshot_refs, members: panel.member_ids}
+    migration_status: pack_native
+    result_equivalence: not_equivalent
+    baseline_fixture: tests/fixtures/uzi_source_snapshot_replay.json
+  - source_id: trap_scan
+    <<: *derived_defaults
+    source_path: domain_packs/finance_ashare/subagents/uzi_methodology.py
+    target_capability: finance.uzi.risk.scan
+    target_artifact_type: risk_scan
+    field_mapping: {news: facts.news, events: facts.events}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_source_snapshot_replay.json
+  - source_id: three_statement
+    <<: *derived_defaults
+    source_path: domain_packs/finance_ashare/subagents/uzi_advanced_methodology.py
+    target_capability: finance.uzi.institutional.evaluate
+    target_artifact_type: institutional_analysis
+    field_mapping: {fundamental: facts.financial_abstract}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: lbo
+    <<: *derived_defaults
+    source_path: domain_packs/finance_ashare/subagents/uzi_advanced_methodology.py
+    target_capability: finance.uzi.institutional.evaluate
+    target_artifact_type: institutional_analysis
+    field_mapping: {fundamental: facts.financial_abstract.ebitda}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: ma_accretion
+    <<: *derived_defaults
+    source_path: domain_packs/finance_ashare/subagents/uzi_advanced_methodology.py
+    target_capability: finance.uzi.institutional.evaluate
+    target_artifact_type: institutional_analysis
+    field_mapping: {fundamental: facts.financial_abstract.eps}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: segmental
+    <<: *derived_defaults
+    source_path: domain_packs/finance_ashare/subagents/uzi_advanced_methodology.py
+    target_capability: finance.uzi.institutional.evaluate
+    target_artifact_type: institutional_analysis
+    field_mapping: {fundamental: facts.financial_abstract.segments}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: workflow
+    <<: *derived_defaults
+    source_path: domain_packs/finance_ashare/subagents/uzi_advanced_methodology.py
+    target_capability: finance.uzi.workflow.evaluate
+    target_artifact_type: research_workflow
+    field_mapping: {snapshots: artifact_board.snapshot_refs}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: deep_analysis
+    <<: *derived_defaults
+    source_path: domain_packs/finance_ashare/subagents/uzi_advanced_methodology.py
+    target_capability: finance.uzi.deep.evaluate
+    target_artifact_type: deep_analysis
+    field_mapping: {institutional: artifact_board.institutional_analysis, workflow: artifact_board.research_workflow}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: dimensions
+    <<: *derived_defaults
+    source_path: domain_packs/finance_ashare/subagents/uzi_advanced_methodology.py
+    target_capability: finance.uzi.dimensions.cover
+    target_artifact_type: uzi_dimension_coverage
+    field_mapping: {snapshots: artifact_board.snapshot_refs, profiles: profiles}
+    migration_status: pack_native_with_provider_gap
+    result_equivalence: not_equivalent
+    baseline_fixture: tests/fixtures/uzi_source_snapshot_replay.json
+  - source_id: report
+    <<: *derived_defaults
+    source_path: domain_packs/finance_ashare/subagents/runtime.py
+    target_capability: finance.uzi.report.compose
+    target_artifact_type: report_presentation
+    field_mapping: {evidence: artifact_board.evidence, methods: artifact_board.methodology}
+    migration_status: pack_native
+    result_equivalence: not_equivalent
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json

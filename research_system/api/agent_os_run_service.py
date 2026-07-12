@@ -121,7 +121,7 @@ class AgentOSRunService:
                 return response
             if detail.get("mode") == "core":
                 state = MainAgentState.model_validate(detail["snapshot"])
-                if state.status in {"completed", "failed", "cancelled", "timed_out"}:
+                if state.status in {"completed", "completed_partial", "failed", "cancelled", "timed_out"}:
                     return None
                 core_request, decision = self.agent_os._load_core_request(run_id)
                 result = self.agent_os.main_agent.run(
@@ -136,7 +136,7 @@ class AgentOSRunService:
                 self._persist_background_response(response)
                 return response
             snapshot = ExecutionRunSnapshot.model_validate(detail["snapshot"])
-            if snapshot.status in {"completed", "failed", "cancelled", "timed_out", "gated"}:
+            if snapshot.status in {"completed", "completed_partial", "failed", "cancelled", "timed_out", "gated"}:
                 return None
             result = self.agent_os.resume(run_id)
             request = self._request_envelope(run_id)
@@ -410,6 +410,47 @@ class AgentOSRunService:
             "snapshot": snapshot.model_dump(mode="json"),
             "artifacts": detail.get("artifacts") or [],
             "events": self._execution_events(run_id),
+        }
+
+    def detail(
+        self,
+        run_id: str,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        return self.agent_os.inspect_run(run_id)
+
+    def artifacts(
+        self,
+        run_id: str,
+        *,
+        artifact_type: str | None = None,
+        status: str | None = "active",
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        detail = self.agent_os.inspect_run(run_id)
+        artifacts = list(detail.get("artifacts") or [])
+        if artifact_type:
+            artifacts = [
+                artifact
+                for artifact in artifacts
+                if str(artifact.get("artifact_type") or "") == artifact_type
+            ]
+        if status:
+            artifacts = [
+                artifact
+                for artifact in artifacts
+                if str(artifact.get("status") or "") == status
+            ]
+        return {
+            "run_id": run_id,
+            "mode": detail.get("mode", "graph"),
+            "status": (detail.get("snapshot") or {}).get("status"),
+            "artifacts": artifacts,
         }
 
     def events(
@@ -907,7 +948,7 @@ class AgentOSRunService:
                 current_phase="execution_graph",
                 latest_event=f"graph_run_{snapshot.status}",
                 status_message=f"Agent OS run {snapshot.status}",
-                percent=100 if snapshot.status in {"completed", "failed", "cancelled", "timed_out", "gated"} else 0,
+                percent=100 if snapshot.status in {"completed", "completed_partial", "failed", "cancelled", "timed_out", "gated"} else 0,
             ),
             result={
                 "protocol": "agent_os",

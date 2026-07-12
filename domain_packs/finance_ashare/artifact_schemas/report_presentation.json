@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["theme", "profile", "hero", "core_conclusion", "dashboard", "great_divide", "panel", "radar", "risk_list", "buy_zones", "source_artifact_ids", "generated_at", "data_gap"],
+  "properties": {
+    "theme": {"type": "string"},
+    "profile": {"type": "string"},
+    "hero": {"type": "object"},
+    "core_conclusion": {"type": "string"},
+    "dashboard": {"type": "object"},
+    "great_divide": {"type": "object"},
+    "panel": {"type": "object"},
+    "radar": {"type": "array"},
+    "risk_list": {"type": "array"},
+    "buy_zones": {"type": "array"},
+    "source_artifact_ids": {"type": "array", "items": {"type": "string"}},
+    "generated_at": {"type": "string"},
+    "data_gap": {"type": "array", "items": {"type": "string"}}
+  }
+}

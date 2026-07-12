@@ -14,4 +14,5 @@ __all__ = [
     "policy_snapshot",
     "sector_snapshot",
     "sentiment_snapshot",
+    "uzi_source_snapshot",
 ]

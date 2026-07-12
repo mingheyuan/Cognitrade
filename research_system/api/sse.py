@@ -12,7 +12,7 @@ from research_system.runtime.platform.settings import Settings
 from research_system.runtime.storage.jsonl import read_json
 
 
-_TERMINAL_STATUSES = {"completed", "cancelled", "failed", "timed_out", "gated"}
+_TERMINAL_STATUSES = {"completed", "completed_partial", "cancelled", "failed", "timed_out", "gated"}
 _TERMINAL_DRAIN_POLLS = 4
 
 

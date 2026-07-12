@@ -111,11 +111,21 @@ export function reportFromDetail(detail?: RunDetail | null): ResearchReport {
   const synthesisArtifact = [...artifacts].reverse().find((artifact) => (
     asString(asRecord(artifact).artifact_type) === 'main_agent_synthesis'
   ))
+  const assistantArtifact = [...artifacts].reverse().find((artifact) => (
+    asString(asRecord(artifact).artifact_type) === 'assistant_message'
+  ))
+  const presentationArtifact = [...artifacts].reverse().find((artifact) => (
+    asString(asRecord(artifact).artifact_type) === 'report_presentation'
+  ))
   const reportContent = asRecord(asRecord(reportArtifact).content)
   const synthesisContent = asRecord(asRecord(synthesisArtifact).content)
+  const assistantContent = asRecord(asRecord(assistantArtifact).content)
+  const presentationContent = asRecord(asRecord(presentationArtifact).content)
   const synthesisAvailable = Object.keys(synthesisContent).length > 0
+  const synthesisUnavailable = asString(assistantContent.delivery_status) === 'synthesis_unavailable'
   const content = {
     ...reportContent,
+    ...(Object.keys(presentationContent).length > 0 ? { presentation: presentationContent } : {}),
     ...synthesisContent,
     ...(synthesisContent.conclusion ? {
       assessment: {
@@ -132,6 +142,7 @@ export function reportFromDetail(detail?: RunDetail | null): ResearchReport {
       protocol: 'agent_os',
       conclusion_source: synthesisAvailable ? 'main_agent_synthesis' : 'pack_report',
       synthesis_available: synthesisAvailable,
+      synthesis_unavailable: synthesisUnavailable,
       final_artifact_ids: [artifactId, synthesisId].filter(Boolean),
     } as ResearchReport
   }
@@ -182,6 +193,7 @@ export function statusLabel(status?: string | null): string {
     waiting_approval: '等待审批',
     gated: '质量门禁',
     completed: '已完成',
+    completed_partial: '部分完成',
     cancelled: '已取消',
     failed: '失败',
     timed_out: '超时',
@@ -229,10 +241,12 @@ export function hasFinalDelivery(detail?: RunDetail | null): boolean {
   if (events.some((event) => (
     asString(event.event_type) === 'assistant_message_ready'
       && asString(event.delivery_status) !== 'paused'
+      && asString(event.delivery_status) !== 'synthesis_unavailable'
   ))) return true
   const artifacts = Array.isArray(detail?.replay.artifacts) ? detail.replay.artifacts : []
   return artifacts.some((artifact) => {
     if (asString(asRecord(artifact).artifact_type) !== 'assistant_message') return false
+    if (asString(asRecord(asRecord(artifact).content).delivery_status) === 'synthesis_unavailable') return false
     return Boolean(asString(asRecord(asRecord(artifact).content).message))
   })
 }
@@ -249,6 +263,9 @@ function eventSummary(event: RunEvent): string {
   const decision = asRecord(event.decision)
   const reason = asString(event.message || event.reason || decision.reason)
   if (eventType === 'assistant_message_ready') return 'Main Agent 已生成最终交付产物。'
+  if (eventType === 'assistant_message_status' && asString(event.delivery_status) === 'synthesis_unavailable') {
+    return '研究产物已保存，但 Main Agent 最终答复暂不可用。'
+  }
   if (eventType === 'agent_progress' && asString(event.progress_kind) === 'main_agent_graph') {
     return 'Main Agent 更新了受治理的执行计划。'
   }
@@ -335,6 +352,7 @@ const USER_VISIBLE_EVENT_TYPES = new Set([
   'tool_call_failed',
   'tool_call_rejected',
   'assistant_message_ready',
+  'assistant_message_status',
   'clarification_requested',
   'clarification_resolved',
   'approval_requested',
@@ -370,7 +388,7 @@ function activityKind(event: RunEvent): AgentActivityItem['kind'] {
 function localizeAgentAction(value: string): string {
   const action = value.trim()
   if (!action) return ''
-  let match = action.match(/^ExecutionGraph (\S+) started at revision (\d+)$/)
+  const match = action.match(/^ExecutionGraph (\S+) started at revision (\d+)$/)
   if (match) return `ExecutionGraph ${match[1]} 已在第 ${match[2]} 个修订版本启动`
   if (action === 'Expand lazy compounds and calculate the ready frontier') return '展开延迟 compound 节点并计算可执行前沿'
   if (action === 'Recompute the ready frontier from the updated graph') return '重新计算更新后的可执行前沿'
@@ -626,7 +644,7 @@ function dateFromUlid(value: string): Date | null {
 }
 
 export function statusTone(status?: RunStatus | string): 'complete' | 'running' | 'review' {
-  if (status === 'completed') return 'complete'
+  if (status === 'completed' || status === 'completed_partial') return 'complete'
   if (isActiveStatus(status)) return 'running'
   return 'review'
 }

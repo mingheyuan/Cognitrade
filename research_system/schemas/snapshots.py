@@ -20,6 +20,19 @@ SnapshotType = Literal[
     "sentiment",
     "events",
     "policy",
+    "kline",
+    "macro",
+    "peers",
+    "chain",
+    "research",
+    "industry",
+    "materials",
+    "futures",
+    "valuation",
+    "governance",
+    "moat",
+    "trap",
+    "contests",
 ]
 
 

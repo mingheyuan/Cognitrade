@@ -64,14 +64,16 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
   } = useCognitrade()
   const selectedReport = reportFromDetail(selectedRun)
   const selectedStatus = String(runs.find((run) => run.run_id === selectedRunId)?.status || '')
+  const synthesisUnavailable = selectedReport.synthesis_unavailable === true
   const synthesisPending = selectedReport.protocol === 'agent_os'
     && selectedReport.synthesis_available === false
+    && !synthesisUnavailable
     && !hasFinalDelivery(selectedRun)
     && (submitting || isActiveStatus(selectedStatus) || Boolean(selectedRun))
   const candidates = dashboardCandidates(overviewDashboard)
   const sectorSignals = dashboardSectorSignals(overviewDashboard)
   const verifiedPolicyMemory = dashboardItems(methodologyDashboard, 'verified_policy_memory')
-  const completed = runs.filter((run) => run.status === 'completed').length
+  const completed = runs.filter((run) => ['completed', 'completed_partial'].includes(String(run.status))).length
   const active = runs.filter((run) => ['received', 'ready', 'running', 'waiting_external', 'waiting_approval'].includes(String(run.status))).length
   const events = Number(selectedRun?.metrics.counts?.events || selectedRun?.events.events.length || 0)
   const latestRuns = runs.slice(0, 5).map(runListItem)
@@ -105,6 +107,8 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
               <div className="focus-company"><span className="company-mark company-mark--small">C</span><div><strong>{INTENT_LABELS[asString(selectedRun.replay.result?.intent)] || '研究报告'}</strong><small>{selectedRun.runId}</small></div></div>
               <p>{synthesisPending
                 ? 'Pack 已完成证据整理，Main Agent 正在生成最终回答。'
+                : synthesisUnavailable
+                  ? '研究事实已保存，但本次未生成 Main Agent 最终答复，请重新运行。'
                 : selectedReport.synthesis_available === false
                   ? '该运行已完成交付，但没有保存 Main Agent 动态结论，请重试。'
                 : asString(selectedReport.conclusion || selectedRun.replay.display_summary, '后端未提供结论')}</p>
@@ -159,7 +163,7 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
           <div className="recent-run-list">
             {latestRuns.map((run) => (
               <button key={run.id} className="recent-run-row" onClick={() => onOpenRun(run.id)}>
-                <span className={`run-icon run-icon--${statusTone(run.status)}`}>{run.status === 'completed' ? <CheckCircle2 size={14} /> : run.status === 'running' ? <Activity size={14} /> : <CircleAlert size={14} />}</span>
+                <span className={`run-icon run-icon--${statusTone(run.status)}`}>{['completed', 'completed_partial'].includes(run.status) ? <CheckCircle2 size={14} /> : run.status === 'running' ? <Activity size={14} /> : <CircleAlert size={14} />}</span>
                 <span><strong>{run.title}</strong><small>{run.intentLabel} · {run.id}</small></span><time>{run.time}</time>
               </button>
             ))}

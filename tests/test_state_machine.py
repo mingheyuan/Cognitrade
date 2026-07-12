@@ -39,6 +39,13 @@ class StateMachineTests(unittest.TestCase):
         with self.assertRaises(InvalidStatusTransition):
             transition_status(scope="run", current="completed", target="running")
 
+    def test_missing_final_synthesis_can_mark_a_completed_graph_partial(self) -> None:
+        self.assertEqual(
+            transition_status(scope="run", current="completed", target="completed_partial"),
+            "completed_partial",
+        )
+        self.assertIn("completed_partial", RUN_TERMINAL_STATUSES)
+
     def test_tool_approval_wait_is_distinct_from_tool_failure(self) -> None:
         self.assertEqual(
             transition_status(scope="tool", current="pending", target="waiting_approval"),

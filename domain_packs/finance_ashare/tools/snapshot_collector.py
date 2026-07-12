@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+from pathlib import Path
 from typing import Any
 
 from domain_packs.finance_ashare.skills.capital_flow_snapshot.skill import CapitalFlowSnapshotSkill
@@ -12,8 +17,26 @@ from domain_packs.finance_ashare.skills.notice_snapshot.skill import NoticeSnaps
 from domain_packs.finance_ashare.skills.policy_snapshot.skill import PolicySnapshotSkill
 from domain_packs.finance_ashare.skills.sector_snapshot.skill import SectorSnapshotSkill
 from domain_packs.finance_ashare.skills.sentiment_snapshot.skill import SentimentSnapshotSkill
+from domain_packs.finance_ashare.skills.uzi_source_snapshot.skill import (
+    ChainSnapshotSkill,
+    ContestsSnapshotSkill,
+    FundHoldersSnapshotSkill,
+    FuturesSnapshotSkill,
+    GovernanceSnapshotSkill,
+    IndustrySnapshotSkill,
+    KlineSnapshotSkill,
+    MacroSnapshotSkill,
+    MaterialsSnapshotSkill,
+    MoatSnapshotSkill,
+    PeersSnapshotSkill,
+    ResearchSnapshotSkill,
+    SimilarStocksSnapshotSkill,
+    TrapSnapshotSkill,
+    ValuationSnapshotSkill,
+)
 
 from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
+from research_system.runtime.storage.jsonl import read_json, write_json
 
 
 _SYMBOL_SKILLS = {
@@ -24,9 +47,52 @@ _SYMBOL_SKILLS = {
     "sentiment": SentimentSnapshotSkill,
     "events": EventsSnapshotSkill,
     "lhb": LHBSnapshotSkill,
+    "kline": KlineSnapshotSkill,
+    "macro": MacroSnapshotSkill,
+    "peers": PeersSnapshotSkill,
+    "chain": ChainSnapshotSkill,
+    "research": ResearchSnapshotSkill,
+    "industry": IndustrySnapshotSkill,
+    "materials": MaterialsSnapshotSkill,
+    "futures": FuturesSnapshotSkill,
+    "valuation": ValuationSnapshotSkill,
+    "governance": GovernanceSnapshotSkill,
+    "moat": MoatSnapshotSkill,
+    "trap": TrapSnapshotSkill,
+    "contests": ContestsSnapshotSkill,
+    "fund_holders": FundHoldersSnapshotSkill,
+    "similar_stocks": SimilarStocksSnapshotSkill,
 }
 _SCREEN_BASE_TYPES = ("market", "fundamental", "notice")
 _SCREEN_ENRICHMENT_TYPES = ("capital_flow", "sentiment", "events", "lhb")
+_SNAPSHOT_CACHE_TTLS = {
+    "market": 3600,
+    "capital_flow": 3600,
+    "sentiment": 3600,
+    "lhb": 3600,
+    "kline": 3600,
+    "fundamental": 86400,
+    "notice": 86400,
+    "events": 86400,
+    "sector": 86400,
+    "policy": 86400,
+    "fund_holders": 90 * 86400,
+    "similar_stocks": 86400,
+}
+_DEFAULT_SNAPSHOT_CACHE_TTL = 43200
+_SNAPSHOT_PROVIDER_HINTS = {
+    "market": "akshare",
+    "fundamental": "akshare",
+    "notice": "cninfo",
+    "capital_flow": "akshare",
+    "sentiment": "akshare",
+    "events": "akshare",
+    "lhb": "akshare",
+    "sector": "akshare",
+    "policy": "cninfo",
+    "fund_holders": "akshare",
+    "similar_stocks": "akshare",
+}
 
 
 def collect_snapshots(
@@ -36,6 +102,8 @@ def collect_snapshots(
     snapshot_types: Iterable[str],
     sector: str | None = None,
     cancellation=None,
+    cache_root: Path | None = None,
+    research_profile: str | None = None,
 ) -> list[dict[str, Any]]:
     """Collect the Finance Pack's declared snapshots through shared vendor adapters."""
     requested = list(dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip()))
@@ -44,7 +112,21 @@ def collect_snapshots(
     sector_snapshot: dict[str, Any] | None = None
 
     if "sector" in requested and sector and not _cancelled(cancellation):
-        sector_snapshot = SectorSnapshotSkill().run(query=sector)
+        sector_snapshot = _load_snapshot_cache(
+            cache_root=cache_root,
+            snapshot_type="sector",
+            target=sector,
+            profile=research_profile,
+        )
+        if sector_snapshot is None:
+            sector_snapshot = SectorSnapshotSkill().run(query=sector)
+            _save_snapshot_cache(
+                cache_root=cache_root,
+                snapshot_type="sector",
+                target=sector,
+                profile=research_profile,
+                snapshot=sector_snapshot,
+            )
         snapshots.append(sector_snapshot)
         for symbol in _constituent_symbols(sector_snapshot):
             if symbol not in resolved_symbols:
@@ -52,22 +134,247 @@ def collect_snapshots(
 
     if "policy" in requested and sector and not _cancelled(cancellation):
         constituents = _constituents(sector_snapshot)
-        snapshots.append(
-            PolicySnapshotSkill().run(
+        policy_snapshot = _load_snapshot_cache(
+            cache_root=cache_root,
+            snapshot_type="policy",
+            target=sector,
+            profile=research_profile,
+        )
+        if policy_snapshot is None:
+            policy_snapshot = PolicySnapshotSkill().run(
                 query=query,
                 sector=sector,
                 constituents=constituents,
             )
-        )
+            _save_snapshot_cache(
+                cache_root=cache_root,
+                snapshot_type="policy",
+                target=sector,
+                profile=research_profile,
+                snapshot=policy_snapshot,
+            )
+        snapshots.append(policy_snapshot)
 
-    for symbol in resolved_symbols:
+    tasks = [
+        (index, symbol, snapshot_type)
+        for index, (symbol, snapshot_type) in enumerate(
+            (pair for symbol in resolved_symbols for pair in ((symbol, item) for item in requested))
+        )
+        if snapshot_type in _SYMBOL_SKILLS
+    ]
+    if not tasks:
         for snapshot_type in requested:
-            if _cancelled(cancellation):
-                return snapshots
-            skill_cls = _SYMBOL_SKILLS.get(snapshot_type)
-            if skill_cls is not None:
-                snapshots.append(skill_cls().run(query=query, symbol=symbol))
+            if snapshot_type in {"sector", "policy"} and not sector:
+                snapshots.append(_missing_scope_snapshot(query=query, snapshot_type=snapshot_type))
+        return snapshots
+    results: dict[int, dict[str, Any]] = {}
+    pending_tasks: list[tuple[int, str, str]] = []
+    for index, symbol, snapshot_type in tasks:
+        cached = _load_snapshot_cache(
+            cache_root=cache_root,
+            snapshot_type=snapshot_type,
+            target=symbol,
+            profile=research_profile,
+        )
+        if cached is None:
+            pending_tasks.append((index, symbol, snapshot_type))
+        else:
+            results[index] = cached
+    if pending_tasks:
+        executor = ThreadPoolExecutor(max_workers=min(8, len(pending_tasks)), thread_name_prefix="finance-snapshot")
+        futures = {
+            executor.submit(_run_snapshot_skill, query, symbol, snapshot_type): (index, symbol, snapshot_type)
+            for index, symbol, snapshot_type in pending_tasks
+        }
+        try:
+            for future in as_completed(futures):
+                index, symbol, snapshot_type = futures[future]
+                if _cancelled(cancellation):
+                    for pending in futures:
+                        pending.cancel()
+                    break
+                result = future.result()
+                results[index] = result
+                _save_snapshot_cache(
+                    cache_root=cache_root,
+                    snapshot_type=snapshot_type,
+                    target=symbol,
+                    profile=research_profile,
+                    snapshot=result,
+                )
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+    snapshots.extend(results[index] for index, _symbol, _snapshot_type in tasks if index in results)
+    for snapshot_type in requested:
+        if snapshot_type in {"sector", "policy"} and not sector:
+            snapshots.append(_missing_scope_snapshot(query=query, snapshot_type=snapshot_type))
     return snapshots
+
+
+def _run_snapshot_skill(query: str, symbol: str, snapshot_type: str) -> dict[str, Any]:
+    skill_cls = _SYMBOL_SKILLS[snapshot_type]
+    try:
+        return skill_cls().run(query=query, symbol=symbol)
+    except Exception as exc:
+        return {
+            "snapshot_type": snapshot_type,
+            "symbol": symbol,
+            "query": query,
+            "facts": {"availability": "data_gap", "data_gap": ["provider_exception"]},
+            "degraded": True,
+            "degrade_reason": f"provider_exception:{exc.__class__.__name__}",
+        }
+
+
+def _snapshot_cache_path(
+    *,
+    cache_root: Path | None,
+    snapshot_type: str,
+    target: str,
+    profile: str | None,
+) -> Path | None:
+    if cache_root is None:
+        return None
+    payload = _snapshot_cache_context(
+        snapshot_type=snapshot_type,
+        target=target,
+        profile=profile,
+    )
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    ).hexdigest()
+    return Path(cache_root) / "finance_ashare" / "snapshot_partitions" / f"{digest}.json"
+
+
+def _snapshot_cache_context(
+    *,
+    snapshot_type: str,
+    target: str,
+    profile: str | None,
+) -> dict[str, Any]:
+    """Describe the Pack-owned raw Provider cache, not a reusable Board fact."""
+
+    return {
+        "cache_layer": "provider_raw",
+        "domain_id": "finance_ashare",
+        "artifact_type": "snapshot",
+        "snapshot_type": snapshot_type,
+        "provider": _SNAPSHOT_PROVIDER_HINTS.get(snapshot_type, snapshot_type),
+        "schema_version": "1",
+        "target": str(target).strip(),
+        "profile": str(profile or "").strip().lower(),
+    }
+
+
+def _snapshot_quality(snapshot: dict[str, Any]) -> str:
+    facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
+    declared = str(
+        snapshot.get("quality_status")
+        or snapshot.get("status")
+        or facts.get("availability")
+        or ""
+    ).strip().lower()
+    if declared in {"data_gap", "degraded", "assumption_only"}:
+        return declared
+    return "degraded" if snapshot.get("degraded") else "available"
+
+
+def _load_snapshot_cache(
+    *,
+    cache_root: Path | None,
+    snapshot_type: str,
+    target: str,
+    profile: str | None,
+) -> dict[str, Any] | None:
+    path = _snapshot_cache_path(
+        cache_root=cache_root,
+        snapshot_type=snapshot_type,
+        target=target,
+        profile=profile,
+    )
+    if path is None:
+        return None
+    payload = read_json(path)
+    if not isinstance(payload, dict) or not isinstance(payload.get("snapshot"), dict):
+        return None
+    if payload.get("cache_layer") != "provider_raw":
+        return None
+    if payload.get("cache_context") != _snapshot_cache_context(
+        snapshot_type=snapshot_type,
+        target=target,
+        profile=profile,
+    ):
+        return None
+    try:
+        expires_at = datetime.fromisoformat(str(payload.get("expires_at") or ""))
+    except ValueError:
+        return None
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= datetime.now(timezone.utc):
+        return None
+    snapshot = dict(payload["snapshot"])
+    if _snapshot_quality(snapshot) != "available":
+        # Degraded/data-gap records remain inspectable on disk but can never
+        # silently become a reusable fact in a later Run.
+        return None
+    return snapshot
+
+
+def _save_snapshot_cache(
+    *,
+    cache_root: Path | None,
+    snapshot_type: str,
+    target: str,
+    profile: str | None,
+    snapshot: dict[str, Any],
+) -> None:
+    path = _snapshot_cache_path(
+        cache_root=cache_root,
+        snapshot_type=snapshot_type,
+        target=target,
+        profile=profile,
+    )
+    if path is None:
+        return
+    now = datetime.now(timezone.utc)
+    ttl = _SNAPSHOT_CACHE_TTLS.get(snapshot_type, _DEFAULT_SNAPSHOT_CACHE_TTL)
+    write_json(
+        path,
+        {
+            "cache_layer": "provider_raw",
+            "domain_id": "finance_ashare",
+            "artifact_type": "snapshot",
+            "snapshot_type": snapshot_type,
+            "provider": _SNAPSHOT_PROVIDER_HINTS.get(snapshot_type, snapshot_type),
+            "schema_version": "1",
+            "profile": str(profile or "").strip().lower() or None,
+            "cache_context": _snapshot_cache_context(
+                snapshot_type=snapshot_type,
+                target=target,
+                profile=profile,
+            ),
+            "created_at": now.isoformat(),
+            "expires_at": (now + timedelta(seconds=ttl)).isoformat(),
+            "quality_status": _snapshot_quality(snapshot),
+            "snapshot": snapshot,
+        },
+    )
+
+
+def _missing_scope_snapshot(*, query: str, snapshot_type: str) -> dict[str, Any]:
+    return {
+        "snapshot_type": snapshot_type,
+        "query": query,
+        "facts": {
+            "availability": "data_gap",
+            "data_gap": [f"{snapshot_type}_scope_missing"],
+        },
+        "degraded": True,
+        "degrade_reason": f"{snapshot_type}_scope_missing",
+        "missing_fields": ["sector"],
+        "source": {"provider_id": "finance_pack.scope_resolver"},
+    }
 
 
 def collect_snapshot_bundle(
@@ -82,6 +389,8 @@ def collect_snapshot_bundle(
     skip_enrichment: bool = False,
     cancellation=None,
     security_master: AShareSecurityMaster | None = None,
+    cache_root: Path | None = None,
+    research_profile: str | None = None,
 ) -> dict[str, Any]:
     """Build a traceable candidate universe and its staged snapshot collection."""
     requested = list(dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip()))
@@ -94,19 +403,48 @@ def collect_snapshot_bundle(
     policy_requested = "policy" in requested
     sector_snapshot: dict[str, Any] | None = None
     if sector and sector_requested and not _cancelled(cancellation):
-        sector_snapshot = SectorSnapshotSkill().run(query=sector)
+        sector_snapshot = _load_snapshot_cache(
+            cache_root=cache_root,
+            snapshot_type="sector",
+            target=sector,
+            profile=research_profile,
+        )
+        if sector_snapshot is None:
+            sector_snapshot = SectorSnapshotSkill().run(query=sector)
+            _save_snapshot_cache(
+                cache_root=cache_root,
+                snapshot_type="sector",
+                target=sector,
+                profile=research_profile,
+                snapshot=sector_snapshot,
+            )
         snapshots.append(sector_snapshot)
         universe_rows = _normalize_constituents(_constituents(sector_snapshot))
         if universe_rows:
             universe_source = "sector_constituents"
 
     if sector and policy_requested and not _cancelled(cancellation):
-        snapshots.append(
-            PolicySnapshotSkill().run(
+        policy_snapshot = _load_snapshot_cache(
+            cache_root=cache_root,
+            snapshot_type="policy",
+            target=sector,
+            profile=research_profile,
+        )
+        if policy_snapshot is None:
+            policy_snapshot = PolicySnapshotSkill().run(
                 query=query,
                 sector=sector,
                 constituents=_constituents(sector_snapshot),
             )
+            _save_snapshot_cache(
+                cache_root=cache_root,
+                snapshot_type="policy",
+                target=sector,
+                profile=research_profile,
+                snapshot=policy_snapshot,
+            )
+        snapshots.append(
+            policy_snapshot
         )
 
     if intent == "sector_research":
@@ -140,15 +478,17 @@ def collect_snapshot_bundle(
         symbol_types = [item for item in _SCREEN_BASE_TYPES if item in symbol_types or not symbol_types]
         if not symbol_types:
             symbol_types = list(_SCREEN_BASE_TYPES)
-    snapshots.extend(
-        collect_snapshots(
-            query=query,
-            symbols=resolved_symbols,
-            snapshot_types=symbol_types,
-            sector=None,
-            cancellation=cancellation,
+        snapshots.extend(
+            collect_snapshots(
+                query=query,
+                symbols=resolved_symbols,
+                snapshot_types=symbol_types,
+                sector=None,
+                cancellation=cancellation,
+                cache_root=cache_root,
+                research_profile=research_profile,
+            )
         )
-    )
 
     enrichment_targets: list[str] = []
     if intent == "stock_screen" and not skip_enrichment and not _cancelled(cancellation):
@@ -161,6 +501,8 @@ def collect_snapshot_bundle(
                     snapshot_types=_SCREEN_ENRICHMENT_TYPES,
                     sector=None,
                     cancellation=cancellation,
+                    cache_root=cache_root,
+                    research_profile=research_profile,
                 )
             )
 
@@ -229,15 +571,32 @@ def _bundle_result(
     universe_source: str,
     enrichment_targets: list[str],
 ) -> dict[str, Any]:
+    normalized_snapshots = [_normalize_snapshot_quality(snapshot) for snapshot in snapshots]
     collected_types = list(
         dict.fromkeys(
             str(snapshot.get("snapshot_type") or "")
-            for snapshot in snapshots
+            for snapshot in normalized_snapshots
             if isinstance(snapshot, dict) and snapshot.get("snapshot_type")
         )
     )
+    degraded_rows = [
+        snapshot
+        for snapshot in normalized_snapshots
+        if isinstance(snapshot, dict)
+        and str(snapshot.get("quality_status") or "") in {"degraded", "data_gap"}
+    ]
+    quality_counts: dict[str, int] = {}
+    for snapshot in normalized_snapshots:
+        quality = str(snapshot.get("quality_status") or "data_gap")
+        quality_counts[quality] = quality_counts.get(quality, 0) + 1
+    if not normalized_snapshots or quality_counts.get("available", 0) == 0:
+        collection_quality = "data_gap"
+    elif degraded_rows:
+        collection_quality = "degraded"
+    else:
+        collection_quality = "available"
     return {
-        "snapshots": snapshots,
+        "snapshots": normalized_snapshots,
         "symbols": _unique_symbols(symbols),
         "candidate_universe": universe_rows,
         "collection": {
@@ -247,9 +606,69 @@ def _bundle_result(
             "collected_snapshot_types": collected_types,
             "enrichment_snapshot_types": list(_SCREEN_ENRICHMENT_TYPES),
             "enrichment_targets": enrichment_targets,
-            "degraded": not bool(snapshots),
+            "quality_status": collection_quality,
+            "quality_counts": quality_counts,
+            "degraded": bool(degraded_rows) or not bool(normalized_snapshots),
+            "degrade_reasons": list(
+                dict.fromkeys(
+                    str(
+                        snapshot.get("degrade_reason")
+                        or snapshot.get("degrade_reasons", [None])[0]
+                        or "snapshot_degraded"
+                    )
+                    for snapshot in degraded_rows
+                )
+            ),
+            "parallelism": "per_snapshot_dimension",
         },
     }
+
+
+def _normalize_snapshot_quality(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Promote source quality to a stable per-dimension contract."""
+
+    normalized = dict(snapshot)
+    facts = normalized.get("facts") if isinstance(normalized.get("facts"), dict) else {}
+    declared = str(
+        normalized.get("quality_status")
+        or normalized.get("status")
+        or facts.get("availability")
+        or ""
+    ).strip().lower()
+    if declared not in {"available", "degraded", "data_gap", "assumption_only"}:
+        declared = "degraded" if bool(normalized.get("degraded")) else "available"
+    if bool(normalized.get("degraded")) and declared == "available":
+        declared = "degraded"
+    if declared == "data_gap" and not bool(normalized.get("degraded")):
+        normalized["degraded"] = True
+    reasons = [
+        str(item).strip()
+        for item in (
+            list(normalized.get("degrade_reasons") or [])
+            + ([normalized.get("degrade_reason")] if normalized.get("degrade_reason") else [])
+            + list(facts.get("data_gap") or [])
+        )
+        if str(item).strip()
+    ]
+    normalized["quality_status"] = declared
+    normalized["degrade_reasons"] = list(dict.fromkeys(reasons))
+    normalized["missing_fields"] = list(
+        dict.fromkeys(
+            str(item).strip()
+            for item in list(normalized.get("missing_fields") or [])
+            if str(item).strip()
+        )
+    )
+    normalized["scope"] = (
+        "sector"
+        if normalized.get("sector")
+        or str(normalized.get("snapshot_type") or "") in {"sector", "policy", "macro"}
+        else "symbol"
+    )
+    normalized["data_period"] = str(
+        normalized.get("data_period") or normalized.get("snapshot_date") or ""
+    ) or None
+    return normalized
 
 
 def _cancelled(cancellation) -> bool:

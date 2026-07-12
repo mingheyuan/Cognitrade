@@ -203,6 +203,139 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
         self.assertTrue(review_artifact["content"]["review_target_found"])
         self.assertGreater(review_artifact["content"]["evidence_comparison"]["fresh_evidence_count"], 0)
 
+    def test_specialized_intents_deliver_pack_artifacts_through_agent_os_api(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        snapshots = [
+            {
+                "snapshot_type": "market",
+                "symbol": "600000",
+                "facts": {"market_overview": {"latest_price": 10.0, "amount": 2_000_000_000}},
+            },
+            {
+                "snapshot_type": "fundamental",
+                "symbol": "600000",
+                "facts": {
+                    "financial_abstract": {
+                        "revenue": 1000,
+                        "net_profit": 120,
+                        "operating_cash_flow": 160,
+                    }
+                },
+            },
+            {
+                "snapshot_type": "notice",
+                "symbol": "600000",
+                "facts": {"notice_count": 2},
+            },
+        ]
+        sector_snapshots = [
+            {
+                "snapshot_type": "sector",
+                "sector": "机器人",
+                "facts": {
+                    "top_constituents": [
+                        {"code": "600001", "name": "Alpha", "pct_change": 2.5}
+                    ]
+                },
+            },
+            {
+                "snapshot_type": "policy",
+                "sector": "机器人",
+                "facts": {"policy_signals": [{"title": "产业支持"}]},
+            },
+        ]
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            settings = Settings.from_env(repository_root).model_copy(
+                update={
+                    "runs_root": root / "runs",
+                    "memory_root": root / "memory",
+                    "domain_packs_root": repository_root / "domain_packs",
+                }
+            )
+            with TestClient(
+                create_app(settings=settings, api_config=ApiConfig(api_token="specialized-intents"))
+            ) as client:
+                headers = {"Authorization": "Bearer specialized-intents"}
+
+                screen = client.post(
+                    "/api/v1/runs",
+                    headers=headers,
+                    json={
+                        "intent": "stock_screen",
+                        "user_query": "筛选 600000 的现金流和估值",
+                        "slots": {"symbols": ["600000"], "snapshots": snapshots},
+                    },
+                )
+                self.assertEqual(screen.status_code, 200, screen.text)
+
+                sector = client.post(
+                    "/api/v1/runs",
+                    headers=headers,
+                    json={
+                        "intent": "sector_research",
+                        "user_query": "研究机器人板块",
+                        "slots": {"sector": "机器人", "snapshots": sector_snapshots},
+                    },
+                )
+                self.assertEqual(sector.status_code, 200, sector.text)
+
+                prior = client.post(
+                    "/api/v1/runs",
+                    headers=headers,
+                    json={
+                        "intent": "stock_check",
+                        "user_query": "分析 600000",
+                        "slots": {"snapshots": snapshots},
+                    },
+                )
+                self.assertEqual(prior.status_code, 200, prior.text)
+                review = client.post(
+                    "/api/v1/runs",
+                    headers=headers,
+                    json={
+                        "intent": "review_thesis",
+                        "user_query": "复核上一轮研究判断",
+                        "slots": {
+                            "review_target_run_id": prior.json()["run_id"],
+                            "snapshots": snapshots,
+                        },
+                    },
+                )
+                self.assertEqual(review.status_code, 200, review.text)
+
+                expected = {
+                    screen.json()["run_id"]: "screening_result",
+                    sector.json()["run_id"]: "sector_analysis",
+                    review.json()["run_id"]: "thesis_review",
+                }
+                for run_id, specialist_artifact_type in expected.items():
+                    replay = client.get(f"/api/v1/runs/{run_id}/replay", headers=headers)
+                    self.assertEqual(replay.status_code, 200, replay.text)
+                    payload = replay.json()
+                    self.assertEqual(payload["snapshot"]["status"], "completed")
+                    artifact_types = {row["artifact_type"] for row in payload["artifacts"]}
+                    self.assertTrue(
+                        {
+                            specialist_artifact_type,
+                            "research_report",
+                            "main_agent_synthesis",
+                            "assistant_message",
+                        }.issubset(artifact_types),
+                            (run_id, artifact_types),
+                        )
+
+                    specialist_gate = {
+                        "screening_result": "finance.screening.quality",
+                        "sector_analysis": "finance.sector.analysis",
+                        "thesis_review": "finance.thesis.review",
+                    }[specialist_artifact_type]
+                    gate_rows = {
+                        row["gate_id"]: row
+                        for row in payload["snapshot"].get("gate_evaluations", [])
+                    }
+                    self.assertEqual(gate_rows[specialist_gate]["verdict"], "pass")
+
 
 if __name__ == "__main__":
     unittest.main()

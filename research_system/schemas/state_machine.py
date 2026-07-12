@@ -10,6 +10,7 @@ RunStatus: TypeAlias = Literal[
     "paused",
     "waiting_approval",
     "completed",
+    "completed_partial",
     "gated",
     "failed",
     "cancelled",
@@ -45,6 +46,7 @@ IntakeStatus: TypeAlias = Literal["accepted", "needs_clarification"]
 
 RUN_TERMINAL_STATUSES = frozenset({
     "completed",
+    "completed_partial",
     "gated",
     "failed",
     "cancelled",
@@ -54,10 +56,11 @@ RUN_TERMINAL_STATUSES = frozenset({
 _RUN_TRANSITIONS: dict[str, frozenset[str]] = {
     "received": frozenset({"ready", "running", "paused", "waiting_approval", "gated", "failed", "cancelled"}),
     "ready": frozenset({"running", "paused", "waiting_approval", "gated", "failed", "cancelled"}),
-    "running": frozenset({"paused", "waiting_approval", "completed", "gated", "failed", "cancelled", "timed_out"}),
+    "running": frozenset({"paused", "waiting_approval", "completed", "completed_partial", "gated", "failed", "cancelled", "timed_out"}),
     "paused": frozenset({"running", "cancelled", "failed", "timed_out"}),
     "waiting_approval": frozenset({"running", "paused", "gated", "failed", "cancelled", "timed_out"}),
-    "completed": frozenset({"paused"}),
+    "completed": frozenset({"paused", "completed_partial"}),
+    "completed_partial": frozenset({"paused"}),
     "gated": frozenset({"paused"}),
     "failed": frozenset({"paused"}),
     "cancelled": frozenset({"paused"}),

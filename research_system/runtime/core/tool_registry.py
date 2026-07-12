@@ -45,6 +45,7 @@ class CoreToolContext:
     request_id: str
     run_root: Path
     actor: str
+    cache_root: Path | None = None
     worker_id: str | None = None
     user_id: str | None = None
     tenant_id: str | None = None

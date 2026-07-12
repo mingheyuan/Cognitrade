@@ -166,6 +166,7 @@ class CapabilityDefinition(BaseModel):
 
     subagent_type: str
     capability: str
+    capability_version: str = "1"
     description: str | None = None
     consumes: list[ArtifactPort] = Field(default_factory=list)
     produces: list[ArtifactPort] = Field(default_factory=list)
@@ -186,6 +187,11 @@ class CapabilityDefinition(BaseModel):
     cache_scope: Literal["run", "thread", "global"] | None = None
     fallback_capabilities: list[str] = Field(default_factory=list)
     fallback_subagent_types: list[str] = Field(default_factory=list)
+    idempotency_key_template: str | None = None
+    freshness_ttl_seconds: int | None = Field(default=None, ge=0)
+    data_period_policy: dict[str, Any] = Field(default_factory=dict)
+    methodology_version: str | None = None
+    policy_version: str | None = None
     tags: list[str] = Field(default_factory=list)
 
 
@@ -213,6 +219,116 @@ class ReportContractDefinition(BaseModel):
     required_gate_ids: list[str] = Field(default_factory=list)
 
 
+class MethodFieldRequirement(BaseModel):
+    """One field-level requirement for a Pack method input."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    type: Literal["number", "string", "boolean", "object", "array", "any"] = "any"
+    unit: str | None = None
+    period: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+    source_required: bool = True
+
+    @model_validator(mode="after")
+    def validate_field(self) -> "MethodFieldRequirement":
+        self.path = self.path.strip()
+        self.aliases = list(dict.fromkeys(str(item).strip() for item in self.aliases if str(item).strip()))
+        if not self.path:
+            raise ValueError("method field requirement requires a path")
+        return self
+
+
+class MethodInputRequirement(BaseModel):
+    """Artifact selector and fields required by one Pack method input."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_type: str = "snapshot"
+    selector: dict[str, Any] = Field(default_factory=dict)
+    required_fields: list[MethodFieldRequirement] = Field(default_factory=list)
+    allowed_quality_statuses: list[
+        Literal["available", "degraded", "data_gap", "assumption_only"]
+    ] = Field(default_factory=lambda: ["available"])
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_field(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return {
+                "artifact_type": "snapshot",
+                "required_fields": [{"path": value, "source_required": False}],
+            }
+        return value
+
+    @model_validator(mode="after")
+    def validate_input(self) -> "MethodInputRequirement":
+        self.artifact_type = self.artifact_type.strip()
+        self.allowed_quality_statuses = list(dict.fromkeys(self.allowed_quality_statuses))
+        if not self.artifact_type:
+            raise ValueError("method input requirement requires an artifact type")
+        if not self.required_fields:
+            raise ValueError(f"method input requirement has no fields: {self.artifact_type}")
+        if not self.allowed_quality_statuses:
+            raise ValueError(f"method input requirement has no quality policy: {self.artifact_type}")
+        return self
+
+
+class MethodDefinition(BaseModel):
+    """Pack-owned method contract used by intake, planning and quality gates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    method_id: str
+    version: str = "1"
+    description: str | None = None
+    output_artifact_types: list[str] = Field(default_factory=list)
+    capability: str
+    required_inputs: list[MethodInputRequirement] = Field(default_factory=list)
+    required_gate_ids: list[str] = Field(default_factory=list)
+    allowed_quality_statuses: list[
+        Literal["available", "degraded", "data_gap", "assumption_only"]
+    ] = Field(default_factory=lambda: ["available"])
+    result_equivalence: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_method(self) -> "MethodDefinition":
+        self.method_id = self.method_id.strip().lower()
+        self.version = self.version.strip()
+        self.capability = self.capability.strip()
+        self.output_artifact_types = list(
+            dict.fromkeys(str(item).strip() for item in self.output_artifact_types if str(item).strip())
+        )
+        self.required_gate_ids = list(
+            dict.fromkeys(str(item).strip() for item in self.required_gate_ids if str(item).strip())
+        )
+        if not self.method_id or not self.version or not self.capability:
+            raise ValueError("method contract requires method_id, version and capability")
+        if not self.output_artifact_types:
+            raise ValueError(f"method contract has no output artifacts: {self.method_id}")
+        if not self.required_inputs:
+            raise ValueError(f"method contract has no required inputs: {self.method_id}")
+        if not self.allowed_quality_statuses:
+            raise ValueError(f"method contract has no allowed quality statuses: {self.method_id}")
+        if self.result_equivalence:
+            level = str(self.result_equivalence.get("level") or "").strip().lower()
+            if level not in {"exact", "numeric_tolerance", "semantic", "not_equivalent"}:
+                raise ValueError(
+                    f"method contract has invalid result equivalence level: {self.method_id}:{level}"
+                )
+            if level == "numeric_tolerance":
+                try:
+                    tolerance = float(self.result_equivalence.get("tolerance"))
+                except (TypeError, ValueError):
+                    tolerance = 0.0
+                if tolerance <= 0:
+                    raise ValueError(
+                        f"numeric method contract requires positive tolerance: {self.method_id}"
+                    )
+        return self
+
+
 class DomainPackManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -231,6 +347,25 @@ class DomainPackManifest(BaseModel):
     evaluations: list[str] = Field(default_factory=list)
     governance: ExecutionGovernance = Field(default_factory=ExecutionGovernance)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    def method_definition(self, method_id: str) -> MethodDefinition:
+        """Return one validated Pack method contract by identifier."""
+
+        normalized = str(method_id or "").strip().lower()
+        raw_catalog = self.planner_policies.get("method_catalog") or {}
+        raw = raw_catalog.get(normalized)
+        if not isinstance(raw, dict):
+            raise KeyError(f"unknown method contract: {self.domain_id}:{normalized}")
+        return MethodDefinition.model_validate({"method_id": normalized, **dict(raw)})
+
+    def method_definitions(self) -> dict[str, MethodDefinition]:
+        """Return all Pack method contracts in a stable identifier mapping."""
+
+        raw_catalog = self.planner_policies.get("method_catalog") or {}
+        return {
+            str(method_id).strip().lower(): self.method_definition(str(method_id))
+            for method_id in raw_catalog
+        }
 
     @model_validator(mode="after")
     def validate_manifest(self) -> "DomainPackManifest":
@@ -257,6 +392,30 @@ class DomainPackManifest(BaseModel):
         capability_ids = {item.capability for item in self.capabilities}
         subagent_types = {item.subagent_type for item in self.capabilities}
         declared_intents = {item.intent_id for item in self.intake.intents}
+        method_catalog = self.planner_policies.get("method_catalog") or {}
+        if not isinstance(method_catalog, dict):
+            raise ValueError("Pack method_catalog must be a mapping")
+        for method_id, raw_definition in method_catalog.items():
+            if not isinstance(raw_definition, dict):
+                raise ValueError(f"Pack method contract must be a mapping: {method_id}")
+            definition = MethodDefinition.model_validate(
+                {"method_id": str(method_id), **dict(raw_definition)}
+            )
+            unknown_outputs = set(definition.output_artifact_types) - declared_artifacts
+            if unknown_outputs:
+                raise ValueError(
+                    f"method references undeclared artifacts: {definition.method_id}:{sorted(unknown_outputs)}"
+                )
+            if definition.capability not in capability_ids:
+                raise ValueError(
+                    f"method references unknown capability: {definition.method_id}:{definition.capability}"
+                )
+            capability = next(item for item in self.capabilities if item.capability == definition.capability)
+            produced = {port.artifact_type for port in capability.produces}
+            if not set(definition.output_artifact_types).issubset(produced):
+                raise ValueError(
+                    f"method outputs are not produced by capability: {definition.method_id}:{definition.capability}"
+                )
         for intent in self.intake.intents:
             unknown_capabilities = set(intent.candidate_capabilities) - capability_ids
             if unknown_capabilities:
@@ -294,6 +453,16 @@ class DomainPackManifest(BaseModel):
                         f"capability references undeclared artifact: {capability.capability}->{port.artifact_type}"
                     )
         gate_ids = {gate.gate_id for gate in self.quality_gates}
+        for method_id, raw_definition in method_catalog.items():
+            definition = MethodDefinition.model_validate(
+                {"method_id": str(method_id), **dict(raw_definition)}
+            )
+            unknown_method_gate_ids = set(definition.required_gate_ids) - gate_ids
+            if unknown_method_gate_ids:
+                raise ValueError(
+                    f"method references unknown quality gates: "
+                    f"{definition.method_id}:{sorted(unknown_method_gate_ids)}"
+                )
         for gate in self.quality_gates:
             if gate.artifact_type not in declared_artifacts:
                 raise ValueError(f"quality gate references undeclared artifact: {gate.gate_id}")
@@ -320,6 +489,7 @@ class CapabilityPlanningRequest(BaseModel):
     objective: str
     available_artifact_types: list[str]
     required_artifact_types: list[str]
+    available_artifact_refs: list[dict[str, Any]] = Field(default_factory=list)
     allowed_tools: list[str] = Field(default_factory=list)
     allowed_permissions: list[str] = Field(default_factory=list)
     allowed_side_effect_levels: list[
@@ -331,6 +501,7 @@ class CapabilityPlanningRequest(BaseModel):
     minimum_reliability: float = Field(default=0.0, ge=0.0, le=1.0)
     token_budget: int | None = Field(default=None, ge=1)
     cost_budget: float | None = Field(default=None, ge=0.0)
+    allowed_capability_tags: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -341,6 +512,9 @@ __all__ = [
     "DomainPackDependency",
     "DomainPackManifest",
     "IntentDefinition",
+    "MethodDefinition",
+    "MethodFieldRequirement",
+    "MethodInputRequirement",
     "PackIntegrity",
     "PackIntakeDefinition",
     "PackToolDefinition",

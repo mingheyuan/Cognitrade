@@ -23,10 +23,50 @@ SUPPORTED_RESEARCH_INTENTS = frozenset(
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _INVESTMENT_CYCLES = frozenset({"short_term", "mid_term", "long_term"})
 _STOCK_SNAPSHOT_TYPES = frozenset(
-    {"market", "fundamental", "notice", "lhb", "capital_flow", "sentiment", "events"}
+    {
+        "market",
+        "fundamental",
+        "notice",
+        "lhb",
+        "capital_flow",
+        "sentiment",
+        "events",
+        "kline",
+        "macro",
+        "peers",
+        "chain",
+        "research",
+        "industry",
+        "materials",
+        "futures",
+        "valuation",
+        "governance",
+        "moat",
+        "trap",
+        "contests",
+    }
 )
-_METHODOLOGIES = frozenset({"comps", "dcf", "cashflow_resilience"})
+_METHODOLOGIES = frozenset(
+    {
+        "comps",
+        "dcf",
+        "cashflow_resilience",
+        "three_statement",
+        "lbo",
+        "ma_accretion",
+        "segmental",
+    }
+)
+_RESEARCH_METHODS = frozenset(
+    {
+        *_METHODOLOGIES,
+        "panel",
+        "risk",
+        "report",
+    }
+)
 _SCREEN_STYLES = frozenset({"value", "growth", "quality", "gulp", "short"})
+_RESEARCH_PROFILES = frozenset({"quick", "lite", "medium", "deep"})
 
 _PLANNING_FIELDS = {"planning_context_hints"}
 _STOCK_FIELDS = {
@@ -34,6 +74,8 @@ _STOCK_FIELDS = {
     "snapshot_types",
     "allow_partial_snapshot_types",
     "investment_cycle",
+    "research_profile",
+    "requested_methods",
     *_PLANNING_FIELDS,
 }
 _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
@@ -80,6 +122,8 @@ def validate_research_request(
     request: RequestEnvelope,
     *,
     supported_intents: Iterable[str] | None = None,
+    supported_methods: Iterable[str] | None = None,
+    supported_snapshot_types: Iterable[str] | None = None,
 ) -> RequestEnvelope:
     query = str(request.user_query or "").strip()
     if not query:
@@ -139,7 +183,11 @@ def validate_research_request(
             details={"intent": intent, "fields": unknown_fields},
         )
 
-    _validate_common_constraints(constraints)
+    _validate_common_constraints(
+        constraints,
+        supported_methods=supported_methods,
+        supported_snapshot_types=supported_snapshot_types,
+    )
     if intent == "stock_compare":
         _validate_stock_compare_constraints(constraints)
     elif intent == "stock_screen":
@@ -147,7 +195,12 @@ def validate_research_request(
     return request.model_copy(update={"intent": intent, "user_query": query, "constraints": constraints})
 
 
-def _validate_common_constraints(constraints: dict[str, Any]) -> None:
+def _validate_common_constraints(
+    constraints: dict[str, Any],
+    *,
+    supported_methods: Iterable[str] | None = None,
+    supported_snapshot_types: Iterable[str] | None = None,
+) -> None:
     for field_name in ("symbol", "sector_query"):
         if field_name in constraints:
             _require_non_empty_string(constraints[field_name], field_name=field_name)
@@ -157,13 +210,48 @@ def _validate_common_constraints(constraints: dict[str, Any]) -> None:
 
     if "investment_cycle" in constraints:
         _require_enum(constraints["investment_cycle"], field_name="investment_cycle", allowed=_INVESTMENT_CYCLES)
+    if "research_profile" in constraints:
+        _require_enum(constraints["research_profile"], field_name="research_profile", allowed=_RESEARCH_PROFILES)
+    if "requested_methods" in constraints:
+        methods = _require_string_list(constraints["requested_methods"], field_name="requested_methods", min_items=1)
+        allowed_methods = frozenset(
+            str(item).strip().lower()
+            for item in (
+                supported_methods
+                if supported_methods is not None
+                else _RESEARCH_METHODS
+            )
+            if str(item).strip()
+        )
+        unsupported = sorted(set(methods) - allowed_methods)
+        if unsupported:
+            _invalid_constraint(
+                "requested_methods",
+                f"contains unsupported values: {', '.join(unsupported)}",
+            )
+        if len(methods) != len(set(methods)):
+            _invalid_constraint("requested_methods", "must not contain duplicate values")
     if "prefer_methodology" in constraints:
-        _require_enum(constraints["prefer_methodology"], field_name="prefer_methodology", allowed=_METHODOLOGIES)
+        allowed_methods = frozenset(
+            str(item).strip().lower()
+            for item in (supported_methods if supported_methods is not None else _RESEARCH_METHODS)
+            if str(item).strip()
+        )
+        _require_enum(constraints["prefer_methodology"], field_name="prefer_methodology", allowed=allowed_methods)
     if "screen_style" in constraints:
         _require_enum(constraints["screen_style"], field_name="screen_style", allowed=_SCREEN_STYLES)
     if "snapshot_types" in constraints:
         snapshots = _require_string_list(constraints["snapshot_types"], field_name="snapshot_types", min_items=1)
-        unsupported = sorted(set(snapshots) - _STOCK_SNAPSHOT_TYPES)
+        allowed_snapshot_types = frozenset(
+            str(item).strip().lower()
+            for item in (
+                supported_snapshot_types
+                if supported_snapshot_types is not None
+                else _STOCK_SNAPSHOT_TYPES
+            )
+            if str(item).strip()
+        )
+        unsupported = sorted(set(snapshots) - allowed_snapshot_types)
         if unsupported:
             _invalid_constraint("snapshot_types", f"contains unsupported values: {', '.join(unsupported)}")
         if len(snapshots) != len(set(snapshots)):

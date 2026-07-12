@@ -46,7 +46,22 @@ class RuntimePlanner:
         manifest = self.domain_pack_registry.get(domain_id)
         required = list(request.slots.get("required_artifact_types") or [])
         if not required:
-            required = [contract.artifact_type for contract in manifest.report_contracts]
+            intent_definition = next(
+                (
+                    item
+                    for item in manifest.intake.intents
+                    if item.intent_id == str(intent or request.intent or "").strip()
+                ),
+                None,
+            )
+            intent_outputs = list(intent_definition.output_artifact_types) if intent_definition else []
+            required = list(
+                dict.fromkeys(
+                    str(item).strip()
+                    for item in (intent_outputs or [contract.artifact_type for contract in manifest.report_contracts])
+                    if str(item).strip()
+                )
+            )
         planning_request = CapabilityPlanningRequest(
             domain_id=domain_id,
             objective=request.user_query,

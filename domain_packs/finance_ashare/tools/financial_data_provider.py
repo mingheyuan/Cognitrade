@@ -16,6 +16,8 @@ def invoke(arguments: dict[str, Any], context) -> dict[str, Any]:
         candidate_pool_size=int(arguments.get("candidate_pool_size") or 8),
         enrichment_top_n=int(arguments.get("enrichment_top_n") or 2),
         cancellation=context.cancellation,
+        cache_root=getattr(context, "cache_root", None),
+        research_profile=str(arguments.get("research_profile") or "").strip() or None,
     )
     source_refs: list[dict[str, Any]] = []
     for row in list(payload.get("snapshots") or []):

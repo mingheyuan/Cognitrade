@@ -3,6 +3,20 @@ from __future__ import annotations
 import re
 
 from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshot_bundle, collect_snapshots
+from domain_packs.finance_ashare.subagents.uzi_methodology import (
+    build_delivery_conclusion,
+    build_panel_review,
+    build_presentation,
+    build_risk_scan,
+    build_valuation_model,
+    select_profile,
+)
+from domain_packs.finance_ashare.subagents.uzi_advanced_methodology import (
+    build_deep_analysis,
+    build_dimension_coverage,
+    build_institutional_analysis,
+    build_research_workflow,
+)
 from research_system.adapters.vendors.akshare_utils import coerce_numeric
 from research_system.services.methodologies import (
     CashflowResilienceService,
@@ -11,6 +25,7 @@ from research_system.services.methodologies import (
 )
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.schemas.artifacts import ArtifactDraft
+from research_system.schemas.execution_runtime import NodeExecutionOutput
 
 
 _SCREEN_STYLE_CRITERIA = {
@@ -92,6 +107,7 @@ def collect_snapshot(context):
     sector = str(inputs.get("sector") or inputs.get("sector_query") or "").strip() or None
     snapshots = list(query.content.get("snapshots") or inputs.get("snapshots") or [])
     requested_types = _requested_snapshot_types(inputs=inputs, sector=sector)
+    governed_tool_path = callable(getattr(context, "call_tool", None))
     review_target_run_id = str(inputs.get("review_target_run_id") or "").strip() or None
     target_artifacts = _review_target_artifacts(context, review_target_run_id) if intent == "review_thesis" else []
     if intent == "review_thesis" and not symbols:
@@ -116,6 +132,7 @@ def collect_snapshot(context):
             "sector": sector,
             "candidate_pool_size": int(inputs.get("candidate_pool_size") or 8),
             "enrichment_top_n": int(inputs.get("enrichment_top_n") or 2),
+            "research_profile": str(inputs.get("research_profile") or "").strip() or None,
         }
         call_tool = getattr(context, "call_tool", None)
         if callable(call_tool):
@@ -146,6 +163,31 @@ def collect_snapshot(context):
             dict(row) for row in collected.get("candidate_universe") or [] if isinstance(row, dict)
         ]
         collection = dict(collected.get("collection") or collection)
+    snapshots = [
+        _normalize_snapshot_record(snapshot)
+        for snapshot in snapshots
+        if isinstance(snapshot, dict)
+    ]
+    if governed_tool_path:
+        snapshots = _ensure_requested_snapshot_records(
+            snapshots,
+            requested_types=requested_types,
+            symbols=symbols,
+            sector=sector,
+        )
+    quality_counts: dict[str, int] = {}
+    for snapshot in snapshots:
+        quality = _snapshot_quality(snapshot)
+        quality_counts[quality] = quality_counts.get(quality, 0) + 1
+    if quality_counts.get("available", 0) == 0:
+        collection_quality = "data_gap"
+    elif any(key in quality_counts for key in ("degraded", "data_gap")):
+        collection_quality = "degraded"
+    else:
+        collection_quality = "available"
+    collection["quality_status"] = collection_quality
+    collection["quality_counts"] = quality_counts
+    collection["degraded"] = collection_quality != "available"
     for snapshot in snapshots:
         if isinstance(snapshot, dict):
             symbol = str(snapshot.get("symbol") or "").strip()
@@ -160,7 +202,8 @@ def collect_snapshot(context):
             if isinstance(snapshot, dict) and snapshot.get("snapshot_type")
         )
     )
-    collection["degraded"] = not bool(snapshots)
+    collection.setdefault("quality_status", "data_gap" if not snapshots else "available")
+    collection["degraded"] = str(collection.get("quality_status") or "") in {"degraded", "data_gap"}
     source_refs = list(inputs.get("source_refs") or [])
     if not source_refs:
         source_refs = (
@@ -168,43 +211,301 @@ def collect_snapshot(context):
             or _snapshot_source_refs(snapshots)
             or [{"type": "user_supplied", "id": query.artifact_id}]
         )
-    return ArtifactDraft(
+    bundle_content = {
+        "query": query_text,
+        "symbols": symbols,
+        "sector": sector,
+        "snapshots": snapshots,
+        "candidate_universe": candidate_universe,
+        "collection": collection,
+        "review_target_run_id": review_target_run_id,
+        "review_target_artifact_ids": [artifact.artifact_id for artifact in target_artifacts],
+        "snapshot_keys": [
+            _snapshot_key(snapshot)
+            for snapshot in snapshots
+            if isinstance(snapshot, dict) and snapshot.get("snapshot_type")
+        ],
+    }
+    snapshot_drafts = [
+        ArtifactDraft(
+            artifact_type="snapshot",
+            content=_snapshot_artifact_content(snapshot),
+            source_refs=_snapshot_artifact_source_refs(snapshot) or source_refs,
+            parent_artifact_ids=[query.artifact_id],
+            confidence=0.45 if _snapshot_quality(snapshot) in {"degraded", "data_gap"} else 0.8,
+            risk_flags=list(_snapshot_quality_reasons(snapshot)),
+            metadata={
+                "snapshot_type": str(snapshot.get("snapshot_type") or ""),
+                "scope": str(_snapshot_artifact_content(snapshot).get("scope") or "symbol"),
+                "quality_status": _snapshot_quality(snapshot),
+            },
+        )
+        for snapshot in snapshots
+        if isinstance(snapshot, dict) and snapshot.get("snapshot_type")
+    ]
+    bundle_draft = ArtifactDraft(
         artifact_type="stock_snapshot_bundle",
-        content={
-            "query": query_text,
-            "symbols": symbols,
-            "sector": sector,
-            "snapshots": snapshots,
-            "candidate_universe": candidate_universe,
-            "collection": collection,
-            "review_target_run_id": review_target_run_id,
-            "review_target_artifact_ids": [artifact.artifact_id for artifact in target_artifacts],
-        },
+        content=bundle_content,
         source_refs=source_refs,
         parent_artifact_ids=[query.artifact_id],
-        confidence=0.8,
+        confidence=0.8 if str(collection.get("quality_status")) == "available" else 0.45,
+        risk_flags=list(collection.get("degrade_reasons") or []),
+        metadata={"quality_status": str(collection.get("quality_status") or "data_gap")},
     )
+    # Production execution has a governed Tool caller and can commit the
+    # independent Snapshot records. Minimal direct Pack contexts retain the
+    # historical single-draft return shape for unit-level equivalence tests.
+    if not callable(getattr(context, "call_tool", None)):
+        return bundle_draft
+    return NodeExecutionOutput(artifacts=[*snapshot_drafts, bundle_draft])
+
+
+def _snapshot_quality(snapshot: dict[str, Any]) -> str:
+    facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
+    quality = str(
+        snapshot.get("quality_status")
+        or snapshot.get("status")
+        or facts.get("availability")
+        or ""
+    ).strip().lower()
+    if quality not in {"available", "degraded", "data_gap", "assumption_only"}:
+        quality = "degraded" if snapshot.get("degraded") else "available"
+    if snapshot.get("degraded") and quality == "available":
+        quality = "degraded"
+    return quality
+
+
+def _normalize_snapshot_record(snapshot: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(snapshot)
+    quality = _snapshot_quality(normalized)
+    normalized["quality_status"] = quality
+    if quality in {"degraded", "data_gap"}:
+        normalized["degraded"] = True
+    normalized.setdefault("degrade_reasons", _snapshot_quality_reasons(normalized))
+    normalized.setdefault("data_period", normalized.get("snapshot_date"))
+    return normalized
+
+
+def _snapshot_quality_reasons(snapshot: dict[str, Any]) -> list[str]:
+    facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
+    values = [
+        *list(snapshot.get("degrade_reasons") or []),
+        snapshot.get("degrade_reason"),
+        *list(facts.get("data_gap") or []),
+    ]
+    reasons: list[str] = []
+    for value in values:
+        if value is None:
+            continue
+        reason = str(value).strip()
+        if reason and reason not in reasons:
+            reasons.append(reason)
+    return reasons
+
+
+def _ensure_requested_snapshot_records(
+    snapshots: list[dict[str, Any]],
+    *,
+    requested_types: list[str],
+    symbols: list[str],
+    sector: str | None,
+) -> list[dict[str, Any]]:
+    """Materialize explicit data-gap facts for requested but unavailable inputs."""
+
+    rows = list(snapshots)
+    sector_scoped = {"sector", "policy", "macro"}
+
+    def target_key(snapshot_type: str, row: dict[str, Any]) -> str:
+        if snapshot_type in sector_scoped:
+            return str(row.get("sector") or sector or "").strip()
+        return str(row.get("symbol") or "").strip()
+
+    for snapshot_type in _unique_strings(requested_types):
+        targets = [None] if snapshot_type in sector_scoped else (symbols or [None])
+        for symbol in targets:
+            expected_target = str(sector or "").strip() if snapshot_type in sector_scoped else str(symbol or "").strip()
+            if any(
+                str(row.get("snapshot_type") or "").strip() == snapshot_type
+                and target_key(snapshot_type, row) == expected_target
+                for row in rows
+            ):
+                continue
+            rows.append(
+                {
+                    "snapshot_type": snapshot_type,
+                    "symbol": None if snapshot_type in sector_scoped else symbol,
+                    "sector": sector if snapshot_type in sector_scoped else None,
+                    "facts": {"availability": "data_gap"},
+                    "quality_status": "data_gap",
+                    "missing_fields": ["provider_snapshot_missing"],
+                    "degrade_reasons": ["provider_snapshot_missing"],
+                    "source": {"provider_id": "financial_data_provider"},
+                }
+            )
+    return rows
+
+
+def _snapshot_key(snapshot: dict[str, Any]) -> str:
+    snapshot_type = str(snapshot.get("snapshot_type") or "snapshot").strip()
+    scope = "sector" if snapshot.get("sector") else "symbol"
+    target = str(snapshot.get("sector") or snapshot.get("symbol") or "unscoped").strip()
+    return f"{scope}:{target}:{snapshot_type}"
+
+
+def _snapshot_artifact_content(snapshot: dict[str, Any]) -> dict[str, Any]:
+    facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
+    source = snapshot.get("source") if isinstance(snapshot.get("source"), dict) else {}
+    snapshot_type = str(snapshot.get("snapshot_type") or "snapshot").strip()
+    scope = "sector" if snapshot.get("sector") else (
+        "sector" if snapshot_type in {"sector", "policy", "macro"} else "symbol"
+    )
+    return {
+        "snapshot_type": snapshot_type,
+        "scope": scope,
+        "symbol": str(snapshot.get("symbol") or "") or None,
+        "sector": str(snapshot.get("sector") or "") or None,
+        "query": str(snapshot.get("query") or "") or None,
+        "snapshot_date": str(snapshot.get("snapshot_date") or "") or None,
+        "data_period": str(
+            snapshot.get("data_period") or snapshot.get("snapshot_date") or ""
+        ) or None,
+        "retrieved_at": str(snapshot.get("retrieved_at") or "") or None,
+        "quality_status": _snapshot_quality(snapshot),
+        "missing_fields": [
+            str(item).strip()
+            for item in list(snapshot.get("missing_fields") or [])
+            if str(item).strip()
+        ],
+        "degrade_reasons": _snapshot_quality_reasons(snapshot),
+        "facts": facts,
+        "source": source,
+        "source_refs": _snapshot_artifact_source_refs(snapshot),
+    }
+
+
+def _snapshot_artifact_source_refs(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    source = snapshot.get("source") if isinstance(snapshot.get("source"), dict) else {}
+    provider = str(
+        source.get("provider_id")
+        or source.get("source_id")
+        or source.get("vendor")
+        or snapshot.get("snapshot_type")
+        or "finance_pack"
+    ).strip()
+    identifier = _snapshot_key(snapshot)
+    return [{"type": "snapshot", "provider": provider, "id": identifier}]
+
+
+def _with_quality_status(content: dict[str, Any]) -> dict[str, Any]:
+    """Attach the canonical quality status to Pack methodology content."""
+
+    result = dict(content)
+    declared = str(result.get("quality_status") or "").strip().lower()
+    if declared in {"available", "degraded", "data_gap", "assumption_only"}:
+        return result
+    statuses: list[str] = []
+    gaps = 0
+    assumptions = 0
+
+    def visit(value: object) -> None:
+        nonlocal gaps, assumptions
+        if isinstance(value, dict):
+            status = str(value.get("status") or "").strip().lower()
+            if status in {"available", "degraded", "data_gap", "assumption_only"}:
+                statuses.append(status)
+            gaps += len(list(value.get("data_gap") or []))
+            assumptions += len(list(value.get("assumption_flags") or []))
+            for nested in value.values():
+                visit(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                visit(nested)
+
+    visit(result)
+    if "data_gap" in statuses and not any(status == "available" for status in statuses):
+        quality = "data_gap"
+    elif "assumption_only" in statuses and not any(status == "available" for status in statuses):
+        quality = "assumption_only"
+    elif gaps or assumptions or "degraded" in statuses or "data_gap" in statuses:
+        quality = "degraded"
+    else:
+        quality = "available"
+    result["quality_status"] = quality
+    return result
+
+
+def _context_artifacts(context, artifact_type: str) -> list:
+    reader = getattr(context, "artifacts", None)
+    if callable(reader):
+        return list(reader(artifact_type))
+    try:
+        return [context.require_artifact(artifact_type)]
+    except Exception:
+        return []
+
+
+def _snapshot_context(context) -> tuple[list[dict], list[str], str, list[dict], list[str]]:
+    """Read independent Snapshot artifacts and retain a compatibility fallback.
+
+    The normal Graph contract supplies individual ``snapshot`` artifacts.  The
+    bundle fallback is intentionally limited to direct legacy/unit contexts so
+    the production path cannot silently make the bundle the shared data plane.
+    """
+
+    artifacts = _context_artifacts(context, "snapshot")
+    rows: list[dict] = []
+    source_refs: list[dict] = []
+    parent_ids: list[str] = []
+    query = str((context.node.inputs or {}).get("query") or "")
+    symbols: list[str] = []
+    for artifact in artifacts:
+        content = dict(artifact.content or {})
+        snapshot_type = str(
+            content.get("snapshot_type") or content.get("dimension") or "snapshot"
+        ).strip()
+        row = {
+            **content,
+            "snapshot_type": snapshot_type,
+            "quality_status": content.get("quality_status") or artifact.metadata.get("quality_status"),
+        }
+        rows.append(row)
+        parent_ids.append(artifact.artifact_id)
+        source_refs.extend(artifact.source_refs)
+        symbol = str(content.get("symbol") or "").strip()
+        if symbol and symbol not in symbols:
+            symbols.append(symbol)
+        if not query:
+            query = str(content.get("query") or "")
+
+    if not rows:
+        bundles = _context_artifacts(context, "stock_snapshot_bundle")
+        if bundles:
+            bundle = bundles[-1]
+            rows = [dict(row) for row in bundle.content.get("snapshots") or [] if isinstance(row, dict)]
+            symbols = _unique_strings(bundle.content.get("symbols") or [])
+            query = str(bundle.content.get("query") or query)
+            source_refs = list(bundle.source_refs)
+            parent_ids = [bundle.artifact_id]
+
+    symbols = _unique_strings([*symbols, *[str(row.get("symbol") or "") for row in rows]])
+    return rows, symbols, query, _unique_source_refs(source_refs), list(dict.fromkeys(parent_ids))
 
 
 def select_evidence(context):
-    snapshots = context.require_artifact("stock_snapshot_bundle")
+    rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
     return ArtifactDraft(
         artifact_type="evidence_set",
-        content={
-            "items": list(snapshots.content.get("snapshots") or []),
-            "query": snapshots.content.get("query"),
-        },
-        source_refs=list(snapshots.source_refs),
-        parent_artifact_ids=[snapshots.artifact_id],
-        confidence=snapshots.confidence,
+        content={"items": rows, "symbols": symbols, "query": query},
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=0.8 if rows else 0.0,
     )
 
 
 def analyze_financials(context):
-    snapshots = context.require_artifact("stock_snapshot_bundle")
+    rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
     inputs = dict(context.node.inputs or {})
-    grouped = _snapshots_by_symbol(list(snapshots.content.get("snapshots") or []))
-    symbols = _unique_strings(snapshots.content.get("symbols") or [])
+    grouped = _snapshots_by_symbol(rows)
     candidates = [
         _analysis_candidate(symbol=symbol, snapshots=grouped.get(symbol, {}))
         for symbol in symbols
@@ -244,19 +545,453 @@ def analyze_financials(context):
         )
     scorecard = _bank_compare_scorecard(candidates)
     scorecards = [scorecard] if scorecard else []
-    return ArtifactDraft(
-        artifact_type="financial_analysis",
-        content={
+    analysis_content = _with_quality_status(
+        {
             "symbols": [candidate["symbol"] for candidate in candidates],
             "methodologies": methodologies,
             "scorecards": scorecards,
             "summary": _analysis_summary(methodologies=methodologies, scorecards=scorecards),
-        },
-        source_refs=list(snapshots.source_refs),
-        parent_artifact_ids=[snapshots.artifact_id],
+        }
+    )
+    return ArtifactDraft(
+        artifact_type="financial_analysis",
+        content=analysis_content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
         confidence=_analysis_confidence(methodologies),
         risk_flags=["methodology_assumption_driven"] if methodologies else ["financial_evidence_missing"],
     )
+
+
+def evaluate_uzi_valuation(context):
+    rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
+    inputs = dict(context.node.inputs or {})
+    profile = select_profile(inputs)
+    content = build_valuation_model(
+        rows,
+        symbols,
+        profile,
+    )
+    content = _with_quality_status(content)
+    models = list(content.get("models") or [])
+    warnings = [
+        warning
+        for model in models
+        for warning in [
+            *list(model.get("warnings") or []),
+            *list(model.get("data_gap") or []),
+            *list(model.get("assumption_flags") or []),
+        ]
+    ]
+    confidence = (
+        round(sum(float(model.get("confidence") or 0.0) for model in models) / len(models), 4)
+        if models
+        else 0.0
+    )
+    return ArtifactDraft(
+        artifact_type="valuation_model",
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=confidence,
+        risk_flags=list(dict.fromkeys(warnings)),
+        metadata={"profile": profile, "methodology_version": content["methodology_version"], "source_commit": profile.get("source_commit")},
+    )
+
+
+def evaluate_uzi_panel(context):
+    rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
+    inputs = dict(context.node.inputs or {})
+    profile = select_profile(inputs)
+    content = build_panel_review(
+        rows,
+        symbols,
+        profile,
+    )
+    content = _with_quality_status(content)
+    return ArtifactDraft(
+        artifact_type="investor_panel_review",
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=float(content.get("confidence") or 0.0),
+        risk_flags=list(content.get("risk_flags") or []),
+        metadata={"profile": profile, "methodology_version": content["methodology_version"], "source_commit": profile.get("source_commit")},
+    )
+
+
+def evaluate_uzi_risk(context):
+    rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
+    inputs = dict(context.node.inputs or {})
+    profile = select_profile(inputs)
+    content = build_risk_scan(
+        query,
+        rows,
+        symbols,
+        profile,
+    )
+    content = _with_quality_status(content)
+    return ArtifactDraft(
+        artifact_type="risk_scan",
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=float(content.get("confidence") or 0.0),
+        risk_flags=list(content.get("risk_flags") or []),
+        metadata={"profile": profile, "methodology_version": content["methodology_version"], "source_commit": profile.get("source_commit")},
+    )
+
+
+def evaluate_uzi_institutional(context):
+    rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
+    valuation = (context.artifacts("valuation_model") or [None])[-1]
+    inputs = dict(context.node.inputs or {})
+    profile = select_profile(inputs)
+    content = build_institutional_analysis(
+        rows,
+        symbols,
+        valuation.content if valuation is not None else None,
+        profile,
+    )
+    content = _with_quality_status(content)
+    if valuation is not None:
+        parent_ids.append(valuation.artifact_id)
+        source_refs = _unique_source_refs([*source_refs, *valuation.source_refs])
+    return ArtifactDraft(
+        artifact_type="institutional_analysis",
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=float(content.get("confidence") or 0.0),
+        risk_flags=list(content.get("risk_flags") or []),
+        metadata={"profile": profile, "methodology_version": content["methodology_version"], "source_commit": profile.get("source_commit")},
+    )
+
+
+def evaluate_uzi_workflow(context):
+    rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
+    valuation = (context.artifacts("valuation_model") or [None])[-1]
+    inputs = dict(context.node.inputs or {})
+    profile = select_profile(inputs)
+    content = build_research_workflow(
+        rows,
+        symbols,
+        valuation.content if valuation is not None else None,
+        profile,
+    )
+    content = _with_quality_status(content)
+    if valuation is not None:
+        parent_ids.append(valuation.artifact_id)
+        source_refs = _unique_source_refs([*source_refs, *valuation.source_refs])
+    return ArtifactDraft(
+        artifact_type="research_workflow",
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=float(content.get("confidence") or 0.0),
+        risk_flags=list(content.get("risk_flags") or []),
+        metadata={"profile": profile, "methodology_version": content["methodology_version"], "source_commit": profile.get("source_commit")},
+    )
+
+
+def evaluate_uzi_deep(context):
+    rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
+    institutional = context.require_artifact("institutional_analysis")
+    workflow = context.require_artifact("research_workflow")
+    inputs = dict(context.node.inputs or {})
+    profile = select_profile(inputs)
+    content = build_deep_analysis(
+        rows,
+        symbols,
+        institutional.content,
+        workflow.content,
+        profile,
+    )
+    content = _with_quality_status(content)
+    return ArtifactDraft(
+        artifact_type="deep_analysis",
+        content=content,
+        source_refs=_unique_source_refs(
+            [*source_refs, *institutional.source_refs, *workflow.source_refs]
+        ),
+        parent_artifact_ids=[*parent_ids, institutional.artifact_id, workflow.artifact_id],
+        confidence=float(content.get("confidence") or 0.0),
+        risk_flags=list(content.get("risk_flags") or []),
+        metadata={"profile": profile, "methodology_version": content["methodology_version"], "source_commit": profile.get("source_commit")},
+    )
+
+
+def evaluate_uzi_dimension_coverage(context):
+    rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
+    institutional = (context.artifacts("institutional_analysis") or [None])[-1]
+    workflow = (context.artifacts("research_workflow") or [None])[-1]
+    deep = (context.artifacts("deep_analysis") or [None])[-1]
+    inputs = dict(context.node.inputs or {})
+    profile = select_profile(inputs)
+    content = build_dimension_coverage(
+        rows,
+        symbols,
+        profile,
+        institutional_available=institutional is not None,
+        workflow_available=workflow is not None,
+        deep_available=deep is not None,
+    )
+    content = _with_quality_status(content)
+    parents = list(parent_ids)
+    for artifact in (institutional, workflow, deep):
+        if artifact is not None:
+            parents.append(artifact.artifact_id)
+            source_refs = _unique_source_refs([*source_refs, *artifact.source_refs])
+    return ArtifactDraft(
+        artifact_type="uzi_dimension_coverage",
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parents,
+        confidence=float(content.get("confidence") or 0.0),
+        risk_flags=list(content.get("risk_flags") or []),
+        metadata={"profile": profile, "methodology_version": content["methodology_version"], "source_commit": profile.get("source_commit")},
+    )
+def compose_uzi_report(context):
+    evidence = context.require_artifact("evidence_set")
+    valuation = context.require_artifact("valuation_model")
+    panel = (context.artifacts("investor_panel_review") or [None])[-1]
+    risk = (context.artifacts("risk_scan") or [None])[-1]
+    institutional = (context.artifacts("institutional_analysis") or [None])[-1]
+    workflow = (context.artifacts("research_workflow") or [None])[-1]
+    deep = (context.artifacts("deep_analysis") or [None])[-1]
+    dimension_coverage = (context.artifacts("uzi_dimension_coverage") or [None])[-1]
+    inputs = dict(context.node.inputs or {})
+    profile = select_profile(inputs)
+    evidence_items = list(evidence.content.get("items") or [])
+    base_content = {
+        "conclusion": "",
+        "assessment": {
+            "status": "pack_methodology",
+            "summary": "UZI Finance Pack methods are presented from the current ArtifactBoard.",
+            "factors": [],
+        },
+        "evidence": [
+            _report_evidence_item(item, index)
+            for index, item in enumerate(evidence_items)
+        ],
+        "methodologies": [],
+        "scorecard": None,
+        "risk": [],
+        "follow_up": [],
+    }
+    base_source_refs = list(evidence.source_refs)
+    base_confidence = evidence.confidence
+    base_risk_flags = ["decision_support_only"]
+    panel_content = (
+        dict(panel.content)
+        if panel is not None
+        else {
+            "methodology_version": UZI_METHOD_VERSION,
+            "profile": profile["selected"],
+            "scope": "not_requested",
+            "panel_version": "uzi-adapted-1",
+            "votes": [],
+            "distribution": {},
+            "average_score": None,
+            "disagreement": {"exists": False, "summary": "本次请求未要求 Panel 方法论视角。"},
+            "confidence": 0.0,
+            "risk_flags": ["panel_not_requested"],
+        }
+    )
+    risk_content = (
+        dict(risk.content)
+        if risk is not None
+        else {
+            "methodology_version": UZI_METHOD_VERSION,
+            "profile": profile["selected"],
+            "risk_level": "data_gap",
+            "signals": [],
+            "signals_hit_count": 0,
+            "recommendation": "本次请求未要求风险扫描，不能据此判断外部风险。",
+            "confidence": 0.0,
+            "risk_flags": ["risk_scan_not_requested"],
+        }
+    )
+    report_content = dict(base_content)
+    report_content.update(
+        {
+            "uzi_profile": profile,
+            "valuation_model": dict(valuation.content),
+            "investor_panel_review": panel_content,
+            "risk_scan": risk_content,
+            "institutional_analysis": dict(institutional.content) if institutional is not None else None,
+            "research_workflow": dict(workflow.content) if workflow is not None else None,
+            "deep_analysis": dict(deep.content) if deep is not None else None,
+            "uzi_dimension_coverage": dict(dimension_coverage.content) if dimension_coverage is not None else None,
+            "presentation_artifact_type": "report_presentation",
+        }
+    )
+    report_content["conclusion"] = build_delivery_conclusion(
+        valuation.content,
+        panel_content,
+        risk_content,
+    )
+    report_content["risk"] = [
+        "证据完整性和时间新鲜度仍需在使用前复核。",
+        str(risk_content.get("recommendation") or "风险扫描未返回建议。"),
+        *[
+            f"模型输入缺口：{warning}"
+            for model in list(valuation.content.get("models") or [])
+            for warning in list(model.get("warnings") or [])
+        ],
+    ]
+    report_content["follow_up"] = [
+        "复核引用的快照、公告和方法论假设后再使用研究结果。",
+        "如需提高结论可靠性，补充同行、公告和外部风险核验数据。",
+    ]
+    source_refs = _unique_source_refs(
+        [
+            *base_source_refs,
+            *list(valuation.source_refs),
+            *(list(panel.source_refs) if panel is not None else []),
+            *(list(risk.source_refs) if risk is not None else []),
+            *(list(institutional.source_refs) if institutional is not None else []),
+            *(list(workflow.source_refs) if workflow is not None else []),
+            *(list(deep.source_refs) if deep is not None else []),
+            *(list(dimension_coverage.source_refs) if dimension_coverage is not None else []),
+        ]
+    )
+    parents = [
+        evidence.artifact_id,
+        valuation.artifact_id,
+        *( [panel.artifact_id] if panel is not None else [] ),
+        *( [risk.artifact_id] if risk is not None else [] ),
+        *( [institutional.artifact_id] if institutional is not None else [] ),
+        *( [workflow.artifact_id] if workflow is not None else [] ),
+        *( [deep.artifact_id] if deep is not None else [] ),
+        *( [dimension_coverage.artifact_id] if dimension_coverage is not None else [] ),
+    ]
+    confidence_values = [
+        _artifact_confidence(base_confidence),
+        _artifact_confidence(valuation.confidence),
+    ]
+    if panel is not None:
+        confidence_values.append(_artifact_confidence(panel.confidence))
+    if risk is not None:
+        confidence_values.append(_artifact_confidence(risk.confidence))
+    if institutional is not None:
+        confidence_values.append(_artifact_confidence(institutional.confidence))
+    if workflow is not None:
+        confidence_values.append(_artifact_confidence(workflow.confidence))
+    if deep is not None:
+        confidence_values.append(_artifact_confidence(deep.confidence))
+    if dimension_coverage is not None:
+        confidence_values.append(_artifact_confidence(dimension_coverage.confidence))
+    report = ArtifactDraft(
+        artifact_type="research_report",
+        content=report_content,
+        source_refs=source_refs,
+        parent_artifact_ids=parents,
+        confidence=min(confidence_values),
+        risk_flags=list(
+            dict.fromkeys(
+                [
+                    *base_risk_flags,
+                    *valuation.risk_flags,
+                    *(list(panel.risk_flags) if panel is not None else ["panel_not_requested"]),
+                    *(list(risk.risk_flags) if risk is not None else ["risk_scan_not_requested"]),
+                    *(list(institutional.risk_flags) if institutional is not None else []),
+                    *(list(workflow.risk_flags) if workflow is not None else []),
+                    *(list(deep.risk_flags) if deep is not None else []),
+                    *(list(dimension_coverage.risk_flags) if dimension_coverage is not None else []),
+                ]
+            )
+        ),
+        metadata={"profile": profile, "methodology_version": "3.9.1-adapted", "source_commit": profile.get("source_commit")},
+    )
+    presentation_content = build_presentation(
+        report_content,
+        valuation.content,
+        panel_content,
+        risk_content,
+        profile,
+        advanced={
+            "institutional_analysis": institutional.content if institutional is not None else None,
+            "research_workflow": workflow.content if workflow is not None else None,
+            "deep_analysis": deep.content if deep is not None else None,
+            "uzi_dimension_coverage": dimension_coverage.content if dimension_coverage is not None else None,
+        },
+    )
+    presentation_content["source_artifact_ids"] = parents
+    presentation = ArtifactDraft(
+        artifact_type="report_presentation",
+        content=presentation_content,
+        source_refs=source_refs,
+        parent_artifact_ids=parents,
+        confidence=report.confidence,
+        risk_flags=list(report.risk_flags),
+        metadata={"profile": profile, "methodology_version": "3.9.1-adapted", "source_commit": profile.get("source_commit")},
+    )
+    return [report, presentation]
+
+
+def evaluate_research_safety_gate(context):
+    content = context.artifact.content if isinstance(context.artifact.content, dict) else {}
+    risk_scan = content.get("risk_scan") if isinstance(content.get("risk_scan"), dict) else {}
+    reasons: list[str] = []
+    if not context.artifact.source_refs:
+        reasons.append("research report has no source references")
+    if str(risk_scan.get("risk_level") or "") == "high":
+        reasons.append("risk scan detected multiple promotion or rumor signals")
+    if "critical_data_gap" in context.artifact.risk_flags:
+        reasons.append("critical financial input is missing")
+    return {
+        "verdict": "fail" if reasons else "pass",
+        "reason": "; ".join(reasons) if reasons else "research delivery passed source and safety checks",
+        "evidence_refs": list(context.artifact.source_refs),
+        "score": float(context.artifact.confidence or 0.0),
+    }
+
+
+def evaluate_methodology_quality_gate(context):
+    """Validate method output quality without turning a data gap into a fact."""
+
+    content = context.artifact.content if isinstance(context.artifact.content, dict) else {}
+    quality = str(
+        content.get("quality_status")
+        or context.artifact.metadata.get("quality_status")
+        or "available"
+    ).strip().lower()
+    if quality not in {"available", "degraded", "data_gap", "assumption_only"}:
+        quality = "degraded" if list(content.get("data_gap") or []) else "available"
+    allowed = {
+        str(item).strip().lower()
+        for item in list(context.config.get("allowed_quality_statuses") or ["available"])
+    }
+    reasons: list[str] = []
+    if quality not in allowed:
+        reasons.append(f"quality status {quality} is not allowed by the method contract")
+    if bool(context.config.get("require_source_refs", True)) and not context.artifact.source_refs:
+        reasons.append("method artifact has no source references")
+    contract = content.get("method_input_contract")
+    if isinstance(contract, dict) and contract.get("status") == "data_gap":
+        missing = ", ".join(str(item) for item in list(contract.get("missing_fields") or [])[:6])
+        if "data_gap" not in allowed:
+            reasons.append(f"required method inputs are missing: {missing or 'unspecified'}")
+    if reasons:
+        return {
+            "verdict": "fail",
+            "reason": "; ".join(reasons),
+            "evidence_refs": list(context.artifact.source_refs),
+            "score": float(context.artifact.confidence or 0.0),
+        }
+    qualifier = {
+        "available": "method output passed with complete declared inputs",
+        "degraded": "method output passed with explicit degraded inputs",
+        "assumption_only": "method output passed as an explicit assumption-only view",
+        "data_gap": "method output passed as an explicit data-gap delivery",
+    }[quality]
+    return {
+        "verdict": "pass",
+        "reason": qualifier,
+        "evidence_refs": list(context.artifact.source_refs),
+        "score": float(context.artifact.confidence or 0.0),
+    }
 
 
 def compose_report(context):
@@ -707,7 +1442,11 @@ def _methodology_warnings(methodologies: list[dict]) -> list[str]:
     for methodology in methodologies:
         if not isinstance(methodology, dict):
             continue
-        for warning in list(methodology.get("warnings") or []):
+        for warning in [
+            *list(methodology.get("warnings") or []),
+            *list(methodology.get("data_gap") or []),
+            *list(methodology.get("assumption_flags") or []),
+        ]:
             text = str(warning)
             if text and text not in warnings:
                 warnings.append(text)
@@ -761,7 +1500,9 @@ def _requested_snapshot_types(*, inputs: dict, sector: str | None) -> list[str]:
         ]
     if intent == "stock_screen":
         return ["sector", "market", "fundamental", "notice"] if sector else ["market", "fundamental", "notice"]
-    return ["market", "fundamental", "notice", "capital_flow", "sentiment", "events", "lhb"]
+    return list(select_profile(inputs).get("snapshot_types") or [
+        "market", "fundamental", "notice", "capital_flow", "sentiment", "events", "lhb"
+    ])
 
 
 def _universe_from_snapshots(snapshots: list[object], symbols: list[str]) -> list[dict]:
@@ -913,15 +1654,16 @@ def _unique_strings(values: object) -> list[str]:
 
 
 def screen_stocks(context):
-    snapshots = context.require_artifact("stock_snapshot_bundle")
+    rows, _symbols, _query, source_refs, parent_ids = _snapshot_context(context)
     inputs = dict(context.node.inputs or {})
-    rows = list(snapshots.content.get("snapshots") or [])
+    bundle = (_context_artifacts(context, "stock_snapshot_bundle") or [None])[-1]
+    bundle_content = dict(bundle.content) if bundle is not None else {}
     universe = {
         str(row.get("symbol") or ""): dict(row)
-        for row in snapshots.content.get("candidate_universe") or []
+        for row in bundle_content.get("candidate_universe") or []
         if isinstance(row, dict) and row.get("symbol")
     }
-    collection = dict(snapshots.content.get("collection") or {})
+    collection = dict(bundle_content.get("collection") or {})
     enrichment_target_symbols = _unique_strings(collection.get("enrichment_targets") or [])
     enrichment_types = _unique_strings(collection.get("enrichment_snapshot_types") or [])
     grouped: dict[str, dict[str, dict]] = {}
@@ -1094,9 +1836,9 @@ def screen_stocks(context):
                 ],
             },
         },
-        source_refs=list(snapshots.source_refs),
-        parent_artifact_ids=[snapshots.artifact_id],
-        confidence=snapshots.confidence,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=0.8 if rows else 0.0,
         risk_flags=["screening_requires_fresh_market_data"],
     )
 
@@ -1156,17 +1898,21 @@ def _has_reported_value(value):
 
 
 def research_sector(context):
-    snapshots = context.require_artifact("stock_snapshot_bundle")
-    content = snapshots.content
+    rows, _symbols, query, source_refs, parent_ids = _snapshot_context(context)
+    bundle = (_context_artifacts(context, "stock_snapshot_bundle") or [None])[-1]
+    content = dict(bundle.content) if bundle is not None else {}
     inputs = dict(context.node.inputs or {})
-    rows = [row for row in list(content.get("snapshots") or []) if isinstance(row, dict)]
+    rows = [row for row in rows if isinstance(row, dict)]
     sector_rows = [row for row in rows if row.get("snapshot_type") == "sector"]
     policy_rows = [row for row in rows if row.get("snapshot_type") == "policy"]
+    usable_rows = [row for row in rows if _snapshot_quality(row) != "data_gap"]
+    usable_sector_rows = [row for row in sector_rows if _snapshot_quality(row) != "data_gap"]
+    usable_policy_rows = [row for row in policy_rows if _snapshot_quality(row) != "data_gap"]
     sector_snapshot = sector_rows[0] if sector_rows else {}
     facts = sector_snapshot.get("facts") or {}
-    sector = inputs.get("sector") or content.get("sector") or sector_snapshot.get("sector") or facts.get("sector") or content.get("query")
+    sector = inputs.get("sector") or content.get("sector") or sector_snapshot.get("sector") or facts.get("sector") or content.get("query") or query
     theme = content.get("theme") or sector_snapshot.get("theme") or facts.get("theme")
-    related = [row for row in rows if row not in sector_rows]
+    related = [row for row in usable_rows if row not in usable_sector_rows]
     constituents = [
         dict(row)
         for row in facts.get("constituent_breadth_source") or facts.get("top_constituents") or []
@@ -1177,14 +1923,14 @@ def research_sector(context):
         theme=theme,
         facts=facts,
         constituents=constituents,
-        source_count=len(rows),
+        source_count=len(usable_rows),
         related_count=len(related),
     )
     include_policy = inputs.get("include_policy_snapshot") is not False
     risks = ["Sector evidence may be incomplete or stale."]
     if not related:
         risks.append("No related sector or constituent snapshots were supplied.")
-    if include_policy and not policy_rows:
+    if include_policy and not usable_policy_rows:
         risks.append("The requested policy snapshot was unavailable.")
     return ArtifactDraft(
         artifact_type="sector_analysis",
@@ -1194,11 +1940,11 @@ def research_sector(context):
             "findings": rows,
             "related_snapshots": related,
             "risks": risks,
-            "source_count": len(rows),
+                "source_count": len(usable_rows),
             "analysis_notes": [
                 "sector_snapshot_present" if sector_rows else "missing_sector_snapshot",
                 "policy_snapshot_requested" if include_policy else "policy_snapshot_not_requested",
-                "policy_snapshot_present" if policy_rows else "missing_policy_snapshot",
+                "policy_snapshot_present" if usable_policy_rows else "missing_policy_snapshot",
             ],
             "sector_heatmap": sector_heatmap,
             "constituents": constituents,
@@ -1213,9 +1959,9 @@ def research_sector(context):
             },
             "policy_snapshots": policy_rows,
         },
-        source_refs=list(snapshots.source_refs),
-        parent_artifact_ids=[snapshots.artifact_id],
-        confidence=snapshots.confidence,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=0.8 if rows else 0.0,
         risk_flags=["sector_analysis_requires_source_refresh"],
     )
 

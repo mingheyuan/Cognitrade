@@ -1,0 +1,50 @@
+{
+  "fixture_id": "uzi-methodology-baseline-300750-v1",
+  "source_commit": "775c76101e8890492d21c2e2827692456fcddb58",
+  "as_of": "2026-07-12T01:51:47Z",
+  "symbol": "300750.SZ",
+  "snapshots": [
+    {
+      "snapshot_type": "market",
+      "symbol": "300750.SZ",
+      "facts": {
+        "market_overview": {
+          "latest_price": 348.76,
+          "market_cap": 16135.91,
+          "pe_ttm": 20.43,
+          "pb": 4.94
+        }
+      }
+    },
+    {
+      "snapshot_type": "fundamental",
+      "symbol": "300750.SZ",
+      "facts": {
+        "financial_abstract": {
+          "revenue": 4237.02,
+          "net_profit": 722.01,
+          "net_margin": 17.6079,
+          "debt_ratio": 62.3223
+        }
+      }
+    },
+    {
+      "snapshot_type": "valuation",
+      "symbol": "300750.SZ",
+      "facts": {
+        "fcf_latest_yi": 577.608
+      }
+    }
+  ],
+  "uzi_reference": {
+    "dcf_intrinsic_per_share": 436.83,
+    "dcf_wacc": 0.0696,
+    "dcf_sensitivity_shape": [5, 5],
+    "panel_seats": {"lite": 10, "medium": 51, "deep": 51}
+  },
+  "equivalence": {
+    "dcf": "numeric_tolerance",
+    "panel": "semantic",
+    "risk": "semantic"
+  }
+}

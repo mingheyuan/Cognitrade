@@ -511,6 +511,7 @@ class MainAgent:
         *,
         request: str,
         report: dict[str, Any],
+        artifacts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         """Create a user-facing Chinese synthesis without changing source facts."""
         provider = self.llm_provider
@@ -519,7 +520,14 @@ class MainAgent:
         complete = getattr(provider, "complete", None)
         if not callable(complete):
             return None
-        facts = json.dumps(report, ensure_ascii=False, default=str)[:36_000]
+        facts = json.dumps(
+            {
+                "report": report,
+                "active_board_artifacts": list(artifacts or []),
+            },
+            ensure_ascii=False,
+            default=str,
+        )[:48_000]
         try:
             raw = complete(
                 system_prompt=(

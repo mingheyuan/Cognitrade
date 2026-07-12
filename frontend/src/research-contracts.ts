@@ -16,6 +16,7 @@ export type RunStatus =
   | 'waiting_external'
   | 'gated'
   | 'completed'
+  | 'completed_partial'
   | 'cancelled'
   | 'failed'
   | 'timed_out'
@@ -63,6 +64,7 @@ export type ResearchReport = {
   conclusion?: string
   conclusion_source?: 'main_agent_synthesis' | 'pack_report' | string
   synthesis_available?: boolean
+  synthesis_unavailable?: boolean
   evidence?: EvidenceRecord[]
   risk?: string | string[]
   follow_up?: string | string[]
@@ -74,6 +76,10 @@ export type ResearchReport = {
   candidates?: Array<Record<string, unknown>>
   methodologies?: Array<Record<string, unknown>>
   review_summary?: Record<string, unknown>
+  presentation?: Record<string, unknown>
+  valuation_model?: Record<string, unknown>
+  investor_panel_review?: Record<string, unknown>
+  risk_scan?: Record<string, unknown>
   [key: string]: unknown
 }
 

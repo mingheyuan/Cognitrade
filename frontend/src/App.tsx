@@ -44,7 +44,7 @@ function App() {
       try {
         const response = await createRun(query, intent, constraints)
         showToast(
-          response.status === 'completed'
+          ['completed', 'completed_partial'].includes(String(response.status))
             ? '研究运行已完成，已加载真实报告与证据链。'
             : response.clarification?.question || response.message,
         )

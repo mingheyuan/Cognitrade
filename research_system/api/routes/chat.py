@@ -34,6 +34,22 @@ def _supported_intents(run_service) -> list[str] | None:
     return None
 
 
+def _supported_methods(run_service) -> list[str] | None:
+    agent_os = getattr(run_service, "agent_os", None)
+    resolver = getattr(agent_os, "supported_methods", None)
+    if callable(resolver):
+        return list(resolver())
+    return None
+
+
+def _supported_snapshot_types(run_service) -> list[str] | None:
+    agent_os = getattr(run_service, "agent_os", None)
+    resolver = getattr(agent_os, "supported_snapshot_types", None)
+    if callable(resolver):
+        return list(resolver())
+    return None
+
+
 @router.post("/threads", status_code=status.HTTP_201_CREATED)
 async def create_chat_thread(
     service: Annotated[ChatService, Depends(get_chat_service)],
@@ -183,6 +199,8 @@ async def submit_chat_research(
     request = validate_research_request(
         request,
         supported_intents=_supported_intents(run_service),
+        supported_methods=_supported_methods(run_service),
+        supported_snapshot_types=_supported_snapshot_types(run_service),
     )
     response = await run_in_threadpool(
         service.submit_research,

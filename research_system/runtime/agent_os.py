@@ -116,6 +116,10 @@ class AgentOS:
                 "required_gate_ids": [
                     gate.gate_id for gate in manifest.quality_gates if gate.blocking
                 ],
+                "method_catalog": dict(manifest.planner_policies.get("method_catalog") or {}),
+                "snapshot_dimensions": list(
+                    manifest.planner_policies.get("snapshot_dimensions") or []
+                ),
                 "pack_path": str(self.registry.pack_path(manifest.domain_id)),
             }
             for manifest in self.registry.list()
@@ -180,7 +184,7 @@ class AgentOS:
         runs_root = self.settings.runs_root
         if not runs_root.exists():
             return
-        terminal = {"completed", "gated", "failed", "cancelled", "timed_out"}
+        terminal = {"completed", "completed_partial", "gated", "failed", "cancelled", "timed_out"}
         for run_root in runs_root.iterdir():
             if not run_root.is_dir():
                 continue
@@ -222,6 +226,34 @@ class AgentOS:
                 if str(intent).strip()
             }
         )
+
+    def supported_methods(self) -> list[str]:
+        """Return method identifiers declared by installed Packs."""
+        methods: set[str] = set()
+        for manifest in self.registry.list():
+            policies = manifest.planner_policies or {}
+            methods.update(
+                str(method).strip().lower()
+                for method in (policies.get("method_catalog") or {})
+                if str(method).strip()
+            )
+            methods.update(
+                str(method).strip().lower()
+                for method in (policies.get("methodology_outputs") or {})
+                if str(method).strip()
+            )
+        return sorted(methods)
+
+    def supported_snapshot_types(self) -> list[str]:
+        """Return Pack-owned snapshot dimension identifiers for request validation."""
+        dimensions: set[str] = set()
+        for manifest in self.registry.list():
+            dimensions.update(
+                str(item).strip().lower()
+                for item in (manifest.planner_policies.get("snapshot_dimensions") or [])
+                if str(item).strip()
+            )
+        return sorted(dimensions)
 
     def run_domain(
         self,
@@ -857,9 +889,28 @@ class AgentOS:
         if not domain_id:
             raise ValueError("accepted domain request has no DomainPack")
         manifest = self.registry.get(domain_id)
-        required = list(request.slots.get("required_artifact_types") or [])
+        requested_required = list(request.slots.get("required_artifact_types") or [])
+        required = list(requested_required)
+        required_outputs_source = "request_slots"
         if not required:
-            required = [contract.artifact_type for contract in manifest.report_contracts]
+            intent_definition = next(
+                (
+                    item
+                    for item in manifest.intake.intents
+                    if item.intent_id == str(request.intent or "").strip()
+                ),
+                None,
+            )
+            intent_outputs = list(intent_definition.output_artifact_types) if intent_definition else []
+            if intent_outputs:
+                # Intent-specific delivery contracts must not inherit unrelated
+                # report contracts such as report_presentation. The planner will
+                # add the intent's specialist artifacts and any profile outputs.
+                required = list(dict.fromkeys(str(item).strip() for item in intent_outputs if str(item).strip()))
+                required_outputs_source = "intent_output_contract"
+            else:
+                required = [contract.artifact_type for contract in manifest.report_contracts]
+                required_outputs_source = "manifest_report_contract"
         planning_request = CapabilityPlanningRequest(
             domain_id=domain_id,
             objective=request.user_query,
@@ -882,6 +933,7 @@ class AgentOS:
                     **dict(request.constraints),
                 },
                 "request_constraints": dict(request.constraints),
+                "required_outputs_source": required_outputs_source,
                 "chat_dispatch": (
                     dict(request.constraints.get("chat_dispatch") or {})
                     if isinstance(request.constraints.get("chat_dispatch"), dict)
@@ -1031,7 +1083,7 @@ class AgentOS:
         if runner is None:
             runner = self._runner(run_id)
             snapshot = read_json(runner.snapshot_path)
-            if not snapshot or snapshot.get("status") in {"completed", "failed", "cancelled", "timed_out", "gated", "waiting_approval"}:
+            if not snapshot or snapshot.get("status") in {"completed", "completed_partial", "failed", "cancelled", "timed_out", "gated", "waiting_approval"}:
                 return False
         runner.request_pause()
         return True
@@ -1060,7 +1112,7 @@ class AgentOS:
         if runner is None:
             runner = self._runner(run_id)
             snapshot = read_json(runner.snapshot_path)
-            if not snapshot or snapshot.get("status") in {"completed", "failed", "cancelled", "timed_out", "gated"}:
+            if not snapshot or snapshot.get("status") in {"completed", "completed_partial", "failed", "cancelled", "timed_out", "gated"}:
                 return False
         runner.request_cancel()
         return True
@@ -1138,6 +1190,23 @@ class AgentOS:
             if artifact.get("artifact_id") in final_ids
             or artifact.get("artifact_type") == "assistant_message"
         ]
+        assistant_artifact = next(
+            (
+                artifact
+                for artifact in reversed(final_artifacts)
+                if artifact.get("artifact_type") == "assistant_message"
+                and isinstance(artifact.get("content"), dict)
+            ),
+            None,
+        )
+        assistant_content = (
+            assistant_artifact.get("content")
+            if isinstance(assistant_artifact, dict)
+            else {}
+        )
+        delivery_status = str(
+            (assistant_content or {}).get("delivery_status") or snapshot.status
+        )
         message = next(
             (
                 str(artifact.get("content", {}).get("message"))
@@ -1180,7 +1249,7 @@ class AgentOS:
                 active_agent="main_agent",
                 latest_event=f"graph_run_{snapshot.status}",
                 status_message=f"Agent OS run {snapshot.status}",
-                percent=100 if status in {"completed", "failed", "cancelled", "timed_out", "gated"} else 0,
+                percent=100 if status in {"completed", "completed_partial", "failed", "cancelled", "timed_out", "gated"} else 0,
             ),
             result={
                 "protocol": "agent_os",
@@ -1190,6 +1259,8 @@ class AgentOS:
                 "artifact_ids": list(result.artifact_ids),
                 "final_artifact_ids": list(result.final_artifact_ids),
                 "tool_call_count": snapshot.tool_call_count,
+                "delivery_status": delivery_status,
+                "synthesis_unavailable": delivery_status == "synthesis_unavailable",
             },
             artifacts=final_artifacts,
         )
@@ -1297,7 +1368,7 @@ class AgentOS:
             run_id=run_id,
             thread_id=thread_id,
             request_id=request.request_id,
-            status=status if status in {"running", "completed", "failed", "cancelled", "paused", "waiting_approval", "gated", "timed_out"} else "failed",
+            status=status if status in {"running", "completed", "completed_partial", "failed", "cancelled", "paused", "waiting_approval", "gated", "timed_out"} else "failed",
             mode="graph",
             intent=request.intent,
             request_kind="domain_task",
@@ -1338,14 +1409,23 @@ class AgentOS:
         )
         if existing:
             assistant_id = existing[-1].artifact_id
+            existing_content = existing[-1].content if isinstance(existing[-1].content, dict) else {}
+            existing_delivery_status = str(
+                existing_content.get("delivery_status") or result.snapshot.status
+            )
+            existing_event_type = (
+                "assistant_message_ready"
+                if existing_delivery_status == "completed"
+                else "assistant_message_status"
+            )
             runner._emit(
-                "assistant_message_ready",
+                existing_event_type,
                 run_id=result.snapshot.run_id,
                 thread_id=result.snapshot.thread_id,
                 request_id=result.snapshot.request_id,
                 mode="graph",
-                delivery_status=result.snapshot.status,
-                message=str(existing[-1].content.get("message") or ""),
+                delivery_status=existing_delivery_status,
+                message=str(existing_content.get("message") or ""),
                 artifact_ids=[assistant_id],
             )
             return result.model_copy(
@@ -1364,11 +1444,17 @@ class AgentOS:
             ),
             None,
         )
+        delivery_artifacts = [
+            artifact
+            for artifact in artifacts
+            if artifact.artifact_type not in {"assistant_message", "main_agent_synthesis"}
+        ]
         synthesis = None
         synthesis_artifact = None
+        synthesis_unavailable = False
         if (
             result.snapshot.status == "completed"
-            and report is not None
+            and (report is not None or delivery_artifacts)
             and result.snapshot.graph.domain_id == "finance_ashare"
         ):
             request_payload = read_json(runner.run_root / "request.json") or {}
@@ -1378,11 +1464,21 @@ class AgentOS:
                 or result.snapshot.graph.objective
                 or ""
             )
+            board_facts = [artifact.model_dump(mode="json") for artifact in delivery_artifacts]
             synthesis = self.main_agent.compose_research_synthesis(
                 request=request_text,
-                report=dict(report.content),
+                report=dict(report.content) if report is not None else {
+                    "delivery_mode": "method_specific",
+                    "artifact_types": [artifact.artifact_type for artifact in delivery_artifacts],
+                },
+                artifacts=board_facts,
             )
             if synthesis:
+                source_refs: list[dict] = []
+                for artifact in delivery_artifacts:
+                    for source_ref in artifact.source_refs:
+                        if source_ref not in source_refs:
+                            source_refs.append(source_ref)
                 synthesis_artifact = runner.board.add(
                     ArtifactRecord(
                         artifact_type="main_agent_synthesis",
@@ -1398,26 +1494,58 @@ class AgentOS:
                         ),
                         content={
                             **synthesis,
-                            "source_artifact_id": report.artifact_id,
+                            "source_artifact_id": (
+                                report.artifact_id
+                                if report is not None
+                                else delivery_artifacts[0].artifact_id
+                            ),
+                            "source_artifact_ids": [artifact.artifact_id for artifact in delivery_artifacts],
                             "model_generated": True,
                         },
-                        source_refs=list(report.source_refs),
-                        parent_artifact_ids=[report.artifact_id],
-                        confidence=report.confidence,
-                        risk_flags=[*report.risk_flags, "main_agent_synthesis"],
+                        source_refs=source_refs,
+                        parent_artifact_ids=[artifact.artifact_id for artifact in delivery_artifacts],
+                        confidence=min(
+                            [float(artifact.confidence or 0.0) for artifact in delivery_artifacts]
+                            or [0.0]
+                        ),
+                        risk_flags=[
+                            *dict.fromkeys(
+                                flag
+                                for artifact in delivery_artifacts
+                                for flag in artifact.risk_flags
+                            ),
+                            "main_agent_synthesis",
+                        ],
                     )
                 )
+            else:
+                synthesis_unavailable = True
+                # A graph can finish its Pack work without having a user-facing
+                # Main Agent synthesis. Keep that distinction in the canonical
+                # Run state instead of reporting a complete delivery.
+                self._mark_graph_partial_delivery(result=result, runner=runner)
+                result = result.model_copy(
+                    update={
+                        "snapshot": result.snapshot.model_copy(deep=True),
+                    }
+                )
         content = report.content if report is not None else {}
-        if result.snapshot.status == "completed":
-            message = str(
-                (synthesis or {}).get("assistant_message")
-                or content.get("conclusion")
-                or content.get("summary")
-                or "Agent OS graph run completed."
-            )
-            source_refs = list(report.source_refs) if report is not None else [
-                {"type": "request", "id": result.snapshot.request_id}
-            ]
+        if synthesis_unavailable:
+            message = "专业研究产物已完成，但主 Agent 暂时无法生成最终答复，请稍后重试。"
+            source_refs = list(report.source_refs) if report is not None else []
+        elif result.snapshot.status == "completed":
+            if synthesis:
+                message = str(synthesis.get("assistant_message") or "主 Agent 已完成研究交付。")
+            else:
+                message = str(content.get("conclusion") or content.get("summary") or "Agent OS 图运行已完成。")
+            source_refs = list(report.source_refs) if report is not None else []
+            if not source_refs:
+                for artifact in delivery_artifacts:
+                    for source_ref in artifact.source_refs:
+                        if source_ref not in source_refs:
+                            source_refs.append(source_ref)
+            if not source_refs:
+                source_refs = [{"type": "request", "id": result.snapshot.request_id}]
         elif result.snapshot.clarification_question:
             message = result.snapshot.clarification_question
             source_refs = [{"type": "request", "id": result.snapshot.request_id}]
@@ -1431,6 +1559,16 @@ class AgentOS:
                 f"Agent OS graph run {result.snapshot.status}.",
             )
             source_refs = [{"type": "request", "id": result.snapshot.request_id}]
+        delivery_status = (
+            "synthesis_unavailable"
+            if synthesis_unavailable
+            else ("completed" if result.snapshot.status == "completed" else result.snapshot.status)
+        )
+        assistant_event_type = (
+            "assistant_message_ready"
+            if delivery_status == "completed"
+            else "assistant_message_status"
+        )
         assistant = runner.board.add(
             ArtifactRecord(
                 artifact_type="assistant_message",
@@ -1451,11 +1589,17 @@ class AgentOS:
                         for artifact_id in (
                             report.artifact_id if report is not None else None,
                             synthesis_artifact.artifact_id if synthesis_artifact is not None else None,
+                            *(
+                                artifact.artifact_id
+                                for artifact in delivery_artifacts
+                                if report is None
+                            ),
                         )
                         if artifact_id
                     ],
                     "mode": "graph",
-                    "delivery_status": result.snapshot.status,
+                    "delivery_status": delivery_status,
+                    "synthesis_unavailable": synthesis_unavailable,
                 },
                 source_refs=source_refs,
                 parent_artifact_ids=[
@@ -1463,23 +1607,32 @@ class AgentOS:
                     for artifact_id in (
                         report.artifact_id if report is not None else None,
                         synthesis_artifact.artifact_id if synthesis_artifact is not None else None,
+                        *(
+                            artifact.artifact_id
+                            for artifact in delivery_artifacts
+                            if report is None
+                        ),
                     )
                     if artifact_id
                 ],
                 confidence=(
                     report.confidence
-                    if result.snapshot.status == "completed" and report is not None
-                    else 0.0
+                    if result.snapshot.status == "completed" and report is not None and not synthesis_unavailable
+                    else (
+                        min([float(artifact.confidence or 0.0) for artifact in delivery_artifacts] or [0.0])
+                        if result.snapshot.status == "completed" and not synthesis_unavailable
+                        else 0.0
+                    )
                 ),
             )
         )
         runner._emit(
-            "assistant_message_ready",
+            assistant_event_type,
             run_id=result.snapshot.run_id,
             thread_id=result.snapshot.thread_id,
             request_id=result.snapshot.request_id,
             mode="graph",
-            delivery_status=result.snapshot.status,
+            delivery_status=delivery_status,
             message=message,
             artifact_ids=[assistant.artifact_id],
             source_artifact_ids=[
@@ -1503,6 +1656,23 @@ class AgentOS:
                     assistant.artifact_id,
                 ],
             }
+        )
+
+    @staticmethod
+    def _mark_graph_partial_delivery(*, result: ExecutionRunResult, runner) -> None:
+        """Persist the distinction between Pack completion and final synthesis."""
+
+        snapshot = result.snapshot
+        if snapshot.status != "completed":
+            return
+        runner._set_run_status(snapshot, "completed_partial")
+        snapshot.updated_at = datetime.now(timezone.utc)
+        runner._persist(snapshot)
+        runner._emit(
+            "graph_run_partial",
+            status="completed_partial",
+            delivery_status="synthesis_unavailable",
+            reason="main_agent_synthesis_unavailable",
         )
 
     def _write_summary(

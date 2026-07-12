@@ -78,6 +78,21 @@ class DomainPackTests(unittest.TestCase):
                 "sentiment_snapshot_skill",
                 "events_snapshot_skill",
                 "policy_snapshot_skill",
+                "uzi_kline_snapshot_skill",
+                "uzi_macro_snapshot_skill",
+                "uzi_peers_snapshot_skill",
+                "uzi_chain_snapshot_skill",
+                "uzi_research_snapshot_skill",
+                "uzi_industry_snapshot_skill",
+                "uzi_materials_snapshot_skill",
+                "uzi_futures_snapshot_skill",
+                "uzi_valuation_snapshot_skill",
+                "uzi_governance_snapshot_skill",
+                "uzi_moat_snapshot_skill",
+                "uzi_trap_snapshot_skill",
+                "uzi_contests_snapshot_skill",
+                "uzi_fund_holders_snapshot_skill",
+                "uzi_similar_stocks_snapshot_skill",
             },
         )
         self.assertEqual(self.registry.skill_definitions(domain_id="legal_contract"), [])
@@ -144,6 +159,13 @@ class DomainPackTests(unittest.TestCase):
                 available_artifact_types=["user_request"],
                 required_artifact_types=["research_report"],
                 allowed_tools=["financial_data_provider"],
+                metadata={
+                    "intent": "stock_check",
+                    "intent_inputs": {
+                        "intent": "stock_check",
+                        "research_profile": "lite",
+                    },
+                },
             )
         )
 
@@ -153,8 +175,10 @@ class DomainPackTests(unittest.TestCase):
                 "query_normalizer",
                 "stock_snapshot_collector",
                 "retrieval_decider",
-                "financial_analyst",
-                "llm_report_composer",
+                "uzi_valuation_analyst",
+                "uzi_panel_reviewer",
+                "uzi_risk_scanner",
+                "uzi_report_composer",
             ],
         )
 
