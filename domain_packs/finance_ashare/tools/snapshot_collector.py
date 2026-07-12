@@ -478,6 +478,7 @@ def collect_snapshot_bundle(
         symbol_types = [item for item in _SCREEN_BASE_TYPES if item in symbol_types or not symbol_types]
         if not symbol_types:
             symbol_types = list(_SCREEN_BASE_TYPES)
+    if symbol_types:
         snapshots.extend(
             collect_snapshots(
                 query=query,

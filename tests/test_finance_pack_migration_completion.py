@@ -98,6 +98,29 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
         self.assertTrue({("600001", item) for item in snapshot_collector._SCREEN_ENRICHMENT_TYPES}.issubset(collected))
         self.assertEqual(len([row for row in result["snapshots"] if row["snapshot_type"] == "market"]), 3)
 
+    def test_stock_research_collects_declared_symbol_snapshots(self) -> None:
+        fake_skills = {
+            snapshot_type: (lambda current=snapshot_type: _SnapshotSkill(current))
+            for snapshot_type in snapshot_collector._SYMBOL_SKILLS
+        }
+        with patch.dict(snapshot_collector._SYMBOL_SKILLS, fake_skills, clear=True):
+            result = snapshot_collector.collect_snapshot_bundle(
+                query="Analyze 600750.",
+                symbols=["600750"],
+                snapshot_types=["market", "fundamental", "notice"],
+                intent="stock_check",
+            )
+
+        self.assertEqual(
+            {(row["symbol"], row["snapshot_type"]) for row in result["snapshots"]},
+            {
+                ("600750", "market"),
+                ("600750", "fundamental"),
+                ("600750", "notice"),
+            },
+        )
+        self.assertEqual(result["collection"]["quality_status"], "available")
+
     def test_sector_collection_emits_real_sector_and_policy_snapshots(self) -> None:
         class SectorSkill:
             def run(self, *, query: str) -> dict:
