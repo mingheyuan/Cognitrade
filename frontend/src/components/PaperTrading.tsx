@@ -125,6 +125,15 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
     document.querySelector<HTMLElement>('#paper-order-ticket')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 
+  const selectSide = (nextSide: 'buy' | 'sell') => {
+    setSide(nextSide)
+    if (nextSide === 'buy') {
+      setQuantity((current) => Math.max(100, Math.ceil(current / 100) * 100))
+    }
+  }
+
+  const quantityIsValid = Number.isInteger(quantity)
+    && (side === 'buy' ? quantity >= 100 && quantity % 100 === 0 : quantity > 0)
   const estimate = estimateOrder(quote?.latest_price, side, quantity)
 
   return (
@@ -160,11 +169,11 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
             <form id="paper-order-ticket" className="paper-order-ticket" onSubmit={submitOrder}>
               <header><div><span className="section-kicker">ORDER TICKET</span><h2>模拟委托</h2></div><span className="quality-pill quality-pill--available">即时成交</span></header>
               <div className="order-side-switch" role="group" aria-label="交易方向">
-                <button type="button" className={side === 'buy' ? 'is-active is-buy' : ''} onClick={() => setSide('buy')}>买入</button>
-                <button type="button" className={side === 'sell' ? 'is-active is-sell' : ''} onClick={() => setSide('sell')}>卖出</button>
+                <button type="button" className={side === 'buy' ? 'is-active is-buy' : ''} onClick={() => selectSide('buy')}>买入</button>
+                <button type="button" className={side === 'sell' ? 'is-active is-sell' : ''} onClick={() => selectSide('sell')}>卖出</button>
               </div>
               <label><span>股票代码或名称</span><div className="quote-input-row"><input value={symbol} onChange={(event) => { setSymbol(event.target.value); setQuote(null) }} placeholder="600519" required /><button type="button" onClick={() => void loadQuote(symbol, true)} disabled={quoteLoading || !symbol.trim()}>{quoteLoading ? <RefreshCw className="is-spinning" size={14} /> : <Search size={14} />}取价</button></div></label>
-              <label><span>委托数量</span><div className="quantity-input-row"><input type="number" min="1" step="100" value={quantity} onChange={(event) => setQuantity(Math.max(Number(event.target.value) || 0, 0))} required /><span>股</span></div></label>
+              <label><span>委托数量</span><div className="quantity-input-row"><input type="number" min={side === 'buy' ? 100 : 1} step={side === 'buy' ? 100 : 1} value={quantity} onChange={(event) => setQuantity(Math.max(Number(event.target.value) || 0, 0))} inputMode="numeric" aria-describedby="paper-order-rule" required /><span>股</span></div></label>
               <div className="quantity-presets">
                 {[100, 500, 1000].map((value) => <button type="button" key={value} onClick={() => setQuantity(value)}>{value} 股</button>)}
                 {side === 'sell' && portfolio.positions.find((position) => position.symbol === symbol)?.available_quantity ? <button type="button" onClick={() => setQuantity(portfolio.positions.find((position) => position.symbol === symbol)!.available_quantity)}>全部可卖</button> : null}
@@ -179,11 +188,11 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
                 <div><dt>预计费用</dt><dd>{formatMoney(estimate.fees)}</dd></div>
                 <div><dt>{side === 'buy' ? '预计占用资金' : '预计回笼资金'}</dt><dd>{formatMoney(estimate.total)}</dd></div>
               </dl>
-              <button className={`paper-submit-button paper-submit-button--${side}`} disabled={submitting || !quote || quantity <= 0}>
+              <button className={`paper-submit-button paper-submit-button--${side}`} disabled={submitting || !quote || !quantityIsValid}>
                 {submitting ? <RefreshCw className="is-spinning" size={15} /> : side === 'buy' ? <ArrowDownToLine size={15} /> : <ArrowUpFromLine size={15} />}
                 {submitting ? '服务端撮合中' : `确认${side === 'buy' ? '买入' : '卖出'} ${quantity || 0} 股`}
               </button>
-              <p className="order-rule-note"><Clock3 size={13} />买入需为 100 股整数倍；当日买入次日可卖；卖出清仓允许零股。</p>
+              <p id="paper-order-rule" className="order-rule-note"><Clock3 size={13} />买入需为 100 股整数倍；当日买入次日可卖；卖出清仓允许零股。</p>
             </form>
 
             <section className="paper-positions-card">

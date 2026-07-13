@@ -11,7 +11,7 @@ import {
   Search,
   TrendingUp,
 } from 'lucide-react'
-import { type FormEvent, type ReactNode, useMemo, useState } from 'react'
+import { type Dispatch, type FormEvent, type ReactNode, type SetStateAction, useMemo } from 'react'
 import { CognitradeApiClient, CognitradeApiError } from '../api-client'
 import { useCognitrade } from '../CognitradeContext'
 import type { JsonRecord, MarketDataResponse } from '../finance-contracts'
@@ -22,27 +22,35 @@ const EXAMPLES = [
   { symbol: '300750', label: '宁德时代' },
 ]
 
-export function MarketData() {
+export interface MarketDataViewState {
+  query: string
+  data: MarketDataResponse | null
+  loading: boolean
+  error: string
+}
+
+interface MarketDataProps {
+  state: MarketDataViewState
+  setState: Dispatch<SetStateAction<MarketDataViewState>>
+}
+
+export function MarketData({ state, setState }: MarketDataProps) {
   const { settings } = useCognitrade()
   const client = useMemo(() => new CognitradeApiClient(settings), [settings])
-  const [query, setQuery] = useState('600519')
-  const [data, setData] = useState<MarketDataResponse | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const { query, data, loading, error } = state
+  const setQuery = (nextQuery: string) => setState((current) => ({ ...current, query: nextQuery }))
 
   const load = async (value = query, refresh = false) => {
     const normalized = value.trim()
     if (!normalized) return
-    setLoading(true)
-    setError('')
+    setState((current) => ({ ...current, loading: true, error: '' }))
     try {
       const response = await client.getMarketData(normalized, refresh)
-      setData(response)
-      setQuery(response.symbol)
+      setState((current) => ({ ...current, data: response, query: response.symbol }))
     } catch (loadError) {
-      setError(apiErrorMessage(loadError))
+      setState((current) => ({ ...current, error: apiErrorMessage(loadError) }))
     } finally {
-      setLoading(false)
+      setState((current) => ({ ...current, loading: false }))
     }
   }
 
