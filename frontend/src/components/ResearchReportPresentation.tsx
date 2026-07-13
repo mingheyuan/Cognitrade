@@ -118,6 +118,21 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
   const dimensions = Array.isArray(presentation.radar)
     ? presentation.radar.map(asRecord).slice(0, 12)
     : []
+  const deepScan = Array.isArray(presentation.deep_scan)
+    ? presentation.deep_scan.map(asRecord)
+    : dimensions
+  const panelRounds = Array.isArray(greatDivide.rounds)
+    ? greatDivide.rounds.map(asRecord)
+    : []
+  const panelInsights = Array.isArray(presentation.panel_insights)
+    ? presentation.panel_insights.map(asRecord)
+    : []
+  const institutionalModeling = Array.isArray(presentation.institutional_modeling)
+    ? presentation.institutional_modeling.map(asRecord)
+    : []
+  const buyZones = Array.isArray(presentation.buy_zones)
+    ? presentation.buy_zones.map(asRecord)
+    : []
   const metricValues = Array.isArray(subject.metrics)
     ? subject.metrics
     : Array.isArray(dashboard.metrics)
@@ -276,17 +291,18 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
           <span>04 / DEEP SCAN</span>
           <h3>研究维度覆盖</h3>
           <i />
+          <small>{deepScan.length} 个来源与派生维度</small>
         </div>
-        {dimensions.length ? (
+        {deepScan.length ? (
           <div className="research-presentation__radar-grid">
-            {dimensions.map((dimension, index) => {
+            {deepScan.map((dimension, index) => {
               const dimensionScore = asNumber(dimension.score)
               const dimensionStatus = statusText(dimension.status)
               return (
                 <article key={asString(dimension.dimension_id, String(index))} className={dimensionStatus === 'data_gap' ? 'is-gap' : ''}>
-                  <div><span>{asString(dimension.label, '研究维度')}</span><strong>{dimensionScore === null ? '—' : numberText(dimensionScore, 1)}</strong></div>
+                  <div><span>{asString(dimension.label, '研究维度')} · {asString(dimension.layer, 'source')}</span><strong>{dimensionScore === null ? verdictLabel(dimensionStatus) : numberText(dimensionScore, 1)}</strong></div>
                   <div className="research-presentation__radar-track"><i style={{ width: `${dimensionScore === null ? 0 : Math.max(0, Math.min(100, dimensionScore * 10))}%` }} /></div>
-                  <small>{dimensionStatus === 'data_gap' ? asStringList(dimension.data_gap).join(' · ') || '数据缺口' : asStringList(dimension.evidence).join(' · ') || '证据已提供'}</small>
+                  <small>{dimensionStatus === 'data_gap' ? asStringList(dimension.data_gap).join(' · ') || '数据缺口' : asStringList(dimension.evidence).join(' · ') || asStringList(dimension.source_refs).join(' · ') || '证据已提供'}</small>
                 </article>
               )
             })}
@@ -296,7 +312,48 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
 
       <section className="research-presentation__section">
         <div className="research-presentation__section-head">
-          <span>05 / MODELING</span>
+          <span>05 / PANEL INSIGHTS</span>
+          <h3>派系评审洞察</h3>
+          <i />
+          <small>{panelInsights.length} 个方法论席位</small>
+        </div>
+        {panelRounds.length ? (
+          <div className="research-presentation__round-grid">
+            {panelRounds.map((round, index) => (
+              <article key={asString(round.round_id, String(index))} className="research-presentation__round-card">
+                <div className="research-presentation__round-card__head">
+                  <span>{asString(round.label, '方法论派系')}</span>
+                  <strong>{asNumber(round.average_score) === null ? '—' : numberText(round.average_score, 1)}</strong>
+                </div>
+                <small>{asNumber(round.seat_count) ?? 0} 席 · 偏多 {asNumber(round.bullish_count) ?? 0} · 偏空 {asNumber(round.bearish_count) ?? 0} · 证据不足 {asNumber(round.insufficient_evidence_count) ?? 0}</small>
+                <p>{asString(asRecord(round.bull_case).headline || asRecord(round.bull_case).reasoning, '该派系没有偏多席位。')}</p>
+                <p className="is-bearish-text">{asString(asRecord(round.bear_case).headline || asRecord(round.bear_case).reasoning, '该派系没有偏空席位。')}</p>
+              </article>
+            ))}
+          </div>
+        ) : null}
+        {panelInsights.length ? (
+          <div className="research-presentation__insight-grid">
+            {panelInsights.map((insight, index) => {
+              const signal = asString(insight.signal, 'insufficient_evidence')
+              return (
+                <article key={asString(insight.perspective_id, String(index))} className={signalClass(signal)}>
+                  <div className="research-presentation__insight-card__head">
+                    <span>{asString(insight.perspective_label, '方法论席位')}</span>
+                    <strong>{numberText(insight.score, 1)}</strong>
+                  </div>
+                  <small>{asString(insight.school_label, '方法论派系')} · {signalLabel(signal)} · 置信度 {percentText(asNumber(insight.confidence) === null ? null : asNumber(insight.confidence)! * 100)}</small>
+                  <p>{asString(insight.headline || insight.reasoning, '未返回评审解释。')}</p>
+                </article>
+              )
+            })}
+          </div>
+        ) : <div className="research-presentation__empty"><Gauge size={17} />后端未返回派系评审洞察。</div>}
+      </section>
+
+      <section className="research-presentation__section">
+        <div className="research-presentation__section-head">
+          <span>06 / MODELING</span>
           <h3>机构模型与研究工作流</h3>
           <i />
         </div>
@@ -326,6 +383,87 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
           </article>
         </div>
       </section>
+
+      <section className="research-presentation__section">
+        <div className="research-presentation__section-head">
+          <span>07 / METHODS</span>
+          <h3>机构模型明细</h3>
+          <i />
+          <small>{institutionalModeling.reduce((count, item) => count + (Array.isArray(item.methods) ? item.methods.length : 0), 0)} 个模型输出</small>
+        </div>
+        {institutionalModeling.length ? (
+          <div className="research-presentation__institutional-grid">
+            {institutionalModeling.flatMap((item, itemIndex) => (Array.isArray(item.methods) ? item.methods : []).map((method, methodIndex) => {
+              const methodRecord = asRecord(method)
+              const sensitivity = Array.isArray(methodRecord.sensitivity) ? methodRecord.sensitivity.map(asRecord) : []
+              const assumptions = asRecord(methodRecord.assumptions)
+              return (
+                <article key={`${asString(item.symbol, String(itemIndex))}-${asString(methodRecord.method_id, String(methodIndex))}`} className={`research-presentation__method-card ${statusText(methodRecord.status) === 'data_gap' ? 'is-gap' : ''}`}>
+                  <div className="research-presentation__method-card__head">
+                    <span>{asString(methodRecord.label, '机构方法')} · {asString(item.symbol, symbol)}</span>
+                    <strong>{verdictLabel(statusText(methodRecord.status))}</strong>
+                  </div>
+                  <p>{asString(methodRecord.summary, '未返回模型摘要。')}</p>
+                  {Object.keys(assumptions).length > 0 && <small className="research-presentation__method-card__meta">假设：{Object.entries(assumptions).slice(0, 5).map(([key, value]) => `${key}=${Array.isArray(value) ? `[${value.slice(0, 3).join(', ')}${value.length > 3 ? ', …' : ''}]` : String(value)}`).join(' · ')}</small>}
+                  {sensitivity.length > 0 && (
+                    <div className="research-presentation__sensitivity-grid" aria-label="估值敏感性矩阵">
+                      {sensitivity.slice(0, 25).map((cell, cellIndex) => <span key={cellIndex}>{numberText(cell.fair_value, 0)}</span>)}
+                    </div>
+                  )}
+                  {asStringList(methodRecord.methodology_log).length > 0 && <small className="research-presentation__method-card__log">{asStringList(methodRecord.methodology_log).slice(0, 2).join(' · ')}</small>}
+                  {asStringList(methodRecord.data_gap).length > 0 && <small className="research-presentation__method-card__gap">缺口：{asStringList(methodRecord.data_gap).slice(0, 3).join(' · ')}</small>}
+                </article>
+              )
+            }))}
+          </div>
+        ) : <div className="research-presentation__empty"><LineChart size={17} />暂无机构模型明细。</div>}
+      </section>
+
+      <section className="research-presentation__section">
+        <div className="research-presentation__section-head">
+          <span>08 / RISKS</span>
+          <h3>核心风险清单</h3>
+          <i />
+          <small>{risks.length} 个风险信号</small>
+        </div>
+        {risks.length ? (
+          <div className="research-presentation__risk-list">
+            {risks.map((risk, index) => {
+              const refs = Array.isArray(risk.evidence_refs) ? risk.evidence_refs.map(asRecord) : []
+              return (
+                <article key={asString(risk.signal_id, String(index))} className={`research-presentation__risk-card ${statusText(risk.status) === 'data_gap' ? 'is-gap' : ''}`}>
+                  <div className="research-presentation__risk-card__head">
+                    <span>{String(index + 1).padStart(2, '0')} · {asString(risk.signal_id, 'risk_signal')}</span>
+                    <strong>{asString(risk.severity, 'medium')} / {verdictLabel(statusText(risk.status, 'data_gap'))}</strong>
+                  </div>
+                  <p>{asString(risk.finding || risk.recommendation, '未返回风险说明。')}</p>
+                  {asString(risk.recommendation) && <small>建议：{asString(risk.recommendation)}</small>}
+                  {refs.length > 0 && <small>证据：{refs.map((ref) => asString(ref.id || ref.provider || ref.type, 'source')).join(' · ')}</small>}
+                </article>
+              )
+            })}
+          </div>
+        ) : <div className="research-presentation__empty"><ShieldAlert size={17} />暂无结构化风险信号。</div>}
+      </section>
+
+      {buyZones.length > 0 && (
+        <section className="research-presentation__section">
+          <div className="research-presentation__section-head">
+            <span>09 / OBSERVATION</span>
+            <h3>价格观察参考</h3>
+            <i />
+          </div>
+          <div className="research-presentation__price-observation-grid">
+            {buyZones.map((zone, index) => (
+              <article key={asString(zone.zone_id, String(index))}>
+                <div><span>{asString(zone.label, '现价观察参考')}</span><strong>¥{numberText(zone.price)}</strong></div>
+                <small>{verdictLabel(statusText(zone.status))} · {asString(zone.kind, 'observation')}</small>
+                <p>{asString(zone.rationale, '缺少足够证据，不形成价格区间。')}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
       <footer className="research-presentation__footer">
         <CircleAlert size={14} />

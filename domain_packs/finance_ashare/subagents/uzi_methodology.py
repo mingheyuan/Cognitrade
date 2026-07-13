@@ -439,6 +439,11 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         "revenue_growth": revenue_growth,
         "profit_growth": profit_growth,
     }
+    market_source = (
+        dict(grouped.get("market", {}).get("source") or {})
+        if isinstance(grouped.get("market"), dict)
+        else {}
+    )
     field_sources = {
         key: source
         for key, source in {
@@ -454,6 +459,14 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         }.items()
         if source
     }
+    if market_source:
+        field_sources.update({
+            "price": "market_snapshot",
+            "pe": "market_snapshot",
+            "pb": "market_snapshot",
+            "market_cap_yi": "market_snapshot",
+            "pct_change": "market_snapshot",
+        })
     assumptions = [debt_derivation] if debt_derivation else []
     return {
         "symbol": symbol,
@@ -1032,6 +1045,189 @@ def build_risk_scan(
     }
 
 
+_PANEL_SCHOOL_LABELS = {
+    "A": "价值与质量",
+    "B": "成长与创新",
+    "C": "宏观与逆向",
+    "D": "趋势与交易",
+    "E": "中国价值投资",
+    "F": "A股游资",
+    "G": "量化系统",
+    "H": "科技与产业",
+    "I": "AI 产业链",
+}
+
+
+def _panel_presentation_data(panel: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Project the persisted panel artifact into readable rounds and insights."""
+
+    votes = [vote for vote in list(panel.get("votes") or []) if isinstance(vote, dict)]
+    insights = []
+    for vote in votes:
+        insights.append(
+            {
+                "perspective_id": vote.get("perspective_id") or vote.get("investor_id"),
+                "perspective_label": vote.get("perspective_label"),
+                "school": vote.get("school"),
+                "school_label": _PANEL_SCHOOL_LABELS.get(str(vote.get("school") or ""), "方法论席位"),
+                "signal": vote.get("signal") or "insufficient_evidence",
+                "score": vote.get("score"),
+                "confidence": vote.get("confidence"),
+                "headline": vote.get("headline"),
+                "reasoning": vote.get("reasoning"),
+                "checks": list(vote.get("checks") or []),
+                "required_dimensions": list(vote.get("required_dimensions") or []),
+                "is_methodology_perspective": bool(vote.get("is_methodology_perspective", True)),
+            }
+        )
+
+    rounds: list[dict[str, Any]] = []
+    for school in dict.fromkeys(str(vote.get("school") or "") for vote in votes):
+        if not school:
+            continue
+        school_votes = [vote for vote in insights if vote.get("school") == school]
+        scores = [float(vote["score"]) for vote in school_votes if vote.get("score") is not None]
+        signal_counts = Counter(str(vote.get("signal") or "insufficient_evidence") for vote in school_votes)
+        bullish = [vote for vote in school_votes if vote.get("signal") == "bullish"]
+        bearish = [vote for vote in school_votes if vote.get("signal") == "bearish"]
+        top_bull = max(bullish, key=lambda vote: float(vote.get("score") or 0), default=None)
+        top_bear = max(bearish, key=lambda vote: float(vote.get("score") or 0), default=None)
+        rounds.append(
+            {
+                "round_id": school,
+                "label": _PANEL_SCHOOL_LABELS.get(school, f"派系 {school}"),
+                "school": school,
+                "seat_count": len(school_votes),
+                "bullish_count": signal_counts.get("bullish", 0),
+                "bearish_count": signal_counts.get("bearish", 0),
+                "neutral_count": signal_counts.get("neutral", 0),
+                "insufficient_evidence_count": signal_counts.get("insufficient_evidence", 0),
+                "average_score": round(sum(scores) / len(scores), 2) if scores else None,
+                "bull_case": top_bull,
+                "bear_case": top_bear,
+                "distribution": dict(signal_counts),
+            }
+        )
+    return rounds, insights
+
+
+def _deep_scan_data(
+    advanced: dict[str, Any],
+    valuation: dict[str, Any],
+    symbols: list[str],
+    fallback_dimensions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Flatten source and derived dimension coverage for the report surface."""
+
+    coverage_artifact = advanced.get("uzi_dimension_coverage")
+    coverage = coverage_artifact.get("coverage") if isinstance(coverage_artifact, dict) else {}
+    valuation_dimensions = valuation.get("dimensions") if isinstance(valuation.get("dimensions"), dict) else {}
+    items: list[dict[str, Any]] = []
+    for symbol in symbols:
+        score_by_id = {
+            str(item.get("dimension_id")): item
+            for item in list(valuation_dimensions.get(symbol) or [])
+            if isinstance(item, dict)
+        }
+        for entry in list(coverage.get(symbol) or []) if isinstance(coverage, dict) else []:
+            if not isinstance(entry, dict):
+                continue
+            item = dict(entry)
+            score_entry = score_by_id.get(str(item.get("dimension_id") or ""))
+            if score_entry is not None:
+                item["score"] = score_entry.get("score")
+                item["weight"] = score_entry.get("weight")
+                item["evidence"] = list(score_entry.get("evidence") or [])
+            item["symbol"] = symbol
+            items.append(item)
+    if items:
+        return items
+    return [
+        {"symbol": symbols[0] if symbols else None, "layer": "valuation", **dict(item)}
+        for item in fallback_dimensions
+    ]
+
+
+def _method_summary(method_id: str, method: dict[str, Any]) -> str:
+    if method_id == "dcf":
+        fair_value = method.get("fair_value")
+        return f"每股代理价值 {fair_value}" if fair_value is not None else "未形成每股代理价值"
+    if method_id == "comps":
+        return f"同行样本 {method.get('peer_count', 0)} 家，{method.get('relative_view', '数据不足')}"
+    if method_id == "three_statement":
+        cash_flow = method.get("cash_flow") if isinstance(method.get("cash_flow"), dict) else {}
+        return f"五年自由现金流路径 {len(list(cash_flow.get('free_cash_flow') or []))} 年"
+    if method_id == "quick_lbo":
+        returns = method.get("returns") if isinstance(method.get("returns"), dict) else {}
+        return f"MOIC {returns.get('moic', '—')}，IRR {returns.get('irr', '—')}"
+    if method_id == "accretion_dilution":
+        return f"EPS 增厚/摊薄 {method.get('accretion_pct', '—')}%"
+    if method_id == "segmental":
+        return f"已披露分部 {len(list(method.get('segments') or []))} 个"
+    return str(method.get("status") or "未返回")
+
+
+def _institutional_modeling_data(
+    advanced: dict[str, Any],
+    valuation: dict[str, Any],
+    symbols: list[str],
+) -> list[dict[str, Any]]:
+    institutional = advanced.get("institutional_analysis")
+    institutional_results = institutional.get("results") if isinstance(institutional, dict) else []
+    valuation_models = list(valuation.get("models") or [])
+    result_by_symbol = {
+        str(result.get("symbol")): result
+        for result in institutional_results
+        if isinstance(result, dict)
+    }
+    output: list[dict[str, Any]] = []
+    method_labels = {
+        "dcf": "DCF",
+        "comps": "Comps",
+        "three_statement": "三表预测",
+        "quick_lbo": "Quick LBO",
+        "accretion_dilution": "并购增厚/摊薄",
+        "segmental": "分部收入模型",
+    }
+    for symbol in symbols:
+        result = result_by_symbol.get(symbol, {})
+        methods = dict(result.get("methods") or {})
+        model = next((item for item in valuation_models if item.get("symbol") == symbol), {})
+        if model:
+            methods = {"dcf": model, "comps": model.get("comps") or {"status": "data_gap", "data_gap": ["comps_not_requested"]}, **methods}
+        normalized_methods = []
+        for method_id, method in methods.items():
+            if not isinstance(method, dict):
+                continue
+            normalized_methods.append(
+                {
+                    "method_id": method_id,
+                    "label": method_labels.get(method_id, method_id),
+                    "status": method.get("status") or "data_gap",
+                    "summary": _method_summary(method_id, method),
+                    "key_outputs": {
+                        key: method[key]
+                        for key in ("fair_value", "margin_of_safety", "relative_view", "peer_count", "returns", "accretion_pct")
+                        if key in method
+                    },
+                    "assumptions": dict(method.get("assumptions") or {}),
+                    "sensitivity": list(method.get("sensitivity") or []),
+                    "methodology_log": list(method.get("methodology_log") or []),
+                    "data_gap": list(method.get("data_gap") or method.get("warnings") or []),
+                    "risk_flags": list(method.get("assumption_flags") or []),
+                }
+            )
+        output.append(
+            {
+                "symbol": symbol,
+                "status": result.get("status") or ("available" if normalized_methods else "data_gap"),
+                "methods": normalized_methods,
+                "data_gap": list(result.get("data_gap") or []),
+            }
+        )
+    return output
+
+
 def build_presentation(
     report: dict[str, Any],
     valuation: dict[str, Any],
@@ -1044,9 +1240,16 @@ def build_presentation(
     models = list(valuation.get("models") or [])
     primary = models[0] if models else {}
     report_symbols = report.get("symbols") if isinstance(report.get("symbols"), list) else []
+    model_symbols = [
+        str(model.get("symbol"))
+        for model in models
+        if isinstance(model, dict) and model.get("symbol")
+    ]
+    presentation_symbols = list(dict.fromkeys(str(item) for item in (report_symbols or model_symbols)))
     symbol = str(primary.get("symbol") or (report_symbols[0] if report_symbols else "") or "")
     features = build_features(list(snapshot_rows or []), symbol) if symbol else {}
     dimensions = list((valuation.get("dimensions") or {}).get(symbol) or [])
+    advanced = dict(advanced or {})
     risks = report.get("risk") or []
     if not isinstance(risks, list):
         risks = [str(risks)]
@@ -1078,7 +1281,7 @@ def build_presentation(
 
     top_bull = top_vote(bull_votes)
     top_bear = top_vote(bear_votes)
-    workflow = (advanced or {}).get("research_workflow") or {}
+    workflow = advanced.get("research_workflow") or {}
     catalysts: list[dict[str, Any]] = []
     for result in list(workflow.get("results") or []):
         calendar = result.get("catalyst_calendar") if isinstance(result, dict) else None
@@ -1092,6 +1295,34 @@ def build_presentation(
                         "symbol": str(result.get("symbol") or symbol),
                     }
                 )
+    panel_rounds, panel_insights = _panel_presentation_data(panel)
+    deep_scan = _deep_scan_data(advanced, valuation, presentation_symbols or ([symbol] if symbol else []), dimensions)
+    institutional_modeling = _institutional_modeling_data(
+        advanced,
+        valuation,
+        presentation_symbols or ([symbol] if symbol else []),
+    )
+    normalized_risks = [
+        {
+            **dict(signal),
+            "recommendation": risk.get("recommendation"),
+        }
+        for signal in list(risk.get("signals") or [])
+        if isinstance(signal, dict)
+    ]
+    price_observation = []
+    if symbol:
+        price_observation = [{
+            "zone_id": "current_price_observation",
+            "label": "现价观察参考",
+            "kind": "observation",
+            "price": features.get("price"),
+            "status": "data_gap",
+            "rationale": "当前仅有现价快照，缺少经验证的估值区间、趋势确认和风险回撤条件；不构成买入区间。",
+            "source_refs": [
+                {"type": "feature", "field": "price", "source": (features.get("field_sources") or {}).get("price")}
+            ],
+        }]
     data_gap = list(
         dict.fromkeys(
             [
@@ -1100,6 +1331,13 @@ def build_presentation(
                 *[
                     str(item)
                     for item in list(primary.get("data_gap") or [])
+                ],
+                *[str(item) for item in list((advanced.get("uzi_dimension_coverage") or {}).get("data_gap") or [])],
+                *[
+                    f"{item.get('symbol')}:{method.get('method_id')}:{gap}"
+                    for item in institutional_modeling
+                    for method in list(item.get("methods") or [])
+                    for gap in list(method.get("data_gap") or [])
                 ],
             ]
         )
@@ -1147,7 +1385,7 @@ def build_presentation(
                 "debt_ratio": features.get("debt_ratio"),
             },
             "metrics": metrics,
-            "risks": risks,
+            "risks": normalized_risks or risks,
             "catalysts": catalysts[:8],
         },
         "great_divide": {
@@ -1163,6 +1401,7 @@ def build_presentation(
             },
             "neutral": panel.get("distribution", {}).get("neutral", 0),
             "insufficient_evidence": panel.get("distribution", {}).get("insufficient_evidence", 0),
+            "rounds": panel_rounds,
             "punchline": panel.get("disagreement", {}).get("summary"),
         },
         "panel": {
@@ -1174,9 +1413,12 @@ def build_presentation(
             "disagreement": dict(panel.get("disagreement") or {}),
         },
         "radar": dimensions,
-        "risk_list": list(risk.get("signals") or []),
-        "buy_zones": [],
-        "advanced_methods": dict(advanced or {}),
+        "deep_scan": deep_scan,
+        "panel_insights": panel_insights,
+        "risk_list": normalized_risks or list(risk.get("signals") or []),
+        "buy_zones": price_observation,
+        "institutional_modeling": institutional_modeling,
+        "advanced_methods": advanced,
         "source_artifact_ids": [],
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "data_gap": data_gap,

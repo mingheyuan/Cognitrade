@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["version", "theme", "profile", "subject", "hero", "core_conclusion", "dashboard", "great_divide", "panel", "radar", "risk_list", "buy_zones", "source_artifact_ids", "generated_at", "data_gap"],
+  "required": ["version", "theme", "profile", "subject", "hero", "core_conclusion", "dashboard", "great_divide", "panel", "radar", "deep_scan", "panel_insights", "risk_list", "buy_zones", "institutional_modeling", "source_artifact_ids", "generated_at", "data_gap"],
   "properties": {
     "version": {"type": "string"},
     "theme": {"type": "string"},
@@ -13,8 +13,11 @@
     "great_divide": {"type": "object"},
     "panel": {"type": "object"},
     "radar": {"type": "array"},
+    "deep_scan": {"type": "array", "items": {"type": "object"}},
+    "panel_insights": {"type": "array", "items": {"type": "object"}},
     "risk_list": {"type": "array"},
     "buy_zones": {"type": "array"},
+    "institutional_modeling": {"type": "array", "items": {"type": "object"}},
     "source_artifact_ids": {"type": "array", "items": {"type": "string"}},
     "generated_at": {"type": "string"},
     "data_gap": {"type": "array", "items": {"type": "string"}}
