@@ -238,6 +238,7 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
   const artifactBackedReport = asString(report.protocol) === 'agent_os' && Array.isArray(report.final_artifact_ids)
   const updatedAt = selectedRun?.events.events.at(-1)?.created_at
   const snapshot = asRecord(selectedRun?.replay.snapshot)
+  const isConversation = intent === 'core.conversation.answer' || asString(snapshot.request_kind) === 'conversation'
   const clarification = asRecord(selectedRun?.replay.result?.clarification)
   const clarificationQuestion = asString(
     clarification.question
@@ -265,12 +266,13 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
     ...(selectedRun?.events.events || []),
     ...liveEvents,
   ])
-  const assistantMessage = (hasMainAgentSynthesis ? assistantMessageFromDetail(selectedRun) : '')
+  const assistantMessage = (isConversation || hasMainAgentSynthesis ? assistantMessageFromDetail(selectedRun) : '')
     || (hasMainAgentSynthesis ? asString(report.conclusion) : '')
     || liveAnswer
     || asString(lastResponse?.message)
   const showMainAgentAnswer = Boolean(
-    assistantMessage
+    !isConversation
+      && assistantMessage
       && !(asString(report.protocol) === 'agent_os' && !hasMainAgentSynthesis),
   )
   const activityFeed = activityEvents.length > 0 ? (
@@ -406,6 +408,26 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
                 <footer className="report-footer">
                   <div><ShieldAlert size={14} /><span>补充信息后，Agent OS 将继续当前运行。</span></div>
                 </footer>
+              </div>
+            </article>
+          ) : isConversation ? (
+            <article className="message-row message-row--assistant">
+              <div className="message-avatar message-avatar--assistant"><span>C</span></div>
+              <div className="assistant-message assistant-message--conversation">
+                <div className="assistant-response-header">
+                  <div>
+                    <span className="assistant-label">COGNITRADE ANSWER</span>
+                    <span className="confidence-label"><MessageSquareText size={13} /> 普通对话</span>
+                  </div>
+                  <time>{updatedAt ? formatDate(updatedAt) : statusLabel(status)}</time>
+                </div>
+                <section className="main-agent-answer main-agent-answer--conversation" aria-label="Cognitrade answer">
+                  <div className="main-agent-answer__heading">
+                    <span><Sparkles size={14} /> Cognitrade</span>
+                    <small>{statusLabel(status)}</small>
+                  </div>
+                  <p>{assistantMessage || '本次对话已完成，但后端没有返回可展示的回答。'}</p>
+                </section>
               </div>
             </article>
           ) : (

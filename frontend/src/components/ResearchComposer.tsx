@@ -1,5 +1,5 @@
-import { ArrowUp, ChevronDown, Paperclip, SlidersHorizontal, Sparkles } from 'lucide-react'
-import { type FormEvent, useState } from 'react'
+import { ArrowUp, Check, ChevronDown, Paperclip, SlidersHorizontal, Sparkles } from 'lucide-react'
+import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
 import type { ResearchIntent } from '../research-contracts'
 
 type ResearchComposerProps = {
@@ -16,9 +16,56 @@ const intentLabels = {
   sector_research: '行业研究',
 }
 
+type IntentValue = keyof typeof intentLabels
+
+const intentEntries = Object.entries(intentLabels) as Array<[IntentValue, string]>
+
 export function ResearchComposer({ onSubmit, running, compact = false }: ResearchComposerProps) {
   const [query, setQuery] = useState('')
-  const [intent, setIntent] = useState<keyof typeof intentLabels>('auto')
+  const [intent, setIntent] = useState<IntentValue>('auto')
+  const [intentMenuOpen, setIntentMenuOpen] = useState(false)
+  const intentSelectRef = useRef<HTMLDivElement>(null)
+  const intentTriggerRef = useRef<HTMLButtonElement>(null)
+  const intentOptionRefs = useRef<Partial<Record<IntentValue, HTMLButtonElement | null>>>({})
+
+  useEffect(() => {
+    if (!intentMenuOpen) return
+
+    const focusFrame = window.requestAnimationFrame(() => intentOptionRefs.current[intent]?.focus())
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!intentSelectRef.current?.contains(event.target as Node)) setIntentMenuOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setIntentMenuOpen(false)
+      intentTriggerRef.current?.focus()
+    }
+
+    document.addEventListener('pointerdown', closeOnOutsideClick)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      window.cancelAnimationFrame(focusFrame)
+      document.removeEventListener('pointerdown', closeOnOutsideClick)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [intent, intentMenuOpen])
+
+  const focusIntentOption = (current: IntentValue, offset: number) => {
+    const currentIndex = intentEntries.findIndex(([value]) => value === current)
+    const nextIndex = (currentIndex + offset + intentEntries.length) % intentEntries.length
+    intentOptionRefs.current[intentEntries[nextIndex][0]]?.focus()
+  }
+
+  const handleIntentOptionKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, value: IntentValue) => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      focusIntentOption(value, event.key === 'ArrowDown' ? 1 : -1)
+    } else if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault()
+      const target = event.key === 'Home' ? intentEntries[0][0] : intentEntries.at(-1)![0]
+      intentOptionRefs.current[target]?.focus()
+    }
+  }
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -56,21 +103,51 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
         </button>
       </div>
       <div className="composer-toolbar">
-        <label className="intent-select">
-          <SlidersHorizontal size={14} />
-          <select
-            value={intent}
-            onChange={(event) => setIntent(event.target.value as keyof typeof intentLabels)}
-            aria-label="选择研究意图"
+        <div className={`intent-select ${intentMenuOpen ? 'is-open' : ''}`} ref={intentSelectRef}>
+          <button
+            ref={intentTriggerRef}
+            className="intent-select-trigger"
+            type="button"
+            aria-label={`选择研究意图，当前为${intentLabels[intent]}`}
+            aria-haspopup="menu"
+            aria-expanded={intentMenuOpen}
+            aria-controls="research-intent-menu"
+            onClick={() => setIntentMenuOpen((open) => !open)}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault()
+                setIntentMenuOpen(true)
+              }
+            }}
           >
-            {Object.entries(intentLabels).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-          <ChevronDown size={13} />
-        </label>
+            <SlidersHorizontal size={14} />
+            <span>{intentLabels[intent]}</span>
+            <ChevronDown className="intent-select-chevron" size={13} />
+          </button>
+          {intentMenuOpen && (
+            <div id="research-intent-menu" className="intent-select-menu" role="menu" aria-label="研究意图">
+              {intentEntries.map(([value, label]) => (
+                <button
+                  key={value}
+                  ref={(node) => { intentOptionRefs.current[value] = node }}
+                  className="intent-select-option"
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={intent === value}
+                  onClick={() => {
+                    setIntent(value)
+                    setIntentMenuOpen(false)
+                    intentTriggerRef.current?.focus()
+                  }}
+                  onKeyDown={(event) => handleIntentOptionKeyDown(event, value)}
+                >
+                  <span className="intent-select-option-check">{intent === value && <Check size={13} />}</span>
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <button className="composer-tool-button" type="button" disabled title="后端 v1 暂未提供材料上传接口">
           <Paperclip size={14} />
           添加材料

@@ -24,12 +24,14 @@ import {
 import { useCognitrade } from '../CognitradeContext'
 import { INTENT_LABELS } from '../data'
 import {
+  assistantMessageFromDetail,
   asString,
   dashboardCandidates,
   dashboardItems,
   dashboardSectorSignals,
   hasFinalDelivery,
   isActiveStatus,
+  intentFromDetail,
   reportFromDetail,
   runListItem,
   statusTone,
@@ -63,6 +65,9 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
     submitting,
   } = useCognitrade()
   const selectedReport = reportFromDetail(selectedRun)
+  const selectedIntent = intentFromDetail(selectedRun)
+  const selectedAssistantMessage = assistantMessageFromDetail(selectedRun)
+  const selectedIsConversation = selectedIntent === 'core.conversation.answer'
   const selectedStatus = String(runs.find((run) => run.run_id === selectedRunId)?.status || '')
   const synthesisUnavailable = selectedReport.synthesis_unavailable === true
   const synthesisPending = selectedReport.protocol === 'agent_os'
@@ -104,8 +109,10 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
           <div className="daily-focus-topline"><span><Sparkles size={14} />最近选中运行</span><span className="live-data-label">实时 API</span></div>
           {selectedRun ? (
             <>
-              <div className="focus-company"><span className="company-mark company-mark--small">C</span><div><strong>{INTENT_LABELS[asString(selectedRun.replay.result?.intent)] || '研究报告'}</strong><small>{selectedRun.runId}</small></div></div>
-              <p>{synthesisPending
+              <div className="focus-company"><span className="company-mark company-mark--small">C</span><div><strong>{INTENT_LABELS[selectedIntent] || selectedIntent || '研究报告'}</strong><small>{selectedRun.runId}</small></div></div>
+              <p>{selectedIsConversation
+                ? asString(selectedAssistantMessage, '本次对话未返回可展示的回答。')
+                : synthesisPending
                 ? 'Pack 已完成证据整理，Main Agent 正在生成最终回答。'
                 : synthesisUnavailable
                   ? '研究事实已保存，但本次未生成 Main Agent 最终答复，请重新运行。'
@@ -115,9 +122,9 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
               <div className="focus-score-row">
                 <span><small>事件</small><strong>{events}</strong></span>
                 <span><small>步骤</small><strong>{selectedRun.steps.steps.length}</strong></span>
-                <span><small>证据</small><strong>{Array.isArray(selectedReport.evidence) ? selectedReport.evidence.length : 0}</strong></span>
+                <span><small>{selectedIsConversation ? '回答' : '证据'}</small><strong>{selectedIsConversation ? (selectedAssistantMessage ? 1 : 0) : (Array.isArray(selectedReport.evidence) ? selectedReport.evidence.length : 0)}</strong></span>
               </div>
-              <button className="primary-inline-button" onClick={onOpenWorkbench}>打开研究报告<ArrowRight size={15} /></button>
+              <button className="primary-inline-button" onClick={onOpenWorkbench}>{selectedIsConversation ? '打开对话' : '打开研究报告'}<ArrowRight size={15} /></button>
             </>
           ) : <div className="inline-empty-state"><Database size={17} />暂无可用运行。</div>}
         </aside>

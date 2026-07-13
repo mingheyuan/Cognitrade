@@ -1,6 +1,7 @@
 export type ViewId = 'workbench' | 'overview' | 'screening' | 'methodology' | 'runs'
 
 export const INTENT_LABELS: Record<string, string> = {
+  'core.conversation.answer': '普通对话',
   stock_check: '个股体检',
   stock_compare: '多股比较',
   stock_screen: '股票筛选',
