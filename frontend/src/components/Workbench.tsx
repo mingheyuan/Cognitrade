@@ -435,7 +435,7 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
                   <div><span>{selectedRunId}</span><h2>{INTENT_LABELS[intent] || intent || '研究报告'}</h2><small>真实 API 回放</small></div>
                 </div>
                 <div className="research-verdict">
-                  <span>运行状态</span><strong>{statusLabel(status)}</strong><small>{asString(selectedRun.replay.summary?.message, displayConclusion || '报告已生成')}</small>
+                  <span>运行状态</span><strong>{statusLabel(status)}</strong><small>{updatedAt ? `最后事件 ${formatDate(updatedAt)}` : '状态来自后端运行记录'}</small>
                 </div>
                 <div className="research-verdict">
                   <span>数据模式</span><strong>{reportHasDegradedEvidence ? '部分降级' : '标准'}</strong><small>{reportHasDegradedEvidence ? `${degradedEvidenceCount || '部分'} 条证据源不可用或不完整` : '所有返回证据均可用'}</small>
