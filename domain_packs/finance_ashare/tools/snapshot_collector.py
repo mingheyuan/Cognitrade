@@ -104,6 +104,7 @@ def collect_snapshots(
     cancellation=None,
     cache_root: Path | None = None,
     research_profile: str | None = None,
+    max_workers: int | None = None,
 ) -> list[dict[str, Any]]:
     """Collect the Finance Pack's declared snapshots through shared vendor adapters."""
     requested = list(dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip()))
@@ -181,7 +182,11 @@ def collect_snapshots(
         else:
             results[index] = cached
     if pending_tasks:
-        executor = ThreadPoolExecutor(max_workers=min(8, len(pending_tasks)), thread_name_prefix="finance-snapshot")
+        requested_workers = 8 if max_workers is None else max(int(max_workers), 1)
+        executor = ThreadPoolExecutor(
+            max_workers=min(requested_workers, len(pending_tasks)),
+            thread_name_prefix="finance-snapshot",
+        )
         futures = {
             executor.submit(_run_snapshot_skill, query, symbol, snapshot_type): (index, symbol, snapshot_type)
             for index, symbol, snapshot_type in pending_tasks

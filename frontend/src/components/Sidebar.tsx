@@ -3,6 +3,7 @@ import {
   Archive,
   BarChart3,
   BrainCircuit,
+  CandlestickChart,
   ChevronsUpDown,
   CircleDot,
   Command,
@@ -11,6 +12,7 @@ import {
   Plus,
   Search,
   Sparkles,
+  WalletCards,
   type LucideIcon,
 } from 'lucide-react'
 import { useCognitrade } from '../CognitradeContext'
@@ -27,6 +29,8 @@ type SidebarProps = {
 const navigation: Array<{ id: ViewId; label: string; icon: LucideIcon }> = [
   { id: 'workbench', label: '研究工作台', icon: Sparkles },
   { id: 'overview', label: '研究总览', icon: LayoutDashboard },
+  { id: 'market', label: '行情数据', icon: CandlestickChart },
+  { id: 'paper', label: '模拟交易', icon: WalletCards },
   { id: 'screening', label: '智能筛选', icon: BarChart3 },
   { id: 'methodology', label: '方法论', icon: BrainCircuit },
   { id: 'runs', label: '运行记录', icon: Activity },

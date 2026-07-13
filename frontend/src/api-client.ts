@@ -11,6 +11,15 @@ import type {
   RunStepsPayload,
   SystemStatus,
 } from './research-contracts'
+import type {
+  MarketDataResponse,
+  MarketQuote,
+  PaperAccount,
+  PaperOrder,
+  PaperOrderInput,
+  PaperPortfolio,
+  SecuritySearchResponse,
+} from './finance-contracts'
 
 export const API_BASE_STORAGE_KEY = 'cognitrade.api.base-url'
 export const API_TOKEN_STORAGE_KEY = 'cognitrade.api.token'
@@ -181,6 +190,50 @@ export class CognitradeApiClient {
     )
   }
 
+  searchSecurities(query: string, limit = 8): Promise<SecuritySearchResponse> {
+    return this.financeRequest(
+      `/finance/securities?query=${encodeURIComponent(query)}&limit=${limit}`,
+    )
+  }
+
+  getMarketData(symbol: string, refresh = false): Promise<MarketDataResponse> {
+    return this.financeRequest(
+      `/finance/market-data/${encodeURIComponent(symbol)}?refresh=${refresh}`,
+    )
+  }
+
+  getMarketQuote(symbol: string, refresh = false): Promise<MarketQuote> {
+    return this.financeRequest(
+      `/finance/quotes/${encodeURIComponent(symbol)}?refresh=${refresh}`,
+    )
+  }
+
+  getPaperAccount(): Promise<PaperAccount> {
+    return this.financeRequest('/finance/paper/account')
+  }
+
+  resetPaperAccount(initialCash = 1_000_000): Promise<PaperAccount> {
+    return this.financeRequest('/finance/paper/account/reset', {
+      method: 'POST',
+      body: JSON.stringify({ initial_cash: initialCash }),
+    })
+  }
+
+  getPaperPortfolio(): Promise<PaperPortfolio> {
+    return this.financeRequest('/finance/paper/portfolio')
+  }
+
+  listPaperOrders(limit = 50): Promise<{ orders: PaperOrder[] }> {
+    return this.financeRequest(`/finance/paper/orders?limit=${limit}`)
+  }
+
+  placePaperOrder(order: PaperOrderInput): Promise<PaperOrder> {
+    return this.financeRequest('/finance/paper/orders', {
+      method: 'POST',
+      body: JSON.stringify(order),
+    })
+  }
+
   async getRunDetail(runId: string): Promise<RunDetail> {
     const [replay, events, steps, metrics] = await Promise.all([
       this.getReplay(runId),
@@ -191,7 +244,12 @@ export class CognitradeApiClient {
     return { runId, replay, events, steps, metrics }
   }
 
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  private financeRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const financeBase = this.settings.baseUrl.replace(/\/api\/v1$/, '/api/v2')
+    return this.request(path, init, financeBase)
+  }
+
+  private async request<T>(path: string, init: RequestInit = {}, baseUrl = this.settings.baseUrl): Promise<T> {
     const headers = new Headers(init.headers)
     headers.set('Accept', 'application/json')
     if (init.body) headers.set('Content-Type', 'application/json')
@@ -199,7 +257,7 @@ export class CognitradeApiClient {
 
     let response: Response
     try {
-      response = await fetch(`${this.settings.baseUrl}${path}`, { ...init, headers })
+      response = await fetch(`${baseUrl}${path}`, { ...init, headers })
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
       throw new CognitradeApiError(`无法连接 Cognitrade API：${reason}`, 0, 'network_error')

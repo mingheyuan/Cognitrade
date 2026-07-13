@@ -39,6 +39,8 @@ class ApiRuntimeState:
     run_service: Any
     chat_service: Any
     event_source: Any
+    finance_market_data: Any
+    paper_trading: Any
     mutation_lock: asyncio.Lock
 
 
@@ -85,6 +87,14 @@ def get_mutation_lock(request: Request) -> asyncio.Lock:
 
 def get_event_source(request: Request):
     return get_api_runtime(request).event_source
+
+
+def get_finance_market_data(request: Request):
+    return get_api_runtime(request).finance_market_data
+
+
+def get_paper_trading(request: Request):
+    return get_api_runtime(request).paper_trading
 
 
 def get_repo_root(request: Request) -> Path:

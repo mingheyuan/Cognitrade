@@ -224,7 +224,7 @@ curl http://127.0.0.1:8000/api/v1/system/status \
 
 ## 后端 API 契约
 
-完整的后端能力分析、Python/CLI 接口与已实现的 `/api/v1` REST/SSE 契约见 [`api-doc/api-v1.md`](./api-doc/api-v1.md)。后续新增业务接口时，新建完整的 `api-doc/api-v2.md` 并使用 `/api/v2`，不在 v1 中静默扩展接口。
+Agent OS 研究、Chat、Dashboard 与管理接口见 [`api-doc/api-v1.md`](./api-doc/api-v1.md)；Finance Workspace 行情聚合与持久化模拟交易接口见 [`api-doc/api-v2.md`](./api-doc/api-v2.md)。后续新增不兼容业务契约时继续递增文档与 URL 主版本，不在已有版本中静默破坏接口。
 
 ## 环境变量
 

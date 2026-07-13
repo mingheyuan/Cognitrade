@@ -138,7 +138,7 @@ def _error_response(
     response_headers = dict(headers or {})
     if request_id is not None:
         response_headers.setdefault("X-Request-ID", request_id)
-    if request.url.path.startswith("/api/v1"):
+    if request.url.path.startswith(("/api/v1", "/api/v2")):
         response_headers.setdefault("Cache-Control", "no-store")
     return JSONResponse(
         status_code=status_code,

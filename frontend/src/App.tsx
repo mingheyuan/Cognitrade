@@ -9,6 +9,8 @@ import type { ResearchIntent } from './research-contracts'
 
 const Workbench = lazy(() => import('./components/Workbench').then((module) => ({ default: module.Workbench })))
 const Overview = lazy(() => import('./components/Overview').then((module) => ({ default: module.Overview })))
+const MarketData = lazy(() => import('./components/MarketData').then((module) => ({ default: module.MarketData })))
+const PaperTrading = lazy(() => import('./components/PaperTrading').then((module) => ({ default: module.PaperTrading })))
 const Screening = lazy(() => import('./components/Screening').then((module) => ({ default: module.Screening })))
 const Methodology = lazy(() => import('./components/Methodology').then((module) => ({ default: module.Methodology })))
 const Runs = lazy(() => import('./components/Runs').then((module) => ({ default: module.Runs })))
@@ -90,6 +92,8 @@ function App() {
     if (activeView === 'overview') {
       return <Overview onSubmit={handleResearch} onOpenWorkbench={() => setActiveView('workbench')} onOpenRuns={() => setActiveView('runs')} onOpenRun={openRun} />
     }
+    if (activeView === 'market') return <MarketData />
+    if (activeView === 'paper') return <PaperTrading onOpenMarketData={() => setActiveView('market')} />
     if (activeView === 'screening') return <Screening onSubmit={handleResearch} onOpenRun={openRun} />
     if (activeView === 'methodology') return <Methodology />
     return <Runs onOpenRun={openRun} />

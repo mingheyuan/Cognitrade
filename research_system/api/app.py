@@ -16,6 +16,8 @@ from pydantic import ConfigDict, BaseModel, Field
 from research_system.api.chat_service import ChatService
 from research_system.api.agent_os_run_service import AgentOSRunService
 from research_system.api.config import ApiConfig
+from research_system.api.finance_market_data_service import FinanceMarketDataService
+from research_system.api.paper_trading_service import PaperTradingService
 from research_system.api.dependencies import (
     ApiPrincipal,
     ApiRuntimeState,
@@ -25,7 +27,7 @@ from research_system.api.dependencies import (
     require_role,
 )
 from research_system.api.errors import install_exception_handlers
-from research_system.api.routes import admin, chat, dashboard, runs, system
+from research_system.api.routes import admin, chat, dashboard, finance, runs, system
 from research_system.api.sse import RunEventSource
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.agent_os import AgentOS
@@ -80,6 +82,8 @@ def create_app(
     run_service_factory: Callable[[AgentOS], Any] | None = None,
     chat_service_factory: Callable[[Settings], Any] | None = None,
     event_source_factory: Callable[[Settings, ApiConfig], Any] | None = None,
+    finance_market_data_factory: Callable[[Settings], Any] | None = None,
+    paper_trading_factory: Callable[[Settings, Any], Any] | None = None,
     repo_root: Path | None = None,
 ) -> FastAPI:
     resolved_repo_root = (repo_root or _DEFAULT_REPO_ROOT).resolve()
@@ -87,6 +91,17 @@ def create_app(
     build_agent_os = agent_os_factory or AgentOS
     build_chat_service = chat_service_factory or ChatService
     build_event_source = event_source_factory or RunEventSource
+    build_finance_market_data = finance_market_data_factory or (
+        lambda current_settings: FinanceMarketDataService(
+            cache_root=current_settings.workspace_root / "cache"
+        )
+    )
+    build_paper_trading = paper_trading_factory or (
+        lambda current_settings, market_data: PaperTradingService(
+            database_path=current_settings.workspace_root / "paper_trading" / "paper_trading.sqlite3",
+            market_data=market_data,
+        )
+    )
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -118,6 +133,8 @@ def create_app(
             bind_chat_completion = getattr(run_service, "bind_chat_completion", None)
             if callable(bind_chat_completion):
                 bind_chat_completion(chat_service.record_run_completion)
+            finance_market_data = build_finance_market_data(effective_settings)
+            paper_trading = build_paper_trading(effective_settings, finance_market_data)
             runtime = ApiRuntimeState(
                 repo_root=resolved_repo_root,
                 settings=effective_settings,
@@ -126,6 +143,8 @@ def create_app(
                 run_service=run_service,
                 chat_service=chat_service,
                 event_source=build_event_source(effective_settings, resolved_api_config),
+                finance_market_data=finance_market_data,
+                paper_trading=paper_trading,
                 mutation_lock=asyncio.Lock(),
             )
             application.state.api_runtime = runtime
@@ -176,7 +195,7 @@ def create_app(
         request.state.request_id = request_id
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
-        if request.url.path.startswith("/api/v1"):
+        if request.url.path.startswith(("/api/v1", "/api/v2")):
             response.headers.setdefault("Cache-Control", "no-store")
         return response
 
@@ -192,6 +211,12 @@ def create_app(
     versioned.include_router(dashboard.router)
     versioned.include_router(system.router)
     application.include_router(versioned)
+    finance_v2 = APIRouter(
+        prefix="/api/v2",
+        dependencies=[Depends(require_principal)],
+    )
+    finance_v2.include_router(finance.router)
+    application.include_router(finance_v2)
 
     @application.get("/", response_class=HTMLResponse)
     def workspace() -> str:

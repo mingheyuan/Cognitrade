@@ -16,6 +16,8 @@ import type { ViewId } from '../data'
 const viewTitles: Record<ViewId, { eyebrow: string; title: string }> = {
   workbench: { eyebrow: '研究空间', title: '研究工作台' },
   overview: { eyebrow: '工作区', title: '研究总览' },
+  market: { eyebrow: '数据中心', title: '行情与研究数据' },
+  paper: { eyebrow: '交易实验室', title: '模拟交易' },
   screening: { eyebrow: '研究工具', title: '智能筛选' },
   methodology: { eyebrow: '认知系统', title: '方法论' },
   runs: { eyebrow: '运行时', title: '运行记录' },
