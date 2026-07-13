@@ -193,7 +193,8 @@ ExecutionGraph leaf node, so the Admin API cannot bypass graph governance.
 
 The lightweight `/api` routes are an embedded workspace convenience surface.
 They also call AgentOS directly and are not used by the production frontend.
-The frontend uses `/api/v1` exclusively.
+The frontend uses `/api/v1` for Agent OS research and the separately documented
+`/api/v2/finance` surface for Finance Workspace data and paper trading.
 
 ## Frontend Configuration
 
@@ -204,4 +205,5 @@ VITE_COGNITRADE_API_TOKEN=<COGNITRADE_API_TOKEN>
 
 The Vite frontend submits Task Intake requests through FastAPI, uses fetch-SSE
 for graph events, lists `/runs`, and opens replay data for ExecutionGraph and
-ArtifactBoard inspection.
+ArtifactBoard inspection. Finance Workspace operations are documented in
+[`api-v2.md`](./api-v2.md).
