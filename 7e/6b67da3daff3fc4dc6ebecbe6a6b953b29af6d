@@ -1,0 +1,29 @@
+frontend/src/components/Overview.tsx
+  s_a6a8a3a6f43b3c::t_94a8f0500cb3ea 27,34,68-70,112-115,125,127
+frontend/src/components/ResearchComposer.tsx
+  s_a6a8a3a6f43b3c::t_8e5e5684c68b42 1-2,19-22,25-68,106-121,123-150
+frontend/src/components/Workbench.tsx
+  s_a6a8a3a6f43b3c::t_6ca64170ca39b2 241,269,274-275,413-432
+frontend/src/data.ts
+  s_a6a8a3a6f43b3c::t_61ba3941727991 4
+frontend/src/styles.css
+  s_a6a8a3a6f43b3c::t_acb1c302967b9a 1035-1047,2014,2028-2029,2032-2033,2037-2047,2050-2059,2061-2088,2092-2114,2119-2121,2128-2132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "7e6b67da3daff3fc4dc6ebecbe6a6b953b29af6d",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
