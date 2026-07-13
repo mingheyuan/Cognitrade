@@ -1,0 +1,25 @@
+frontend/src/App.tsx
+  s_a6a8a3a6f43b3c::t_0d23d281415e1c 8,28-33,102
+frontend/src/components/MarketData.tsx
+  s_a6a8a3a6f43b3c::t_f5990935fe6afc 14,25-37,40-41,46,49,51,53
+frontend/src/components/PaperTrading.tsx
+  s_a6a8a3a6f43b3c::t_edcb4fdb459fc2 128-136,172-173,176,191,195
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "4a20fbe6c28b57ddcc30929f82f44528f4d34313",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
