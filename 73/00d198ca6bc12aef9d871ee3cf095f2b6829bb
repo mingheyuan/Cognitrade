@@ -1,0 +1,57 @@
+README.md
+  s_a6a8a3a6f43b3c::t_0c9687fe1aa749 227
+api-doc/api-v2.md
+  s_a6a8a3a6f43b3c::t_dd41564c3a2642 1-350
+deploy/backend-entrypoint.sh
+  s_a6a8a3a6f43b3c::t_70bfa8ea29f306 10-12
+domain_packs/finance_ashare/tools/snapshot_collector.py
+  s_a6a8a3a6f43b3c::t_491aeef9ca9c5b 107,185-189
+frontend/src/App.tsx
+  s_a6a8a3a6f43b3c::t_312b555b5fbd10 12-13,95-96
+frontend/src/api-client.ts
+  s_a6a8a3a6f43b3c::t_03ac7f33331d16 14-22,193-236,247-252,260
+frontend/src/components/MarketData.tsx
+  s_a6a8a3a6f43b3c::t_7e1032551a9255 1-439
+frontend/src/components/PaperTrading.tsx
+  s_a6a8a3a6f43b3c::t_2abde313c00bf5 1-257
+frontend/src/components/Sidebar.tsx
+  s_a6a8a3a6f43b3c::t_515f9b8043a560 6,15,32-33
+frontend/src/components/Topbar.tsx
+  s_a6a8a3a6f43b3c::t_06eb27385d80fc 19-20
+frontend/src/data.ts
+  s_a6a8a3a6f43b3c::t_4103cff2955035 1
+frontend/src/finance-contracts.ts
+  s_a6a8a3a6f43b3c::t_1440554f13df68 1-126
+frontend/src/styles.css
+  s_a6a8a3a6f43b3c::t_663c27a62cb791 6180-7568
+research_system/api/app.py
+  s_a6a8a3a6f43b3c::t_2903b42c8aba7c 19-20,30,85-86,94-104,136-137,146-147,198,214-219
+research_system/api/dependencies.py
+  s_a6a8a3a6f43b3c::t_8c7aea924a033d 42-43,92-99
+research_system/api/errors.py
+  s_a6a8a3a6f43b3c::t_90cadb8479dda7 141
+research_system/api/finance_market_data_service.py
+  s_a6a8a3a6f43b3c::t_19e6510418463e 1-271
+research_system/api/paper_trading_service.py
+  s_a6a8a3a6f43b3c::t_2f255149030bb6 1-646
+research_system/api/routes/finance.py
+  s_a6a8a3a6f43b3c::t_8722e9b5ef1c07 1-183
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "7300d198ca6bc12aef9d871ee3cf095f2b6829bb",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
