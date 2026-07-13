@@ -1,10 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["theme", "profile", "hero", "core_conclusion", "dashboard", "great_divide", "panel", "radar", "risk_list", "buy_zones", "source_artifact_ids", "generated_at", "data_gap"],
+  "required": ["version", "theme", "profile", "subject", "hero", "core_conclusion", "dashboard", "great_divide", "panel", "radar", "risk_list", "buy_zones", "source_artifact_ids", "generated_at", "data_gap"],
   "properties": {
+    "version": {"type": "string"},
     "theme": {"type": "string"},
     "profile": {"type": "string"},
+    "subject": {"type": "object"},
     "hero": {"type": "object"},
     "core_conclusion": {"type": "string"},
     "dashboard": {"type": "object"},

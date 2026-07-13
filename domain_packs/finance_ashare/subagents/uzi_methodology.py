@@ -254,8 +254,38 @@ def _snapshot_for_symbol(snapshots: list[dict[str, Any]], symbol: str) -> dict[s
     return result
 
 
+def _snapshot_identity(snapshots: list[dict[str, Any]], symbol: str) -> tuple[str, str]:
+    """Resolve display identity from source snapshots without inventing company data."""
+
+    name = symbol
+    dates: list[str] = []
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict) or str(snapshot.get("symbol") or "") != symbol:
+            continue
+        snapshot_date = str(snapshot.get("snapshot_date") or snapshot.get("data_period") or "").strip()
+        if snapshot_date:
+            dates.append(snapshot_date)
+        facts = _facts(snapshot)
+        info = _section(facts, "info", "company_info")
+        for candidate in (
+            snapshot.get("name"),
+            snapshot.get("company_name"),
+            info.get("name"),
+            info.get("company_name"),
+            info.get("股票简称"),
+            info.get("名称"),
+        ):
+            if str(candidate or "").strip():
+                name = str(candidate).strip()
+                break
+        if name != symbol:
+            break
+    return name, max(dates) if dates else ""
+
+
 def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str, Any]:
     grouped = _snapshot_for_symbol(snapshot_rows, symbol)
+    name, data_period = _snapshot_identity(snapshot_rows, symbol)
     market = _section(_facts(grouped.get("market")), "market_overview", "spot")
     fundamental_facts = _facts(grouped.get("fundamental"))
     financial = _section(fundamental_facts, "financial_abstract", "financials")
@@ -427,6 +457,8 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
     assumptions = [debt_derivation] if debt_derivation else []
     return {
         "symbol": symbol,
+        "name": name,
+        "data_period": data_period,
         **values,
         "pct_change": pct_change,
         "amount": amount,
@@ -1007,36 +1039,139 @@ def build_presentation(
     risk: dict[str, Any],
     profile: dict[str, Any],
     advanced: dict[str, Any] | None = None,
+    snapshot_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     models = list(valuation.get("models") or [])
     primary = models[0] if models else {}
-    symbol = str(primary.get("symbol") or report.get("symbols", [None])[0] or "")
+    report_symbols = report.get("symbols") if isinstance(report.get("symbols"), list) else []
+    symbol = str(primary.get("symbol") or (report_symbols[0] if report_symbols else "") or "")
+    features = build_features(list(snapshot_rows or []), symbol) if symbol else {}
     dimensions = list((valuation.get("dimensions") or {}).get(symbol) or [])
+    risks = report.get("risk") or []
+    if not isinstance(risks, list):
+        risks = [str(risks)]
+    metric_specs = (
+        ("pe", "PE (TTM)", features.get("pe"), "x"),
+        ("pb", "PB", features.get("pb"), "x"),
+        ("market_cap_yi", "总市值", features.get("market_cap_yi"), "亿元"),
+        ("net_margin", "销售净利率", features.get("net_margin"), "%"),
+        ("roe", "ROE", features.get("roe"), "%"),
+        ("debt_ratio", "资产负债率", features.get("debt_ratio"), "%"),
+    )
+    metrics = [
+        {
+            "key": key,
+            "label": label,
+            "value": value,
+            "unit": unit,
+            "status": "available" if value is not None else "data_gap",
+            "source": (features.get("field_sources") or {}).get(key),
+        }
+        for key, label, value, unit in metric_specs
+    ]
+    votes = [vote for vote in list(panel.get("votes") or []) if isinstance(vote, dict)]
+    bull_votes = [vote for vote in votes if str(vote.get("signal") or "") in {"bullish", "buy", "strong_buy"}]
+    bear_votes = [vote for vote in votes if str(vote.get("signal") or "") in {"bearish", "sell", "strong_sell"}]
+
+    def top_vote(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+        return max(rows, key=lambda item: float(item.get("score") or 0.0), default=None)
+
+    top_bull = top_vote(bull_votes)
+    top_bear = top_vote(bear_votes)
+    workflow = (advanced or {}).get("research_workflow") or {}
+    catalysts: list[dict[str, Any]] = []
+    for result in list(workflow.get("results") or []):
+        calendar = result.get("catalyst_calendar") if isinstance(result, dict) else None
+        for event in list((calendar or {}).get("events") or []) if isinstance(calendar, dict) else []:
+            if isinstance(event, dict) and str(event.get("title") or "").strip():
+                catalysts.append(
+                    {
+                        "date": event.get("date"),
+                        "title": str(event.get("title")),
+                        "impact": str(event.get("impact") or "medium"),
+                        "symbol": str(result.get("symbol") or symbol),
+                    }
+                )
+    data_gap = list(
+        dict.fromkeys(
+            [
+                *[str(item) for item in list(features.get("data_gap") or [])],
+                *[str(item) for item in list(risk.get("risk_flags") or [])],
+                *[
+                    str(item)
+                    for item in list(primary.get("data_gap") or [])
+                ],
+            ]
+        )
+    )
     return {
+        "version": "2",
         "theme": "uzi_terminal_light",
         "profile": profile["selected"],
+        "subject": {
+            "symbol": symbol,
+            "name": str(features.get("name") or symbol),
+            "sector": str(features.get("sector") or ""),
+            "as_of": str(features.get("data_period") or ""),
+            "price": features.get("price") if features else primary.get("market_price"),
+            "change_pct": features.get("pct_change"),
+            "metrics": metrics,
+            "data_gap": data_gap,
+        },
         "hero": {
             "symbol": symbol,
-            "price": primary.get("market_price"),
+            "name": str(features.get("name") or symbol),
+            "sector": str(features.get("sector") or ""),
+            "price": features.get("price") if features else primary.get("market_price"),
+            "change_pct": features.get("pct_change"),
             "score": panel.get("average_score"),
             "verdict": primary.get("verdict") or "data_gap",
             "safety": risk.get("risk_level") or "data_gap",
         },
         "core_conclusion": str(report.get("conclusion") or ""),
         "dashboard": {
-            "price": {"current": primary.get("market_price")},
+            "price": {
+                "current": features.get("price") if features else primary.get("market_price"),
+                "change_pct": features.get("pct_change"),
+                "as_of": str(features.get("data_period") or ""),
+            },
             "valuation": {"fair_value": primary.get("fair_value"), "margin_of_safety": primary.get("margin_of_safety")},
-            "risks": list(report.get("risk") or []),
-            "catalysts": [],
+            "fundamentals": {
+                "revenue_yi": features.get("revenue_latest_yi"),
+                "net_profit_yi": features.get("net_profit_latest_yi"),
+                "fcf_yi": features.get("fcf_latest_yi"),
+                "revenue_growth": features.get("revenue_growth"),
+                "profit_growth": features.get("profit_growth"),
+                "net_margin": features.get("net_margin"),
+                "roe": features.get("roe"),
+                "debt_ratio": features.get("debt_ratio"),
+            },
+            "metrics": metrics,
+            "risks": risks,
+            "catalysts": catalysts[:8],
         },
         "great_divide": {
-            "bull": {"signal": "bullish", "count": panel.get("distribution", {}).get("bullish", 0)},
-            "bear": {"signal": "bearish", "count": panel.get("distribution", {}).get("bearish", 0)},
+            "bull": {
+                "signal": "bullish",
+                "count": panel.get("distribution", {}).get("bullish", 0),
+                "top_vote": top_bull,
+            },
+            "bear": {
+                "signal": "bearish",
+                "count": panel.get("distribution", {}).get("bearish", 0),
+                "top_vote": top_bear,
+            },
+            "neutral": panel.get("distribution", {}).get("neutral", 0),
+            "insufficient_evidence": panel.get("distribution", {}).get("insufficient_evidence", 0),
             "punchline": panel.get("disagreement", {}).get("summary"),
         },
         "panel": {
             "tabs": [vote.get("perspective_label") for vote in panel.get("votes") or []],
-            "votes": list(panel.get("votes") or []),
+            "votes": votes,
+            "distribution": dict(panel.get("distribution") or {}),
+            "average_score": panel.get("average_score"),
+            "registered_seat_count": panel.get("registered_seat_count"),
+            "disagreement": dict(panel.get("disagreement") or {}),
         },
         "radar": dimensions,
         "risk_list": list(risk.get("signals") or []),
@@ -1044,7 +1179,7 @@ def build_presentation(
         "advanced_methods": dict(advanced or {}),
         "source_artifact_ids": [],
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "data_gap": list(risk.get("risk_flags") or []),
+        "data_gap": data_gap,
     }
 
 

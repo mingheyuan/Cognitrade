@@ -37,6 +37,7 @@ import {
 } from '../live-data'
 import type { ResearchIntent } from '../research-contracts'
 import { ResearchComposer } from './ResearchComposer'
+import { ResearchReportPresentation } from './ResearchReportPresentation'
 
 type WorkbenchProps = {
   onSubmit: (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => void
@@ -428,6 +429,8 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
                   <p>{assistantMessage}</p>
                 </section>
               )}
+
+              <ResearchReportPresentation report={report} />
 
               <section className="report-hero live-report-hero">
                 <div className="company-identity">

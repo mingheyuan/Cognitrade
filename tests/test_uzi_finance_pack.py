@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from domain_packs.finance_ashare.subagents.uzi_methodology import (
     build_features,
     build_panel_review,
+    build_presentation,
     build_risk_scan,
     build_valuation_model,
     select_profile,
@@ -408,6 +409,37 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertEqual(features["cash_yi"], 30.0)
         self.assertEqual(valuation["status"], "available")
         self.assertNotIn("total_assets_missing", valuation["warnings"])
+
+    def test_report_presentation_exposes_bento_dashboard_sections(self) -> None:
+        rows = _snapshots()
+        profile = select_profile({"research_profile": "lite"})
+        valuation = build_valuation_model(rows, ["600000"], profile)
+        panel = build_panel_review(rows, ["600000"], profile)
+        risk = build_risk_scan("分析 600000", rows, ["600000"], profile)
+
+        presentation = build_presentation(
+            {
+                "symbols": ["600000"],
+                "risk": ["需要复核数据完整性"],
+                "conclusion": "结构化研究结论",
+            },
+            valuation,
+            panel,
+            risk,
+            profile,
+            snapshot_rows=rows,
+        )
+
+        self.assertEqual(presentation["version"], "2")
+        self.assertEqual(presentation["subject"]["symbol"], "600000")
+        self.assertEqual(len(presentation["subject"]["metrics"]), 6)
+        self.assertIn("fundamentals", presentation["dashboard"])
+        self.assertIn("change_pct", presentation["dashboard"]["price"])
+        self.assertIn("top_vote", presentation["great_divide"]["bull"])
+        self.assertEqual(
+            presentation["panel"]["distribution"],
+            panel["distribution"],
+        )
 
     def test_uzi_methodology_replay_matches_versioned_dcf_baseline(self) -> None:
         fixture = json.loads(

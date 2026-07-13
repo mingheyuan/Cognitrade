@@ -916,6 +916,7 @@ def compose_uzi_report(context):
             "deep_analysis": deep.content if deep is not None else None,
             "uzi_dimension_coverage": dimension_coverage.content if dimension_coverage is not None else None,
         },
+        snapshot_rows=evidence_items,
     )
     presentation_content["source_artifact_ids"] = parents
     presentation = ArtifactDraft(
