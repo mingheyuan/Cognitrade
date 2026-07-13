@@ -441,6 +441,56 @@ class UziFinancePackTests(unittest.TestCase):
             panel["distribution"],
         )
 
+    def test_report_presentation_exposes_full_scan_panel_and_model_details(self) -> None:
+        rows = _snapshots()
+        profile = select_profile({"research_profile": "medium"})
+        valuation = build_valuation_model(rows, ["600000"], profile)
+        panel = build_panel_review(rows, ["600000"], profile)
+        risk = build_risk_scan("分析 600000", rows, ["600000"], profile)
+        institutional = build_institutional_analysis(rows, ["600000"], valuation, profile)
+        workflow = build_research_workflow(rows, ["600000"], valuation, profile)
+        deep = build_deep_analysis(rows, ["600000"], institutional, workflow, profile)
+        coverage = build_dimension_coverage(
+            rows,
+            ["600000"],
+            profile,
+            institutional_available=True,
+            workflow_available=True,
+            deep_available=True,
+        )
+
+        presentation = build_presentation(
+            {
+                "symbols": ["600000"],
+                "risk": ["需要复核数据完整性"],
+                "conclusion": "结构化研究结论",
+            },
+            valuation,
+            panel,
+            risk,
+            profile,
+            advanced={
+                "institutional_analysis": institutional,
+                "research_workflow": workflow,
+                "deep_analysis": deep,
+                "uzi_dimension_coverage": coverage,
+            },
+            snapshot_rows=rows,
+        )
+
+        schema = json.loads(
+            (Path(__file__).resolve().parents[1] / "domain_packs" / "finance_ashare" / "artifact_schemas" / "report_presentation.json").read_text(encoding="utf-8")
+        )
+        jsonschema.validate(presentation, schema)
+        self.assertEqual(len(presentation["deep_scan"]), 23)
+        self.assertEqual(len(presentation["panel_insights"]), panel["registered_seat_count"])
+        self.assertTrue(presentation["great_divide"]["rounds"])
+        self.assertTrue(presentation["institutional_modeling"][0]["methods"])
+        self.assertEqual(len(presentation["institutional_modeling"][0]["methods"][0]["sensitivity"]), 25)
+        self.assertTrue(presentation["risk_list"])
+        self.assertEqual(presentation["buy_zones"][0]["status"], "data_gap")
+        self.assertEqual(presentation["buy_zones"][0]["kind"], "observation")
+
     def test_uzi_methodology_replay_matches_versioned_dcf_baseline(self) -> None:
         fixture = json.loads(
             (Path(__file__).resolve().parent / "fixtures" / "uzi_methodology_baseline.json")

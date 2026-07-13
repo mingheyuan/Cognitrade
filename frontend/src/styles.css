@@ -5695,6 +5695,165 @@ select:focus-visible {
   background: var(--warning);
 }
 
+.research-presentation__round-grid,
+.research-presentation__insight-grid,
+.research-presentation__institutional-grid,
+.research-presentation__risk-list,
+.research-presentation__price-observation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.research-presentation__round-card,
+.research-presentation__insight-grid > article,
+.research-presentation__method-card,
+.research-presentation__risk-card,
+.research-presentation__price-observation-grid > article {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.research-presentation__round-card__head,
+.research-presentation__insight-card__head,
+.research-presentation__method-card__head,
+.research-presentation__risk-card__head,
+.research-presentation__price-observation-grid article > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.research-presentation__round-card__head span,
+.research-presentation__insight-card__head span,
+.research-presentation__method-card__head span,
+.research-presentation__risk-card__head span,
+.research-presentation__price-observation-grid article > div span {
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-presentation__round-card__head strong,
+.research-presentation__insight-card__head strong,
+.research-presentation__price-observation-grid article > div strong {
+  flex: 0 0 auto;
+  color: var(--gold);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+}
+
+.research-presentation__round-card > small,
+.research-presentation__insight-grid article > small,
+.research-presentation__method-card__meta,
+.research-presentation__method-card__log,
+.research-presentation__method-card__gap,
+.research-presentation__risk-card > small,
+.research-presentation__price-observation-grid article > small {
+  display: block;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.research-presentation__round-card p,
+.research-presentation__insight-grid article p,
+.research-presentation__method-card p,
+.research-presentation__risk-card p,
+.research-presentation__price-observation-grid article p {
+  margin: 9px 0 0;
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.research-presentation__round-card p.is-bearish-text {
+  color: var(--market-down);
+}
+
+.research-presentation__insight-grid > article.is-bullish {
+  border-left: 2px solid var(--market-up);
+}
+
+.research-presentation__insight-grid > article.is-bearish {
+  border-left: 2px solid var(--market-down);
+}
+
+.research-presentation__insight-grid > article.is-neutral {
+  border-left: 2px solid var(--gold);
+}
+
+.research-presentation__institutional-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.research-presentation__method-card.is-gap,
+.research-presentation__risk-card.is-gap {
+  border-color: rgba(221, 168, 92, 0.38);
+}
+
+.research-presentation__method-card__head strong,
+.research-presentation__risk-card__head strong {
+  flex: 0 0 auto;
+  color: var(--warning);
+  font-size: 9px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.research-presentation__method-card__log {
+  color: var(--muted-dim);
+}
+
+.research-presentation__method-card__gap {
+  color: var(--warning);
+}
+
+.research-presentation__sensitivity-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+  margin-top: 10px;
+}
+
+.research-presentation__sensitivity-grid span {
+  min-width: 0;
+  padding: 4px 2px;
+  border: 1px solid var(--border);
+  color: var(--text-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  text-align: center;
+}
+
+.research-presentation__risk-list {
+  grid-template-columns: 1fr;
+}
+
+.research-presentation__risk-card__head strong {
+  color: var(--warning);
+  text-transform: uppercase;
+}
+
+.research-presentation__price-observation-grid article {
+  border-left: 2px solid var(--gold);
+}
+
+.research-presentation__price-observation-grid article > div strong {
+  color: var(--mint-strong);
+  font-size: 20px;
+}
+
 .research-presentation__advanced-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
@@ -5876,6 +6035,11 @@ select:focus-visible {
   .research-presentation__divide-grid,
   .research-presentation__vote-grid,
   .research-presentation__radar-grid,
+  .research-presentation__round-grid,
+  .research-presentation__insight-grid,
+  .research-presentation__institutional-grid,
+  .research-presentation__risk-list,
+  .research-presentation__price-observation-grid,
   .research-presentation__advanced-grid {
     grid-template-columns: 1fr;
   }
