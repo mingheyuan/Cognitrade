@@ -1,0 +1,27 @@
+frontend/src/components/Overview.tsx
+  s_a6a8a3a6f43b3c::t_a7415f3fad1fe7 171-181
+frontend/src/components/PaperTrading.tsx
+  s_a6a8a3a6f43b3c::t_764fbf587da1ba 94-95,164,208-209
+frontend/src/styles.css
+  s_a6a8a3a6f43b3c::t_9b65e331e68a8a 3001-3002,3009-3018,3034-3038,3070-3081
+tests/test_api_v2_finance.py
+  s_a6a8a3a6f43b3c::t_cb6ace3fc4a554 201-207,213-219
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "20dbdfbd8395591452e17158302f7fb1fb4c2f16",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
