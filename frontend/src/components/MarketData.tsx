@@ -11,7 +11,7 @@ import {
   Search,
   TrendingUp,
 } from 'lucide-react'
-import { type Dispatch, type FormEvent, type ReactNode, type SetStateAction, useMemo } from 'react'
+import { type Dispatch, type FormEvent, type ReactNode, type SetStateAction, useMemo, useState } from 'react'
 import { CognitradeApiClient, CognitradeApiError } from '../api-client'
 import { useCognitrade } from '../CognitradeContext'
 import type { JsonRecord, MarketDataResponse } from '../finance-contracts'
@@ -21,6 +21,19 @@ const EXAMPLES = [
   { symbol: '600036', label: '招商银行' },
   { symbol: '300750', label: '宁德时代' },
 ]
+
+type KlineBar = {
+  date: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+  amount: number | null
+  turnover: number | null
+}
+
+type KlineRange = 20 | 60 | 120 | 'all'
 
 export interface MarketDataViewState {
   query: string
@@ -159,42 +172,24 @@ function MarketDataContent({ data, onRefresh }: { data: MarketDataResponse; onRe
 
       <DataSection icon={<TrendingUp size={18} />} kicker="VALUATION" title="估值概览" quality={data.quality.market}>
         <div className="metric-grid metric-grid--valuation">
-          <Metric label="PE · TTM" value={formatRatio(first(overview, 'pe_ttm'))} />
-          <Metric label="PE · 静态" value={formatRatio(first(overview, 'pe_static'))} />
-          <Metric label="PB" value={formatRatio(first(overview, 'pb'))} />
-          <Metric label="PEG" value={formatRatio(first(overview, 'peg'))} />
-          <Metric label="PCF" value={formatRatio(first(overview, 'pcf'))} />
-          <Metric label="PS" value={formatRatio(first(overview, 'ps'))} />
+          <Metric label="市盈率（TTM）" value={formatRatio(first(overview, 'pe_ttm'))} />
+          <Metric label="静态市盈率" value={formatRatio(first(overview, 'pe_static'))} />
+          <Metric label="市净率" value={formatRatio(first(overview, 'pb'))} />
+          <Metric label="市盈增长比" value={formatRatio(first(overview, 'peg'))} />
+          <Metric label="市现率" value={formatRatio(first(overview, 'pcf'))} />
+          <Metric label="市销率" value={formatRatio(first(overview, 'ps'))} />
           <Metric label="总市值" value={formatCompact(first(overview, 'market_cap'), '元')} />
           <Metric label="流通市值" value={formatCompact(first(overview, 'float_market_cap'), '元')} />
           <Metric label="估值日期" value={formatValue(first(overview, 'valuation_date'))} />
         </div>
       </DataSection>
 
-      <DataSection icon={<BarChart3 size={18} />} kicker="SINGLE-DAY KLINE" title="K 线摘要" quality={data.quality.kline}>
-        <div className="kline-summary-layout">
-          <SingleCandle bar={latestBar} />
-          <div className="kline-meta-grid">
-            <Metric label="数据起始" value={formatDate(first(kline, 'start_date'))} />
-            <Metric label="数据截止" value={formatDate(first(kline, 'end_date'))} />
-            <Metric label="复权方式" value={adjustLabel(first(kline, 'adjust'))} />
-            <Metric label="K 线条数" value={formatValue(first(kline, 'bar_count'))} />
-            <Metric label="最后交易日" value={formatDate(first(latestBar, 'date'))} />
-            <Metric label="换手率" value={formatTurnover(first(latestBar, 'turnover', '换手率'))} />
-          </div>
-          <div className="ohlc-strip" aria-label="最后交易日 OHLC">
-            {(['open', 'high', 'low', 'close'] as const).map((key) => (
-              <div key={key}><span>{key.toUpperCase()}</span><strong>{formatPrice(latestBar[key])}</strong></div>
-            ))}
-            <div><span>VOL</span><strong>{formatCompact(first(latestBar, 'volume'), '股')}</strong></div>
-            <div><span>AMT</span><strong>{formatCompact(first(latestBar, 'amount'), '元')}</strong></div>
-          </div>
-          <p className="data-disclaimer">按需求仅展示最后一个交易日蜡烛与 OHLC 摘要，不生成历史价格趋势。</p>
-        </div>
+      <DataSection icon={<BarChart3 size={18} />} kicker="HISTORICAL KLINE" title="历史 K 线 · 日线" quality={data.quality.kline}>
+        <KlineHistory kline={kline} fallbackBar={latestBar} />
       </DataSection>
 
       <DataSection icon={<Building2 size={18} />} kicker="FUNDAMENTALS" title="基本面与财务" quality={data.quality.fundamental}>
-        <div className="record-panel-grid">
+        <div className="record-panel-columns">
           <RecordPanel title="公司资料" value={fundamental.info} />
           <RecordPanel title="财务摘要" value={fundamental.financial_abstract_new || fundamental.financial_abstract} />
           <RecordPanel title="盈利能力" value={fundamental.financial_benefit_new} />
@@ -211,28 +206,29 @@ function MarketDataContent({ data, onRefresh }: { data: MarketDataResponse; onRe
         )}
       </DataSection>
 
-      <div className="finance-two-column">
-        <DataSection icon={<Activity size={18} />} kicker="CAPITAL FLOW" title="资金流与主力排名" quality={data.quality.capital_flow}>
-          <RecordPanel title="最新资金流" value={flow.latest_flow} />
-          <RecordPanel title="最近资金流" value={flow.recent_flows} wide />
-          <RecordPanel title="主力资金排名" value={flow.main_flow_rank} wide />
-        </DataSection>
-        <DataSection icon={<TrendingUp size={18} />} kicker="SENTIMENT" title="热度与新闻样本" quality={data.quality.sentiment}>
-          <RecordPanel title="热度排名趋势" value={sentiment.hot_rank_detail || sentiment.hot_rank_latest} wide />
-          <TagList title="热门关键词" value={sentiment.hot_keywords} />
-          <RecordPanel title="新闻样本" value={sentiment.news_samples} wide />
-        </DataSection>
-      </div>
-
-      <div className="finance-two-column">
-        <DataSection icon={<Newspaper size={18} />} kicker="DISCLOSURES" title="最近 30 天公告" quality={data.quality.notice}>
-          <div className="notice-count"><strong>{formatValue(notices.notice_count)}</strong><span>条公告</span><small>{formatDate(notices.window_start)} — {formatDate(notices.window_end)}</small></div>
-          <RecordPanel title="公告列表" value={notices.recent_notices} wide />
-        </DataSection>
-        <DataSection icon={<Clock3 size={18} />} kicker="EVENT TIMELINE" title="公司事件" quality={data.quality.events}>
-          <TagList title="事件关键词" value={events.event_keywords} />
-          <Timeline value={events.event_notices} />
-        </DataSection>
+      <div className="finance-adaptive-columns">
+        <div className="finance-column-stack">
+          <DataSection icon={<Activity size={18} />} kicker="CAPITAL FLOW" title="资金流与主力排名" quality={data.quality.capital_flow}>
+            <RecordPanel title="最新资金流" value={flow.latest_flow} />
+            <RecordPanel title="最近资金流" value={flow.recent_flows} wide />
+            <RecordPanel title="主力资金排名" value={flow.main_flow_rank} wide />
+          </DataSection>
+          <DataSection icon={<Clock3 size={18} />} kicker="EVENT TIMELINE" title="公司事件" quality={data.quality.events}>
+            <TagList title="事件关键词" value={events.event_keywords} />
+            <Timeline value={events.event_notices} />
+          </DataSection>
+        </div>
+        <div className="finance-column-stack">
+          <DataSection icon={<TrendingUp size={18} />} kicker="SENTIMENT" title="热度与新闻样本" quality={data.quality.sentiment}>
+            <RecordPanel title="热度排名趋势" value={sentiment.hot_rank_detail || sentiment.hot_rank_latest} wide />
+            <TagList title="热门关键词" value={sentiment.hot_keywords} />
+            <RecordPanel title="新闻样本" value={sentiment.news_samples} wide />
+          </DataSection>
+          <DataSection icon={<Newspaper size={18} />} kicker="DISCLOSURES" title="最近 30 天公告" quality={data.quality.notice}>
+            <div className="notice-count"><strong>{formatValue(notices.notice_count)}</strong><span>条公告</span><small>{formatDate(notices.window_start)} — {formatDate(notices.window_end)}</small></div>
+            <RecordPanel title="公告列表" value={notices.recent_notices} wide />
+          </DataSection>
+        </div>
       </div>
 
       <DataSection icon={<Landmark size={18} />} kicker="DRAGON & TIGER LIST" title="龙虎榜" quality={data.quality.lhb}>
@@ -241,9 +237,9 @@ function MarketDataContent({ data, onRefresh }: { data: MarketDataResponse; onRe
           <Metric label="买入席位合计" value={formatCompact(lhb.buy_top_total, '元')} tone="up" />
           <Metric label="卖出席位合计" value={formatCompact(lhb.sell_top_total, '元')} tone="down" />
         </div>
-        <div className="finance-two-column">
-          <RecordPanel title="买入席位" value={lhb.buy_detail} wide />
-          <RecordPanel title="卖出席位" value={lhb.sell_detail} wide />
+        <div className="record-panel-grid">
+          <RecordPanel title="买入席位" value={lhb.buy_detail} />
+          <RecordPanel title="卖出席位" value={lhb.sell_detail} />
         </div>
         <RecordPanel title="统计记录" value={lhb.lhb_statistics} wide />
       </DataSection>
@@ -268,27 +264,147 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: '
   return <div className={`finance-metric ${tone ? `finance-metric--${tone}` : ''}`}><span>{label}</span><strong>{value}</strong></div>
 }
 
-function SingleCandle({ bar }: { bar: JsonRecord }) {
-  const open = asNumber(bar.open)
-  const close = asNumber(bar.close)
-  const high = asNumber(bar.high)
-  const low = asNumber(bar.low)
-  if ([open, close, high, low].some((value) => value === null)) {
-    return <div className="single-candle single-candle--empty"><BarChart3 size={26} /><span>暂无单日蜡烛数据</span></div>
+function KlineHistory({ kline, fallbackBar }: { kline: JsonRecord; fallbackBar: JsonRecord }) {
+  const allBars = normalizeKlineBars(kline.bars)
+  const fallbackBars = allBars.length ? allBars : normalizeKlineBars([fallbackBar])
+  const [range, setRange] = useState<KlineRange>('all')
+  const [selectedDate, setSelectedDate] = useState('')
+  const bars = range === 'all' ? fallbackBars : fallbackBars.slice(-range)
+  const selected = bars.find((bar) => bar.date === selectedDate) || bars.at(-1)
+  const hasHistory = allBars.length > 1
+
+  if (!selected) {
+    return <div className="kline-empty"><BarChart3 size={25} /><strong>暂无历史 K 线</strong><span>数据源未返回可绘制的开、高、低、收价格。</span></div>
   }
-  const maximum = Math.max(high!, open!, close!)
-  const minimum = Math.min(low!, open!, close!)
-  const range = maximum - minimum || 1
-  const bodyTop = ((maximum - Math.max(open!, close!)) / range) * 100
-  const bodyHeight = Math.max((Math.abs(close! - open!) / range) * 100, 8)
-  const rising = close! >= open!
+
+  const width = 1000
+  const priceTop = 18
+  const priceHeight = 250
+  const volumeTop = 296
+  const volumeHeight = 58
+  const plotLeft = 18
+  const plotRight = 944
+  const plotWidth = plotRight - plotLeft
+  const priceLow = Math.min(...bars.map((bar) => bar.low))
+  const priceHigh = Math.max(...bars.map((bar) => bar.high))
+  const pricePadding = Math.max((priceHigh - priceLow) * 0.08, priceHigh * 0.002, 0.01)
+  const scaleLow = priceLow - pricePadding
+  const scaleHigh = priceHigh + pricePadding
+  const priceSpan = scaleHigh - scaleLow || 1
+  const maxVolume = Math.max(...bars.map((bar) => bar.volume), 1)
+  const slotWidth = plotWidth / Math.max(bars.length, 1)
+  const candleWidth = Math.max(2, Math.min(slotWidth * 0.58, 12))
+  const priceY = (value: number) => priceTop + ((scaleHigh - value) / priceSpan) * priceHeight
+  const volumeY = (value: number) => volumeTop + volumeHeight - (value / maxVolume) * volumeHeight
+  const gridTicks = Array.from({ length: 5 }, (_, index) => scaleHigh - (priceSpan * index) / 4)
+  const dateTickIndexes = Array.from(new Set([0, Math.floor((bars.length - 1) / 4), Math.floor((bars.length - 1) / 2), Math.floor(((bars.length - 1) * 3) / 4), bars.length - 1]))
+  const rangeOptions: Array<{ value: KlineRange; label: string }> = [
+    { value: 20, label: '20 日' },
+    { value: 60, label: '60 日' },
+    { value: 120, label: '120 日' },
+    { value: 'all', label: '全部' },
+  ]
+
   return (
-    <div className="single-candle">
-      <div className={`candle-visual ${rising ? 'is-up' : 'is-down'}`} aria-label={`${rising ? '上涨' : '下跌'}单日蜡烛`}>
-        <span className="candle-wick" />
-        <span className="candle-body" style={{ top: `${bodyTop}%`, height: `${bodyHeight}%` }} />
+    <div className="kline-history">
+      <div className="kline-toolbar">
+        <div className="kline-selected-summary" aria-live="polite">
+          <strong>{formatDate(selected.date)}</strong>
+          <span>开 {formatPrice(selected.open)}</span>
+          <span>高 {formatPrice(selected.high)}</span>
+          <span>低 {formatPrice(selected.low)}</span>
+          <span>收 {formatPrice(selected.close)}</span>
+          <span className={selected.close >= selected.open ? 'number-up' : 'number-down'}>{selected.close >= selected.open ? '收涨' : '收跌'}</span>
+        </div>
+        <div className="kline-range-switch" aria-label="K 线时间范围">
+          {rangeOptions.map((option) => (
+            <button
+              key={String(option.value)}
+              type="button"
+              className={range === option.value ? 'is-active' : ''}
+              onClick={() => setRange(option.value)}
+              disabled={option.value !== 'all' && fallbackBars.length <= option.value && range !== option.value}
+              aria-pressed={range === option.value}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
       </div>
-      <div><span>单日方向</span><strong className={rising ? 'number-up' : 'number-down'}>{rising ? '收涨 / 平盘' : '收跌'}</strong><small>高 {formatPrice(high)} · 低 {formatPrice(low)}</small></div>
+
+      {hasHistory ? (
+        <div className="kline-chart-shell">
+          <svg className="kline-chart" viewBox={`0 0 ${width} 382`} role="img" aria-label={`${formatDate(bars[0].date)}至${formatDate(bars.at(-1)?.date)}日 K 线与成交量，共 ${bars.length} 个交易日`}>
+            {gridTicks.map((tick) => {
+              const y = priceY(tick)
+              return <g key={tick}><line className="kline-grid-line" x1={plotLeft} x2={plotRight} y1={y} y2={y} /><text className="kline-axis-label" x={plotRight + 12} y={y + 4}>{tick.toFixed(2)}</text></g>
+            })}
+            <line className="kline-volume-divider" x1={plotLeft} x2={plotRight} y1={volumeTop - 11} y2={volumeTop - 11} />
+            {bars.map((bar, index) => {
+              const x = plotLeft + index * slotWidth + slotWidth / 2
+              const rising = bar.close >= bar.open
+              const bodyTop = priceY(Math.max(bar.open, bar.close))
+              const bodyBottom = priceY(Math.min(bar.open, bar.close))
+              const bodyHeight = Math.max(bodyBottom - bodyTop, 1.8)
+              const volumeBarY = volumeY(bar.volume)
+              return (
+                <g
+                  key={`${bar.date}-${index}`}
+                  className={`kline-candle ${rising ? 'is-up' : 'is-down'} ${bar.date === selected.date ? 'is-selected' : ''}`}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`${formatDate(bar.date)}，开盘${bar.open}，最高${bar.high}，最低${bar.low}，收盘${bar.close}`}
+                  onMouseEnter={() => setSelectedDate(bar.date)}
+                  onFocus={() => setSelectedDate(bar.date)}
+                >
+                  <rect className="kline-hit-area" x={x - slotWidth / 2} y={priceTop} width={slotWidth} height={priceHeight + volumeHeight + 36} />
+                  <line className="kline-wick" x1={x} x2={x} y1={priceY(bar.high)} y2={priceY(bar.low)} />
+                  <rect className="kline-body" x={x - candleWidth / 2} y={bodyTop} width={candleWidth} height={bodyHeight} rx="0.7" />
+                  <rect className="kline-volume" x={x - candleWidth / 2} y={volumeBarY} width={candleWidth} height={volumeTop + volumeHeight - volumeBarY} rx="0.7" />
+                </g>
+              )
+            })}
+            {dateTickIndexes.map((index) => {
+              const bar = bars[index]
+              const x = plotLeft + index * slotWidth + slotWidth / 2
+              return <text key={`${bar.date}-${index}`} className="kline-date-label" x={x} y={377} textAnchor={index === 0 ? 'start' : index === bars.length - 1 ? 'end' : 'middle'}>{shortDate(bar.date)}</text>
+            })}
+            <text className="kline-volume-label" x={plotLeft} y={volumeTop - 17}>成交量</text>
+          </svg>
+        </div>
+      ) : (
+        <div className="kline-cache-note"><AlertCircle size={16} /><span>当前缓存只包含最后一个交易日，请点击“刷新源数据”获取完整历史序列。</span></div>
+      )}
+
+      <div className="kline-meta-grid">
+        <Metric label="历史起始" value={formatDate(first(kline, 'start_date') || fallbackBars[0]?.date)} />
+        <Metric label="历史截止" value={formatDate(first(kline, 'end_date') || fallbackBars.at(-1)?.date)} />
+        <Metric label="复权方式" value={adjustLabel(first(kline, 'adjust'))} />
+        <Metric label="交易日数量" value={`${formatValue(first(kline, 'bar_count') || fallbackBars.length)} 日`} />
+        <Metric label="最后交易日" value={formatDate(selected.date)} />
+        <Metric label="换手率" value={formatTurnover(selected.turnover)} />
+      </div>
+
+      <div className="ohlc-strip" aria-label="选中交易日行情摘要">
+        <div><span>开盘价</span><strong>{formatPrice(selected.open)}</strong></div>
+        <div><span>最高价</span><strong>{formatPrice(selected.high)}</strong></div>
+        <div><span>最低价</span><strong>{formatPrice(selected.low)}</strong></div>
+        <div><span>收盘价</span><strong>{formatPrice(selected.close)}</strong></div>
+        <div><span>成交量</span><strong>{formatCompact(selected.volume, '股')}</strong></div>
+        <div><span>成交额</span><strong>{formatCompact(selected.amount, '元')}</strong></div>
+      </div>
+
+      {hasHistory && (
+        <details className="kline-detail-table">
+          <summary>查看完整历史明细 <span>{allBars.length} 个交易日</span></summary>
+          <div className="finance-table-scroll">
+            <table className="finance-table">
+              <thead><tr><th>交易日期</th><th>开盘价</th><th>最高价</th><th>最低价</th><th>收盘价</th><th>成交量</th><th>成交额</th><th>换手率</th></tr></thead>
+              <tbody>{allBars.map((bar) => <tr key={bar.date}><td>{formatDate(bar.date)}</td><td>{formatPrice(bar.open)}</td><td>{formatPrice(bar.high)}</td><td>{formatPrice(bar.low)}</td><td>{formatPrice(bar.close)}</td><td>{formatCompact(bar.volume, '股')}</td><td>{formatCompact(bar.amount, '元')}</td><td>{formatTurnover(bar.turnover)}</td></tr>)}</tbody>
+            </table>
+          </div>
+        </details>
+      )}
     </div>
   )
 }
@@ -301,11 +417,11 @@ function RecordTable({ value, limit = 12 }: { value: unknown; limit?: number }) 
   const records = normalizeRecords(value)
   if (!records.length) return <p className="data-empty">数据源暂未返回可展示记录</p>
   if (records.length === 1) {
-    return <dl className="record-definition-list">{Object.entries(records[0]).slice(0, limit).map(([key, item]) => <div key={key}><dt>{key}</dt><dd>{formatValue(item)}</dd></div>)}</dl>
+    return <dl className="record-definition-list">{Object.entries(records[0]).slice(0, limit).map(([key, item]) => <div key={key}><dt>{fieldLabel(key)}</dt><dd>{formatValue(item)}</dd></div>)}</dl>
   }
   const columns = Array.from(new Set(records.flatMap((row) => Object.keys(row)))).slice(0, 6)
   return (
-    <div className="finance-table-scroll"><table className="finance-table"><thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr></thead><tbody>{records.slice(0, limit).map((row, index) => <tr key={`${index}-${columns.map((column) => String(row[column] ?? '')).join('-')}`}>{columns.map((column) => <td key={column}>{formatValue(row[column])}</td>)}</tr>)}</tbody></table></div>
+    <div className="finance-table-scroll"><table className="finance-table"><thead><tr>{columns.map((column) => <th key={column}>{fieldLabel(column)}</th>)}</tr></thead><tbody>{records.slice(0, limit).map((row, index) => <tr key={`${index}-${columns.map((column) => String(row[column] ?? '')).join('-')}`}>{columns.map((column) => <td key={column}>{formatValue(row[column])}</td>)}</tr>)}</tbody></table></div>
   )
 }
 
@@ -329,6 +445,27 @@ function normalizeRecords(value: unknown): JsonRecord[] {
   const record = asRecord(value)
   if (!record || !Object.keys(record).length) return []
   return [record]
+}
+
+function normalizeKlineBars(value: unknown): KlineBar[] {
+  return normalizeRecords(value).flatMap((row) => {
+    const date = String(first(row, 'date', '日期', '交易日期') || '').trim()
+    const open = asNumber(first(row, 'open', '开盘', '开盘价'))
+    const high = asNumber(first(row, 'high', '最高', '最高价'))
+    const low = asNumber(first(row, 'low', '最低', '最低价'))
+    const close = asNumber(first(row, 'close', '收盘', '收盘价'))
+    if (!date || open === null || high === null || low === null || close === null) return []
+    return [{
+      date,
+      open,
+      high,
+      low,
+      close,
+      volume: asNumber(first(row, 'volume', '成交量')) || 0,
+      amount: asNumber(first(row, 'amount', '成交额')),
+      turnover: asNumber(first(row, 'turnover', '换手率')),
+    }]
+  })
 }
 
 function asRecord(value: unknown): JsonRecord | null {
@@ -381,6 +518,11 @@ function formatValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return '—'
   if (typeof value === 'number') return value.toLocaleString('zh-CN', { maximumFractionDigits: 4 })
   if (typeof value === 'boolean') return value ? '是' : '否'
+  if (Array.isArray(value)) {
+    if (!value.length) return '暂无数据'
+    const preview = value.slice(0, 4).map((item) => formatNestedValue(item, 1)).filter(Boolean)
+    return `${preview.join('；')}${value.length > preview.length ? `；另有 ${value.length - preview.length} 项` : ''}`
+  }
   if (typeof value === 'object') {
     const record = asRecord(value)
     if (record && record.value !== undefined) {
@@ -388,9 +530,87 @@ function formatValue(value: unknown): string {
       const yoy = asNumber(record.yoy)
       return yoy === null ? primary : `${primary} · 同比 ${formatPercent(yoy * 100)}`
     }
-    return JSON.stringify(value)
+    return formatNestedValue(value, 0)
   }
-  return String(value)
+  const text = String(value)
+  return VALUE_LABELS[text.toLowerCase()] || text
+}
+
+function formatNestedValue(value: unknown, depth: number): string {
+  if (value === null || value === undefined || value === '') return '—'
+  if (depth >= 2) return Array.isArray(value) ? `${value.length} 项明细` : '结构化明细'
+  if (Array.isArray(value)) {
+    if (!value.length) return '暂无数据'
+    return value.slice(0, 3).map((item) => formatNestedValue(item, depth + 1)).join('；') + (value.length > 3 ? `；另有 ${value.length - 3} 项` : '')
+  }
+  const record = asRecord(value)
+  if (record) {
+    const entries = Object.entries(record).filter(([, item]) => item !== null && item !== undefined && item !== '').slice(0, 5)
+    if (!entries.length) return '暂无数据'
+    return entries.map(([key, item]) => `${fieldLabel(key)}：${formatNestedValue(item, depth + 1)}`).join(' · ')
+  }
+  if (typeof value === 'number') return value.toLocaleString('zh-CN', { maximumFractionDigits: 4 })
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  const text = String(value)
+  return VALUE_LABELS[text.toLowerCase()] || text
+}
+
+const VALUE_LABELS: Record<string, string> = {
+  available: '数据可用', partial: '部分可用', degraded: '数据降级', data_gap: '数据缺口', assumption_only: '仅有假设',
+  qfq: '前复权', hfq: '后复权', true: '是', false: '否',
+}
+
+const FIELD_LABELS: Record<string, string> = {
+  symbol: '股票代码', normalized_symbol: '市场代码', code: '代码', name: '名称', title: '标题', type: '类型', keyword: '关键词',
+  date: '日期', time: '时间', publish_time: '发布时间', report_date: '报告日期', start_date: '起始日期', end_date: '截止日期',
+  open: '开盘价', high: '最高价', low: '最低价', close: '收盘价', pre_close: '前收盘价', latest_price: '最新价', pct_change: '涨跌幅', change: '涨跌额',
+  volume: '成交量', amount: '成交额', turnover: '换手率', outstanding_share: '流通股本', adjust: '复权方式', bar_count: '交易日数量', latest_bar: '最新交易日', bars: '历史行情',
+  pe_ttm: '市盈率（TTM）', pe_static: '静态市盈率', pb: '市净率', peg: '市盈增长比', pcf: '市现率', ps: '市销率',
+  market_cap: '总市值', float_market_cap: '流通市值', total_shares: '总股本', float_shares: '流通股本', valuation_date: '估值日期', valuation: '估值明细',
+  spot: '实时行情', spot_found: '实时行情可用', valuation_found: '估值数据可用',
+  value: '数值', yoy: '同比变化', ratio: '比例', rank: '排名', score: '评分', count: '数量', total: '合计',
+  availability: '数据状态', data_gap: '数据缺口', degrade_reason: '降级原因', error: '错误说明', note: '数据说明',
+  provider_id: '数据提供方', vendor: '数据供应商', source_id: '来源标识', source: '数据来源', skill: '采集能力', from_cache: '使用缓存', source_confidence: '来源置信度',
+  url: '详情链接', link: '详情链接', industry: '所属行业', concept: '所属概念', category: '分类', description: '说明', content: '内容',
+  main_net_inflow: '主力净流入', net_inflow: '净流入', buy_amount: '买入金额', sell_amount: '卖出金额', buy_ratio: '买入占比', sell_ratio: '卖出占比',
+  basic_eps: '基本每股收益', diluted_eps: '稀释每股收益', assets_debt_ratio: '资产负债率', business_cycle: '营业周期', calc_per_net_assets: '每股净资产',
+  operating_income_total: '营业总收入', parent_holder_net_profit: '归母净利润', sale_gross_margin: '销售毛利率', sale_net_interest_ratio: '销售净利率',
+  current_ratio: '流动比率', quick_ratio: '速动比率', conservative_quick_ratio: '保守速动比率', equity_ratio: '股东权益比率',
+  accounts_payable: '应付账款', accounts_receivable: '应收账款', accrued_wages: '应付职工薪酬', assets_total: '资产总额', capital_reserve: '资本公积',
+  act_cash_flow_net: '经营活动现金流净额', act_cash_inflow_total: '经营活动现金流入合计', act_cash_outflow_total: '经营活动现金流出合计',
+  cash_net_addition: '现金净增加额', financing_cash_flow_net: '筹资活动现金流净额', invest_cash_flow_net: '投资活动现金流净额',
+  common_profit_total: '综合收益总额', net_profit: '净利润', profit_total: '利润总额', operating_profit: '营业利润', operating_income: '营业收入',
+}
+
+const FIELD_WORDS: Record<string, string> = {
+  latest: '最新', recent: '近期', main: '主力', net: '净额', inflow: '流入', outflow: '流出', flow: '资金流', hot: '热度', news: '新闻',
+  buy: '买入', sell: '卖出', price: '价格', avg: '平均', average: '平均', max: '最高', min: '最低', current: '当前', previous: '前期',
+  company: '公司', stock: '股票', security: '证券', market: '市场', financial: '财务', revenue: '营收', profit: '利润', cash: '现金', debt: '负债',
+  date: '日期', time: '时间', year: '年度', quarter: '季度', rate: '比率', ratio: '占比', amount: '金额', volume: '数量', total: '合计', count: '数量',
+  id: '标识', status: '状态', source: '来源', provider: '提供方', data: '数据', detail: '明细', info: '资料', metric: '指标', value: '数值',
+  calculate: '', calc: '', index: '', basic: '基本', diluted: '稀释', eps: '每股收益', assets: '资产', asset: '资产', equity: '权益',
+  business: '营业', cycle: '周期', per: '每股', operating: '经营', activity: '活动', income: '收入', cost: '成本', costs: '成本',
+  parent: '归属母公司', holder: '股东', deduct: '扣非', yoy: '同比', growth: '增长', full: '全面摊薄', weighted: '加权平均', roe: '净资产收益率',
+  inventory: '存货', days: '天数', receive: '应收', accounts: '账款', sale: '销售', gross: '毛利', margin: '率', interest: '利息',
+  conservative: '保守', quick: '速动', common: '综合', continuing: '持续经营', minority: '少数股东', comprehensive: '综合收益',
+  payable: '应付', receivable: '应收', accrued: '应计', wages: '职工薪酬', reserve: '准备金', borrow: '借款', borrowing: '借款',
+  construction: '在建工程', contract: '合同', deferred: '递延', tax: '税费', fixed: '固定', intangible: '无形', goodwill: '商誉',
+  long: '长期', term: '期', short: '短期', loans: '借款', loan: '借款', other: '其他', capital: '资本', surplus: '盈余', undistributed: '未分配',
+  act: '经营活动', invest: '投资', financing: '筹资活动', addition: '增加额', ending: '期末',
+  equivalents: '等价物', amortization: '摊销', impairment: '减值', depreciation: '折旧', employees: '职工', payments: '支付', received: '收到',
+  expense: '费用', expenses: '费用', fee: '费用', manage: '管理', sales: '销售', research: '研发', development: '开发', taxes: '税费', surcharges: '附加',
+  associate: '联营企业', disposal: '处置', fair: '公允价值', changes: '变动', exchange: '汇兑', commission: '佣金', commissions: '佣金',
+}
+
+function fieldLabel(key: string): string {
+  const normalized = String(key || '').trim()
+  if (!normalized) return '数据项'
+  const direct = FIELD_LABELS[normalized] || FIELD_LABELS[normalized.toLowerCase()]
+  if (direct) return direct
+  if (Array.from(normalized).some((character) => character.charCodeAt(0) > 127)) return normalized
+  const words = normalized.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().split(/[_\s.-]+/).filter(Boolean)
+  const translated = words.map((word) => FIELD_WORDS[word] || '').filter(Boolean)
+  return translated.length ? translated.join('') : '扩展指标'
 }
 
 function formatDate(value: unknown): string {
@@ -401,6 +621,12 @@ function formatDate(value: unknown): string {
 function formatDateTime(value: string): string {
   const date = new Date(value)
   return Number.isNaN(date.valueOf()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function shortDate(value: string): string {
+  const normalized = formatDate(value)
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  return match ? `${match[2]}-${match[3]}` : normalized
 }
 
 function adjustLabel(value: unknown): string {

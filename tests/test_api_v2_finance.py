@@ -86,8 +86,13 @@ def _collector(*, query, symbols, snapshot_types, **kwargs):
                 "start_date": "20260413",
                 "end_date": "20260713",
                 "adjust": "",
-                "bar_count": 60,
-                "latest_bar": {"date": "2026-07-13", "close": 100.0},
+                "bar_count": 3,
+                "bars": [
+                    {"date": "2026-07-09", "open": 98.0, "high": 100.0, "low": 97.0, "close": 99.0, "volume": 1800, "amount": 178200},
+                    {"date": "2026-07-10", "open": 99.0, "high": 101.0, "low": 98.0, "close": 100.0, "volume": 2000, "amount": 200000},
+                    {"date": "2026-07-13", "open": 100.0, "high": 102.0, "low": 99.0, "close": 101.0, "volume": 2200, "amount": 222200},
+                ],
+                "latest_bar": {"date": "2026-07-13", "open": 100.0, "high": 102.0, "low": 99.0, "close": 101.0, "volume": 2200, "amount": 222200},
             },
         },
         "fundamental": {"info": {"股票简称": "贵州茅台"}, "banking_metrics": {}},
@@ -152,7 +157,9 @@ class ApiV2FinanceTests(unittest.TestCase):
         self.assertEqual(payload["symbol"], "600519")
         self.assertEqual(payload["name"], "贵州茅台")
         self.assertEqual(payload["sections"]["market"]["overview"]["latest_price"], 100.0)
-        self.assertEqual(payload["sections"]["kline"]["bar_count"], 60)
+        self.assertEqual(payload["sections"]["kline"]["bar_count"], 3)
+        self.assertEqual(len(payload["sections"]["kline"]["bars"]), 3)
+        self.assertEqual(payload["sections"]["kline"]["bars"][-1]["close"], 101.0)
         self.assertEqual(payload["sections"]["fundamental"]["info"]["股票简称"], "贵州茅台")
         self.assertEqual(payload["sections"]["events"]["event_keywords"], ["回购"])
         self.assertEqual(payload["quality_status"], "available")

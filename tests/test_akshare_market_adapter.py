@@ -15,6 +15,27 @@ class AkShareMarketAdapterTests(unittest.TestCase):
         AkShareMarketAdapter._spot_cache_df = None
         AkShareMarketAdapter._spot_cache_at = None
 
+    @patch("research_system.adapters.vendors.akshare_market_adapter.ak.stock_zh_a_daily")
+    def test_get_market_snapshot_keeps_complete_bar_series(self, mock_daily) -> None:
+        mock_daily.return_value = pd.DataFrame(
+            [
+                {"date": "2026-07-10", "open": 99.0, "high": 101.0, "low": 98.0, "close": 100.0, "volume": 1000},
+                {"date": "2026-07-11", "open": 100.0, "high": 103.0, "low": 99.0, "close": 102.0, "volume": 1200},
+                {"date": "2026-07-13", "open": 102.0, "high": 104.0, "low": 101.0, "close": 103.0, "volume": 1500},
+            ]
+        )
+
+        payload = self.adapter.get_market_snapshot(
+            symbol="600519",
+            start_date="20260701",
+            end_date="20260714",
+        )
+
+        self.assertEqual(payload["bar_count"], 3)
+        self.assertEqual(len(payload["bars"]), 3)
+        self.assertEqual(payload["bars"][0]["date"], "2026-07-10")
+        self.assertEqual(payload["latest_bar"], payload["bars"][-1])
+
     @patch("research_system.adapters.vendors.akshare_market_adapter.ak.stock_value_em")
     @patch("research_system.adapters.vendors.akshare_market_adapter.ak.stock_zh_a_spot")
     def test_get_market_overview_prefers_latest_bar_and_merges_valuation(self, mock_spot, mock_value) -> None:
