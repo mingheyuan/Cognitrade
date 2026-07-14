@@ -198,11 +198,24 @@ class ApiV2FinanceTests(unittest.TestCase):
         )
 
         self.assertEqual(buy.status_code, 201, buy.text)
-        self.assertEqual(buy.json()["status"], "filled")
+        buy_payload = buy.json()
+        self.assertEqual(buy_payload["status"], "filled")
+        self.assertAlmostEqual(
+            buy_payload["cash_effect"],
+            -(buy_payload["gross_amount"] + buy_payload["fees"]["total"]),
+            places=2,
+        )
         self.assertEqual(duplicate.status_code, 201, duplicate.text)
         self.assertTrue(duplicate.json()["idempotent_replay"])
         self.assertEqual(blocked_sell.status_code, 409, blocked_sell.text)
         self.assertEqual(blocked_sell.json()["error"]["code"], "insufficient_position")
+
+        after_buy = self.client.get("/api/v2/finance/paper/portfolio", headers=auth_headers()).json()
+        self.assertAlmostEqual(
+            after_buy["summary"]["cash"],
+            after_buy["account"]["initial_cash"] + buy_payload["cash_effect"],
+            places=2,
+        )
 
         with sqlite3.connect(self.database_path) as connection:
             connection.execute(
