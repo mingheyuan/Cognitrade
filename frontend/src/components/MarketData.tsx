@@ -206,30 +206,45 @@ function MarketDataContent({ data, onRefresh }: { data: MarketDataResponse; onRe
         )}
       </DataSection>
 
-      <div className="finance-adaptive-columns">
-        <div className="finance-column-stack">
-          <DataSection icon={<Activity size={18} />} kicker="CAPITAL FLOW" title="资金流与主力排名" quality={data.quality.capital_flow}>
-            <RecordPanel title="最新资金流" value={flow.latest_flow} />
-            <RecordPanel title="最近资金流" value={flow.recent_flows} wide />
-            <RecordPanel title="主力资金排名" value={flow.main_flow_rank} wide />
-          </DataSection>
-          <DataSection icon={<Clock3 size={18} />} kicker="EVENT TIMELINE" title="公司事件" quality={data.quality.events}>
-            <TagList title="事件关键词" value={events.event_keywords} />
-            <Timeline value={events.event_notices} />
-          </DataSection>
-        </div>
-        <div className="finance-column-stack">
-          <DataSection icon={<TrendingUp size={18} />} kicker="SENTIMENT" title="热度与新闻样本" quality={data.quality.sentiment}>
-            <RecordPanel title="热度排名趋势" value={sentiment.hot_rank_detail || sentiment.hot_rank_latest} wide />
+      <DataSection icon={<Activity size={18} />} kicker="CAPITAL FLOW" title="资金流与主力排名" quality={data.quality.capital_flow}>
+        <RecordPanel title="最新资金流" value={flow.latest_flow} wide />
+        <RecordPanel title="最近资金流" value={flow.recent_flows} wide />
+        <RecordPanel title="主力资金排名" value={flow.main_flow_rank} wide />
+      </DataSection>
+
+      <DataSection icon={<TrendingUp size={18} />} kicker="MARKET SIGNALS" title="市场热度与新闻" quality={data.quality.sentiment}>
+        <div className="market-signal-summary-grid">
+          <RecordPanel title="热度排名趋势" value={sentiment.hot_rank_detail || sentiment.hot_rank_latest} />
+          <article className="record-panel market-keyword-panel">
             <TagList title="热门关键词" value={sentiment.hot_keywords} />
-            <RecordPanel title="新闻样本" value={sentiment.news_samples} wide />
-          </DataSection>
-          <DataSection icon={<Newspaper size={18} />} kicker="DISCLOSURES" title="最近 30 天公告" quality={data.quality.notice}>
-            <div className="notice-count"><strong>{formatValue(notices.notice_count)}</strong><span>条公告</span><small>{formatDate(notices.window_start)} — {formatDate(notices.window_end)}</small></div>
-            <RecordPanel title="公告列表" value={notices.recent_notices} wide />
-          </DataSection>
+          </article>
         </div>
-      </div>
+        <RecordPanel title="新闻样本" value={sentiment.news_samples} wide />
+      </DataSection>
+
+      <DataSection icon={<Newspaper size={18} />} kicker="DISCLOSURES & EVENTS" title="公司事件与公告">
+        <div className="disclosure-overview">
+          <div className="notice-count">
+            <strong>{formatValue(notices.notice_count)}</strong>
+            <span>条公告</span>
+            <small>{formatDate(notices.window_start)} — {formatDate(notices.window_end)}</small>
+          </div>
+          <div className="disclosure-quality-pills" aria-label="信息披露数据状态">
+            {data.quality.events && <span className={`quality-pill quality-pill--${data.quality.events}`}>事件 · {qualityLabel(data.quality.events)}</span>}
+            {data.quality.notice && <span className={`quality-pill quality-pill--${data.quality.notice}`}>公告 · {qualityLabel(data.quality.notice)}</span>}
+          </div>
+        </div>
+        <div className="disclosure-event-summary">
+          <div className="disclosure-keyword-panel">
+            <TagList title="事件关键词" value={events.event_keywords} />
+          </div>
+          <div className="disclosure-timeline-panel">
+            <h3><Clock3 size={14} aria-hidden="true" />事件时间线</h3>
+            <Timeline value={events.event_notices} />
+          </div>
+        </div>
+        <RecordPanel title="最近 30 天公告" value={notices.recent_notices} wide />
+      </DataSection>
 
       <DataSection icon={<Landmark size={18} />} kicker="DRAGON & TIGER LIST" title="龙虎榜" quality={data.quality.lhb}>
         <div className="lhb-summary">
