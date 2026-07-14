@@ -414,6 +414,10 @@ function RecordPanel({ title, value, wide = false }: { title: string; value: unk
 }
 
 function RecordTable({ value, limit = 12 }: { value: unknown; limit?: number }) {
+  const unavailableMessage = dataUnavailableMessage(value)
+  if (unavailableMessage) {
+    return <div className="data-unavailable"><AlertCircle size={14} aria-hidden="true" /><span>{unavailableMessage}</span></div>
+  }
   const records = normalizeRecords(value)
   if (!records.length) return <p className="data-empty">数据源暂未返回可展示记录</p>
   if (records.length === 1) {
@@ -533,6 +537,7 @@ function formatValue(value: unknown): string {
     return formatNestedValue(value, 0)
   }
   const text = String(value)
+  if (isTechnicalErrorMessage(text)) return '数据暂不可用，请稍后刷新'
   return VALUE_LABELS[text.toLowerCase()] || text
 }
 
@@ -552,7 +557,22 @@ function formatNestedValue(value: unknown, depth: number): string {
   if (typeof value === 'number') return value.toLocaleString('zh-CN', { maximumFractionDigits: 4 })
   if (typeof value === 'boolean') return value ? '是' : '否'
   const text = String(value)
+  if (isTechnicalErrorMessage(text)) return '数据暂不可用，请稍后刷新'
   return VALUE_LABELS[text.toLowerCase()] || text
+}
+
+function dataUnavailableMessage(value: unknown): string | null {
+  const record = asRecord(value)
+  if (!record) return null
+  const availability = String(first(record, 'availability', 'status') || '').toLowerCase()
+  const detail = String(first(record, 'note', 'error', 'degrade_reason') || '')
+  if (!['degraded', 'data_gap', 'assumption_only'].includes(availability) && !isTechnicalErrorMessage(detail)) return null
+  if (/individual_info_unavailable/i.test(detail)) return '公司资料暂不可用，请稍后刷新'
+  return '该项数据暂不可用，请稍后刷新'
+}
+
+function isTechnicalErrorMessage(value: string): boolean {
+  return /(?:[a-z0-9]+_){1,}[a-z0-9]*unavailable|connection aborted|remote.?disconnected|provider_failure|traceback|(?:network|connection|read) timeout|http\s*\d{3}/i.test(value)
 }
 
 const VALUE_LABELS: Record<string, string> = {

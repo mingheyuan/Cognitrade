@@ -7041,6 +7041,26 @@ select:focus-visible {
   text-align: center;
 }
 
+.data-unavailable {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 12px;
+  border: 1px dashed rgba(221, 168, 92, 0.2);
+  border-radius: 7px;
+  background: var(--warning-soft);
+  color: var(--muted);
+  font-size: 9px;
+  text-align: center;
+}
+
+.data-unavailable svg {
+  flex: 0 0 auto;
+  color: var(--warning);
+}
+
 .banking-block {
   display: grid;
   gap: 12px;
