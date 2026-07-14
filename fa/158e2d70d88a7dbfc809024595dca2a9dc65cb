@@ -1,0 +1,23 @@
+frontend/src/components/MarketData.tsx
+  s_a6a8a3a6f43b3c::t_fc285917d8f3b0 209-238,240-242,244,246-247
+frontend/src/styles.css
+  s_a6a8a3a6f43b3c::t_136e698c165c7d 6915-6916,6922,6926-6985,7734-7738
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "fa158e2d70d88a7dbfc809024595dca2a9dc65cb",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
