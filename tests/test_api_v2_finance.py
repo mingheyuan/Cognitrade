@@ -86,8 +86,13 @@ def _collector(*, query, symbols, snapshot_types, **kwargs):
                 "start_date": "20260413",
                 "end_date": "20260713",
                 "adjust": "",
-                "bar_count": 60,
-                "latest_bar": {"date": "2026-07-13", "close": 100.0},
+                "bar_count": 3,
+                "bars": [
+                    {"date": "2026-07-09", "open": 98.0, "high": 100.0, "low": 97.0, "close": 99.0, "volume": 1800, "amount": 178200},
+                    {"date": "2026-07-10", "open": 99.0, "high": 101.0, "low": 98.0, "close": 100.0, "volume": 2000, "amount": 200000},
+                    {"date": "2026-07-13", "open": 100.0, "high": 102.0, "low": 99.0, "close": 101.0, "volume": 2200, "amount": 222200},
+                ],
+                "latest_bar": {"date": "2026-07-13", "open": 100.0, "high": 102.0, "low": 99.0, "close": 101.0, "volume": 2200, "amount": 222200},
             },
         },
         "fundamental": {"info": {"股票简称": "贵州茅台"}, "banking_metrics": {}},
@@ -152,7 +157,9 @@ class ApiV2FinanceTests(unittest.TestCase):
         self.assertEqual(payload["symbol"], "600519")
         self.assertEqual(payload["name"], "贵州茅台")
         self.assertEqual(payload["sections"]["market"]["overview"]["latest_price"], 100.0)
-        self.assertEqual(payload["sections"]["kline"]["bar_count"], 60)
+        self.assertEqual(payload["sections"]["kline"]["bar_count"], 3)
+        self.assertEqual(len(payload["sections"]["kline"]["bars"]), 3)
+        self.assertEqual(payload["sections"]["kline"]["bars"][-1]["close"], 101.0)
         self.assertEqual(payload["sections"]["fundamental"]["info"]["股票简称"], "贵州茅台")
         self.assertEqual(payload["sections"]["events"]["event_keywords"], ["回购"])
         self.assertEqual(payload["quality_status"], "available")
@@ -198,11 +205,24 @@ class ApiV2FinanceTests(unittest.TestCase):
         )
 
         self.assertEqual(buy.status_code, 201, buy.text)
-        self.assertEqual(buy.json()["status"], "filled")
+        buy_payload = buy.json()
+        self.assertEqual(buy_payload["status"], "filled")
+        self.assertAlmostEqual(
+            buy_payload["cash_effect"],
+            -(buy_payload["gross_amount"] + buy_payload["fees"]["total"]),
+            places=2,
+        )
         self.assertEqual(duplicate.status_code, 201, duplicate.text)
         self.assertTrue(duplicate.json()["idempotent_replay"])
         self.assertEqual(blocked_sell.status_code, 409, blocked_sell.text)
         self.assertEqual(blocked_sell.json()["error"]["code"], "insufficient_position")
+
+        after_buy = self.client.get("/api/v2/finance/paper/portfolio", headers=auth_headers()).json()
+        self.assertAlmostEqual(
+            after_buy["summary"]["cash"],
+            after_buy["account"]["initial_cash"] + buy_payload["cash_effect"],
+            places=2,
+        )
 
         with sqlite3.connect(self.database_path) as connection:
             connection.execute(

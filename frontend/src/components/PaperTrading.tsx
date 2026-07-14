@@ -91,7 +91,8 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
         quantity,
         client_order_id: crypto.randomUUID(),
       })
-      setSuccess(`${result.name} ${side === 'buy' ? '买入' : '卖出'} ${result.quantity} 股已模拟成交，成交价 ${formatMoney(result.fill_price)}。`)
+      const cashAction = result.side === 'buy' ? '实际占用资金' : '实际回笼资金'
+      setSuccess(`${result.name} ${result.side === 'buy' ? '买入' : '卖出'} ${result.quantity} 股已模拟成交，成交价 ${formatMoney(result.fill_price)}；${cashAction} ${formatMoney(Math.abs(result.cash_effect))}，其中费用 ${formatMoney(result.fees.total)}。`)
       await Promise.all([refresh(true), loadQuote(result.symbol)])
     } catch (orderError) {
       setError(apiErrorMessage(orderError))
@@ -125,6 +126,15 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
     document.querySelector<HTMLElement>('#paper-order-ticket')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 
+  const selectSide = (nextSide: 'buy' | 'sell') => {
+    setSide(nextSide)
+    if (nextSide === 'buy') {
+      setQuantity((current) => Math.max(100, Math.ceil(current / 100) * 100))
+    }
+  }
+
+  const quantityIsValid = Number.isInteger(quantity)
+    && (side === 'buy' ? quantity >= 100 && quantity % 100 === 0 : quantity > 0)
   const estimate = estimateOrder(quote?.latest_price, side, quantity)
 
   return (
@@ -151,7 +161,7 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
         <>
           <section className="paper-account-grid">
             <AccountMetric icon={<WalletCards size={18} />} label="账户权益" value={formatMoney(portfolio.summary.equity)} note={`第 ${portfolio.account.generation} 代模拟账户`} />
-            <AccountMetric icon={<Landmark size={18} />} label="可用资金" value={formatMoney(portfolio.summary.cash)} note={`初始 ${formatMoney(portfolio.account.initial_cash)}`} />
+            <AccountMetric icon={<Landmark size={18} />} label="可用资金" value={formatMoney(portfolio.summary.cash)} note={`净资金变动 ${formatSignedMoney(portfolio.summary.cash - portfolio.account.initial_cash)}`} />
             <AccountMetric icon={<ArrowDownToLine size={18} />} label="持仓市值" value={formatMoney(portfolio.summary.market_value)} note={`${portfolio.summary.position_count} 只持仓`} />
             <AccountMetric icon={<ArrowUpFromLine size={18} />} label="累计盈亏" value={formatSignedMoney(portfolio.summary.total_pnl)} note={formatPercent(portfolio.summary.total_return_pct)} tone={portfolio.summary.total_pnl >= 0 ? 'up' : 'down'} />
           </section>
@@ -160,11 +170,11 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
             <form id="paper-order-ticket" className="paper-order-ticket" onSubmit={submitOrder}>
               <header><div><span className="section-kicker">ORDER TICKET</span><h2>模拟委托</h2></div><span className="quality-pill quality-pill--available">即时成交</span></header>
               <div className="order-side-switch" role="group" aria-label="交易方向">
-                <button type="button" className={side === 'buy' ? 'is-active is-buy' : ''} onClick={() => setSide('buy')}>买入</button>
-                <button type="button" className={side === 'sell' ? 'is-active is-sell' : ''} onClick={() => setSide('sell')}>卖出</button>
+                <button type="button" className={side === 'buy' ? 'is-active is-buy' : ''} onClick={() => selectSide('buy')}>买入</button>
+                <button type="button" className={side === 'sell' ? 'is-active is-sell' : ''} onClick={() => selectSide('sell')}>卖出</button>
               </div>
               <label><span>股票代码或名称</span><div className="quote-input-row"><input value={symbol} onChange={(event) => { setSymbol(event.target.value); setQuote(null) }} placeholder="600519" required /><button type="button" onClick={() => void loadQuote(symbol, true)} disabled={quoteLoading || !symbol.trim()}>{quoteLoading ? <RefreshCw className="is-spinning" size={14} /> : <Search size={14} />}取价</button></div></label>
-              <label><span>委托数量</span><div className="quantity-input-row"><input type="number" min="1" step="100" value={quantity} onChange={(event) => setQuantity(Math.max(Number(event.target.value) || 0, 0))} required /><span>股</span></div></label>
+              <label><span>委托数量</span><div className="quantity-input-row"><input type="number" min={side === 'buy' ? 100 : 1} step={side === 'buy' ? 100 : 1} value={quantity} onChange={(event) => setQuantity(Math.max(Number(event.target.value) || 0, 0))} inputMode="numeric" aria-describedby="paper-order-rule" required /><span>股</span></div></label>
               <div className="quantity-presets">
                 {[100, 500, 1000].map((value) => <button type="button" key={value} onClick={() => setQuantity(value)}>{value} 股</button>)}
                 {side === 'sell' && portfolio.positions.find((position) => position.symbol === symbol)?.available_quantity ? <button type="button" onClick={() => setQuantity(portfolio.positions.find((position) => position.symbol === symbol)!.available_quantity)}>全部可卖</button> : null}
@@ -179,11 +189,11 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
                 <div><dt>预计费用</dt><dd>{formatMoney(estimate.fees)}</dd></div>
                 <div><dt>{side === 'buy' ? '预计占用资金' : '预计回笼资金'}</dt><dd>{formatMoney(estimate.total)}</dd></div>
               </dl>
-              <button className={`paper-submit-button paper-submit-button--${side}`} disabled={submitting || !quote || quantity <= 0}>
+              <button className={`paper-submit-button paper-submit-button--${side}`} disabled={submitting || !quote || !quantityIsValid}>
                 {submitting ? <RefreshCw className="is-spinning" size={15} /> : side === 'buy' ? <ArrowDownToLine size={15} /> : <ArrowUpFromLine size={15} />}
                 {submitting ? '服务端撮合中' : `确认${side === 'buy' ? '买入' : '卖出'} ${quantity || 0} 股`}
               </button>
-              <p className="order-rule-note"><Clock3 size={13} />买入需为 100 股整数倍；当日买入次日可卖；卖出清仓允许零股。</p>
+              <p id="paper-order-rule" className="order-rule-note"><Clock3 size={13} />买入需为 100 股整数倍；当日买入次日可卖；卖出清仓允许零股。</p>
             </form>
 
             <section className="paper-positions-card">
@@ -195,8 +205,8 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
           </div>
 
           <section className="paper-orders-card">
-            <header><div><span className="section-kicker">ORDER HISTORY</span><h2>成交记录</h2></div><small>服务端持久化 · 最近 {orders.length} 笔</small></header>
-            {orders.length ? <div className="finance-table-scroll"><table className="finance-table"><thead><tr><th>时间</th><th>方向</th><th>证券</th><th>数量</th><th>成交价</th><th>成交额</th><th>费用</th><th>已实现盈亏</th><th>状态</th></tr></thead><tbody>{orders.map((order) => <tr key={order.order_id}><td>{formatDateTime(order.created_at)}</td><td><span className={`order-side-label order-side-label--${order.side}`}>{order.side === 'buy' ? '买入' : '卖出'}</span></td><td><strong>{order.name}</strong><small>{order.symbol}</small></td><td>{order.quantity.toLocaleString()}</td><td>{formatMoney(order.fill_price)}</td><td>{formatMoney(order.gross_amount)}</td><td>{formatMoney(order.fees.total)}</td><td className={(order.realized_pnl || 0) >= 0 ? 'number-up' : 'number-down'}>{order.realized_pnl === null || order.realized_pnl === undefined ? '—' : formatSignedMoney(order.realized_pnl)}</td><td>{order.status === 'filled' ? '已成交' : order.status}</td></tr>)}</tbody></table></div> : <div className="paper-empty paper-empty--compact"><Clock3 size={22} /><span>还没有模拟成交记录</span></div>}
+            <header><div><span className="section-kicker">ORDER HISTORY</span><h2>成交记录</h2></div><small>可用资金 = 初始资金 + 累计资金变动 · 最近 {orders.length} 笔</small></header>
+            {orders.length ? <div className="finance-table-scroll"><table className="finance-table"><thead><tr><th>时间</th><th>方向</th><th>证券</th><th>数量</th><th>成交价</th><th>证券成交额</th><th>费用</th><th>资金变动</th><th>已实现盈亏</th><th>状态</th></tr></thead><tbody>{orders.map((order) => <tr key={order.order_id}><td>{formatDateTime(order.created_at)}</td><td><span className={`order-side-label order-side-label--${order.side}`}>{order.side === 'buy' ? '买入' : '卖出'}</span></td><td><strong>{order.name}</strong><small>{order.symbol}</small></td><td>{order.quantity.toLocaleString()}</td><td>{formatMoney(order.fill_price)}</td><td>{formatMoney(order.gross_amount)}</td><td>{formatMoney(order.fees.total)}</td><td className={order.cash_effect >= 0 ? 'number-up' : 'number-down'}>{formatSignedMoney(order.cash_effect)}</td><td className={(order.realized_pnl || 0) >= 0 ? 'number-up' : 'number-down'}>{order.realized_pnl === null || order.realized_pnl === undefined ? '—' : formatSignedMoney(order.realized_pnl)}</td><td>{order.status === 'filled' ? '已成交' : order.status}</td></tr>)}</tbody></table></div> : <div className="paper-empty paper-empty--compact"><Clock3 size={22} /><span>还没有模拟成交记录</span></div>}
           </section>
         </>
       )}

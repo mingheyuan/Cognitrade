@@ -72,7 +72,7 @@ class UziSourceSnapshotSkill:
         if self.snapshot_type == "kline":
             payload = AkShareMarketAdapter().get_market_snapshot(
                 symbol=symbol,
-                start_date=(date.today() - timedelta(days=90)).strftime("%Y%m%d"),
+                start_date=(date.today() - timedelta(days=365)).strftime("%Y%m%d"),
                 end_date=date.today().strftime("%Y%m%d"),
             )
             return {"history": payload, "availability": "available" if payload else "data_gap"}

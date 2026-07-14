@@ -5,6 +5,7 @@ import { RunInspector } from './components/RunInspector'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
 import type { ViewId } from './data'
+import type { MarketDataViewState } from './components/MarketData'
 import type { ResearchIntent } from './research-contracts'
 
 const Workbench = lazy(() => import('./components/Workbench').then((module) => ({ default: module.Workbench })))
@@ -24,6 +25,12 @@ function App() {
     clearError,
   } = useCognitrade()
   const [activeView, setActiveView] = useState<ViewId>('workbench')
+  const [marketDataState, setMarketDataState] = useState<MarketDataViewState>({
+    query: '600519',
+    data: null,
+    loading: false,
+    error: '',
+  })
   const [selectedEvidence, setSelectedEvidence] = useState('')
   const [toast, setToast] = useState('')
   const toastTimer = useRef<number | undefined>(undefined)
@@ -92,7 +99,7 @@ function App() {
     if (activeView === 'overview') {
       return <Overview onSubmit={handleResearch} onOpenWorkbench={() => setActiveView('workbench')} onOpenRuns={() => setActiveView('runs')} onOpenRun={openRun} />
     }
-    if (activeView === 'market') return <MarketData />
+    if (activeView === 'market') return <MarketData state={marketDataState} setState={setMarketDataState} />
     if (activeView === 'paper') return <PaperTrading onOpenMarketData={() => setActiveView('market')} />
     if (activeView === 'screening') return <Screening onSubmit={handleResearch} onOpenRun={openRun} />
     if (activeView === 'methodology') return <Methodology />

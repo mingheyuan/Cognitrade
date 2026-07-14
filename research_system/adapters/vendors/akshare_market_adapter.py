@@ -32,15 +32,19 @@ class AkShareMarketAdapter:
         )
         if hist_df.empty:
             raise ValueError(f"no market data returned for symbol {symbol}")
-        latest = hist_df.iloc[-1].to_dict()
+        bars = [
+            {str(key): normalize_value(value) for key, value in row.items()}
+            for row in hist_df.to_dict("records")
+        ]
         return {
             "symbol": symbol,
             "normalized_symbol": normalized_symbol,
             "start_date": start_date,
             "end_date": end_date,
             "adjust": adjust,
-            "latest_bar": {str(k): normalize_value(v) for k, v in latest.items()},
-            "bar_count": int(len(hist_df)),
+            "bars": bars,
+            "latest_bar": dict(bars[-1]),
+            "bar_count": len(bars),
         }
 
     def get_market_overview(self, *, symbol: str, latest_bar: dict[str, Any] | None = None) -> dict[str, Any]:

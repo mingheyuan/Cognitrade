@@ -168,12 +168,17 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
         <section className="dashboard-panel recent-runs-panel">
           <div className="panel-heading"><div><span className="section-kicker">RECENT RUNS</span><h2>最近运行</h2></div><button className="text-button" onClick={onOpenRuns}>全部运行<ChevronRight size={13} /></button></div>
           <div className="recent-run-list">
-            {latestRuns.map((run) => (
-              <button key={run.id} className="recent-run-row" onClick={() => onOpenRun(run.id)}>
-                <span className={`run-icon run-icon--${statusTone(run.status)}`}>{['completed', 'completed_partial'].includes(run.status) ? <CheckCircle2 size={14} /> : run.status === 'running' ? <Activity size={14} /> : <CircleAlert size={14} />}</span>
-                <span><strong>{run.title}</strong><small>{run.intentLabel} · {run.id}</small></span><time>{run.time}</time>
-              </button>
-            ))}
+            {latestRuns.map((run) => {
+              const tone = statusTone(run.status)
+              const title = run.title.replace(/^(completed(?:_partial)?|running|failed):\s*/i, '')
+              return (
+                <button key={run.id} className={`recent-run-item recent-run-item--${tone}`} onClick={() => onOpenRun(run.id)} aria-label={`打开运行 ${title}`}>
+                  <span className={`run-list-icon ${tone === 'running' ? 'is-running' : tone === 'review' ? 'is-review' : ''}`}>{['completed', 'completed_partial'].includes(run.status) ? <CheckCircle2 size={14} /> : isActiveStatus(run.status) ? <Activity size={14} /> : <CircleAlert size={14} />}</span>
+                  <span className="recent-run-copy"><strong>{title}</strong><small>{run.intentLabel} · {run.id}</small></span>
+                  <span className="recent-run-time"><strong>{run.statusLabel}</strong><small>{run.time}</small></span>
+                </button>
+              )
+            })}
             {!latestRuns.length && <div className="inline-empty-state"><Database size={16} />暂无运行记录。</div>}
           </div>
         </section>
