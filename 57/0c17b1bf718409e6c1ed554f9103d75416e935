@@ -1,0 +1,29 @@
+domain_packs/finance_ashare/skills/uzi_source_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_cd77924a5a32ff 75
+frontend/src/styles.css
+  s_a6a8a3a6f43b3c::t_6d1644fde9c173 6636,6638,6641,6644-6645,6648,6650-6659,6662,6667-6673,6676-6682,6684-6686,6689-6693,6696-6698,6701-6703,6706-6729,6732-6744,6746-6747,6750-6822,6866-6903,6907-6912,6914-6915,6921-6940,7653,7661-7663,7691,7696-7699,7761-7767
+research_system/adapters/vendors/akshare_market_adapter.py
+  s_a6a8a3a6f43b3c::t_0210984d8ded76 35-38,45-47
+tests/test_akshare_market_adapter.py
+  s_a6a8a3a6f43b3c::t_d622a375ff9052 18-38
+tests/test_api_v2_finance.py
+  s_a6a8a3a6f43b3c::t_ca50ba4f3fde6c 89-95,160-162
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "570c17b1bf718409e6c1ed554f9103d75416e935",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
