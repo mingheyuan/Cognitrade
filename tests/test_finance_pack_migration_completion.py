@@ -216,9 +216,9 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     headers=headers,
                 ).json()
 
-        self.assertEqual(prior["status"], "completed")
+            self.assertEqual(prior["status"], "completed_partial")
         self.assertEqual(review_response.status_code, 200, review_response.text)
-        self.assertEqual(review_response.json()["status"], "completed")
+        self.assertEqual(review_response.json()["status"], "completed_partial")
         review_artifact = next(
             artifact for artifact in replay["artifacts"] if artifact["artifact_type"] == "thesis_review"
         )
@@ -336,13 +336,12 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     replay = client.get(f"/api/v1/runs/{run_id}/replay", headers=headers)
                     self.assertEqual(replay.status_code, 200, replay.text)
                     payload = replay.json()
-                    self.assertEqual(payload["snapshot"]["status"], "completed")
+                    self.assertEqual(payload["snapshot"]["status"], "completed_partial")
                     artifact_types = {row["artifact_type"] for row in payload["artifacts"]}
                     self.assertTrue(
                         {
                             specialist_artifact_type,
                             "research_report",
-                            "main_agent_synthesis",
                             "assistant_message",
                         }.issubset(artifact_types),
                             (run_id, artifact_types),

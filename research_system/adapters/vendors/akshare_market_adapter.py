@@ -11,6 +11,7 @@ from research_system.adapters.vendors.akshare_utils import (
     normalize_ashare_symbol,
     normalize_value,
 )
+from research_system.adapters.vendors.provider_execution import classify_provider_exception, failure_facts
 
 
 class AkShareMarketAdapter:
@@ -60,7 +61,7 @@ class AkShareMarketAdapter:
             valuation=valuation,
         )
         normalized["spot_found"] = bool(spot)
-        normalized["valuation_found"] = bool(valuation)
+        normalized["valuation_found"] = bool(valuation) and str(valuation.get("availability") or "available") == "available"
         return normalized
 
     def _spot_from_latest_bar(self, *, normalized_symbol: str, latest_bar: dict[str, Any] | None) -> dict[str, Any]:
@@ -121,7 +122,7 @@ class AkShareMarketAdapter:
                 delay_seconds=0.5,
             )
         except Exception as exc:
-            return {"availability": "degraded", "note": f"stock_value_unavailable: {exc}"}
+            return failure_facts(classify_provider_exception(exc))
         if valuation_df.empty:
             return {}
         latest = valuation_df.iloc[-1].to_dict()

@@ -7,6 +7,7 @@ import pandas as pd
 import requests
 
 from research_system.adapters.vendors.akshare_utils import call_with_retry, coerce_numeric, normalize_ashare_symbol, normalize_value
+from research_system.adapters.vendors.provider_execution import classify_provider_exception, failure_facts
 
 
 class AkShareFundamentalAdapter:
@@ -93,7 +94,7 @@ class AkShareFundamentalAdapter:
         try:
             info_df = call_with_retry(lambda: ak.stock_individual_info_em(symbol=symbol), retries=2, delay_seconds=0.5)
         except Exception as exc:
-            return {"availability": "degraded", "note": f"individual_info_unavailable: {exc}"}
+            return failure_facts(classify_provider_exception(exc))
 
         info_payload: dict[str, Any] = {}
         if info_df.empty:

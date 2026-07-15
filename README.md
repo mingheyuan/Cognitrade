@@ -255,6 +255,10 @@ COGNITRADE_PROVIDERS_NOTICE=
 COGNITRADE_PROVIDERS_SECTOR=
 COGNITRADE_PROVIDERS_CAPITAL_FLOW=
 COGNITRADE_PROVIDERS_SENTIMENT=
+COGNITRADE_PROVIDERS_LHB=
+COGNITRADE_PROVIDERS_EVENTS=
+COGNITRADE_PROVIDERS_POLICY=
+TUSHARE_TOKEN=
 
 DEFAULT_TIMEZONE=Asia/Shanghai
 LOG_LEVEL=INFO
@@ -275,6 +279,7 @@ COGNITRADE_API_ALLOW_UNAUTHENTICATED=false
 COGNITRADE_API_CORS_ORIGINS=http://127.0.0.1:4173,http://localhost:4173
 COGNITRADE_API_HOST=127.0.0.1
 COGNITRADE_API_PORT=8000
+COGNITRADE_PAPER_ENFORCE_MARKET_HOURS=true
 ```
 
 说明：
@@ -283,7 +288,10 @@ COGNITRADE_API_PORT=8000
 - 不配置 `QDRANT_URL` 时，会优先使用本地文件模式
 - 长期 memory 当前统一落在本地 `workspace/memory/`，包含 `records.jsonl`、`memory_summary.md` 和 `MEMORY.md`
 - `ROUTER_*` 用于 Redis 动态路由控制面；未配置时会退回本地 `router_defaults.yml`
-- `COGNITRADE_PROVIDERS_*` 用于 provider chain 覆盖，优先级高于默认 `provider_policy.yml`
+- `COGNITRADE_PROVIDERS_*` 用于 provider chain 覆盖，优先级高于默认 `provider_policy.yml`；行情默认按 AkShare → BaoStock 执行真实回退
+- 配置 `TUSHARE_TOKEN` 后，基本面在 AkShare 不可用时会自动回退到 TuShare；未配置密钥时不会把 TuShare 放入执行链
+- Finance 快照统一输出 `available / no_data / provider_unavailable / rate_limited / parse_failed`，上游异常原文不会直接返回前端
+- `COGNITRADE_PAPER_ENFORCE_MARKET_HOURS=true` 使用 XSHG 交易日历与上海连续竞价时段约束模拟成交
 - `COGNITRADE_API_TOKEN` 默认必填；API 会从 `.env` 和进程环境读取，环境变量优先
 - `COGNITRADE_API_PRINCIPALS` 可配置 JSON 主体映射，例如
   `[{"token":"...","actor_id":"analyst-a","user_id":"user-a","tenant_id":"tenant-a","roles":["user"]}]`；配置后主体身份以映射为准，不能由 `X-User-ID` 或 `X-Tenant-ID` 改写

@@ -789,7 +789,7 @@ class UziFinancePackTests(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 200, response.text)
                 payload = response.json()
-                self.assertEqual(payload["status"], "completed")
+                self.assertEqual(payload["status"], "completed_partial")
                 run_id = payload["run_id"]
                 detail = client.get(
                     f"/api/v1/runs/{run_id}",
@@ -820,7 +820,6 @@ class UziFinancePackTests(unittest.TestCase):
                         "investor_panel_review",
                         "risk_scan",
                         "report_presentation",
-                        "main_agent_synthesis",
                         "assistant_message",
                     }.issubset(types)
                 )
@@ -829,7 +828,16 @@ class UziFinancePackTests(unittest.TestCase):
                 self.assertTrue(
                     all(
                         row["content"]["quality_status"]
-                        in {"available", "degraded", "data_gap", "assumption_only"}
+                        in {
+                            "available",
+                            "degraded",
+                            "data_gap",
+                            "assumption_only",
+                            "no_data",
+                            "provider_unavailable",
+                            "rate_limited",
+                            "parse_failed",
+                        }
                         for row in snapshot_rows
                     )
                 )

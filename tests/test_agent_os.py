@@ -19,6 +19,8 @@ class AgentOSTests(unittest.TestCase):
                 "runs_root": root / "runs",
                 "memory_root": root / "memory",
                 "domain_packs_root": repository_root / "domain_packs",
+                "openai_api_key": None,
+                "openai_base_url": None,
             }
         )
 
@@ -40,7 +42,7 @@ class AgentOSTests(unittest.TestCase):
                     )
                 )
 
-            self.assertEqual(response.status, "completed")
+            self.assertEqual(response.status, "completed_partial")
             self.assertEqual(response.mode, "graph")
             events = read_jsonl(
                 self._settings(repository_root, root).runs_root

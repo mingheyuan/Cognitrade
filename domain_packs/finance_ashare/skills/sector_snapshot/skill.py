@@ -6,6 +6,7 @@ from typing import Any
 from research_system.adapters.vendors.akshare_catalyst_adapter import AkShareCatalystAdapter
 from research_system.adapters.vendors.fallback_merge import merge_provider_facts
 from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
+from research_system.adapters.vendors.provider_execution import classify_provider_exception, failure_facts
 from research_system.adapters.vendors.akshare_sector_adapter import AkShareSectorAdapter
 from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
 
@@ -91,15 +92,20 @@ class SectorSnapshotSkill:
                 fallback_applied=bool(facts.get("_fallback_applied")),
                 field_sources={str(key): str(value) for key, value in (facts.get("_field_sources") or {}).items()},
                 missing_fields=[str(item) for item in (facts.get("_missing_fields") or [])],
-                source_confidence="medium",
+                source_confidence=(
+                    self.provider_registry.source_confidence(provider_chain[0])
+                    if self.provider_registry and provider_chain
+                    else "medium"
+                ),
                 source_trace=provider_trace,
             ).model_dump(mode="json")
         except Exception as exc:
+            failure = classify_provider_exception(exc)
             return VerifiedSnapshot(
                 snapshot_type="sector",
                 query=query,
                 snapshot_date=snapshot_date,
-                facts={"availability": "degraded", "note": str(exc)},
+                facts=failure_facts(failure),
                 source=SnapshotSource(
                     skill=self.skill_name,
                     vendor=self.adapter.vendor_name,
@@ -120,7 +126,7 @@ class SectorSnapshotSkill:
                 ),
                 source_trace=provider_trace + [self._provider_trace_entry("akshare_sector", f"error:{exc.__class__.__name__}")],
                 degraded=True,
-                degrade_reason="vendor_failure",
+                degrade_reason=failure,
             ).model_dump(mode="json")
 
     def _provider_trace_entry(self, provider_id: str, status: str) -> dict[str, str]:
@@ -137,11 +143,11 @@ class SectorSnapshotSkill:
             try:
                 sample["recent_news"] = self.catalyst_adapter.get_symbol_news(symbol=symbol, limit=2)
             except Exception as exc:
-                sample["recent_news"] = [{"availability": "degraded", "note": str(exc)}]
+                sample["recent_news"] = [failure_facts(classify_provider_exception(exc))]
             try:
                 sample["recent_reports"] = self.catalyst_adapter.get_symbol_research_reports(symbol=symbol, limit=2)
             except Exception as exc:
-                sample["recent_reports"] = [{"availability": "degraded", "note": str(exc)}]
+                sample["recent_reports"] = [failure_facts(classify_provider_exception(exc))]
             samples.append(sample)
         return samples
 

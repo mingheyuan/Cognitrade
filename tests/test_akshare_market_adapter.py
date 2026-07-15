@@ -101,11 +101,11 @@ class AkShareMarketAdapterTests(unittest.TestCase):
         payload = self.adapter.get_market_overview(symbol="000001")
 
         self.assertTrue(payload["spot_found"])
-        self.assertTrue(payload["valuation_found"])
+        self.assertFalse(payload["valuation_found"])
         self.assertAlmostEqual(payload["latest_price"] or 0.0, 10.16)
         self.assertIsNone(payload["pb"])
-        self.assertEqual(payload["valuation"]["availability"], "degraded")
-        self.assertIn("stock_value_unavailable", payload["valuation"]["note"])
+        self.assertEqual(payload["valuation"]["availability"], "provider_unavailable")
+        self.assertIn("暂时不可用", payload["valuation"]["message"])
 
     @patch("research_system.adapters.vendors.akshare_market_adapter.ak.stock_zh_a_spot")
     def test_spot_dataframe_uses_short_ttl_cache(self, mock_spot) -> None:

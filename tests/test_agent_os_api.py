@@ -17,7 +17,7 @@ from research_system.runtime.storage.jsonl import read_jsonl
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.schemas.execution_graph import ExecutionGraph
 from research_system.schemas.execution_runtime import ExecutionRunResult, ExecutionRunSnapshot
-from research_system.schemas.protocol import RequestEnvelope
+from research_system.schemas.protocol import ProgressState, RequestEnvelope, ResponseEnvelope
 
 
 class AgentOSApiTests(unittest.TestCase):
@@ -277,7 +277,8 @@ class AgentOSApiTests(unittest.TestCase):
                 self.assertEqual(events.status_code, 200, events.text)
                 event_rows = events.json()["events"]
                 self.assertTrue(event_rows)
-                self.assertTrue(any(event["event_type"] == "assistant_message_ready" for event in event_rows))
+                self.assertEqual(payload["status"], "completed_partial")
+                self.assertTrue(any(event["event_type"] == "assistant_message_status" for event in event_rows))
                 self.assertTrue(any(event["event_type"] == "artifact_committed" for event in event_rows))
                 self.assertTrue(all(event.get("run_id") == run_id for event in event_rows))
                 self.assertTrue(all(event.get("thread_id") for event in event_rows))
@@ -302,10 +303,43 @@ class AgentOSApiTests(unittest.TestCase):
                     "domain_packs_root": repository_root / "domain_packs",
                 }
             )
+
+            class ClarificationRunService:
+                def __init__(self, agent_os: AgentOS) -> None:
+                    self.agent_os = agent_os
+                    self.run_ids: list[str | None] = []
+
+                def run(
+                    self,
+                    request: RequestEnvelope,
+                    *,
+                    run_id: str | None = None,
+                ) -> ResponseEnvelope:
+                    self.run_ids.append(run_id)
+                    if run_id is None:
+                        return self.agent_os.handle_request(request)
+                    return ResponseEnvelope(
+                        request_id=request.request_id,
+                        run_id=run_id,
+                        mode="graph",
+                        intent="stock_check",
+                        status="completed_partial",
+                        message="Clarification continued.",
+                        progress=ProgressState(status_message="completed", percent=100),
+                    )
+
+            run_services: list[ClarificationRunService] = []
+
+            def build_run_service(agent_os: AgentOS) -> ClarificationRunService:
+                service = ClarificationRunService(agent_os)
+                run_services.append(service)
+                return service
+
             with TestClient(
                 create_app(
                     settings=settings,
                     api_config=ApiConfig(api_token=None, allow_unauthenticated=True),
+                    run_service_factory=build_run_service,
                 )
             ) as client:
                 thread_response = client.post("/api/v1/chat/threads")
@@ -330,8 +364,9 @@ class AgentOSApiTests(unittest.TestCase):
                 )
                 self.assertEqual(second.status_code, 200, second.text)
                 second_payload = second.json()
-                self.assertEqual(second_payload["status"], "completed")
+                self.assertEqual(second_payload["status"], "completed_partial")
                 self.assertEqual(second_payload["run_id"], first_run_id)
+                self.assertEqual(run_services[0].run_ids, [None, first_run_id])
 
     def test_background_run_returns_a_run_id_before_completion_and_exposes_events(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]

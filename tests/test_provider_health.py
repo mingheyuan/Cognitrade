@@ -24,8 +24,10 @@ class ProviderHealthTests(unittest.TestCase):
         rows = {item["dim"]: item for item in payload["provider_rows"]}
         self.assertGreaterEqual(rows["market"]["provider_count"], 2)
         self.assertTrue(rows["market"]["has_fallback"])
-        self.assertGreaterEqual(rows["notice"]["provider_count"], 2)
-        self.assertTrue(rows["notice"]["has_fallback"])
+        self.assertEqual(rows["notice"]["provider_count"], 1)
+        self.assertFalse(rows["notice"]["has_fallback"])
+        self.assertGreaterEqual(rows["notice"]["configured_provider_count"], 2)
+        self.assertIn("sse_notice", rows["notice"]["disabled_provider_ids"])
 
     def test_doctor_checks_include_dimension_aliases_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

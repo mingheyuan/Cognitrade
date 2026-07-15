@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
@@ -133,7 +133,11 @@ class ApiV2FinanceTests(unittest.TestCase):
             security_master=_SecurityMaster(),
         )
         self.database_path = workspace / "paper_trading" / "paper.sqlite3"
-        self.paper = PaperTradingService(database_path=self.database_path, market_data=self.market)
+        self.paper = PaperTradingService(
+            database_path=self.database_path,
+            market_data=self.market,
+            clock=lambda: datetime(2026, 7, 15, 2, 0, tzinfo=UTC),
+        )
         self.app = create_app(
             settings=self.settings,
             api_config=ApiConfig(api_token=API_TOKEN),
@@ -227,7 +231,7 @@ class ApiV2FinanceTests(unittest.TestCase):
         with sqlite3.connect(self.database_path) as connection:
             connection.execute(
                 "UPDATE paper_position_lots SET available_date = ?",
-                ((date.today() - timedelta(days=1)).isoformat(),),
+                ("2026-07-14",),
             )
         sell = self.client.post(
             "/api/v2/finance/paper/orders",

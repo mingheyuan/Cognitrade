@@ -445,7 +445,7 @@ class AgentOSCoreLoopTests(unittest.TestCase):
             )
 
             self.assertEqual(second.run_id, first.run_id)
-            self.assertEqual(second.status, "completed")
+            self.assertEqual(second.status, "completed_partial")
             self.assertFalse((run_root / "clarification_pending.json").exists())
             event_types = [event["event_type"] for event in read_jsonl(run_root / "execution_events.jsonl")]
             self.assertIn("clarification_requested", event_types)

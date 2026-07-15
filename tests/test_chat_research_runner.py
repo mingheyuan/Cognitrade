@@ -59,6 +59,35 @@ class SkillRuntimeStub:
 
 
 class ChatResearchRunnerTests(unittest.TestCase):
+    def test_default_cli_research_entry_calls_agent_os_directly(self) -> None:
+        captured: list[RequestEnvelope] = []
+
+        class AgentOSStub:
+            def __init__(self, settings) -> None:
+                self.settings = settings
+
+            def handle_request(self, request, event_callback=None):
+                del event_callback
+                captured.append(request)
+                return type(
+                    "Response",
+                    (),
+                    {"model_dump": lambda _self, mode="json": {"run_id": "01AGENTOS", "status": "completed"}},
+                )()
+
+        with patch("research_system.cli.flow.chat_research_runner.AgentOS", AgentOSStub):
+            payload = run_chat_research(
+                Settings.from_env(Path(".")),
+                query="check 600000",
+                intent="stock_check",
+                run_id=None,
+                thinking_enabled=False,
+                events_mode="compact",
+            )
+
+        self.assertEqual(payload["run_id"], "01AGENTOS")
+        self.assertEqual([request.user_query for request in captured], ["check 600000"])
+
     def test_chat_event_listener_streams_live_subagent_progress_updates(self) -> None:
         presenter = build_chat_presenter(thinking_enabled=True, events_mode="compact")
         captured = []
@@ -203,7 +232,7 @@ class ChatResearchRunnerTests(unittest.TestCase):
                         },
                     )
                 )
-                self.assertEqual(response.status, "completed")
+                self.assertEqual(response.status, "completed_partial")
                 snapshot = read_json(
                     settings.runs_root / str(response.run_id) / "execution_snapshot.json"
                 ) or {}

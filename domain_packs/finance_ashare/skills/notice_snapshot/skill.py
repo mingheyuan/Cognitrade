@@ -5,6 +5,7 @@ from datetime import date
 from research_system.adapters.vendors.cninfo_notice_adapter import CninfoNoticeAdapter
 from research_system.adapters.vendors.fallback_merge import merge_provider_facts
 from research_system.adapters.vendors.market_router import MarketRouter
+from research_system.adapters.vendors.provider_execution import classify_provider_exception, failure_facts
 from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
 from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
 
@@ -36,7 +37,7 @@ class NoticeSnapshotSkill:
                 symbol=None,
                 query=query,
                 snapshot_date=snapshot_date,
-                facts={"availability": "degraded", "note": "symbol_missing"},
+                facts={**failure_facts("no_data"), "missing_scope": "symbol"},
                 source=SnapshotSource(
                     skill=self.skill_name,
                     vendor=self.adapter.vendor_name,
@@ -83,16 +84,21 @@ class NoticeSnapshotSkill:
                 fallback_applied=bool(facts.get("_fallback_applied")),
                 field_sources={str(key): str(value) for key, value in (facts.get("_field_sources") or {}).items()},
                 missing_fields=[str(item) for item in (facts.get("_missing_fields") or [])],
-                source_confidence="high",
+                source_confidence=(
+                    self.provider_registry.source_confidence(provider_chain[0])
+                    if self.provider_registry and provider_chain
+                    else "high"
+                ),
                 source_trace=provider_trace,
             ).model_dump(mode="json")
         except Exception as exc:
+            failure = classify_provider_exception(exc)
             return VerifiedSnapshot(
                 snapshot_type="notice",
                 symbol=symbol,
                 query=query,
                 snapshot_date=snapshot_date,
-                facts={"availability": "degraded", "note": str(exc)},
+                facts=failure_facts(failure),
                 source=SnapshotSource(
                     skill=self.skill_name,
                     vendor=self.adapter.vendor_name,
@@ -113,7 +119,7 @@ class NoticeSnapshotSkill:
                 ),
                 source_trace=provider_trace + [self._provider_trace_entry("cninfo_notice", f"error:{exc.__class__.__name__}")],
                 degraded=True,
-                degrade_reason="vendor_failure",
+                degrade_reason=failure,
             ).model_dump(mode="json")
 
     def _provider_trace_entry(self, provider_id: str, status: str) -> dict[str, str]:

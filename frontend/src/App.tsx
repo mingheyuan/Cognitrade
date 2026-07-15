@@ -1,20 +1,12 @@
 import { AlertTriangle, CheckCircle2, X } from 'lucide-react'
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useCognitrade } from './CognitradeContext'
-import { RunInspector } from './components/RunInspector'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
-import type { ViewId } from './data'
+import { WorkspaceView } from './components/WorkspaceView'
+import { useViewNavigation } from './hooks/useViewNavigation'
 import type { MarketDataViewState } from './components/MarketData'
 import type { ResearchIntent } from './research-contracts'
-
-const Workbench = lazy(() => import('./components/Workbench').then((module) => ({ default: module.Workbench })))
-const Overview = lazy(() => import('./components/Overview').then((module) => ({ default: module.Overview })))
-const MarketData = lazy(() => import('./components/MarketData').then((module) => ({ default: module.MarketData })))
-const PaperTrading = lazy(() => import('./components/PaperTrading').then((module) => ({ default: module.PaperTrading })))
-const Screening = lazy(() => import('./components/Screening').then((module) => ({ default: module.Screening })))
-const Methodology = lazy(() => import('./components/Methodology').then((module) => ({ default: module.Methodology })))
-const Runs = lazy(() => import('./components/Runs').then((module) => ({ default: module.Runs })))
 
 function App() {
   const {
@@ -24,7 +16,7 @@ function App() {
     error,
     clearError,
   } = useCognitrade()
-  const [activeView, setActiveView] = useState<ViewId>('workbench')
+  const { activeView, navigate } = useViewNavigation()
   const [marketDataState, setMarketDataState] = useState<MarketDataViewState>({
     query: '600519',
     data: null,
@@ -42,13 +34,13 @@ function App() {
   }, [])
 
   const focusComposer = useCallback(() => {
-    setActiveView('workbench')
+    navigate('workbench')
     window.requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('#research-composer')?.focus())
-  }, [])
+  }, [navigate])
 
   const handleResearch = useCallback(
     async (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => {
-      setActiveView('workbench')
+      navigate('workbench')
       setSelectedEvidence('')
       try {
         const response = await createRun(query, intent, constraints)
@@ -61,16 +53,16 @@ function App() {
         // The shared context renders the transport error with its request id.
       }
     },
-    [createRun, showToast],
+    [createRun, navigate, showToast],
   )
 
   const openRun = useCallback(
     (runId: string) => {
       selectRun(runId)
       setSelectedEvidence('')
-      setActiveView('workbench')
+      navigate('workbench')
     },
-    [selectRun],
+    [navigate, selectRun],
   )
 
   useEffect(() => {
@@ -87,28 +79,9 @@ function App() {
     }
   }, [focusComposer])
 
-  const renderView = () => {
-    if (activeView === 'workbench') {
-      return (
-        <div className="workspace-grid">
-          <Workbench onSubmit={handleResearch} onSelectEvidence={setSelectedEvidence} />
-          <RunInspector selectedEvidence={selectedEvidence} onSelectEvidence={setSelectedEvidence} />
-        </div>
-      )
-    }
-    if (activeView === 'overview') {
-      return <Overview onSubmit={handleResearch} onOpenWorkbench={() => setActiveView('workbench')} onOpenRuns={() => setActiveView('runs')} onOpenRun={openRun} />
-    }
-    if (activeView === 'market') return <MarketData state={marketDataState} setState={setMarketDataState} />
-    if (activeView === 'paper') return <PaperTrading onOpenMarketData={() => setActiveView('market')} />
-    if (activeView === 'screening') return <Screening onSubmit={handleResearch} onOpenRun={openRun} />
-    if (activeView === 'methodology') return <Methodology />
-    return <Runs onOpenRun={openRun} />
-  }
-
   return (
     <div className="app-shell">
-      <Sidebar activeView={activeView} onNavigate={setActiveView} onNewResearch={focusComposer} onOpenRun={openRun} />
+      <Sidebar activeView={activeView} onNavigate={navigate} onNewResearch={focusComposer} onOpenRun={openRun} />
       <section className="app-workspace">
         <Topbar activeView={activeView} />
         {error && (
@@ -119,7 +92,16 @@ function App() {
           </div>
         )}
         <Suspense fallback={<div className="page-loader" role="status"><span /><strong>正在载入研究视图</strong></div>}>
-          {renderView()}
+          <WorkspaceView
+            activeView={activeView}
+            navigate={navigate}
+            marketDataState={marketDataState}
+            setMarketDataState={setMarketDataState}
+            selectedEvidence={selectedEvidence}
+            setSelectedEvidence={setSelectedEvidence}
+            onResearch={handleResearch}
+            onOpenRun={openRun}
+          />
         </Suspense>
       </section>
 

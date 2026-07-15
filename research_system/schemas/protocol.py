@@ -19,6 +19,7 @@ ResponseStatus = Literal[
     "waiting_approval",
     "gated",
     "completed",
+    "completed_partial",
     "cancelled",
     "failed",
     "timed_out",

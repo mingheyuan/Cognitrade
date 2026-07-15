@@ -36,22 +36,45 @@ class VendorProviderRegistry:
         return list(self._providers.values())
 
     def get_provider_chain(self, dim: str, market: str) -> list[ProviderSpec]:
+        normalized_dim = dim.strip().lower()
+        normalized_market = market.strip().lower()
         override = self._env_override(dim)
         if override:
-            resolved = [self._providers[item] for item in override if item in self._providers]
+            resolved = [
+                self._providers[item]
+                for item in override
+                if item in self._providers
+                and self._providers[item].enabled
+                and self._credentials_available(self._providers[item])
+                and normalized_dim in self._providers[item].dims
+                and (
+                    normalized_market in self._providers[item].markets
+                    or "cn" in self._providers[item].markets and normalized_market.startswith("cn_")
+                )
+            ]
             if resolved:
                 return resolved
 
-        normalized_dim = dim.strip().lower()
-        normalized_market = market.strip().lower()
         rows = [
             provider
             for provider in self._providers.values()
             if provider.enabled
+            and self._credentials_available(provider)
             and normalized_dim in provider.dims
             and (normalized_market in provider.markets or "cn" in provider.markets and normalized_market.startswith("cn_"))
         ]
         return rows
+
+    def source_confidence(self, provider: ProviderSpec | None) -> str:
+        source = self.data_sources.get(provider.source_id) if provider else None
+        return source.stability if source is not None else "low"
+
+    def _credentials_available(self, provider: ProviderSpec) -> bool:
+        if not provider.requires_key:
+            return True
+        if provider.provider_id.startswith("tushare_"):
+            return bool(self.settings.tushare_token)
+        return False
 
     def describe_dim(self, dim: str, market: str) -> dict[str, Any]:
         chain = self.get_provider_chain(dim, market)
@@ -96,7 +119,8 @@ class VendorProviderRegistry:
                 markets=("cn", "cn_equity"),
                 dims=("market",),
                 access="sdk",
-                notes="Optional tertiary market fallback.",
+                enabled=False,
+                notes="Reserved until the eFinance adapter is installed.",
             ),
             ProviderSpec(
                 provider_id="akshare_fundamental",
@@ -124,7 +148,8 @@ class VendorProviderRegistry:
                 markets=("cn", "cn_equity"),
                 dims=("fundamental",),
                 access="official_disclosure",
-                notes="Official fallback for partial fundamental facts.",
+                enabled=False,
+                notes="Reserved until an official-report metric parser is installed.",
             ),
             ProviderSpec(
                 provider_id="cninfo_notice",
@@ -142,7 +167,8 @@ class VendorProviderRegistry:
                 markets=("cn", "cn_equity"),
                 dims=("notice",),
                 access="official_disclosure",
-                notes="Official fallback for SSE issuers.",
+                enabled=False,
+                notes="Reserved until the SSE notice adapter is installed.",
             ),
             ProviderSpec(
                 provider_id="szse_notice",
@@ -151,7 +177,8 @@ class VendorProviderRegistry:
                 markets=("cn", "cn_equity"),
                 dims=("notice",),
                 access="official_disclosure",
-                notes="Official fallback for SZSE issuers.",
+                enabled=False,
+                notes="Reserved until the SZSE notice adapter is installed.",
             ),
             ProviderSpec(
                 provider_id="eastmoney_notice",
@@ -160,7 +187,8 @@ class VendorProviderRegistry:
                 markets=("cn", "cn_equity"),
                 dims=("notice",),
                 access="http",
-                notes="Mirror fallback for notice headlines and links.",
+                enabled=False,
+                notes="Reserved until the EastMoney notice adapter is installed.",
             ),
             ProviderSpec(
                 provider_id="akshare_sector",
@@ -178,7 +206,8 @@ class VendorProviderRegistry:
                 markets=("cn", "cn_sector"),
                 dims=("sector",),
                 access="http",
-                notes="Sector breadth and fallback provider.",
+                enabled=False,
+                notes="Reserved until an independent EastMoney sector adapter is installed.",
             ),
             ProviderSpec(
                 provider_id="akshare_lhb",

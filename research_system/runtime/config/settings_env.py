@@ -35,6 +35,7 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "embedding_dimensions": int(env_values.get("OPENAI_EMBEDDING_DIMENSIONS", "1536")),
         "openai_api_key": env_values.get("OPENAI_API_KEY"),
         "openai_base_url": env_values.get("OPENAI_BASE_URL"),
+        "tushare_token": env_values.get("TUSHARE_TOKEN"),
         "qdrant_url": env_values.get("QDRANT_URL"),
         "qdrant_api_key": env_values.get("QDRANT_API_KEY"),
         "qdrant_collection_name": env_values.get("QDRANT_COLLECTION_NAME", "research_evidence"),
@@ -77,8 +78,15 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
             "sector": env_values.get("COGNITRADE_PROVIDERS_SECTOR", ""),
             "capital_flow": env_values.get("COGNITRADE_PROVIDERS_CAPITAL_FLOW", ""),
             "sentiment": env_values.get("COGNITRADE_PROVIDERS_SENTIMENT", ""),
+            "lhb": env_values.get("COGNITRADE_PROVIDERS_LHB", ""),
+            "events": env_values.get("COGNITRADE_PROVIDERS_EVENTS", ""),
+            "policy": env_values.get("COGNITRADE_PROVIDERS_POLICY", ""),
         },
         "default_timezone": env_values.get("DEFAULT_TIMEZONE", "Asia/Shanghai"),
+        "paper_trading_enforce_market_hours": env_values.get(
+            "COGNITRADE_PAPER_ENFORCE_MARKET_HOURS", "true"
+        ).strip().lower()
+        in {"1", "true", "yes", "on"},
         "log_level": env_values.get("LOG_LEVEL", "INFO"),
         "llm_request_timeout_seconds": int(env_values.get("LLM_REQUEST_TIMEOUT_SECONDS", "25")),
         "max_llm_calls_per_turn": int(env_values.get("MAX_LLM_CALLS_PER_TURN", "1")),

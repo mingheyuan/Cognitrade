@@ -16,6 +16,7 @@ import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { CognitradeApiClient, CognitradeApiError } from '../api-client'
 import { useCognitrade } from '../CognitradeContext'
 import type { MarketQuote, PaperOrder, PaperPortfolio } from '../finance-contracts'
+import { estimateOrder } from '../utils/paper-order'
 
 export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => void }) {
   const { settings } = useCognitrade()
@@ -231,17 +232,6 @@ function AccountMetric({ icon, label, value, note, tone }: { icon: React.ReactNo
 
 function PaperSkeleton() {
   return <div className="finance-data-stack"><div className="paper-account-grid">{Array.from({ length: 4 }, (_, index) => <div key={index} className="paper-account-metric finance-skeleton" />)}</div><div className="paper-trade-layout"><div className="paper-order-ticket finance-skeleton" /><div className="paper-positions-card finance-skeleton" /></div></div>
-}
-
-function estimateOrder(price: number | undefined, side: 'buy' | 'sell', quantity: number) {
-  if (!price || quantity <= 0) return { gross: 0, fees: 0, total: 0 }
-  const fill = price * (side === 'buy' ? 1.0005 : 0.9995)
-  const gross = fill * quantity
-  const commission = Math.max(gross * 0.00025, 5)
-  const transfer = gross * 0.00001
-  const stamp = side === 'sell' ? gross * 0.0005 : 0
-  const fees = commission + transfer + stamp
-  return { gross, fees, total: side === 'buy' ? gross + fees : gross - fees }
 }
 
 function formatMoney(value: number): string {

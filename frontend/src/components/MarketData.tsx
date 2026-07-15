@@ -15,6 +15,7 @@ import { type Dispatch, type FormEvent, type ReactNode, type SetStateAction, use
 import { CognitradeApiClient, CognitradeApiError } from '../api-client'
 import { useCognitrade } from '../CognitradeContext'
 import type { JsonRecord, MarketDataResponse } from '../finance-contracts'
+import { dataUnavailableMessage, isTechnicalErrorMessage } from '../utils/data-availability'
 
 const EXAMPLES = [
   { symbol: '600519', label: '贵州茅台' },
@@ -429,6 +430,7 @@ function RecordPanel({ title, value, wide = false }: { title: string; value: unk
 }
 
 function RecordTable({ value, limit = 12 }: { value: unknown; limit?: number }) {
+  const [expanded, setExpanded] = useState(false)
   const unavailableMessage = dataUnavailableMessage(value)
   if (unavailableMessage) {
     return <div className="data-unavailable"><AlertCircle size={14} aria-hidden="true" /><span>{unavailableMessage}</span></div>
@@ -436,11 +438,16 @@ function RecordTable({ value, limit = 12 }: { value: unknown; limit?: number }) 
   const records = normalizeRecords(value)
   if (!records.length) return <p className="data-empty">数据源暂未返回可展示记录</p>
   if (records.length === 1) {
-    return <dl className="record-definition-list">{Object.entries(records[0]).slice(0, limit).map(([key, item]) => <div key={key}><dt>{fieldLabel(key)}</dt><dd>{formatValue(item)}</dd></div>)}</dl>
+    const entries = Object.entries(records[0])
+    const visibleEntries = expanded ? entries : entries.slice(0, limit)
+    return <><dl className="record-definition-list">{visibleEntries.map(([key, item]) => <div key={key}><dt>{fieldLabel(key)}</dt><dd>{formatValue(item)}</dd></div>)}</dl>{entries.length > limit && <button className="record-table-more" type="button" onClick={() => setExpanded((current) => !current)}>{expanded ? '收起字段' : `查看全部 ${entries.length} 个字段`}</button>}</>
   }
-  const columns = Array.from(new Set(records.flatMap((row) => Object.keys(row)))).slice(0, 6)
+  const allColumns = Array.from(new Set(records.flatMap((row) => Object.keys(row))))
+  const columns = expanded ? allColumns : allColumns.slice(0, 6)
+  const visibleRecords = expanded ? records : records.slice(0, limit)
+  const hasMore = records.length > limit || allColumns.length > 6
   return (
-    <div className="finance-table-scroll"><table className="finance-table"><thead><tr>{columns.map((column) => <th key={column}>{fieldLabel(column)}</th>)}</tr></thead><tbody>{records.slice(0, limit).map((row, index) => <tr key={`${index}-${columns.map((column) => String(row[column] ?? '')).join('-')}`}>{columns.map((column) => <td key={column}>{formatValue(row[column])}</td>)}</tr>)}</tbody></table></div>
+    <><div className="finance-table-scroll"><table className="finance-table"><thead><tr>{columns.map((column) => <th key={column}>{fieldLabel(column)}</th>)}</tr></thead><tbody>{visibleRecords.map((row, index) => <tr key={`${index}-${columns.map((column) => String(row[column] ?? '')).join('-')}`}>{columns.map((column) => <td key={column}>{formatValue(row[column])}</td>)}</tr>)}</tbody></table></div>{hasMore && <button className="record-table-more" type="button" onClick={() => setExpanded((current) => !current)}>{expanded ? '收起明细' : `查看全部 ${records.length} 条 · ${allColumns.length} 列`}</button>}</>
   )
 }
 
@@ -576,22 +583,9 @@ function formatNestedValue(value: unknown, depth: number): string {
   return VALUE_LABELS[text.toLowerCase()] || text
 }
 
-function dataUnavailableMessage(value: unknown): string | null {
-  const record = asRecord(value)
-  if (!record) return null
-  const availability = String(first(record, 'availability', 'status') || '').toLowerCase()
-  const detail = String(first(record, 'note', 'error', 'degrade_reason') || '')
-  if (!['degraded', 'data_gap', 'assumption_only'].includes(availability) && !isTechnicalErrorMessage(detail)) return null
-  if (/individual_info_unavailable/i.test(detail)) return '公司资料暂不可用，请稍后刷新'
-  return '该项数据暂不可用，请稍后刷新'
-}
-
-function isTechnicalErrorMessage(value: string): boolean {
-  return /(?:[a-z0-9]+_){1,}[a-z0-9]*unavailable|connection aborted|remote.?disconnected|provider_failure|traceback|(?:network|connection|read) timeout|http\s*\d{3}/i.test(value)
-}
-
 const VALUE_LABELS: Record<string, string> = {
   available: '数据可用', partial: '部分可用', degraded: '数据降级', data_gap: '数据缺口', assumption_only: '仅有假设',
+  no_data: '暂无记录', provider_unavailable: '数据源不可用', rate_limited: '请求受限', parse_failed: '解析失败',
   qfq: '前复权', hfq: '后复权', true: '是', false: '否',
 }
 
@@ -699,7 +693,7 @@ function tagLabel(value: unknown): string {
 }
 
 function qualityLabel(value: string): string {
-  return ({ available: '数据可用', partial: '部分可用', degraded: '数据降级', data_gap: '数据缺口', assumption_only: '仅假设' } as Record<string, string>)[value] || value
+  return ({ available: '数据可用', partial: '部分可用', degraded: '数据降级', data_gap: '数据缺口', assumption_only: '仅假设', no_data: '暂无记录', provider_unavailable: '数据源不可用', rate_limited: '请求受限', parse_failed: '解析失败' } as Record<string, string>)[value] || value
 }
 
 function apiErrorMessage(error: unknown): string {

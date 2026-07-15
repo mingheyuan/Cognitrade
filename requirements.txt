@@ -1,4 +1,6 @@
 akshare>=1.16
+baostock>=0.8,<1
+exchange-calendars>=4.11,<5
 fastapi==0.139.0
 httpx>=0.28,<1
 jsonschema>=4,<5
@@ -11,4 +13,5 @@ PyYAML>=6,<7
 qdrant-client>=1.12,<2
 redis>=5,<8
 requests>=2.31,<3
+tushare>=1.4,<2
 uvicorn[standard]==0.50.2

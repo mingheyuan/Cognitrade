@@ -212,7 +212,7 @@ def _review_target_run_id(
         row
         for row in recent_runs
         if str(row.get("run_id") or "").strip()
-        and str(row.get("status") or "") == "completed"
+        and str(row.get("status") or "") in {"completed", "completed_partial"}
         and str(row.get("intent") or "") != "review_thesis"
     ]
     return str(eligible[0].get("run_id")) if eligible else None
