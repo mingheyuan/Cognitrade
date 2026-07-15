@@ -220,7 +220,15 @@ class FinanceMarketDataService:
             or facts.get("availability")
             or ""
         ).strip().lower()
-        if declared in {"data_gap", "degraded", "assumption_only"}:
+        if declared in {
+            "data_gap",
+            "degraded",
+            "assumption_only",
+            "no_data",
+            "provider_unavailable",
+            "rate_limited",
+            "parse_failed",
+        }:
             return declared
         return "degraded" if payload.get("degraded") else "available"
 

@@ -61,6 +61,10 @@ Authorization: Bearer <COGNITRADE_API_TOKEN>
 | `503` | `quote_unavailable` | 当前没有服务端可成交价格 |
 | `409` | `insufficient_cash` | 可用现金不足 |
 | `409` | `insufficient_position` | T+1 可卖持仓不足 |
+| `409` | `market_closed` | 当前不在 A 股连续竞价时段 |
+| `409` | `security_suspended` | 证券停牌或不可交易 |
+| `409` | `price_limit_reached` | 买入触及涨停或卖出触及跌停 |
+| `409` | `invalid_quote` | 行情价格缺失或不是正数 |
 | `422` | `invalid_board_lot` | 委托不符合 100 股规则 |
 | `422` | `validation_error` | 请求字段或范围无效 |
 
@@ -177,7 +181,7 @@ GET /api/v2/finance/securities?query=茅台&limit=8
 }
 ```
 
-`quality_status` 为 `available`、`partial` 或 `degraded`。每个快照独立返回 `available`、`degraded`、`data_gap` 或 `assumption_only`。数据源失败不会被静默替换成演示数据。
+`quality_status` 为 `available`、`partial` 或具体不可用状态。每个快照统一使用 `available`、`no_data`、`provider_unavailable`、`rate_limited`、`parse_failed`；兼容历史 Artifact 时仍可能读取到 `degraded`、`data_gap` 或 `assumption_only`。数据源失败不会被静默替换成演示数据，也不会向客户端暴露上游连接异常原文。
 
 K 线响应只有区间元数据与最后交易日记录；前端契约禁止用该接口绘制历史价格趋势。
 
@@ -217,7 +221,9 @@ K 线响应只有区间元数据与最后交易日记录；前端契约禁止用
 - 过户费为成交额 0.001%。
 - 卖出印花税为成交额 0.05%。
 - 买入数量必须为 100 股整数倍。
-- 当日买入记为 T+1，次日才能卖出；卖出采用 FIFO 成本。
+- 默认只在上海时区交易日的 `09:30–11:30`、`13:00–15:00` 接受委托，可通过 `COGNITRADE_PAPER_ENFORCE_MARKET_HOURS=false` 为隔离演示环境关闭限制。
+- 当日买入记为 T+1，持仓在下一交易日而不是下一自然日可卖；交易日来自离线 XSHG 日历，卖出采用 FIFO 成本。
+- 行情声明停牌、不可交易、涨跌停或无有效正价格时拒绝模拟成交。
 - 禁止融券和负持仓；清仓时允许卖出全部可用零股。
 - 现金与费用以整数分持久化，价格以百万分之一元持久化。
 
@@ -240,7 +246,11 @@ K 线响应只有区间元数据与最后交易日记录；前端契约禁止用
     "board_lot": 100,
     "settlement": "T+1",
     "short_selling": false,
-    "price_source": "server-side Finance Pack quote"
+    "price_source": "server-side Finance Pack quote",
+    "market_hours_enforced": true,
+    "calendar": "exchange_calendars:XSHG",
+    "timezone": "Asia/Shanghai",
+    "sessions": ["09:30-11:30", "13:00-15:00"]
   }
 }
 ```
@@ -289,6 +299,7 @@ K 线响应只有区间元数据与最后交易日记录；前端契约禁止用
   "realized_pnl": null,
   "quote_as_of": "2026-07-13",
   "quote_source": "akshare_market",
+  "trade_date": "2026-07-13",
   "status": "filled",
   "created_at": "2026-07-13T09:00:00+00:00",
   "idempotent_replay": false

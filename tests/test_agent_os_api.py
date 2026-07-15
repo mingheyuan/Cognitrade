@@ -277,7 +277,8 @@ class AgentOSApiTests(unittest.TestCase):
                 self.assertEqual(events.status_code, 200, events.text)
                 event_rows = events.json()["events"]
                 self.assertTrue(event_rows)
-                self.assertTrue(any(event["event_type"] == "assistant_message_ready" for event in event_rows))
+                self.assertEqual(payload["status"], "completed_partial")
+                self.assertTrue(any(event["event_type"] == "assistant_message_status" for event in event_rows))
                 self.assertTrue(any(event["event_type"] == "artifact_committed" for event in event_rows))
                 self.assertTrue(all(event.get("run_id") == run_id for event in event_rows))
                 self.assertTrue(all(event.get("thread_id") for event in event_rows))
@@ -330,7 +331,7 @@ class AgentOSApiTests(unittest.TestCase):
                 )
                 self.assertEqual(second.status_code, 200, second.text)
                 second_payload = second.json()
-                self.assertEqual(second_payload["status"], "completed")
+                self.assertEqual(second_payload["status"], "completed_partial")
                 self.assertEqual(second_payload["run_id"], first_run_id)
 
     def test_background_run_returns_a_run_id_before_completion_and_exposes_events(self) -> None:

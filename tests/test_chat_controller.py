@@ -527,7 +527,7 @@ class ChatControllerTests(unittest.TestCase):
             try:
                 response = orchestrator.run(RequestEnvelope(intent="stock_check", user_query="\u5206\u6790 000001"))
 
-                self.assertEqual(response.status, "completed")
+                self.assertEqual(response.status, "completed_partial")
                 self.assertIn("request_received", events)
                 self.assertIn("run_accepted", events)
             finally:
@@ -559,7 +559,7 @@ class ChatControllerTests(unittest.TestCase):
             finally:
                 orchestrator.close()
 
-            self.assertEqual(response.status, "completed")
+            self.assertEqual(response.status, "completed_partial")
             snapshot = read_json(
                 settings.runs_root / str(response.run_id) / "execution_snapshot.json"
             ) or {}

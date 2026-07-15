@@ -21,6 +21,12 @@ class ProviderHealthService:
         for dim in market_dims:
             market = "cn_sector" if dim in {"sector", "policy"} else "cn_equity"
             chain = self.providers.get_provider_chain(dim, market)
+            configured = [
+                provider
+                for provider in self.providers.list_all()
+                if dim in provider.dims
+                and (market in provider.markets or "cn" in provider.markets and market.startswith("cn_"))
+            ]
             provider_rows.append(
                 {
                     "dim": dim,
@@ -28,6 +34,8 @@ class ProviderHealthService:
                     "source_ids": [item.source_id for item in chain],
                     "provider_count": len(chain),
                     "has_fallback": len(chain) >= 2,
+                    "configured_provider_count": len(configured),
+                    "disabled_provider_ids": [item.provider_id for item in configured if not item.enabled],
                 }
             )
         return {

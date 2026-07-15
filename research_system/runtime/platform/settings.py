@@ -22,6 +22,7 @@ class Settings(BaseModel):
     embedding_dimensions: int = 1536
     openai_api_key: str | None = None
     openai_base_url: str | None = None
+    tushare_token: str | None = None
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None
     qdrant_collection_name: str = "research_evidence"
@@ -52,6 +53,7 @@ class Settings(BaseModel):
     skill_sources_path: Path
     provider_policy_overrides: dict[str, str] = Field(default_factory=dict)
     default_timezone: str = "Asia/Shanghai"
+    paper_trading_enforce_market_hours: bool = True
     log_level: str = "INFO"
     llm_request_timeout_seconds: int = 25
     max_llm_calls_per_turn: int = 1

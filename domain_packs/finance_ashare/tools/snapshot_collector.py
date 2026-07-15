@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 import hashlib
+import inspect
 import json
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,9 @@ from domain_packs.finance_ashare.skills.uzi_source_snapshot.skill import (
 
 from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
 from research_system.runtime.storage.jsonl import read_json, write_json
+from research_system.adapters.vendors.provider_execution import classify_provider_exception, failure_facts
+from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
+from research_system.runtime.platform.settings import Settings
 
 
 _SYMBOL_SKILLS = {
@@ -80,6 +84,15 @@ _SNAPSHOT_CACHE_TTLS = {
     "similar_stocks": 86400,
 }
 _DEFAULT_SNAPSHOT_CACHE_TTL = 43200
+_UNAVAILABLE_QUALITY_STATUSES = {
+    "degraded",
+    "data_gap",
+    "assumption_only",
+    "no_data",
+    "provider_unavailable",
+    "rate_limited",
+    "parse_failed",
+}
 _SNAPSHOT_PROVIDER_HINTS = {
     "market": "akshare",
     "fundamental": "akshare",
@@ -105,9 +118,11 @@ def collect_snapshots(
     cache_root: Path | None = None,
     research_profile: str | None = None,
     max_workers: int | None = None,
+    provider_registry: VendorProviderRegistry | None = None,
 ) -> list[dict[str, Any]]:
     """Collect the Finance Pack's declared snapshots through shared vendor adapters."""
     requested = list(dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip()))
+    providers = provider_registry or _default_provider_registry()
     resolved_symbols = _unique_symbols(symbols)
     snapshots: list[dict[str, Any]] = []
     sector_snapshot: dict[str, Any] | None = None
@@ -120,7 +135,7 @@ def collect_snapshots(
             profile=research_profile,
         )
         if sector_snapshot is None:
-            sector_snapshot = SectorSnapshotSkill().run(query=sector)
+            sector_snapshot = _instantiate_skill(SectorSnapshotSkill, providers).run(query=sector)
             _save_snapshot_cache(
                 cache_root=cache_root,
                 snapshot_type="sector",
@@ -142,7 +157,7 @@ def collect_snapshots(
             profile=research_profile,
         )
         if policy_snapshot is None:
-            policy_snapshot = PolicySnapshotSkill().run(
+            policy_snapshot = _instantiate_skill(PolicySnapshotSkill, providers).run(
                 query=query,
                 sector=sector,
                 constituents=constituents,
@@ -188,7 +203,7 @@ def collect_snapshots(
             thread_name_prefix="finance-snapshot",
         )
         futures = {
-            executor.submit(_run_snapshot_skill, query, symbol, snapshot_type): (index, symbol, snapshot_type)
+            executor.submit(_run_snapshot_skill, query, symbol, snapshot_type, providers): (index, symbol, snapshot_type)
             for index, symbol, snapshot_type in pending_tasks
         }
         try:
@@ -216,19 +231,37 @@ def collect_snapshots(
     return snapshots
 
 
-def _run_snapshot_skill(query: str, symbol: str, snapshot_type: str) -> dict[str, Any]:
+def _run_snapshot_skill(
+    query: str,
+    symbol: str,
+    snapshot_type: str,
+    provider_registry: VendorProviderRegistry | None = None,
+) -> dict[str, Any]:
     skill_cls = _SYMBOL_SKILLS[snapshot_type]
     try:
-        return skill_cls().run(query=query, symbol=symbol)
+        return _instantiate_skill(skill_cls, provider_registry).run(query=query, symbol=symbol)
     except Exception as exc:
+        status = classify_provider_exception(exc)
         return {
             "snapshot_type": snapshot_type,
             "symbol": symbol,
             "query": query,
-            "facts": {"availability": "data_gap", "data_gap": ["provider_exception"]},
+            "facts": failure_facts(status),
             "degraded": True,
-            "degrade_reason": f"provider_exception:{exc.__class__.__name__}",
+            "degrade_reason": status,
+            "source_trace": [{"status": status, "error_type": exc.__class__.__name__}],
         }
+
+
+def _instantiate_skill(skill_cls, provider_registry: VendorProviderRegistry | None):
+    if provider_registry is not None and "provider_registry" in inspect.signature(skill_cls).parameters:
+        return skill_cls(provider_registry=provider_registry)
+    return skill_cls()
+
+
+def _default_provider_registry() -> VendorProviderRegistry:
+    repository_root = Path(__file__).resolve().parents[3]
+    return VendorProviderRegistry(Settings.from_env(repository_root))
 
 
 def _snapshot_cache_path(
@@ -279,7 +312,7 @@ def _snapshot_quality(snapshot: dict[str, Any]) -> str:
         or facts.get("availability")
         or ""
     ).strip().lower()
-    if declared in {"data_gap", "degraded", "assumption_only"}:
+    if declared in _UNAVAILABLE_QUALITY_STATUSES:
         return declared
     return "degraded" if snapshot.get("degraded") else "available"
 
@@ -372,7 +405,7 @@ def _missing_scope_snapshot(*, query: str, snapshot_type: str) -> dict[str, Any]
         "snapshot_type": snapshot_type,
         "query": query,
         "facts": {
-            "availability": "data_gap",
+            "availability": "no_data",
             "data_gap": [f"{snapshot_type}_scope_missing"],
         },
         "degraded": True,
@@ -396,9 +429,11 @@ def collect_snapshot_bundle(
     security_master: AShareSecurityMaster | None = None,
     cache_root: Path | None = None,
     research_profile: str | None = None,
+    provider_registry: VendorProviderRegistry | None = None,
 ) -> dict[str, Any]:
     """Build a traceable candidate universe and its staged snapshot collection."""
     requested = list(dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip()))
+    providers = provider_registry or _default_provider_registry()
     resolved_symbols = _unique_symbols(symbols)
     universe_rows: list[dict[str, Any]] = []
     snapshots: list[dict[str, Any]] = []
@@ -415,7 +450,7 @@ def collect_snapshot_bundle(
             profile=research_profile,
         )
         if sector_snapshot is None:
-            sector_snapshot = SectorSnapshotSkill().run(query=sector)
+            sector_snapshot = _instantiate_skill(SectorSnapshotSkill, providers).run(query=sector)
             _save_snapshot_cache(
                 cache_root=cache_root,
                 snapshot_type="sector",
@@ -436,7 +471,7 @@ def collect_snapshot_bundle(
             profile=research_profile,
         )
         if policy_snapshot is None:
-            policy_snapshot = PolicySnapshotSkill().run(
+            policy_snapshot = _instantiate_skill(PolicySnapshotSkill, providers).run(
                 query=query,
                 sector=sector,
                 constituents=_constituents(sector_snapshot),
@@ -493,6 +528,7 @@ def collect_snapshot_bundle(
                 cancellation=cancellation,
                 cache_root=cache_root,
                 research_profile=research_profile,
+                provider_registry=providers,
             )
         )
 
@@ -509,6 +545,7 @@ def collect_snapshot_bundle(
                     cancellation=cancellation,
                     cache_root=cache_root,
                     research_profile=research_profile,
+                    provider_registry=providers,
                 )
             )
 
@@ -589,14 +626,23 @@ def _bundle_result(
         snapshot
         for snapshot in normalized_snapshots
         if isinstance(snapshot, dict)
-        and str(snapshot.get("quality_status") or "") in {"degraded", "data_gap"}
+        and str(snapshot.get("quality_status") or "") in _UNAVAILABLE_QUALITY_STATUSES
     ]
     quality_counts: dict[str, int] = {}
     for snapshot in normalized_snapshots:
-        quality = str(snapshot.get("quality_status") or "data_gap")
+        quality = str(snapshot.get("quality_status") or "no_data")
         quality_counts[quality] = quality_counts.get(quality, 0) + 1
-    if not normalized_snapshots or quality_counts.get("available", 0) == 0:
-        collection_quality = "data_gap"
+    if not normalized_snapshots:
+        collection_quality = "no_data"
+    elif quality_counts.get("available", 0) == 0:
+        collection_quality = next(
+            (
+                status
+                for status in ("rate_limited", "provider_unavailable", "parse_failed", "no_data", "data_gap")
+                if quality_counts.get(status, 0)
+            ),
+            "no_data",
+        )
     elif degraded_rows:
         collection_quality = "degraded"
     else:
@@ -641,11 +687,11 @@ def _normalize_snapshot_quality(snapshot: dict[str, Any]) -> dict[str, Any]:
         or facts.get("availability")
         or ""
     ).strip().lower()
-    if declared not in {"available", "degraded", "data_gap", "assumption_only"}:
+    if declared not in {"available", *_UNAVAILABLE_QUALITY_STATUSES}:
         declared = "degraded" if bool(normalized.get("degraded")) else "available"
     if bool(normalized.get("degraded")) and declared == "available":
         declared = "degraded"
-    if declared == "data_gap" and not bool(normalized.get("degraded")):
+    if declared in _UNAVAILABLE_QUALITY_STATUSES and not bool(normalized.get("degraded")):
         normalized["degraded"] = True
     reasons = [
         str(item).strip()

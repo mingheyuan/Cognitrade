@@ -100,6 +100,7 @@ def create_app(
         lambda current_settings, market_data: PaperTradingService(
             database_path=current_settings.workspace_root / "paper_trading" / "paper_trading.sqlite3",
             market_data=market_data,
+            enforce_market_hours=current_settings.paper_trading_enforce_market_hours,
         )
     )
 

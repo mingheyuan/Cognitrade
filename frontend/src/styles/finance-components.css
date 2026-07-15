@@ -1,0 +1,28 @@
+.quality-pill--no_data,
+.quality-pill--provider_unavailable,
+.quality-pill--rate_limited,
+.quality-pill--parse_failed {
+  border-color: color-mix(in srgb, var(--warning) 42%, var(--border));
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
+.record-table-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  margin-top: 12px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-strong);
+  color: var(--text-soft);
+  cursor: pointer;
+}
+
+.record-table-more:hover,
+.record-table-more:focus-visible {
+  border-color: var(--mint);
+  color: var(--mint);
+}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from collections.abc import Callable
+from datetime import UTC, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 import sqlite3
@@ -8,6 +9,7 @@ from threading import RLock
 from typing import Any
 
 from research_system.api.finance_market_data_service import FinanceMarketDataService
+from research_system.api.trading_calendar import AShareTradingCalendar
 from research_system.runtime.core.id_utils import generate_ulid
 
 
@@ -41,9 +43,20 @@ class PaperTradingError(ValueError):
 class PaperTradingService:
     """Persistent server-side A-share paper ledger with FIFO lots and T+1 sells."""
 
-    def __init__(self, *, database_path: Path, market_data: FinanceMarketDataService) -> None:
+    def __init__(
+        self,
+        *,
+        database_path: Path,
+        market_data: FinanceMarketDataService,
+        trading_calendar: AShareTradingCalendar | None = None,
+        clock: Callable[[], datetime] | None = None,
+        enforce_market_hours: bool = True,
+    ) -> None:
         self.database_path = Path(database_path)
         self.market_data = market_data
+        self.trading_calendar = trading_calendar or AShareTradingCalendar()
+        self.clock = clock or (lambda: datetime.now(UTC))
+        self.enforce_market_hours = bool(enforce_market_hours)
         self._lock = RLock()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_schema()
@@ -121,9 +134,23 @@ class PaperTradingService:
                 payload["idempotent_replay"] = True
                 return payload
 
+        trade_moment = self.clock()
+        if self.enforce_market_hours and not self.trading_calendar.is_market_open(trade_moment):
+            raise PaperTradingError(
+                "market_closed",
+                "当前不在 A 股连续竞价交易时段",
+                status_code=409,
+                details={
+                    "timezone": "Asia/Shanghai",
+                    "next_session_date": self.trading_calendar.next_session_date(trade_moment).isoformat(),
+                    "sessions": ["09:30-11:30", "13:00-15:00"],
+                },
+            )
+
         # The browser never supplies an executable price. Every fill starts from
         # a fresh server-side quote so a stale/tampered client cannot mint cash.
         quote = self.market_data.get_quote(symbol, refresh=True)
+        self._validate_tradable_quote(quote, side=normalized_side)
         quote_price = self._decimal(quote["latest_price"])
         fill_price = (
             quote_price * (Decimal("1") + _BUY_SLIPPAGE)
@@ -139,8 +166,9 @@ class PaperTradingService:
             else Decimal("0")
         )
         fees = commission + transfer_fee + stamp_duty
-        now = self._now()
-        trade_date = date.today()
+        now = self._format_moment(trade_moment)
+        trade_date = self.trading_calendar.trading_date(trade_moment)
+        next_available_date = self.trading_calendar.next_trading_day(trade_date)
 
         with self._lock, self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -220,8 +248,8 @@ class PaperTradingService:
                     quantity, quote_price_micros, fill_price_micros, gross_amount_cents,
                     commission_cents, transfer_fee_cents, stamp_duty_cents,
                     total_fees_cents, cash_effect_cents, realized_pnl_cents,
-                    quote_as_of, quote_source, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'filled', ?)
+                    quote_as_of, quote_source, trade_date, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'filled', ?)
                 """,
                 (
                     order_id,
@@ -242,6 +270,7 @@ class PaperTradingService:
                     realized_pnl_cents,
                     str(quote.get("as_of") or ""),
                     self._quote_source(quote),
+                    trade_date.isoformat(),
                     now,
                 ),
             )
@@ -265,7 +294,7 @@ class PaperTradingService:
                         normalized_quantity,
                         self._to_micros(unit_cost),
                         now,
-                        (trade_date + timedelta(days=1)).isoformat(),
+                        next_available_date.isoformat(),
                         now,
                     ),
                 )
@@ -292,7 +321,7 @@ class PaperTradingService:
                 (account["account_id"],),
             ).fetchall()
         positions_by_symbol: dict[str, dict[str, Any]] = {}
-        today = date.today().isoformat()
+        today = self.trading_calendar.trading_date(self.clock()).isoformat()
         for lot in lots:
             symbol = str(lot["symbol"])
             position = positions_by_symbol.setdefault(
@@ -427,6 +456,7 @@ class PaperTradingService:
                     realized_pnl_cents INTEGER,
                     quote_as_of TEXT,
                     quote_source TEXT,
+                    trade_date TEXT,
                     status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     UNIQUE (account_id, client_order_id)
@@ -448,9 +478,16 @@ class PaperTradingService:
                 );
                 CREATE INDEX IF NOT EXISTS paper_lots_account_symbol
                     ON paper_position_lots (account_id, symbol, available_date);
-                PRAGMA user_version = 1;
+                PRAGMA user_version = 2;
                 """
             )
+            self._ensure_column(connection, "paper_orders", "trade_date", "TEXT")
+
+    @staticmethod
+    def _ensure_column(connection: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
+        columns = {str(row["name"]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=15)
@@ -546,8 +583,7 @@ class PaperTradingService:
             remaining_to_sell -= consumed
         return cost_basis_micros
 
-    @staticmethod
-    def _account_payload(account: sqlite3.Row) -> dict[str, Any]:
+    def _account_payload(self, account: sqlite3.Row) -> dict[str, Any]:
         return {
             "account_id": str(account["account_id"]),
             "generation": int(account["generation"]),
@@ -563,6 +599,8 @@ class PaperTradingService:
                 "settlement": "T+1",
                 "short_selling": False,
                 "price_source": "server-side Finance Pack quote",
+                "market_hours_enforced": self.enforce_market_hours,
+                **self.trading_calendar.rule_summary(),
             },
         }
 
@@ -589,6 +627,7 @@ class PaperTradingService:
             "realized_pnl": PaperTradingService._from_cents(int(realized)) if realized is not None else None,
             "quote_as_of": str(order["quote_as_of"] or ""),
             "quote_source": str(order["quote_source"] or ""),
+            "trade_date": str(order["trade_date"] or "") if "trade_date" in order.keys() else "",
             "status": str(order["status"]),
             "created_at": str(order["created_at"]),
             "idempotent_replay": False,
@@ -638,9 +677,27 @@ class PaperTradingService:
             return str(source.get("provider_id") or source.get("vendor") or "finance_pack")
         return str(source or "finance_pack")
 
+    def _now(self) -> str:
+        return self._format_moment(self.clock())
+
     @staticmethod
-    def _now() -> str:
-        return datetime.now(UTC).isoformat()
+    def _format_moment(moment: datetime) -> str:
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        return moment.astimezone(UTC).isoformat()
+
+    def _validate_tradable_quote(self, quote: dict[str, Any], *, side: str) -> None:
+        if quote.get("tradable") is False or quote.get("suspended") is True:
+            raise PaperTradingError("security_suspended", "该证券当前停牌或不可交易", status_code=409)
+        price = self._decimal(quote.get("latest_price"))
+        if price <= 0:
+            raise PaperTradingError("invalid_quote", "行情源未返回有效成交价格", status_code=409)
+        limit_up = quote.get("limit_up")
+        limit_down = quote.get("limit_down")
+        if side == "buy" and limit_up is not None and price >= self._decimal(limit_up):
+            raise PaperTradingError("price_limit_reached", "证券已触及涨停价，模拟买入不成交", status_code=409)
+        if side == "sell" and limit_down is not None and price <= self._decimal(limit_down):
+            raise PaperTradingError("price_limit_reached", "证券已触及跌停价，模拟卖出不成交", status_code=409)
 
 
 __all__ = ["PaperTradingError", "PaperTradingService"]

@@ -60,6 +60,10 @@ export type PaperAccount = {
     settlement: string
     short_selling: boolean
     price_source: string
+    market_hours_enforced: boolean
+    calendar: string
+    timezone: string
+    sessions: string[]
   }
 }
 
@@ -113,6 +117,7 @@ export type PaperOrder = {
   realized_pnl?: number | null
   quote_as_of?: string
   quote_source?: string
+  trade_date?: string
   status: string
   created_at: string
   idempotent_replay: boolean

@@ -3,7 +3,6 @@ from __future__ import annotations
 from research_system.cli.flow.chat_event_adapter import build_chat_presenter, chat_event_listener
 from research_system.cli.commands.research_request_payloads import build_research_request
 from research_system.runtime.agent_os import AgentOS
-from research_system.runtime.orchestrator import ResearchOrchestrator
 from research_system.runtime.platform.settings import Settings
 from research_system.schemas.runtime import RunEvent
 from research_system.services.routing.router.task_router import ChatDispatchDecision
