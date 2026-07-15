@@ -1,0 +1,23 @@
+tests/test_agent_os.py
+  s_a6a8a3a6f43b3c::t_d88a1d296b0375 22-23
+tests/test_provider_registry.py
+  s_a6a8a3a6f43b3c::t_63b45d1eb9af95 7,65-78
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "5c82fc245cada776ddcae549441d34a1ed3dff8a",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
