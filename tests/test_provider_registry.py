@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from research_system.runtime.providers.openai_client_support import OpenAIClientSupport
 from research_system.runtime.providers.openai_response_support import OpenAIResponseSupport
@@ -61,12 +62,20 @@ class ProviderRegistryTests(unittest.TestCase):
         return settings.model_copy(update={"openai_api_key": "test-key"})
 
     def test_from_env_does_not_leak_dotenv_values_into_later_workspaces(self) -> None:
-        root_settings = Settings.from_env(Path("."))
-        self.assertTrue(bool(root_settings.openai_api_key))
+        with (
+            tempfile.TemporaryDirectory() as configured_dir,
+            tempfile.TemporaryDirectory() as isolated_dir,
+            patch.dict("os.environ", {}, clear=True),
+        ):
+            Path(configured_dir, ".env").write_text(
+                "OPENAI_API_KEY=workspace-key\nOPENAI_BASE_URL=https://example.test/v1\n",
+                encoding="utf-8",
+            )
+            configured_settings = Settings.from_env(Path(configured_dir))
+            isolated_settings = Settings.from_env(Path(isolated_dir))
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            isolated_settings = Settings.from_env(Path(temp_dir))
-
+        self.assertEqual(configured_settings.openai_api_key, "workspace-key")
+        self.assertEqual(configured_settings.openai_base_url, "https://example.test/v1")
         self.assertIsNone(isolated_settings.openai_api_key)
         self.assertIsNone(isolated_settings.openai_base_url)
 

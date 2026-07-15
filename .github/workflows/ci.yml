@@ -14,7 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      OPENAI_API_KEY: test-key
       COGNITRADE_API_ALLOW_UNAUTHENTICATED: "true"
     steps:
       - uses: actions/checkout@v4
