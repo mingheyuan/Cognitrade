@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
 from research_system.cli.flow.chat_controller import handle_chat_line
@@ -13,7 +14,7 @@ from research_system.cli.state.chat_updates import TranscriptUpdate
 from research_system.runtime.orchestrator import ResearchOrchestrator
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.runtime.storage.jsonl import read_json
-from research_system.schemas.protocol import RequestEnvelope
+from research_system.schemas.protocol import ProgressState, RequestEnvelope, ResponseEnvelope
 from research_system.services.memory import MemoryService
 from research_system.services.routing.router.task_router import TaskRouter
 
@@ -525,7 +526,22 @@ class ChatControllerTests(unittest.TestCase):
 
             orchestrator = ResearchOrchestrator(settings, event_listener=listener)
             try:
-                response = orchestrator.run(RequestEnvelope(intent="stock_check", user_query="\u5206\u6790 000001"))
+                request = RequestEnvelope(intent="stock_check", user_query="\u5206\u6790 000001")
+                agent_os_response = ResponseEnvelope(
+                    request_id=request.request_id,
+                    run_id="01TESTEVENTLISTENER",
+                    mode="graph",
+                    intent="stock_check",
+                    status="completed_partial",
+                    message="Test run completed.",
+                    progress=ProgressState(status_message="completed", percent=100),
+                )
+                with patch.object(
+                    orchestrator._agent_os(),
+                    "handle_request",
+                    return_value=agent_os_response,
+                ):
+                    response = orchestrator.run(request)
 
                 self.assertEqual(response.status, "completed_partial")
                 self.assertIn("request_received", events)

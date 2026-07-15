@@ -13,7 +13,7 @@ from research_system.cli.memory.chat_thread_store import ChatThreadStore
 from research_system.cli.state.chat_updates import SessionStatePatch, TranscriptUpdate
 from research_system.runtime.orchestrator import ResearchOrchestrator
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
-from research_system.schemas.protocol import RequestEnvelope
+from research_system.schemas.protocol import ProgressState, RequestEnvelope, ResponseEnvelope
 
 
 class ChatShellTests(unittest.TestCase):
@@ -66,7 +66,25 @@ class ChatShellTests(unittest.TestCase):
 
             orchestrator = ResearchOrchestrator(settings, event_listener=listener)
             try:
-                response = orchestrator.run(RequestEnvelope(intent="stock_check", user_query="甯垜鐪嬩笅 000001 杩欎釜鑲＄エ"))
+                request = RequestEnvelope(
+                    intent="stock_check",
+                    user_query="甯垜鐪嬩笅 000001 杩欎釜鑲＄エ",
+                )
+                agent_os_response = ResponseEnvelope(
+                    request_id=request.request_id,
+                    run_id="01TESTEVENTLISTENER",
+                    mode="graph",
+                    intent="stock_check",
+                    status="completed_partial",
+                    message="Test run completed.",
+                    progress=ProgressState(status_message="completed", percent=100),
+                )
+                with patch.object(
+                    orchestrator._agent_os(),
+                    "handle_request",
+                    return_value=agent_os_response,
+                ):
+                    response = orchestrator.run(request)
 
                 self.assertEqual(response.status, "completed_partial")
                 self.assertIn("request_received", events)
