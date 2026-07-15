@@ -1,0 +1,145 @@
+.env.example
+  s_a6a8a3a6f43b3c::t_beb622e1738c80 8,26-28,48
+.github/workflows/ci.yml
+  s_a6a8a3a6f43b3c::t_1fc0f06eb0b91b 1-45
+README.md
+  s_a6a8a3a6f43b3c::t_ef9ff603d761e7 258-261,282,291-294
+api-doc/api-v2.md
+  s_a6a8a3a6f43b3c::t_9f93a51765b124 64-67,184,224-226,249-253,302
+domain_packs/finance_ashare/skills/capital_flow_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_5f7779618f41e7 9,27-31,47,74-78,82,97,102
+domain_packs/finance_ashare/skills/events_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_a34354c766121e 9,27-31,47,74-78,82,97,102
+domain_packs/finance_ashare/skills/fundamental_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_f2e1f797c9dce8 4,8-10,24-27,32,34,40-42,47-87,90-93,95-106,108-109
+domain_packs/finance_ashare/skills/lhb_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_8c09fe66efceb1 9,27-31,47,74-78,82,97,102
+domain_packs/finance_ashare/skills/market_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_b871bb6a7aa252 7,9-10,24-27,33,35,41-43,48-87,89-90,92,94,99-108,111-114,116-127,129-130
+domain_packs/finance_ashare/skills/notice_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_020a6ae5cf5272 8,40,87-91,95,101,122
+domain_packs/finance_ashare/skills/policy_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_e3a11313655387 8,22-26,41,69-73,77,93,98
+domain_packs/finance_ashare/skills/sector_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_eb94dbdec7df81 9,95-99,103,108,129,146,150
+domain_packs/finance_ashare/skills/sentiment_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_807f3c55e0157b 9,27-31,47,74-78,82,97,102
+domain_packs/finance_ashare/subagents/task_intake.py
+  s_a6a8a3a6f43b3c::t_753ca508772cbf 215
+domain_packs/finance_ashare/tools/snapshot_collector.py
+  s_a6a8a3a6f43b3c::t_15d55644308ff2 7,41-43,87-95,121,125,138,160,206,234-239,242,244,249,251-252,256-266,315,408,432,436,453,474,531,548,629,633,635-645,690,694
+frontend/package-lock.json
+  s_a6a8a3a6f43b3c::t_3b366bdb787b95 18-19,27,30-31,34-91,284-293,342-494,657-674,1140-1215,1227-1245,1309-1315,1632-1744,1785-1788,1791,1793-1837,1853-1862,1931-1940,1972-1992,2121-2134,2153-2159,2173-2182,2193-2200,2208-2227,2436-2445,2462-2471,2630-2642,2673-2682,2715-2721,2736-2786,3166-3203,3263-3276,3327-3339,3360-3366,3426-3449,3541-3554,3570-3579,3620-3632,3672-3678,3689-3722,3729-3745,3763-3818,3891-3900,4051-4188,4205-4221,4232-4248
+frontend/package.json
+  s_a6a8a3a6f43b3c::t_ac111045846ba9 10-11,21-22,30,33-34
+frontend/src/App.tsx
+  s_a6a8a3a6f43b3c::t_93ca9a046dd6b1 2,6-7,19,37,39,43,56,63,65,84,95-104
+frontend/src/components/MarketData.tsx
+  s_a6a8a3a6f43b3c::t_4748e4d71608b6 18,433,441-443,445-448,450,588,696
+frontend/src/components/PaperTrading.test.ts
+  s_a6a8a3a6f43b3c::t_537a5ba72a268e 1-19
+frontend/src/components/PaperTrading.tsx
+  s_a6a8a3a6f43b3c::t_42440a86241bd5 19
+frontend/src/components/WorkspaceView.tsx
+  s_a6a8a3a6f43b3c::t_a4e9a294f08bd9 1-53
+frontend/src/finance-contracts.ts
+  s_a6a8a3a6f43b3c::t_110bbfefc32432 63-66,120
+frontend/src/hooks/useViewNavigation.test.ts
+  s_a6a8a3a6f43b3c::t_aa763eeacb39e3 1-15
+frontend/src/hooks/useViewNavigation.ts
+  s_a6a8a3a6f43b3c::t_155abcac90a950 1-43
+frontend/src/main.tsx
+  s_a6a8a3a6f43b3c::t_6eeada6666d2ce 6
+frontend/src/styles/finance-components.css
+  s_a6a8a3a6f43b3c::t_8ad2dc52c02180 1-28
+frontend/src/test/setup.ts
+  s_a6a8a3a6f43b3c::t_59ab1c05895922 1
+frontend/src/utils/data-availability.test.ts
+  s_a6a8a3a6f43b3c::t_4ae75e6f38deb0 1-16
+frontend/src/utils/data-availability.ts
+  s_a6a8a3a6f43b3c::t_d2114107a873c2 1-28
+frontend/src/utils/paper-order.ts
+  s_a6a8a3a6f43b3c::t_85a0f2b00ea559 1-10
+frontend/vite.config.ts
+  s_a6a8a3a6f43b3c::t_3917a3bd85508a 1,6-9
+plan/AllPlan/agent_os_migration_matrix.md
+  s_a6a8a3a6f43b3c::t_52d3505eb97054 11,15,27-29,34-35
+requirements.txt
+  s_a6a8a3a6f43b3c::t_448a8352d5faad 2-3,16
+research_system/.env.example
+  s_a6a8a3a6f43b3c::t_186f4cfde2fbcb 4,16
+research_system/adapters/vendors/akshare_fundamental_adapter.py
+  s_a6a8a3a6f43b3c::t_e6d2c0f0b41201 10,97
+research_system/adapters/vendors/akshare_market_adapter.py
+  s_a6a8a3a6f43b3c::t_003b06b99f3d08 14,64,125
+research_system/adapters/vendors/baostock_market_adapter.py
+  s_a6a8a3a6f43b3c::t_eda61caf9808de 1-86
+research_system/adapters/vendors/provider_execution.py
+  s_a6a8a3a6f43b3c::t_91fc1179303a11 1-130
+research_system/adapters/vendors/provider_registry.py
+  s_a6a8a3a6f43b3c::t_45af00075e8c12 39-40,43-54,62,68-78,122-123,151-152,170-171,180-181,190-191,209-210
+research_system/adapters/vendors/tushare_fundamental_adapter.py
+  s_a6a8a3a6f43b3c::t_c7c6838b6a014c 1-48
+research_system/api/app.py
+  s_a6a8a3a6f43b3c::t_b78c00a1e06e40 103
+research_system/api/finance_market_data_service.py
+  s_a6a8a3a6f43b3c::t_cf0781608e0b21 223-231
+research_system/api/paper_trading_service.py
+  s_a6a8a3a6f43b3c::t_6c066a88195359 3-4,12,46-54,57-59,137-149,153,169-171,251-252,273,297,324,459,481,484-490,586,602-603,630,680-682,684-700
+research_system/api/trading_calendar.py
+  s_a6a8a3a6f43b3c::t_3ddf9bd6bc1299 1-77
+research_system/runtime/config/settings_env.py
+  s_a6a8a3a6f43b3c::t_30e6cc0fa438aa 38,81-83,86-89
+research_system/runtime/diagnostics/status/provider_health.py
+  s_a6a8a3a6f43b3c::t_26e313828c8ff8 24-29,37-38
+research_system/runtime/platform/settings.py
+  s_a6a8a3a6f43b3c::t_6feb1b1765eb0d 25,56
+research_system/schemas/protocol.py
+  s_a6a8a3a6f43b3c::t_2cfe38c4ddebf0 22
+tests/test_agent_os.py
+  s_a6a8a3a6f43b3c::t_ea80d5ddacc05d 43
+tests/test_agent_os_api.py
+  s_a6a8a3a6f43b3c::t_97431492507577 280-281,334
+tests/test_agent_os_core_loop.py
+  s_a6a8a3a6f43b3c::t_1f62bbe29c8d9c 448
+tests/test_agent_os_task_intake.py
+  s_a6a8a3a6f43b3c::t_a38c91cb245b30 176
+tests/test_akshare_market_adapter.py
+  s_a6a8a3a6f43b3c::t_50347b57e779f0 104,107-108
+tests/test_api_v2_finance.py
+  s_a6a8a3a6f43b3c::t_848a04b1493fa5 3,136-140,234
+tests/test_chat_controller.py
+  s_a6a8a3a6f43b3c::t_d17b95e5483662 530,562
+tests/test_chat_research_runner.py
+  s_a6a8a3a6f43b3c::t_b3b662f667e86a 62-90,235
+tests/test_chat_shell.py
+  s_a6a8a3a6f43b3c::t_2e56332b3418ef 71
+tests/test_finance_pack_migration_completion.py
+  s_a6a8a3a6f43b3c::t_79a10573e3e215 219,221,339
+tests/test_finance_provider_execution.py
+  s_a6a8a3a6f43b3c::t_9f5f1c7478ffaf 1-129
+tests/test_paper_trading_calendar.py
+  s_a6a8a3a6f43b3c::t_e4df947f4b486f 1-79
+tests/test_provider_health.py
+  s_a6a8a3a6f43b3c::t_932bb1763dd875 27-30
+tests/test_uzi_finance_pack.py
+  s_a6a8a3a6f43b3c::t_36e2609c90e14d 792,831-840
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "1824431fd2004c8fe3185bb51ee159aead67ed40",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
