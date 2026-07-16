@@ -5,7 +5,17 @@ from typing import Any
 
 import akshare as ak
 
-from research_system.adapters.vendors.akshare_utils import call_with_retry, normalize_value
+from research_system.adapters.vendors.akshare_utils import call_with_retry, normalize_ashare_symbol, normalize_value
+
+
+_LHB_STATISTICS_PERIOD = "\u8fd1\u4e00\u6708"
+_LHB_SYMBOL_COLUMNS = {
+    "\u4ee3\u7801",
+    "\u8bc1\u5238\u4ee3\u7801",
+    "\u80a1\u7968\u4ee3\u7801",
+    "security_code",
+    "symbol",
+}
 
 
 class AkShareLHBAdapter:
@@ -27,14 +37,23 @@ class AkShareLHBAdapter:
             retries=2,
             delay_seconds=0.5,
         )
-        stats_df = call_with_retry(lambda: ak.stock_lhb_stock_statistic_em(symbol=symbol), retries=2, delay_seconds=0.5)
+        stats_df = call_with_retry(
+            lambda: ak.stock_lhb_stock_statistic_em(symbol=_LHB_STATISTICS_PERIOD),
+            retries=2,
+            delay_seconds=0.5,
+        )
+        statistics = [
+            self._normalize_row(row)
+            for row in stats_df.to_dict("records")
+            if self._matches_symbol(row, symbol)
+        ]
 
         return {
             "symbol": symbol,
             "latest_lhb_date": latest_date,
             "buy_detail": [self._normalize_row(item) for item in buy_df.head(10).to_dict("records")] if not buy_df.empty else [],
             "sell_detail": [self._normalize_row(item) for item in sell_df.head(10).to_dict("records")] if not sell_df.empty else [],
-            "lhb_statistics": [self._normalize_row(item) for item in stats_df.head(5).to_dict("records")] if not stats_df.empty else [],
+            "lhb_statistics": statistics[:5],
             "buy_top_total": self._sum_numeric_column(buy_df),
             "sell_top_total": self._sum_numeric_column(sell_df),
         }
@@ -55,6 +74,23 @@ class AkShareLHBAdapter:
 
     def _normalize_row(self, row: dict[str, Any]) -> dict[str, Any]:
         return {str(key): normalize_value(value) for key, value in row.items()}
+
+    def _matches_symbol(self, row: dict[str, Any], symbol: str) -> bool:
+        target = self._symbol_text(symbol)
+        for key, value in row.items():
+            if str(key).strip().lower() in _LHB_SYMBOL_COLUMNS and self._symbol_text(value) == target:
+                return True
+        return False
+
+    def _symbol_text(self, value: Any) -> str:
+        normalized = str(normalize_value(value) or "").strip().lower()
+        if normalized.endswith(".0"):
+            normalized = normalized[:-2]
+        if normalized[:2] in {"sh", "sz", "bj"}:
+            normalized = normalized[2:]
+        if normalized.isdigit():
+            normalized = normalized.zfill(6)
+        return normalize_ashare_symbol(normalized)
 
     def _sum_numeric_column(self, df) -> float | None:
         if df is None or getattr(df, "empty", True):
