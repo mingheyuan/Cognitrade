@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 import jsonschema
 
-from research_system.runtime.storage.jsonl import append_jsonl, read_json, write_json
+from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.adapters.storage.resource_lease import (
     FileResourceLeaseStore,
@@ -45,6 +45,7 @@ class CoreToolContext:
     request_id: str
     run_root: Path
     actor: str
+    turn_id: str | None = None
     cache_root: Path | None = None
     worker_id: str | None = None
     user_id: str | None = None
@@ -602,8 +603,8 @@ class CoreToolRegistry:
         self._emit(context, "tool_call_rejected", call=call, result=result)
         return result
 
-    @staticmethod
     def _emit(
+        self,
         context: CoreToolContext,
         event_type: str,
         *,
@@ -636,8 +637,16 @@ class CoreToolRegistry:
             payload["metadata"] = result.metadata
         if extra:
             payload.update(extra)
-        payload = EventEnvelope.model_validate(payload).model_dump(mode="json")
-        append_jsonl(context.run_root / "execution_events.jsonl", payload)
+        with self._lock:
+            existing_events = read_jsonl(context.run_root / "execution_events.jsonl")
+            sequence = max(
+                (int(event.get("sequence") or 0) for event in existing_events),
+                default=0,
+            ) + 1
+            payload["turn_id"] = context.turn_id
+            payload["sequence"] = sequence
+            payload = EventEnvelope.model_validate(payload).model_dump(mode="json")
+            append_jsonl(context.run_root / "execution_events.jsonl", payload)
         if context.event_callback is not None:
             context.event_callback(payload)
 

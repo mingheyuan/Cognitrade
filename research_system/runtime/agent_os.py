@@ -22,10 +22,11 @@ from research_system.runtime.planning.capability_planner import (
 )
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import ProviderRegistry
-from research_system.runtime.storage.jsonl import read_json, write_json
+from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
 from research_system.runtime.storage.jsonl import append_jsonl
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.storage.runs.run_store import RunStore
+from research_system.runtime.turn_runner import TurnContext, TurnRunner
 from research_system.schemas.artifacts import ArtifactDraft, ArtifactProducer, ArtifactRecord
 from research_system.schemas.core_runtime import (
     MainAgentRunResult,
@@ -39,6 +40,36 @@ from research_system.schemas.execution_runtime import ExecutionRunResult, Execut
 from research_system.schemas.protocol import ProgressState, RequestEnvelope, ResponseEnvelope
 from research_system.services.memory.layers import LayeredMemoryStore
 
+
+class _AgentOSGraphRunnerAdapter:
+    """Adapt the existing Graph request implementation to GraphExecutor."""
+
+    def __init__(self, agent_os: "AgentOS") -> None:
+        self.agent_os = agent_os
+
+    def step(self, context: TurnContext) -> ExecutionRunResult:
+        if context.resume:
+            if context.rerun_from:
+                return self.agent_os._rerun_graph_task(
+                    context.run_id,
+                    context.rerun_from,
+                    thread_id=context.thread_id,
+                    event_callback=context.event_callback,
+                )
+            return self.agent_os._resume_graph_task(
+                context.run_id,
+                thread_id=context.thread_id,
+                event_callback=context.event_callback,
+            )
+        if context.graph is not None:
+            return self.agent_os._execute_prebuilt_graph(context)
+        return self.agent_os._execute_graph_task(
+            context.request,
+            run_id=context.run_id,
+            turn_id=context.turn.turn_id,
+            intake_decision=context.decision,
+            event_callback=context.event_callback,
+        )
 
 class AgentOS:
     """Public domain-neutral API for capability planning and graph execution."""
@@ -79,6 +110,11 @@ class AgentOS:
         self._active: dict[str, ExecutionGraphRunner] = {}
         self._prepared_run_ids: set[str] = set()
         self._lock = RLock()
+        self.turn_runner = TurnRunner(
+            run_store=self.run_store,
+            main_agent=self.main_agent,
+            graph_adapter=_AgentOSGraphRunnerAdapter(self),
+        )
 
     def list_domain_packs(self) -> list[dict[str, Any]]:
         return [
@@ -282,7 +318,7 @@ class AgentOS:
                 "required_artifact_types": required,
             },
         )
-        effective_run_id, paths, _ = self.run_store.create_run(
+        effective_run_id, _, _ = self.run_store.create_run(
             request,
             request.intent or f"domain:{domain_id}",
             run_id=run_id,
@@ -309,45 +345,30 @@ class AgentOS:
         if graph.governance.timeout_seconds is None:
             graph.governance.timeout_seconds = float(self.settings.run_timeout_seconds)
         thread_id = str(request.thread_id or request.slots.get("chat_thread_id") or graph.graph_id)
-        self._write_graph_agent_state(
-            paths.root,
-            run_id=effective_run_id,
+        decision = RequestIntakeDecision(
+            status="accepted",
+            request_kind="domain_task",
+            recommended_mode="graph",
+            intent=request.intent,
+            domain_id=domain_id,
+            confidence=1.0,
+        )
+        outcome = self.turn_runner.execute_task(
             request=request,
+            decision=decision,
+            run_id=effective_run_id,
             thread_id=thread_id,
+            execution_mode="graph",
             graph=graph,
-            status="running",
+            seed_artifacts=input_artifacts,
+            event_callback=event_callback,
         )
-        write_json(
-            paths.root / "agent_os_request.json",
-            {
-                "run_id": effective_run_id,
-                "thread_id": thread_id,
-                "request_id": request.request_id,
-                "domain_id": domain_id,
-                "objective": objective,
-                "required_artifact_types": required,
-            },
+        result = outcome.result
+        self.turn_runner.finalize(
+            outcome=outcome,
+            response_factory=lambda value: self._response_from_graph(request, value),
         )
-        runner = self._runner(effective_run_id, event_callback=event_callback)
-        with self._lock:
-            self._active[effective_run_id] = runner
-        try:
-            result = runner.run(
-                graph=graph,
-                run_id=effective_run_id,
-                thread_id=thread_id,
-                request_id=request.request_id,
-                user_id=request.user_id,
-                tenant_id=request.tenant_id,
-                seed_artifacts=input_artifacts,
-            )
-            result = self._ensure_graph_assistant_message(result)
-            self._update_graph_agent_state(result)
-            self._write_summary(result)
-            return result
-        finally:
-            with self._lock:
-                self._active.pop(effective_run_id, None)
+        return result
 
     def run_request(
         self,
@@ -356,6 +377,109 @@ class AgentOS:
         run_id: str | None = None,
         intake_decision: RequestIntakeDecision | None = None,
         event_callback=None,
+        turn_id: str | None = None,
+    ) -> ExecutionRunResult:
+        """Compatibility facade for callers that still invoke Graph directly."""
+        return self._execute_graph_task(
+            request,
+            run_id=run_id,
+            intake_decision=intake_decision,
+            event_callback=event_callback,
+            turn_id=turn_id,
+        )
+
+    def _run_graph_runner(
+        self,
+        *,
+        run_id: str,
+        request: RequestEnvelope,
+        thread_id: str,
+        graph=None,
+        seed_artifacts: list[ArtifactDraft] | None = None,
+        event_callback=None,
+        turn_id: str | None = None,
+        resume: bool = False,
+        intent: str | None = None,
+    ) -> ExecutionRunResult:
+        """Own the shared GraphRunner lease and result finalization."""
+        runner = self._runner(
+            run_id,
+            event_callback=event_callback,
+            turn_id=turn_id,
+        )
+        with self._lock:
+            self._active[run_id] = runner
+        try:
+            if resume:
+                result = runner.resume()
+            else:
+                if graph is None:
+                    raise ValueError("Graph execution requires a graph")
+                result = runner.run(
+                    graph=graph,
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    request_id=request.request_id,
+                    user_id=request.user_id,
+                    tenant_id=request.tenant_id,
+                    seed_artifacts=list(seed_artifacts or []),
+                )
+            result = self._ensure_graph_assistant_message(result)
+            self._update_graph_agent_state(result)
+            self._write_summary(result, intent=intent or request.intent)
+            return result
+        finally:
+            with self._lock:
+                self._active.pop(run_id, None)
+
+    def _execute_prebuilt_graph(self, context: TurnContext) -> ExecutionRunResult:
+        """Execute a graph prepared by a compatibility domain API in a Turn."""
+        graph = context.graph
+        if graph is None:
+            raise ValueError("prebuilt Graph execution requires a graph")
+        paths = self.run_store.load_run_paths(context.run_id)
+        self._write_graph_agent_state(
+            paths.root,
+            run_id=context.run_id,
+            request=context.request,
+            thread_id=context.thread_id,
+            graph=graph,
+            status="running",
+        )
+        write_json(
+            paths.root / "agent_os_request.json",
+            {
+                "run_id": context.run_id,
+                "thread_id": context.thread_id,
+                "request": context.request.model_dump(mode="json"),
+                "request_intake": context.decision.model_dump(mode="json"),
+                "domain_id": graph.domain_id,
+                "objective": graph.objective,
+                "intent": context.request.intent,
+                "required_artifact_types": list(
+                    graph.metadata.get("required_artifact_types") or []
+                ),
+            },
+        )
+        return self._run_graph_runner(
+            run_id=context.run_id,
+            request=context.request,
+            thread_id=context.thread_id,
+            graph=graph,
+            seed_artifacts=context.seed_artifacts,
+            event_callback=context.event_callback,
+            turn_id=context.turn.turn_id,
+            intent=context.request.intent,
+        )
+
+    def _execute_graph_task(
+        self,
+        request: RequestEnvelope,
+        *,
+        run_id: str | None = None,
+        intake_decision: RequestIntakeDecision | None = None,
+        event_callback=None,
+        turn_id: str | None = None,
     ) -> ExecutionRunResult:
         decision = intake_decision or self.request_intake_decision(request)
         if decision.status != "accepted":
@@ -398,32 +522,22 @@ class AgentOS:
                 ),
             },
         )
-        runner = self._runner(effective_run_id, event_callback=event_callback)
-        with self._lock:
-            self._active[effective_run_id] = runner
-        try:
-            result = runner.run(
-                graph=graph,
-                run_id=effective_run_id,
-                thread_id=thread_id,
-                request_id=request.request_id,
-                user_id=request.user_id,
-                tenant_id=request.tenant_id,
-                seed_artifacts=[
-                    ArtifactDraft(
-                        artifact_type="user_request",
-                        content=input_payload,
-                        source_refs=[{"type": "request", "id": request.request_id}],
-                    )
-                ],
-            )
-            result = self._ensure_graph_assistant_message(result)
-            self._update_graph_agent_state(result)
-            self._write_summary(result, intent=intent)
-            return result
-        finally:
-            with self._lock:
-                self._active.pop(effective_run_id, None)
+        return self._run_graph_runner(
+            run_id=effective_run_id,
+            request=request,
+            thread_id=thread_id,
+            graph=graph,
+            seed_artifacts=[
+                ArtifactDraft(
+                    artifact_type="user_request",
+                    content=input_payload,
+                    source_refs=[{"type": "request", "id": request.request_id}],
+                )
+            ],
+            event_callback=event_callback,
+            turn_id=turn_id,
+            intent=intent,
+        )
 
     def handle_request(
         self,
@@ -502,15 +616,18 @@ class AgentOS:
             with self._lock:
                 self._prepared_run_ids.add(effective_run_id)
         if decision.request_kind == "domain_task":
-            result = self.run_request(
-                resolved_request,
+            return self.turn_runner.run(
+                request=resolved_request,
+                decision=decision,
                 run_id=effective_run_id,
-                intake_decision=decision,
+                thread_id=thread_id,
+                execution_mode="graph",
+                response_factory=lambda result: self._response_from_graph(
+                    resolved_request,
+                    result,
+                ),
                 event_callback=event_callback,
             )
-            response = self._response_from_graph(resolved_request, result)
-            self._persist_response(response)
-            return response
 
         effective_run_id, paths, _ = self.run_store.create_run(
             resolved_request,
@@ -543,18 +660,18 @@ class AgentOS:
                 "request_intake": decision.model_dump(mode="json"),
             },
         )
-        result = self.main_agent.run(
+        return self.turn_runner.run(
             request=resolved_request,
             decision=decision,
             run_id=effective_run_id,
             thread_id=thread_id,
+            execution_mode=decision.recommended_mode,
+            response_factory=lambda result: self._finalize_core_turn_response(
+                resolved_request,
+                result,
+            ),
             event_callback=event_callback,
-            emit_started=False,
         )
-        self._write_core_summary(result)
-        response = self._response_from_core(resolved_request, result)
-        self._persist_response(response)
-        return response
 
     def _clarification_path(self, run_id: str) -> Path:
         return self.run_store.load_run_paths(run_id).root / "clarification_pending.json"
@@ -693,10 +810,7 @@ class AgentOS:
             "question": pending.get("question"),
             "missing_fields": list(pending.get("missing_fields") or []),
         }
-        event = EventEnvelope.model_validate(event).model_dump(mode="json")
-        append_jsonl(paths.root / "execution_events.jsonl", event)
-        if event_callback is not None:
-            event_callback(event)
+        self._append_execution_event(paths.root, event, event_callback)
         self._clarification_path(run_id).unlink(missing_ok=True)
 
     def _write_clarification_state(
@@ -772,8 +886,7 @@ class AgentOS:
             },
         )
 
-    @staticmethod
-    def _emit_clarification_event(root: Path, callback, *, run_id: str, request: RequestEnvelope, decision: RequestIntakeDecision) -> None:
+    def _emit_clarification_event(self, root: Path, callback, *, run_id: str, request: RequestEnvelope, decision: RequestIntakeDecision) -> None:
         event = {
             "event_type": "clarification_requested",
             "run_id": run_id,
@@ -783,10 +896,25 @@ class AgentOS:
             "question": decision.clarification_question or "请补充请求所需的信息后继续。",
             "missing_fields": list(decision.missing_fields),
         }
-        event = EventEnvelope.model_validate(event).model_dump(mode="json")
-        append_jsonl(root / "execution_events.jsonl", event)
+        self._append_execution_event(root, event, callback)
+
+    @staticmethod
+    def _append_execution_event(
+        root: Path,
+        event: dict[str, Any],
+        callback=None,
+    ) -> None:
+        """Append a pre-Turn event without resetting the shared cursor."""
+        path = root / "execution_events.jsonl"
+        existing = read_jsonl(path)
+        event["sequence"] = max(
+            (int(row.get("sequence") or 0) for row in existing),
+            default=0,
+        ) + 1
+        normalized = EventEnvelope.model_validate(event).model_dump(mode="json")
+        append_jsonl(path, normalized)
         if callback is not None:
-            callback(event)
+            callback(normalized)
 
     def _clarification_response(
         self,
@@ -846,15 +974,17 @@ class AgentOS:
                 "created_at": datetime.now(timezone.utc).isoformat(),
             },
         )
-        event = EventEnvelope(
-            event_type="run_accepted",
-            run_id=effective_run_id,
-            thread_id=str(request.thread_id or f"run:{effective_run_id}"),
-            request_id=request.request_id,
-            actor="agent_os",
-            message="Agent OS run accepted for background execution.",
-        ).model_dump(mode="json")
-        append_jsonl(root / "execution_events.jsonl", event)
+        self._append_execution_event(
+            root,
+            {
+                "event_type": "run_accepted",
+                "run_id": effective_run_id,
+                "thread_id": str(request.thread_id or f"run:{effective_run_id}"),
+                "request_id": request.request_id,
+                "actor": "agent_os",
+                "message": "Agent OS run accepted for background execution.",
+            },
+        )
         return effective_run_id
 
     def adopt_prepared_run(self, run_id: str) -> None:
@@ -1019,45 +1149,52 @@ class AgentOS:
             if state.status != "paused":
                 raise ValueError(f"core run is not resumable: {state.status}")
             request, decision = self._load_core_request(run_id)
-            result = self.main_agent.run(
+            result, _ = self._resume_core_task(
                 request=request,
                 decision=decision,
-                run_id=state.run_id,
-                thread_id=state.thread_id,
-                resume=True,
+                state=state,
             )
-            self._write_core_summary(result)
             return result  # type: ignore[return-value]
-        runner = self._runner(run_id)
-        with self._lock:
-            self._active[run_id] = runner
-        try:
-            result = runner.resume()
-            result = self._ensure_graph_assistant_message(result)
-            self._update_graph_agent_state(result)
-            self._write_summary(result)
-            return result
-        finally:
-            with self._lock:
-                self._active.pop(run_id, None)
+        request, decision = self._load_graph_request(run_id)
+        snapshot = detail.get("snapshot") or {}
+        outcome = self.turn_runner.execute_task(
+            request=request,
+            decision=decision,
+            run_id=run_id,
+            thread_id=str(snapshot.get("thread_id") or f"thread_{run_id}"),
+            execution_mode="graph",
+            resume=True,
+        )
+        result = outcome.result
+        self._update_graph_agent_state(result)
+        self._write_summary(result)
+        self.turn_runner.finalize(
+            outcome=outcome,
+            response_factory=lambda value: self._response_from_graph(request, value),
+        )
+        return result
 
     def rerun_from(self, run_id: str, node_id: str) -> ExecutionRunResult:
         detail = self.inspect_run(run_id)
         if detail.get("mode") == "core":
             raise ValueError("Core Agent Loop runs do not expose graph nodes for partial rerun")
-        runner = self._runner(run_id)
-        runner.rerun_from(node_id)
-        with self._lock:
-            self._active[run_id] = runner
-        try:
-            result = runner.resume()
-            result = self._ensure_graph_assistant_message(result)
-            self._update_graph_agent_state(result)
-            self._write_summary(result)
-            return result
-        finally:
-            with self._lock:
-                self._active.pop(run_id, None)
+        request, decision = self._load_graph_request(run_id)
+        snapshot = detail.get("snapshot") or {}
+        outcome = self.turn_runner.execute_task(
+            request=request,
+            decision=decision,
+            run_id=run_id,
+            thread_id=str(snapshot.get("thread_id") or f"thread_{run_id}"),
+            execution_mode="graph",
+            resume=True,
+            rerun_from=node_id,
+        )
+        result = outcome.result
+        self.turn_runner.finalize(
+            outcome=outcome,
+            response_factory=lambda value: self._response_from_graph(request, value),
+        )
+        return result
 
     def pause(self, run_id: str) -> bool:
         detail = self.inspect_run(run_id)
@@ -1135,7 +1272,13 @@ class AgentOS:
         runner.submit_patch(patch)
         return True
 
-    def _runner(self, run_id: str, *, event_callback=None) -> ExecutionGraphRunner:
+    def _runner(
+        self,
+        run_id: str,
+        *,
+        event_callback=None,
+        turn_id: str | None = None,
+    ) -> ExecutionGraphRunner:
         paths = self.run_store.load_run_paths(run_id)
         return ExecutionGraphRunner(
             registry=self.registry,
@@ -1153,6 +1296,7 @@ class AgentOS:
             cache_root=self.settings.memory_root / "agent_os_cache",
             event_callback=event_callback,
             progress_observer=self.main_agent.observe_graph_progress,
+            turn_id=turn_id,
         )
 
     def _runner_board(self, run_id: str):
@@ -1169,6 +1313,117 @@ class AgentOS:
         return (
             RequestEnvelope.model_validate(payload["request"]),
             RequestIntakeDecision.model_validate(decision_payload),
+        )
+
+    def _resume_core_task(
+        self,
+        *,
+        request: RequestEnvelope,
+        decision: RequestIntakeDecision,
+        state: MainAgentState,
+    ) -> tuple[MainAgentRunResult, ResponseEnvelope]:
+        outcome = self.turn_runner.execute_task(
+            request=request,
+            decision=decision,
+            run_id=state.run_id,
+            thread_id=state.thread_id,
+            execution_mode=state.mode,
+            resume=True,
+        )
+        result = outcome.result
+        self._write_core_summary(result)
+        response = self.turn_runner.finalize(
+            outcome=outcome,
+            response_factory=lambda value: self._response_from_core(request, value),
+        )
+        return result, response
+
+    def _load_graph_request(self, run_id: str):
+        root = self.run_store.load_run_paths(run_id).root
+        payload = read_json(root / "agent_os_request.json")
+        if not isinstance(payload, dict):
+            raise ValueError(f"graph run request is missing: {run_id}")
+        request_payload = payload.get("request")
+        if isinstance(request_payload, dict):
+            request = RequestEnvelope.model_validate(request_payload)
+        else:
+            # ``run_domain`` predates the standard request envelope and only
+            # persisted the graph-facing fields. Reconstruct a stable request
+            # for resume without re-running intake or creating a new Run.
+            request = RequestEnvelope(
+                request_id=str(payload.get("request_id") or generate_ulid()),
+                thread_id=str(payload.get("thread_id") or f"thread_{run_id}"),
+                intent=str(payload.get("intent") or payload.get("domain_id") or "domain_task"),
+                user_query=str(payload.get("objective") or "Resume the domain graph."),
+                slots={"domain_id": payload.get("domain_id")},
+            )
+        decision = RequestIntakeDecision(
+            status="accepted",
+            request_kind="domain_task",
+            recommended_mode="graph",
+            intent=str(payload.get("intent") or request.intent or "") or None,
+            domain_id=str(payload.get("domain_id") or "") or None,
+            confidence=1.0,
+        )
+        return request, decision
+
+    def _resume_graph_task(
+        self,
+        run_id: str,
+        *,
+        thread_id: str | None = None,
+        event_callback=None,
+    ) -> ExecutionRunResult:
+        turn_payload = read_json(
+            self.run_store.load_run_paths(run_id).root / "turn_state.json"
+        )
+        request, _ = self._load_graph_request(run_id)
+        return self._run_graph_runner(
+            run_id=run_id,
+            request=request,
+            thread_id=str(thread_id or request.thread_id or f"thread_{run_id}"),
+            event_callback=event_callback,
+            turn_id=(
+                str(turn_payload.get("turn_id"))
+                if isinstance(turn_payload, dict) and turn_payload.get("turn_id")
+                else None
+            ),
+            resume=True,
+        )
+
+    def _rerun_graph_task(
+        self,
+        run_id: str,
+        node_id: str,
+        *,
+        thread_id: str | None = None,
+        event_callback=None,
+    ) -> ExecutionRunResult:
+        request, _ = self._load_graph_request(run_id)
+        turn_payload = read_json(
+            self.run_store.load_run_paths(run_id).root / "turn_state.json"
+        )
+        runner = self._runner(
+            run_id,
+            event_callback=event_callback,
+            turn_id=(
+                str(turn_payload.get("turn_id"))
+                if isinstance(turn_payload, dict) and turn_payload.get("turn_id")
+                else None
+            ),
+        )
+        runner.rerun_from(node_id)
+        return self._run_graph_runner(
+            run_id=run_id,
+            request=request,
+            thread_id=str(thread_id or request.thread_id or f"thread_{run_id}"),
+            event_callback=event_callback,
+            turn_id=(
+                str(turn_payload.get("turn_id"))
+                if isinstance(turn_payload, dict) and turn_payload.get("turn_id")
+                else None
+            ),
+            resume=True,
         )
 
     def _response_from_graph(
@@ -1343,6 +1598,15 @@ class AgentOS:
                 "tool_call_ids": [item.call_id for item in result.tool_calls],
             },
         )
+
+    def _finalize_core_turn_response(
+        self,
+        request: RequestEnvelope,
+        result: MainAgentRunResult,
+    ) -> ResponseEnvelope:
+        """Build the legacy Core response inside TurnRunner.finalize."""
+        self._write_core_summary(result)
+        return self._response_from_core(request, result)
 
     def _persist_response(self, response: ResponseEnvelope) -> None:
         if not response.run_id:

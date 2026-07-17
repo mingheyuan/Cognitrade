@@ -28,6 +28,10 @@ class EventEnvelope(BaseModel):
     run_id: str
     thread_id: str
     request_id: str
+    turn_id: str | None = None
+    task_type: str | None = None
+    execution_mode: str | None = None
+    sequence: int = Field(default=0, ge=0)
     graph_revision: int | None = None
     actor: str = "agent_os"
     node_id: str | None = None

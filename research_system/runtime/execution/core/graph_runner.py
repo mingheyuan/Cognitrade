@@ -125,6 +125,7 @@ class ExecutionNodeContext:
     memory_store: Any | None = None
     settings: Any | None = None
     event_callback: Callable[[dict[str, Any]], None] | None = None
+    turn_id: str | None = None
     progress_observer: Callable[[dict[str, Any]], dict[str, str] | None] | None = None
     progress_emitter: Callable[[dict[str, Any]], None] | None = None
     authorize_tool_call: Callable[[], bool] | None = None
@@ -171,6 +172,7 @@ class ExecutionNodeContext:
             tenant_id=self.tenant_id,
             run_root=Path(self.artifact_board.path).parent,
             actor=f"subagent:{self.node.node_id}",
+            turn_id=self.turn_id,
             cache_root=self.cache_root,
             artifact_board=self.artifact_board,
             skill_runtime=self.skill_runtime,
@@ -295,6 +297,9 @@ class ExecutionGraphRunner:
         cache_root: Path | None = None,
         failure_injections: list[dict[str, Any]] | None = None,
         progress_observer: Callable[[dict[str, Any]], dict[str, str] | None] | None = None,
+        turn_id: str | None = None,
+        task_type: str = "regular",
+        execution_mode: str = "graph",
     ) -> None:
         self.registry = registry
         self.run_root = Path(run_root)
@@ -324,7 +329,15 @@ class ExecutionGraphRunner:
         self._run_id: str | None = self.run_root.name
         self._thread_id: str | None = None
         self._request_id: str | None = None
+        self._turn_id = turn_id
+        self._task_type = task_type
+        self._execution_mode = execution_mode
         self._graph_revision: int | None = None
+        existing_events = read_jsonl(self.events_path)
+        self._event_sequence = max(
+            (int(event.get("sequence") or 0) for event in existing_events),
+            default=0,
+        )
         self._tool_semaphore: Semaphore | None = None
         self._progress_policy: dict[str, Any] = {}
         self._progress_model_updates = 0
@@ -758,6 +771,13 @@ class ExecutionGraphRunner:
             snapshot.updated_at = utc_now()
             self._persist(snapshot)
             self._emit("graph_running_nodes_requeued_after_restart")
+        if snapshot.status in {"gated", "completed_partial"}:
+            # An explicit resume may re-evaluate gates or newly available
+            # inputs. Completed runs remain non-resumable; these two statuses
+            # are the recoverable terminal outcomes of a partial Graph run.
+            self._set_run_status(snapshot, "paused")
+            snapshot.updated_at = utc_now()
+            self._persist(snapshot)
         self._pause_requested.clear()
         self._write_control(pause_requested=False, cancel_requested=False)
         return self.run(
@@ -1307,6 +1327,7 @@ class ExecutionGraphRunner:
                             memory_store=self.memory_store,
                             settings=self.settings,
                             event_callback=self.event_callback,
+                            turn_id=self._turn_id,
                             progress_observer=self.progress_observer,
                             progress_emitter=self._emit_observer_progress,
                             authorize_tool_call=lambda: self._authorize_tool_call(snapshot),
@@ -2962,6 +2983,9 @@ class ExecutionGraphRunner:
             "run_id": self._run_id or "unknown",
             "thread_id": self._thread_id or "unknown",
             "request_id": self._request_id or "unknown",
+            "turn_id": self._turn_id,
+            "task_type": self._task_type,
+            "execution_mode": self._execution_mode,
             "graph_revision": revision,
             "event_type": event_type,
             "actor": payload.get("actor", "execution_graph_runner"),
@@ -2969,6 +2993,16 @@ class ExecutionGraphRunner:
         }
         event = EventEnvelope.model_validate(event).model_dump(mode="json")
         with self._lock:
+            existing_events = read_jsonl(self.events_path)
+            self._event_sequence = max(
+                self._event_sequence,
+                max(
+                    (int(item.get("sequence") or 0) for item in existing_events),
+                    default=0,
+                ),
+            )
+            self._event_sequence += 1
+            event["sequence"] = self._event_sequence
             append_jsonl(self.events_path, event)
         if self.event_callback is not None:
             self.event_callback(event)

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import json
 import re
 from pathlib import Path
-from threading import Event
+from threading import Event, RLock
 from typing import Any, Callable
 
 from research_system.runtime.core.artifact_board import ArtifactBoard
@@ -14,7 +14,7 @@ from research_system.runtime.core.tool_registry import (
     CoreToolRegistry,
     build_core_tool_registry,
 )
-from research_system.runtime.storage.jsonl import append_jsonl, read_json, write_json
+from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
 from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.schemas.core_runtime import (
@@ -50,6 +50,9 @@ class MainAgent:
         self.memory_store = memory_store
         self.llm_provider = llm_provider
         self.tools = tool_registry or build_core_tool_registry()
+        self._event_lock = RLock()
+        self._event_sequences: dict[str, int] = {}
+        self._event_turn_ids: dict[str, str] = {}
 
     def run(
         self,
@@ -61,7 +64,34 @@ class MainAgent:
         event_callback: Callable[[dict[str, Any]], None] | None = None,
         resume: bool = False,
         emit_started: bool = True,
+        turn_id: str | None = None,
     ) -> MainAgentRunResult:
+        """Compatibility facade; standard execution is owned by TurnRunner."""
+        return self._run_core_task(
+            request=request,
+            decision=decision,
+            run_id=run_id,
+            thread_id=thread_id,
+            event_callback=event_callback,
+            resume=resume,
+            emit_started=emit_started,
+            turn_id=turn_id,
+        )
+
+    def _run_core_task(
+        self,
+        *,
+        request: RequestEnvelope,
+        decision: RequestIntakeDecision,
+        run_id: str,
+        thread_id: str,
+        event_callback: Callable[[dict[str, Any]], None] | None = None,
+        resume: bool = False,
+        emit_started: bool = True,
+        turn_id: str | None = None,
+    ) -> MainAgentRunResult:
+        if turn_id:
+            self._event_turn_ids[run_id] = turn_id
         paths = self.run_store.load_run_paths(run_id)
         board = ArtifactBoard(paths.artifact_board)
         board.bind_thread(thread_id)
@@ -117,6 +147,7 @@ class MainAgent:
             tenant_id=request.tenant_id,
             run_root=paths.root,
             actor="main_agent",
+            turn_id=turn_id,
             artifact_board=board,
             memory_store=self.memory_store,
             settings=self.settings,
@@ -1203,8 +1234,8 @@ class MainAgent:
         rows = transcript[-100:]
         return [dict(row) for row in rows]
 
-    @staticmethod
     def _emit_loop_progress(
+        self,
         root: Path,
         callback,
         *,
@@ -1218,7 +1249,7 @@ class MainAgent:
         """Persist factual loop state without exposing hidden reasoning."""
         current = str(current_action).strip()
         next_step = str(next_action).strip()
-        MainAgent._emit(
+        self._emit(
             root,
             callback,
             "agent_progress",
@@ -1473,19 +1504,30 @@ class MainAgent:
     def _persist_state(root: Path, state: MainAgentState) -> None:
         write_json(root / "main_agent_state.json", state.model_dump(mode="json"))
 
-    @staticmethod
-    def _emit(root: Path, callback, event_type: str, **payload: Any) -> None:
+    def _emit(self, root: Path, callback, event_type: str, **payload: Any) -> None:
         event_payload = dict(payload)
         event_payload.setdefault("run_id", "unknown")
         event_payload.setdefault("thread_id", "unknown")
         event_payload.setdefault("request_id", "unknown")
         event_payload.setdefault("graph_revision", None)
         event_payload.setdefault("actor", "main_agent")
-        event = EventEnvelope(
-            event_type=event_type,
-            **event_payload,
-        ).model_dump(mode="json")
-        append_jsonl(root / "execution_events.jsonl", event)
+        run_id = str(event_payload["run_id"])
+        with self._event_lock:
+            if run_id not in self._event_sequences:
+                existing = read_jsonl(root / "execution_events.jsonl")
+                self._event_sequences[run_id] = max(
+                    (int(row.get("sequence") or 0) for row in existing),
+                    default=0,
+                )
+            sequence = self._event_sequences[run_id] + 1
+            self._event_sequences[run_id] = sequence
+            event = EventEnvelope(
+                event_type=event_type,
+                turn_id=self._event_turn_ids.get(run_id),
+                sequence=sequence,
+                **event_payload,
+            ).model_dump(mode="json")
+            append_jsonl(root / "execution_events.jsonl", event)
         if callback is not None:
             callback(event)
 

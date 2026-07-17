@@ -76,7 +76,11 @@ class AgentOSRunService:
         )
 
     def close(self) -> None:
-        self._background_executor.shutdown(wait=False, cancel_futures=False)
+        # A worker may have completed the Turn state transition but still be
+        # releasing its lease in ``finally``. Wait here so callers can safely
+        # dispose the RunStore (notably on Windows, where an open lease file
+        # prevents directory cleanup).
+        self._background_executor.shutdown(wait=True, cancel_futures=False)
 
     def _forget_background(self, run_id: str) -> None:
         with self._background_lock:
@@ -124,15 +128,11 @@ class AgentOSRunService:
                 if state.status in {"completed", "completed_partial", "failed", "cancelled", "timed_out"}:
                     return None
                 core_request, decision = self.agent_os._load_core_request(run_id)
-                result = self.agent_os.main_agent.run(
+                result, response = self.agent_os._resume_core_task(
                     request=core_request,
                     decision=decision,
-                    run_id=state.run_id,
-                    thread_id=state.thread_id,
-                    resume=True,
+                    state=state,
                 )
-                self.agent_os._write_core_summary(result)
-                response = self.agent_os._response_from_core(core_request, result)
                 self._persist_background_response(response)
                 return response
             snapshot = ExecutionRunSnapshot.model_validate(detail["snapshot"])
