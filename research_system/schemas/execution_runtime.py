@@ -137,8 +137,20 @@ class ExecutionRunResult(BaseModel):
     final_artifact_ids: list[str] = Field(default_factory=list)
 
 
+class GraphStepOutcome(BaseModel):
+    """One scheduler step projected into the enclosing RegularExecutor loop."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    result: ExecutionRunResult
+    progressed: bool = False
+    safe_point: bool = True
+    should_continue: bool = False
+
+
 __all__ = [
     "ExecutionRunResult",
+    "GraphStepOutcome",
     "ExecutionRunSnapshot",
     "ExecutionUsage",
     "GateEvaluation",

@@ -137,13 +137,19 @@ class TurnRunnerTests(unittest.TestCase):
             self.assertEqual(turn["status"], "completed")
             self.assertEqual(turn["execution_mode"], "core")
             self.assertTrue(turn["config_hash"])
-            self.assertEqual(turn["sequence"], 4)
+            self.assertEqual(turn["sequence"], 5)
             self.assertTrue(turn["last_event_id"])
             self.assertEqual(read_json(root / "response.json")["status"], "completed")
             event_types = [event["event_type"] for event in read_jsonl(root / "execution_events.jsonl")]
             self.assertEqual(
                 event_types,
-                ["turn_received", "task_selected", "turn_started", "turn_completed"],
+                [
+                    "turn_received",
+                    "turn_ready",
+                    "task_selected",
+                    "turn_started",
+                    "turn_completed",
+                ],
             )
             self.assertEqual(response.message, "done")
 
@@ -249,6 +255,100 @@ class TurnRunnerTests(unittest.TestCase):
                 "turn_recovered_after_worker_restart",
                 [event["event_type"] for event in read_jsonl(root / "execution_events.jsonl")],
             )
+
+    def test_resume_uses_the_persisted_turn_config(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            run_store = RunStore(Path(temporary_directory) / "runs")
+            request = RequestEnvelope(user_query="test")
+            run_id, _, _ = run_store.create_run(request, "core.conversation.answer")
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="conversation",
+                recommended_mode="core",
+            )
+            runner = TurnRunner(
+                run_store=run_store,
+                main_agent=_FakeMainAgent(),
+                graph_adapter=_UnusedGraphAdapter(),
+            )
+            original_config = TurnConfig(task_policy_ref="persisted-v1")
+            runner.run(
+                request=request,
+                decision=decision,
+                run_id=run_id,
+                thread_id="thread-1",
+                execution_mode="core",
+                turn_config=original_config,
+                response_factory=lambda result: ResponseEnvelope(
+                    request_id=result.request_id,
+                    run_id=result.run_id,
+                    mode="core",
+                    status="completed",
+                    message=result.message,
+                    progress=ProgressState(
+                        current_phase="core",
+                        active_agent="main_agent",
+                        latest_event="completed",
+                        status_message="done",
+                        percent=100,
+                    ),
+                ),
+            )
+            root = run_store.load_run_paths(run_id).root
+            turn = read_json(root / "turn_state.json")
+            turn["status"] = "running"
+            write_json(root / "turn_state.json", turn)
+            changed_request = request.model_copy(
+                update={"constraints": {"turn_config": {"task_policy_ref": "changed-v2"}}}
+            )
+
+            outcome = runner.execute_task(
+                request=changed_request,
+                decision=decision,
+                run_id=run_id,
+                thread_id="thread-1",
+                execution_mode="core",
+                resume=True,
+            )
+
+            self.assertEqual(outcome.status, "completed")
+            self.assertEqual(
+                read_json(root / "turn_state.json")["config"]["task_policy_ref"],
+                "persisted-v1",
+            )
+
+    def test_turn_worker_lease_rejects_a_second_executor(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            run_store = RunStore(Path(temporary_directory) / "runs")
+            request = RequestEnvelope(user_query="test")
+            run_id, _, _ = run_store.create_run(request, "core.conversation.answer")
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="conversation",
+                recommended_mode="core",
+            )
+            runner = TurnRunner(
+                run_store=run_store,
+                main_agent=_FakeMainAgent(),
+                graph_adapter=_UnusedGraphAdapter(),
+            )
+            write_json(
+                run_store.load_run_paths(run_id).root / "turn_worker_lease.json",
+                {
+                    "owner": "other-worker",
+                    "run_id": run_id,
+                    "expires_at": "2999-01-01T00:00:00+00:00",
+                },
+            )
+
+            with self.assertRaisesRegex(ValueError, "already being executed"):
+                runner.execute_task(
+                    request=request,
+                    decision=decision,
+                    run_id=run_id,
+                    thread_id="thread-1",
+                    execution_mode="core",
+                )
 
 
 class GraphExecutorTests(unittest.TestCase):

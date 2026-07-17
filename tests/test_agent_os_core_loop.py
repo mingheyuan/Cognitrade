@@ -96,6 +96,8 @@ class AgentOSCoreLoopTests(unittest.TestCase):
                 "memory_root": root / "memory",
                 "domain_packs_root": root / "empty_packs",
                 "workspace_root": root / "workspace",
+                "openai_api_key": None,
+                "openai_base_url": None,
             }
         )
 
@@ -418,6 +420,8 @@ class AgentOSCoreLoopTests(unittest.TestCase):
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
+                    "openai_api_key": None,
+                    "openai_base_url": None,
                 }
             )
             agent_os = AgentOS(settings)

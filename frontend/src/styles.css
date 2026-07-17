@@ -2272,6 +2272,18 @@ select:focus-visible {
   font-size: 8px;
 }
 
+.turn-context-grid {
+  margin-top: 6px;
+}
+
+.turn-context-grid strong {
+  min-width: 0;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .run-actions {
   display: grid;
   margin-top: 8px;

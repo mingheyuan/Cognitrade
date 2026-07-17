@@ -74,6 +74,9 @@ class RuntimeTurnState(BaseModel):
     status: TurnStatus = "ready"
     intent: str
     objective: str | None = None
+    parent_turn_id: str | None = None
+    parent_node_id: str | None = None
+    relation: Literal["child", "review", "continuation", "compact"] | None = None
     current_item_id: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

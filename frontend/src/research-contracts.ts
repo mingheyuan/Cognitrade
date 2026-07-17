@@ -92,6 +92,9 @@ export type ResearchResult = {
 export type ResearchResponse = {
   request_id: string
   run_id?: string | null
+  thread_id?: string | null
+  turn_id?: string | null
+  task_type?: 'regular' | 'review' | 'compact' | string | null
   mode?: 'core' | 'task' | 'graph' | null
   intent?: ResearchIntent | null
   status: RunStatus
@@ -117,6 +120,11 @@ export type RunHistoryRecord = {
   progress?: ProgressState
   display_summary?: string
   child_thread_count?: number
+  turn_id?: string | null
+  task_type?: string | null
+  execution_mode?: string | null
+  task_selection?: Record<string, unknown>
+  child_turn_ids?: string[]
   created_at?: string
   updated_at?: string
   [key: string]: unknown
@@ -140,6 +148,9 @@ export type RunEventsPayload = {
   display_summary?: string
   events: RunEvent[]
   event_counts?: Record<string, number>
+  turn?: Record<string, unknown> | null
+  task?: Record<string, unknown> | null
+  task_selection?: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -163,6 +174,8 @@ export type RunStepsPayload = {
   display_summary?: string
   steps: RunStep[]
   step_counts?: Record<string, number>
+  turn?: Record<string, unknown> | null
+  task_selection?: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -187,6 +200,8 @@ export type RunReplayPayload = {
   events?: RunEvent[]
   artifacts?: Array<Record<string, unknown>>
   snapshot?: Record<string, unknown>
+  turn?: Record<string, unknown> | null
+  task?: Record<string, unknown> | null
   [key: string]: unknown
 }
 

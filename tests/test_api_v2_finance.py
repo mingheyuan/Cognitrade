@@ -228,11 +228,15 @@ class ApiV2FinanceTests(unittest.TestCase):
             places=2,
         )
 
-        with sqlite3.connect(self.database_path) as connection:
+        connection = sqlite3.connect(self.database_path)
+        try:
             connection.execute(
                 "UPDATE paper_position_lots SET available_date = ?",
                 ("2026-07-14",),
             )
+            connection.commit()
+        finally:
+            connection.close()
         sell = self.client.post(
             "/api/v2/finance/paper/orders",
             headers=auth_headers(),

@@ -16,6 +16,7 @@ ResponseStatus = Literal[
     "accepted",
     "needs_clarification",
     "running",
+    "paused",
     "waiting_approval",
     "gated",
     "completed",
@@ -66,6 +67,9 @@ class ResponseEnvelope(BaseModel):
 
     request_id: str
     run_id: str | None = None
+    thread_id: str | None = None
+    turn_id: str | None = None
+    task_type: str | None = None
     mode: Literal["core", "task", "graph"] | None = None
     intent: str | None = None
     status: ResponseStatus
@@ -74,6 +78,11 @@ class ResponseEnvelope(BaseModel):
     progress: ProgressState
     result: dict[str, Any] | None = None
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    artifact_ids: list[str] = Field(default_factory=list)
+    final_artifact_ids: list[str] = Field(default_factory=list)
+    pending_approval_ids: list[str] = Field(default_factory=list)
+    child_turn_ids: list[str] = Field(default_factory=list)
+    continuation: dict[str, Any] | None = None
     errors: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)

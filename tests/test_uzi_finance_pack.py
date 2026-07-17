@@ -772,6 +772,9 @@ class UziFinancePackTests(unittest.TestCase):
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
+                    # This case asserts partial delivery when synthesis is
+                    # unavailable; keep the provider state deterministic.
+                    "openai_api_key": None,
                 }
             )
             with TestClient(

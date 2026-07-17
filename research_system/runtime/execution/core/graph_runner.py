@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -21,6 +21,7 @@ from research_system.runtime.core.approvals import (
 )
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.core.tool_registry import CoreToolContext, CoreToolRegistry
+from research_system.runtime.event_store import append_canonical_event
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.execution.core.execution_graph import (
     ExecutionGraphScheduler,
@@ -40,6 +41,7 @@ from research_system.schemas.execution_runtime import (
     ExecutionRunResult,
     ExecutionRunSnapshot,
     ExecutionUsage,
+    GraphStepOutcome,
     GateEvaluation,
     GraphPatchImpact,
     NodeExecutionOutput,
@@ -132,6 +134,7 @@ class ExecutionNodeContext:
     tool_semaphore: Semaphore | None = None
     approval_store: HumanApprovalStore | None = None
     failure_injection: Callable[[str, str], str | None] | None = None
+    follow_up_messages: list[dict[str, Any]] = field(default_factory=list)
 
     def artifacts(self, artifact_type: str) -> list[ArtifactRecord]:
         return [
@@ -333,11 +336,6 @@ class ExecutionGraphRunner:
         self._task_type = task_type
         self._execution_mode = execution_mode
         self._graph_revision: int | None = None
-        existing_events = read_jsonl(self.events_path)
-        self._event_sequence = max(
-            (int(event.get("sequence") or 0) for event in existing_events),
-            default=0,
-        )
         self._tool_semaphore: Semaphore | None = None
         self._progress_policy: dict[str, Any] = {}
         self._progress_model_updates = 0
@@ -460,6 +458,7 @@ class ExecutionGraphRunner:
         tenant_id: str | None = None,
         seed_artifacts: list[ArtifactDraft] | None = None,
         resume: bool = False,
+        max_steps: int | None = None,
     ) -> ExecutionRunResult:
         self._run_id = run_id
         self._thread_id = thread_id
@@ -524,6 +523,7 @@ class ExecutionGraphRunner:
         self._tool_semaphore = Semaphore(snapshot.graph.governance.max_concurrent_tool_calls)
         self._persist(snapshot)
         started = perf_counter()
+        step_count = 0
         self._emit(
             "main_agent_plan_started",
             actor="main_agent.plan_agent",
@@ -695,6 +695,19 @@ class ExecutionGraphRunner:
                 self._persist(snapshot)
                 if snapshot.status in {"paused", "waiting_approval"}:
                     return self._result(snapshot)
+                step_count += 1
+                pending_after_step = self._node_ids(snapshot, "pending") | self._node_ids(snapshot, "waiting")
+                if max_steps is not None and step_count >= max_steps and pending_after_step:
+                    self._set_run_status(snapshot, "paused")
+                    snapshot.updated_at = utc_now()
+                    self._persist(snapshot)
+                    self._emit(
+                        "graph_step_yielded",
+                        step_count=step_count,
+                        pending_node_ids=sorted(pending_after_step),
+                        graph_revision=snapshot.graph.revision,
+                    )
+                    return self._result(snapshot)
 
             snapshot.gate_evaluations = self._evaluate_gates(snapshot)
             self._refresh_compound_statuses(snapshot)
@@ -748,6 +761,42 @@ class ExecutionGraphRunner:
                 snapshot.updated_at = utc_now()
                 self._persist(snapshot)
             raise
+
+    def step(
+        self,
+        *,
+        graph: ExecutionGraph,
+        run_id: str,
+        thread_id: str,
+        request_id: str,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+        seed_artifacts: list[ArtifactDraft] | None = None,
+        resume: bool = False,
+    ) -> GraphStepOutcome:
+        """Advance exactly one frontier and return at a RegularExecutor safe point."""
+        result = self.run(
+            graph=graph,
+            run_id=run_id,
+            thread_id=thread_id,
+            request_id=request_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            seed_artifacts=seed_artifacts,
+            resume=resume,
+            max_steps=1,
+        )
+        status = result.snapshot.status
+        control = read_json(self.control_path) or {}
+        waiting = status == "waiting_approval"
+        externally_paused = bool(control.get("pause_requested") or control.get("cancel_requested"))
+        should_continue = status == "paused" and not waiting and not externally_paused
+        return GraphStepOutcome(
+            result=result,
+            progressed=True,
+            safe_point=True,
+            should_continue=should_continue,
+        )
 
     def resume(self) -> ExecutionRunResult:
         snapshot = self._load_snapshot()
@@ -1246,6 +1295,7 @@ class ExecutionGraphRunner:
         self._validate_node_authorization(snapshot, node)
         inputs = self._select_input_artifacts(snapshot, node)
         state.input_artifact_ids = [artifact.artifact_id for artifact in inputs]
+        follow_up_messages = list(node.metadata.get("pending_followups") or [])
         self._emit(
             "graph_node_started",
             node_id=node.node_id,
@@ -1334,6 +1384,7 @@ class ExecutionGraphRunner:
                             tool_semaphore=self._tool_semaphore,
                             approval_store=self.approvals,
                             failure_injection=self._consume_failure_injection,
+                            follow_up_messages=follow_up_messages,
                         )
                     )
                     output = self._normalize_output(raw_output)
@@ -2993,17 +3044,8 @@ class ExecutionGraphRunner:
         }
         event = EventEnvelope.model_validate(event).model_dump(mode="json")
         with self._lock:
-            existing_events = read_jsonl(self.events_path)
-            self._event_sequence = max(
-                self._event_sequence,
-                max(
-                    (int(item.get("sequence") or 0) for item in existing_events),
-                    default=0,
-                ),
-            )
-            self._event_sequence += 1
-            event["sequence"] = self._event_sequence
-            append_jsonl(self.events_path, event)
+            event["sequence"] = 0
+            event = append_canonical_event(self.events_path, event)
         if self.event_callback is not None:
             self.event_callback(event)
 

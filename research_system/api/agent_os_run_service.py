@@ -154,7 +154,8 @@ class AgentOSRunService:
             self._release_background_lease(run_id)
 
     def _persist_background_response(self, response: ResponseEnvelope) -> None:
-        self.agent_os._persist_response(response)
+        # TurnRunner.finalize owns canonical response persistence.  This
+        # adapter only publishes the completion to Chat/background observers.
         callback = self._chat_completion_callback
         if callback is None or response.status == "running":
             return
@@ -246,6 +247,15 @@ class AgentOSRunService:
         status = str(row.get("status") or "unknown")
         return {
             **row,
+            "turn_id": (detail.get("turn") or {}).get("turn_id"),
+            "task_type": (detail.get("turn") or {}).get("task_type") or (detail.get("task") or {}).get("task_type"),
+            "execution_mode": (detail.get("turn") or {}).get("execution_mode") or (detail.get("task") or {}).get("execution_mode"),
+            "task_selection": (detail.get("turn") or {}).get("task_selection") or {},
+            "child_turn_ids": [
+                item.get("child_turn_id")
+                for item in list((detail.get("turn") or {}).get("child_turns") or [])
+                if isinstance(item, dict) and item.get("child_turn_id")
+            ],
             "message": message,
             "display_summary": f"{status}: {message}" if message else f"{status}: Agent OS run",
         }
@@ -392,6 +402,7 @@ class AgentOSRunService:
                 "request": detail.get("request"),
                 "snapshot": detail.get("snapshot"),
                 "artifacts": [],
+                "task": detail.get("task"),
                 "events": self._execution_events(run_id),
             }
         if detail.get("mode") == "core":
@@ -401,6 +412,8 @@ class AgentOSRunService:
                 "request": detail.get("request"),
                 "snapshot": detail.get("snapshot"),
                 "artifacts": detail.get("artifacts") or [],
+                "turn": detail.get("turn"),
+                "task": detail.get("task"),
                 "events": self._execution_events(run_id),
             }
         snapshot = self.agent_os.replay(run_id)
@@ -408,6 +421,8 @@ class AgentOSRunService:
             "run_id": run_id,
             "request": detail.get("request"),
             "snapshot": snapshot.model_dump(mode="json"),
+            "turn": detail.get("turn"),
+            "task": detail.get("task"),
             "artifacts": detail.get("artifacts") or [],
             "events": self._execution_events(run_id),
         }
@@ -449,7 +464,9 @@ class AgentOSRunService:
         return {
             "run_id": run_id,
             "mode": detail.get("mode", "graph"),
-            "status": (detail.get("snapshot") or {}).get("status"),
+            "status": (detail.get("turn") or {}).get("status")
+            or (detail.get("snapshot") or {}).get("status"),
+            "turn": detail.get("turn"),
             "artifacts": artifacts,
         }
 
@@ -463,11 +480,13 @@ class AgentOSRunService:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
         detail = self.agent_os.inspect_run(run_id)
         events = self._execution_events(run_id)
+        turn = detail.get("turn") or {}
         status = (
             detail.get("snapshot", {}).get("status")
             if detail.get("mode") == "pending"
-            else
-            MainAgentState.model_validate(detail["snapshot"]).status
+            else str(turn.get("status") or "")
+            if turn
+            else MainAgentState.model_validate(detail["snapshot"]).status
             if detail.get("mode") == "core"
             else self._snapshot(run_id).status
         )
@@ -475,6 +494,8 @@ class AgentOSRunService:
             "run_id": run_id,
             "mode": detail.get("mode", "graph"),
             "status": status,
+            "turn": turn,
+            "task_selection": turn.get("task_selection") or {},
             "events": events,
             "event_counts": {
                 "events": len(events),
@@ -499,6 +520,7 @@ class AgentOSRunService:
                 "mode": "pending",
                 "request": detail.get("request"),
                 "snapshot": detail.get("snapshot"),
+                "turn": detail.get("turn"),
                 "artifacts": [],
                 "dynamic_trace": self._execution_events(run_id),
                 "event_counts": {"events": len(self._execution_events(run_id)), "graph_events": 0},
@@ -510,6 +532,7 @@ class AgentOSRunService:
                 "mode": "core",
                 "request": detail.get("request"),
                 "snapshot": detail.get("snapshot"),
+                "turn": detail.get("turn"),
                 "artifacts": detail.get("artifacts") or [],
                 "dynamic_trace": events,
                 "event_counts": {"events": len(events), "graph_events": 0},
@@ -520,6 +543,7 @@ class AgentOSRunService:
             "run_id": run_id,
             "request": detail.get("request"),
             "snapshot": snapshot.model_dump(mode="json"),
+            "turn": detail.get("turn"),
             "artifacts": detail.get("artifacts") or [],
             "dynamic_trace": events,
             "event_counts": {
@@ -554,17 +578,22 @@ class AgentOSRunService:
             }
         if detail.get("mode") == "core":
             state = MainAgentState.model_validate(detail["snapshot"])
+            turn = detail.get("turn") or {}
+            status = str(turn.get("status") or state.status)
             row = {
                 "step_index": 1,
                 "node_id": "main_agent",
                 "node_kind": "agent",
                 "capability": "core.conversation.answer",
                 "executor": "main_agent",
-                "status": state.status,
+                "status": status,
                 "depends_on": [],
                 "tags": ["core", "main_agent"],
                 "input_artifact_types": ["request"],
                 "output_artifact_types": ["assistant_message"],
+                "turn_id": turn.get("turn_id"),
+                "task_type": turn.get("task_type") or "regular",
+                "execution_mode": turn.get("execution_mode") or state.mode,
             }
             return {
                 "run_id": run_id,
@@ -575,15 +604,17 @@ class AgentOSRunService:
                 "strategy": "core_agent_loop",
                 "revision": None,
                 "notes": [],
-                "status": state.status,
+                "status": status,
                 "steps": [row],
                 "step_counts": {
                     "total": 1,
-                    "active": 1 if state.status == "running" else 0,
-                    "completed": 1 if state.status == "completed" else 0,
+                    "active": 1 if status == "running" else 0,
+                    "completed": 1 if status == "completed" else 0,
                     "pending": 0,
                 },
-                "status_counts": {state.status: 1},
+                "status_counts": {status: 1},
+                "turn": turn,
+                "task_selection": turn.get("task_selection") or {},
             }
         snapshot = self._snapshot(run_id)
         rows = [
@@ -603,12 +634,16 @@ class AgentOSRunService:
                 "tags": list(node.tags),
                 "input_artifact_types": [port.artifact_type for port in node.consumes],
                 "output_artifact_types": [port.artifact_type for port in node.produces],
+                "turn_id": (detail.get("turn") or {}).get("turn_id"),
+                "task_type": (detail.get("turn") or {}).get("task_type") or "regular",
+                "execution_mode": (detail.get("turn") or {}).get("execution_mode") or "graph",
             }
             for index, node in enumerate(snapshot.graph.nodes, start=1)
         ]
         status_counts = Counter(row["status"] for row in rows)
         return {
             "run_id": run_id,
+            "turn": detail.get("turn"),
             "graph_id": snapshot.graph.graph_id,
             "domain_id": snapshot.graph.domain_id,
             "intent": self._intent(snapshot),
@@ -624,6 +659,7 @@ class AgentOSRunService:
                 "pending": status_counts.get("pending", 0),
             },
             "status_counts": dict(status_counts),
+            "task_selection": (detail.get("turn") or {}).get("task_selection") or {},
         }
 
     def metrics(
@@ -661,15 +697,18 @@ class AgentOSRunService:
             }
         if detail.get("mode") == "core":
             state = MainAgentState.model_validate(detail["snapshot"])
+            turn = detail.get("turn") or {}
+            status = str(turn.get("status") or state.status)
             return {
                 "run_id": run_id,
                 "mode": "core",
-                "status": state.status,
+                "status": status,
+                "turn": turn,
                 "counts": {
                     "nodes": 0,
                     "subagents": 0,
                     "completed_nodes": 0,
-                    "failed_nodes": 1 if state.status == "failed" else 0,
+                    "failed_nodes": 1 if status == "failed" else 0,
                     "artifacts": len(detail.get("artifacts") or []),
                     "gates": 0,
                     "tool_calls": len(state.tool_call_ids),
@@ -732,6 +771,7 @@ class AgentOSRunService:
             }
         if detail.get("mode") == "core":
             state = MainAgentState.model_validate(detail["snapshot"])
+            turn = detail.get("turn") or {}
             if thread_id != state.thread_id:
                 raise KeyError(f"thread not found: {thread_id}")
             return {
@@ -740,6 +780,7 @@ class AgentOSRunService:
                 "scope": "core_agent_loop",
                 "scope_thread_ids": [thread_id],
                 "snapshot": state.model_dump(mode="json"),
+                "turn": turn,
                 "artifacts": detail.get("artifacts") or [],
                 "events": self._execution_events(run_id),
             }
@@ -857,7 +898,8 @@ class AgentOSRunService:
             }
         if detail.get("mode") == "core":
             state = MainAgentState.model_validate(detail["snapshot"])
-            if state.status == "paused":
+            turn_status = str((detail.get("turn") or {}).get("status") or "")
+            if state.status == "paused" or turn_status in {"paused", "waiting_approval", "gated"}:
                 result = self.agent_os.resume(run_id)
                 return {
                     "run_id": run_id,
@@ -915,6 +957,24 @@ class AgentOSRunService:
             "status": snapshot.status,
             "message": "Cancellation requested" if cancelled else "Run is not active",
             "cancellation_requested": cancelled,
+        }
+
+    def pause(
+        self,
+        run_id: str,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        paused = self.agent_os.pause(run_id)
+        detail = self.agent_os.inspect_run(run_id)
+        turn = detail.get("turn") or {}
+        return {
+            "run_id": run_id,
+            "status": turn.get("status") or (detail.get("snapshot") or {}).get("status"),
+            "message": "Pause requested" if paused else "Run is not active",
+            "pause_requested": paused,
         }
 
     def rerun_from(

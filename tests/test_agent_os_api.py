@@ -236,6 +236,9 @@ class AgentOSApiTests(unittest.TestCase):
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
+                    # Keep this integration assertion deterministic: it
+                    # verifies the partial-delivery path without synthesis.
+                    "openai_api_key": None,
                 }
             )
             with TestClient(
@@ -266,12 +269,17 @@ class AgentOSApiTests(unittest.TestCase):
                 payload = response.json()
                 self.assertEqual(payload["result"]["protocol"], "agent_os")
                 self.assertEqual(payload["intent"], "stock_check")
+                self.assertTrue(payload["turn_id"])
+                self.assertEqual(payload["task_type"], "regular")
+                self.assertEqual(payload["mode"], "graph")
                 run_id = payload["run_id"]
 
                 steps = client.get(f"/api/v1/runs/{run_id}/steps", headers=headers)
                 self.assertEqual(steps.status_code, 200, steps.text)
                 self.assertEqual(steps.json()["domain_id"], "finance_ashare")
                 self.assertTrue(steps.json()["steps"])
+                self.assertEqual(steps.json()["turn"]["turn_id"], payload["turn_id"])
+                self.assertEqual(steps.json()["task_selection"]["execution_mode"], "graph")
 
                 events = client.get(f"/api/v1/runs/{run_id}/events", headers=headers)
                 self.assertEqual(events.status_code, 200, events.text)

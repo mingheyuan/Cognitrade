@@ -14,6 +14,9 @@ from research_system.runtime.core.tool_registry import (
     CoreToolRegistry,
     build_core_tool_registry,
 )
+from research_system.runtime.event_store import append_canonical_event
+from research_system.runtime.follow_up import FollowUpRuntime
+from research_system.runtime.hooks import StopHookInput, StopHookOutcome
 from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
 from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
@@ -27,6 +30,7 @@ from research_system.schemas.core_runtime import (
 )
 from research_system.schemas.events import EventEnvelope
 from research_system.schemas.protocol import RequestEnvelope
+from research_system.schemas.turn_runtime import FollowUpConfig, TurnConfig
 
 
 def utc_now() -> datetime:
@@ -51,8 +55,12 @@ class MainAgent:
         self.llm_provider = llm_provider
         self.tools = tool_registry or build_core_tool_registry()
         self._event_lock = RLock()
-        self._event_sequences: dict[str, int] = {}
         self._event_turn_ids: dict[str, str] = {}
+        self._turn_runner = None
+
+    def bind_turn_runner(self, turn_runner) -> None:
+        """Bind the canonical lifecycle without making TurnRunner a dependency."""
+        self._turn_runner = turn_runner
 
     def run(
         self,
@@ -65,8 +73,23 @@ class MainAgent:
         resume: bool = False,
         emit_started: bool = True,
         turn_id: str | None = None,
+        hook_runtime=None,
+        follow_up_runtime: FollowUpRuntime | None = None,
+        turn_config: TurnConfig | None = None,
     ) -> MainAgentRunResult:
         """Compatibility facade; standard execution is owned by TurnRunner."""
+        if self._turn_runner is not None:
+            outcome = self._turn_runner.execute_task(
+                request=request,
+                decision=decision,
+                run_id=run_id,
+                thread_id=thread_id,
+                execution_mode=(turn_config.execution_mode if turn_config else decision.recommended_mode),
+                turn_config=turn_config,
+                event_callback=event_callback,
+                resume=resume,
+            )
+            return outcome.result
         return self._run_core_task(
             request=request,
             decision=decision,
@@ -76,6 +99,9 @@ class MainAgent:
             resume=resume,
             emit_started=emit_started,
             turn_id=turn_id,
+            hook_runtime=hook_runtime,
+            follow_up_runtime=follow_up_runtime,
+            turn_config=turn_config,
         )
 
     def _run_core_task(
@@ -89,6 +115,9 @@ class MainAgent:
         resume: bool = False,
         emit_started: bool = True,
         turn_id: str | None = None,
+        hook_runtime=None,
+        follow_up_runtime: FollowUpRuntime | None = None,
+        turn_config: TurnConfig | None = None,
     ) -> MainAgentRunResult:
         if turn_id:
             self._event_turn_ids[run_id] = turn_id
@@ -153,6 +182,7 @@ class MainAgent:
             settings=self.settings,
             cancellation=cancellation,
             event_callback=event_callback,
+            hook_runtime=hook_runtime,
             allowed_tools=frozenset(
                 item.name
                 for item in self.tools.definitions()
@@ -180,6 +210,9 @@ class MainAgent:
                 state=state,
                 root=paths.root,
                 event_callback=event_callback,
+                hook_runtime=hook_runtime,
+                follow_up_runtime=follow_up_runtime,
+                turn_config=turn_config,
             )
             control_status = self._control_status(paths.root)
             if control_status is not None:
@@ -191,6 +224,20 @@ class MainAgent:
                     decision=decision,
                     tool_results=tool_results,
                     event_callback=event_callback,
+                )
+            if state.status in {"gated", "failed", "cancelled", "timed_out", "waiting_approval"}:
+                return MainAgentRunResult(
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    request_id=request.request_id,
+                    status=state.status,
+                    mode=state.mode,
+                    intent=decision.intent,
+                    message=message,
+                    artifact_ids=list(state.artifact_ids),
+                    tool_calls=tool_results,
+                    continuation=state.continuation,
+                    state=state,
                 )
             if state.clarification_question:
                 composed = self.tools.invoke(
@@ -737,6 +784,9 @@ class MainAgent:
         state: MainAgentState,
         root: Path,
         event_callback: Callable[[dict[str, Any]], None] | None,
+        hook_runtime=None,
+        follow_up_runtime: FollowUpRuntime | None = None,
+        turn_config: TurnConfig | None = None,
     ) -> tuple[str, MainAgentState]:
         """Run a bounded provider-native Tool loop, with a deterministic fallback.
 
@@ -785,6 +835,23 @@ class MainAgent:
                 next_action="Persist the assistant message and finish the Run",
                 status="completed",
             )
+            state, should_continue = self._apply_stop_hook_candidate(
+                message=message,
+                state=state,
+                root=root,
+                hook_runtime=hook_runtime,
+                follow_up_runtime=follow_up_runtime,
+                turn_config=turn_config,
+                event_callback=event_callback,
+            )
+            if should_continue:
+                state = state.model_copy(
+                    update={
+                        "status": "gated",
+                        "error": "StopHook requested continuation but no provider loop is available.",
+                    }
+                )
+                self._persist_state(root, state)
             return message, state
         if not callable(native_turn) or not available:
             self._emit_loop_progress(
@@ -819,6 +886,23 @@ class MainAgent:
                 next_action="Persist the assistant message and finish the Run",
                 status="completed",
             )
+            state, should_continue = self._apply_stop_hook_candidate(
+                message=message,
+                state=state,
+                root=root,
+                hook_runtime=hook_runtime,
+                follow_up_runtime=follow_up_runtime,
+                turn_config=turn_config,
+                event_callback=event_callback,
+            )
+            if should_continue:
+                state = state.model_copy(
+                    update={
+                        "status": "gated",
+                        "error": "StopHook requested continuation but no provider loop is available.",
+                    }
+                )
+                self._persist_state(root, state)
             return message, state
 
         transcript = list(state.transcript)
@@ -826,6 +910,27 @@ class MainAgent:
             transcript.append({"role": "user", "content": request.user_query})
         limit = state.tool_loop_limit or self._tool_loop_limit()
         for turn_index in range(state.turn_count, limit):
+            if follow_up_runtime is not None:
+                pending_inputs = follow_up_runtime.deliver_current()
+                if pending_inputs:
+                    for item in pending_inputs:
+                        transcript.append(
+                            {
+                                "role": "user",
+                                "content": item.text,
+                                "source": item.source,
+                                "hook_originated": item.source == "hook",
+                                "operation_id": item.operation_id,
+                            }
+                        )
+                    state = state.model_copy(
+                        update={
+                            "follow_up_count": follow_up_runtime.follow_up_count,
+                            "transcript": self._trim_transcript(transcript),
+                            "updated_at": utc_now(),
+                        }
+                    )
+                    self._persist_state(root, state)
             control_status = self._control_status(root)
             if control_status is not None:
                 state = state.model_copy(
@@ -871,6 +976,19 @@ class MainAgent:
                 current_action=f"Main Agent model call {turn_index + 1} started",
                 next_action="Wait for the model response",
             )
+            operation_id = f"model:{state.run_id}:{turn_index + 1}"
+            self._emit(
+                root,
+                event_callback,
+                "model_call_started",
+                run_id=state.run_id,
+                thread_id=state.thread_id,
+                request_id=state.request_id,
+                turn_id=self._event_turn_ids.get(state.run_id),
+                mode=state.mode,
+                turn=turn_index + 1,
+                operation_id=operation_id,
+            )
             try:
                 response = self._provider_tool_turn(
                     provider=provider,
@@ -884,6 +1002,19 @@ class MainAgent:
                         if item.name.startswith("core.")
                     ],
                 )
+                self._emit(
+                    root,
+                    event_callback,
+                    "model_call_completed",
+                    run_id=state.run_id,
+                    thread_id=state.thread_id,
+                    request_id=state.request_id,
+                    turn_id=self._event_turn_ids.get(state.run_id),
+                    mode=state.mode,
+                    turn=turn_index + 1,
+                    operation_id=operation_id,
+                    response_kind=response.kind,
+                )
             except Exception as exc:
                 self._emit(
                     root,
@@ -895,6 +1026,7 @@ class MainAgent:
                     mode=state.mode,
                     turn=turn_index + 1,
                     error=f"{exc.__class__.__name__}: {exc}",
+                    operation_id=operation_id,
                 )
                 return self._answer(
                     request=request,
@@ -980,11 +1112,23 @@ class MainAgent:
                     state = state.model_copy(
                         update={
                             "assistant_message": message,
+                            "stop_hook_active": False,
                             "transcript": self._trim_transcript(transcript),
                             "updated_at": utc_now(),
                         }
                     )
                     self._persist_state(root, state)
+                    state, should_continue = self._apply_stop_hook_candidate(
+                        message=message,
+                        state=state,
+                        root=root,
+                        hook_runtime=hook_runtime,
+                        follow_up_runtime=follow_up_runtime,
+                        turn_config=turn_config,
+                        event_callback=event_callback,
+                    )
+                    if should_continue:
+                        continue
                     return message, state
                 break
 
@@ -1099,6 +1243,27 @@ class MainAgent:
                     status=result.status,
                 )
 
+            if follow_up_runtime is not None and follow_up_runtime.config.allow_model_follow_up:
+                try:
+                    follow_up_runtime.record_model_follow_up()
+                    state = state.model_copy(
+                        update={
+                            "follow_up_count": follow_up_runtime.follow_up_count,
+                            "updated_at": utc_now(),
+                        }
+                    )
+                    self._persist_state(root, state)
+                except RuntimeError as exc:
+                    state = state.model_copy(
+                        update={
+                            "status": "gated",
+                            "error": str(exc),
+                            "updated_at": utc_now(),
+                        }
+                    )
+                    self._persist_state(root, state)
+                    return "Agent OS follow-up limit exceeded.", state
+
         message = (
             "Agent OS Core Agent Loop reached its Tool-loop limit before producing a final answer."
         )
@@ -1121,6 +1286,134 @@ class MainAgent:
         )
         self._persist_state(root, state)
         return message, state
+
+    def _apply_stop_hook_candidate(
+        self,
+        *,
+        message: str,
+        state: MainAgentState,
+        root: Path,
+        hook_runtime,
+        follow_up_runtime: FollowUpRuntime | None,
+        turn_config: TurnConfig | None,
+        event_callback: Callable[[dict[str, Any]], None] | None,
+    ) -> tuple[MainAgentState, bool]:
+        """Run the only execution-time stop decision shared by Core and Task mode."""
+        if (
+            hook_runtime is None
+            or turn_config is None
+            or turn_config.hook_config is None
+            or not turn_config.hook_config.enabled
+        ):
+            return state, False
+        hook_input = StopHookInput(
+            session_id=state.thread_id,
+            run_id=state.run_id,
+            thread_id=state.thread_id,
+            turn_id=self._event_turn_ids.get(state.run_id, state.run_id),
+            task_type=turn_config.task_type,
+            target="stop",
+            cwd=str(root),
+            transcript_ref=str(root / "task_state.json"),
+            stop_hook_active=state.stop_hook_active,
+            last_assistant_message=message,
+            hook_iteration=state.hook_iteration,
+        )
+        decision: StopHookOutcome = hook_runtime.run_stop(
+            hook_input,
+            policy=turn_config.hook_config.policy,
+        )
+        if not decision.should_block:
+            return state.model_copy(update={"stop_hook_active": False}), False
+
+        iteration = state.hook_iteration + 1
+        continuation_text = "; ".join(
+            item
+            for item in [
+                decision.block_reason or "The stop hook requested more work.",
+                *[fragment.text for fragment in decision.continuation_fragments],
+            ]
+            if str(item).strip()
+        ).strip()
+        continuation = {
+            "source": "stop_hook",
+            "operation_id": f"stop-hook:{state.run_id}:{iteration}",
+            "reason": continuation_text,
+            "hook_iteration": iteration,
+        }
+        max_iterations = turn_config.hook_config.policy.max_stop_continuations
+        if iteration > max_iterations:
+            state = state.model_copy(
+                update={
+                    "status": "gated",
+                    "stop_hook_active": True,
+                    "hook_iteration": iteration,
+                    "continuation": continuation,
+                    "assistant_message": message,
+                    "error": "StopHook continuation limit exceeded.",
+                    "updated_at": utc_now(),
+                }
+            )
+            self._persist_state(root, state)
+            self._emit(
+                root,
+                event_callback,
+                "stop_hook_limit_exceeded",
+                run_id=state.run_id,
+                thread_id=state.thread_id,
+                request_id=state.request_id,
+                turn_id=self._event_turn_ids.get(state.run_id),
+                mode=state.mode,
+                hook_iteration=iteration,
+                max_stop_continuations=max_iterations,
+            )
+            return state, False
+
+        if follow_up_runtime is not None:
+            follow_up_runtime.set_stop_hook_state(
+                active=True,
+                iteration=iteration,
+                continuation=continuation,
+            )
+            follow_up_runtime.enqueue(
+                source="hook",
+                kind="hook_prompt",
+                text=continuation_text,
+                operation_id=str(continuation["operation_id"]),
+            )
+        state = state.model_copy(
+            update={
+                "status": "running",
+                "stop_hook_active": True,
+                "hook_iteration": iteration,
+                "follow_up_count": state.follow_up_count + 1,
+                "continuation": continuation,
+                "transcript": self._trim_transcript(
+                    [
+                        *list(state.transcript),
+                        {
+                            "role": "assistant",
+                            "content": message,
+                        },
+                    ]
+                ),
+                "updated_at": utc_now(),
+            }
+        )
+        self._persist_state(root, state)
+        self._emit(
+            root,
+            event_callback,
+            "stop_hook_blocked",
+            run_id=state.run_id,
+            thread_id=state.thread_id,
+            request_id=state.request_id,
+            turn_id=self._event_turn_ids.get(state.run_id),
+            mode=state.mode,
+            hook_iteration=iteration,
+            reason=continuation_text,
+        )
+        return state, True
 
     @staticmethod
     def _provider_tool_turn(
@@ -1513,21 +1806,13 @@ class MainAgent:
         event_payload.setdefault("actor", "main_agent")
         run_id = str(event_payload["run_id"])
         with self._event_lock:
-            if run_id not in self._event_sequences:
-                existing = read_jsonl(root / "execution_events.jsonl")
-                self._event_sequences[run_id] = max(
-                    (int(row.get("sequence") or 0) for row in existing),
-                    default=0,
-                )
-            sequence = self._event_sequences[run_id] + 1
-            self._event_sequences[run_id] = sequence
             event = EventEnvelope(
                 event_type=event_type,
                 turn_id=self._event_turn_ids.get(run_id),
-                sequence=sequence,
+                sequence=0,
                 **event_payload,
             ).model_dump(mode="json")
-            append_jsonl(root / "execution_events.jsonl", event)
+            event = append_canonical_event(root / "execution_events.jsonl", event)
         if callback is not None:
             callback(event)
 

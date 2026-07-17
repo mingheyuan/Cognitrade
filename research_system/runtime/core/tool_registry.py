@@ -15,6 +15,7 @@ import jsonschema
 
 from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
 from research_system.runtime.core.id_utils import generate_ulid
+from research_system.runtime.event_store import append_canonical_event
 from research_system.adapters.storage.resource_lease import (
     FileResourceLeaseStore,
     ResourceLease,
@@ -66,6 +67,7 @@ class CoreToolContext:
     idempotency_key: str | None = None
     rate_limit_key: str | None = None
     tool_semaphore: Semaphore | None = None
+    hook_runtime: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -283,6 +285,28 @@ class CoreToolRegistry:
                 error="run Tool call budget exceeded",
             )
         if definition.requires_approval:
+            if context.hook_runtime is not None:
+                allowed, _ = context.hook_runtime.run_event(
+                    "PermissionRequest",
+                    {
+                        "run_id": context.run_id,
+                        "thread_id": context.thread_id,
+                        "request_id": context.request_id,
+                        "turn_id": context.turn_id,
+                        "tool_name": tool_name,
+                        "arguments": dict(arguments or {}),
+                        "approval_id": context.approval_id,
+                    },
+                )
+                if not allowed:
+                    return self._rejected(
+                        context=context,
+                        tool_name=tool_name,
+                        arguments=arguments or {},
+                        graph_revision=graph_revision,
+                        node_id=node_id,
+                        error="PermissionRequest hook blocked the Tool call",
+                    )
             if not context.approval_id or context.authorize_approval is None:
                 return self._rejected(
                     context=context,
@@ -320,6 +344,30 @@ class CoreToolRegistry:
                 error="tool call cancelled before execution",
                 status="cancelled",
             )
+
+        if context.hook_runtime is not None:
+            allowed, rewritten = context.hook_runtime.run_event(
+                "PreToolUse",
+                {
+                    "run_id": context.run_id,
+                    "thread_id": context.thread_id,
+                    "request_id": context.request_id,
+                    "tool_name": tool_name,
+                    "arguments": dict(arguments or {}),
+                    "node_id": node_id,
+                },
+            )
+            if not allowed:
+                return self._rejected(
+                    context=context,
+                    tool_name=tool_name,
+                    arguments=arguments or {},
+                    graph_revision=graph_revision,
+                    node_id=node_id,
+                    error="PreToolUse hook blocked the Tool call",
+                )
+            if isinstance(rewritten.get("arguments"), dict):
+                arguments = dict(rewritten["arguments"])
         payload = dict(arguments or {})
         try:
             jsonschema.validate(instance=payload, schema=definition.input_schema or {"type": "object"})
@@ -498,6 +546,19 @@ class CoreToolRegistry:
                 )
                 self._save_idempotency_receipt(context, result)
                 self._emit(context, "tool_call_completed", call=call, result=result)
+                if context.hook_runtime is not None:
+                    context.hook_runtime.run_event(
+                        "PostToolUse",
+                        {
+                            "run_id": context.run_id,
+                            "thread_id": context.thread_id,
+                            "request_id": context.request_id,
+                            "tool_name": tool_name,
+                            "call_id": call.call_id,
+                            "status": result.status,
+                            "output": dict(result.output),
+                        },
+                    )
                 return result
             except Exception as exc:
                 result = CoreToolResult(
@@ -509,6 +570,19 @@ class CoreToolRegistry:
                     completed_at=utc_now(),
                 )
                 self._emit(context, "tool_call_failed", call=call, result=result)
+                if context.hook_runtime is not None:
+                    context.hook_runtime.run_event(
+                        "PostToolUse",
+                        {
+                            "run_id": context.run_id,
+                            "thread_id": context.thread_id,
+                            "request_id": context.request_id,
+                            "tool_name": tool_name,
+                            "call_id": call.call_id,
+                            "status": result.status,
+                            "error": result.error,
+                        },
+                    )
                 return result
         finally:
             if heartbeat is not None:
@@ -638,15 +712,13 @@ class CoreToolRegistry:
         if extra:
             payload.update(extra)
         with self._lock:
-            existing_events = read_jsonl(context.run_root / "execution_events.jsonl")
-            sequence = max(
-                (int(event.get("sequence") or 0) for event in existing_events),
-                default=0,
-            ) + 1
             payload["turn_id"] = context.turn_id
-            payload["sequence"] = sequence
+            payload["sequence"] = 0
             payload = EventEnvelope.model_validate(payload).model_dump(mode="json")
-            append_jsonl(context.run_root / "execution_events.jsonl", payload)
+            payload = append_canonical_event(
+                context.run_root / "execution_events.jsonl",
+                payload,
+            )
         if context.event_callback is not None:
             context.event_callback(payload)
 

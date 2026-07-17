@@ -25,6 +25,7 @@ from research_system.runtime.providers.provider_registry import ProviderRegistry
 from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
 from research_system.runtime.storage.jsonl import append_jsonl
 from research_system.runtime.core.id_utils import generate_ulid
+from research_system.runtime.event_store import append_canonical_event
 from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.runtime.turn_runner import TurnContext, TurnRunner
 from research_system.schemas.artifacts import ArtifactDraft, ArtifactProducer, ArtifactRecord
@@ -36,8 +37,14 @@ from research_system.schemas.core_runtime import (
 from research_system.schemas.events import EventEnvelope
 from research_system.schemas.domain_pack import CapabilityPlanningRequest
 from research_system.schemas.execution_graph import ExecutionGraphPatch
-from research_system.schemas.execution_runtime import ExecutionRunResult, ExecutionRunSnapshot
+from research_system.schemas.execution_runtime import (
+    ExecutionRunResult,
+    ExecutionRunSnapshot,
+    GraphStepOutcome,
+)
 from research_system.schemas.protocol import ProgressState, RequestEnvelope, ResponseEnvelope
+from research_system.schemas.state_machine import RUN_TERMINAL_STATUSES
+from research_system.schemas.turn_runtime import TurnConfig
 from research_system.services.memory.layers import LayeredMemoryStore
 
 
@@ -47,19 +54,27 @@ class _AgentOSGraphRunnerAdapter:
     def __init__(self, agent_os: "AgentOS") -> None:
         self.agent_os = agent_os
 
-    def step(self, context: TurnContext) -> ExecutionRunResult:
+    def step(self, context: TurnContext) -> GraphStepOutcome | ExecutionRunResult:
         if context.resume:
             if context.rerun_from:
+                rerun_from = context.rerun_from
+                # A rerun is a one-time graph mutation.  The enclosing
+                # RegularExecutor may call us again for the next frontier;
+                # those calls must resume the prepared snapshot instead of
+                # invalidating the same node repeatedly.
+                context.rerun_from = None
                 return self.agent_os._rerun_graph_task(
                     context.run_id,
-                    context.rerun_from,
+                    rerun_from,
                     thread_id=context.thread_id,
                     event_callback=context.event_callback,
+                    step=True,
                 )
             return self.agent_os._resume_graph_task(
                 context.run_id,
                 thread_id=context.thread_id,
                 event_callback=context.event_callback,
+                step=True,
             )
         if context.graph is not None:
             return self.agent_os._execute_prebuilt_graph(context)
@@ -69,6 +84,7 @@ class _AgentOSGraphRunnerAdapter:
             turn_id=context.turn.turn_id,
             intake_decision=context.decision,
             event_callback=context.event_callback,
+            step=True,
         )
 
 class AgentOS:
@@ -114,7 +130,9 @@ class AgentOS:
             run_store=self.run_store,
             main_agent=self.main_agent,
             graph_adapter=_AgentOSGraphRunnerAdapter(self),
+            timeout_seconds=float(settings.run_timeout_seconds),
         )
+        self.main_agent.bind_turn_runner(self.turn_runner)
 
     def list_domain_packs(self) -> list[dict[str, Any]]:
         return [
@@ -379,14 +397,38 @@ class AgentOS:
         event_callback=None,
         turn_id: str | None = None,
     ) -> ExecutionRunResult:
-        """Compatibility facade for callers that still invoke Graph directly."""
-        return self._execute_graph_task(
-            request,
+        """Compatibility facade that still enters the canonical TurnRunner."""
+        decision = intake_decision or self.request_intake_decision(request)
+        if decision.status != "accepted":
+            raise ValueError("Agent OS RequestIntake requires clarification before execution")
+        resolved_request = decision.apply_to(request)
+        effective_run_id, _, _ = self.run_store.create_run(
+            resolved_request,
+            resolved_request.intent or "domain_task",
             run_id=run_id,
-            intake_decision=intake_decision,
-            event_callback=event_callback,
-            turn_id=turn_id,
+            reuse_existing=bool(run_id and run_id in self._prepared_run_ids),
         )
+        with self._lock:
+            self._prepared_run_ids.add(effective_run_id)
+        thread_id = str(
+            resolved_request.thread_id
+            or resolved_request.slots.get("chat_thread_id")
+            or f"thread_{effective_run_id}"
+        )
+        outcome = self.turn_runner.execute_task(
+            request=resolved_request,
+            decision=decision,
+            run_id=effective_run_id,
+            thread_id=thread_id,
+            execution_mode="graph",
+            event_callback=event_callback,
+        )
+        self._prepared_run_ids.discard(effective_run_id)
+        self.turn_runner.finalize(
+            outcome=outcome,
+            response_factory=lambda value: self._response_from_graph(resolved_request, value),
+        )
+        return outcome.result
 
     def _run_graph_runner(
         self,
@@ -400,7 +442,8 @@ class AgentOS:
         turn_id: str | None = None,
         resume: bool = False,
         intent: str | None = None,
-    ) -> ExecutionRunResult:
+        step: bool = False,
+    ) -> GraphStepOutcome | ExecutionRunResult:
         """Own the shared GraphRunner lease and result finalization."""
         runner = self._runner(
             run_id,
@@ -410,23 +453,68 @@ class AgentOS:
         with self._lock:
             self._active[run_id] = runner
         try:
-            if resume:
+            if resume and step:
+                persisted = read_json(runner.snapshot_path)
+                if not isinstance(persisted, dict):
+                    raise ValueError(f"graph snapshot is missing: {run_id}")
+                snapshot = ExecutionRunSnapshot.model_validate(persisted)
+                step_outcome = runner.step(
+                    graph=snapshot.graph,
+                    run_id=snapshot.run_id,
+                    thread_id=snapshot.thread_id,
+                    request_id=snapshot.request_id,
+                    user_id=snapshot.user_id,
+                    tenant_id=snapshot.tenant_id,
+                    resume=True,
+                )
+                result = step_outcome.result
+            elif resume:
                 result = runner.resume()
             else:
                 if graph is None:
                     raise ValueError("Graph execution requires a graph")
-                result = runner.run(
-                    graph=graph,
-                    run_id=run_id,
-                    thread_id=thread_id,
-                    request_id=request.request_id,
-                    user_id=request.user_id,
-                    tenant_id=request.tenant_id,
-                    seed_artifacts=list(seed_artifacts or []),
-                )
-            result = self._ensure_graph_assistant_message(result)
+                if step:
+                    step_outcome = runner.step(
+                        graph=graph,
+                        run_id=run_id,
+                        thread_id=thread_id,
+                        request_id=request.request_id,
+                        user_id=request.user_id,
+                        tenant_id=request.tenant_id,
+                        seed_artifacts=list(seed_artifacts or []),
+                    )
+                    result = step_outcome.result
+                else:
+                    result = runner.run(
+                        graph=graph,
+                        run_id=run_id,
+                        thread_id=thread_id,
+                        request_id=request.request_id,
+                        user_id=request.user_id,
+                        tenant_id=request.tenant_id,
+                        seed_artifacts=list(seed_artifacts or []),
+                    )
+            if not step or result.snapshot.status in {
+                "completed",
+                "completed_partial",
+                "gated",
+                "failed",
+                "cancelled",
+                "timed_out",
+            }:
+                result = self._ensure_graph_assistant_message(result)
             self._update_graph_agent_state(result)
-            self._write_summary(result, intent=intent or request.intent)
+            if not step or result.snapshot.status in {
+                "completed",
+                "completed_partial",
+                "gated",
+                "failed",
+                "cancelled",
+                "timed_out",
+            }:
+                self._write_summary(result, intent=intent or request.intent)
+            if step:
+                return step_outcome.model_copy(update={"result": result})
             return result
         finally:
             with self._lock:
@@ -470,6 +558,7 @@ class AgentOS:
             event_callback=context.event_callback,
             turn_id=context.turn.turn_id,
             intent=context.request.intent,
+            step=True,
         )
 
     def _execute_graph_task(
@@ -480,7 +569,8 @@ class AgentOS:
         intake_decision: RequestIntakeDecision | None = None,
         event_callback=None,
         turn_id: str | None = None,
-    ) -> ExecutionRunResult:
+        step: bool = False,
+    ) -> GraphStepOutcome | ExecutionRunResult:
         decision = intake_decision or self.request_intake_decision(request)
         if decision.status != "accepted":
             raise ValueError("Agent OS RequestIntake requires clarification before execution")
@@ -537,6 +627,7 @@ class AgentOS:
             event_callback=event_callback,
             turn_id=turn_id,
             intent=intent,
+            step=step,
         )
 
     def handle_request(
@@ -615,61 +706,40 @@ class AgentOS:
             )
             with self._lock:
                 self._prepared_run_ids.add(effective_run_id)
-        if decision.request_kind == "domain_task":
-            return self.turn_runner.run(
-                request=resolved_request,
-                decision=decision,
-                run_id=effective_run_id,
-                thread_id=thread_id,
-                execution_mode="graph",
-                response_factory=lambda result: self._response_from_graph(
-                    resolved_request,
-                    result,
-                ),
-                event_callback=event_callback,
+        execution_mode = "graph" if decision.request_kind == "domain_task" else decision.recommended_mode
+        if execution_mode == "graph":
+            response_factory = lambda result: self._response_from_graph(resolved_request, result)
+        else:
+            response_factory = lambda result: self._finalize_core_turn_response(resolved_request, result)
+        if execution_mode != "graph":
+            paths = self.run_store.load_run_paths(effective_run_id)
+            self._prepared_run_ids.discard(effective_run_id)
+            resolved_request = resolved_request.model_copy(
+                update={
+                    "slots": {
+                        **dict(resolved_request.slots),
+                        "run_id": effective_run_id,
+                        "thread_id": thread_id,
+                    }
+                }
             )
-
-        effective_run_id, paths, _ = self.run_store.create_run(
-            resolved_request,
-            decision.intent or "core.conversation.answer",
-            run_id=effective_run_id,
-            reuse_existing=True,
-        )
-        self._prepared_run_ids.discard(effective_run_id)
-        thread_id = str(
-            resolved_request.thread_id
-            or resolved_request.slots.get("chat_thread_id")
-            or f"thread_{effective_run_id}"
-        )
-        resolved_request = resolved_request.model_copy(
-            update={
-                "slots": {
-                    **dict(resolved_request.slots),
+            write_json(
+                paths.root / "agent_os_request.json",
+                {
                     "run_id": effective_run_id,
                     "thread_id": thread_id,
-                }
-            }
-        )
-        write_json(
-            paths.root / "agent_os_request.json",
-            {
-                "run_id": effective_run_id,
-                "thread_id": thread_id,
-                "request": resolved_request.model_dump(mode="json"),
-                "mode": "core",
-                "request_intake": decision.model_dump(mode="json"),
-            },
-        )
+                    "request": resolved_request.model_dump(mode="json"),
+                    "mode": execution_mode,
+                    "request_intake": decision.model_dump(mode="json"),
+                },
+            )
         return self.turn_runner.run(
             request=resolved_request,
             decision=decision,
             run_id=effective_run_id,
             thread_id=thread_id,
-            execution_mode=decision.recommended_mode,
-            response_factory=lambda result: self._finalize_core_turn_response(
-                resolved_request,
-                result,
-            ),
+            execution_mode=execution_mode,
+            response_factory=response_factory,
             event_callback=event_callback,
         )
 
@@ -906,13 +976,9 @@ class AgentOS:
     ) -> None:
         """Append a pre-Turn event without resetting the shared cursor."""
         path = root / "execution_events.jsonl"
-        existing = read_jsonl(path)
-        event["sequence"] = max(
-            (int(row.get("sequence") or 0) for row in existing),
-            default=0,
-        ) + 1
+        event["sequence"] = 0
         normalized = EventEnvelope.model_validate(event).model_dump(mode="json")
-        append_jsonl(path, normalized)
+        normalized = append_canonical_event(path, normalized)
         if callback is not None:
             callback(normalized)
 
@@ -1076,6 +1142,7 @@ class AgentOS:
 
     def inspect_run(self, run_id: str) -> dict[str, Any]:
         root = self.run_store.load_run_paths(run_id).root
+        turn_state = read_json(root / "turn_state.json") or read_json(root / "turn.json")
         snapshot = read_json(root / "execution_snapshot.json")
         if snapshot is None:
             core_state = read_json(root / "main_agent_state.json")
@@ -1084,6 +1151,8 @@ class AgentOS:
                     "mode": "core",
                     "request": read_json(root / "agent_os_request.json") or read_json(root / "request.json"),
                     "snapshot": core_state,
+                    "turn": turn_state,
+                    "task": read_json(root / "task_state.json") or read_json(root / "task.json"),
                     "artifacts": [
                         artifact.model_dump(mode="json")
                         for artifact in self._runner_board(run_id).list_artifacts(thread_id=None)
@@ -1097,6 +1166,8 @@ class AgentOS:
                         "run_id": run_id,
                         "status": "received",
                     },
+                    "turn": turn_state,
+                    "task": read_json(root / "task_state.json") or read_json(root / "task.json"),
                     "artifacts": [],
                 }
             raise KeyError(f"run has no canonical execution snapshot: {run_id}")
@@ -1104,6 +1175,8 @@ class AgentOS:
             "mode": "graph",
             "request": read_json(root / "agent_os_request.json"),
             "snapshot": snapshot,
+            "turn": turn_state,
+            "task": read_json(root / "task_state.json") or read_json(root / "task.json"),
             "main_agent_state": read_json(root / "main_agent_state.json"),
             "artifacts": [
                 artifact.model_dump(mode="json")
@@ -1146,7 +1219,8 @@ class AgentOS:
         detail = self.inspect_run(run_id)
         if detail.get("mode") == "core":
             state = MainAgentState.model_validate(detail["snapshot"])
-            if state.status != "paused":
+            turn_status = str((detail.get("turn") or {}).get("status") or "")
+            if state.status != "paused" and turn_status not in {"paused", "waiting_approval", "gated"}:
                 raise ValueError(f"core run is not resumable: {state.status}")
             request, decision = self._load_core_request(run_id)
             result, _ = self._resume_core_task(
@@ -1157,12 +1231,14 @@ class AgentOS:
             return result  # type: ignore[return-value]
         request, decision = self._load_graph_request(run_id)
         snapshot = detail.get("snapshot") or {}
+        turn_config = self._stored_turn_config(detail)
         outcome = self.turn_runner.execute_task(
             request=request,
             decision=decision,
             run_id=run_id,
             thread_id=str(snapshot.get("thread_id") or f"thread_{run_id}"),
             execution_mode="graph",
+            turn_config=turn_config,
             resume=True,
         )
         result = outcome.result
@@ -1180,12 +1256,14 @@ class AgentOS:
             raise ValueError("Core Agent Loop runs do not expose graph nodes for partial rerun")
         request, decision = self._load_graph_request(run_id)
         snapshot = detail.get("snapshot") or {}
+        turn_config = self._stored_turn_config(detail)
         outcome = self.turn_runner.execute_task(
             request=request,
             decision=decision,
             run_id=run_id,
             thread_id=str(snapshot.get("thread_id") or f"thread_{run_id}"),
             execution_mode="graph",
+            turn_config=turn_config,
             resume=True,
             rerun_from=node_id,
         )
@@ -1197,62 +1275,51 @@ class AgentOS:
         return result
 
     def pause(self, run_id: str) -> bool:
-        detail = self.inspect_run(run_id)
-        if detail.get("mode") == "pending":
-            paths = self.run_store.load_run_paths(run_id)
+        paths = self.run_store.load_run_paths(run_id)
+        turn_payload = read_json(paths.turn_state)
+        if not isinstance(turn_payload, dict):
+            control = read_json(paths.root / "execution_control.json") or {}
             write_json(
                 paths.root / "execution_control.json",
-                {"pause_requested": True, "cancel_requested": False},
+                {**control, "pause_requested": True, "cancel_requested": False},
             )
             return True
-        if detail.get("mode") == "core":
-            state = MainAgentState.model_validate(detail["snapshot"])
-            if state.status in {"completed", "failed", "cancelled", "paused"}:
-                return False
-            paths = self.run_store.load_run_paths(run_id)
-            write_json(
-                paths.root / "execution_control.json",
-                {"pause_requested": True, "cancel_requested": False},
-            )
-            return True
-        with self._lock:
-            runner = self._active.get(run_id)
-        if runner is None:
-            runner = self._runner(run_id)
-            snapshot = read_json(runner.snapshot_path)
-            if not snapshot or snapshot.get("status") in {"completed", "completed_partial", "failed", "cancelled", "timed_out", "gated", "waiting_approval"}:
-                return False
-        runner.request_pause()
+        status = str(turn_payload.get("status") or "")
+        if status in RUN_TERMINAL_STATUSES or status in {"paused", "waiting_approval"}:
+            return False
+        self.turn_runner.pause(run_id, reason="pause requested by caller")
         return True
 
     def cancel(self, run_id: str) -> bool:
-        detail = self.inspect_run(run_id)
-        if detail.get("mode") == "pending":
-            paths = self.run_store.load_run_paths(run_id)
+        paths = self.run_store.load_run_paths(run_id)
+        turn_payload = read_json(paths.turn_state)
+        if not isinstance(turn_payload, dict):
+            control = read_json(paths.root / "execution_control.json") or {}
             write_json(
                 paths.root / "execution_control.json",
-                {"pause_requested": False, "cancel_requested": True},
+                {**control, "pause_requested": False, "cancel_requested": True},
             )
             return True
-        if detail.get("mode") == "core":
-            state = MainAgentState.model_validate(detail["snapshot"])
-            if state.status in {"completed", "failed", "cancelled"}:
-                return False
-            paths = self.run_store.load_run_paths(run_id)
-            write_json(
-                paths.root / "execution_control.json",
-                {"pause_requested": False, "cancel_requested": True},
-            )
-            return True
-        with self._lock:
-            runner = self._active.get(run_id)
-        if runner is None:
-            runner = self._runner(run_id)
-            snapshot = read_json(runner.snapshot_path)
-            if not snapshot or snapshot.get("status") in {"completed", "completed_partial", "failed", "cancelled", "timed_out", "gated"}:
-                return False
-        runner.request_cancel()
+        status = str(turn_payload.get("status") or "")
+        if status in RUN_TERMINAL_STATUSES or status == "cancelled":
+            return False
+        self.turn_runner.cancel(run_id, reason="cancel requested by caller")
         return True
+
+    def enqueue_turn_follow_up(
+        self,
+        run_id: str,
+        *,
+        text: str,
+        operation_id: str | None = None,
+    ) -> dict[str, Any]:
+        item = self.turn_runner.enqueue_follow_up(
+            run_id,
+            text=text,
+            source="user",
+            operation_id=operation_id,
+        )
+        return item.model_dump(mode="json")
 
     def patch(
         self,
@@ -1268,7 +1335,10 @@ class AgentOS:
         with self._lock:
             runner = self._active.get(run_id)
         if runner is None:
-            return False
+            runner = self._runner(run_id)
+            snapshot = read_json(runner.snapshot_path)
+            if not isinstance(snapshot, dict) or str(snapshot.get("status") or "") in RUN_TERMINAL_STATUSES:
+                return False
         runner.submit_patch(patch)
         return True
 
@@ -1322,12 +1392,21 @@ class AgentOS:
         decision: RequestIntakeDecision,
         state: MainAgentState,
     ) -> tuple[MainAgentRunResult, ResponseEnvelope]:
+        turn_payload = read_json(
+            self.run_store.load_run_paths(state.run_id).root / "turn_state.json"
+        ) or {}
+        turn_config = (
+            TurnConfig.model_validate(turn_payload.get("config"))
+            if isinstance(turn_payload, dict) and isinstance(turn_payload.get("config"), dict)
+            else None
+        )
         outcome = self.turn_runner.execute_task(
             request=request,
             decision=decision,
             run_id=state.run_id,
             thread_id=state.thread_id,
             execution_mode=state.mode,
+            turn_config=turn_config,
             resume=True,
         )
         result = outcome.result
@@ -1337,6 +1416,13 @@ class AgentOS:
             response_factory=lambda value: self._response_from_core(request, value),
         )
         return result, response
+
+    @staticmethod
+    def _stored_turn_config(detail: dict[str, Any]) -> TurnConfig | None:
+        payload = detail.get("turn") if isinstance(detail, dict) else None
+        if not isinstance(payload, dict) or not isinstance(payload.get("config"), dict):
+            return None
+        return TurnConfig.model_validate(payload["config"])
 
     def _load_graph_request(self, run_id: str):
         root = self.run_store.load_run_paths(run_id).root
@@ -1373,7 +1459,8 @@ class AgentOS:
         *,
         thread_id: str | None = None,
         event_callback=None,
-    ) -> ExecutionRunResult:
+        step: bool = False,
+    ) -> GraphStepOutcome | ExecutionRunResult:
         turn_payload = read_json(
             self.run_store.load_run_paths(run_id).root / "turn_state.json"
         )
@@ -1389,6 +1476,7 @@ class AgentOS:
                 else None
             ),
             resume=True,
+            step=step,
         )
 
     def _rerun_graph_task(
@@ -1398,7 +1486,8 @@ class AgentOS:
         *,
         thread_id: str | None = None,
         event_callback=None,
-    ) -> ExecutionRunResult:
+        step: bool = False,
+    ) -> GraphStepOutcome | ExecutionRunResult:
         request, _ = self._load_graph_request(run_id)
         turn_payload = read_json(
             self.run_store.load_run_paths(run_id).root / "turn_state.json"
@@ -1424,6 +1513,7 @@ class AgentOS:
                 else None
             ),
             resume=True,
+            step=step,
         )
 
     def _response_from_graph(
@@ -1439,6 +1529,9 @@ class AgentOS:
         )
         artifacts = self.inspect_run(snapshot.run_id).get("artifacts") or []
         final_ids = set(result.final_artifact_ids)
+        turn_payload = read_json(
+            self.run_store.load_run_paths(snapshot.run_id).root / "turn_state.json"
+        ) or {}
         final_artifacts = [
             artifact
             for artifact in artifacts
@@ -1488,6 +1581,9 @@ class AgentOS:
             mode="graph",
             request_id=snapshot.request_id,
             run_id=snapshot.run_id,
+            thread_id=snapshot.thread_id,
+            turn_id=str(turn_payload.get("turn_id") or "") or None,
+            task_type=str(turn_payload.get("task_type") or "regular"),
             intent=str(snapshot.graph.metadata.get("intent") or request.intent or ""),
             status=status,
             message=message,
@@ -1516,8 +1612,14 @@ class AgentOS:
                 "tool_call_count": snapshot.tool_call_count,
                 "delivery_status": delivery_status,
                 "synthesis_unavailable": delivery_status == "synthesis_unavailable",
+                "turn_id": str(turn_payload.get("turn_id") or "") or None,
             },
             artifacts=final_artifacts,
+            artifact_ids=list(result.artifact_ids),
+            final_artifact_ids=list(result.final_artifact_ids),
+            continuation=(
+                read_json(self.run_store.load_run_paths(snapshot.run_id).root / "task_state.json") or {}
+            ).get("continuation"),
         )
 
     def _response_from_core(
@@ -1526,6 +1628,9 @@ class AgentOS:
         result: MainAgentRunResult,
     ) -> ResponseEnvelope:
         artifacts = self.inspect_run(result.run_id).get("artifacts") or []
+        turn_payload = read_json(
+            self.run_store.load_run_paths(result.run_id).root / "turn_state.json"
+        ) or {}
         response_status = (
             "needs_clarification"
             if result.clarification_question
@@ -1535,6 +1640,9 @@ class AgentOS:
             mode=result.mode,
             request_id=result.request_id,
             run_id=result.run_id,
+            thread_id=result.thread_id,
+            turn_id=str(turn_payload.get("turn_id") or "") or None,
+            task_type=str(turn_payload.get("task_type") or "regular"),
             intent=result.intent,
             status=response_status,
             message=result.message,
@@ -1567,8 +1675,12 @@ class AgentOS:
                     if result.clarification_question
                     else None
                 ),
+                "turn_id": str(turn_payload.get("turn_id") or "") or None,
+                "task_selection": turn_payload.get("task_selection") or {},
             },
             artifacts=[artifact for artifact in artifacts if artifact.get("artifact_id") in set(result.artifact_ids)],
+            artifact_ids=list(result.artifact_ids),
+            continuation=result.continuation,
         )
 
     def _write_core_summary(self, result: MainAgentRunResult) -> None:
@@ -1677,6 +1789,57 @@ class AgentOS:
             existing_delivery_status = str(
                 existing_content.get("delivery_status") or result.snapshot.status
             )
+            has_synthesis = bool(
+                runner.board.list_artifacts(
+                    run_id=result.snapshot.run_id,
+                    artifact_type="main_agent_synthesis",
+                    status="active",
+                )
+            )
+            if (
+                result.snapshot.status == "completed"
+                and result.snapshot.graph.domain_id == "finance_ashare"
+                and not has_synthesis
+                and existing_delivery_status == "completed"
+            ):
+                # A Pack may have emitted an assistant message before the
+                # canonical Main Agent synthesis stage. Preserve the old
+                # artifact for replay, but supersede it so delivery status
+                # cannot claim a complete user-facing answer.
+                self._mark_graph_partial_delivery(result=result, runner=runner)
+                partial_artifact = runner.board.add(
+                    existing[-1].model_copy(
+                        update={
+                            "artifact_id": generate_ulid(),
+                            "artifact_version": existing[-1].artifact_version + 1,
+                            "supersedes_artifact_id": existing[-1].artifact_id,
+                            "content": {
+                                **existing_content,
+                                "delivery_status": "synthesis_unavailable",
+                                "synthesis_unavailable": True,
+                            },
+                        }
+                    )
+                )
+                runner._emit(
+                    "assistant_message_status",
+                    run_id=result.snapshot.run_id,
+                    thread_id=result.snapshot.thread_id,
+                    request_id=result.snapshot.request_id,
+                    mode="graph",
+                    delivery_status="synthesis_unavailable",
+                    synthesis_unavailable=True,
+                    message=str(existing_content.get("message") or ""),
+                    artifact_ids=[partial_artifact.artifact_id],
+                )
+                return result.model_copy(
+                    update={
+                        "artifact_ids": [
+                            *result.artifact_ids,
+                            partial_artifact.artifact_id,
+                        ],
+                    }
+                )
             existing_event_type = (
                 "assistant_message_ready"
                 if existing_delivery_status == "completed"

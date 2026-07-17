@@ -1,0 +1,805 @@
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from research_system.runtime.agent_os import AgentOS
+from research_system.runtime.follow_up import FollowUpRuntime
+from research_system.runtime.hooks import HookRuntime, StopHookInput
+from research_system.runtime.platform.settings import Settings
+from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
+from research_system.runtime.storage.runs.run_store import RunStore
+from research_system.runtime.turn_runner import GraphExecutor, TurnContext, TurnRunner
+from research_system.schemas.core_runtime import MainAgentRunResult, MainAgentState, RequestIntakeDecision
+from research_system.schemas.execution_graph import ExecutionGraph, ExecutionNode
+from research_system.schemas.execution_runtime import (
+    ExecutionRunResult,
+    ExecutionRunSnapshot,
+    NodeExecutionState,
+)
+from research_system.schemas.protocol import ProgressState, RequestEnvelope, ResponseEnvelope
+from research_system.schemas.turn_runtime import (
+    CompactConfig,
+    FollowupTaskRequest,
+    HookConfig,
+    HookPolicy,
+    FollowUpConfig,
+    TurnConfig,
+    TurnSnapshot,
+)
+
+
+class TurnExtensionTests(unittest.TestCase):
+    def test_graph_nodes_are_projected_as_child_turns_in_the_root_turn(self) -> None:
+        class Adapter:
+            def step(self, context):
+                graph = ExecutionGraph(
+                    domain_id="test",
+                    objective="test",
+                    nodes=[
+                        ExecutionNode(
+                            node_id="analyst",
+                            node_kind="subagent",
+                            executor="research.analyst",
+                            capability="research.analysis",
+                        )
+                    ],
+                )
+                return ExecutionRunResult(
+                    snapshot=ExecutionRunSnapshot(
+                        run_id=context.run_id,
+                        thread_id=context.thread_id,
+                        request_id=context.request.request_id,
+                        graph=graph,
+                        status="completed",
+                        node_states={
+                            "analyst": NodeExecutionState(
+                                node_id="analyst",
+                                status="completed",
+                                output_artifact_ids=["analysis-1"],
+                            )
+                        },
+                    )
+                )
+
+        with TemporaryDirectory() as temporary_directory:
+            run_store = RunStore(Path(temporary_directory) / "runs")
+            request = RequestEnvelope(user_query="graph")
+            run_id, _, _ = run_store.create_run(request, "domain:test")
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="domain_task",
+                recommended_mode="graph",
+                intent="domain:test",
+            )
+            runner = TurnRunner(
+                run_store=run_store,
+                main_agent=object(),
+                graph_adapter=Adapter(),
+            )
+            response = runner.run(
+                request=request,
+                decision=decision,
+                run_id=run_id,
+                thread_id="thread-1",
+                execution_mode="graph",
+                response_factory=lambda result: ResponseEnvelope(
+                    request_id=request.request_id,
+                    run_id=run_id,
+                    status="completed",
+                    message="done",
+                    progress=ProgressState(
+                        current_phase="graph",
+                        active_agent="main_agent",
+                        latest_event="turn_completed",
+                        status_message="done",
+                        percent=100,
+                    ),
+                ),
+            )
+            root = run_store.load_run_paths(run_id).root
+            turn = TurnSnapshot.model_validate(read_json(root / "turn.json"))
+            self.assertEqual(len(turn.child_turns), 1)
+            self.assertEqual(turn.child_turns[0].parent_node_id, "analyst")
+            self.assertEqual(response.child_turn_ids, [turn.child_turns[0].child_turn_id])
+            self.assertTrue(read_json(root / "child_turns.json"))
+
+    def test_review_and_compact_tasks_execute_inside_the_same_turn_lifecycle(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            run_store = RunStore(Path(temporary_directory) / "runs")
+            request = RequestEnvelope(user_query="task", constraints={"task_type": "review"})
+            run_id, _, _ = run_store.create_run(request, "review")
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="conversation",
+                recommended_mode="core",
+                intent="review",
+            )
+            runner = TurnRunner(
+                run_store=run_store,
+                main_agent=object(),
+                graph_adapter=object(),
+            )
+            response = runner.run(
+                request=request,
+                decision=decision,
+                run_id=run_id,
+                thread_id="thread-1",
+                execution_mode="core",
+                response_factory=lambda result: ResponseEnvelope(
+                    request_id=request.request_id,
+                    run_id=run_id,
+                    status=result.status,
+                    message=result.message,
+                    progress=ProgressState(
+                        current_phase="task",
+                        active_agent="main_agent",
+                        latest_event="turn_completed",
+                        status_message="done",
+                        percent=100,
+                    ),
+                ),
+            )
+            self.assertEqual(response.task_type, "review")
+            self.assertEqual(response.status, "completed")
+
+    def test_stop_hook_blocks_with_a_persisted_continuation(self) -> None:
+        class Adapter:
+            def step(self, context):
+                return ExecutionRunResult(
+                    snapshot=ExecutionRunSnapshot(
+                        run_id=context.run_id,
+                        thread_id=context.thread_id,
+                        request_id=context.request.request_id,
+                        graph=ExecutionGraph(domain_id="test", objective="test"),
+                        status="completed",
+                    )
+                )
+
+        with TemporaryDirectory() as temporary_directory:
+            run_store = RunStore(Path(temporary_directory) / "runs")
+            request = RequestEnvelope(user_query="graph")
+            run_id, _, _ = run_store.create_run(request, "domain:test")
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="domain_task",
+                recommended_mode="graph",
+                intent="domain:test",
+            )
+            hooks = HookRuntime()
+            hooks.register(
+                "stop",
+                lambda _input: {
+                    "should_block": True,
+                    "block_reason": "source review is required",
+                },
+                name="source-review",
+            )
+            runner = TurnRunner(
+                run_store=run_store,
+                main_agent=object(),
+                graph_adapter=Adapter(),
+                hook_runtime=hooks,
+            )
+            response = runner.run(
+                request=request,
+                decision=decision,
+                run_id=run_id,
+                thread_id="thread-1",
+                execution_mode="graph",
+                response_factory=lambda result: ResponseEnvelope(
+                    request_id=request.request_id,
+                    run_id=run_id,
+                    status="paused",
+                    message="continuation required",
+                    progress=ProgressState(
+                        current_phase="graph",
+                        active_agent="main_agent",
+                        latest_event="turn_paused",
+                        status_message="paused",
+                        percent=0,
+                    ),
+                ),
+            )
+            root = run_store.load_run_paths(run_id).root
+            turn = TurnSnapshot.model_validate(read_json(root / "turn.json"))
+            task = read_json(root / "task_state.json")
+            events = read_jsonl(root / "execution_events.jsonl")
+
+            self.assertEqual(response.status, "paused")
+            self.assertEqual(turn.status, "paused")
+            self.assertEqual(task["continuation"]["source"], "stop_hook")
+            self.assertTrue(any(event["event_type"] == "hook_started" for event in events))
+            self.assertTrue(any(event["event_type"] == "hook_completed" for event in events))
+            self.assertTrue(any(event["event_type"] == "stop_hook_blocked" for event in events))
+
+    def test_graph_stop_hook_continuation_resumes_inside_the_same_turn(self) -> None:
+        class Adapter:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def step(self, context):
+                self.calls += 1
+                return ExecutionRunResult(
+                    snapshot=ExecutionRunSnapshot(
+                        run_id=context.run_id,
+                        thread_id=context.thread_id,
+                        request_id=context.request.request_id,
+                        graph=ExecutionGraph(domain_id="test", objective="test"),
+                        status="completed",
+                    )
+                )
+
+        with TemporaryDirectory() as temporary_directory:
+            run_store = RunStore(Path(temporary_directory) / "runs")
+            request = RequestEnvelope(user_query="graph")
+            run_id, _, _ = run_store.create_run(request, "domain:test")
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="domain_task",
+                recommended_mode="graph",
+                intent="domain:test",
+            )
+            hooks = HookRuntime()
+            hooks.register(
+                "stop",
+                lambda _input: {
+                    "should_block": True,
+                    "block_reason": "review the completed graph",
+                },
+            )
+            adapter = Adapter()
+            runner = TurnRunner(
+                run_store=run_store,
+                main_agent=object(),
+                graph_adapter=adapter,
+                hook_runtime=hooks,
+            )
+            first = runner.run(
+                request=request,
+                decision=decision,
+                run_id=run_id,
+                thread_id="thread-1",
+                execution_mode="graph",
+                response_factory=lambda result: ResponseEnvelope(
+                    request_id=request.request_id,
+                    run_id=run_id,
+                    mode="graph",
+                    status="running",
+                    message="continuation required",
+                    progress=ProgressState(
+                        current_phase="graph",
+                        active_agent="main_agent",
+                        latest_event="turn_paused",
+                        status_message="paused",
+                        percent=0,
+                    ),
+                ),
+            )
+            resumed = runner.resume(run_id)
+
+            self.assertEqual(first.status, "running")
+            self.assertEqual(resumed.status, "completed")
+            self.assertEqual(adapter.calls, 1)
+            self.assertEqual(
+                read_json(run_store.load_run_paths(run_id).root / "task_state.json")["task_type"],
+                "review",
+            )
+            self.assertTrue(
+                any(
+                    artifact.get("artifact_type") == "review_result"
+                    for artifact in read_jsonl(
+                        run_store.load_run_paths(run_id).root / "artifact_board.jsonl"
+                    )
+                )
+            )
+
+    def test_follow_up_mailbox_is_idempotent_and_rejects_root_child_followup(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            runtime = FollowUpRuntime(
+                root=root,
+                run_id="run-1",
+                turn_id="turn-root",
+            )
+            item = runtime.enqueue(
+                source="user",
+                kind="user_input",
+                text="continue",
+                operation_id="op-1",
+            )
+            duplicate = runtime.enqueue(
+                source="user",
+                kind="user_input",
+                text="continue",
+                operation_id="op-1",
+            )
+            delivered = runtime.deliver_current()
+            rejected = runtime.followup_task(
+                FollowupTaskRequest(
+                    parent_turn_id="turn-root",
+                    target_child_turn_id="turn-root",
+                    target_agent_id="root",
+                    message="do more",
+                )
+            )
+
+            self.assertEqual(item.input_id, duplicate.input_id)
+            self.assertEqual([row.input_id for row in delivered], [item.input_id])
+            self.assertFalse(rejected.accepted)
+            self.assertEqual(rejected.delivery, "rejected")
+
+    def test_root_stop_hook_uses_stop_target_and_identity(self) -> None:
+        seen = []
+        runtime = HookRuntime()
+        runtime.register("stop", lambda value: seen.append(value) or None)
+        outcome = runtime.run_stop(
+            StopHookInput(
+                session_id="thread-1",
+                run_id="run-1",
+                thread_id="thread-1",
+                turn_id="turn-1",
+                task_type="regular",
+                target="stop",
+            )
+        )
+        self.assertTrue(outcome.should_stop)
+        self.assertEqual(seen[0].run_id, "run-1")
+        self.assertEqual(seen[0].target, "stop")
+
+    def test_session_and_user_prompt_hooks_run_inside_the_turn(self) -> None:
+        seen: list[tuple[str, str]] = []
+
+        class MainAgent:
+            def run(self, **kwargs):
+                state = MainAgentState(
+                    run_id=kwargs["run_id"],
+                    thread_id=kwargs["thread_id"],
+                    request_id=kwargs["request"].request_id,
+                    status="completed",
+                    mode="core",
+                )
+                return MainAgentRunResult(
+                    run_id=state.run_id,
+                    thread_id=state.thread_id,
+                    request_id=state.request_id,
+                    status="completed",
+                    mode="core",
+                    intent="core.conversation.answer",
+                    message=kwargs["request"].user_query,
+                    state=state,
+                )
+
+        hooks = HookRuntime()
+        hooks.register("SessionStart", lambda value: seen.append((value.event, value.turn_id)))
+        hooks.register(
+            "UserPromptSubmit",
+            lambda _value: {"user_query": "rewritten by hook"},
+        )
+        with TemporaryDirectory() as temporary_directory:
+            run_store = RunStore(Path(temporary_directory) / "runs")
+            request = RequestEnvelope(user_query="original")
+            run_id, _, _ = run_store.create_run(request, "core.conversation.answer")
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="conversation",
+                recommended_mode="core",
+                intent="core.conversation.answer",
+            )
+            runner = TurnRunner(
+                run_store=run_store,
+                main_agent=MainAgent(),
+                graph_adapter=object(),
+                hook_runtime=hooks,
+            )
+            response = runner.run(
+                request=request,
+                decision=decision,
+                run_id=run_id,
+                thread_id="thread-1",
+                execution_mode="core",
+                turn_config=TurnConfig(
+                    execution_mode="core",
+                    hook_config=HookConfig(
+                        policy=HookPolicy(allow_input_rewrite=True),
+                    ),
+                    follow_up_config=FollowUpConfig(),
+                ),
+                response_factory=lambda result: ResponseEnvelope(
+                    request_id=request.request_id,
+                    run_id=run_id,
+                    status=result.status,
+                    message=result.message,
+                    progress=ProgressState(
+                        current_phase="core",
+                        active_agent="main_agent",
+                        latest_event="turn_completed",
+                        status_message="done",
+                        percent=100,
+                    ),
+                ),
+            )
+
+            self.assertEqual(response.message, "rewritten by hook")
+            self.assertEqual([event for event, _ in seen], ["SessionStart"])
+            events = read_jsonl(run_store.load_run_paths(run_id).root / "execution_events.jsonl")
+            self.assertTrue(
+                any(event.get("payload", {}).get("hook_event") == "SessionStart" for event in events)
+            )
+            self.assertTrue(
+                any(event.get("payload", {}).get("hook_event") == "UserPromptSubmit" for event in events)
+            )
+            self.assertTrue(any(event["event_type"] == "user_prompt_rewritten" for event in events))
+
+    def test_child_followup_creates_a_continuation_child_without_a_new_root_run(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            run_store = RunStore(Path(temporary_directory) / "runs")
+            request = RequestEnvelope(user_query="graph")
+            run_id, _, _ = run_store.create_run(request, "domain:test")
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="domain_task",
+                recommended_mode="graph",
+                intent="domain:test",
+            )
+            runner = TurnRunner(
+                run_store=run_store,
+                main_agent=object(),
+                graph_adapter=object(),
+            )
+            turn = TurnSnapshot(
+                run_id=run_id,
+                thread_id="thread-1",
+                request_id=request.request_id,
+                execution_mode="graph",
+                config=TurnConfig(
+                    execution_mode="graph",
+                    follow_up_config=FollowUpConfig(),
+                ),
+                child_turns=[
+                    {
+                        "child_turn_id": "child-1",
+                        "child_thread_id": "child-thread-1",
+                        "parent_turn_id": "turn-root",
+                        "parent_run_id": run_id,
+                        "parent_node_id": "analyst",
+                        "role_id": "analyst",
+                        "status": "completed",
+                    }
+                ],
+            )
+            runner._persist_turn(turn)
+
+            request_payload = FollowupTaskRequest(
+                parent_turn_id=turn.turn_id,
+                target_child_turn_id="child-1",
+                target_agent_id="analyst",
+                message="recheck the evidence",
+                operation_id="followup-1",
+            )
+            first = runner.followup_task(run_id, request_payload)
+            second = runner.followup_task(run_id, request_payload)
+
+            self.assertTrue(first.accepted)
+            self.assertEqual(first.delivery, "triggered_new_turn")
+            self.assertNotEqual(first.target_turn_id, "child-1")
+            self.assertTrue(second.duplicate)
+            persisted = TurnSnapshot.model_validate(
+                read_json(run_store.load_run_paths(run_id).root / "turn.json")
+            )
+            self.assertEqual(len(persisted.child_turns), 2)
+            self.assertEqual(persisted.child_turns[-1].relation, "continuation")
+            self.assertEqual(persisted.child_turns[-1].status, "ready")
+            self.assertTrue(
+                any(
+                    event["event_type"] == "child_turn_queued"
+                    for event in read_jsonl(run_store.load_run_paths(run_id).root / "execution_events.jsonl")
+                )
+            )
+
+    def test_child_followup_executes_continuation_when_core_executor_is_available(self) -> None:
+        class Provider:
+            available = True
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def complete_with_tools(self, **_kwargs):
+                self.calls += 1
+                return {"kind": "message", "message": "child completed"}
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            repository_root = Path(__file__).resolve().parents[1]
+            settings = Settings.from_env(repository_root).model_copy(
+                update={
+                    "runs_root": root / "runs",
+                    "memory_root": root / "memory",
+                    "domain_packs_root": root / "empty_packs",
+                    "workspace_root": root / "workspace",
+                }
+            )
+            agent_os = AgentOS(settings)
+            provider = Provider()
+            agent_os.main_agent.llm_provider = provider
+            request = RequestEnvelope(user_query="graph")
+            run_id, _, _ = agent_os.run_store.create_run(request, "domain:test")
+            turn = TurnSnapshot(
+                run_id=run_id,
+                thread_id="thread-1",
+                request_id=request.request_id,
+                execution_mode="graph",
+                config=TurnConfig(
+                    execution_mode="graph",
+                    hook_config=HookConfig(),
+                    follow_up_config=FollowUpConfig(),
+                ),
+                child_turns=[
+                    {
+                        "child_turn_id": "child-1",
+                        "child_thread_id": "child-thread-1",
+                        "parent_turn_id": "turn-root",
+                        "parent_run_id": run_id,
+                        "parent_node_id": "analyst",
+                        "role_id": "analyst",
+                        "status": "completed",
+                    }
+                ],
+            )
+            agent_os.turn_runner._persist_turn(turn)
+
+            request_payload = FollowupTaskRequest(
+                parent_turn_id=turn.turn_id,
+                target_child_turn_id="child-1",
+                target_agent_id="analyst",
+                message="recheck the evidence",
+                operation_id="followup-execute-1",
+            )
+            result = agent_os.turn_runner.followup_task(run_id, request_payload)
+
+            self.assertTrue(result.accepted)
+            self.assertEqual(result.delivery, "triggered_new_turn")
+            continuation_root = root / "runs" / run_id / "child_turns" / str(result.target_turn_id)
+            self.assertEqual(read_json(continuation_root / "main_agent_state.json")["status"], "completed")
+            child_turn = TurnSnapshot.model_validate(read_json(continuation_root / "turn.json"))
+            self.assertGreater(child_turn.sequence, 0)
+            self.assertTrue(child_turn.last_event_id)
+            child_events = read_jsonl(continuation_root / "execution_events.jsonl")
+            self.assertTrue(child_events)
+            self.assertTrue(all(event["turn_id"] == child_turn.turn_id for event in child_events))
+            self.assertEqual(
+                [event["sequence"] for event in child_events],
+                list(range(1, len(child_events) + 1)),
+            )
+            self.assertEqual(provider.calls, 1)
+            persisted = TurnSnapshot.model_validate(read_json(root / "runs" / run_id / "turn.json"))
+            self.assertEqual(persisted.child_turns[-1].status, "completed")
+            self.assertGreater(persisted.child_turns[-1].sequence, 0)
+            events = read_jsonl(root / "runs" / run_id / "execution_events.jsonl")
+            self.assertTrue(any(event["event_type"] == "child_turn_completed" for event in events))
+
+    def test_running_child_followup_is_injected_at_graph_safe_point(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            run_store = RunStore(root / "runs")
+            request = RequestEnvelope(user_query="graph")
+            run_id, _, _ = run_store.create_run(request, "domain:test")
+            child_id = "child-running"
+            turn = TurnSnapshot(
+                run_id=run_id,
+                thread_id="thread-1",
+                request_id=request.request_id,
+                execution_mode="graph",
+                config=TurnConfig(
+                    execution_mode="graph",
+                    hook_config=HookConfig(),
+                    follow_up_config=FollowUpConfig(),
+                ),
+                child_turns=[
+                    {
+                        "child_turn_id": child_id,
+                        "child_thread_id": "child-thread",
+                        "parent_turn_id": "turn-root",
+                        "parent_run_id": run_id,
+                        "parent_node_id": "worker",
+                        "role_id": "worker",
+                        "status": "running",
+                    }
+                ],
+            )
+            runner_root = run_store.load_run_paths(run_id).root
+            runner = TurnRunner(run_store=run_store, main_agent=object(), graph_adapter=object())
+            runner._persist_turn(turn)
+            graph = ExecutionGraph(
+                domain_id="test",
+                objective="test",
+                nodes=[
+                    ExecutionNode(
+                        node_id="worker",
+                        node_kind="subagent",
+                        executor="worker",
+                        capability="worker.run",
+                        metadata={},
+                    )
+                ],
+            )
+            snapshot = ExecutionRunSnapshot(
+                run_id=run_id,
+                thread_id="thread-1",
+                request_id=request.request_id,
+                graph=graph,
+                status="running",
+                node_states={"worker": NodeExecutionState(node_id="worker", status="running")},
+            )
+            write_json(runner_root / "execution_snapshot.json", snapshot.model_dump(mode="json"))
+
+            context = TurnContext(
+                request=request,
+                decision=RequestIntakeDecision(
+                    status="accepted",
+                    request_kind="domain_task",
+                    recommended_mode="graph",
+                    intent="domain:test",
+                ),
+                run_id=run_id,
+                thread_id="thread-1",
+                turn=turn,
+                config=turn.config,
+                run_store=run_store,
+                main_agent=object(),
+            )
+            seen: dict[str, object] = {}
+            context.follow_up_runtime = FollowUpRuntime(
+                root=runner_root,
+                run_id=run_id,
+                turn_id=turn.turn_id,
+                config=turn.config.follow_up_config,
+            )
+            context.follow_up_runtime.enqueue(
+                source="child",
+                kind="inter_agent_communication",
+                text="recheck this node",
+                target_turn_id=child_id,
+                operation_id="running-child-followup-1",
+            )
+
+            class Adapter:
+                def step(self, step_context):
+                    current = ExecutionRunSnapshot.model_validate(
+                        read_json(step_context.root / "execution_snapshot.json")
+                    )
+                    seen["messages"] = current.graph.nodes[0].metadata.get("pending_followups")
+                    return ExecutionRunResult(snapshot=current)
+
+            outcome = GraphExecutor(Adapter()).execute(context)
+
+            self.assertEqual(outcome.status, "running")
+            self.assertEqual(seen["messages"][0]["text"], "recheck this node")
+            persisted_task = read_json(runner_root / "task_state.json")
+            self.assertEqual(persisted_task["pending_inputs"], [])
+            persisted_graph = ExecutionRunSnapshot.model_validate(
+                read_json(runner_root / "execution_snapshot.json")
+            )
+            self.assertEqual(persisted_graph.graph.nodes[0].metadata, {})
+
+    def test_compact_task_runs_pre_and_post_compact_hooks(self) -> None:
+        seen: list[str] = []
+        hooks = HookRuntime()
+        hooks.register("PreCompact", lambda _payload: seen.append("pre") or {"allowed": True})
+        hooks.register("PostCompact", lambda _payload: seen.append("post") or {"allowed": True})
+        with TemporaryDirectory() as temporary_directory:
+            run_store = RunStore(Path(temporary_directory) / "runs")
+            request = RequestEnvelope(user_query="compact")
+            run_id, _, _ = run_store.create_run(request, "compact")
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="conversation",
+                recommended_mode="core",
+                intent="compact",
+            )
+            runner = TurnRunner(
+                run_store=run_store,
+                main_agent=object(),
+                graph_adapter=object(),
+                hook_runtime=hooks,
+            )
+            response = runner.run(
+                request=request,
+                decision=decision,
+                run_id=run_id,
+                thread_id="thread-1",
+                execution_mode="core",
+                turn_config=TurnConfig(
+                    task_type="compact",
+                    execution_mode="core",
+                    hook_config=HookConfig(),
+                    compact_config=CompactConfig(context_threshold=1),
+                ),
+                response_factory=lambda result: ResponseEnvelope(
+                    request_id=request.request_id,
+                    run_id=run_id,
+                    status=result.status,
+                    message=result.message,
+                    progress=ProgressState(
+                        current_phase="compact",
+                        active_agent="main_agent",
+                        latest_event="turn_completed",
+                        status_message="done",
+                        percent=100,
+                    ),
+                ),
+            )
+
+            self.assertEqual(response.status, "paused")
+            task_state = read_json(run_store.load_run_paths(run_id).root / "task_state.json")
+            self.assertEqual(task_state["task_type"], "regular")
+            self.assertEqual(task_state["continuation"]["source"], "compact")
+            self.assertEqual(seen, ["pre", "post"])
+            events = read_jsonl(run_store.load_run_paths(run_id).root / "execution_events.jsonl")
+            self.assertGreaterEqual(
+                sum(event["event_type"] == "hook_started" for event in events),
+                2,
+            )
+
+    def test_pre_compact_hook_can_gate_the_compact_task(self) -> None:
+        hooks = HookRuntime()
+        hooks.register(
+            "PreCompact",
+            lambda _payload: {"allowed": False},
+            name="block-compaction",
+        )
+        with TemporaryDirectory() as temporary_directory:
+            run_store = RunStore(Path(temporary_directory) / "runs")
+            request = RequestEnvelope(user_query="compact")
+            run_id, _, _ = run_store.create_run(request, "compact")
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="conversation",
+                recommended_mode="core",
+                intent="compact",
+            )
+            runner = TurnRunner(
+                run_store=run_store,
+                main_agent=object(),
+                graph_adapter=object(),
+                hook_runtime=hooks,
+            )
+            response = runner.run(
+                request=request,
+                decision=decision,
+                run_id=run_id,
+                thread_id="thread-1",
+                execution_mode="core",
+                turn_config=TurnConfig(
+                    task_type="compact",
+                    execution_mode="core",
+                    hook_config=HookConfig(),
+                    compact_config=CompactConfig(),
+                ),
+                response_factory=lambda result: ResponseEnvelope(
+                    request_id=request.request_id,
+                    run_id=run_id,
+                    status=result.status,
+                    message=result.message,
+                    progress=ProgressState(
+                        current_phase="compact",
+                        active_agent="main_agent",
+                        latest_event="turn_gated",
+                        status_message="gated",
+                        percent=0,
+                    ),
+                ),
+            )
+
+            self.assertEqual(response.status, "gated")
+            self.assertEqual(
+                TurnSnapshot.model_validate(
+                    read_json(run_store.load_run_paths(run_id).root / "turn.json")
+                ).status,
+                "gated",
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

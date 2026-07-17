@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -62,7 +63,7 @@ class PaperTradingService:
         self._initialize_schema()
 
     def get_account(self, *, tenant_id: str, user_id: str) -> dict[str, Any]:
-        with self._lock, self._connect() as connection:
+        with self._lock, self._connection() as connection:
             account = self._active_account(connection, tenant_id=tenant_id, user_id=user_id)
             return self._account_payload(account)
 
@@ -80,7 +81,7 @@ class PaperTradingService:
                 "初始资金必须在 1 万元到 10 亿元之间",
             )
         now = self._now()
-        with self._lock, self._connect() as connection:
+        with self._lock, self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = self._find_active_account(connection, tenant_id=tenant_id, user_id=user_id)
             generation = 1
@@ -123,7 +124,7 @@ class PaperTradingService:
 
         # Resolve retries before touching the quote provider. This preserves the
         # original fill even when a duplicate arrives during a provider outage.
-        with self._lock, self._connect() as connection:
+        with self._lock, self._connection() as connection:
             account = self._active_account(connection, tenant_id=tenant_id, user_id=user_id)
             existing = connection.execute(
                 "SELECT * FROM paper_orders WHERE account_id = ? AND client_order_id = ?",
@@ -170,7 +171,7 @@ class PaperTradingService:
         trade_date = self.trading_calendar.trading_date(trade_moment)
         next_available_date = self.trading_calendar.next_trading_day(trade_date)
 
-        with self._lock, self._connect() as connection:
+        with self._lock, self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             account = self._active_account(connection, tenant_id=tenant_id, user_id=user_id)
             existing = connection.execute(
@@ -310,7 +311,7 @@ class PaperTradingService:
             return self._order_payload(order)
 
     def get_portfolio(self, *, tenant_id: str, user_id: str) -> dict[str, Any]:
-        with self._lock, self._connect() as connection:
+        with self._lock, self._connection() as connection:
             account = self._active_account(connection, tenant_id=tenant_id, user_id=user_id)
             lots = connection.execute(
                 """
@@ -409,7 +410,7 @@ class PaperTradingService:
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         normalized_limit = min(max(int(limit), 1), 200)
-        with self._lock, self._connect() as connection:
+        with self._lock, self._connection() as connection:
             account = self._active_account(connection, tenant_id=tenant_id, user_id=user_id)
             rows = connection.execute(
                 "SELECT * FROM paper_orders WHERE account_id = ? ORDER BY created_at DESC LIMIT ?",
@@ -418,7 +419,7 @@ class PaperTradingService:
             return [self._order_payload(row) for row in rows]
 
     def _initialize_schema(self) -> None:
-        with self._lock, self._connect() as connection:
+        with self._lock, self._connection() as connection:
             connection.executescript(
                 """
                 PRAGMA journal_mode = WAL;
@@ -495,6 +496,18 @@ class PaperTradingService:
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 15000")
         return connection
+
+    @contextmanager
+    def _connection(self):
+        connection = self._connect()
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def _active_account(self, connection: sqlite3.Connection, *, tenant_id: str, user_id: str) -> sqlite3.Row:
         account = self._find_active_account(connection, tenant_id=tenant_id, user_id=user_id)

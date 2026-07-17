@@ -29,14 +29,20 @@ class EventEnvelope(BaseModel):
     thread_id: str
     request_id: str
     turn_id: str | None = None
+    tenant_id: str | None = None
+    user_id: str | None = None
+    parent_turn_id: str | None = None
     task_type: str | None = None
+    graph_id: str | None = None
     execution_mode: str | None = None
     sequence: int = Field(default=0, ge=0)
     graph_revision: int | None = None
     actor: str = "agent_os"
     node_id: str | None = None
     tool_call_id: str | None = None
+    operation_id: str | None = None
     artifact_ids: list[str] = Field(default_factory=list)
+    child_turn_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod

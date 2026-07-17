@@ -118,6 +118,8 @@ class AgentControl:
                 status="ready",
                 intent=intent,
                 objective=objective,
+                parent_turn_id=parent_turn_id,
+                relation="child",
             )
             thread.active_turn_id = turn.turn_id
             self._write_child_thread_state(thread)

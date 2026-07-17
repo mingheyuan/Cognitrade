@@ -1,8 +1,8 @@
 # Cognitrade Codex 风格 Turn/Task 架构方案
 
-> 状态：第一阶段的 TurnRunner/RegularTask/GraphExecutor 适配壳已实施；Core provider/tool loop、TaskSnapshot、ReviewTask、CompactTask、StopHook 和 Follow-upRuntime 仍保留在迁移阶段，尚未全部下沉到 RegularExecutor
+> 状态：Codex 风格 Turn/Task 运行时已完成核心实现；Core 单 provider/tool step、Graph 增量 step、统一控制/恢复、跨进程 Turn worker lease、ReviewTask、CompactTask、Pre/PostCompact、StopHook、SubagentStop、Follow-upRuntime、ChildTurn 投影和 canonical event stream 均已接入 RegularExecutor/TurnRunner。旧 MainAgent.run() 与历史持久化文件仅作为兼容适配保留
 > 分支：plan/design-and-issues
-> 范围：描述 Cognitrade Main Agent 的运行时架构重构及当前第一阶段实现边界
+> 范围：描述 Cognitrade Main Agent 的目标架构、实际实现边界、兼容策略和验收证据
 > 参考：Cognitrade 当前 Agent OS / Main Agent / GraphRunner，以及 Codex codex-rs 的 Turn、Task、Session 和 child thread 设计
 
 ## 目录
@@ -87,7 +87,7 @@ AgentOS.handle_request()
   -> ResponseEnvelope
 ~~~
 
-第一阶段不重写 GraphRunner 的节点调度算法。RegularTask 始终进入同一个 RegularExecutor loop；当 TurnConfig 启用 Graph 时，RegularExecutor 在自己的 step 内挂载 GraphExecutor，由 GraphExecutor 通过适配器调用现有 GraphRunner。GraphRunner 只负责 Graph 内部调度，不拥有 Turn 生命周期，也不成为 MainAgent 的第二条顶层执行路径。
+不重写 GraphRunner 的节点调度算法。RegularTask 始终进入同一个 RegularExecutor loop；当 TurnConfig 启用 Graph 时，RegularExecutor 在自己的 step 内挂载 GraphExecutor，由 GraphExecutor 通过适配器调用 GraphRunner 的单 frontier `step()`。GraphRunner 只负责 Graph 内部调度，不拥有 Turn 生命周期，也不成为 MainAgent 的第二条顶层执行路径。
 
 ### 2.2 解决的问题
 
@@ -113,23 +113,28 @@ AgentOS.handle_request()
 - 把所有历史持久化文件一次性迁移；
 - 用一个抽象消灭 Core、Task 和 Graph 之间的实际差异。
 
-### 2.4 第一阶段的实现边界
+### 2.4 当前实现边界
 
-当前代码实现的是“统一入口和统一生命周期适配层”，不是一次性完成最终职责迁移：
+当前代码已经完成目标架构的核心运行时迁移，同时保留了兼容入口：
 
-- `TurnRunner` 已统一创建/恢复 `TurnSnapshot`、Task 选择、事件游标、终态校验和最终响应持久化；
-- `RegularTask`/`RegularExecutor` 已成为 Core 与 Graph 的共同选择边界；
-- `CoreLoopExecutor` 当前调用 `MainAgent._run_core_task()`，所以 provider/tool loop 仍在 MainAgent 内部；
-- `GraphExecutor` 当前通过 `GraphRunnerAdapter` 调用完整的既有 GraphRunner 执行/恢复流程，GraphRunner 的内部 frontier 并发、Gate、patch 和 Node 状态逻辑暂不重写；
-- StopHook、SubagentStop、Follow-upRuntime、Mailbox 和独立 `TaskSnapshot` 已在目标协议中定义，但本阶段只保留配置字段和迁移接口，不宣称已经完成运行时接线。
-- 第一阶段没有新增由 `TurnRunner` 直接暴露的 `pause/resume/cancel` API；AgentOS 的兼容控制入口仍按 Core/Graph 适配到共享的控制文件或 GraphRunner，统一控制 API 是后续阶段退出条件。
-- 第一阶段的 `GraphRunnerAdapter` 返回既有 `ExecutionRunResult`，`GraphExecutor` 仍包裹完整的 GraphRunner run/resume；`GraphStepOutcome`、Graph safe-point Hook 和 Graph 内 follow-up 仍是后续迁移工作。
-- 路由、澄清和部分兼容入口产生的事件可能发生在根 Turn 创建前，属于 legacy pre-Turn 事件，使用 Run/Request 身份但不保证 `turn_id`；TurnRunner 执行阶段的事件才使用根 Turn 身份和连续游标。
-- 兼容 Graph 适配层仍负责生成/补齐 assistant Artifact，后台恢复也保留一层 ResponseEnvelope 兼容转换；“TurnRunner 唯一最终响应收敛”是目标态，尚未作为第一阶段完成声明。
+- `TurnRunner` 统一创建/恢复 `TurnSnapshot`、Task 选择、事件游标、状态迁移、控制、超时、最终响应和幂等持久化；
+- `RegularExecutor` 拥有唯一的串行 Turn loop，Core 和 Graph 都以增量 step 返回 `TaskOutcome(status="running")`，由它决定是否继续；
+- `CoreLoopExecutor` 已在 `research_system/runtime/turn_runner.py` 中负责 provider checkpoint、单次模型调用、Tool dispatch、Tool checkpoint、工具结果恢复、Follow-up 和最终 Artifact；每次调用只推进一个安全点，RegularExecutor 拥有唯一循环；MainAgent 只提供路由、provider 和领域辅助方法；
+- `GraphExecutor` 通过 `GraphRunner.step(max_steps=1)` 推进一个 frontier/safe point，保留 Graph 内部并发、Gate、patch、Node 状态和恢复算法，但不再一次性拥有 Root Turn 执行；
+- `HookRuntime` 已接入 Turn lifecycle、Pre/Post Tool、Pre/PostCompact、Root StopHook 和 Graph SubagentStop；Hook block 通过 continuation/mailbox 返回 RegularExecutor；
+- `FollowUpRuntime` 已持久化 transcript、pending input、CurrentTurn/NextTurn、model follow-up、hook continuation 和 `followup_task` 幂等/非 Root 校验；
+- `ReviewTask` 生成审查 Artifact，`CompactTask` 压缩并持久化 Task transcript，二者共享 TurnRunner 的终态和响应收敛；
+- Graph subagent node 会投影为父 Turn 下的 `ChildTurnSnapshot`，RoleContract 进入 `RoleRegistry`，child follow-up 只能投递到已知非 Root ChildTurn；
+- `AgentOS` 标准请求、Core/Graph 恢复、Graph partial rerun 以及 pause/cancel 都经过 TurnRunner，并恢复原 TurnConfig；`MainAgent.run()` 和旧的完整 Graph 入口仅保留为兼容适配；
+- TurnRunner 通过 `turn_worker_lease.json` 使用原子文件创建保护跨进程同一 Run 的执行互斥；进程内锁只负责降低同进程竞争，过期 lease 才允许恢复接管；
+- 恢复优先读取已持久化 `TurnSnapshot.config`、`config_hash` 和 `config_version`，不会先解析当前默认配置再覆盖历史 Turn；
+- Graph StopHook/SubagentStop block 会在同一 Root Turn 的下一次恢复中选择 `ReviewTask` continuation，避免 Graph 已到终态后恢复为空操作；ReviewTask 在 Graph Turn 中仍返回同一 Graph snapshot 的 `TaskOutcome`；
+- Core、Tool、Graph、TurnRunner 和 ChildTurn 本地事件统一通过 canonical event writer 分配单一递增 sequence；ChildTurn 另有自己的 `execution_events.jsonl`、sequence 和 `last_event_id`，同时向 Parent Turn 投影；
+- API 的 `events`、`artifacts`、`steps`、`trace`、`metrics` 和 `thread` 查询优先返回 canonical Turn 状态和身份字段，旧 MainAgent/Graph snapshot 仅作为兼容回退；
+- 路由和澄清仍可能在具体 Turn 配置完成前产生 legacy pre-Turn 事件；一旦进入 TurnRunner，所有执行事件使用根 Turn 身份和连续游标；
+- 旧 `turn_state.json`、`run_state.json`、`main_agent_state.json` 和 `execution_snapshot.json` 继续作为兼容投影，canonical Turn/Task 文件为 `turn.json`、`task.json`、`task_state.json`。
 
-因此，“一个 RegularTask、一个 Turn 生命周期”是当前已接入的外层边界；“RegularExecutor 完全拥有原始 provider/tool loop、统一控制 API 和 Hook 决策”是后续迁移目标。
-
-这些问题可以在 Turn 协议稳定后单独处理。
+因此，当前实现已经具备“一个 RegularTask、一个 RegularExecutor、一个 Root Turn 生命周期”的运行语义；未迁移的内容只限于兼容入口和 Graph 内部 scheduler 算法，不再是第二套顶层生命周期。
 
 ## 3. 当前 Cognitrade 结构
 
@@ -848,7 +853,7 @@ RegularTask 是 Root Turn 的默认执行容器，始终经过统一 Turn loop�
 
 RegularTask 不把 Graph 伪装成 Tool call，也不把 Graph 提升成另一种顶层 Task。它把 `execution_mode` 作为 RegularExecutor 的配置：core/task 使用 CoreLoopExecutor，graph 在同一个 loop 中装载 GraphExecutor。两种 step executor 都返回 TurnStepOutcome，再由同一个 RegularExecutor 处理 Follow-up、StopHook、控制和持久化。
 
-当前第一阶段的实际形态是：`RegularExecutor` 先作为单一 dispatch/checkpoint 边界，CoreLoopExecutor 内部仍调用 MainAgent 的有限 provider/tool loop，GraphExecutor 内部仍调用一次完整的 GraphRunner run/resume。后续迁移才会把 provider/tool step、Follow-up 和 StopHook 的继续/暂停判断逐步移动到 RegularExecutor；这不改变 Graph 作为 RegularTask 配置的架构结论。
+当前实现形态是：`RegularExecutor` 是唯一的 dispatch/checkpoint/continue 边界，`CoreLoopExecutor` 每次推进一个 provider/tool step，`GraphExecutor` 每次推进一个 Graph frontier。GraphRunner 仍保留 Graph 内部 scheduler、并发、Gate、patch 和 Node 状态算法，但通过 `GraphStepOutcome` 把 safe point 返回给 RegularExecutor；Follow-up、StopHook、SubagentStop 和控制状态均在同一 TurnContext 内收敛。
 
 ~~~text
 RegularTask
@@ -2508,6 +2513,25 @@ Snapshot 用于快速恢复，Event 用于回放和审计，两者不能互相�
 
 迁移目标是每一步都有可运行版本，避免一次性重写 Agent OS。
 
+### 20.0 当前完成状态
+
+本分支已完成 Phase 0 至 Phase 5 的核心运行时接线，并完成 Phase 6 中“标准入口收敛”的部分工作：
+
+| 能力 | 当前实现 | 证据 |
+|---|---|---|
+| 统一 Root Turn | 已完成 | `TurnRunner._execute_task()`、`turn.json`、`turn_state.json` |
+| Core 单一 loop | 已完成 | `RegularExecutor` 驱动 `CoreLoopExecutor` 单 provider/tool step；`provider_checkpoint.json`、`core_tool_results.json` |
+| Graph 增量 step | 已完成 | `ExecutionGraphRunner.step()`、`GraphStepOutcome` |
+| 统一 pause/cancel/resume | 已完成 | `TurnRunner.pause/cancel/resume` 与 `AgentOS` 转发 |
+| StopHook/SubagentStop | 已完成 | `HookRuntime`、`RegularExecutor`、Graph safe point |
+| PreCompact/PostCompact | 已完成 | `CompactExecutor` 在压缩前后调用 HookRuntime，阻断时返回 `gated` |
+| Follow-up/Mailbox | 已完成 | `FollowUpRuntime`、`followup_task`、幂等 operation_id |
+| Review/Compact | 已完成 | `ReviewExecutor`、`CompactExecutor` |
+| ChildTurn/Role 投影 | 已完成 | `ChildTurnRuntime`、`RoleRegistry`、`child_turns.json` |
+| 旧入口清理 | 兼容保留 | `MainAgent.run()`、旧 Graph API 仅作 adapter；canonical response 由 `TurnRunner.finalize` 持久化 |
+
+兼容入口的保留不改变标准请求的生命周期：它们必须继续转发到同一个 `TurnRunner`，不得自行创建第二个 Root Turn 或写入独立 ResponseEnvelope。
+
 ### Phase 0：冻结协议和建立基线
 
 目标：
@@ -3140,7 +3164,7 @@ ChildTurn     独立子执行生命周期
 2. 先用 GraphRunnerAdapter 接入，确认协议后再重构 GraphRunner；
 3. skill/plugin 的安装状态只影响能力和 Task 选择，不创建另一套顶层运行时。
 
-按 Phase 0 到 Phase 6 推进，可以在保持现有行为和持久化兼容的前提下，逐步把 Cognitrade 的 Main Agent 变成类似 Codex 的统一 Turn/Task 架构。
+本分支已按 Phase 0 到 Phase 5 完成核心实现，并将 Phase 6 的标准入口收敛落地；保留的旧入口只承担兼容转发。当前实现可以在保持现有行为和持久化兼容的前提下，把 Cognitrade 的 Main Agent 作为类似 Codex 的统一 Turn/Task 架构运行。
 
 ## 31. 完整 Turn 链路：原始骨架与配置挂载
 
@@ -3177,7 +3201,7 @@ ChildTurn     独立子执行生命周期
 
 这条骨架不假设请求一定使用 Graph，也不假设一定安装了某个 Pack、Skill 或 Plugin。最小普通请求可以在 TurnTask 中使用 RegularTask 完成。
 
-实现注记：当前第一阶段为了兼容既有路由，`MainAgent.route()` 在 `TurnRunner` 创建/恢复具体执行配置之前完成；因此现有入口的可观察顺序是 `AgentOS.handle_request -> MainAgent.route -> TurnRunner -> RegularTask`。目标架构会把路由结果作为 TurnContext 的前置阶段纳入同一生命周期，但不会因此创建第二个 Turn。
+实现注记：为兼容既有 RequestIntake，`MainAgent.route()` 在 `TurnRunner` 创建/恢复具体执行配置之前完成；因此现有入口的可观察顺序是 `AgentOS.handle_request -> MainAgent.route -> TurnRunner -> RegularTask`。路由结果随后被冻结进 `TurnConfig`/`TurnSnapshot`，不会因此创建第二个 Turn；进入 TurnRunner 后 Core 和 Graph 共享同一 RegularExecutor loop。
 
 ### 31.2 完整配置投影链路
 
@@ -3536,3 +3560,31 @@ GraphSnapshot
 - Mailbox 是当前 Turn 的输入交付状态，不是另一个 Turn；
 - GraphRunner 是 GraphExecutor 的内部调度器，不是第二个 Agent OS 入口；
 - TurnRunner 是唯一拥有原始 Turn 生命周期和最终完成权的组件。
+
+### 31.9 实现与验收记录
+
+当前工作树的实现证据如下：
+
+- 统一入口：`AgentOS.handle_request -> TurnRunner.run -> TaskFactory -> RegularTask -> RegularExecutor`；Graph 只作为 `GraphExecutor` 的内部 step executor。
+- Root Turn 持久化：`turn.json` / `turn_state.json`；Task 持久化：`task.json` / `task_state.json`；Graph 持久化：`execution_snapshot.json`；子 Turn 持久化在 `child_turns/<child_turn_id>/`。
+- 控制与恢复：`pause`、`cancel`、`resume`、Graph partial rerun、provider/tool checkpoint、同一 Run 的跨进程 lease 和幂等恢复均由 TurnRunner 入口承接。
+- 可观察性：Root 和 ChildTurn 都有 canonical event envelope；Parent event 通过 `parent_turn_id`、`child_turn_id`、`child_thread_id` 关联，ChildTurn 的本地事件保持独立序列。
+- Graph Hook：Root StopHook 或 SubagentStop block 保存 continuation；恢复时在同一 Turn 内运行 ReviewTask，不创建新的 Root Run，也不把终态 Graph 静默当作已继续执行。
+
+已执行并通过的定向验证：
+
+~~~text
+tests.test_turn_runner                         7 passed
+tests.test_turn_extensions                    12 passed
+tests.test_turn_core_checkpoints                6 passed
+tests.test_agent_os_api                        9 passed
+tests.test_standard_agent_os_entry            14 passed
+test_api_v1_sse_openapi                         9 passed
+test_api_v1_chat                                7 passed
+frontend: npm run build                         passed
+frontend: npm test -- --run                    6 passed
+frontend: npm run lint                          passed
+test_api_v2_finance                             5 passed
+~~~
+
+Finance 测试中的 Windows 临时目录清理已补上显式 SQLite connection 关闭；完整 Python 测试集仍未宣称全绿，曾在长时间收集/运行中超时，仍应在独立进程环境中分组运行。

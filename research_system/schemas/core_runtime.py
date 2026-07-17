@@ -147,6 +147,11 @@ class AgentTurnResponse(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
     public_progress: AgentPublicProgress | None = None
+    # Providers may explicitly mark a message as an intermediate result.
+    # Both names are accepted while provider adapters migrate to the
+    # canonical ``model_needs_follow_up`` spelling.
+    needs_follow_up: bool = False
+    model_needs_follow_up: bool = False
 
 
 CoreToolDefinition = ToolDefinition
@@ -200,6 +205,10 @@ class MainAgentState(BaseModel):
     tool_call_ids: list[str] = Field(default_factory=list)
     artifact_ids: list[str] = Field(default_factory=list)
     assistant_message: str | None = None
+    stop_hook_active: bool = False
+    hook_iteration: int = Field(default=0, ge=0)
+    follow_up_count: int = Field(default=0, ge=0)
+    continuation: dict[str, Any] | None = None
     clarification_question: str | None = None
     missing_fields: list[str] = Field(default_factory=list)
     last_event_id: str | None = None
@@ -221,6 +230,7 @@ class MainAgentRunResult(BaseModel):
     clarification_question: str | None = None
     missing_fields: list[str] = Field(default_factory=list)
     artifact_ids: list[str] = Field(default_factory=list)
+    continuation: dict[str, Any] | None = None
     tool_calls: list[CoreToolResult] = Field(default_factory=list)
     state: MainAgentState
 

@@ -1,4 +1,5 @@
 import {
+  Bot,
   Activity,
   Check,
   ChevronRight,
@@ -7,6 +8,7 @@ import {
   Database,
   FileCheck2,
   FileText,
+  GitBranch,
   Gauge,
   RefreshCcw,
   RotateCcw,
@@ -17,6 +19,7 @@ import {
 import { useCognitrade } from '../CognitradeContext'
 import {
   asNumber,
+  asRecord,
   asString,
   evidenceFromReport,
   formatDate,
@@ -53,6 +56,18 @@ export function RunInspector({ selectedEvidence, onSelectEvidence }: RunInspecto
   const progress = submitting ? 0 : ['completed', 'completed_partial'].includes(status) ? 100 : stepProgress(steps)
   const counts = selectedRun?.metrics.counts || {}
   const fallbackRate = asNumber(selectedRun?.metrics.rates?.fallback_rate)
+  const turn = asRecord(selectedRun?.replay.turn || selectedRun?.steps.turn || selectedRun?.events.turn)
+  const task = asRecord(selectedRun?.replay.task || selectedRun?.events.task)
+  const selection = asRecord(
+    selectedRun?.steps.task_selection
+      || asRecord(turn).task_selection
+      || {},
+  )
+  const executionMode = asString(turn.execution_mode || selectedRun?.steps.execution_mode, 'core')
+  const taskType = asString(turn.task_type || task.task_type, 'regular')
+  const selectionReason = Array.isArray(selection.reason_codes)
+    ? selection.reason_codes.map((item) => asString(item)).filter(Boolean).join(', ')
+    : asString(selection.reason_codes)
 
   return (
     <aside className="run-inspector" aria-label="运行详情">
@@ -70,6 +85,13 @@ export function RunInspector({ selectedEvidence, onSelectEvidence }: RunInspecto
         <div className="run-meta-grid">
           <span><Clock3 size={13} /><small>最后事件</small><strong>{currentEvent?.created_at ? formatDate(currentEvent.created_at) : '—'}</strong></span>
           <span><Waypoints size={13} /><small>执行步骤</small><strong>{steps.length}</strong></span>
+        </div>
+
+        <div className="run-meta-grid turn-context-grid">
+          <span><GitBranch size={13} /><small>MODE</small><strong>{executionMode}</strong></span>
+          <span><Bot size={13} /><small>TASK</small><strong>{taskType}</strong></span>
+          <span><Database size={13} /><small>TURN</small><strong title={asString(turn.turn_id)}>{asString(turn.turn_id, '—').slice(0, 12)}</strong></span>
+          <span><ShieldCheck size={13} /><small>SELECTED</small><strong title={selectionReason}>{selectionReason || 'default'}</strong></span>
         </div>
 
         <div className="run-actions">
