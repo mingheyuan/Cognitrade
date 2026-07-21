@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -72,6 +72,10 @@ class GraphCancelledError(GraphExecutionError):
 
 
 class GraphTimedOutError(GraphExecutionError):
+    pass
+
+
+class GraphNodeTimeoutError(GraphExecutionError):
     pass
 
 
@@ -1344,6 +1348,7 @@ class ExecutionGraphRunner:
                 domain_id=snapshot.graph.domain_id,
                 capability=str(node.capability),
                 version=self._node_domain_version(snapshot, node),
+                subagent_type=str(node.executor or "").strip() or None,
             )
             for attempt in range(state.attempt_count + 1, node.max_attempts + 1):
                 state.attempt_count = attempt
@@ -1359,33 +1364,36 @@ class ExecutionGraphRunner:
                         raise GraphExecutionError(
                             f"injected capability failure for {node.capability}: {injected_reason}"
                         )
-                    raw_output = executor(
-                        ExecutionNodeContext(
-                            run_id=snapshot.run_id,
-                            thread_id=snapshot.thread_id,
-                            request_id=snapshot.request_id,
-                            user_id=snapshot.user_id,
-                            tenant_id=snapshot.tenant_id,
-                            graph=snapshot.graph,
-                            node=node,
-                            input_artifacts=inputs,
-                            artifact_board=self.board,
-                            cache_root=self.cache_root,
-                            cancellation=cancellation,
-                            tool_registry=self.tool_registry,
-                            skill_runtime=self._skill_runtime_for(snapshot, node),
-                            memory_store=self.memory_store,
-                            settings=self.settings,
-                            event_callback=self.event_callback,
-                            turn_id=self._turn_id,
-                            progress_observer=self.progress_observer,
-                            progress_emitter=self._emit_observer_progress,
-                            authorize_tool_call=lambda: self._authorize_tool_call(snapshot),
-                            tool_semaphore=self._tool_semaphore,
-                            approval_store=self.approvals,
-                            failure_injection=self._consume_failure_injection,
-                            follow_up_messages=follow_up_messages,
-                        )
+                    context = ExecutionNodeContext(
+                        run_id=snapshot.run_id,
+                        thread_id=snapshot.thread_id,
+                        request_id=snapshot.request_id,
+                        user_id=snapshot.user_id,
+                        tenant_id=snapshot.tenant_id,
+                        graph=snapshot.graph,
+                        node=node,
+                        input_artifacts=inputs,
+                        artifact_board=self.board,
+                        cache_root=self.cache_root,
+                        cancellation=cancellation,
+                        tool_registry=self.tool_registry,
+                        skill_runtime=self._skill_runtime_for(snapshot, node),
+                        memory_store=self.memory_store,
+                        settings=self.settings,
+                        event_callback=self.event_callback,
+                        turn_id=self._turn_id,
+                        progress_observer=self.progress_observer,
+                        progress_emitter=self._emit_observer_progress,
+                        authorize_tool_call=lambda: self._authorize_tool_call(snapshot),
+                        tool_semaphore=self._tool_semaphore,
+                        approval_store=self.approvals,
+                        failure_injection=self._consume_failure_injection,
+                        follow_up_messages=follow_up_messages,
+                    )
+                    raw_output = self._execute_node_executor(
+                        executor,
+                        context,
+                        timeout_seconds=self._node_timeout_seconds(node),
                     )
                     output = self._normalize_output(raw_output)
                     input_contract = self._evaluate_method_input_contract(node, inputs)
@@ -1446,6 +1454,15 @@ class ExecutionGraphRunner:
                     return _NodeOutcome(node=node, state=state, output=output)
                 except GraphCancelledError:
                     raise
+                except GraphNodeTimeoutError as exc:
+                    last_error = exc
+                    self._emit(
+                        "graph_node_attempt_failed",
+                        node_id=node.node_id,
+                        attempt=attempt,
+                        error=f"{exc.__class__.__name__}: {exc}",
+                    )
+                    break
                 except Exception as exc:
                     last_error = exc
                     self._emit(
@@ -1567,6 +1584,53 @@ class ExecutionGraphRunner:
             if str(actual or "") != str(expected):
                 return False
         return True
+
+    @staticmethod
+    def _node_timeout_seconds(node: ExecutionNode) -> float | None:
+        raw = (node.metadata or {}).get("timeout_seconds")
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+
+    @staticmethod
+    def _execute_node_executor(
+        executor: Callable,
+        context: Any,
+        *,
+        timeout_seconds: float | None,
+    ) -> Any:
+        if timeout_seconds is None:
+            return executor(context)
+        if not bool(getattr(executor, "supports_timeout", False)):
+            raise GraphNodeTimeoutError(
+                "executor does not support a governed node timeout"
+            )
+        pool = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="cognitrade-graph-node-timeout",
+        )
+        future = pool.submit(executor, context)
+        timed_out = False
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FutureTimeoutError as exc:
+            future.cancel()
+            cancellation = getattr(context, "cancellation", None)
+            if cancellation is not None:
+                cancellation.set()
+            # Python cannot kill an already-running thread. Wait for a
+            # cooperative executor to leave before GraphRunner reports the
+            # failure, preventing retries or later nodes from overlapping it.
+            timed_out = True
+            pool.shutdown(wait=True, cancel_futures=True)
+            raise GraphNodeTimeoutError(
+                f"graph_node_timeout: {timeout_seconds}s"
+            ) from exc
+        finally:
+            if not timed_out:
+                pool.shutdown(wait=False, cancel_futures=True)
 
     def _normalize_output(self, output: Any) -> NodeExecutionOutput:
         if isinstance(output, NodeExecutionOutput):

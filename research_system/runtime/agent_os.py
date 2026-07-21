@@ -16,6 +16,10 @@ from research_system.runtime.core.tool_registry import (
 from research_system.runtime.execution.core.graph_runner import ExecutionGraphRunner
 from research_system.runtime.intake.task_intake import TaskIntakeService
 from research_system.runtime.intake.request_intake import RequestIntakeService
+from research_system.runtime.orchestration.runtime_role_overlay import RuntimeRoleOverlay
+from research_system.runtime.orchestration.subagent_discovery_store import (
+    SubagentDiscoveryStore,
+)
 from research_system.runtime.planning.capability_planner import (
     CapabilityDynamicPlanner,
     CapabilityPlanner,
@@ -97,7 +101,15 @@ class AgentOS:
             require_integrity=settings.domain_pack_require_integrity,
             trusted_digests=settings.domain_pack_trusted_digests,
         )
-        self.planner = CapabilityPlanner(self.registry)
+        self.subagent_discovery_store = SubagentDiscoveryStore(
+            settings.subagent_discovery_root
+        )
+        self.runtime_role_overlay = RuntimeRoleOverlay(
+            self.registry,
+            self.subagent_discovery_store,
+            settings=settings,
+        )
+        self.planner = CapabilityPlanner(self.runtime_role_overlay)
         self.provider = ProviderRegistry(settings).default()
         self.task_intake = TaskIntakeService(self.registry)
         self.request_intake = RequestIntakeService(self.registry, llm_provider=self.provider)
@@ -132,6 +144,8 @@ class AgentOS:
             graph_adapter=_AgentOSGraphRunnerAdapter(self),
             timeout_seconds=float(settings.run_timeout_seconds),
         )
+        self._runtime_role_ids: set[str] = set()
+        self._sync_runtime_roles()
         self.main_agent.bind_turn_runner(self.turn_runner)
 
     def list_domain_packs(self) -> list[dict[str, Any]]:
@@ -216,7 +230,12 @@ class AgentOS:
         """Rebind all capability-facing services to one registry snapshot."""
 
         self.registry = registry
-        self.planner = CapabilityPlanner(self.registry)
+        self.runtime_role_overlay = RuntimeRoleOverlay(
+            self.registry,
+            self.subagent_discovery_store,
+            settings=self.settings,
+        )
+        self.planner = CapabilityPlanner(self.runtime_role_overlay)
         self.task_intake = TaskIntakeService(self.registry)
         self.request_intake = RequestIntakeService(self.registry, llm_provider=self.provider)
         self.tool_registry = register_mcp_tools(
@@ -229,6 +248,35 @@ class AgentOS:
         self.main_agent.tools = self.tool_registry
         self.dynamic_planner = CapabilityDynamicPlanner(self.planner)
         self.plan_agent = MainAgentPlanRole(self.dynamic_planner)
+        self._sync_runtime_roles()
+
+    def _sync_runtime_roles(self) -> None:
+        """Project active discovery aliases into the Turn role registry."""
+        if not hasattr(self, "turn_runner"):
+            return
+        contracts = self.runtime_role_overlay.role_contracts()
+        current_ids = {contract.role_id for contract in contracts}
+        for role_id in self._runtime_role_ids - current_ids:
+            self.turn_runner.role_registry.remove(role_id)
+        for contract in contracts:
+            self.turn_runner.role_registry.replace(contract)
+        self._runtime_role_ids = current_ids
+
+    def _refresh_runtime_roles(self) -> None:
+        self.runtime_role_overlay.refresh()
+        self._sync_runtime_roles()
+
+    @staticmethod
+    def _runtime_role_aliases(request: RequestEnvelope) -> list[str]:
+        raw = (request.constraints or {}).get("runtime_role_aliases")
+        if isinstance(raw, str):
+            raw = [raw]
+        aliases = [
+            str(item).strip()
+            for item in list(raw or [])
+            if str(item).strip()
+        ]
+        return list(dict.fromkeys(aliases))
 
     def _assert_pack_reload_safe(self, *, domain_id: str | None = None) -> None:
         if self._active:
@@ -317,11 +365,13 @@ class AgentOS:
         input_artifacts: list[ArtifactDraft],
         required_artifact_types: list[str] | None = None,
         preferred_capabilities: list[str] | None = None,
+        runtime_role_aliases: list[str] | None = None,
         run_id: str | None = None,
         user_id: str | None = None,
         tenant_id: str | None = None,
         event_callback=None,
     ) -> ExecutionRunResult:
+        self._refresh_runtime_roles()
         manifest = self.registry.get(domain_id)
         required = list(required_artifact_types or [])
         if not required:
@@ -335,6 +385,11 @@ class AgentOS:
                 "domain_id": domain_id,
                 "required_artifact_types": required,
             },
+            constraints=(
+                {"runtime_role_aliases": list(runtime_role_aliases)}
+                if runtime_role_aliases
+                else {}
+            ),
         )
         effective_run_id, _, _ = self.run_store.create_run(
             request,
@@ -357,6 +412,7 @@ class AgentOS:
                 metadata={
                     "request_id": request.request_id,
                     "intent": request.intent or f"domain:{domain_id}",
+                    "runtime_role_aliases": self._runtime_role_aliases(request),
                 },
             )
         )
@@ -668,6 +724,27 @@ class AgentOS:
         )
         with self._lock:
             self._prepared_run_ids.add(effective_run_id)
+        try:
+            return self._handle_routed_request(
+                routed_request=routed_request,
+                effective_run_id=effective_run_id,
+                thread_id=thread_id,
+                run_id=run_id,
+                event_callback=event_callback,
+            )
+        finally:
+            with self._lock:
+                self._prepared_run_ids.discard(effective_run_id)
+
+    def _handle_routed_request(
+        self,
+        *,
+        routed_request: RequestEnvelope,
+        effective_run_id: str,
+        thread_id: str,
+        run_id: str | None,
+        event_callback=None,
+    ) -> ResponseEnvelope:
         decision = self.main_agent.route(
             request=routed_request,
             run_id=effective_run_id,
@@ -678,24 +755,18 @@ class AgentOS:
         )
         if decision.status == "needs_clarification":
             if run_id and self._is_pending_clarification(run_id):
-                response = self._update_clarification_run(
+                return self._update_clarification_run(
                     run_id=run_id,
                     request=routed_request,
                     decision=decision,
                     event_callback=event_callback,
                 )
-                with self._lock:
-                    self._prepared_run_ids.discard(effective_run_id)
-                return response
-            response = self._create_clarification_run(
+            return self._create_clarification_run(
                 request=routed_request,
                 decision=decision,
                 run_id=effective_run_id,
                 event_callback=event_callback,
             )
-            with self._lock:
-                self._prepared_run_ids.discard(effective_run_id)
-            return response
 
         resolved_request = decision.apply_to(routed_request)
         if run_id and self._is_pending_clarification(run_id):
@@ -1081,6 +1152,7 @@ class AgentOS:
         decision: RequestIntakeDecision,
     ):
         """Build a lazy graph from the accepted request and installed Pack contracts."""
+        self._refresh_runtime_roles()
         domain_id = str(decision.domain_id or request.slots.get("domain_id") or "").strip()
         if not domain_id:
             raise ValueError("accepted domain request has no DomainPack")
@@ -1129,6 +1201,7 @@ class AgentOS:
                     **dict(request.constraints),
                 },
                 "request_constraints": dict(request.constraints),
+                "runtime_role_aliases": self._runtime_role_aliases(request),
                 "required_outputs_source": required_outputs_source,
                 "chat_dispatch": (
                     dict(request.constraints.get("chat_dispatch") or {})
@@ -1349,9 +1422,10 @@ class AgentOS:
         event_callback=None,
         turn_id: str | None = None,
     ) -> ExecutionGraphRunner:
+        self._refresh_runtime_roles()
         paths = self.run_store.load_run_paths(run_id)
         return ExecutionGraphRunner(
-            registry=self.registry,
+            registry=self.runtime_role_overlay,
             run_root=paths.root,
             dynamic_planner=self.plan_agent,
             memory_store=self.memory,

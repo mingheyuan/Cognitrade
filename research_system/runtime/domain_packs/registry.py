@@ -592,12 +592,17 @@ class DomainPackRegistry:
         domain_id: str,
         capability: str,
         version: str | None = None,
+        subagent_type: str | None = None,
     ) -> Callable:
         definitions = self.capabilities(
             domain_id=domain_id,
             capability=capability,
             version=version,
         )
+        if subagent_type:
+            definitions = [
+                item for item in definitions if item.subagent_type == subagent_type
+            ]
         if not definitions:
             raise KeyError(f"unknown domain capability: {domain_id}:{capability}")
         implementation = str(definitions[0].implementation or "").strip()

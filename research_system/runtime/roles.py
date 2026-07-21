@@ -40,6 +40,9 @@ class RoleRegistry:
     def list(self) -> list[RoleContract]:
         return list(self._roles.values())
 
+    def remove(self, role_id: str) -> None:
+        self._roles.pop(role_id, None)
+
     def validate_tool(self, role_id: str, tool_name: str) -> None:
         role = self.get(role_id)
         if role.allowed_tools and tool_name not in role.allowed_tools:

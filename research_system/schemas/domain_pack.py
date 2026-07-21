@@ -180,6 +180,8 @@ class CapabilityDefinition(BaseModel):
     failure_mode: Literal["halt", "isolate"] = "halt"
     parallel_safe: bool = False
     max_concurrency: int | None = Field(default=None, ge=1)
+    max_retries: int | None = Field(default=None, ge=0)
+    timeout_seconds: float | None = Field(default=None, gt=0.0)
     requires_llm: bool = False
     estimated_tokens: int = Field(default=0, ge=0)
     estimated_cost: float = Field(default=0.0, ge=0.0)

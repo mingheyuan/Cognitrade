@@ -30,6 +30,8 @@ __all__ = [
     "SubagentRuntimeSourceResolutionSupport",
     "SubagentRuntimeValidationSupport",
     "SubagentDiscoveryStore",
+    "RuntimeRoleExecutorAdapter",
+    "RuntimeRoleOverlay",
     "SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES",
     "SUPPORTED_RUNTIME_MATERIALIZATION_TYPES",
     "SUPPORTED_RUNTIME_REGISTRATION_TYPES",
@@ -122,6 +124,14 @@ _EXPORTS = {
         "SubagentRuntimeValidationSupport",
     ),
     "SubagentDiscoveryStore": ("research_system.runtime.orchestration.subagent_discovery_store", "SubagentDiscoveryStore"),
+    "RuntimeRoleExecutorAdapter": (
+        "research_system.runtime.orchestration.runtime_role_overlay",
+        "RuntimeRoleExecutorAdapter",
+    ),
+    "RuntimeRoleOverlay": (
+        "research_system.runtime.orchestration.runtime_role_overlay",
+        "RuntimeRoleOverlay",
+    ),
     "SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES": (
         "research_system.runtime.orchestration.subagent_discovery_candidate_sources",
         "SUPPORTED_DISCOVERY_CANDIDATE_SOURCE_TYPES",

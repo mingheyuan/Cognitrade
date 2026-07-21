@@ -21,6 +21,13 @@ python -m research_system.cli.app domain-run legal_contract "Review this contrac
   --artifact "contract_document=@contract.txt" --json
 ```
 
+Approved runtime-role aliases are opt-in extensions of an installed Pack. The
+discovery ticket must be approved and active before an alias can be selected;
+pass its exact alias through the `runtime_role_aliases` argument of the
+programmatic `AgentOS.run_domain` API. The alias uses the Pack's artifact,
+tool, permission, and governance contracts, and its runtime output must
+include confidence when the Graph governance requires it.
+
 Run controls and inspection:
 
 ```bash

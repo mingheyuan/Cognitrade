@@ -9,6 +9,7 @@ from research_system.runtime.agent_os import AgentOS
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.storage.jsonl import read_jsonl
 from research_system.schemas.artifacts import ArtifactDraft
+from research_system.schemas.core_runtime import RequestIntakeDecision
 from research_system.schemas.protocol import RequestEnvelope
 
 
@@ -93,6 +94,43 @@ class AgentOSTests(unittest.TestCase):
             episodes = agent_os.memory.list(layer="episodic", domain_id="legal_contract")
             self.assertEqual(len(episodes), 1)
             self.assertEqual(episodes[0].source_artifact_ids, result.final_artifact_ids)
+
+    def test_handle_request_releases_prepared_run_after_turn_runner_failure(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            agent_os = AgentOS(self._settings(repository_root, root))
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="domain_task",
+                recommended_mode="graph",
+                intent="legal_contract_review",
+                domain_id="legal_contract",
+                confidence=1.0,
+            )
+            request = RequestEnvelope(
+                intent="legal_contract_review",
+                user_query="Review this contract.",
+            )
+            with patch.object(agent_os.main_agent, "route", return_value=decision):
+                with patch.object(
+                    agent_os.turn_runner,
+                    "run",
+                    side_effect=RuntimeError("simulated turn failure"),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "simulated turn failure"):
+                        agent_os.handle_request(request)
+
+            self.assertEqual(agent_os._prepared_run_ids, set())
+            with patch.object(
+                agent_os.main_agent,
+                "route",
+                side_effect=RuntimeError("simulated route failure"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "simulated route failure"):
+                    agent_os.handle_request(request)
+            self.assertEqual(agent_os._prepared_run_ids, set())
+            self.assertIsInstance(agent_os.reload_domain_packs(), list)
 
 
 if __name__ == "__main__":
