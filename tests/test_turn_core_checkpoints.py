@@ -344,7 +344,7 @@ class CoreCheckpointTests(unittest.TestCase):
 
             first = agent_os.handle_request(request)
 
-            self.assertEqual(first.status, "running")
+            self.assertEqual(first.status, "paused")
             run_root = agent_os.run_store.load_run_paths(str(first.run_id)).root
             task_state = read_json(run_root / "task_state.json")
             self.assertEqual(task_state["task_type"], "regular")

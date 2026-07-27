@@ -124,6 +124,7 @@ class AgentToolCallRequest(BaseModel):
     tool_name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     call_id: str | None = None
+    approval_id: str | None = None
 
 
 class AgentPublicProgress(BaseModel):
@@ -208,6 +209,7 @@ class MainAgentState(BaseModel):
     stop_hook_active: bool = False
     hook_iteration: int = Field(default=0, ge=0)
     follow_up_count: int = Field(default=0, ge=0)
+    pending_approval_ids: list[str] = Field(default_factory=list)
     continuation: dict[str, Any] | None = None
     clarification_question: str | None = None
     missing_fields: list[str] = Field(default_factory=list)
@@ -231,6 +233,7 @@ class MainAgentRunResult(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
     artifact_ids: list[str] = Field(default_factory=list)
     continuation: dict[str, Any] | None = None
+    pending_approval_ids: list[str] = Field(default_factory=list)
     tool_calls: list[CoreToolResult] = Field(default_factory=list)
     state: MainAgentState
 

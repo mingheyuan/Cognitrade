@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import json
 import re
 from pathlib import Path
-from threading import Event, RLock
+from threading import RLock
 from typing import Any, Callable
 
 from research_system.runtime.core.artifact_board import ArtifactBoard
@@ -17,11 +17,10 @@ from research_system.runtime.core.tool_registry import (
 from research_system.runtime.event_store import append_canonical_event
 from research_system.runtime.follow_up import FollowUpRuntime
 from research_system.runtime.hooks import StopHookInput, StopHookOutcome
-from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
+from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.schemas.core_runtime import (
-    AgentToolCallRequest,
     AgentTurnResponse,
     MainAgentRunResult,
     MainAgentState,
@@ -30,7 +29,7 @@ from research_system.schemas.core_runtime import (
 )
 from research_system.schemas.events import EventEnvelope
 from research_system.schemas.protocol import RequestEnvelope
-from research_system.schemas.turn_runtime import FollowUpConfig, TurnConfig
+from research_system.schemas.turn_runtime import TurnConfig
 
 
 def utc_now() -> datetime:
@@ -77,329 +76,27 @@ class MainAgent:
         follow_up_runtime: FollowUpRuntime | None = None,
         turn_config: TurnConfig | None = None,
     ) -> MainAgentRunResult:
-        """Compatibility facade; standard execution is owned by TurnRunner."""
-        if self._turn_runner is not None:
-            outcome = self._turn_runner.execute_task(
-                request=request,
-                decision=decision,
-                run_id=run_id,
-                thread_id=thread_id,
-                execution_mode=(turn_config.execution_mode if turn_config else decision.recommended_mode),
-                turn_config=turn_config,
-                event_callback=event_callback,
-                resume=resume,
+        """Compatibility facade; all execution is owned by TurnRunner."""
+        del emit_started, turn_id, hook_runtime, follow_up_runtime
+        if self._turn_runner is None:
+            raise RuntimeError(
+                "MainAgent.run requires a bound TurnRunner; use AgentOS as the execution entrypoint"
             )
-            return outcome.result
-        return self._run_core_task(
+        outcome = self._turn_runner.execute_task(
             request=request,
             decision=decision,
             run_id=run_id,
             thread_id=thread_id,
+            execution_mode=(
+                turn_config.execution_mode
+                if turn_config is not None
+                else decision.recommended_mode
+            ),
+            turn_config=turn_config,
             event_callback=event_callback,
             resume=resume,
-            emit_started=emit_started,
-            turn_id=turn_id,
-            hook_runtime=hook_runtime,
-            follow_up_runtime=follow_up_runtime,
-            turn_config=turn_config,
         )
-
-    def _run_core_task(
-        self,
-        *,
-        request: RequestEnvelope,
-        decision: RequestIntakeDecision,
-        run_id: str,
-        thread_id: str,
-        event_callback: Callable[[dict[str, Any]], None] | None = None,
-        resume: bool = False,
-        emit_started: bool = True,
-        turn_id: str | None = None,
-        hook_runtime=None,
-        follow_up_runtime: FollowUpRuntime | None = None,
-        turn_config: TurnConfig | None = None,
-    ) -> MainAgentRunResult:
-        if turn_id:
-            self._event_turn_ids[run_id] = turn_id
-        paths = self.run_store.load_run_paths(run_id)
-        board = ArtifactBoard(paths.artifact_board)
-        board.bind_thread(thread_id)
-        persisted = read_json(paths.root / "main_agent_state.json")
-        if resume and isinstance(persisted, dict):
-            state = MainAgentState.model_validate(persisted).model_copy(
-                update={
-                    "status": "running",
-                    "error": None,
-                    "clarification_question": None,
-                    "missing_fields": [],
-                    "updated_at": utc_now(),
-                }
-            )
-        else:
-            mode = decision.recommended_mode
-            state = MainAgentState(
-                run_id=run_id,
-                thread_id=thread_id,
-                request_id=request.request_id,
-                status="running",
-                mode=mode,
-                intent=decision.intent,
-                request_kind=decision.request_kind,
-                tool_loop_limit=self._tool_loop_limit(),
-            )
-        mode = state.mode
-        control_path = paths.root / "execution_control.json"
-        if resume or not control_path.exists():
-            write_json(
-                control_path,
-                {"pause_requested": False, "cancel_requested": False, "updated_at": utc_now().isoformat()},
-            )
-        self._persist_state(paths.root, state)
-        if emit_started:
-            self._emit(
-                paths.root,
-                event_callback,
-                "main_agent_resumed" if resume else "main_agent_started",
-                run_id=run_id,
-                thread_id=thread_id,
-                request_id=request.request_id,
-                intent=decision.intent,
-                mode=mode,
-            )
-
-        cancellation = Event()
-        context = CoreToolContext(
-            run_id=run_id,
-            thread_id=thread_id,
-            request_id=request.request_id,
-            user_id=request.user_id,
-            tenant_id=request.tenant_id,
-            run_root=paths.root,
-            actor="main_agent",
-            turn_id=turn_id,
-            artifact_board=board,
-            memory_store=self.memory_store,
-            settings=self.settings,
-            cancellation=cancellation,
-            event_callback=event_callback,
-            hook_runtime=hook_runtime,
-            allowed_tools=frozenset(
-                item.name
-                for item in self.tools.definitions()
-                if item.name.startswith("core.")
-            ),
-        )
-        tool_results = []
-        try:
-            control_status = self._control_status(paths.root)
-            if control_status is not None:
-                return self._control_result(
-                    root=paths.root,
-                    state=state,
-                    status=control_status,
-                    request=request,
-                    decision=decision,
-                    tool_results=tool_results,
-                    event_callback=event_callback,
-                )
-            message, state = self._run_agent_loop(
-                request=request,
-                decision=decision,
-                context=context,
-                tool_results=tool_results,
-                state=state,
-                root=paths.root,
-                event_callback=event_callback,
-                hook_runtime=hook_runtime,
-                follow_up_runtime=follow_up_runtime,
-                turn_config=turn_config,
-            )
-            control_status = self._control_status(paths.root)
-            if control_status is not None:
-                return self._control_result(
-                    root=paths.root,
-                    state=state,
-                    status=control_status,
-                    request=request,
-                    decision=decision,
-                    tool_results=tool_results,
-                    event_callback=event_callback,
-                )
-            if state.status in {"gated", "failed", "cancelled", "timed_out", "waiting_approval"}:
-                return MainAgentRunResult(
-                    run_id=run_id,
-                    thread_id=thread_id,
-                    request_id=request.request_id,
-                    status=state.status,
-                    mode=state.mode,
-                    intent=decision.intent,
-                    message=message,
-                    artifact_ids=list(state.artifact_ids),
-                    tool_calls=tool_results,
-                    continuation=state.continuation,
-                    state=state,
-                )
-            if state.clarification_question:
-                composed = self.tools.invoke(
-                    tool_name="core.message.compose",
-                    arguments={"message": message},
-                    context=context,
-                )
-                tool_results.append(composed)
-                if composed.status == "completed":
-                    message = str(composed.output.get("message") or message)
-                artifact = self._assistant_artifact(
-                    request=request,
-                    decision=decision,
-                    run_id=run_id,
-                    thread_id=thread_id,
-                    message=message,
-                    tool_results=tool_results,
-                )
-                artifact = board.add(artifact)
-                state = state.model_copy(
-                    update={
-                        "assistant_message": message,
-                        "artifact_ids": [artifact.artifact_id],
-                        "tool_call_ids": [item.call_id for item in tool_results],
-                        "updated_at": utc_now(),
-                    }
-                )
-                self._persist_state(paths.root, state)
-                self._emit(
-                    paths.root,
-                    event_callback,
-                    "assistant_message_ready",
-                    run_id=run_id,
-                    thread_id=thread_id,
-                    request_id=request.request_id,
-                    mode=state.mode,
-                    delivery_status="paused",
-                    message=message,
-                    artifact_ids=[artifact.artifact_id],
-                )
-                self._emit(
-                    paths.root,
-                    event_callback,
-                    "main_agent_clarification_requested",
-                    run_id=run_id,
-                    thread_id=thread_id,
-                    request_id=request.request_id,
-                    question=state.clarification_question,
-                    missing_fields=list(state.missing_fields),
-                )
-                return MainAgentRunResult(
-                    run_id=run_id,
-                    thread_id=thread_id,
-                    request_id=request.request_id,
-                    status="paused",
-                    mode=state.mode,
-                    intent=decision.intent,
-                    message=message,
-                    clarification_question=state.clarification_question,
-                    missing_fields=list(state.missing_fields),
-                    artifact_ids=[artifact.artifact_id],
-                    tool_calls=tool_results,
-                    state=state,
-                )
-            composed = self.tools.invoke(
-                tool_name="core.message.compose",
-                arguments={"message": message},
-                context=context,
-            )
-            tool_results.append(composed)
-            if composed.status != "completed":
-                raise RuntimeError(composed.error or "core.message.compose failed")
-            message = str(composed.output.get("message") or message)
-            artifact = self._assistant_artifact(
-                request=request,
-                decision=decision,
-                run_id=run_id,
-                thread_id=thread_id,
-                message=message,
-                tool_results=tool_results,
-            )
-            artifact = board.add(artifact)
-            state = state.model_copy(
-                update={
-                    "status": "completed",
-                    "assistant_message": message,
-                    "artifact_ids": [artifact.artifact_id],
-                    "tool_call_ids": [item.call_id for item in tool_results],
-                    "updated_at": utc_now(),
-                }
-            )
-            self._persist_state(paths.root, state)
-            self._emit(
-                paths.root,
-                event_callback,
-                "assistant_message_ready",
-                run_id=run_id,
-                thread_id=thread_id,
-                request_id=request.request_id,
-                intent=decision.intent,
-                mode=state.mode,
-                delivery_status="completed",
-                message=message,
-                artifact_ids=[artifact.artifact_id],
-            )
-            self._emit(
-                paths.root,
-                event_callback,
-                "main_agent_completed",
-                run_id=run_id,
-                thread_id=thread_id,
-                request_id=request.request_id,
-                intent=decision.intent,
-                mode=state.mode,
-                artifact_ids=[artifact.artifact_id],
-            )
-            return MainAgentRunResult(
-                run_id=run_id,
-                thread_id=thread_id,
-                request_id=request.request_id,
-                status="completed",
-                mode=state.mode,
-                intent=decision.intent,
-                message=message,
-                artifact_ids=[artifact.artifact_id],
-                tool_calls=tool_results,
-                state=state,
-            )
-
-        except Exception as exc:
-            state = state.model_copy(
-                update={
-                    "status": "failed",
-                    "error": f"{exc.__class__.__name__}: {exc}",
-                    "tool_call_ids": [item.call_id for item in tool_results],
-                    "updated_at": utc_now(),
-                }
-            )
-            self._persist_state(paths.root, state)
-            self._emit(
-                paths.root,
-                event_callback,
-                "main_agent_failed",
-                run_id=run_id,
-                thread_id=thread_id,
-                request_id=request.request_id,
-                intent=decision.intent,
-                mode=state.mode,
-                error=state.error,
-            )
-            return MainAgentRunResult(
-                run_id=run_id,
-                thread_id=thread_id,
-                request_id=request.request_id,
-                status="failed",
-                mode=state.mode,
-                intent=decision.intent,
-                message="Agent OS Core Agent Loop failed to complete the request.",
-                artifact_ids=[],
-                tool_calls=tool_results,
-                state=state,
-            )
+        return outcome.result
 
     def route(
         self,
@@ -717,15 +414,6 @@ class MainAgent:
             return f"为了继续处理，请补充{requested}。"
         return f"To continue, please provide: {requested}."
 
-    @staticmethod
-    def _control_status(root: Path) -> str | None:
-        control = read_json(root / "execution_control.json") or {}
-        if control.get("cancel_requested"):
-            return "cancelled"
-        if control.get("pause_requested"):
-            return "paused"
-        return None
-
     def _control_result(
         self,
         *,
@@ -774,519 +462,6 @@ class MainAgent:
     def _tool_loop_limit(self) -> int:
         return max(1, min(int(getattr(self.settings, "max_agent_tool_loop_turns", 4)), 32))
 
-    def _run_agent_loop(
-        self,
-        *,
-        request: RequestEnvelope,
-        decision: RequestIntakeDecision,
-        context: CoreToolContext,
-        tool_results: list,
-        state: MainAgentState,
-        root: Path,
-        event_callback: Callable[[dict[str, Any]], None] | None,
-        hook_runtime=None,
-        follow_up_runtime: FollowUpRuntime | None = None,
-        turn_config: TurnConfig | None = None,
-    ) -> tuple[str, MainAgentState]:
-        """Run a bounded provider-native Tool loop, with a deterministic fallback.
-
-        Providers that do not expose ``complete_with_tools`` still use the
-        existing deterministic/Core response path. The persisted transcript
-        makes a pause or retry resume the same Main Agent context instead of
-        silently starting a second loop.
-        """
-        provider = self.llm_provider
-        native_turn = getattr(provider, "complete_with_tools", None) if provider is not None else None
-        available = bool(provider is not None and getattr(provider, "available", False))
-        if (
-            provider is not None
-            and provider.__class__.__name__ == "OpenAIProvider"
-            and self._has_deterministic_core_route(request.user_query)
-        ):
-            self._emit_loop_progress(
-                root,
-                event_callback,
-                state=state,
-                turn=max(1, state.turn_count + 1),
-                phase="core_route",
-                current_action="Main Agent entered the deterministic Core path",
-                next_action="Execute the Core path and collect its result",
-            )
-            message = self._answer(
-                request=request,
-                decision=decision,
-                context=context,
-                tool_results=tool_results,
-            )
-            self._emit_loop_progress(
-                root,
-                event_callback,
-                state=state,
-                turn=max(1, state.turn_count + 1),
-                phase="core_tool_result",
-                current_action=(
-                    "Core path completed"
-                    + (
-                        f" with Tool(s): {', '.join(item.tool_name for item in tool_results)}"
-                        if tool_results
-                        else " without Tool calls"
-                    )
-                ),
-                next_action="Persist the assistant message and finish the Run",
-                status="completed",
-            )
-            state, should_continue = self._apply_stop_hook_candidate(
-                message=message,
-                state=state,
-                root=root,
-                hook_runtime=hook_runtime,
-                follow_up_runtime=follow_up_runtime,
-                turn_config=turn_config,
-                event_callback=event_callback,
-            )
-            if should_continue:
-                state = state.model_copy(
-                    update={
-                        "status": "gated",
-                        "error": "StopHook requested continuation but no provider loop is available.",
-                    }
-                )
-                self._persist_state(root, state)
-            return message, state
-        if not callable(native_turn) or not available:
-            self._emit_loop_progress(
-                root,
-                event_callback,
-                state=state,
-                turn=max(1, state.turn_count + 1),
-                phase="core_route",
-                current_action="Main Agent entered the deterministic Core path",
-                next_action="Execute the Core path and collect its result",
-            )
-            message = self._answer(
-                request=request,
-                decision=decision,
-                context=context,
-                tool_results=tool_results,
-            )
-            self._emit_loop_progress(
-                root,
-                event_callback,
-                state=state,
-                turn=max(1, state.turn_count + 1),
-                phase="core_tool_result",
-                current_action=(
-                    "Core path completed"
-                    + (
-                        f" with Tool(s): {', '.join(item.tool_name for item in tool_results)}"
-                        if tool_results
-                        else " without Tool calls"
-                    )
-                ),
-                next_action="Persist the assistant message and finish the Run",
-                status="completed",
-            )
-            state, should_continue = self._apply_stop_hook_candidate(
-                message=message,
-                state=state,
-                root=root,
-                hook_runtime=hook_runtime,
-                follow_up_runtime=follow_up_runtime,
-                turn_config=turn_config,
-                event_callback=event_callback,
-            )
-            if should_continue:
-                state = state.model_copy(
-                    update={
-                        "status": "gated",
-                        "error": "StopHook requested continuation but no provider loop is available.",
-                    }
-                )
-                self._persist_state(root, state)
-            return message, state
-
-        transcript = list(state.transcript)
-        if not transcript:
-            transcript.append({"role": "user", "content": request.user_query})
-        limit = state.tool_loop_limit or self._tool_loop_limit()
-        for turn_index in range(state.turn_count, limit):
-            if follow_up_runtime is not None:
-                pending_inputs = follow_up_runtime.deliver_current()
-                if pending_inputs:
-                    for item in pending_inputs:
-                        transcript.append(
-                            {
-                                "role": "user",
-                                "content": item.text,
-                                "source": item.source,
-                                "hook_originated": item.source == "hook",
-                                "operation_id": item.operation_id,
-                            }
-                        )
-                    state = state.model_copy(
-                        update={
-                            "follow_up_count": follow_up_runtime.follow_up_count,
-                            "transcript": self._trim_transcript(transcript),
-                            "updated_at": utc_now(),
-                        }
-                    )
-                    self._persist_state(root, state)
-            control_status = self._control_status(root)
-            if control_status is not None:
-                state = state.model_copy(
-                    update={
-                        "status": control_status,
-                        "transcript": self._trim_transcript(transcript),
-                        "turn_count": turn_index,
-                        "updated_at": utc_now(),
-                    }
-                )
-                self._persist_state(root, state)
-                return state.assistant_message or (
-                    "Agent OS Core Agent Loop paused."
-                    if control_status == "paused"
-                    else "Agent OS Core Agent Loop cancelled."
-                ), state
-
-            state = state.model_copy(
-                update={
-                    "turn_count": turn_index + 1,
-                    "transcript": self._trim_transcript(transcript),
-                    "updated_at": utc_now(),
-                }
-            )
-            self._persist_state(root, state)
-            self._emit(
-                root,
-                event_callback,
-                "main_agent_turn_started",
-                run_id=state.run_id,
-                thread_id=state.thread_id,
-                request_id=state.request_id,
-                mode=state.mode,
-                turn=turn_index + 1,
-                message=f"Main Agent started loop {turn_index + 1}.",
-            )
-            self._emit_loop_progress(
-                root,
-                event_callback,
-                state=state,
-                turn=turn_index + 1,
-                phase="model_turn",
-                current_action=f"Main Agent model call {turn_index + 1} started",
-                next_action="Wait for the model response",
-            )
-            operation_id = f"model:{state.run_id}:{turn_index + 1}"
-            self._emit(
-                root,
-                event_callback,
-                "model_call_started",
-                run_id=state.run_id,
-                thread_id=state.thread_id,
-                request_id=state.request_id,
-                turn_id=self._event_turn_ids.get(state.run_id),
-                mode=state.mode,
-                turn=turn_index + 1,
-                operation_id=operation_id,
-            )
-            try:
-                response = self._provider_tool_turn(
-                    provider=provider,
-                    request=request,
-                    decision=decision,
-                    transcript=transcript,
-                    native_turn=native_turn,
-                    definitions=[
-                        item
-                        for item in self.tools.definitions()
-                        if item.name.startswith("core.")
-                    ],
-                )
-                self._emit(
-                    root,
-                    event_callback,
-                    "model_call_completed",
-                    run_id=state.run_id,
-                    thread_id=state.thread_id,
-                    request_id=state.request_id,
-                    turn_id=self._event_turn_ids.get(state.run_id),
-                    mode=state.mode,
-                    turn=turn_index + 1,
-                    operation_id=operation_id,
-                    response_kind=response.kind,
-                )
-            except Exception as exc:
-                self._emit(
-                    root,
-                    event_callback,
-                    "main_agent_model_turn_failed",
-                    run_id=state.run_id,
-                    thread_id=state.thread_id,
-                    request_id=state.request_id,
-                    mode=state.mode,
-                    turn=turn_index + 1,
-                    error=f"{exc.__class__.__name__}: {exc}",
-                    operation_id=operation_id,
-                )
-                return self._answer(
-                    request=request,
-                    decision=decision,
-                    context=context,
-                    tool_results=tool_results,
-                ), state
-            if response.kind == "clarification":
-                question = str(response.question or response.message or "").strip()
-                if not question:
-                    question = "Please clarify the request before I continue."
-                current_action, next_action = self._response_progress(
-                    response,
-                    fallback_current=f"Model requested clarification: {question[:240]}",
-                    fallback_next="Wait for the user response before resuming this Run",
-                )
-                self._emit_loop_progress(
-                    root,
-                    event_callback,
-                    state=state,
-                    turn=turn_index + 1,
-                    phase="clarification",
-                    current_action=current_action,
-                    next_action=next_action,
-                    status="paused",
-                )
-                self._emit(
-                    root,
-                    event_callback,
-                    "main_agent_turn_completed",
-                    run_id=state.run_id,
-                    thread_id=state.thread_id,
-                    request_id=state.request_id,
-                    mode=state.mode,
-                    turn=turn_index + 1,
-                    message=question,
-                    status="clarification",
-                )
-                transcript.append({"role": "assistant", "content": question})
-                state = state.model_copy(
-                    update={
-                        "status": "paused",
-                        "clarification_question": question,
-                        "missing_fields": list(response.missing_fields),
-                        "assistant_message": question,
-                        "transcript": self._trim_transcript(transcript),
-                        "updated_at": utc_now(),
-                    }
-                )
-                self._persist_state(root, state)
-                return question, state
-            if response.kind != "tool_calls" or not response.tool_calls:
-                message = response.message or response.question
-                if message:
-                    current_action, next_action = self._response_progress(
-                        response,
-                        fallback_current=f"Model returned a final answer: {str(message)[:240]}",
-                        fallback_next="Persist the assistant message and finish the Run",
-                    )
-                    self._emit_loop_progress(
-                        root,
-                        event_callback,
-                        state=state,
-                        turn=turn_index + 1,
-                        phase="answer",
-                        current_action=current_action,
-                        next_action=next_action,
-                        status="completed",
-                    )
-                    self._emit(
-                        root,
-                        event_callback,
-                        "main_agent_turn_completed",
-                        run_id=state.run_id,
-                        thread_id=state.thread_id,
-                        request_id=state.request_id,
-                        mode=state.mode,
-                        turn=turn_index + 1,
-                        message=message,
-                        status="answer",
-                    )
-                    transcript.append({"role": "assistant", "content": message})
-                    state = state.model_copy(
-                        update={
-                            "assistant_message": message,
-                            "stop_hook_active": False,
-                            "transcript": self._trim_transcript(transcript),
-                            "updated_at": utc_now(),
-                        }
-                    )
-                    self._persist_state(root, state)
-                    state, should_continue = self._apply_stop_hook_candidate(
-                        message=message,
-                        state=state,
-                        root=root,
-                        hook_runtime=hook_runtime,
-                        follow_up_runtime=follow_up_runtime,
-                        turn_config=turn_config,
-                        event_callback=event_callback,
-                    )
-                    if should_continue:
-                        continue
-                    return message, state
-                break
-
-            self._emit(
-                root,
-                event_callback,
-                "main_agent_tool_calls_requested",
-                run_id=state.run_id,
-                thread_id=state.thread_id,
-                request_id=state.request_id,
-                mode=state.mode,
-                turn=turn_index + 1,
-                tool_names=[item.tool_name for item in response.tool_calls],
-                tool_call_ids=[item.call_id for item in response.tool_calls],
-                message=(
-                    f"Main Agent loop {turn_index + 1} selected "
-                    f"{len(response.tool_calls)} Tool(s)."
-                ),
-            )
-            current_action, next_action = self._response_progress(
-                response,
-                fallback_current=(
-                    "Model requested Tool(s): "
-                    + ", ".join(item.tool_name for item in response.tool_calls)
-                ),
-                fallback_next=(
-                    "Execute Tool(s): "
-                    + ", ".join(item.tool_name for item in response.tool_calls)
-                ),
-            )
-            self._emit_loop_progress(
-                root,
-                event_callback,
-                state=state,
-                turn=turn_index + 1,
-                phase="tool_dispatch",
-                current_action=current_action,
-                next_action=next_action,
-            )
-
-            transcript.append(
-                {
-                    "role": "assistant",
-                    "tool_calls": [
-                        {
-                            "tool_name": item.tool_name,
-                            "arguments": item.arguments,
-                            "call_id": item.call_id,
-                        }
-                        for item in response.tool_calls
-                    ],
-                }
-            )
-            for requested in response.tool_calls:
-                result = self.tools.invoke(
-                    tool_name=requested.tool_name,
-                    arguments=requested.arguments,
-                    context=context,
-                )
-                tool_results.append(result)
-                transcript.append(
-                    {
-                        "role": "tool",
-                        "tool_name": result.tool_name,
-                        "call_id": result.call_id,
-                        "status": result.status,
-                        "output": self._trim_tool_output(result.output),
-                        "error": result.error,
-                    }
-                )
-                state = state.model_copy(
-                    update={
-                        "tool_call_ids": [item.call_id for item in tool_results],
-                        "transcript": self._trim_transcript(transcript),
-                        "updated_at": utc_now(),
-                    }
-                )
-                self._persist_state(root, state)
-                self._emit(
-                    root,
-                    event_callback,
-                    "main_agent_tool_loop_result",
-                    run_id=state.run_id,
-                    thread_id=state.thread_id,
-                    request_id=state.request_id,
-                    mode=state.mode,
-                    turn=turn_index + 1,
-                    tool_name=result.tool_name,
-                    call_id=result.call_id,
-                    status=result.status,
-                    output_summary=self._tool_output_summary(result),
-                    message=(
-                        f"Main Agent loop {turn_index + 1} received "
-                        f"the result from Tool {result.tool_name}."
-                    ),
-                )
-                self._emit_loop_progress(
-                    root,
-                    event_callback,
-                    state=state,
-                    turn=turn_index + 1,
-                    phase="tool_result",
-                    current_action=(
-                        f"Tool {result.tool_name} returned {result.status}"
-                        + (
-                            f": {self._tool_output_summary(result)[:240]}"
-                            if result.status == "completed"
-                            else f": {result.error or result.status}"
-                        )
-                    ),
-                    next_action=f"Write the Tool {result.tool_name} result into the next Main Agent turn",
-                    status=result.status,
-                )
-
-            if follow_up_runtime is not None and follow_up_runtime.config.allow_model_follow_up:
-                try:
-                    follow_up_runtime.record_model_follow_up()
-                    state = state.model_copy(
-                        update={
-                            "follow_up_count": follow_up_runtime.follow_up_count,
-                            "updated_at": utc_now(),
-                        }
-                    )
-                    self._persist_state(root, state)
-                except RuntimeError as exc:
-                    state = state.model_copy(
-                        update={
-                            "status": "gated",
-                            "error": str(exc),
-                            "updated_at": utc_now(),
-                        }
-                    )
-                    self._persist_state(root, state)
-                    return "Agent OS follow-up limit exceeded.", state
-
-        message = (
-            "Agent OS Core Agent Loop reached its Tool-loop limit before producing a final answer."
-        )
-        self._emit_loop_progress(
-            root,
-            event_callback,
-            state=state,
-            turn=state.turn_count,
-            phase="loop_limit",
-            current_action=f"Tool loop limit reached after {state.turn_count} turn(s)",
-            next_action="Return the bounded response and finish the Run",
-            status="bounded",
-        )
-        state = state.model_copy(
-            update={
-                "assistant_message": message,
-                "transcript": self._trim_transcript(transcript),
-                "updated_at": utc_now(),
-            }
-        )
-        self._persist_state(root, state)
-        return message, state
-
     def _apply_stop_hook_candidate(
         self,
         *,
@@ -1297,8 +472,13 @@ class MainAgent:
         follow_up_runtime: FollowUpRuntime | None,
         turn_config: TurnConfig | None,
         event_callback: Callable[[dict[str, Any]], None] | None,
+        stop_target: str = "stop",
+        parent_turn_id: str | None = None,
+        agent_id: str | None = None,
+        agent_type: str | None = None,
+        agent_transcript_ref: str | None = None,
     ) -> tuple[MainAgentState, bool]:
-        """Run the only execution-time stop decision shared by Core and Task mode."""
+        """Run the execution-time stop decision for a Root or Child Turn."""
         if (
             hook_runtime is None
             or turn_config is None
@@ -1312,9 +492,13 @@ class MainAgent:
             thread_id=state.thread_id,
             turn_id=self._event_turn_ids.get(state.run_id, state.run_id),
             task_type=turn_config.task_type,
-            target="stop",
+            target=stop_target,
             cwd=str(root),
             transcript_ref=str(root / "task_state.json"),
+            parent_turn_id=parent_turn_id,
+            agent_id=agent_id,
+            agent_type=agent_type,
+            agent_transcript_ref=agent_transcript_ref,
             stop_hook_active=state.stop_hook_active,
             last_assistant_message=message,
             hook_iteration=state.hook_iteration,
@@ -1775,6 +959,8 @@ class MainAgent:
             run_id=run_id,
             thread_id=thread_id,
             request_id=request.request_id,
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
             producer=ArtifactProducer(
                 executor="main_agent",
                 capability="core.conversation.answer",

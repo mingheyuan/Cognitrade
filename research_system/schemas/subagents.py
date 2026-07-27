@@ -47,6 +47,7 @@ class RoleContract(BaseModel):
     required_capabilities: list[str] = Field(default_factory=list)
     allowed_tools: list[str] = Field(default_factory=list)
     denied_tools: list[str] = Field(default_factory=list)
+    allowed_permissions: list[str] = Field(default_factory=list)
     max_model_turns: int = Field(default=1, ge=1)
     timeout_seconds: int = Field(default=30, ge=1)
     requires_approval: bool = False

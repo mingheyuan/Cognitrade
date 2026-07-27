@@ -60,10 +60,6 @@ class Settings(BaseModel):
     max_agent_tool_loop_turns: int = 4
     max_subagent_calls_per_turn: int = 32
     max_child_threads_per_turn: int = 8
-    turn_runner_enabled: bool = True
-    turn_runner_regular_enabled: bool = True
-    turn_runner_graph_enabled: bool = True
-    turn_runner_child_enabled: bool = True
     subagent_discovery_shadow_llm_enabled: bool = False
     subagent_discovery_shadow_llm_reasoning_effort: str = "low"
     subagent_discovery_llm_policy_enabled: bool = False

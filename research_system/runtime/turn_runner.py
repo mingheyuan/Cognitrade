@@ -4,7 +4,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 import hashlib
-import inspect
 import json
 import os
 from time import monotonic
@@ -13,10 +12,11 @@ from threading import Event, RLock, get_ident
 from typing import Any, Callable, Protocol
 
 from research_system.runtime.core.id_utils import generate_ulid
+from research_system.runtime.core.approvals import HumanApprovalStore
 from research_system.runtime.core.artifact_board import ArtifactBoard
-from research_system.runtime.core.tool_registry import CoreToolContext
+from research_system.runtime.core.tool_registry import CoreToolContext, build_core_tool_registry
 from research_system.runtime.event_store import append_canonical_event
-from research_system.runtime.follow_up import FollowUpRuntime
+from research_system.runtime.follow_up import FollowUpRuntime, mailbox_lease
 from research_system.runtime.hooks import HookRuntime, LifecycleInput, StopHookInput
 from research_system.runtime.roles import ChildTurnRuntime, RoleRegistry
 from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
@@ -60,6 +60,24 @@ class TurnStepExecutor(Protocol):
         ...
 
 
+class TurnTask(Protocol):
+    """Explicit lifecycle contract for a Task mounted in one root Turn."""
+
+    task_type: TurnTaskType
+
+    def start_or_resume(self, context: "TurnContext") -> TaskOutcome:
+        ...
+
+    def start(self, context: "TurnContext") -> TaskOutcome:
+        ...
+
+    def resume(self, context: "TurnContext") -> TaskOutcome:
+        ...
+
+    def cancel(self, context: "TurnContext", reason: str) -> TaskOutcome:
+        ...
+
+
 @dataclass
 class TurnContext:
     request: RequestEnvelope
@@ -77,12 +95,22 @@ class TurnContext:
     rerun_from: str | None = None
     hook_runtime: HookRuntime | None = None
     follow_up_runtime: FollowUpRuntime | None = None
+    followup_task_handler: Callable[[FollowupTaskRequest], FollowupTaskResult] | None = None
     # Kept for the duration of one RegularExecutor invocation.  The persisted
     # state remains the recovery source after a worker restart.
     core_session: Any | None = None
     # Child Turns keep the parent Run identity but use a namespaced storage
     # root, so their checkpoints and transcripts cannot overwrite the parent.
     storage_root: Path | None = None
+    parent_turn_id: str | None = None
+    child_role_id: str | None = None
+    role_contract: RoleContract | None = None
+    role_approval_id: str | None = None
+    approval_store: HumanApprovalStore | None = None
+    deadline_at: float | None = None
+    last_result: Any | None = None
+    recovery_continuation: bool = False
+    worker_restart_recovery: bool = False
 
     @property
     def root(self) -> Path:
@@ -111,11 +139,15 @@ class CoreLoopExecutor:
 
     def execute(self, context: TurnContext) -> TaskOutcome:
         if not self._supports_incremental_main_agent():
-            return self._execute_legacy(context)
+            raise TypeError(
+                "TurnRunner requires MainAgent's incremental Core runtime contract"
+            )
         session = context.core_session
         if session is None:
             session = self._prepare(context)
             context.core_session = session
+        if context.deadline_at is not None and monotonic() >= context.deadline_at:
+            return self._timed_out(context, session)
         if session.state.status in {
             "completed",
             "completed_partial",
@@ -145,45 +177,23 @@ class CoreLoopExecutor:
             for name in ("_provider_tool_turn", "_trim_transcript", "_assistant_artifact")
         ) and hasattr(self.main_agent, "tools")
 
-    def _execute_legacy(self, context: TurnContext) -> TaskOutcome:
-        core_task = getattr(self.main_agent, "_run_core_task", None)
-        if not callable(core_task):
-            core_task = self.main_agent.run
-        core_kwargs = dict(
-            request=context.request,
-            decision=context.decision,
-            run_id=context.run_id,
-            thread_id=context.thread_id,
-            event_callback=context.event_callback,
-            resume=context.resume,
-            turn_id=context.turn.turn_id,
-            emit_started=False,
-            hook_runtime=context.hook_runtime,
-            follow_up_runtime=context.follow_up_runtime,
-            turn_config=context.config,
-        )
-        try:
-            parameters = inspect.signature(core_task).parameters
-            if not any(item.kind == inspect.Parameter.VAR_KEYWORD for item in parameters.values()):
-                core_kwargs = {
-                    key: value for key, value in core_kwargs.items() if key in parameters
-                }
-        except (TypeError, ValueError):
-            pass
-        result: MainAgentRunResult = core_task(**core_kwargs)
-        return TaskOutcome(
-            execution_mode=context.config.execution_mode,
-            status=result.status,
-            result=result,
-            artifact_ids=list(result.artifact_ids),
-        )
-
     def _prepare(self, context: TurnContext) -> _CoreLoopSession:
         root = context.root
         board = ArtifactBoard(root / "artifact_board.jsonl")
         board.bind_thread(context.thread_id)
         persisted = read_json(root / "main_agent_state.json")
-        if context.resume and isinstance(persisted, dict):
+        if context.recovery_continuation and isinstance(persisted, dict):
+            persisted_state = MainAgentState.model_validate(persisted)
+            state = persisted_state.model_copy(
+                update={
+                    "status": "running",
+                    "error": None,
+                    "clarification_question": None,
+                    "missing_fields": [],
+                    "updated_at": _utc_now(),
+                }
+            )
+        elif context.resume and isinstance(persisted, dict):
             persisted_state = MainAgentState.model_validate(persisted)
             if persisted_state.status in {
                 "completed",
@@ -226,7 +236,7 @@ class CoreLoopExecutor:
                 tool_loop_limit=self.main_agent._tool_loop_limit(),
             )
         control_path = root / "execution_control.json"
-        if context.resume or not control_path.exists():
+        if not control_path.exists():
             write_json(
                 control_path,
                 {
@@ -245,6 +255,56 @@ class CoreLoopExecutor:
                 mode=state.mode,
             )
         cancellation = Event()
+        approval_store = context.approval_store or HumanApprovalStore(root / "approvals.jsonl")
+        if context.role_contract is not None and context.role_contract.requires_approval:
+            context.role_approval_id = self._role_approval_id(context)
+            existing_approval = approval_store.get(context.role_approval_id)
+            if existing_approval is None:
+                approval_store.request(
+                    run_id=context.run_id,
+                    node_id=f"child_role:{context.child_role_id or context.role_contract.role_id}",
+                    capability=context.role_contract.role_id,
+                    reason=(
+                        f"Child role {context.role_contract.role_id} requires human approval."
+                    ),
+                    approval_id=context.role_approval_id,
+                    user_id=context.request.user_id,
+                    tenant_id=context.request.tenant_id,
+                )
+                existing_approval = approval_store.get(context.role_approval_id)
+            if existing_approval is not None and existing_approval.status != "approved":
+                state = state.model_copy(
+                    update={
+                        "status": "waiting_approval",
+                        "pending_approval_ids": [context.role_approval_id],
+                        "continuation": {
+                            "source": "child_role_approval",
+                            "approval_id": context.role_approval_id,
+                            "role_id": context.role_contract.role_id,
+                        },
+                        "updated_at": _utc_now(),
+                    }
+                )
+                self.main_agent._persist_state(root, state)
+        actor = (
+            f"subagent:{context.child_role_id}"
+            if context.child_role_id
+            else "main_agent"
+        )
+        if context.role_contract is None:
+            allowed_tools = frozenset(
+                item.name
+                for item in self.main_agent.tools.definitions()
+                if item.name.startswith("core.")
+            )
+            allowed_permissions = None
+        else:
+            allowed_tools = frozenset(
+                item
+                for item in context.role_contract.allowed_tools
+                if item not in context.role_contract.denied_tools
+            )
+            allowed_permissions = frozenset(context.role_contract.allowed_permissions)
         core_context = CoreToolContext(
             run_id=context.run_id,
             thread_id=context.thread_id,
@@ -252,20 +312,19 @@ class CoreLoopExecutor:
             user_id=context.request.user_id,
             tenant_id=context.request.tenant_id,
             run_root=root,
-            actor="main_agent",
+            actor=actor,
             turn_id=context.turn.turn_id,
             artifact_board=board,
             memory_store=getattr(self.main_agent, "memory_store", None),
             settings=getattr(self.main_agent, "settings", None),
             cancellation=cancellation,
             event_callback=context.event_callback,
-            allowed_tools=frozenset(
-                item.name
-                for item in self.main_agent.tools.definitions()
-                if item.name.startswith("core.")
-            ),
+            allowed_tools=allowed_tools,
+            allowed_permissions=allowed_permissions,
             idempotency_key=context.request.idempotency_key,
             hook_runtime=context.hook_runtime,
+            followup_task_handler=context.followup_task_handler,
+            approval_store=approval_store,
         )
         transcript = list(state.transcript)
         if not transcript:
@@ -357,6 +416,10 @@ class CoreLoopExecutor:
         if control_status is not None:
             return self._control(context, session, control_status)
 
+        role_approval = self._role_approval_outcome(context, session)
+        if role_approval is not None:
+            return role_approval
+
         compacted = self._maybe_compact(context, session)
         if compacted is not None:
             return compacted
@@ -389,6 +452,8 @@ class CoreLoopExecutor:
         checkpoint_status = str(provider_checkpoint.get("status") or "")
         recoverable_checkpoint = checkpoint_status in {"running", "response_ready"}
         limit = session.state.tool_loop_limit or self.main_agent._tool_loop_limit()
+        if context.role_contract is not None:
+            limit = min(limit, context.role_contract.max_model_turns)
         if session.state.turn_count >= limit and not recoverable_checkpoint:
             message = "Agent OS Core Agent Loop reached its Tool-loop limit before producing a final answer."
             return self._complete_answer(context, session, message, status="completed_partial")
@@ -622,6 +687,13 @@ class CoreLoopExecutor:
                 follow_up_runtime=follow_up,
                 turn_config=context.config,
                 event_callback=context.event_callback,
+                stop_target=("subagent_stop" if context.parent_turn_id else "stop"),
+                parent_turn_id=context.parent_turn_id,
+                agent_id=context.child_role_id,
+                agent_type=context.child_role_id,
+                agent_transcript_ref=(
+                    str(root / "task_state.json") if context.parent_turn_id else None
+                ),
             )
             self._persist(context, session)
             if should_continue:
@@ -676,13 +748,16 @@ class CoreLoopExecutor:
             }
         )
         for requested in response.tool_calls:
+            approval_id = requested.approval_id
             result = self._invoke_tool(
                 context,
                 session,
                 requested.tool_name,
                 requested.arguments,
                 operation_id=requested.call_id,
+                approval_id=approval_id,
             )
+            approval_id = str(result.metadata.get("approval_id") or approval_id or "") or None
             self._record_tool_result(context, session, result)
             session.transcript.append(
                 {
@@ -697,6 +772,16 @@ class CoreLoopExecutor:
             session.state = session.state.model_copy(
                 update={
                     "tool_call_ids": [item.call_id for item in session.tool_results],
+                    "pending_approval_ids": (
+                        [str(result.metadata.get("approval_id"))]
+                        if result.status == "waiting_approval"
+                        and result.metadata.get("approval_id")
+                        else [
+                            item
+                            for item in session.state.pending_approval_ids
+                            if item != result.metadata.get("approval_id")
+                        ]
+                    ),
                     "transcript": self._trim(session.transcript),
                     "updated_at": _utc_now(),
                 }
@@ -712,6 +797,69 @@ class CoreLoopExecutor:
                 status=result.status,
                 output_summary=self.main_agent._tool_output_summary(result),
             )
+            if result.status == "rejected" and approval_id:
+                approval = (
+                    session.context.approval_store.get(approval_id)
+                    if session.context.approval_store is not None
+                    else None
+                )
+                if approval is not None and approval.status in {
+                    "rejected",
+                    "revoked",
+                    "expired",
+                }:
+                    session.state = session.state.model_copy(
+                        update={
+                            "status": "gated",
+                            "pending_approval_ids": [],
+                            "continuation": {
+                                "source": "tool_approval",
+                                "approval_id": approval_id,
+                                "tool_name": result.tool_name,
+                                "decision": approval.status,
+                            },
+                            "error": result.error,
+                            "updated_at": _utc_now(),
+                        }
+                    )
+                    self._persist(context, session)
+                    self._emit(
+                        context,
+                        "main_agent_tool_approval_rejected",
+                        tool_name=result.tool_name,
+                        approval_id=approval_id,
+                        decision=approval.status,
+                    )
+                    return self._result(
+                        context,
+                        session,
+                        "gated",
+                        result.error or "Tool approval was rejected.",
+                    )
+            if result.status == "waiting_approval":
+                approval_id = str(result.metadata.get("approval_id") or "")
+                session.state = session.state.model_copy(
+                    update={
+                        "status": "waiting_approval",
+                        "continuation": {
+                            "source": "tool_approval",
+                            "approval_id": approval_id,
+                            "tool_name": result.tool_name,
+                            "operation_id": requested.call_id,
+                        },
+                        "pending_approval_ids": [approval_id] if approval_id else [],
+                        "updated_at": _utc_now(),
+                    }
+                )
+                self._persist(context, session)
+                self._emit(
+                    context,
+                    "main_agent_waiting_approval",
+                    tool_name=result.tool_name,
+                    approval_id=approval_id,
+                    operation_id=requested.call_id,
+                )
+                return self._result(context, session, "waiting_approval", result.error or "Tool approval required.")
             self._emit_progress(
                 context,
                 phase="tool_result",
@@ -764,17 +912,22 @@ class CoreLoopExecutor:
         *,
         status: str = "completed",
     ) -> TaskOutcome:
-        composed = self._invoke_tool(
-            context,
-            session,
-            "core.message.compose",
-            {"message": message},
-            operation_id=f"compose:{session.state.turn_count}",
+        compose_allowed = (
+            session.context.allowed_tools is None
+            or "core.message.compose" in session.context.allowed_tools
         )
-        self._record_tool_result(context, session, composed)
-        if composed.status != "completed":
-            return self._failed(context, session, RuntimeError(composed.error or "core.message.compose failed"))
-        message = str(composed.output.get("message") or message)
+        if compose_allowed:
+            composed = self._invoke_tool(
+                context,
+                session,
+                "core.message.compose",
+                {"message": message},
+                operation_id=f"compose:{session.state.turn_count}",
+            )
+            self._record_tool_result(context, session, composed)
+            if composed.status != "completed":
+                return self._failed(context, session, RuntimeError(composed.error or "core.message.compose failed"))
+            message = str(composed.output.get("message") or message)
         artifact = self.main_agent._assistant_artifact(
             request=context.request,
             decision=context.decision,
@@ -828,6 +981,7 @@ class CoreLoopExecutor:
             missing_fields=list(session.state.missing_fields),
             artifact_ids=list(session.state.artifact_ids),
             continuation=session.state.continuation,
+            pending_approval_ids=list(session.state.pending_approval_ids),
             tool_calls=list(session.tool_results),
             state=session.state,
         )
@@ -836,7 +990,72 @@ class CoreLoopExecutor:
             status=status,
             result=result,
             artifact_ids=list(result.artifact_ids),
+            pending_approval_ids=list(result.pending_approval_ids),
+            continuation=result.continuation,
+            usage=self._usage(session),
         )
+
+    @staticmethod
+    def _usage(session: _CoreLoopSession) -> dict[str, Any]:
+        return {
+            "model_turns": int(session.state.turn_count),
+            "tool_calls": len(session.tool_results),
+        }
+
+    @staticmethod
+    def _role_approval_id(context: TurnContext) -> str:
+        identity = (
+            f"{context.run_id}:{context.parent_turn_id or context.turn.turn_id}:"
+            f"{context.child_role_id or context.role_contract.role_id}"
+        )
+        return "approval_" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+
+    def _role_approval_outcome(
+        self,
+        context: TurnContext,
+        session: _CoreLoopSession,
+    ) -> TaskOutcome | None:
+        approval_id = context.role_approval_id
+        if not approval_id or session.context.approval_store is None:
+            return None
+        approval = session.context.approval_store.get(approval_id)
+        if approval is None or approval.status == "pending":
+            session.state = session.state.model_copy(
+                update={
+                    "status": "waiting_approval",
+                    "pending_approval_ids": [approval_id],
+                    "updated_at": _utc_now(),
+                }
+            )
+            self._persist(context, session)
+            self._emit(context, "child_role_waiting_approval", approval_id=approval_id)
+            return self._result(context, session, "waiting_approval", "Child role is waiting for human approval.")
+        if approval.status != "approved":
+            session.state = session.state.model_copy(
+                update={
+                    "status": "gated",
+                    "pending_approval_ids": [],
+                    "error": f"Child role approval was {approval.status}.",
+                    "continuation": {
+                        "source": "child_role_approval",
+                        "approval_id": approval_id,
+                        "decision": approval.status,
+                    },
+                    "updated_at": _utc_now(),
+                }
+            )
+            self._persist(context, session)
+            return self._result(context, session, "gated", session.state.error or "Child role approval was rejected.")
+        if approval_id in session.state.pending_approval_ids:
+            session.state = session.state.model_copy(
+                update={
+                    "pending_approval_ids": [],
+                    "continuation": None,
+                    "updated_at": _utc_now(),
+                }
+            )
+            self._persist(context, session)
+        return None
 
     def _control(self, context: TurnContext, session: _CoreLoopSession, status: str) -> TaskOutcome:
         result = self.main_agent._control_result(
@@ -873,6 +1092,19 @@ class CoreLoopExecutor:
             "failed",
             "Agent OS Core Agent Loop failed to complete the request.",
         )
+
+    def _timed_out(self, context: TurnContext, session: _CoreLoopSession) -> TaskOutcome:
+        message = "Turn exceeded its configured timeout at a Core safe point."
+        session.state = session.state.model_copy(
+            update={
+                "status": "timed_out",
+                "error": message,
+                "updated_at": _utc_now(),
+            }
+        )
+        self._persist(context, session)
+        self._emit(context, "main_agent_timed_out", mode=session.state.mode, error=message)
+        return self._result(context, session, "timed_out", message)
 
     def _maybe_compact(
         self,
@@ -1021,16 +1253,55 @@ class CoreLoopExecutor:
         arguments: dict[str, Any],
         *,
         operation_id: str,
+        approval_id: str | None = None,
     ):
+        tool_arguments = dict(arguments)
+        approval_id = approval_id or str(tool_arguments.pop("approval_id", "") or "") or None
+        if approval_id is None:
+            for prior in reversed(session.tool_results):
+                if (
+                    (
+                        prior.call_id == operation_id
+                        or prior.metadata.get("operation_id") == operation_id
+                    )
+                    and prior.tool_name == tool_name
+                    and prior.status == "waiting_approval"
+                ):
+                    approval_id = str(prior.metadata.get("approval_id") or "") or None
+                    break
         governed_context = replace(
             session.context,
             idempotency_key=f"{context.run_id}:{operation_id}:{tool_name}",
+            approval_id=approval_id,
+            authorize_approval=(
+                lambda candidate: session.context.approval_store.validate(
+                    approval_id=candidate,
+                    run_id=context.run_id,
+                    node_id=f"core_tool:{tool_name}",
+                    capability=tool_name,
+                    user_id=context.request.user_id,
+                    tenant_id=context.request.tenant_id,
+                )
+                if session.context.approval_store is not None
+                else False
+            ),
         )
-        return self.main_agent.tools.invoke(
+        result = self.main_agent.tools.invoke(
             tool_name=tool_name,
-            arguments=arguments,
+            arguments=tool_arguments,
             context=governed_context,
+            node_id=f"core_tool:{tool_name}",
         )
+        result = result.model_copy(
+            update={
+                "metadata": {
+                    **dict(result.metadata),
+                    **({"approval_id": approval_id} if approval_id else {}),
+                    **({"operation_id": operation_id} if result.status == "waiting_approval" else {}),
+                }
+            }
+        )
+        return result
 
     def _emit(self, context: TurnContext, event_type: str, **payload: Any) -> None:
         self.main_agent._emit(
@@ -1110,6 +1381,7 @@ class GraphExecutor:
             graph_state_ref=str(context.root / "execution_snapshot.json"),
             artifact_ids=list(result.artifact_ids),
             final_artifact_ids=list(result.final_artifact_ids),
+            pending_approval_ids=list(result.snapshot.pending_approval_ids),
             child_turn_ids=child_turn_ids,
         )
         return self._apply_subagent_stop_hooks(context, outcome)
@@ -1184,6 +1456,24 @@ class GraphExecutor:
         write_json(context.root / "execution_snapshot.json", result.snapshot.model_dump(mode="json"))
 
     @staticmethod
+    def _child_transcript_ref(context: TurnContext, child: ChildTurnSnapshot) -> str:
+        """Create the durable transcript boundary owned by one Graph ChildTurn."""
+        child_root = ChildTurnRuntime(context.root).storage_root(child.child_turn_id)
+        child_root.mkdir(parents=True, exist_ok=True)
+        transcript_path = child_root / "task_state.json"
+        if not transcript_path.exists():
+            write_json(
+                transcript_path,
+                {
+                    "task_type": "regular",
+                    "execution_mode": "graph",
+                    "transcript": [],
+                    "graph_state_ref": str(context.root / "execution_snapshot.json"),
+                },
+            )
+        return str(transcript_path)
+
+    @staticmethod
     def _apply_subagent_stop_hooks(context: TurnContext, outcome: TaskOutcome) -> TaskOutcome:
         runtime = context.hook_runtime
         follow_up = context.follow_up_runtime
@@ -1209,17 +1499,22 @@ class GraphExecutor:
                 continue
             node = next((item for item in snapshot.graph.nodes if item.node_id == node_id), None)
             child = child_by_node.get(node_id)
+            if child is None:
+                # SubagentStop is a ChildTurn lifecycle hook. A stale or
+                # externally supplied Graph node must not be evaluated with
+                # the Root Turn identity; Root completion is handled by Stop.
+                continue
             hook_input = StopHookInput(
                 session_id=context.thread_id,
                 run_id=context.run_id,
-                thread_id=child.child_thread_id if child is not None else context.thread_id,
-                turn_id=child.child_turn_id if child is not None else context.turn.turn_id,
+                thread_id=child.child_thread_id,
+                turn_id=child.child_turn_id,
                 parent_turn_id=context.turn.turn_id,
                 task_type=context.config.task_type,
                 target="subagent_stop",
                 agent_id=node_id,
                 agent_type=str(getattr(node, "executor", None) or getattr(node, "capability", None) or node_id),
-                agent_transcript_ref=str(context.root / "task_state.json"),
+                agent_transcript_ref=GraphExecutor._child_transcript_ref(context, child),
                 last_assistant_message=None,
             )
             decision = runtime.run_stop(
@@ -1283,6 +1578,17 @@ class RegularExecutor:
         self.graph_executor = graph_executor
 
     def execute(self, context: TurnContext) -> TaskOutcome:
+        if (
+            context.deadline_at is not None
+            and monotonic() >= context.deadline_at
+            and context.last_result is not None
+        ):
+            return TaskOutcome(
+                execution_mode=context.config.execution_mode,
+                status="timed_out",
+                result=context.last_result,
+                error="Turn exceeded its configured timeout at a safe point.",
+            )
         executor = (
             self.graph_executor
             if context.config.execution_mode == "graph"
@@ -1292,6 +1598,7 @@ class RegularExecutor:
         # loop and keeps the root Turn alive while a mode reports progress.
         while True:
             outcome = executor.execute(context)
+            context.last_result = outcome.result
             if outcome.status != "running":
                 break
             context.resume = True
@@ -1413,6 +1720,29 @@ class RegularTask:
     def start_or_resume(self, context: TurnContext) -> TaskOutcome:
         return self.executor.execute(context)
 
+    def start(self, context: TurnContext) -> TaskOutcome:
+        context.resume = False
+        return self.executor.execute(context)
+
+    def resume(self, context: TurnContext) -> TaskOutcome:
+        context.resume = True
+        return self.executor.execute(context)
+
+    def cancel(self, context: TurnContext, reason: str) -> TaskOutcome:
+        control = read_json(context.root / "execution_control.json") or {}
+        write_json(
+            context.root / "execution_control.json",
+            {
+                **control,
+                "pause_requested": False,
+                "cancel_requested": True,
+                "cancel_reason": reason,
+                "updated_at": _utc_now().isoformat(),
+            },
+        )
+        context.resume = True
+        return self.executor.execute(context)
+
 
 class ReviewExecutor:
     """Review the current Turn's active artifacts in the same lifecycle."""
@@ -1442,6 +1772,8 @@ class ReviewExecutor:
             run_id=context.run_id,
             thread_id=context.thread_id,
             request_id=context.request.request_id,
+            user_id=context.request.user_id,
+            tenant_id=context.request.tenant_id,
             producer=ArtifactProducer(
                 executor="turn_runner",
                 capability="turn.review",
@@ -1681,7 +2013,20 @@ class ReviewTask(RegularTask):
         self.review_executor = review_executor
 
     def start_or_resume(self, context: TurnContext) -> TaskOutcome:
-        return self.review_executor.execute(context)
+        return self._execute_guarded(context) or self.review_executor.execute(context)
+
+    def start(self, context: TurnContext) -> TaskOutcome:
+        return self._execute_guarded(context) or self.review_executor.execute(context)
+
+    def resume(self, context: TurnContext) -> TaskOutcome:
+        return self._execute_guarded(context) or self.review_executor.execute(context)
+
+    def cancel(self, context: TurnContext, reason: str) -> TaskOutcome:
+        return _special_control_outcome(context, "cancelled", reason)
+
+    @staticmethod
+    def _execute_guarded(context: TurnContext) -> TaskOutcome | None:
+        return _special_task_guard(context)
 
 
 class CompactTask(RegularTask):
@@ -1694,7 +2039,20 @@ class CompactTask(RegularTask):
         self.compact_executor = compact_executor
 
     def start_or_resume(self, context: TurnContext) -> TaskOutcome:
-        return self.compact_executor.execute(context)
+        return self._execute_guarded(context) or self.compact_executor.execute(context)
+
+    def start(self, context: TurnContext) -> TaskOutcome:
+        return self._execute_guarded(context) or self.compact_executor.execute(context)
+
+    def resume(self, context: TurnContext) -> TaskOutcome:
+        return self._execute_guarded(context) or self.compact_executor.execute(context)
+
+    def cancel(self, context: TurnContext, reason: str) -> TaskOutcome:
+        return _special_control_outcome(context, "cancelled", reason)
+
+    @staticmethod
+    def _execute_guarded(context: TurnContext) -> TaskOutcome | None:
+        return _special_task_guard(context)
 
 
 def _special_state(
@@ -1725,6 +2083,76 @@ def _special_state(
         intent=context.decision.intent,
         request_kind=context.decision.request_kind,
         artifact_ids=list(artifact_ids or []),
+    )
+
+
+def _special_task_guard(context: TurnContext) -> TaskOutcome | None:
+    """Apply root control and deadline checks before atomic special Tasks."""
+    if context.deadline_at is not None and monotonic() >= context.deadline_at:
+        return _special_control_outcome(
+            context,
+            "timed_out",
+            "Turn exceeded its configured timeout before the Task safe point.",
+        )
+    control = read_json(context.root / "execution_control.json") or {}
+    if isinstance(control, dict) and control.get("cancel_requested"):
+        return _special_control_outcome(context, "cancelled", "Turn cancellation requested.")
+    if isinstance(control, dict) and control.get("pause_requested"):
+        return _special_control_outcome(context, "paused", "Turn pause requested.")
+    return None
+
+
+def _special_control_outcome(
+    context: TurnContext,
+    status: str,
+    reason: str,
+) -> TaskOutcome:
+    """Return a normalized result when a special Task reaches a control point."""
+    state = _special_state(context, status=status)
+    if status in {"cancelled", "timed_out", "failed"}:
+        state = state.model_copy(update={"error": reason})
+    write_json(context.root / "main_agent_state.json", state.model_dump(mode="json"))
+    if context.config.execution_mode == "graph":
+        payload = read_json(context.root / "execution_snapshot.json")
+        if isinstance(payload, dict):
+            graph_result = ExecutionRunResult(
+                snapshot=ExecutionRunSnapshot.model_validate(payload)
+            )
+        else:
+            graph_result = ExecutionRunResult(
+                snapshot=ExecutionRunSnapshot(
+                    run_id=context.run_id,
+                    thread_id=context.thread_id,
+                    request_id=context.request.request_id,
+                    graph=context.graph or ExecutionGraph(
+                        domain_id=context.decision.domain_id or "unknown",
+                        objective=context.request.user_query,
+                    ),
+                    status=status,
+                )
+            )
+        result: Any = graph_result
+        pending_approval_ids = list(graph_result.snapshot.pending_approval_ids)
+    else:
+        result = MainAgentRunResult(
+            run_id=context.run_id,
+            thread_id=context.thread_id,
+            request_id=context.request.request_id,
+            status=status,
+            mode=context.config.execution_mode,
+            intent=context.decision.intent,
+            message=reason,
+            continuation={"source": "turn_control", "reason": reason},
+            state=state,
+        )
+        pending_approval_ids = list(state.pending_approval_ids)
+    _emit_special_event(context, f"{status}_task_controlled", reason=reason)
+    return TaskOutcome(
+        execution_mode=context.config.execution_mode,
+        status=status,
+        result=result,
+        pending_approval_ids=pending_approval_ids,
+        error=reason if status in {"cancelled", "timed_out", "failed"} else None,
     )
 
 
@@ -1773,6 +2201,11 @@ class TaskFactory:
         if requested is not None:
             if requested.execution_mode != execution_mode:
                 requested = requested.model_copy(update={"execution_mode": execution_mode})
+            if execution_mode == "graph" and requested.task_type != "regular":
+                # Graph is the RegularTask executor mounted inside the root
+                # Turn. Review/compact continuations are selected from the
+                # persisted TaskState, not encoded as a second Graph task.
+                requested = requested.model_copy(update={"task_type": "regular"})
             if execution_mode == "graph" and requested.graph_config is None:
                 requested = requested.model_copy(
                     update={"graph_config": GraphExecutorConfig(graph_id=decision.domain_id)}
@@ -1825,7 +2258,7 @@ class TaskFactory:
         review_executor: ReviewExecutor,
         compact_executor: CompactExecutor,
         active_task_type: TurnTaskType | None = None,
-    ) -> RegularTask:
+    ) -> TurnTask:
         task_type = active_task_type or config.task_type
         if task_type == "review":
             return ReviewTask(regular.executor, review_executor)
@@ -1841,7 +2274,7 @@ class TaskFactory:
         regular: RegularTask,
         review_executor: ReviewExecutor | None = None,
         compact_executor: CompactExecutor | None = None,
-    ) -> RegularTask:
+    ) -> TurnTask:
         if str(getattr(task_snapshot, "execution_mode", turn.execution_mode)) != turn.execution_mode:
             raise ValueError("TaskSnapshot execution mode does not match Turn")
         return TaskFactory.build(
@@ -1862,6 +2295,7 @@ class TurnRunner:
         run_store: RunStore,
         main_agent: Any,
         graph_adapter: GraphRunnerAdapter,
+        core_executor: TurnStepExecutor | None = None,
         hook_runtime: HookRuntime | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
@@ -1878,7 +2312,7 @@ class TurnRunner:
         self.role_registry = RoleRegistry()
         self.regular_task = RegularTask(
             RegularExecutor(
-                core_executor=CoreLoopExecutor(main_agent),
+                core_executor=core_executor or CoreLoopExecutor(main_agent),
                 graph_executor=GraphExecutor(
                     graph_adapter,
                     child_projector=self._project_graph_children,
@@ -1900,14 +2334,30 @@ class TurnRunner:
         for child in children:
             if not any(item.role_id == child.role_id for item in self.role_registry.list()):
                 self.role_registry.register(
-                    RoleContract(
-                        role_id=child.role_id,
-                        role_version="graph",
-                        display_name=child.role_id,
-                        objective=child.objective or child.role_id,
-                        source="pack",
+                    RoleContract.model_validate(
+                        child.role_contract
+                        or {
+                            "role_id": child.role_id,
+                            "role_version": "graph",
+                            "display_name": child.role_id,
+                            "objective": child.objective or child.role_id,
+                            "source": "pack",
+                        }
                     )
                 )
+            self._project_child_artifacts(
+                parent_root=context.root,
+                parent_turn=context.turn,
+                child=child,
+                artifact_ids=list(child.artifact_ids),
+                parent_request=context.request,
+            )
+        self._normalize_root_artifact_scope(
+            parent_root=context.root,
+            parent_turn=context.turn,
+            parent_request=context.request,
+            artifact_ids=[*list(result.artifact_ids), *list(result.final_artifact_ids)],
+        )
         context.turn = context.turn.model_copy(
             update={"child_turns": children, "updated_at": _utc_now()}
         )
@@ -1919,6 +2369,260 @@ class TurnRunner:
             node_ids=[item.parent_node_id for item in children if item.parent_node_id],
         )
         return [item.child_turn_id for item in children]
+
+    def _project_child_artifacts(
+        self,
+        *,
+        parent_root: Path,
+        parent_turn: TurnSnapshot,
+        child: ChildTurnSnapshot,
+        artifact_ids: list[str],
+        parent_request: RequestEnvelope,
+    ) -> None:
+        """Consume ChildTurn artifacts into the parent Board at a safe point.
+
+        A child Core Turn owns a namespaced Board.  Returning only its IDs is
+        insufficient: the parent response validator cannot prove ownership or
+        lineage from the child filesystem.  Projection keeps the stable ID,
+        rewrites identity scope to the parent request, and records the child
+        provenance in metadata.
+        """
+        requested_ids = {str(item).strip() for item in artifact_ids if str(item).strip()}
+        if not requested_ids:
+            return
+        parent_board = ArtifactBoard(parent_root / "artifact_board.jsonl")
+        parent_board.bind_thread(parent_turn.thread_id)
+        existing = {
+            item.artifact_id: item
+            for item in parent_board.list_artifacts(
+                thread_id=None,
+                run_id=parent_turn.run_id,
+                include_invalidated=True,
+            )
+        }
+        child_root = ChildTurnRuntime(parent_root).storage_root(child.child_turn_id)
+        child_board = ArtifactBoard(child_root / "artifact_board.jsonl")
+        child_records = {
+            item.artifact_id: item
+            for item in child_board.list_artifacts(
+                thread_id=None,
+                run_id=parent_turn.run_id,
+                include_invalidated=True,
+            )
+        }
+
+        ordered: list[str] = []
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(artifact_id: str) -> None:
+            if artifact_id in visited:
+                return
+            if artifact_id in visiting:
+                raise ValueError(f"cyclic ChildTurn artifact lineage: {artifact_id}")
+            visiting.add(artifact_id)
+            record = child_records.get(artifact_id)
+            if record is None:
+                if artifact_id not in existing:
+                    raise ValueError(
+                        f"ChildTurn artifact is missing from both child and parent Board: "
+                        f"{child.child_turn_id}->{artifact_id}"
+                    )
+            else:
+                for parent_id in record.parent_artifact_ids:
+                    if parent_id in child_records:
+                        visit(parent_id)
+                    elif parent_id not in existing:
+                        raise ValueError(
+                            f"ChildTurn artifact lineage is not available in the parent Run: "
+                            f"{artifact_id}->{parent_id}"
+                        )
+            visiting.remove(artifact_id)
+            visited.add(artifact_id)
+            ordered.append(artifact_id)
+
+        for artifact_id in sorted(requested_ids):
+            visit(artifact_id)
+
+        projections: list[ArtifactRecord] = []
+        for artifact_id in ordered:
+            source = child_records.get(artifact_id)
+            if source is None:
+                current = existing.get(artifact_id)
+                if current is None:
+                    continue
+                if (
+                    current.thread_id != parent_turn.thread_id
+                    and current.run_id == parent_turn.run_id
+                    and current.request_id == parent_turn.request_id
+                ):
+                    projections.append(
+                        current.model_copy(
+                            update={
+                                "thread_id": parent_turn.thread_id,
+                                "user_id": parent_request.user_id,
+                                "tenant_id": parent_request.tenant_id,
+                                "metadata": {
+                                    **dict(current.metadata),
+                                    "projected_from_graph_child": child.child_turn_id,
+                                    "source_thread_id": current.thread_id,
+                                },
+                            }
+                        )
+                    )
+                else:
+                    self._validate_parent_artifact_scope(
+                        current, parent_turn=parent_turn, parent_request=parent_request
+                    )
+                continue
+            if source.run_id != parent_turn.run_id:
+                raise ValueError(f"ChildTurn artifact run scope mismatch: {artifact_id}")
+            if source.thread_id != child.child_thread_id:
+                raise ValueError(f"ChildTurn artifact thread scope mismatch: {artifact_id}")
+            if artifact_id in existing:
+                current = existing[artifact_id]
+                if (
+                    current.thread_id != parent_turn.thread_id
+                    and current.run_id == parent_turn.run_id
+                    and current.request_id == parent_turn.request_id
+                ):
+                    projections.append(
+                        current.model_copy(
+                            update={
+                                "thread_id": parent_turn.thread_id,
+                                "user_id": parent_request.user_id,
+                                "tenant_id": parent_request.tenant_id,
+                                "metadata": {
+                                    **dict(current.metadata),
+                                    "projected_from_graph_child": child.child_turn_id,
+                                    "source_thread_id": current.thread_id,
+                                },
+                            }
+                        )
+                    )
+                else:
+                    self._validate_parent_artifact_scope(
+                        current, parent_turn=parent_turn, parent_request=parent_request
+                    )
+                continue
+            source_refs: list[dict[str, Any]] = []
+            for source_ref in source.source_refs:
+                ref = dict(source_ref)
+                source_type = str(ref.get("source_type") or ref.get("type") or "").strip()
+                source_id = str(ref.get("source_id") or ref.get("id") or "").strip()
+                if source_type == "request":
+                    if source_id not in {"", source.request_id, parent_turn.request_id}:
+                        raise ValueError(f"ChildTurn artifact request lineage mismatch: {artifact_id}")
+                    ref["source_id"] = parent_turn.request_id
+                    ref["id"] = parent_turn.request_id
+                elif source_type == "artifact" and source_id not in child_records and source_id not in existing:
+                    raise ValueError(
+                        f"ChildTurn artifact source is outside the parent Run: {artifact_id}->{source_id}"
+                    )
+                source_refs.append(ref)
+            projections.append(
+                source.model_copy(
+                    update={
+                        "thread_id": parent_turn.thread_id,
+                        "request_id": parent_turn.request_id,
+                        "user_id": parent_request.user_id,
+                        "tenant_id": parent_request.tenant_id,
+                        "source_refs": source_refs,
+                        "metadata": {
+                            **dict(source.metadata),
+                            "projected_from_child_turn": child.child_turn_id,
+                            "child_thread_id": child.child_thread_id,
+                            "source_artifact_id": source.artifact_id,
+                        },
+                    }
+                )
+            )
+        if projections:
+            parent_board.add_many(projections)
+        for artifact_id in requested_ids:
+            projected = parent_board.get(artifact_id)
+            if projected is None:
+                raise ValueError(f"ChildTurn artifact projection failed: {artifact_id}")
+            self._validate_parent_artifact_scope(
+                projected, parent_turn=parent_turn, parent_request=parent_request
+            )
+
+    def _normalize_root_artifact_scope(
+        self,
+        *,
+        parent_root: Path,
+        parent_turn: TurnSnapshot,
+        parent_request: RequestEnvelope,
+        artifact_ids: list[str],
+    ) -> None:
+        """Project Graph-owned records onto the canonical Root thread."""
+        board = ArtifactBoard(parent_root / "artifact_board.jsonl")
+        board.bind_thread(parent_turn.thread_id)
+        records = {
+            item.artifact_id: item
+            for item in board.list_artifacts(
+                thread_id=None,
+                run_id=parent_turn.run_id,
+                include_invalidated=True,
+            )
+        }
+        ordered: list[str] = []
+        visited: set[str] = set()
+
+        def visit(artifact_id: str) -> None:
+            if artifact_id in visited:
+                return
+            record = records.get(artifact_id)
+            if record is None:
+                return
+            visited.add(artifact_id)
+            for parent_id in record.parent_artifact_ids:
+                visit(parent_id)
+            ordered.append(artifact_id)
+
+        for artifact_id in artifact_ids:
+            visit(str(artifact_id).strip())
+        projections: list[ArtifactRecord] = []
+        for artifact_id in ordered:
+            record = records[artifact_id]
+            if record.run_id != parent_turn.run_id or record.request_id != parent_turn.request_id:
+                continue
+            if record.thread_id == parent_turn.thread_id:
+                continue
+            projections.append(
+                record.model_copy(
+                    update={
+                        "thread_id": parent_turn.thread_id,
+                        "user_id": parent_request.user_id,
+                        "tenant_id": parent_request.tenant_id,
+                        "metadata": {
+                            **dict(record.metadata),
+                            "projected_to_root_thread": parent_turn.thread_id,
+                            "source_thread_id": record.thread_id,
+                        },
+                    }
+                )
+            )
+        if projections:
+            board.add_many(projections)
+
+    @staticmethod
+    def _validate_parent_artifact_scope(
+        artifact: ArtifactRecord,
+        *,
+        parent_turn: TurnSnapshot,
+        parent_request: RequestEnvelope,
+    ) -> None:
+        if artifact.run_id != parent_turn.run_id:
+            raise ValueError(f"artifact does not belong to the parent Run: {artifact.artifact_id}")
+        if artifact.request_id != parent_turn.request_id:
+            raise ValueError(f"artifact request scope does not match the parent Turn: {artifact.artifact_id}")
+        if artifact.thread_id != parent_turn.thread_id:
+            raise ValueError(f"artifact thread scope does not match the parent Turn: {artifact.artifact_id}")
+        if artifact.user_id not in (None, "") and artifact.user_id != parent_request.user_id:
+            raise ValueError(f"artifact user scope does not match the parent Turn: {artifact.artifact_id}")
+        if artifact.tenant_id not in (None, "") and artifact.tenant_id != parent_request.tenant_id:
+            raise ValueError(f"artifact tenant scope does not match the parent Turn: {artifact.artifact_id}")
 
     def register_hook(self, event: str, callback: Callable[[Any], Any], **kwargs: Any) -> None:
         """Register a process-level hook template cloned into each Turn."""
@@ -1971,6 +2675,7 @@ class TurnRunner:
         turn_config: TurnConfig | None = None,
         event_callback: Callable[[dict[str, Any]], None] | None = None,
         resume: bool = False,
+        recover: bool = False,
         graph: Any | None = None,
         seed_artifacts: list[ArtifactDraft] | None = None,
         rerun_from: str | None = None,
@@ -2002,7 +2707,17 @@ class TurnRunner:
             thread_id=thread_id,
             config=config,
         )
+        turn = self._ensure_turn_deadline(turn, config)
         config = turn.config
+        recovery_continuation = False
+        if recover and turn.status in {"timed_out", "failed", "cancelled"}:
+            turn = self._create_recovery_continuation(
+                turn,
+                request=request,
+                config=config,
+            )
+            recovery_continuation = True
+            resume = True
         is_graph_rerun = execution_mode == "graph" and bool(rerun_from)
         if (
             turn.status in RUN_TERMINAL_STATUSES
@@ -2040,8 +2755,15 @@ class TurnRunner:
             graph=graph,
             seed_artifacts=list(seed_artifacts or []),
             rerun_from=rerun_from,
+            recovery_continuation=recovery_continuation,
+            worker_restart_recovery=recovered_running,
         )
         context.event_callback = self._event_observer(context, event_callback)
+        context.followup_task_handler = lambda request: self._followup_task_internal(
+            context.run_id,
+            request,
+        )
+        context.deadline_at = self._monotonic_deadline(turn.deadline_at)
         context.hook_runtime = self.hook_runtime.clone(
             policy=(config.hook_config.policy if config.hook_config else None),
             emitter=lambda event_type, payload: self._emit(
@@ -2073,6 +2795,7 @@ class TurnRunner:
                 },
             ),
         )
+        self._prepare_resume_control(context)
         persisted_task = context.follow_up_runtime.state
         compact_continuation = (
             resume
@@ -2161,7 +2884,6 @@ class TurnRunner:
             )
         )
         self._running_runs.add(run_id)
-        started_at = monotonic()
         try:
             if created:
                 context.hook_runtime.run_lifecycle(
@@ -2216,13 +2938,12 @@ class TurnRunner:
                     compact_executor=self.compact_executor,
                     active_task_type=active_task_type,
                 )
-                outcome = task.start_or_resume(context)
-            timeout = config.timeout_seconds or self.timeout_seconds
-            if timeout is not None and monotonic() - started_at > timeout:
+                outcome = task.resume(context) if resume else task.start(context)
+            if context.deadline_at is not None and monotonic() >= context.deadline_at:
                 outcome = outcome.model_copy(
                     update={
                         "status": "timed_out",
-                        "error": f"Turn exceeded timeout of {timeout} seconds",
+                        "error": "Turn exceeded its configured timeout.",
                     }
                 )
             self._finish_turn(context, outcome)
@@ -2298,6 +3019,7 @@ class TurnRunner:
         response_factory: Callable[[Any], ResponseEnvelope],
         event_callback: Callable[[dict[str, Any]], None] | None = None,
         resume: bool = False,
+        recover: bool = False,
     ) -> ResponseEnvelope:
         if not resume:
             persisted = read_json(self.run_store.load_run_paths(run_id).root / "response.json")
@@ -2316,6 +3038,7 @@ class TurnRunner:
             turn_config=turn_config,
             event_callback=event_callback,
             resume=resume,
+            recover=recover,
         )
         return self.finalize(outcome=outcome, response_factory=response_factory)
 
@@ -2344,6 +3067,7 @@ class TurnRunner:
             response_factory=response_factory,
             event_callback=event_callback,
             resume=operation == "resume",
+            recover=operation == "resume",
         )
 
     def resume(
@@ -2398,6 +3122,7 @@ class TurnRunner:
             response_factory=response_factory,
             event_callback=event_callback,
             resume=True,
+            recover=True,
         )
 
     def finalize(
@@ -2411,12 +3136,14 @@ class TurnRunner:
         turn_id = None
         thread_id = None
         task_type = None
+        payload: dict[str, Any] | None = None
         if response.run_id:
             payload = read_json(self.run_store.load_run_paths(response.run_id).turn_state)
             if isinstance(payload, dict):
                 turn_id = str(payload.get("turn_id") or "") or None
                 thread_id = str(payload.get("thread_id") or "") or None
                 task_type = str(payload.get("task_type") or "") or None
+        self._validate_response_artifacts(response=response, outcome=outcome, turn_payload=payload)
         persisted_status = str((payload or {}).get("status") or "") if isinstance(payload, dict) else ""
         child_turn_ids = [
             str(item.get("child_turn_id"))
@@ -2454,6 +3181,104 @@ class TurnRunner:
             )
         self._persist_response(response)
         return response
+
+    def _validate_response_artifacts(
+        self,
+        *,
+        response: ResponseEnvelope,
+        outcome: TaskOutcome,
+        turn_payload: dict[str, Any] | None,
+    ) -> None:
+        """Validate response references at the only root response boundary."""
+        run_id = str(response.run_id or "").strip()
+        if not run_id:
+            return
+        if not isinstance(turn_payload, dict):
+            raise ValueError(f"Turn checkpoint is missing before response finalization: {run_id}")
+        turn = TurnSnapshot.model_validate(turn_payload)
+        if response.request_id != turn.request_id:
+            raise ValueError("response request_id does not match the Root Turn")
+        if response.thread_id and response.thread_id != turn.thread_id:
+            raise ValueError("response thread_id does not match the Root Turn")
+        root = self.run_store.load_run_paths(run_id).root
+        request_payload = read_json(root / "request.json") or read_json(root / "agent_os_request.json") or {}
+        if not isinstance(request_payload, dict):
+            request_payload = {}
+        request = request_payload.get("request") if isinstance(request_payload.get("request"), dict) else request_payload
+        expected_user_id = request.get("user_id")
+        expected_tenant_id = request.get("tenant_id")
+        board = ArtifactBoard(root / "artifact_board.jsonl")
+        records = board.list_artifacts(
+            thread_id=None,
+            run_id=run_id,
+            include_invalidated=True,
+        )
+        by_id = {record.artifact_id: record for record in records}
+
+        references: set[str] = set()
+
+        def collect(payload: Any) -> None:
+            if not isinstance(payload, dict):
+                return
+            for key in ("artifact_ids", "final_artifact_ids", "source_artifact_ids"):
+                values = payload.get(key)
+                if isinstance(values, str):
+                    references.add(values)
+                elif isinstance(values, list):
+                    references.update(
+                        str(value).strip()
+                        for value in values
+                        if str(value).strip()
+                    )
+
+        collect(response.model_dump(mode="json"))
+        collect(outcome.model_dump(mode="json"))
+        collect(response.result)
+        for child in turn.child_turns:
+            references.update(
+                str(artifact_id).strip()
+                for artifact_id in child.artifact_ids
+                if str(artifact_id).strip()
+            )
+        for item in response.artifacts:
+            if isinstance(item, dict) and item.get("artifact_id"):
+                references.add(str(item["artifact_id"]))
+
+        for artifact_id in sorted(references):
+            record = by_id.get(artifact_id)
+            if record is None:
+                raise ValueError(
+                    f"response references an artifact outside the current Run: {artifact_id}"
+                )
+            if record.run_id != run_id or record.request_id != turn.request_id:
+                raise ValueError(f"artifact does not belong to the current Root Turn: {artifact_id}")
+            if record.thread_id != turn.thread_id:
+                raise ValueError(f"artifact does not belong to the current Root thread: {artifact_id}")
+            if record.user_id not in (None, "") and record.user_id != expected_user_id:
+                raise ValueError(f"artifact user scope does not match the request: {artifact_id}")
+            if record.tenant_id not in (None, "") and record.tenant_id != expected_tenant_id:
+                raise ValueError(f"artifact tenant scope does not match the request: {artifact_id}")
+            for parent_id in record.parent_artifact_ids:
+                parent = by_id.get(parent_id)
+                if parent is None or parent.run_id != run_id or parent.thread_id != turn.thread_id:
+                    raise ValueError(
+                        f"artifact lineage escapes the current Root Turn: {artifact_id}->{parent_id}"
+                    )
+            for source_ref in record.source_refs:
+                source_type = str(
+                    source_ref.get("source_type") or source_ref.get("type") or ""
+                ).strip()
+                source_id = str(
+                    source_ref.get("source_id") or source_ref.get("id") or ""
+                ).strip()
+                if source_type == "artifact" and source_id not in by_id:
+                    raise ValueError(
+                        f"artifact source reference is missing from the current Run: {artifact_id}->{source_id}"
+                    )
+                if source_type == "request" and source_id and source_id != turn.request_id:
+                    raise ValueError(
+                        f"artifact source request does not match the Root Turn: {artifact_id}"
+                    )
 
     def _load_or_create_turn(
         self,
@@ -2516,19 +3341,136 @@ class TurnRunner:
         self._persist_turn(turn)
         return turn, True
 
+    def _create_recovery_continuation(
+        self,
+        turn: TurnSnapshot,
+        *,
+        request: RequestEnvelope,
+        config: TurnConfig,
+    ) -> TurnSnapshot:
+        """Create a new logical Turn under the same Run for terminal recovery.
+
+        Terminal Turns are immutable from a lifecycle perspective.  The
+        latest ``turn.json`` becomes the active continuation, while the
+        original terminal snapshot remains in ``turn_history.jsonl`` and in
+        the canonical event stream.  This preserves one Run boundary without
+        pretending that ``timed_out -> running`` was a legal transition.
+        """
+        if turn.status not in {"timed_out", "failed", "cancelled"}:
+            raise ValueError(f"Turn is not recoverable: {turn.status}")
+        root = self.run_store.load_run_paths(turn.run_id).root
+        operation_id = f"recovery:{turn.turn_id}"
+        history = read_jsonl(root / "turn_history.jsonl")
+        prior = next(
+            (
+                item
+                for item in history
+                if isinstance(item, dict) and item.get("operation_id") == operation_id
+            ),
+            None,
+        )
+        continuation_turn_id = str(
+            (prior or {}).get("continuation_turn_id") or generate_ulid()
+        )
+        continuation = {
+            "source": "recovery",
+            "operation_id": operation_id,
+            "parent_turn_id": turn.turn_id,
+            "parent_status": turn.status,
+            "continuation_turn_id": continuation_turn_id,
+        }
+        if prior is None:
+            append_jsonl(
+                root / "turn_history.jsonl",
+                {
+                    "kind": "terminal_turn_snapshot",
+                    "operation_id": operation_id,
+                    "continuation_turn_id": continuation_turn_id,
+                    "turn": turn.model_dump(mode="json"),
+                    "created_at": _utc_now().isoformat(),
+                },
+            )
+        timeout = config.timeout_seconds or self.timeout_seconds
+        deadline_at = (
+            _utc_now() + timedelta(seconds=float(timeout)) if timeout is not None else None
+        )
+        new_turn = TurnSnapshot(
+            turn_id=continuation_turn_id,
+            run_id=turn.run_id,
+            thread_id=turn.thread_id,
+            request_id=request.request_id,
+            parent_turn_id=turn.turn_id,
+            relation="continuation",
+            task_type=turn.task_type,
+            execution_mode=turn.execution_mode,
+            status="paused",
+            config=config,
+            config_hash=turn.config_hash or self._config_hash(config),
+            task_selection=turn.task_selection,
+            child_turns=list(turn.child_turns),
+            usage=dict(turn.usage),
+            sequence=turn.sequence,
+            task_state_ref=turn.task_state_ref,
+            graph_state_ref=turn.graph_state_ref,
+            error=None,
+            deadline_at=deadline_at,
+        )
+        self._persist_turn(new_turn)
+        task_payload = read_json(root / "task_state.json") or read_json(root / "task.json")
+        if isinstance(task_payload, dict):
+            write_json(
+                root / "task_state.json",
+                {**task_payload, "continuation": continuation, "updated_at": _utc_now().isoformat()},
+            )
+            write_json(
+                root / "task.json",
+                {**task_payload, "continuation": continuation, "updated_at": _utc_now().isoformat()},
+            )
+        new_turn = self._append_snapshot_event(
+            new_turn,
+            "turn_recovery_continuation_created",
+            operation_id=operation_id,
+            parent_turn_id=turn.turn_id,
+            parent_status=turn.status,
+            continuation_turn_id=continuation_turn_id,
+        )
+        return new_turn
+
     def _finish_turn(self, context: TurnContext, outcome: TaskOutcome) -> None:
         target = self._normalize_status(outcome.status)
         context.turn = context.turn.model_copy(
             update={
                 "status": self._transition_status(context.turn.status, target),
                 "graph_state_ref": outcome.graph_state_ref,
-                "task_state_ref": str(self.run_store.load_run_paths(context.turn.run_id).root / "task_state.json"),
+                "task_state_ref": str(context.root / "task_state.json"),
                 "task_selection": context.turn.task_selection,
                 "updated_at": _utc_now(),
                 "error": outcome.error,
             }
         )
         self._persist_turn(context.turn)
+
+    def _ensure_turn_deadline(self, turn: TurnSnapshot, config: TurnConfig) -> TurnSnapshot:
+        if turn.deadline_at is not None:
+            return turn
+        timeout = config.timeout_seconds or self.timeout_seconds
+        if timeout is None:
+            return turn
+        updated = turn.model_copy(
+            update={
+                "deadline_at": _utc_now() + timedelta(seconds=float(timeout)),
+                "updated_at": _utc_now(),
+            }
+        )
+        self._persist_turn(updated)
+        return updated
+
+    @staticmethod
+    def _monotonic_deadline(deadline_at: datetime | None) -> float | None:
+        if deadline_at is None:
+            return None
+        remaining = (deadline_at - _utc_now()).total_seconds()
+        return monotonic() + max(0.0, remaining)
 
     @staticmethod
     def _transition_status(current: str, target: str) -> str:
@@ -2567,6 +3509,13 @@ class TurnRunner:
         payload = turn.model_dump(mode="json")
         write_json(root / "turn_state.json", payload)
         write_json(root / "turn.json", payload)
+
+    @contextmanager
+    def _mailbox_lease(self, run_id: str):
+        """Serialize mailbox writers without blocking the active Turn worker."""
+        root = self.run_store.load_run_paths(run_id).root
+        with mailbox_lease(root, run_id):
+            yield
 
     @contextmanager
     def _execution_lease(self, run_id: str):
@@ -2736,6 +3685,41 @@ class TurnRunner:
             root = self.run_store.load_run_paths(response.run_id).root
             write_json(root / "response.json", response.model_dump(mode="json"))
 
+    def _prepare_resume_control(self, context: TurnContext) -> None:
+        """Consume a prior pause request while preserving a pending cancel.
+
+        A pause request is a safe-point instruction. Once a caller explicitly
+        resumes a paused Turn, that instruction has been consumed. A cancel
+        request remains authoritative until a Task reaches the cancelled
+        state, including when it was issued while the Turn was paused.
+        """
+        if not context.resume:
+            return
+        control_path = context.root / "execution_control.json"
+        control = read_json(control_path) or {}
+        if not isinstance(control, dict):
+            return
+        if not control.get("pause_requested") or control.get("cancel_requested"):
+            return
+        write_json(
+            control_path,
+            {
+                **control,
+                "pause_requested": False,
+                "status": "consumed",
+                "consumed_action": "pause",
+                "consumed_at": _utc_now().isoformat(),
+                "updated_at": _utc_now().isoformat(),
+            },
+        )
+        self._emit(
+            context,
+            "turn_control_consumed",
+            actor="turn_runner.resume",
+            action="pause",
+            status="consumed",
+        )
+
     def pause(self, run_id: str, *, reason: str = "pause requested") -> TurnSnapshot:
         return self._request_control(run_id, "pause", reason)
 
@@ -2751,16 +3735,51 @@ class TurnRunner:
         operation_id: str | None = None,
         delivery_phase: str = "current_turn",
     ):
+        """Queue external input with the same mailbox audit as model input."""
+        return self._enqueue_follow_up(
+            run_id,
+            text=text,
+            source=source,
+            operation_id=operation_id,
+            delivery_phase=delivery_phase,
+        )
+
+    def _enqueue_follow_up(
+        self,
+        run_id: str,
+        *,
+        text: str,
+        source: str,
+        operation_id: str | None,
+        delivery_phase: str,
+    ):
+        """Write one mailbox item through FollowUpRuntime's shared lease."""
         root = self.run_store.load_run_paths(run_id).root
         payload = read_json(root / "turn_state.json") or read_json(root / "turn.json")
         if not isinstance(payload, dict):
             raise ValueError(f"Turn state is missing: {run_id}")
         turn = TurnSnapshot.model_validate(payload)
+        event_turn = turn
+
+        def emit_followup(event_type: str, event_payload: dict[str, Any]) -> None:
+            nonlocal event_turn
+            event_turn = self._append_snapshot_event(
+                event_turn,
+                event_type,
+                actor="turn_runner.api",
+                **{
+                    key: value
+                    for key, value in event_payload.items()
+                    if key not in {"run_id", "thread_id", "turn_id"}
+                },
+            )
+
         runtime = FollowUpRuntime(
             root=root,
             run_id=run_id,
             turn_id=turn.turn_id,
             config=turn.config.follow_up_config,
+            emitter=emit_followup,
         )
         return runtime.enqueue(
             source=source,
@@ -2826,6 +3845,61 @@ class TurnRunner:
         run_id: str,
         request: FollowupTaskRequest,
     ) -> FollowupTaskResult:
+        """Submit a ChildTurn follow-up through the governed Core Tool path."""
+        with self._lock_for_run(run_id), self._execution_lease(run_id):
+            root = self.run_store.load_run_paths(run_id).root
+            payload = read_json(root / "turn_state.json") or read_json(root / "turn.json")
+            if not isinstance(payload, dict):
+                raise ValueError(f"Turn state is missing: {run_id}")
+            turn = TurnSnapshot.model_validate(payload)
+            existing_operation = any(
+                item.operation_id == request.operation_id
+                for item in FollowUpRuntime(
+                    root=root,
+                    run_id=run_id,
+                    turn_id=turn.turn_id,
+                    config=turn.config.follow_up_config,
+                ).state.pending_inputs
+            )
+            registry = getattr(self.main_agent, "tools", None)
+            if registry is None or not callable(getattr(registry, "invoke", None)):
+                registry = build_core_tool_registry()
+            tool_result = registry.invoke(
+                tool_name="core.followup.task",
+                arguments=request.model_dump(mode="json"),
+                context=CoreToolContext(
+                    run_id=run_id,
+                    thread_id=turn.thread_id,
+                    request_id=turn.request_id,
+                    turn_id=turn.turn_id,
+                    run_root=root,
+                    actor="system",
+                    allowed_tools=frozenset({"core.followup.task"}),
+                    allowed_permissions=frozenset({"turn:followup"}),
+                    followup_task_handler=lambda item: self._followup_task_internal(run_id, item),
+                    idempotency_key=(
+                        f"{run_id}:followup:{request.operation_id}:{generate_ulid()}"
+                    ),
+                ),
+            )
+            if tool_result.status != "completed" or not isinstance(tool_result.output, dict):
+                return FollowupTaskResult(
+                    target_child_turn_id=request.target_child_turn_id,
+                    accepted=False,
+                    delivery="rejected",
+                    reason=tool_result.error or "follow-up Tool invocation was rejected",
+                )
+            result = FollowupTaskResult.model_validate(tool_result.output)
+            if existing_operation and not result.duplicate:
+                result = result.model_copy(update={"duplicate": True})
+            return result
+
+    def _followup_task_internal(
+        self,
+        run_id: str,
+        request: FollowupTaskRequest,
+    ) -> FollowupTaskResult:
+        """Run Follow-up logic while the enclosing Turn already owns its lease."""
         root = self.run_store.load_run_paths(run_id).root
         payload = read_json(root / "turn_state.json") or read_json(root / "turn.json")
         if not isinstance(payload, dict):
@@ -2900,6 +3974,7 @@ class TurnRunner:
                 "cancelled",
                 "timed_out",
                 "paused",
+                "waiting_approval",
             }:
                 continuation = ChildTurnRuntime(root).spawn(
                     parent_turn_id=turn.turn_id,
@@ -2908,6 +3983,7 @@ class TurnRunner:
                     role_id=target_child.role_id,
                     objective=request.message,
                     relation="continuation",
+                    role_contract=target_child.role_contract,
                 )
                 runtime.retarget_operation(request.operation_id, continuation.child_turn_id)
                 turn = turn.model_copy(
@@ -2941,6 +4017,7 @@ class TurnRunner:
                 child_turn_id=child_turn_id,
                 message=request.message,
             )
+        runtime.record_operation_result(request.operation_id, result)
         emit_followup(
             "followup_task_result",
             {
@@ -2981,7 +4058,8 @@ class TurnRunner:
         child = next(
             item for item in parent_turn.child_turns if item.child_turn_id == child_turn_id
         )
-        child_root = parent_root / "child_turns" / child.child_turn_id
+        role_contract = self._resolve_child_role_contract(child)
+        child_root = ChildTurnRuntime(parent_root).storage_root(child.child_turn_id)
         child_root.mkdir(parents=True, exist_ok=True)
         child_request = RequestEnvelope(
             thread_id=child.child_thread_id,
@@ -3023,6 +4101,12 @@ class TurnRunner:
             config=child_config,
             config_hash=self._config_hash(child_config),
             task_selection=child_config.selection,
+            deadline_at=parent_turn.deadline_at,
+        )
+        child_turn = child_turn.model_copy(
+            update={
+                "task_selection": child_config.selection,
+            }
         )
         write_json(child_root / "request.json", child_request.model_dump(mode="json"))
         write_json(child_root / "turn_state.json", child_turn.model_dump(mode="json"))
@@ -3063,6 +4147,11 @@ class TurnRunner:
             main_agent=self.main_agent,
             event_callback=observe_child,
             storage_root=child_root,
+            parent_turn_id=parent_turn.turn_id,
+            child_role_id=child.role_id,
+            role_contract=role_contract,
+            approval_store=HumanApprovalStore(parent_root / "approvals.jsonl"),
+            deadline_at=self._monotonic_deadline(parent_turn.deadline_at),
         )
         child_context.hook_runtime = self.hook_runtime.clone(
             policy=child_config.hook_config.policy if child_config.hook_config else None,
@@ -3104,17 +4193,20 @@ class TurnRunner:
         )
         previous_event_turn_id = self.main_agent._event_turn_ids.get(parent_turn.run_id)
         self.main_agent._event_turn_ids[parent_turn.run_id] = child_turn.turn_id
+        outcome_artifact_ids: list[str] = []
         try:
             executor = CoreLoopExecutor(self.main_agent)
             outcome = executor.execute(child_context)
             while outcome.status == "running":
                 child_context.resume = True
                 outcome = executor.execute(child_context)
+            outcome_artifact_ids = list(outcome.artifact_ids)
             child_status = outcome.status
             child_turn = child_turn.model_copy(
                 update={
                     "status": child_status,
                     "artifact_ids": list(outcome.artifact_ids),
+                    "usage": dict(outcome.usage),
                     "continuation": outcome.continuation,
                     "updated_at": _utc_now(),
                 }
@@ -3160,15 +4252,32 @@ class TurnRunner:
             if isinstance(persisted_child_main_state, dict)
             else []
         )
+        child_artifact_ids = list(
+            dict.fromkeys([*child_artifact_ids, *outcome_artifact_ids])
+        )
         child_continuation = (
             (persisted_child_state or {}).get("continuation")
             if isinstance(persisted_child_state, dict)
             else None
         )
+        parent_request_payload = read_json(parent_root / "request.json") or {}
+        if isinstance(parent_request_payload, dict) and isinstance(
+            parent_request_payload.get("request"), dict
+        ):
+            parent_request_payload = parent_request_payload["request"]
+        parent_request = RequestEnvelope.model_validate(parent_request_payload)
+        self._project_child_artifacts(
+            parent_root=parent_root,
+            parent_turn=event_turn,
+            child=child,
+            artifact_ids=child_artifact_ids,
+            parent_request=parent_request,
+        )
         ChildTurnRuntime(parent_root).update(
             child_turn.turn_id,
             status=child_turn.status,
             artifact_ids=child_artifact_ids,
+            usage=dict(child_turn.usage),
             continuation=child_continuation,
             sequence=child_turn.sequence,
             last_event_id=child_turn.last_event_id,
@@ -3180,6 +4289,7 @@ class TurnRunner:
             update={
                 "status": child_turn.status,
                 "artifact_ids": child_artifact_ids,
+                "usage": dict(child_turn.usage),
                 "continuation": child_continuation,
                 "sequence": child_turn.sequence,
                 "last_event_id": child_turn.last_event_id,
@@ -3196,6 +4306,29 @@ class TurnRunner:
         self._persist_turn(event_turn)
         return event_turn
 
+    def _resolve_child_role_contract(self, child: ChildTurnSnapshot) -> RoleContract:
+        """Resolve the immutable contract used by a ChildTurn Core executor."""
+        if child.role_contract:
+            try:
+                return RoleContract.model_validate(child.role_contract)
+            except Exception:
+                # A legacy projection may contain an incomplete contract;
+                # fall through to the current registry or a deny-by-default
+                # contract rather than widening the child's authority.
+                pass
+        try:
+            return self.role_registry.get(child.role_id)
+        except KeyError:
+            return RoleContract(
+                role_id=child.role_id,
+                role_version="legacy",
+                display_name=child.role_id,
+                objective=child.objective or child.role_id,
+                allowed_tools=[],
+                allowed_permissions=[],
+                source="pack",
+            )
+
     def _request_control(self, run_id: str, action: str, reason: str) -> TurnSnapshot:
         if action not in {"pause", "cancel"}:
             raise ValueError(f"unsupported Turn control action: {action}")
@@ -3206,31 +4339,55 @@ class TurnRunner:
         turn = TurnSnapshot.model_validate(turn_payload)
         if turn.status in RUN_TERMINAL_STATUSES:
             return turn
+        control = read_json(root / "execution_control.json") or {}
+        cancel_already_requested = bool(
+            isinstance(control, dict) and control.get("cancel_requested")
+        )
+        cancel_requested = cancel_already_requested or action == "cancel"
+        pause_requested = action == "pause" and not cancel_requested
         write_json(
             root / "execution_control.json",
             {
-                "pause_requested": action == "pause",
-                "cancel_requested": action == "cancel",
+                "run_id": turn.run_id,
+                "turn_id": turn.turn_id,
+                "request_id": turn.request_id,
+                "actor": "turn_runner.api",
+                "status": "requested",
+                "pause_requested": pause_requested,
+                "cancel_requested": cancel_requested,
                 "reason": reason,
-                "updated_at": _utc_now().isoformat(),
+                "requested_at": _utc_now().isoformat(),
+                "expires_at": turn.deadline_at.isoformat() if turn.deadline_at else None,
             },
         )
-        if run_id not in self._running_runs:
-            target = "paused" if action == "pause" else "cancelled"
-            if turn.status in {"received", "ready", "running", "waiting_approval"}:
-                turn = turn.model_copy(
-                    update={"status": self._transition_status(turn.status, target)}
-                )
-                self._persist_turn(turn)
         self._append_snapshot_event(
             turn,
             "turn_control_requested",
             action=action,
             reason=reason,
+            actor="turn_runner.api",
+            status="requested",
+            effective_action=("cancel" if cancel_requested else action),
+            cancel_request_preserved=cancel_already_requested,
+            expires_at=turn.deadline_at.isoformat() if turn.deadline_at else None,
         )
-        return turn
+        return self._load_turn(run_id)
 
-    def _append_snapshot_event(self, turn: TurnSnapshot, event_type: str, **payload: Any) -> TurnSnapshot:
+    def _load_turn(self, run_id: str) -> TurnSnapshot:
+        root = self.run_store.load_run_paths(run_id).root
+        payload = read_json(root / "turn_state.json") or read_json(root / "turn.json")
+        if not isinstance(payload, dict):
+            raise ValueError(f"Turn state is missing: {run_id}")
+        return TurnSnapshot.model_validate(payload)
+
+    def _append_snapshot_event(
+        self,
+        turn: TurnSnapshot,
+        event_type: str,
+        *,
+        actor: str = "turn_runner",
+        **payload: Any,
+    ) -> TurnSnapshot:
         root = self.run_store.load_run_paths(turn.run_id).root
         event = EventEnvelope(
             event_type=event_type,
@@ -3241,7 +4398,7 @@ class TurnRunner:
             task_type=turn.task_type,
             execution_mode=turn.execution_mode,
             sequence=0,
-            actor="turn_runner",
+            actor=actor,
             payload=payload,
         ).model_dump(mode="json")
         event = append_canonical_event(root / "execution_events.jsonl", event)
@@ -3470,6 +4627,7 @@ __all__ = [
     "ReviewTask",
     "CompactTask",
     "TaskFactory",
+    "TurnTask",
     "TurnContext",
     "TurnRunner",
 ]

@@ -20,6 +20,7 @@ from research_system.adapters.storage.resource_lease import (
     RedisResourceLeaseStore,
 )
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
+from research_system.schemas.turn_runtime import FollowupTaskResult
 
 
 class ToolDefinitionContractTests(unittest.TestCase):
@@ -54,6 +55,46 @@ class ToolDefinitionContractTests(unittest.TestCase):
         core = build_core_tool_registry().definition("core.run.status")
         self.assertEqual(core.namespace, "core")
         self.assertEqual(core.name, core.tool_id)
+
+    def test_followup_task_is_governed_by_the_core_tool_registry(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            received: list[dict] = []
+            registry = build_core_tool_registry()
+            context = CoreToolContext(
+                run_id="run-1",
+                thread_id="thread-1",
+                request_id="request-1",
+                turn_id="turn-1",
+                run_root=root,
+                actor="main_agent",
+                allowed_tools=frozenset({"core.followup.task"}),
+                followup_task_handler=lambda request: (
+                    received.append(request.model_dump(mode="json"))
+                    or FollowupTaskResult(
+                        accepted=True,
+                        delivery="queued",
+                        target_child_turn_id=request.target_child_turn_id,
+                    )
+                ),
+                idempotency_key="run-1:followup:core.followup.task",
+            )
+
+            result = registry.invoke(
+                tool_name="core.followup.task",
+                arguments={
+                    "parent_turn_id": "turn-1",
+                    "target_child_turn_id": "child-1",
+                    "target_agent_id": "analyst",
+                    "message": "Recheck the evidence.",
+                    "operation_id": "followup-1",
+                },
+                context=context,
+            )
+
+            self.assertEqual(result.status, "completed")
+            self.assertEqual(result.output["delivery"], "queued")
+            self.assertEqual(received[0]["operation_id"], "followup-1")
 
     def test_registry_preserves_pack_namespace_when_adapting_a_pack(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]

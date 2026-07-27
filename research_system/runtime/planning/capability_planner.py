@@ -8,6 +8,7 @@ from research_system.schemas.domain_pack import (
     CapabilityPlanningRequest,
 )
 from research_system.schemas.execution_graph import (
+    ArtifactPort,
     ExecutionGraph,
     ExecutionGraphPatch,
     ExecutionGraphPatchOperation,
@@ -314,13 +315,25 @@ class CapabilityPlanner:
                     return existing.node_id
 
                 dependencies: list[str] = []
+                consumes: list[ArtifactPort] = []
                 for consumed in capability.consumes:
                     required_input = consumed.required or consumed.artifact_type in required_outputs
-                    if not required_input:
-                        continue
-                    producer_node_id = resolve_artifact(consumed.artifact_type)
-                    if producer_node_id and producer_node_id not in dependencies:
-                        dependencies.append(producer_node_id)
+                    selector = dict(consumed.selector or {})
+                    if required_input:
+                        producer_node_id = resolve_artifact(consumed.artifact_type)
+                        if producer_node_id and producer_node_id not in dependencies:
+                            dependencies.append(producer_node_id)
+                        if producer_node_id:
+                            selector["producer_node_id"] = producer_node_id
+                    consumes.append(
+                        consumed.model_copy(
+                            update={
+                                "required": required_input,
+                                "selector": selector,
+                            },
+                            deep=True,
+                        )
+                    )
                 node_id = self._node_id(capability.subagent_type, selected_by_subagent)
                 node = ExecutionNode(
                     node_id=node_id,
@@ -334,15 +347,7 @@ class CapabilityPlanner:
                         capability.consumes,
                         available_refs,
                     ),
-                    consumes=[
-                        port.model_copy(
-                            update={
-                                "required": port.required or port.artifact_type in required_outputs,
-                            },
-                            deep=True,
-                        )
-                        for port in capability.consumes
-                    ],
+                    consumes=consumes,
                     produces=[port.model_copy(deep=True) for port in capability.produces],
                     depends_on=dependencies,
                     failure_mode=capability.failure_mode,

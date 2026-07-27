@@ -120,6 +120,8 @@ class ArtifactRecord(BaseModel):
     run_id: str
     thread_id: str
     request_id: str
+    user_id: str | None = None
+    tenant_id: str | None = None
     producer: ArtifactProducer
     content: dict[str, Any]
     source_refs: list[dict[str, Any]] = Field(default_factory=list)

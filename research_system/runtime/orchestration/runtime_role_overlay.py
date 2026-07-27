@@ -332,6 +332,7 @@ class RuntimeRoleOverlay:
                     ],
                     required_capabilities=[binding.alias.capability],
                     allowed_tools=list(binding.alias.tools),
+                    allowed_permissions=list(binding.alias.permissions),
                     max_model_turns=1,
                     timeout_seconds=max(
                         1,

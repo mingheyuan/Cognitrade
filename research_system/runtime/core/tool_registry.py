@@ -15,6 +15,7 @@ import jsonschema
 
 from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
 from research_system.runtime.core.id_utils import generate_ulid
+from research_system.runtime.core.approvals import HumanApprovalStore
 from research_system.runtime.event_store import append_canonical_event
 from research_system.adapters.storage.resource_lease import (
     FileResourceLeaseStore,
@@ -29,6 +30,7 @@ from research_system.schemas.core_runtime import (
 )
 from research_system.schemas.events import EventEnvelope
 from research_system.schemas.tools import ToolDefinition
+from research_system.schemas.turn_runtime import FollowupTaskRequest, FollowupTaskResult
 
 
 def utc_now() -> datetime:
@@ -68,6 +70,8 @@ class CoreToolContext:
     rate_limit_key: str | None = None
     tool_semaphore: Semaphore | None = None
     hook_runtime: Any | None = None
+    followup_task_handler: Callable[[FollowupTaskRequest], FollowupTaskResult] | None = None
+    approval_store: HumanApprovalStore | None = None
 
 
 @dataclass(frozen=True)
@@ -307,14 +311,39 @@ class CoreToolRegistry:
                         node_id=node_id,
                         error="PermissionRequest hook blocked the Tool call",
                     )
-            if not context.approval_id or context.authorize_approval is None:
+            if not context.approval_id:
+                if context.approval_store is None:
+                    return self._rejected(
+                        context=context,
+                        tool_name=tool_name,
+                        arguments=arguments or {},
+                        graph_revision=graph_revision,
+                        node_id=node_id,
+                        error="Tool requires human approval before execution",
+                    )
+                approval_id = self._request_tool_approval(
+                    context=context,
+                    tool_name=tool_name,
+                    arguments=arguments or {},
+                    graph_revision=graph_revision,
+                    node_id=node_id,
+                )
+                return self._approval_required(
+                    context=context,
+                    tool_name=tool_name,
+                    arguments=arguments or {},
+                    graph_revision=graph_revision,
+                    node_id=node_id,
+                    approval_id=approval_id,
+                )
+            if context.authorize_approval is None:
                 return self._rejected(
                     context=context,
                     tool_name=tool_name,
                     arguments=arguments or {},
                     graph_revision=graph_revision,
                     node_id=node_id,
-                    error="Tool requires human approval before execution",
+                    error="Tool approval authorizer is not configured",
                 )
             if not context.authorize_approval(context.approval_id):
                 return self._rejected(
@@ -677,6 +706,81 @@ class CoreToolRegistry:
         self._emit(context, "tool_call_rejected", call=call, result=result)
         return result
 
+    @staticmethod
+    def _approval_id(
+        *,
+        context: CoreToolContext,
+        tool_name: str,
+        node_id: str | None,
+    ) -> str:
+        import hashlib
+
+        identity = f"{context.run_id}:{node_id or f'core_tool:{tool_name}'}:{tool_name}:{context.idempotency_key or ''}"
+        return f"approval_{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:32]}"
+
+    def _request_tool_approval(
+        self,
+        *,
+        context: CoreToolContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+        graph_revision: int | None,
+        node_id: str | None,
+    ) -> str:
+        if context.approval_store is None:
+            raise CoreToolError("approval store is not configured")
+        approval_node_id = node_id or f"core_tool:{tool_name}"
+        approval_id = self._approval_id(
+            context=context,
+            tool_name=tool_name,
+            node_id=approval_node_id,
+        )
+        existing = context.approval_store.get(approval_id)
+        if existing is None:
+            context.approval_store.request(
+                run_id=context.run_id,
+                node_id=approval_node_id,
+                capability=tool_name,
+                reason=f"Core Tool {tool_name} requires human approval.",
+                approval_id=approval_id,
+                graph_revision=graph_revision,
+                user_id=context.user_id,
+                tenant_id=context.tenant_id,
+            )
+        return approval_id
+
+    def _approval_required(
+        self,
+        *,
+        context: CoreToolContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+        graph_revision: int | None,
+        node_id: str | None,
+        approval_id: str,
+    ) -> CoreToolResult:
+        call = CoreToolCall(
+            tool_name=tool_name,
+            arguments=dict(arguments),
+            actor=context.actor,
+            run_id=context.run_id,
+            thread_id=context.thread_id,
+            request_id=context.request_id,
+            graph_revision=graph_revision,
+            node_id=node_id or f"core_tool:{tool_name}",
+            idempotency_key=context.idempotency_key,
+        )
+        result = CoreToolResult(
+            call_id=call.call_id,
+            tool_name=tool_name,
+            status="waiting_approval",
+            error="Tool is waiting for human approval",
+            retryable=True,
+            metadata={"approval_id": approval_id},
+        )
+        self._emit(context, "tool_call_waiting_approval", call=call, result=result)
+        return result
+
     def _emit(
         self,
         context: CoreToolContext,
@@ -1010,6 +1114,35 @@ def build_core_tool_registry(
     )
     registry.register(
         ToolDefinition(
+            name="core.followup.task",
+            description="Send governed follow-up work to an existing non-root ChildTurn.",
+            input_schema={
+                "type": "object",
+                "required": [
+                    "parent_turn_id",
+                    "target_child_turn_id",
+                    "target_agent_id",
+                    "message",
+                ],
+                "properties": {
+                    "parent_turn_id": {"type": "string", "minLength": 1},
+                    "target_child_turn_id": {"type": "string", "minLength": 1},
+                    "target_agent_id": {"type": "string", "minLength": 1},
+                    "message": {"type": "string", "minLength": 1},
+                    "trigger_turn": {"type": "boolean"},
+                    "operation_id": {"type": "string", "minLength": 1},
+                },
+            },
+            output_schema={"type": "object", "required": ["accepted", "delivery"]},
+            permissions=["turn:followup"],
+            parallel_safe=False,
+            idempotency_required=True,
+            allowed_callers=["main_agent", "system"],
+        ),
+        _followup_task,
+    )
+    registry.register(
+        ToolDefinition(
             name="core.message.compose",
             description="Compose a user-facing assistant message from verified content.",
             input_schema={
@@ -1193,6 +1326,13 @@ def _request_intake(arguments: dict[str, Any], context: CoreToolContext) -> dict
         runtime_context=dict(arguments.get("runtime_context") or {}),
     )
     return {"decision": decision.model_dump(mode="json")}
+
+
+def _followup_task(arguments: dict[str, Any], context: CoreToolContext) -> dict[str, Any]:
+    if context.followup_task_handler is None:
+        raise CoreToolError("followup_task is unavailable outside a TurnRunner context")
+    request = FollowupTaskRequest.model_validate(arguments)
+    return context.followup_task_handler(request).model_dump(mode="json")
 
 
 def _run_status(arguments: dict[str, Any], context: CoreToolContext) -> dict[str, Any]:

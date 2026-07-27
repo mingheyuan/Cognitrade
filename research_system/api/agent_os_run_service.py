@@ -899,7 +899,15 @@ class AgentOSRunService:
         if detail.get("mode") == "core":
             state = MainAgentState.model_validate(detail["snapshot"])
             turn_status = str((detail.get("turn") or {}).get("status") or "")
-            if state.status == "paused" or turn_status in {"paused", "waiting_approval", "gated"}:
+            if state.status == "paused" or turn_status in {
+                "running",
+                "paused",
+                "waiting_approval",
+                "gated",
+                "timed_out",
+                "failed",
+                "cancelled",
+            }:
                 result = self.agent_os.resume(run_id)
                 return {
                     "run_id": run_id,
@@ -921,7 +929,15 @@ class AgentOSRunService:
         return {
             "run_id": run_id,
             "status": snapshot.status,
-            "resumable": snapshot.status in {"paused", "waiting_approval"},
+            "resumable": snapshot.status in {
+                "running",
+                "paused",
+                "waiting_approval",
+                "gated",
+                "timed_out",
+                "failed",
+                "cancelled",
+            },
             "resume_from": {
                 "graph_revision": snapshot.graph.revision,
                 "pending_nodes": [
@@ -995,7 +1011,7 @@ class AgentOSRunService:
         result: ExecutionRunResult,
     ) -> ResponseEnvelope:
         snapshot = result.snapshot
-        response_status = {"paused": "running"}.get(snapshot.status, snapshot.status)
+        response_status = snapshot.status
         artifacts = self.agent_os.inspect_run(snapshot.run_id).get("artifacts") or []
         final_ids = set(result.final_artifact_ids)
         return ResponseEnvelope(

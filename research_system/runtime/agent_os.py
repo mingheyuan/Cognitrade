@@ -59,6 +59,24 @@ class _AgentOSGraphRunnerAdapter:
         self.agent_os = agent_os
 
     def step(self, context: TurnContext) -> GraphStepOutcome | ExecutionRunResult:
+        if context.recovery_continuation:
+            context.recovery_continuation = False
+            return self.agent_os._recover_graph_task(
+                context.run_id,
+                thread_id=context.thread_id,
+                event_callback=context.event_callback,
+                deadline_at=context.deadline_at,
+                step=True,
+            )
+        if context.worker_restart_recovery:
+            context.worker_restart_recovery = False
+            return self.agent_os._recover_graph_worker_task(
+                context.run_id,
+                thread_id=context.thread_id,
+                event_callback=context.event_callback,
+                deadline_at=context.deadline_at,
+                step=True,
+            )
         if context.resume:
             if context.rerun_from:
                 rerun_from = context.rerun_from
@@ -72,12 +90,14 @@ class _AgentOSGraphRunnerAdapter:
                     rerun_from,
                     thread_id=context.thread_id,
                     event_callback=context.event_callback,
+                    deadline_at=context.deadline_at,
                     step=True,
                 )
             return self.agent_os._resume_graph_task(
                 context.run_id,
                 thread_id=context.thread_id,
                 event_callback=context.event_callback,
+                deadline_at=context.deadline_at,
                 step=True,
             )
         if context.graph is not None:
@@ -88,6 +108,7 @@ class _AgentOSGraphRunnerAdapter:
             turn_id=context.turn.turn_id,
             intake_decision=context.decision,
             event_callback=context.event_callback,
+            deadline_at=context.deadline_at,
             step=True,
         )
 
@@ -499,17 +520,23 @@ class AgentOS:
         resume: bool = False,
         intent: str | None = None,
         step: bool = False,
+        deadline_at: float | None = None,
     ) -> GraphStepOutcome | ExecutionRunResult:
-        """Own the shared GraphRunner lease and result finalization."""
+        """Advance one Graph safe point under the enclosing Root Turn."""
+        if not step:
+            raise ValueError(
+                "GraphRunner must be advanced through the TurnRunner safe-point adapter"
+            )
         runner = self._runner(
             run_id,
             event_callback=event_callback,
             turn_id=turn_id,
+            deadline_at=deadline_at,
         )
         with self._lock:
             self._active[run_id] = runner
         try:
-            if resume and step:
+            if resume:
                 persisted = read_json(runner.snapshot_path)
                 if not isinstance(persisted, dict):
                     raise ValueError(f"graph snapshot is missing: {run_id}")
@@ -524,32 +551,19 @@ class AgentOS:
                     resume=True,
                 )
                 result = step_outcome.result
-            elif resume:
-                result = runner.resume()
             else:
                 if graph is None:
                     raise ValueError("Graph execution requires a graph")
-                if step:
-                    step_outcome = runner.step(
-                        graph=graph,
-                        run_id=run_id,
-                        thread_id=thread_id,
-                        request_id=request.request_id,
-                        user_id=request.user_id,
-                        tenant_id=request.tenant_id,
-                        seed_artifacts=list(seed_artifacts or []),
-                    )
-                    result = step_outcome.result
-                else:
-                    result = runner.run(
-                        graph=graph,
-                        run_id=run_id,
-                        thread_id=thread_id,
-                        request_id=request.request_id,
-                        user_id=request.user_id,
-                        tenant_id=request.tenant_id,
-                        seed_artifacts=list(seed_artifacts or []),
-                    )
+                step_outcome = runner.step(
+                    graph=graph,
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    request_id=request.request_id,
+                    user_id=request.user_id,
+                    tenant_id=request.tenant_id,
+                    seed_artifacts=list(seed_artifacts or []),
+                )
+                result = step_outcome.result
             if not step or result.snapshot.status in {
                 "completed",
                 "completed_partial",
@@ -569,9 +583,7 @@ class AgentOS:
                 "timed_out",
             }:
                 self._write_summary(result, intent=intent or request.intent)
-            if step:
-                return step_outcome.model_copy(update={"result": result})
-            return result
+            return step_outcome.model_copy(update={"result": result})
         finally:
             with self._lock:
                 self._active.pop(run_id, None)
@@ -614,6 +626,7 @@ class AgentOS:
             event_callback=context.event_callback,
             turn_id=context.turn.turn_id,
             intent=context.request.intent,
+            deadline_at=context.deadline_at,
             step=True,
         )
 
@@ -626,6 +639,7 @@ class AgentOS:
         event_callback=None,
         turn_id: str | None = None,
         step: bool = False,
+        deadline_at: float | None = None,
     ) -> GraphStepOutcome | ExecutionRunResult:
         decision = intake_decision or self.request_intake_decision(request)
         if decision.status != "accepted":
@@ -683,6 +697,7 @@ class AgentOS:
             event_callback=event_callback,
             turn_id=turn_id,
             intent=intent,
+            deadline_at=deadline_at,
             step=step,
         )
 
@@ -706,6 +721,10 @@ class AgentOS:
             )
             if isinstance(persisted_response, dict):
                 return ResponseEnvelope.model_validate(persisted_response)
+            # Idempotency applies while a worker is still running too.  Return
+            # the persisted lifecycle view instead of routing the same request
+            # into a second execution attempt.
+            return self._inflight_idempotent_response(existing_run_id)
         reuse_existing = False
         if run_id:
             existing_paths = self.run_store.load_run_paths(run_id)
@@ -735,6 +754,60 @@ class AgentOS:
         finally:
             with self._lock:
                 self._prepared_run_ids.discard(effective_run_id)
+
+    def _inflight_idempotent_response(self, run_id: str) -> ResponseEnvelope:
+        """Return a stable response while an idempotent Run has no result yet."""
+        root = self.run_store.load_run_paths(run_id).root
+        request_payload = read_json(root / "request.json") or {}
+        request = RequestEnvelope.model_validate(request_payload)
+        turn = read_json(root / "turn_state.json") or read_json(root / "turn.json") or {}
+        if not isinstance(turn, dict):
+            turn = {}
+        raw_status = str(turn.get("status") or "received")
+        status = raw_status if raw_status in {
+            "running",
+            "paused",
+            "waiting_approval",
+            "gated",
+            "completed",
+            "completed_partial",
+            "failed",
+            "cancelled",
+            "timed_out",
+        } else "running"
+        task = read_json(root / "task_state.json") or read_json(root / "task.json") or {}
+        continuation = task.get("continuation") if isinstance(task, dict) else None
+        return ResponseEnvelope(
+            request_id=request.request_id,
+            run_id=run_id,
+            thread_id=str(turn.get("thread_id") or request.thread_id or "") or None,
+            turn_id=str(turn.get("turn_id") or "") or None,
+            task_type=str(turn.get("task_type") or "regular"),
+            mode=(
+                str(turn.get("execution_mode"))
+                if turn.get("execution_mode") in {"core", "task", "graph"}
+                else None
+            ),
+            status=status,  # type: ignore[arg-type]
+            message=(
+                "This idempotent Run is already in progress."
+                if status == "running"
+                else f"Agent OS Run is {status}."
+            ),
+            progress=ProgressState(
+                current_phase="turn",
+                active_agent="main_agent",
+                latest_event="turn_replayed_for_idempotency",
+                status_message=f"Agent OS Run is {status}.",
+                percent=100 if status in RUN_TERMINAL_STATUSES else 0,
+            ),
+            continuation=continuation if isinstance(continuation, dict) else None,
+            child_turn_ids=[
+                str(item.get("child_turn_id"))
+                for item in list(turn.get("child_turns") or [])
+                if isinstance(item, dict) and item.get("child_turn_id")
+            ],
+        )
 
     def _handle_routed_request(
         self,
@@ -1293,18 +1366,25 @@ class AgentOS:
         if detail.get("mode") == "core":
             state = MainAgentState.model_validate(detail["snapshot"])
             turn_status = str((detail.get("turn") or {}).get("status") or "")
-            if state.status != "paused" and turn_status not in {"paused", "waiting_approval", "gated"}:
+            recover = turn_status in {"timed_out", "failed", "cancelled"}
+            if (
+                state.status != "paused"
+                and turn_status not in {"running", "paused", "waiting_approval", "gated"}
+                and not recover
+            ):
                 raise ValueError(f"core run is not resumable: {state.status}")
             request, decision = self._load_core_request(run_id)
             result, _ = self._resume_core_task(
                 request=request,
                 decision=decision,
                 state=state,
+                recover=recover,
             )
             return result  # type: ignore[return-value]
         request, decision = self._load_graph_request(run_id)
         snapshot = detail.get("snapshot") or {}
         turn_config = self._stored_turn_config(detail)
+        turn_status = str((detail.get("turn") or {}).get("status") or "")
         outcome = self.turn_runner.execute_task(
             request=request,
             decision=decision,
@@ -1313,6 +1393,7 @@ class AgentOS:
             execution_mode="graph",
             turn_config=turn_config,
             resume=True,
+            recover=turn_status in {"timed_out", "failed", "cancelled"},
         )
         result = outcome.result
         self._update_graph_agent_state(result)
@@ -1352,9 +1433,14 @@ class AgentOS:
         turn_payload = read_json(paths.turn_state)
         if not isinstance(turn_payload, dict):
             control = read_json(paths.root / "execution_control.json") or {}
+            cancel_requested = bool(control.get("cancel_requested"))
             write_json(
                 paths.root / "execution_control.json",
-                {**control, "pause_requested": True, "cancel_requested": False},
+                {
+                    **control,
+                    "pause_requested": not cancel_requested,
+                    "cancel_requested": cancel_requested,
+                },
             )
             return True
         status = str(turn_payload.get("status") or "")
@@ -1421,6 +1507,7 @@ class AgentOS:
         *,
         event_callback=None,
         turn_id: str | None = None,
+        deadline_at: float | None = None,
     ) -> ExecutionGraphRunner:
         self._refresh_runtime_roles()
         paths = self.run_store.load_run_paths(run_id)
@@ -1441,6 +1528,7 @@ class AgentOS:
             event_callback=event_callback,
             progress_observer=self.main_agent.observe_graph_progress,
             turn_id=turn_id,
+            deadline_at=deadline_at,
         )
 
     def _runner_board(self, run_id: str):
@@ -1465,6 +1553,7 @@ class AgentOS:
         request: RequestEnvelope,
         decision: RequestIntakeDecision,
         state: MainAgentState,
+        recover: bool = False,
     ) -> tuple[MainAgentRunResult, ResponseEnvelope]:
         turn_payload = read_json(
             self.run_store.load_run_paths(state.run_id).root / "turn_state.json"
@@ -1482,6 +1571,7 @@ class AgentOS:
             execution_mode=state.mode,
             turn_config=turn_config,
             resume=True,
+            recover=recover,
         )
         result = outcome.result
         self._write_core_summary(result)
@@ -1534,6 +1624,7 @@ class AgentOS:
         thread_id: str | None = None,
         event_callback=None,
         step: bool = False,
+        deadline_at: float | None = None,
     ) -> GraphStepOutcome | ExecutionRunResult:
         turn_payload = read_json(
             self.run_store.load_run_paths(run_id).root / "turn_state.json"
@@ -1550,7 +1641,70 @@ class AgentOS:
                 else None
             ),
             resume=True,
+            deadline_at=deadline_at,
             step=step,
+        )
+
+    def _recover_graph_task(
+        self,
+        run_id: str,
+        *,
+        thread_id: str | None = None,
+        event_callback=None,
+        step: bool = False,
+        deadline_at: float | None = None,
+    ) -> GraphStepOutcome | ExecutionRunResult:
+        """Prepare a terminal Graph checkpoint for a Turn recovery continuation."""
+        if not step:
+            raise ValueError("Graph recovery must be advanced through TurnRunner")
+        request, _ = self._load_graph_request(run_id)
+        runner = self._runner(
+            run_id,
+            event_callback=event_callback,
+            turn_id=(
+                str((read_json(self.run_store.load_run_paths(run_id).root / "turn_state.json") or {}).get("turn_id"))
+                or None
+            ),
+            deadline_at=deadline_at,
+        )
+        runner.recover_terminal()
+        return self._resume_graph_task(
+            run_id,
+            thread_id=str(thread_id or request.thread_id or f"thread_{run_id}"),
+            event_callback=event_callback,
+            deadline_at=deadline_at,
+            step=True,
+        )
+
+    def _recover_graph_worker_task(
+        self,
+        run_id: str,
+        *,
+        thread_id: str | None = None,
+        event_callback=None,
+        step: bool = False,
+        deadline_at: float | None = None,
+    ) -> GraphStepOutcome | ExecutionRunResult:
+        """Requeue in-flight Graph nodes before the next Turn safe point."""
+        if not step:
+            raise ValueError("Graph worker recovery must be advanced through TurnRunner")
+        request, _ = self._load_graph_request(run_id)
+        runner = self._runner(
+            run_id,
+            event_callback=event_callback,
+            turn_id=(
+                str((read_json(self.run_store.load_run_paths(run_id).root / "turn_state.json") or {}).get("turn_id"))
+                or None
+            ),
+            deadline_at=deadline_at,
+        )
+        runner.recover_worker_restart()
+        return self._resume_graph_task(
+            run_id,
+            thread_id=str(thread_id or request.thread_id or f"thread_{run_id}"),
+            event_callback=event_callback,
+            deadline_at=deadline_at,
+            step=True,
         )
 
     def _rerun_graph_task(
@@ -1561,6 +1715,7 @@ class AgentOS:
         thread_id: str | None = None,
         event_callback=None,
         step: bool = False,
+        deadline_at: float | None = None,
     ) -> GraphStepOutcome | ExecutionRunResult:
         request, _ = self._load_graph_request(run_id)
         turn_payload = read_json(
@@ -1574,6 +1729,7 @@ class AgentOS:
                 if isinstance(turn_payload, dict) and turn_payload.get("turn_id")
                 else None
             ),
+            deadline_at=deadline_at,
         )
         runner.rerun_from(node_id)
         return self._run_graph_runner(
@@ -1587,6 +1743,7 @@ class AgentOS:
                 else None
             ),
             resume=True,
+            deadline_at=deadline_at,
             step=step,
         )
 
@@ -1599,7 +1756,7 @@ class AgentOS:
         status = (
             "needs_clarification"
             if snapshot.clarification_question
-            else {"paused": "running"}.get(snapshot.status, snapshot.status)
+            else snapshot.status
         )
         artifacts = self.inspect_run(snapshot.run_id).get("artifacts") or []
         final_ids = set(result.final_artifact_ids)
@@ -1655,7 +1812,9 @@ class AgentOS:
             mode="graph",
             request_id=snapshot.request_id,
             run_id=snapshot.run_id,
-            thread_id=snapshot.thread_id,
+            # Graph may use an internal planning thread, but the externally
+            # visible response belongs to the canonical Root Turn thread.
+            thread_id=str(turn_payload.get("thread_id") or snapshot.thread_id),
             turn_id=str(turn_payload.get("turn_id") or "") or None,
             task_type=str(turn_payload.get("task_type") or "regular"),
             intent=str(snapshot.graph.metadata.get("intent") or request.intent or ""),
@@ -1683,6 +1842,7 @@ class AgentOS:
                 "graph_revision": snapshot.graph.revision,
                 "artifact_ids": list(result.artifact_ids),
                 "final_artifact_ids": list(result.final_artifact_ids),
+                "pending_approval_ids": list(snapshot.pending_approval_ids),
                 "tool_call_count": snapshot.tool_call_count,
                 "delivery_status": delivery_status,
                 "synthesis_unavailable": delivery_status == "synthesis_unavailable",
@@ -1691,6 +1851,7 @@ class AgentOS:
             artifacts=final_artifacts,
             artifact_ids=list(result.artifact_ids),
             final_artifact_ids=list(result.final_artifact_ids),
+            pending_approval_ids=list(snapshot.pending_approval_ids),
             continuation=(
                 read_json(self.run_store.load_run_paths(snapshot.run_id).root / "task_state.json") or {}
             ).get("continuation"),
@@ -1708,7 +1869,7 @@ class AgentOS:
         response_status = (
             "needs_clarification"
             if result.clarification_question
-            else {"paused": "running"}.get(result.status, result.status)
+            else result.status
         )
         return ResponseEnvelope(
             mode=result.mode,
@@ -1740,6 +1901,7 @@ class AgentOS:
                 "mode": result.mode,
                 "message": result.message,
                 "artifact_ids": list(result.artifact_ids),
+                "pending_approval_ids": list(result.pending_approval_ids),
                 "tool_calls": [item.model_dump(mode="json") for item in result.tool_calls],
                 "clarification": (
                     {
@@ -1754,6 +1916,7 @@ class AgentOS:
             },
             artifacts=[artifact for artifact in artifacts if artifact.get("artifact_id") in set(result.artifact_ids)],
             artifact_ids=list(result.artifact_ids),
+            pending_approval_ids=list(result.pending_approval_ids),
             continuation=result.continuation,
         )
 
@@ -1987,6 +2150,8 @@ class AgentOS:
                         run_id=result.snapshot.run_id,
                         thread_id=result.snapshot.thread_id,
                         request_id=result.snapshot.request_id,
+                        user_id=result.snapshot.user_id,
+                        tenant_id=result.snapshot.tenant_id,
                         producer=ArtifactProducer(
                             executor="main_agent",
                             capability="core.research.synthesize",
@@ -2077,6 +2242,8 @@ class AgentOS:
                 run_id=result.snapshot.run_id,
                 thread_id=result.snapshot.thread_id,
                 request_id=result.snapshot.request_id,
+                user_id=result.snapshot.user_id,
+                tenant_id=result.snapshot.tenant_id,
                 producer=ArtifactProducer(
                     executor="main_agent",
                     capability="core.message.compose",

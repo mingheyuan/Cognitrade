@@ -16,69 +16,21 @@ class OrchestratorRunCoordinator:
 
     def __init__(self, host: Any) -> None:
         self.host = host
+        # Kept as compatibility dependencies for callers that inspect the
+        # assembled service graph. They are intentionally not used to execute
+        # a request; ``run`` delegates to the canonical AgentOS entrypoint.
         self.startup_support = OrchestratorRunStartupSupport(host)
         self.terminal_support = OrchestratorRunTerminalSupport(host)
 
     def run(self, request: RequestEnvelope) -> ResponseEnvelope:
-        run_id, paths, context = self.startup_support.create_preflight_context(request=request)
-        self.host._active_runtime_context = context
-        decision = self.host.task_router.identify(request)
-        if decision.trace and isinstance(request.constraints, dict):
-            request.constraints["routing_trace"] = dict(decision.trace)
-        if decision.intent is None:
-            try:
-                return self.startup_support.build_clarification_response(
-                    request=request,
-                    decision=decision,
-                    run_id=run_id,
-                )
-            finally:
-                self.host._active_runtime_context = None
+        """Compatibility facade for the one canonical request lifecycle.
 
-        intent = decision.intent
-        self.startup_support.promote_context_intent(
-            context=context,
-            request=request,
-            intent=intent,
-        )
-        try:
-            graph = self.startup_support.initialize_run(
-                context=context,
-                request=request,
-                intent=intent,
-            )
-            self.host._execute_plan(context=context, request=request, plan=graph)
-            return self.terminal_support.finalize_success_path(
-                context=context,
-                request=request,
-                run_id=run_id,
-                intent=intent,
-                result_path=paths.result,
-            )
-        except self.host.run_cancelled_error_cls:
-            return self.terminal_support.build_cancelled_response(
-                context=context,
-                request=request,
-                run_id=run_id,
-                intent=intent,
-            )
-        except self.host.run_timed_out_error_cls:
-            return self.terminal_support.build_timed_out_response(
-                context=context,
-                request=request,
-                run_id=run_id,
-                intent=intent,
-            )
-        except Exception as exc:
-            return self.terminal_support.build_failed_response(
-                context=context,
-                request=request,
-                run_id=run_id,
-                intent=intent,
-                error=exc,
-            )
-        finally:
-            self.host._active_runtime_context = None
+        The former coordinator created a routing Turn and then a second
+        Graph-owned Run.  ``ResearchOrchestrator.run`` now enters AgentOS and
+        TurnRunner directly, so this compatibility object must not recreate a
+        competing lifecycle.
+        """
+        return self.host.run(request)
 
 
 __all__ = ["OrchestratorRunCoordinator"]

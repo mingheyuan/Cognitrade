@@ -2883,11 +2883,12 @@ class ResponseEnvelope(BaseModel):
 建议至少有：
 
 ~~~text
-COGNITRADE_TURN_RUNNER_ENABLED
-COGNITRADE_TURN_RUNNER_REGULAR_ENABLED
-COGNITRADE_TURN_RUNNER_GRAPH_ENABLED
-COGNITRADE_TURN_RUNNER_CHILD_ENABLED
+The canonical TurnRunner entry is mandatory after the migration.
+No runtime switch keeps a second MainAgent execution lifecycle alive.
 ~~~
+
+Implementation note: the canonical entry has now converged; compatibility APIs
+forward into TurnRunner and do not provide a legacy execution branch.
 
 切换策略：
 

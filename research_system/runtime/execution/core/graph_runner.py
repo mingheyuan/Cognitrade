@@ -7,7 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 from threading import Event, RLock, Semaphore
-from time import perf_counter
+from time import monotonic, perf_counter
 from typing import Any, Callable, Protocol
 
 from typing import TYPE_CHECKING
@@ -49,7 +49,7 @@ from research_system.schemas.execution_runtime import (
 )
 from research_system.schemas.events import EventEnvelope
 from research_system.schemas.governance import GateEvaluationResult
-from research_system.schemas.state_machine import transition_status
+from research_system.schemas.state_machine import RUN_TERMINAL_STATUSES, transition_status
 
 if TYPE_CHECKING:
     from research_system.services.memory.layers import LayeredMemoryStore
@@ -307,6 +307,7 @@ class ExecutionGraphRunner:
         turn_id: str | None = None,
         task_type: str = "regular",
         execution_mode: str = "graph",
+        deadline_at: float | None = None,
     ) -> None:
         self.registry = registry
         self.run_root = Path(run_root)
@@ -339,6 +340,7 @@ class ExecutionGraphRunner:
         self._turn_id = turn_id
         self._task_type = task_type
         self._execution_mode = execution_mode
+        self._deadline_at = deadline_at
         self._graph_revision: int | None = None
         self._tool_semaphore: Semaphore | None = None
         self._progress_policy: dict[str, Any] = {}
@@ -487,6 +489,16 @@ class ExecutionGraphRunner:
                 self._mark_approval_rejection(snapshot)
                 self._persist(snapshot)
                 return self._result(snapshot)
+            control_payload = read_json(self.control_path) or {}
+            cancel_requested = self._cancel_requested.is_set() or (
+                isinstance(control_payload, dict)
+                and bool(control_payload.get("cancel_requested"))
+            )
+            if snapshot.status == "waiting_approval" and cancel_requested:
+                self._set_run_status(snapshot, "cancelled")
+                self._persist(snapshot)
+                self._emit("graph_run_cancelled", reason="run cancellation requested")
+                return self._result(snapshot)
             if snapshot.status == "waiting_approval":
                 self._persist(snapshot)
                 self._emit(
@@ -509,6 +521,16 @@ class ExecutionGraphRunner:
                 self._mark_approval_rejection(snapshot)
                 self._persist(snapshot)
                 return self._result(snapshot)
+            control_payload = read_json(self.control_path) or {}
+            cancel_requested = self._cancel_requested.is_set() or (
+                isinstance(control_payload, dict)
+                and bool(control_payload.get("cancel_requested"))
+            )
+            if snapshot.status == "waiting_approval" and cancel_requested:
+                self._set_run_status(snapshot, "cancelled")
+                self._persist(snapshot)
+                self._emit("graph_run_cancelled", reason="run cancellation requested")
+                return self._result(snapshot)
             if snapshot.status == "waiting_approval" and self._pending_approval_ids(snapshot):
                 self._persist(snapshot)
                 self._emit(
@@ -518,6 +540,17 @@ class ExecutionGraphRunner:
                 return self._result(snapshot)
             self._set_run_status(snapshot, "running")
             snapshot.updated_at = utc_now()
+        control = read_json(self.control_path) or {}
+        if (
+            self._cancel_requested.is_set()
+            or (isinstance(control, dict) and control.get("cancel_requested"))
+        ):
+            if snapshot.status not in RUN_TERMINAL_STATUSES:
+                self._set_run_status(snapshot, "cancelled")
+                snapshot.updated_at = utc_now()
+                self._persist(snapshot)
+                self._emit("graph_run_cancelled", reason="run cancellation requested")
+            return self._result(snapshot)
         self.board.bind_invalidated_artifacts(snapshot.invalidated_artifact_ids)
         self._set_run_status(snapshot, "running")
         if not self.control_path.exists():
@@ -802,6 +835,79 @@ class ExecutionGraphRunner:
             should_continue=should_continue,
         )
 
+    def recover_terminal(self) -> ExecutionRunResult:
+        """Reopen a timed-out terminal graph through an explicit continuation.
+
+        The original terminal snapshot is preserved by the enclosing Turn
+        history.  This method only prepares the Graph checkpoint for the new
+        continuation; normal progress still goes through ``step``.
+        """
+        snapshot = self._load_snapshot()
+        if snapshot is None:
+            raise GraphExecutionError("cannot recover a run without an execution snapshot")
+        if snapshot.status not in {"timed_out", "failed", "cancelled"}:
+            raise GraphExecutionError(
+                f"graph recovery requires a terminal recoverable status, got {snapshot.status}"
+            )
+        source_status = snapshot.status
+        for node_id, state in snapshot.node_states.items():
+            if state.status not in {"failed", "cancelled", "timed_out"}:
+                continue
+            self._set_node_status(state, "pending")
+            state.error = "reopened_by_recovery_continuation"
+            state.started_at = None
+            state.completed_at = None
+            node = self._node(snapshot.graph, node_id)
+            if node.status != "pending":
+                node.status = transition_status(scope="node", current=node.status, target="pending")
+        self._set_run_status(snapshot, "paused")
+        snapshot.updated_at = utc_now()
+        self._write_control(pause_requested=False, cancel_requested=False)
+        self._persist(snapshot)
+        self._emit(
+            "graph_recovery_continuation_prepared",
+            source_status=source_status,
+            pending_node_ids=sorted(
+                node_id
+                for node_id, state in snapshot.node_states.items()
+                if state.status == "pending"
+            ),
+        )
+        return self._result(snapshot)
+
+    def recover_worker_restart(self) -> ExecutionRunResult:
+        """Requeue in-flight nodes after a process dies at a checkpoint."""
+        snapshot = self._load_snapshot()
+        if snapshot is None:
+            raise GraphExecutionError("cannot recover a run without an execution snapshot")
+        if snapshot.status != "running":
+            return self._result(snapshot)
+        requeued: list[str] = []
+        for node_id, state in snapshot.node_states.items():
+            if state.status != "running":
+                continue
+            self._set_node_status(state, "pending")
+            state.error = "requeued_after_worker_restart"
+            state.started_at = None
+            state.completed_at = None
+            node = self._node(snapshot.graph, node_id)
+            if node.status != "pending":
+                node.status = transition_status(scope="node", current=node.status, target="pending")
+            requeued.append(node_id)
+        self._set_run_status(snapshot, "paused")
+        snapshot.updated_at = utc_now()
+        control = read_json(self.control_path) or {}
+        self._write_control(
+            pause_requested=False,
+            cancel_requested=bool(control.get("cancel_requested")),
+        )
+        self._persist(snapshot)
+        self._emit(
+            "graph_running_nodes_requeued_after_restart",
+            node_ids=sorted(requeued),
+        )
+        return self._result(snapshot)
+
     def resume(self) -> ExecutionRunResult:
         snapshot = self._load_snapshot()
         if snapshot is None:
@@ -832,7 +938,11 @@ class ExecutionGraphRunner:
             snapshot.updated_at = utc_now()
             self._persist(snapshot)
         self._pause_requested.clear()
-        self._write_control(pause_requested=False, cancel_requested=False)
+        control = read_json(self.control_path) or {}
+        self._write_control(
+            pause_requested=False,
+            cancel_requested=bool(control.get("cancel_requested")),
+        )
         return self.run(
             graph=snapshot.graph,
             run_id=snapshot.run_id,
@@ -1243,6 +1353,8 @@ class ExecutionGraphRunner:
                     run_id=snapshot.run_id,
                     thread_id=snapshot.thread_id,
                     request_id=snapshot.request_id,
+                    user_id=snapshot.user_id,
+                    tenant_id=snapshot.tenant_id,
                     artifact_type=draft.artifact_type,
                     schema_version=draft.schema_version,
                     producer=ArtifactProducer(
@@ -1317,6 +1429,7 @@ class ExecutionGraphRunner:
             if idempotent_output is not None:
                 artifacts = self._commit_outputs(snapshot, node, inputs, idempotent_output)
                 state.output_artifact_ids = [artifact.artifact_id for artifact in artifacts]
+                state.usage = idempotent_output.usage
                 self._set_node_status(state, "completed")
                 state.completed_at = utc_now()
                 node.status = transition_status(scope="node", current=node.status, target="completed")
@@ -1333,6 +1446,7 @@ class ExecutionGraphRunner:
             if cached_output is not None:
                 artifacts = self._commit_outputs(snapshot, node, inputs, cached_output)
                 state.output_artifact_ids = [artifact.artifact_id for artifact in artifacts]
+                state.usage = cached_output.usage
                 self._set_node_status(state, "completed")
                 state.completed_at = utc_now()
                 node.status = transition_status(scope="node", current=node.status, target="completed")
@@ -1408,6 +1522,7 @@ class ExecutionGraphRunner:
                         )
                     elapsed = perf_counter() - started
                     output.usage.duration_seconds += elapsed
+                    state.usage = self._add_usage(state.usage, output.usage)
                     for message in output.messages:
                         text = str(message or "").strip()
                         if not text:
@@ -1838,6 +1953,8 @@ class ExecutionGraphRunner:
                     run_id=snapshot.run_id,
                     thread_id=snapshot.thread_id,
                     request_id=snapshot.request_id,
+                    user_id=snapshot.user_id,
+                    tenant_id=snapshot.tenant_id,
                     artifact_type=draft.artifact_type,
                     schema_version=draft.schema_version,
                     producer=ArtifactProducer(
@@ -2212,7 +2329,13 @@ class ExecutionGraphRunner:
         output.usage = ExecutionUsage()
         output.artifacts = [
             draft.model_copy(
-                update={"parent_artifact_ids": [], "supersedes_artifact_id": None},
+                update={
+                    "parent_artifact_ids": [],
+                    "supersedes_artifact_id": None,
+                    # Cached receipts are portable execution results, not
+                    # provenance for the current Run's input artifacts.
+                    "source_refs": [],
+                },
                 deep=True,
             )
             for draft in output.artifacts
@@ -2326,7 +2449,11 @@ class ExecutionGraphRunner:
         output.usage = ExecutionUsage()
         output.artifacts = [
             draft.model_copy(
-                update={"parent_artifact_ids": [], "supersedes_artifact_id": None},
+                update={
+                    "parent_artifact_ids": [],
+                    "supersedes_artifact_id": None,
+                    "source_refs": [],
+                },
                 deep=True,
             )
             for draft in output.artifacts
@@ -2975,9 +3102,14 @@ class ExecutionGraphRunner:
         if control.get("cancel_requested"):
             self._cancel_requested.set()
             raise GraphCancelledError("run cancellation requested")
+        # When mounted inside TurnRunner, the root Turn owns the deadline.
+        # Applying the graph-local timer here would restart that budget on
+        # every safe-point ``step`` invocation.
         timeout = snapshot.graph.governance.timeout_seconds
-        if timeout is not None and perf_counter() - started >= timeout:
+        if self._deadline_at is None and timeout is not None and perf_counter() - started >= timeout:
             raise GraphTimedOutError("run timeout exceeded")
+        if self._deadline_at is not None and monotonic() >= self._deadline_at:
+            raise GraphTimedOutError("turn timeout exceeded")
         if self._pause_requested.is_set() or control.get("pause_requested"):
             self._set_run_status(snapshot, "paused")
             snapshot.updated_at = utc_now()
@@ -3037,6 +3169,10 @@ class ExecutionGraphRunner:
             raise GraphExecutionError("resume graph does not match persisted execution")
 
     def _result(self, snapshot: ExecutionRunSnapshot) -> ExecutionRunResult:
+        snapshot.pending_approval_ids = self._pending_approval_ids(snapshot)
+        # Keep the normalized approval view recoverable even when the caller
+        # is returning immediately from an approval safe point.
+        write_json(self.snapshot_path, snapshot.model_dump(mode="json"))
         artifacts = self.board.list_artifacts(run_id=snapshot.run_id)
         final_types = {
             contract.artifact_type

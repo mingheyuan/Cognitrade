@@ -7,6 +7,8 @@ import sys
 from time import sleep
 
 from research_system.runtime.agent_os import AgentOS
+from research_system.api.agent_os_admin_service import AgentOSAdminService
+from research_system.runtime.core.approvals import HumanApprovalStore
 from research_system.runtime.core.tool_registry import (
     CoreToolContext,
     build_core_tool_registry,
@@ -383,6 +385,142 @@ class AgentOSCoreLoopTests(unittest.TestCase):
                 event for event in events if event["event_type"] == "main_agent_tool_loop_result"
             )
             self.assertIn("native tool result", tool_result_event["output_summary"])
+
+    def test_core_tool_approval_is_durable_and_resumes_the_same_turn(self) -> None:
+        class ApprovalProvider:
+            available = True
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def complete_with_tools(self, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return {
+                        "kind": "tool_calls",
+                        "tool_calls": [
+                            {
+                                "tool_name": "core.test.approval",
+                                "arguments": {"value": "approved"},
+                                "call_id": "approval-call-1",
+                            }
+                        ],
+                    }
+                return {"kind": "message", "message": "approved tool completed"}
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            settings = self._settings(root)
+            agent_os = AgentOS(settings)
+            provider = ApprovalProvider()
+            agent_os.main_agent.llm_provider = provider
+            calls: list[dict] = []
+            agent_os.main_agent.tools.register(
+                CoreToolDefinition(
+                    name="core.test.approval",
+                    description="A test tool requiring human approval.",
+                    input_schema={"type": "object", "required": ["value"]},
+                    output_schema={"type": "object"},
+                    permissions=["test:write"],
+                    requires_approval=True,
+                ),
+                lambda arguments, _context: (calls.append(arguments) or {"ok": True}),
+            )
+
+            first = agent_os.handle_request(
+                RequestEnvelope(
+                    intent="core.conversation.answer",
+                    user_query="use the approved tool",
+                )
+            )
+            self.assertEqual(first.status, "waiting_approval")
+            self.assertEqual(len(first.pending_approval_ids), 1)
+            run_id = str(first.run_id)
+            run_root = settings.runs_root / run_id
+            approvals = HumanApprovalStore(run_root / "approvals.jsonl")
+            approval_id = first.pending_approval_ids[0]
+            pending = approvals.get(approval_id)
+            self.assertIsNotNone(pending)
+            self.assertEqual(pending.status, "pending")
+            event_types = [event["event_type"] for event in read_jsonl(run_root / "execution_events.jsonl")]
+            self.assertIn("tool_call_waiting_approval", event_types)
+
+            approved = AgentOSAdminService(agent_os).approve(
+                run_id,
+                node_id="core_tool:core.test.approval",
+                capability="core.test.approval",
+                approval_id=approval_id,
+                approved_by="test-reviewer",
+                reason="approved for the test turn",
+            )
+            self.assertEqual(approved["status"], "approved")
+
+            resumed = agent_os.resume(run_id)
+            self.assertEqual(resumed.status, "completed")
+            self.assertEqual(provider.calls, 2)
+            self.assertEqual(calls, [{"value": "approved"}])
+            self.assertEqual(
+                approvals.get(approval_id).status,
+                "approved",
+            )
+            event_types = [event["event_type"] for event in read_jsonl(run_root / "execution_events.jsonl")]
+            self.assertIn("tool_call_completed", event_types)
+            self.assertEqual(read_json(run_root / "turn_state.json")["status"], "completed")
+
+    def test_core_tool_rejection_gates_without_executing_the_tool(self) -> None:
+        class ApprovalProvider:
+            available = True
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def complete_with_tools(self, **_kwargs):
+                self.calls += 1
+                return {
+                    "kind": "tool_calls",
+                    "tool_calls": [
+                        {
+                                "tool_name": "core.test.rejection",
+                            "arguments": {},
+                            "call_id": "rejection-call-1",
+                        }
+                    ],
+                }
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            agent_os = AgentOS(self._settings(root))
+            agent_os.main_agent.llm_provider = ApprovalProvider()
+            calls: list[bool] = []
+            agent_os.main_agent.tools.register(
+                CoreToolDefinition(
+                    name="core.test.rejection",
+                    description="A test tool requiring human approval.",
+                    input_schema={"type": "object"},
+                    output_schema={"type": "object"},
+                    requires_approval=True,
+                ),
+                lambda _arguments, _context: (calls.append(True) or {"ok": True}),
+            )
+            first = agent_os.handle_request(
+                RequestEnvelope(
+                    intent="core.conversation.answer",
+                    user_query="reject the tool",
+                )
+            )
+            run_id = str(first.run_id)
+            approval_id = first.pending_approval_ids[0]
+            rejected = AgentOSAdminService(agent_os).reject(
+                run_id,
+                approval_id=approval_id,
+                rejected_by="test-reviewer",
+                reason="not permitted",
+            )
+            self.assertEqual(rejected["status"], "rejected")
+            resumed = agent_os.resume(run_id)
+            self.assertEqual(resumed.status, "gated")
+            self.assertEqual(calls, [])
+            self.assertIn("approval", resumed.message.lower())
 
     def test_core_agent_clarification_is_not_reported_as_completed(self) -> None:
         with TemporaryDirectory() as temporary_directory:
@@ -764,6 +902,85 @@ def read_with_tool(context):
             self.assertEqual(first.model_dump(mode="json"), second.model_dump(mode="json"))
             runs = [path for path in (self._settings(root).runs_root).iterdir() if path.is_dir()]
             self.assertEqual(len(runs), 1)
+
+    def test_request_idempotency_replays_an_inflight_turn_without_new_run(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            agent_os = AgentOS(self._settings(root))
+            request = RequestEnvelope(
+                user_query="in flight",
+                idempotency_key="in-flight-1",
+                tenant_id="tenant-1",
+                user_id="user-1",
+            )
+            run_id, paths, _ = agent_os.run_store.create_run(request, "core.conversation.answer")
+            write_json(
+                paths.root / "turn.json",
+                {
+                    "run_id": run_id,
+                    "thread_id": "thread-1",
+                    "request_id": request.request_id,
+                    "status": "running",
+                },
+            )
+
+            replay = agent_os.handle_request(
+                request.model_copy(update={"request_id": "different-request-id"})
+            )
+
+            self.assertEqual(replay.run_id, run_id)
+            self.assertEqual(replay.status, "running")
+            self.assertIn("already in progress", replay.message)
+            runs = [path for path in self._settings(root).runs_root.iterdir() if path.is_dir()]
+            self.assertEqual(len(runs), 1)
+
+    def test_public_resume_recovers_a_running_core_checkpoint(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            agent_os = AgentOS(self._settings(root))
+            request = RequestEnvelope(user_query="recover running core")
+            decision = agent_os.request_intake_decision(request)
+            run_id, paths, _ = agent_os.run_store.create_run(request, "core.conversation.answer")
+            thread_id = f"thread_{run_id}"
+            resolved = request.model_copy(update={"thread_id": thread_id})
+            write_json(
+                paths.root / "agent_os_request.json",
+                {
+                    "run_id": run_id,
+                    "thread_id": thread_id,
+                    "request": resolved.model_dump(mode="json"),
+                    "mode": "core",
+                    "request_intake": decision.model_dump(mode="json"),
+                },
+            )
+            write_json(
+                paths.root / "main_agent_state.json",
+                {
+                    "run_id": run_id,
+                    "thread_id": thread_id,
+                    "request_id": request.request_id,
+                    "status": "running",
+                    "mode": "core",
+                    "request_kind": "conversation",
+                },
+            )
+            write_json(
+                paths.root / "turn_state.json",
+                {
+                    "run_id": run_id,
+                    "thread_id": thread_id,
+                    "request_id": request.request_id,
+                    "status": "running",
+                },
+            )
+
+            resumed = agent_os.resume(run_id)
+
+            self.assertEqual(resumed.status, "completed")
+            events = read_jsonl(paths.root / "execution_events.jsonl")
+            self.assertTrue(
+                any(event["event_type"] == "turn_recovered_after_worker_restart" for event in events)
+            )
 
 
 if __name__ == "__main__":

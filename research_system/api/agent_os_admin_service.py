@@ -72,9 +72,53 @@ class AgentOSAdminService:
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
-        snapshot = ExecutionRunSnapshot.model_validate(
-            self.agent_os.inspect_run(run_id)["snapshot"]
-        )
+        store = self._approval_store(run_id)
+        existing = store.get(approval_id)
+        # Core Tool and ChildTurn approvals are not Graph nodes, but they are
+        # still bound to the same Run approval ledger.  Resolve them before
+        # the Graph-specific validation below so a Graph parent can approve a
+        # namespaced ChildTurn Core request after a restart.
+        if existing is not None and (
+            existing.node_id.startswith("core_tool:")
+            or existing.node_id.startswith("child_role:")
+        ):
+            if (
+                existing.run_id != run_id
+                or existing.node_id != node_id
+                or existing.capability != capability
+            ):
+                raise ValueError("approval is not bound to the requested Core execution")
+            return store.approve(
+                run_id=run_id,
+                node_id=node_id,
+                capability=capability,
+                approved_by=approved_by,
+                reason=reason,
+                approval_id=approval_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            ).model_dump(mode="json")
+        detail = self.agent_os.inspect_run(run_id)
+        if detail.get("mode") == "core":
+            existing = store.get(approval_id)
+            if (
+                existing is None
+                or existing.run_id != run_id
+                or existing.node_id != node_id
+                or existing.capability != capability
+            ):
+                raise ValueError("approval is not bound to the Core Tool request")
+            return store.approve(
+                run_id=run_id,
+                node_id=node_id,
+                capability=capability,
+                approved_by=approved_by,
+                reason=reason,
+                approval_id=approval_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            ).model_dump(mode="json")
+        snapshot = ExecutionRunSnapshot.model_validate(detail["snapshot"])
         node = next(
             (item for item in snapshot.graph.nodes if item.node_id == node_id),
             None,
@@ -124,9 +168,30 @@ class AgentOSAdminService:
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
-        snapshot = ExecutionRunSnapshot.model_validate(
-            self.agent_os.inspect_run(run_id)["snapshot"]
-        )
+        store = self._approval_store(run_id)
+        existing = store.get(approval_id)
+        if existing is not None and (
+            existing.node_id.startswith("core_tool:")
+            or existing.node_id.startswith("child_role:")
+        ):
+            if existing.run_id != run_id:
+                raise KeyError(f"approval not found: {approval_id}")
+            return store.reject(
+                approval_id,
+                rejected_by=rejected_by,
+                reason=reason,
+            ).model_dump(mode="json")
+        detail = self.agent_os.inspect_run(run_id)
+        if detail.get("mode") == "core":
+            approval = store.get(approval_id)
+            if approval is None or approval.run_id != run_id:
+                raise KeyError(f"approval not found: {approval_id}")
+            return store.reject(
+                approval_id,
+                rejected_by=rejected_by,
+                reason=reason,
+            ).model_dump(mode="json")
+        snapshot = ExecutionRunSnapshot.model_validate(detail["snapshot"])
         store = self._approval_store(run_id)
         approval = store.get(approval_id)
         if approval is None or approval.run_id != run_id:

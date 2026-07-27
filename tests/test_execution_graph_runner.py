@@ -296,6 +296,18 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
             self.assertEqual(result.snapshot.status, "timed_out")
             self.assertTrue(any(event["event_type"] == "graph_run_timed_out" for event in events))
 
+            prepared = runner.recover_terminal()
+            self.assertEqual(prepared.snapshot.status, "paused")
+            self.assertTrue(
+                any(state.status == "pending" for state in prepared.snapshot.node_states.values())
+            )
+            self.assertTrue(
+                any(
+                    event["event_type"] == "graph_recovery_continuation_prepared"
+                    for event in events
+                )
+            )
+
     def test_governance_rejects_tool_and_approval_bypass(self) -> None:
         graph = self._legal_graph()
         risk_node = next(node for node in graph.nodes if node.node_id == "legal_risk_reviewer")
@@ -352,6 +364,34 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
             )
             completed = runner.resume()
             self.assertEqual(completed.snapshot.status, "completed")
+
+    def test_cancel_overrides_a_pending_graph_approval_on_resume(self) -> None:
+        graph = self._legal_graph()
+        risk_node = next(node for node in graph.nodes if node.node_id == "legal_risk_reviewer")
+        risk_node.side_effect_level = "write_external"
+        risk_node.idempotency_key = "approval-cancel-test"
+        with TemporaryDirectory() as temporary_directory:
+            runner = ExecutionGraphRunner(
+                registry=self.registry,
+                run_root=Path(temporary_directory),
+            )
+            waiting = runner.run(
+                graph=graph,
+                run_id="cancel-run",
+                thread_id="cancel-thread",
+                request_id="cancel-request",
+                seed_artifacts=[
+                    ArtifactDraft(
+                        artifact_type="contract_document",
+                        content={"text": "Supplier shall deliver."},
+                        source_refs=[{"type": "contract", "id": "contract-1"}],
+                    )
+                ],
+            )
+            self.assertEqual(waiting.snapshot.status, "waiting_approval")
+            runner.request_cancel()
+            cancelled = runner.resume()
+            self.assertEqual(cancelled.snapshot.status, "cancelled")
 
     def test_dynamic_planner_expands_arbitrary_subgraph_from_board_at_safe_point(self) -> None:
         planner = _LegalLazyPlanner()

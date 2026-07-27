@@ -142,7 +142,11 @@ class ChildTurnSnapshot(BaseModel):
         "timed_out",
     ] = "ready"
     objective: str | None = None
+    # Snapshot the effective contract so a ChildTurn can be recovered even
+    # when the process-local role registry is rebuilt after a restart.
+    role_contract: dict[str, Any] = Field(default_factory=dict)
     artifact_ids: list[str] = Field(default_factory=list)
+    usage: dict[str, Any] = Field(default_factory=dict)
     continuation: dict[str, Any] | None = None
     sequence: int = Field(default=0, ge=0)
     last_event_id: str | None = None
@@ -178,7 +182,11 @@ class TaskSnapshot(BaseModel):
     execution_mode: TurnExecutionMode = "core"
     transcript: list[dict[str, Any]] = Field(default_factory=list)
     pending_inputs: list[PendingInputItem] = Field(default_factory=list)
+    # Operation receipts survive mailbox delivery.  Without this ledger a
+    # retry that arrives after delivery can enqueue the same follow-up again.
+    operation_receipts: dict[str, dict[str, Any]] = Field(default_factory=dict)
     follow_up_count: int = Field(default=0, ge=0)
+    pending_approval_ids: list[str] = Field(default_factory=list)
     stop_hook_active: bool = False
     hook_iteration: int = Field(default=0, ge=0)
     last_assistant_message: str | None = None
@@ -233,6 +241,8 @@ class TurnSnapshot(BaseModel):
     run_id: str
     thread_id: str
     request_id: str
+    parent_turn_id: str | None = None
+    relation: Literal["child", "review", "continuation", "compact"] | None = None
     task_type: TurnTaskType = "regular"
     execution_mode: TurnExecutionMode = "core"
     status: RunStatus = "received"
@@ -240,11 +250,15 @@ class TurnSnapshot(BaseModel):
     config_hash: str = ""
     task_selection: TaskSelection = Field(default_factory=TaskSelection)
     child_turns: list[ChildTurnSnapshot] = Field(default_factory=list)
+    usage: dict[str, Any] = Field(default_factory=dict)
     sequence: int = Field(default=0, ge=0)
     task_state_ref: str | None = None
     graph_state_ref: str | None = None
     last_event_id: str | None = None
     error: str | None = None
+    # The deadline belongs to the root Turn, not to one worker invocation.
+    # Persisting wall-clock time lets recovery preserve the original budget.
+    deadline_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -263,6 +277,7 @@ class TaskOutcome(BaseModel):
     final_artifact_ids: list[str] = Field(default_factory=list)
     pending_approval_ids: list[str] = Field(default_factory=list)
     child_turn_ids: list[str] = Field(default_factory=list)
+    usage: dict[str, Any] = Field(default_factory=dict)
     reason_codes: list[str] = Field(default_factory=list)
     error: str | None = None
 

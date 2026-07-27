@@ -163,6 +163,31 @@ class ExecutionGraph(BaseModel):
                     raise ValueError(
                         f"unknown execution graph dependency: {node.node_id}->{dependency_id}"
                     )
+            for port in node.consumes:
+                producer_node_id = str(
+                    port.selector.get("producer_node_id") or ""
+                ).strip()
+                if not producer_node_id:
+                    continue
+                if producer_node_id not in node_map:
+                    raise ValueError(
+                        f"unknown artifact producer: {node.node_id}:{port.artifact_type}"
+                        f"<-{producer_node_id}"
+                    )
+                if producer_node_id not in node.depends_on:
+                    raise ValueError(
+                        f"artifact producer must be a dependency: {node.node_id}"
+                        f"->{producer_node_id}"
+                    )
+                producer = node_map[producer_node_id]
+                if not any(
+                    output.artifact_type == port.artifact_type
+                    for output in producer.produces
+                ):
+                    raise ValueError(
+                        f"artifact producer does not produce {port.artifact_type}: "
+                        f"{producer_node_id}"
+                    )
 
         self._validate_acyclic(
             node_map=node_map,

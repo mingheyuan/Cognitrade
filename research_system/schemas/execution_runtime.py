@@ -74,6 +74,7 @@ class NodeExecutionState(BaseModel):
     attempt_count: int = Field(default=0, ge=0)
     input_artifact_ids: list[str] = Field(default_factory=list)
     output_artifact_ids: list[str] = Field(default_factory=list)
+    usage: ExecutionUsage = Field(default_factory=ExecutionUsage)
     error: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -125,6 +126,7 @@ class ExecutionRunSnapshot(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
     patch_impacts: list[GraphPatchImpact] = Field(default_factory=list)
     invalidated_artifact_ids: list[str] = Field(default_factory=list)
+    pending_approval_ids: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

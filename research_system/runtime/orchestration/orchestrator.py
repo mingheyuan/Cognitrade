@@ -393,7 +393,6 @@ class ResearchOrchestrator:
         status = snapshot.status
         response_status = {
             "ready": "accepted",
-            "paused": "running",
         }.get(status, status)
         return ResponseEnvelope(
             request_id=snapshot.request_id,
