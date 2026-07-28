@@ -1697,6 +1697,8 @@ class RegularExecutor:
             run_id=context.run_id,
             thread_id=context.thread_id,
             request_id=context.request.request_id,
+            user_id=context.request.user_id,
+            tenant_id=context.request.tenant_id,
             turn_id=context.turn.turn_id,
             task_type=context.config.task_type,
             execution_mode=context.config.execution_mode,
@@ -1765,6 +1767,7 @@ class ReviewExecutor:
             if not artifact.source_refs:
                 findings.append({"artifact_id": artifact.artifact_id, "finding": "missing_source_refs"})
         verdict = "needs_review" if findings else "pass"
+        status = "gated" if findings else "completed"
         reviewed_ids = [item.artifact_id for item in artifacts]
         review_artifact = ArtifactRecord(
             artifact_type="review_result",
@@ -1791,18 +1794,41 @@ class ReviewExecutor:
             risk_flags=[item["finding"] for item in findings],
         )
         review_artifact = board.add(review_artifact)
-        state = _special_state(context, status="completed", artifact_ids=[review_artifact.artifact_id])
+        continuation = (
+            {
+                "source": "review",
+                "reason": "Review findings require a Gate decision.",
+                "resume_task_type": "review",
+                "review_artifact_id": review_artifact.artifact_id,
+                "findings": findings,
+            }
+            if findings
+            else None
+        )
+        if continuation and context.follow_up_runtime is not None:
+            context.follow_up_runtime.state = context.follow_up_runtime.state.model_copy(
+                update={"continuation": continuation}
+            )
+            context.follow_up_runtime.persist()
+        state = _special_state(context, status=status, artifact_ids=[review_artifact.artifact_id])
         write_json(context.root / "main_agent_state.json", state.model_dump(mode="json"))
-        _emit_special_event(context, "review_task_completed", verdict=verdict, artifact_ids=reviewed_ids)
+        _emit_special_event(
+            context,
+            "review_task_completed" if not findings else "review_task_gated",
+            verdict=verdict,
+            artifact_ids=reviewed_ids,
+            findings=findings,
+        )
         result = MainAgentRunResult(
             run_id=context.run_id,
             thread_id=context.thread_id,
             request_id=context.request.request_id,
-            status="completed",
+            status=status,
             mode=context.config.execution_mode,
             intent=context.decision.intent,
             message=f"Reviewed {len(reviewed_ids)} artifact(s): {verdict}.",
             artifact_ids=[review_artifact.artifact_id],
+            continuation=continuation,
             state=state,
         )
         if context.config.execution_mode == "graph":
@@ -1812,21 +1838,25 @@ class ReviewExecutor:
                 graph_result = ExecutionRunResult(
                     snapshot=snapshot,
                     artifact_ids=[review_artifact.artifact_id],
-                    final_artifact_ids=[review_artifact.artifact_id],
+                    final_artifact_ids=[] if findings else [review_artifact.artifact_id],
                 )
                 return TaskOutcome(
                     execution_mode=context.config.execution_mode,
-                    status="completed",
+                    status=status,
                     result=graph_result,
                     artifact_ids=[review_artifact.artifact_id],
-                    final_artifact_ids=[review_artifact.artifact_id],
+                    final_artifact_ids=[] if findings else [review_artifact.artifact_id],
+                    continuation=continuation,
+                    reason_codes=["review_required"] if findings else [],
                 )
         return TaskOutcome(
             execution_mode=context.config.execution_mode,
-            status="completed",
+            status=status,
             result=result,
             artifact_ids=[review_artifact.artifact_id],
-            final_artifact_ids=[review_artifact.artifact_id],
+            final_artifact_ids=[] if findings else [review_artifact.artifact_id],
+            continuation=continuation,
+            reason_codes=["review_required"] if findings else [],
         )
 
 
@@ -2162,6 +2192,8 @@ def _emit_special_event(context: TurnContext, event_type: str, **payload: Any) -
         run_id=context.run_id,
         thread_id=context.thread_id,
         request_id=context.request.request_id,
+        user_id=context.request.user_id,
+        tenant_id=context.request.tenant_id,
         turn_id=context.turn.turn_id,
         task_type=context.config.task_type,
         execution_mode=context.config.execution_mode,
@@ -2680,14 +2712,8 @@ class TurnRunner:
         seed_artifacts: list[ArtifactDraft] | None = None,
         rerun_from: str | None = None,
     ) -> TaskOutcome:
-        persisted_turn_payload = read_json(
-            self.run_store.load_run_paths(run_id).root / "turn_state.json"
-        ) or read_json(self.run_store.load_run_paths(run_id).root / "turn.json")
-        persisted_turn = (
-            TurnSnapshot.model_validate(persisted_turn_payload)
-            if isinstance(persisted_turn_payload, dict)
-            else None
-        )
+        run_root = self.run_store.load_run_paths(run_id).root
+        persisted_turn = self._read_persisted_turn(run_root)
         # A persisted Turn is the source of truth during recovery. Resolving
         # current defaults first would make a config-file change look like a
         # mutation of an already-running Turn.
@@ -3289,10 +3315,9 @@ class TurnRunner:
         config: TurnConfig,
     ) -> tuple[TurnSnapshot, bool]:
         root = self.run_store.load_run_paths(run_id).root
-        payload = read_json(root / "turn_state.json") or read_json(root / "turn.json")
         config_hash = self._config_hash(config)
-        if isinstance(payload, dict):
-            turn = TurnSnapshot.model_validate(payload)
+        turn = self._read_persisted_turn(root)
+        if turn is not None:
             if turn.request_id != request.request_id:
                 raise ValueError(f"Turn already belongs to another request: {run_id}")
             stored_request = read_json(root / "request.json")
@@ -3309,6 +3334,8 @@ class TurnRunner:
             turn = turn.model_copy(
                 update={
                     "thread_id": turn.thread_id or thread_id,
+                    "user_id": turn.user_id or request.user_id,
+                    "tenant_id": turn.tenant_id or request.tenant_id,
                     "config_hash": turn.config_hash or config_hash,
                     "updated_at": _utc_now(),
                 }
@@ -3330,6 +3357,8 @@ class TurnRunner:
             run_id=run_id,
             thread_id=thread_id,
             request_id=request.request_id,
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
             task_type=config.task_type,
             execution_mode=config.execution_mode,
             config=config,
@@ -3340,6 +3369,20 @@ class TurnRunner:
         )
         self._persist_turn(turn)
         return turn, True
+
+    @staticmethod
+    def _read_persisted_turn(root: Path) -> TurnSnapshot | None:
+        """Prefer the active turn_state projection, then the canonical alias."""
+        for filename in ("turn_state.json", "turn.json"):
+            payload = read_json(root / filename)
+            if not isinstance(payload, dict):
+                continue
+            try:
+                return TurnSnapshot.model_validate(payload)
+            except Exception:
+                if filename == "turn.json":
+                    raise
+        return None
 
     def _create_recovery_continuation(
         self,
@@ -3399,6 +3442,8 @@ class TurnRunner:
             run_id=turn.run_id,
             thread_id=turn.thread_id,
             request_id=request.request_id,
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
             parent_turn_id=turn.turn_id,
             relation="continuation",
             task_type=turn.task_type,
@@ -4095,6 +4140,8 @@ class TurnRunner:
             run_id=parent_turn.run_id,
             thread_id=child.child_thread_id,
             request_id=child_request.request_id,
+            user_id=child_request.user_id,
+            tenant_id=child_request.tenant_id,
             task_type="regular",
             execution_mode="core",
             status="running",
@@ -4394,6 +4441,8 @@ class TurnRunner:
             run_id=turn.run_id,
             thread_id=turn.thread_id,
             request_id=turn.request_id,
+            user_id=turn.user_id,
+            tenant_id=turn.tenant_id,
             turn_id=turn.turn_id,
             task_type=turn.task_type,
             execution_mode=turn.execution_mode,
@@ -4438,6 +4487,8 @@ class TurnRunner:
             run_id=parent_turn.run_id,
             thread_id=child_thread_id,
             request_id=str(getattr(child_turn, "request_id", "") or parent_turn.request_id),
+            user_id=getattr(child_turn, "user_id", None) or parent_turn.user_id,
+            tenant_id=getattr(child_turn, "tenant_id", None) or parent_turn.tenant_id,
             turn_id=child_id,
             parent_turn_id=parent_turn.turn_id,
             task_type="regular",
@@ -4503,6 +4554,8 @@ class TurnRunner:
             run_id=child_turn.run_id,
             thread_id=child_turn.thread_id,
             request_id=child_turn.request_id,
+            user_id=child_turn.user_id,
+            tenant_id=child_turn.tenant_id,
             turn_id=child_turn.turn_id,
             task_type=child_turn.task_type,
             execution_mode=child_turn.execution_mode,

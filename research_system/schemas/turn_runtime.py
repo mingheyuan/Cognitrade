@@ -180,6 +180,7 @@ class TaskSnapshot(BaseModel):
 
     task_type: TurnTaskType = "regular"
     execution_mode: TurnExecutionMode = "core"
+    active_turn_id: str | None = None
     transcript: list[dict[str, Any]] = Field(default_factory=list)
     pending_inputs: list[PendingInputItem] = Field(default_factory=list)
     # Operation receipts survive mailbox delivery.  Without this ledger a
@@ -241,6 +242,8 @@ class TurnSnapshot(BaseModel):
     run_id: str
     thread_id: str
     request_id: str
+    user_id: str | None = None
+    tenant_id: str | None = None
     parent_turn_id: str | None = None
     relation: Literal["child", "review", "continuation", "compact"] | None = None
     task_type: TurnTaskType = "regular"

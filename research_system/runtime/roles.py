@@ -260,6 +260,8 @@ class ChildTurnRuntime:
             run_id=child.parent_run_id,
             thread_id=child.child_thread_id,
             request_id=str(snapshot.request_id),
+            user_id=getattr(snapshot, "user_id", None),
+            tenant_id=getattr(snapshot, "tenant_id", None),
             turn_id=child.child_turn_id,
             parent_turn_id=child.parent_turn_id,
             task_type="regular",

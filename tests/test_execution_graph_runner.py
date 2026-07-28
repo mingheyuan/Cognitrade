@@ -15,7 +15,7 @@ from research_system.runtime.planning.capability_planner import (
     CapabilityDynamicPlanner,
     CapabilityPlanner,
 )
-from research_system.runtime.storage.jsonl import read_json, write_json
+from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
 from research_system.schemas.artifacts import ArtifactDraft
 from research_system.schemas.domain_pack import CapabilityPlanningRequest
 from research_system.schemas.execution_graph import (
@@ -120,6 +120,8 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
                 run_id="legal-run",
                 thread_id="legal-thread",
                 request_id="legal-request",
+                user_id="user-1",
+                tenant_id="tenant-1",
                 seed_artifacts=[
                     ArtifactDraft(
                         artifact_type="contract_document",
@@ -135,6 +137,13 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
             )
 
             self.assertEqual(result.snapshot.status, "completed")
+            self.assertTrue(events)
+            self.assertTrue(
+                all(
+                    event["user_id"] == "user-1" and event["tenant_id"] == "tenant-1"
+                    for event in events
+                )
+            )
             self.assertEqual(result.snapshot.graph.nodes[0].status, "completed")
             main_agent_progress = [
                 event

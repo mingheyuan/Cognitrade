@@ -985,9 +985,20 @@ class MainAgent:
 
     def _emit(self, root: Path, callback, event_type: str, **payload: Any) -> None:
         event_payload = dict(payload)
+        request_payload = read_json(root / "request.json") or read_json(root / "agent_os_request.json")
+        if isinstance(request_payload, dict) and isinstance(request_payload.get("request"), dict):
+            request_payload = request_payload["request"]
         event_payload.setdefault("run_id", "unknown")
         event_payload.setdefault("thread_id", "unknown")
         event_payload.setdefault("request_id", "unknown")
+        event_payload.setdefault(
+            "user_id",
+            request_payload.get("user_id") if isinstance(request_payload, dict) else None,
+        )
+        event_payload.setdefault(
+            "tenant_id",
+            request_payload.get("tenant_id") if isinstance(request_payload, dict) else None,
+        )
         event_payload.setdefault("graph_revision", None)
         event_payload.setdefault("actor", "main_agent")
         run_id = str(event_payload["run_id"])

@@ -305,6 +305,8 @@ class ExecutionGraphRunner:
         failure_injections: list[dict[str, Any]] | None = None,
         progress_observer: Callable[[dict[str, Any]], dict[str, str] | None] | None = None,
         turn_id: str | None = None,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
         task_type: str = "regular",
         execution_mode: str = "graph",
         deadline_at: float | None = None,
@@ -337,6 +339,8 @@ class ExecutionGraphRunner:
         self._run_id: str | None = self.run_root.name
         self._thread_id: str | None = None
         self._request_id: str | None = None
+        self._user_id = user_id
+        self._tenant_id = tenant_id
         self._turn_id = turn_id
         self._task_type = task_type
         self._execution_mode = execution_mode
@@ -469,6 +473,8 @@ class ExecutionGraphRunner:
         self._run_id = run_id
         self._thread_id = thread_id
         self._request_id = request_id
+        self._user_id = user_id
+        self._tenant_id = tenant_id
         self._graph_revision = graph.revision
         self._progress_policy = dict(graph.metadata.get("progress_policy") or {})
         self._progress_model_updates = 0
@@ -507,6 +513,8 @@ class ExecutionGraphRunner:
                 )
                 return self._result(snapshot)
         else:
+            self._user_id = snapshot.user_id
+            self._tenant_id = snapshot.tenant_id
             self._validate_resume_identity(
                 snapshot=snapshot,
                 graph=graph,
@@ -3234,6 +3242,8 @@ class ExecutionGraphRunner:
             "run_id": self._run_id or "unknown",
             "thread_id": self._thread_id or "unknown",
             "request_id": self._request_id or "unknown",
+            "user_id": self._user_id,
+            "tenant_id": self._tenant_id,
             "turn_id": self._turn_id,
             "task_type": self._task_type,
             "execution_mode": self._execution_mode,

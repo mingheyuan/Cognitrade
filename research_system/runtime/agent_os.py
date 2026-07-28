@@ -1511,6 +1511,9 @@ class AgentOS:
     ) -> ExecutionGraphRunner:
         self._refresh_runtime_roles()
         paths = self.run_store.load_run_paths(run_id)
+        request_payload = read_json(paths.request) or read_json(paths.root / "agent_os_request.json") or {}
+        if isinstance(request_payload, dict) and isinstance(request_payload.get("request"), dict):
+            request_payload = request_payload["request"]
         return ExecutionGraphRunner(
             registry=self.runtime_role_overlay,
             run_root=paths.root,
@@ -1528,6 +1531,8 @@ class AgentOS:
             event_callback=event_callback,
             progress_observer=self.main_agent.observe_graph_progress,
             turn_id=turn_id,
+            user_id=(request_payload.get("user_id") if isinstance(request_payload, dict) else None),
+            tenant_id=(request_payload.get("tenant_id") if isinstance(request_payload, dict) else None),
             deadline_at=deadline_at,
         )
 

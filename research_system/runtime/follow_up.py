@@ -96,6 +96,12 @@ class FollowUpRuntime:
         self.legacy_path = root / "task.json"
         self.state = self._load()
         self._baseline = self.state.model_copy(deep=True)
+        if self.state.active_turn_id != self.turn_id:
+            self.promote_next_turn(self.turn_id)
+            with mailbox_lease(self.root, self.run_id):
+                self._refresh_unlocked()
+                self.state = self.state.model_copy(update={"active_turn_id": self.turn_id})
+                self._persist_unlocked()
 
     def bind_execution(self, *, task_type: str, execution_mode: str) -> TaskSnapshot:
         with mailbox_lease(self.root, self.run_id):
@@ -438,6 +444,40 @@ class FollowUpRuntime:
             if item.delivery_phase == "current_turn"
             and (item.target_turn_id in {None, self.turn_id})
         ]
+
+    def promote_next_turn(self, target_turn_id: str | None = None) -> list[PendingInputItem]:
+        """Promote queue-only inputs when a new logical Turn starts."""
+        with mailbox_lease(self.root, self.run_id):
+            self._refresh_unlocked()
+            target = str(target_turn_id or self.turn_id).strip() or self.turn_id
+            promoted: list[PendingInputItem] = []
+            updated_items: list[PendingInputItem] = []
+            for item in self.state.pending_inputs:
+                if item.delivery_phase != "next_turn":
+                    updated_items.append(item)
+                    continue
+                updated = item.model_copy(
+                    update={
+                        "delivery_phase": "current_turn",
+                        "target_turn_id": target,
+                    }
+                )
+                promoted.append(updated)
+                updated_items.append(updated)
+            if not promoted:
+                return []
+            self.state = self.state.model_copy(update={"pending_inputs": updated_items})
+            self._persist_unlocked()
+            for item in promoted:
+                self._emit(
+                    "followup_promoted",
+                    input_id=item.input_id,
+                    operation_id=item.operation_id,
+                    source=item.source,
+                    delivery_phase="current_turn",
+                    target_turn_id=target,
+                )
+            return promoted
 
     def retarget_operation(self, operation_id: str, target_turn_id: str) -> PendingInputItem:
         """Move one queued input to a newly-created ChildTurn continuation."""

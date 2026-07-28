@@ -14,6 +14,7 @@ from research_system.runtime.platform.settings import Settings
 from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
 from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.runtime.turn_runner import GraphExecutor, TurnContext, TurnRunner
+from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.schemas.core_runtime import MainAgentRunResult, MainAgentState, RequestIntakeDecision
 from research_system.schemas.subagents import RoleContract
 from research_system.schemas.execution_graph import ExecutionGraph, ExecutionNode
@@ -37,6 +38,35 @@ from research_system.schemas.turn_runtime import (
 
 
 class TurnExtensionTests(unittest.TestCase):
+    def test_next_turn_mailbox_is_promoted_before_delivery(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            runtime = FollowUpRuntime(
+                root=root,
+                run_id="run-1",
+                turn_id="turn-1",
+                config=FollowUpConfig(),
+            )
+            queued = runtime.enqueue(
+                source="system",
+                kind="context",
+                text="deliver on the next turn",
+                operation_id="next-turn-1",
+                delivery_phase="next_turn",
+            )
+
+            self.assertEqual(runtime.deliver_current(), [])
+            next_runtime = FollowUpRuntime(
+                root=root,
+                run_id="run-1",
+                turn_id="turn-2",
+                config=FollowUpConfig(),
+            )
+            delivered = next_runtime.deliver_current()
+
+            self.assertEqual([item.input_id for item in delivered], [queued.input_id])
+            self.assertEqual(delivered[0].target_turn_id, "turn-2")
+
     def test_followup_operation_receipt_survives_mailbox_delivery(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -112,6 +142,8 @@ class TurnExtensionTests(unittest.TestCase):
                         run_id=context.run_id,
                         thread_id=context.thread_id,
                         request_id=context.request.request_id,
+                        user_id=context.request.user_id,
+                        tenant_id=context.request.tenant_id,
                         graph=graph,
                         status="completed",
                         node_states={
@@ -127,7 +159,11 @@ class TurnExtensionTests(unittest.TestCase):
 
         with TemporaryDirectory() as temporary_directory:
             run_store = RunStore(Path(temporary_directory) / "runs")
-            request = RequestEnvelope(user_query="graph")
+            request = RequestEnvelope(
+                user_query="graph",
+                user_id="user-1",
+                tenant_id="tenant-1",
+            )
             run_id, _, _ = run_store.create_run(request, "domain:test")
             decision = RequestIntakeDecision(
                 status="accepted",
@@ -181,6 +217,19 @@ class TurnExtensionTests(unittest.TestCase):
             transcript_path = Path(seen_stops[0].agent_transcript_ref or "")
             self.assertTrue(transcript_path.exists())
             self.assertNotEqual(transcript_path, root / "task_state.json")
+            child_events = read_jsonl(
+                root
+                / "child_turns"
+                / str(turn.child_turns[0].child_turn_id).replace(":", "__")
+                / "execution_events.jsonl"
+            )
+            self.assertTrue(child_events)
+            self.assertTrue(
+                all(
+                    event["user_id"] == "user-1" and event["tenant_id"] == "tenant-1"
+                    for event in child_events
+                )
+            )
 
     def test_review_and_compact_tasks_execute_inside_the_same_turn_lifecycle(self) -> None:
         with TemporaryDirectory() as temporary_directory:
@@ -220,6 +269,72 @@ class TurnExtensionTests(unittest.TestCase):
             )
             self.assertEqual(response.task_type, "review")
             self.assertEqual(response.status, "completed")
+
+    def test_review_findings_gate_the_turn_without_final_artifact(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            run_store = RunStore(root / "runs")
+            request = RequestEnvelope(
+                user_query="review",
+                constraints={"task_type": "review"},
+                user_id="user-1",
+                tenant_id="tenant-1",
+            )
+            run_id, paths, _ = run_store.create_run(request, "review")
+            ArtifactBoard(paths.root / "artifact_board.jsonl").add(
+                ArtifactRecord(
+                    artifact_type="source_document",
+                    run_id=run_id,
+                    thread_id="thread-1",
+                    request_id=request.request_id,
+                    user_id=request.user_id,
+                    tenant_id=request.tenant_id,
+                    producer=ArtifactProducer(
+                        executor="test",
+                        capability="test.source",
+                    ),
+                    content={"text": "evidence"},
+                )
+            )
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="conversation",
+                recommended_mode="core",
+                intent="review",
+            )
+            runner = TurnRunner(
+                run_store=run_store,
+                main_agent=object(),
+                graph_adapter=object(),
+            )
+
+            response = runner.run(
+                request=request,
+                decision=decision,
+                run_id=run_id,
+                thread_id="thread-1",
+                execution_mode="core",
+                response_factory=lambda result: ResponseEnvelope(
+                    request_id=request.request_id,
+                    run_id=run_id,
+                    status=result.status,
+                    message=result.message,
+                    progress=ProgressState(
+                        current_phase="review",
+                        active_agent="main_agent",
+                        latest_event="turn_gated",
+                        status_message="review required",
+                        percent=0,
+                    ),
+                ),
+            )
+
+            turn = TurnSnapshot.model_validate(read_json(paths.root / "turn.json"))
+            self.assertEqual(response.status, "gated")
+            self.assertEqual(turn.status, "gated")
+            self.assertTrue(response.artifact_ids)
+            self.assertEqual(response.final_artifact_ids, [])
+            self.assertEqual(response.continuation["source"], "review")
 
     def test_stop_hook_blocks_with_a_persisted_continuation(self) -> None:
         class Adapter:
