@@ -17,6 +17,8 @@ from research_system.cli.flow.chat_dispatch import (
 from research_system.cli.flow.chat_result import print_chat_result_payload
 from research_system.cli.commands.research_request_payloads import build_research_request
 from research_system.cli.runtime.chat_research_runner_impl import run_chat_research
+from research_system.cli.shell.chat_fallback import run_chat_fallback
+from research_system.cli.shell.chat_shell import run_chat_tui
 from research_system.cli.state.chat_types import ChatSessionState
 from research_system.cli.state.chat_updates import dispatch_transcript_update
 from research_system.cli.commands.cli_command_dispatch import execute_cli_payload_command
@@ -36,12 +38,19 @@ def build_parser():
 def main(
     argv: list[str] | None = None,
     *,
-    run_chat_tui_fn,
-    run_chat_fallback_fn,
-    execute_cli_command_fn,
-    handle_chat_line_fn,
-    print_payload_fn,
+    run_chat_tui_fn=None,
+    run_chat_fallback_fn=None,
+    execute_cli_command_fn=None,
+    handle_chat_line_fn=None,
+    print_payload_fn=None,
 ) -> int:
+    run_chat_tui_fn = run_chat_tui if run_chat_tui_fn is None else run_chat_tui_fn
+    run_chat_fallback_fn = run_chat_fallback if run_chat_fallback_fn is None else run_chat_fallback_fn
+    execute_cli_command_fn = (
+        execute_cli_command if execute_cli_command_fn is None else execute_cli_command_fn
+    )
+    handle_chat_line_fn = handle_chat_line if handle_chat_line_fn is None else handle_chat_line_fn
+    print_payload_fn = print_cli_payload if print_payload_fn is None else print_payload_fn
     parser = build_parser()
     args = parser.parse_args(argv)
     settings = build_app_settings()
@@ -80,8 +89,9 @@ def execute_cli_command(
     openapi_spec_uri: str | None = None,
     openapi_operation_id: str | None = None,
     timeout_seconds: float | None = None,
-    orchestrator_cls=ResearchOrchestrator,
+    orchestrator_cls=None,
 ) -> object:
+    orchestrator_cls = ResearchOrchestrator if orchestrator_cls is None else orchestrator_cls
     runtime = build_cli_command_runtime(
         orchestrator_cls=orchestrator_cls,
         build_research_request_fn=build_research_request,
@@ -126,9 +136,13 @@ def handle_chat_line(
     task_router: TaskRouter,
     output_writer=None,
     stop_callback=None,
-    execute_cli_command_fn,
-    print_payload_fn,
+    execute_cli_command_fn=None,
+    print_payload_fn=None,
 ) -> str | None:
+    execute_cli_command_fn = (
+        execute_cli_command if execute_cli_command_fn is None else execute_cli_command_fn
+    )
+    print_payload_fn = print_cli_payload if print_payload_fn is None else print_payload_fn
     runtime = build_chat_app_runtime(
         controller_handle_chat_line_fn=controller_handle_chat_line,
         cli_command_runner=execute_cli_command_fn,

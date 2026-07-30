@@ -6,10 +6,10 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from research_system.cli.app import _execute_cli_command
+from research_system.cli.application.app_entrypoint import execute_cli_command
 from research_system.cli.commands.chat_command_catalog import print_chat_help
 from research_system.cli.rendering.chat_rendering import apply_tui_update, render_tui_output
-from research_system.cli.chat_scene import (
+from research_system.cli.view.chat_scene import (
     build_commands_popup_view,
     build_hint_bar_view,
     build_output_blocks,
@@ -379,8 +379,8 @@ class CliOutputTests(unittest.TestCase):
 
     def test_execute_cli_command_closes_orchestrator_for_history(self) -> None:
         _AppOrchestratorStub.instances.clear()
-        with patch("research_system.cli.app.ResearchOrchestrator", _AppOrchestratorStub):
-            rows = _execute_cli_command(
+        with patch("research_system.cli.application.app_entrypoint.ResearchOrchestrator", _AppOrchestratorStub):
+            rows = execute_cli_command(
                 Settings.from_env(Path(".")),
                 command="history",
                 limit=20,
@@ -392,19 +392,19 @@ class CliOutputTests(unittest.TestCase):
 
     def test_execute_cli_command_supports_proposal_commands(self) -> None:
         _AppOrchestratorStub.instances.clear()
-        with patch("research_system.cli.app.ResearchOrchestrator", _AppOrchestratorStub):
-            rows = _execute_cli_command(
+        with patch("research_system.cli.application.app_entrypoint.ResearchOrchestrator", _AppOrchestratorStub):
+            rows = execute_cli_command(
                 Settings.from_env(Path(".")),
                 command="proposals",
                 limit=10,
                 status_filter="pending",
             )
-            detail = _execute_cli_command(
+            detail = execute_cli_command(
                 Settings.from_env(Path(".")),
                 command="proposal",
                 run_id="01PROP",
             )
-            reviewed = _execute_cli_command(
+            reviewed = execute_cli_command(
                 Settings.from_env(Path(".")),
                 command="review-proposal",
                 run_id="01PROP",
@@ -420,19 +420,19 @@ class CliOutputTests(unittest.TestCase):
 
     def test_execute_cli_command_supports_subagent_discovery_commands(self) -> None:
         _AppOrchestratorStub.instances.clear()
-        with patch("research_system.cli.app.ResearchOrchestrator", _AppOrchestratorStub):
-            rows = _execute_cli_command(
+        with patch("research_system.cli.application.app_entrypoint.ResearchOrchestrator", _AppOrchestratorStub):
+            rows = execute_cli_command(
                 Settings.from_env(Path(".")),
                 command="subagent-discoveries",
                 limit=10,
                 status_filter="approved",
             )
-            detail = _execute_cli_command(
+            detail = execute_cli_command(
                 Settings.from_env(Path(".")),
                 command="subagent-discovery",
                 ticket_id="01DISC",
             )
-            reviewed = _execute_cli_command(
+            reviewed = execute_cli_command(
                 Settings.from_env(Path(".")),
                 command="review-subagent-discovery",
                 ticket_id="01DISC",
@@ -440,7 +440,7 @@ class CliOutputTests(unittest.TestCase):
                 intent="ops_reviewer",
                 status_filter="validated",
             )
-            activated = _execute_cli_command(
+            activated = execute_cli_command(
                 Settings.from_env(Path(".")),
                 command="activate-subagent-discovery",
                 ticket_id="01DISC",
@@ -449,7 +449,7 @@ class CliOutputTests(unittest.TestCase):
                 status_filter="delegate approved",
                 candidate_subagent_type="candidate_screening_strategy",
             )
-            runtime_activated = _execute_cli_command(
+            runtime_activated = execute_cli_command(
                 Settings.from_env(Path(".")),
                 command="activate-subagent-discovery",
                 ticket_id="01DISC",
@@ -460,7 +460,7 @@ class CliOutputTests(unittest.TestCase):
                 skill_name="market_snapshot_skill",
                 snapshot_type="market",
             )
-            http_runtime_activated = _execute_cli_command(
+            http_runtime_activated = execute_cli_command(
                 Settings.from_env(Path(".")),
                 command="activate-subagent-discovery",
                 ticket_id="01DISC",
@@ -473,7 +473,7 @@ class CliOutputTests(unittest.TestCase):
                 http_method="GET",
                 timeout_seconds=9.5,
             )
-            openapi_runtime_activated = _execute_cli_command(
+            openapi_runtime_activated = execute_cli_command(
                 Settings.from_env(Path(".")),
                 command="activate-subagent-discovery",
                 ticket_id="01DISC",
@@ -485,7 +485,7 @@ class CliOutputTests(unittest.TestCase):
                 openapi_spec_uri="https://example.com/openapi.json",
                 openapi_operation_id="getMarketSignal",
             )
-            mcp_runtime_activated = _execute_cli_command(
+            mcp_runtime_activated = execute_cli_command(
                 Settings.from_env(Path(".")),
                 command="activate-subagent-discovery",
                 ticket_id="01DISC",
@@ -497,7 +497,7 @@ class CliOutputTests(unittest.TestCase):
                 tool_name="market_signal_lookup",
                 timeout_seconds=7.5,
             )
-            template_runtime_activated = _execute_cli_command(
+            template_runtime_activated = execute_cli_command(
                 Settings.from_env(Path(".")),
                 command="activate-subagent-discovery",
                 ticket_id="01DISC",
@@ -612,7 +612,7 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("F12     toggle child detail expansion", popup.lines)
         self.assertIn("Ctrl+F8  focus next thread tree node", popup.lines)
 
-    @patch("research_system.cli.chat_scene.current_thread_summary", return_value=THREAD_SUMMARY)
+    @patch("research_system.cli.view.chat_scene.current_thread_summary", return_value=THREAD_SUMMARY)
     def test_build_hint_bar_view_uses_idle_thread_context(self, _current_thread_summary) -> None:
         session = self._session(state=ChatSessionState(current_intent="stock_compare"))
         session.current_phase = "collect"
@@ -640,9 +640,9 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("inspect:focused-call", hint.text)
         self.assertIn("child:1", hint.text)
 
-    @patch("research_system.cli.chat_scene.current_thread_summary", return_value=THREAD_SUMMARY)
-    @patch("research_system.cli.chat_scene.list_chat_threads", return_value=THREAD_ROWS)
-    @patch("research_system.cli.chat_scene.thread_preview_payload", return_value=THREAD_PREVIEW)
+    @patch("research_system.cli.view.chat_scene.current_thread_summary", return_value=THREAD_SUMMARY)
+    @patch("research_system.cli.view.chat_scene.list_chat_threads", return_value=THREAD_ROWS)
+    @patch("research_system.cli.view.chat_scene.thread_preview_payload", return_value=THREAD_PREVIEW)
     def test_build_threads_blocks_render_lineage_tree_and_focused_family(
         self,
         _thread_preview_payload,
@@ -666,9 +666,9 @@ class CliOutputTests(unittest.TestCase):
         self.assertIn("> -".replace(" ", ""), by_title["thread_tree:active"].lines[-1].replace(" ", ""))
         self.assertIn("source=fork:thread-parent", "\n".join(by_title["threads:active"].lines))
 
-    @patch("research_system.cli.chat_scene.current_thread_summary", return_value=THREAD_SUMMARY)
-    @patch("research_system.cli.chat_scene.list_chat_threads", return_value=THREAD_ROWS)
-    @patch("research_system.cli.chat_scene.thread_preview_payload", return_value=THREAD_PREVIEW)
+    @patch("research_system.cli.view.chat_scene.current_thread_summary", return_value=THREAD_SUMMARY)
+    @patch("research_system.cli.view.chat_scene.list_chat_threads", return_value=THREAD_ROWS)
+    @patch("research_system.cli.view.chat_scene.thread_preview_payload", return_value=THREAD_PREVIEW)
     def test_build_output_blocks_uses_threads_panel(
         self,
         _thread_preview_payload,
@@ -683,7 +683,7 @@ class CliOutputTests(unittest.TestCase):
         self.assertEqual(blocks[0].title, "thread")
         self.assertIn("thread_tree:active", [block.title for block in blocks])
 
-    @patch("research_system.cli.chat_scene.current_thread_summary", return_value=THREAD_SUMMARY)
+    @patch("research_system.cli.view.chat_scene.current_thread_summary", return_value=THREAD_SUMMARY)
     def test_build_shell_scene_view_exposes_help_layout(self, _current_thread_summary) -> None:
         session = self._session(
             state=ChatSessionState(

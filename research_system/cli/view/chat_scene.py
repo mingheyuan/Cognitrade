@@ -110,10 +110,17 @@ def build_transcript_blocks_for_session(session: TuiSession) -> list[TranscriptR
 def build_threads_blocks_runtime(
     session: TuiSession,
     *,
-    current_thread_summary_fn=current_thread_summary,
-    list_chat_threads_fn=list_chat_threads,
-    thread_preview_payload_fn=thread_preview_payload,
+    current_thread_summary_fn=None,
+    list_chat_threads_fn=None,
+    thread_preview_payload_fn=None,
 ) -> list[TranscriptRenderBlock]:
+    current_thread_summary_fn = (
+        current_thread_summary if current_thread_summary_fn is None else current_thread_summary_fn
+    )
+    list_chat_threads_fn = list_chat_threads if list_chat_threads_fn is None else list_chat_threads_fn
+    thread_preview_payload_fn = (
+        thread_preview_payload if thread_preview_payload_fn is None else thread_preview_payload_fn
+    )
     return support_build_threads_blocks(
         session,
         current_thread_summary=current_thread_summary_fn,
@@ -161,10 +168,21 @@ def build_output_blocks(session: TuiSession) -> list[TranscriptRenderBlock]:
 def build_output_blocks_runtime(
     session: TuiSession,
     *,
-    build_threads_blocks_fn=build_threads_blocks,
-    build_events_blocks_for_session_fn=build_events_blocks_for_session,
-    build_transcript_blocks_for_session_fn=build_transcript_blocks_for_session,
+    build_threads_blocks_fn=None,
+    build_events_blocks_for_session_fn=None,
+    build_transcript_blocks_for_session_fn=None,
 ) -> list[TranscriptRenderBlock]:
+    build_threads_blocks_fn = build_threads_blocks if build_threads_blocks_fn is None else build_threads_blocks_fn
+    build_events_blocks_for_session_fn = (
+        build_events_blocks_for_session
+        if build_events_blocks_for_session_fn is None
+        else build_events_blocks_for_session_fn
+    )
+    build_transcript_blocks_for_session_fn = (
+        build_transcript_blocks_for_session
+        if build_transcript_blocks_for_session_fn is None
+        else build_transcript_blocks_for_session_fn
+    )
     return support_build_output_blocks(
         session,
         build_threads_blocks=build_threads_blocks_fn,
@@ -184,8 +202,11 @@ def _idle_transcript_context_text(session: TuiSession) -> str:
 def idle_transcript_context_text_runtime(
     session: TuiSession,
     *,
-    current_thread_summary_fn=current_thread_summary,
+    current_thread_summary_fn=None,
 ) -> str:
+    current_thread_summary_fn = (
+        current_thread_summary if current_thread_summary_fn is None else current_thread_summary_fn
+    )
     return support_idle_transcript_context_text(
         session,
         current_thread_summary=current_thread_summary_fn,
@@ -211,8 +232,11 @@ def build_hint_bar_view(session: TuiSession) -> HintBarView:
 def build_hint_bar_view_runtime(
     session: TuiSession,
     *,
-    current_thread_summary_fn=current_thread_summary,
+    current_thread_summary_fn=None,
 ) -> HintBarView:
+    current_thread_summary_fn = (
+        current_thread_summary if current_thread_summary_fn is None else current_thread_summary_fn
+    )
     return scene_build_hint_bar_view(
         session,
         current_thread_summary=current_thread_summary_fn,
@@ -234,10 +258,17 @@ def build_shell_scene_view(session: TuiSession) -> ShellSceneView:
 def build_shell_scene_view_runtime(
     session: TuiSession,
     *,
-    build_output_blocks_fn=build_output_blocks,
-    build_commands_popup_view_fn=build_commands_popup_view,
-    current_thread_summary_fn=current_thread_summary,
+    build_output_blocks_fn=None,
+    build_commands_popup_view_fn=None,
+    current_thread_summary_fn=None,
 ) -> ShellSceneView:
+    build_output_blocks_fn = build_output_blocks if build_output_blocks_fn is None else build_output_blocks_fn
+    build_commands_popup_view_fn = (
+        build_commands_popup_view if build_commands_popup_view_fn is None else build_commands_popup_view_fn
+    )
+    current_thread_summary_fn = (
+        current_thread_summary if current_thread_summary_fn is None else current_thread_summary_fn
+    )
     return scene_build_shell_scene_view(
         session,
         build_output_blocks=build_output_blocks_fn,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.app import build_parser, main
+from research_system.cli.application.app_entrypoint import build_parser, main
 from research_system.cli.application.app_entry_support import (
     build_app_settings,
     execute_app_main_command,

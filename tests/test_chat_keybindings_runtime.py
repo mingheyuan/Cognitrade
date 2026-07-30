@@ -15,11 +15,11 @@ from research_system.cli.keybindings.chat_keybinding_runtime import (
     move_output_cursor,
     set_output_mode,
 )
-from research_system.cli.chat_keybindings import build_chat_keybindings
+from research_system.cli.keybindings.chat_keybindings import build_chat_keybindings
 
 
 class ChatKeybindingsRuntimeTests(unittest.TestCase):
-    def test_top_level_keybinding_supports_remain_compatible_with_keybindings_package(self) -> None:
+    def test_keybinding_supports_remain_available(self) -> None:
         self.assertIs(build_chat_keybindings_from_runtime, keybindings_build_chat_keybindings_from_runtime)
         self.assertIs(ChatKeybindingRuntime, KeybindingsChatKeybindingRuntime)
 

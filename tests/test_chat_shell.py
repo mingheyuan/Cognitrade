@@ -18,10 +18,10 @@ from research_system.schemas.protocol import ProgressState, RequestEnvelope, Res
 
 class ChatShellTests(unittest.TestCase):
     def test_app_chat_defaults_to_line_mode(self) -> None:
-        from research_system.cli import app as cli_app
+        from research_system.cli.application import app_entrypoint as cli_app
 
-        with patch("research_system.cli.app.run_chat_fallback", return_value=0) as line_mode, patch(
-            "research_system.cli.app.run_chat_tui", return_value=0
+        with patch("research_system.cli.application.app_entrypoint.run_chat_fallback", return_value=0) as line_mode, patch(
+            "research_system.cli.application.app_entrypoint.run_chat_tui", return_value=0
         ) as tui_mode:
             result = cli_app.main(["chat"])
 
@@ -30,10 +30,10 @@ class ChatShellTests(unittest.TestCase):
         tui_mode.assert_not_called()
 
     def test_app_chat_tui_mode_uses_tui_entrypoint(self) -> None:
-        from research_system.cli import app as cli_app
+        from research_system.cli.application import app_entrypoint as cli_app
 
-        with patch("research_system.cli.app.run_chat_tui", return_value=0) as tui_mode, patch(
-            "research_system.cli.app.run_chat_fallback", return_value=0
+        with patch("research_system.cli.application.app_entrypoint.run_chat_tui", return_value=0) as tui_mode, patch(
+            "research_system.cli.application.app_entrypoint.run_chat_fallback", return_value=0
         ) as line_mode:
             result = cli_app.main(["chat", "--ui", "tui"])
 
@@ -42,10 +42,10 @@ class ChatShellTests(unittest.TestCase):
         line_mode.assert_not_called()
 
     def test_app_chat_falls_back_when_windows_console_is_unavailable(self) -> None:
-        from research_system.cli import app as cli_app
+        from research_system.cli.application import app_entrypoint as cli_app
 
-        with patch("research_system.cli.app.run_chat_tui", side_effect=NoConsoleScreenBufferError()), patch(
-            "research_system.cli.app.run_chat_fallback", return_value=0
+        with patch("research_system.cli.application.app_entrypoint.run_chat_tui", side_effect=NoConsoleScreenBufferError()), patch(
+            "research_system.cli.application.app_entrypoint.run_chat_fallback", return_value=0
         ) as fallback:
             result = cli_app.main(["chat", "--ui", "tui"])
 

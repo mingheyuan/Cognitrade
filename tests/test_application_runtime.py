@@ -4,7 +4,7 @@ import argparse
 import unittest
 from pathlib import Path
 
-from research_system.cli.app import build_parser, main
+from research_system.cli.application.app_entrypoint import build_parser, main
 from research_system.cli.application.app_entry_support import (
     build_app_settings as application_build_app_settings,
     execute_app_main_command as application_execute_app_main_command,

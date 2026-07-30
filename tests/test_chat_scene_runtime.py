@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.chat_scene import (
+from research_system.cli.view.chat_scene import (
     _build_focused_thread_family_lines,
     _build_thread_lineage_tree_entries,
     _build_thread_lineage_tree_lines,

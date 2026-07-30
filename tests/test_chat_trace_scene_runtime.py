@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from research_system.cli.chat_trace_scene import (
+from research_system.cli.view.chat_trace_scene import (
     _append_trace_child_group_lines,
     _append_trace_child_tree_lines,
     _branch_has_nested_children,
@@ -32,7 +32,7 @@ from research_system.cli.chat_trace_scene import (
     build_trace_task_blocks,
     build_trace_task_blocks_for_session,
 )
-from research_system.cli.chat_trace_scene_support import (
+from research_system.cli.view.chat_trace_scene_support import (
     append_trace_child_group_lines,
     append_trace_child_tree_lines,
     branch_has_nested_children,

@@ -17,11 +17,19 @@ def _pick_interactive_stdio():
 
 def create_terminal_io(
     *,
-    pick_interactive_stdio_fn=_pick_interactive_stdio,
-    create_output_fn=create_output,
-    create_input_fn=create_input,
-    no_console_error_cls=NoConsoleScreenBufferError,
+    pick_interactive_stdio_fn=None,
+    create_output_fn=None,
+    create_input_fn=None,
+    no_console_error_cls=None,
 ):
+    pick_interactive_stdio_fn = (
+        _pick_interactive_stdio if pick_interactive_stdio_fn is None else pick_interactive_stdio_fn
+    )
+    create_output_fn = create_output if create_output_fn is None else create_output_fn
+    create_input_fn = create_input if create_input_fn is None else create_input_fn
+    no_console_error_cls = (
+        NoConsoleScreenBufferError if no_console_error_cls is None else no_console_error_cls
+    )
     stdout = pick_interactive_stdio_fn()
     stdin = sys.__stdin__ if sys.__stdin__ is not None else sys.stdin
 

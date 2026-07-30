@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from research_system.cli.prompt_toolkit_compat import NoConsoleScreenBufferError
-from research_system.cli.windows_terminal import create_terminal_io
+from research_system.cli.shell.windows_terminal import create_terminal_io
 
 
 class _TTYStub:
@@ -15,10 +15,10 @@ class _TTYStub:
 class WindowsTerminalTests(unittest.TestCase):
     def test_create_terminal_io_prefers_interactive_tty_mode(self) -> None:
         stdout = _TTYStub()
-        with patch("research_system.cli.windows_terminal._pick_interactive_stdio", return_value=stdout), patch(
-            "research_system.cli.windows_terminal.create_output", return_value="OUT"
+        with patch("research_system.cli.shell.windows_terminal._pick_interactive_stdio", return_value=stdout), patch(
+            "research_system.cli.shell.windows_terminal.create_output", return_value="OUT"
         ) as create_output_mock, patch(
-            "research_system.cli.windows_terminal.create_input", return_value="IN"
+            "research_system.cli.shell.windows_terminal.create_input", return_value="IN"
         ) as create_input_mock:
             input_obj, output_obj = create_terminal_io()
 
@@ -28,11 +28,11 @@ class WindowsTerminalTests(unittest.TestCase):
 
     def test_create_terminal_io_falls_back_when_console_screen_buffer_is_unavailable(self) -> None:
         stdout = _TTYStub()
-        with patch("research_system.cli.windows_terminal._pick_interactive_stdio", return_value=stdout), patch(
-            "research_system.cli.windows_terminal.create_output",
+        with patch("research_system.cli.shell.windows_terminal._pick_interactive_stdio", return_value=stdout), patch(
+            "research_system.cli.shell.windows_terminal.create_output",
             side_effect=[NoConsoleScreenBufferError(), "OUT_FALLBACK"],
         ) as create_output_mock, patch(
-            "research_system.cli.windows_terminal.create_input",
+            "research_system.cli.shell.windows_terminal.create_input",
             return_value="IN_FALLBACK",
         ) as create_input_mock:
             input_obj, output_obj = create_terminal_io()

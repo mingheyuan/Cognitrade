@@ -11,13 +11,13 @@ finance tooling during the final pack extraction.
 Installed packs:
 
 ```bash
-python -m research_system.cli.app domain-packs --json
+python -m research_system.cli.application domain-packs --json
 ```
 
 Run a pack by artifact contract:
 
 ```bash
-python -m research_system.cli.app domain-run legal_contract "Review this contract" \
+python -m research_system.cli.application domain-run legal_contract "Review this contract" \
   --artifact "contract_document=@contract.txt" --json
 ```
 
@@ -31,12 +31,12 @@ include confidence when the Graph governance requires it.
 Run controls and inspection:
 
 ```bash
-python -m research_system.cli.app domain-inspect <run_id> --json
-python -m research_system.cli.app domain-replay <run_id> --json
-python -m research_system.cli.app domain-pause <run_id> --json
-python -m research_system.cli.app domain-resume <run_id> --json
-python -m research_system.cli.app domain-rerun <run_id> <node_id> --json
-python -m research_system.cli.app domain-cancel <run_id> --json
+python -m research_system.cli.application domain-inspect <run_id> --json
+python -m research_system.cli.application domain-replay <run_id> --json
+python -m research_system.cli.application domain-pause <run_id> --json
+python -m research_system.cli.application domain-resume <run_id> --json
+python -m research_system.cli.application domain-rerun <run_id> <node_id> --json
+python -m research_system.cli.application domain-cancel <run_id> --json
 ```
 
 Each pack must provide `domain.yaml` plus `ontology`, `artifact_schemas`,
@@ -331,11 +331,11 @@ workspace/taxonomy/
 ### 运行一次研究
 
 ```bash
-python -m research_system.cli.app run "帮我看下 000001 这个股票" --json
-python -m research_system.cli.app run "分析茅台、宁德时代、比亚迪，谁更值得投资" --json
-python -m research_system.cli.app run "最近创新药板块怎么样" --json
-python -m research_system.cli.app run "请蒸馏这个雪球 statuses 文件 D:\\path\\to\\statuses.jsonl" --intent distill_kol_logic --json
-python -m research_system.cli.app run "复核上次创新药判断" --intent review_thesis --run-id <target_run_id> --json
+python -m research_system.cli.application run "帮我看下 000001 这个股票" --json
+python -m research_system.cli.application run "分析茅台、宁德时代、比亚迪，谁更值得投资" --json
+python -m research_system.cli.application run "最近创新药板块怎么样" --json
+python -m research_system.cli.application run "请蒸馏这个雪球 statuses 文件 D:\\path\\to\\statuses.jsonl" --intent distill_kol_logic --json
+python -m research_system.cli.application run "复核上次创新药判断" --intent review_thesis --run-id <target_run_id> --json
 ```
 
 ### 交互模式
@@ -343,13 +343,13 @@ python -m research_system.cli.app run "复核上次创新药判断" --intent rev
 默认 `chat` 是 line mode，交互体验更接近 `codex`，依赖终端原生滚动：
 
 ```bash
-python -m research_system.cli.app chat
+python -m research_system.cli.application chat
 ```
 
 如果你明确要进入全屏 TUI：
 
 ```bash
-python -m research_system.cli.app chat --ui tui
+python -m research_system.cli.application chat --ui tui
 ```
 
 如果 `--ui tui` 在当前终端不可用，会自动回退到 line mode。
@@ -421,15 +421,15 @@ python -m research_system.cli.app chat --ui tui
 ### 其他 CLI 命令
 
 ```bash
-python -m research_system.cli.app history --json
-python -m research_system.cli.app replay <run_id> --json
-python -m research_system.cli.app resume <run_id> --json
-python -m research_system.cli.app cancel <run_id> --json
-python -m research_system.cli.app status --json
-python -m research_system.cli.app doctor --json
-python -m research_system.cli.app check --json
-python -m research_system.cli.app cleanup --json
-python -m research_system.cli.app reindex-qdrant --json
+python -m research_system.cli.application history --json
+python -m research_system.cli.application replay <run_id> --json
+python -m research_system.cli.application resume <run_id> --json
+python -m research_system.cli.application cancel <run_id> --json
+python -m research_system.cli.application status --json
+python -m research_system.cli.application doctor --json
+python -m research_system.cli.application check --json
+python -m research_system.cli.application cleanup --json
+python -m research_system.cli.application reindex-qdrant --json
 ```
 
 ## 运行产物
@@ -512,7 +512,7 @@ workspace/memory/
 ## 本地检查
 
 ```bash
-python -m research_system.cli.app check --json
+python -m research_system.cli.application check --json
 python -m unittest discover -s tests -p "test_*.py" -v
 python -m compileall research_system tests
 ```

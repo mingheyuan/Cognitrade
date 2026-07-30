@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from prompt_toolkit.keys import Keys
 
-from research_system.cli.chat_keybindings import build_chat_keybindings
+from research_system.cli.keybindings.chat_keybindings import build_chat_keybindings
 from research_system.cli.state.chat_types import ChatSessionState, TuiSession
 from research_system.runtime.platform.settings import Settings
 from research_system.services.routing.router.task_router import TaskRouter
@@ -957,7 +957,7 @@ class ChatKeybindingsTests(unittest.TestCase):
         )
 
         ctrl_f8 = _find_binding(kb, str(Keys.ControlF8))
-        with patch("research_system.cli.chat_keybindings.list_chat_threads") as list_threads:
+        with patch("research_system.cli.keybindings.chat_keybindings.list_chat_threads") as list_threads:
             list_threads.return_value = [
                 {
                     "thread_id": "thread_parent_00",
@@ -1787,7 +1787,7 @@ class ChatKeybindingsTests(unittest.TestCase):
         focus_binding = _find_binding(kb, str(Keys.F8))
         from unittest.mock import patch
 
-        with patch("research_system.cli.chat_keybindings.list_chat_threads") as list_threads:
+        with patch("research_system.cli.keybindings.chat_keybindings.list_chat_threads") as list_threads:
             list_threads.return_value = [
                 {"thread_id": "thread_active_01"},
                 {"thread_id": "thread_parent_00"},
@@ -1824,8 +1824,8 @@ class ChatKeybindingsTests(unittest.TestCase):
         switch_binding = _find_binding(kb, str(Keys.F9))
         from unittest.mock import patch
 
-        with patch("research_system.cli.chat_keybindings.list_chat_threads") as list_threads, patch(
-            "research_system.cli.chat_keybindings.resume_session_thread"
+        with patch("research_system.cli.keybindings.chat_keybindings.list_chat_threads") as list_threads, patch(
+            "research_system.cli.keybindings.chat_keybindings.resume_session_thread"
         ) as resume_thread:
             list_threads.return_value = [
                 {"thread_id": "thread_active_01"},
@@ -1869,8 +1869,8 @@ class ChatKeybindingsTests(unittest.TestCase):
         fork_binding = _find_binding(kb, str(Keys.F10))
         from unittest.mock import patch
 
-        with patch("research_system.cli.chat_keybindings.list_chat_threads") as list_threads, patch(
-            "research_system.cli.chat_keybindings.fork_session_thread"
+        with patch("research_system.cli.keybindings.chat_keybindings.list_chat_threads") as list_threads, patch(
+            "research_system.cli.keybindings.chat_keybindings.fork_session_thread"
         ) as fork_thread:
             list_threads.side_effect = [
                 [
@@ -1920,8 +1920,8 @@ class ChatKeybindingsTests(unittest.TestCase):
         archive_binding = _find_binding(kb, str(Keys.F11))
         from unittest.mock import patch
 
-        with patch("research_system.cli.chat_keybindings.list_chat_threads") as list_threads, patch(
-            "research_system.cli.chat_keybindings.archive_session_thread"
+        with patch("research_system.cli.keybindings.chat_keybindings.list_chat_threads") as list_threads, patch(
+            "research_system.cli.keybindings.chat_keybindings.archive_session_thread"
         ) as archive_thread:
             list_threads.side_effect = [
                 [{"thread_id": "thread_active_01", "archived": False}],
@@ -1964,8 +1964,8 @@ class ChatKeybindingsTests(unittest.TestCase):
         archive_binding = _find_binding(kb, str(Keys.F11))
         from unittest.mock import patch
 
-        with patch("research_system.cli.chat_keybindings.list_chat_threads") as list_threads, patch(
-            "research_system.cli.chat_keybindings.unarchive_session_thread"
+        with patch("research_system.cli.keybindings.chat_keybindings.list_chat_threads") as list_threads, patch(
+            "research_system.cli.keybindings.chat_keybindings.unarchive_session_thread"
         ) as unarchive_thread:
             list_threads.side_effect = [
                 [{"thread_id": "thread_archived_01", "archived": True}],

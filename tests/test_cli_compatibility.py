@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import re
 import unittest
 from pathlib import Path
 
@@ -9,17 +10,20 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CLI_ROOT = REPOSITORY_ROOT / "research_system" / "cli"
 
-RETAINED_CLI_COMPAT_MODULES = {
-    "research_system.cli.chat_shell_scene": "research_system.cli.view.chat_shell_scene",
-    "research_system.cli.chat_thread_queries": "research_system.cli.memory.chat_thread_queries",
-    "research_system.cli.chat_trace_events_blocks": "research_system.cli.view.chat_trace_events_blocks",
-    "research_system.cli.chat_trace_events_linking": "research_system.cli.view.chat_trace_events_linking",
-    "research_system.cli.chat_trace_events_rows": "research_system.cli.view.chat_trace_events_rows",
-    "research_system.cli.chat_trace_events_support": "research_system.cli.view.chat_trace_events_support",
-    "research_system.cli.chat_trace_scene_support": "research_system.cli.view.chat_trace_scene_support",
-}
-
 REMOVED_CLI_COMPAT_MODULES = {
+    "research_system.cli.app",
+    "research_system.cli.chat_keybindings",
+    "research_system.cli.chat_scene",
+    "research_system.cli.chat_shell_scene",
+    "research_system.cli.chat_thread_queries",
+    "research_system.cli.chat_trace_events_blocks",
+    "research_system.cli.chat_trace_events_linking",
+    "research_system.cli.chat_trace_events_rows",
+    "research_system.cli.chat_trace_events_support",
+    "research_system.cli.chat_trace_scene",
+    "research_system.cli.chat_trace_scene_support",
+    "research_system.cli.chat_view",
+    "research_system.cli.windows_terminal",
     "research_system.cli.chat_shell_hint_support",
     "research_system.cli.chat_shell_layout_support",
     "research_system.cli.chat_shell_runtime",
@@ -75,18 +79,6 @@ def _has_star_import(path: Path) -> bool:
 
 
 class CliCompatibilityTests(unittest.TestCase):
-    def test_retained_cli_compat_modules_reexport_the_canonical_module(self) -> None:
-        for facade_name, canonical_name in RETAINED_CLI_COMPAT_MODULES.items():
-            with self.subTest(facade=facade_name):
-                facade = importlib.import_module(facade_name)
-                canonical = importlib.import_module(canonical_name)
-                facade_exports = {name for name in vars(facade) if not name.startswith("_")}
-                canonical_exports = {name for name in vars(canonical) if not name.startswith("_")}
-
-                self.assertEqual(facade_exports, canonical_exports)
-                for name in canonical_exports:
-                    self.assertIs(getattr(facade, name), getattr(canonical, name), name)
-
     def test_cli_has_no_star_compat_imports(self) -> None:
         actual = {
             _module_name(path)
@@ -114,7 +106,10 @@ class CliCompatibilityTests(unittest.TestCase):
             module_name: [
                 path
                 for path in _repository_python_files()
-                if module_name in path.read_text(encoding="utf-8-sig")
+                if re.search(
+                    rf"(?<![A-Za-z0-9_]){re.escape(module_name)}(?![A-Za-z0-9_])",
+                    path.read_text(encoding="utf-8-sig"),
+                )
             ]
             for module_name in REMOVED_CLI_COMPAT_MODULES
         }
