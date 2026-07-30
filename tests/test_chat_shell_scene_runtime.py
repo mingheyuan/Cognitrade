@@ -9,11 +9,24 @@ from research_system.cli.chat_shell_scene import (
     build_status_bar_items,
     output_mode_label,
 )
+from research_system.cli.view.chat_shell_scene import (
+    build_header_bar_view as canonical_build_header_bar_view,
+    build_input_bar_view as canonical_build_input_bar_view,
+    build_popup_layout_view as canonical_build_popup_layout_view,
+    build_status_bar_items as canonical_build_status_bar_items,
+    output_mode_label as canonical_output_mode_label,
+)
 from research_system.cli.state.chat_types import ChatSessionState, TuiSession
 
 
 class ChatShellSceneRuntimeTests(unittest.TestCase):
     def test_shell_scene_facade_exports_remain_available(self) -> None:
+        self.assertIs(output_mode_label, canonical_output_mode_label)
+        self.assertIs(build_status_bar_items, canonical_build_status_bar_items)
+        self.assertIs(build_header_bar_view, canonical_build_header_bar_view)
+        self.assertIs(build_input_bar_view, canonical_build_input_bar_view)
+        self.assertIs(build_popup_layout_view, canonical_build_popup_layout_view)
+
         session = TuiSession(
             settings=None,  # type: ignore[arg-type]
             state=ChatSessionState(),

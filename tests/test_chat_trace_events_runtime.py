@@ -21,18 +21,12 @@ from research_system.cli.chat_trace_events_support import (
 
 class ChatTraceEventsRuntimeTests(unittest.TestCase):
     def test_trace_events_facade_exports_split_supports(self) -> None:
-        self.assertIsNotNone(build_events_blocks)
-        self.assertIsNotNone(build_events_blocks_for_session)
-        self.assertIsNotNone(build_events_rows_for_session)
-        self.assertIsNotNone(build_linked_event_for_trace_session)
-        self.assertIsNotNone(build_linked_trace_for_events_session)
-        self.assertIsNotNone(linked_event_summary_for_trace_focus)
-        self.assertIsNotNone(facade_build_events_blocks)
-        self.assertIsNotNone(facade_build_events_blocks_for_session)
-        self.assertIsNotNone(facade_build_events_rows_for_session)
-        self.assertIsNotNone(facade_build_linked_event_for_trace_session)
-        self.assertIsNotNone(facade_build_linked_trace_for_events_session)
-        self.assertIsNotNone(facade_linked_event_summary_for_trace_focus)
+        self.assertIs(facade_build_events_blocks, build_events_blocks)
+        self.assertIs(facade_build_events_blocks_for_session, build_events_blocks_for_session)
+        self.assertIs(facade_build_events_rows_for_session, build_events_rows_for_session)
+        self.assertIs(facade_build_linked_event_for_trace_session, build_linked_event_for_trace_session)
+        self.assertIs(facade_build_linked_trace_for_events_session, build_linked_trace_for_events_session)
+        self.assertIs(facade_linked_event_summary_for_trace_focus, linked_event_summary_for_trace_focus)
 
 
 if __name__ == "__main__":
