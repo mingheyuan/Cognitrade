@@ -232,7 +232,7 @@ class ChatResearchRunnerTests(unittest.TestCase):
                         },
                     )
                 )
-                self.assertEqual(response.status, "completed_partial")
+                self.assertEqual(response.status, "completed")
                 snapshot = read_json(
                     settings.runs_root / str(response.run_id) / "execution_snapshot.json"
                 ) or {}
