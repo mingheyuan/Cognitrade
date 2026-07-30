@@ -173,7 +173,7 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["intent"], "stock_compare")
-        self.assertEqual(response.json()["status"], "completed_partial")
+        self.assertEqual(response.json()["status"], "completed")
 
     def test_versioned_api_persists_a_resumable_clarification_run(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
