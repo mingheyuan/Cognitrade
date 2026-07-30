@@ -66,16 +66,12 @@ def _repository_python_files() -> list[Path]:
     ]
 
 
-def _is_pure_star_forwarder(path: Path) -> bool:
+def _has_star_import(path: Path) -> bool:
     tree = ast.parse(path.read_text(encoding="utf-8-sig"))
-    imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)]
-    if not imports or not any(alias.name == "*" for node in imports for alias in node.names):
-        return False
-    return all(
-        node.module == "__future__"
-        or len(node.names) == 1 and node.names[0].name == "*"
-        for node in imports
-    ) and len(imports) == len(tree.body)
+    return any(
+        isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names)
+        for node in tree.body
+    )
 
 
 class CliCompatibilityTests(unittest.TestCase):
@@ -91,14 +87,14 @@ class CliCompatibilityTests(unittest.TestCase):
                 for name in canonical_exports:
                     self.assertIs(getattr(facade, name), getattr(canonical, name), name)
 
-    def test_cli_has_only_the_documented_pure_star_compat_modules(self) -> None:
+    def test_cli_has_no_star_compat_imports(self) -> None:
         actual = {
             _module_name(path)
             for path in CLI_ROOT.rglob("*.py")
-            if _is_pure_star_forwarder(path)
+            if _has_star_import(path)
         }
 
-        self.assertEqual(actual, set(RETAINED_CLI_COMPAT_MODULES))
+        self.assertEqual(actual, set())
         self.assertTrue(REMOVED_CLI_COMPAT_MODULES.isdisjoint(actual))
 
     def test_removed_cli_compat_modules_have_no_files(self) -> None:
