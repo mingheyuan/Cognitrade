@@ -1,0 +1,157 @@
+README.md
+  s_a6a8a3a6f43b3c::t_8a0ed59a6206b1 3-4,6,8-13,15,17,23,27,30,33-36,39,42-43,45,47,49-54,57,65-66,68,70,72-73,76,78-84,87-89,91,93-96,99,101,103-106,108-109,111,114-124,127,129,132-133,135-138,141,144-145,148,150-152
+api-doc/api-v1.md
+  s_a6a8a3a6f43b3c::t_4e8c0fb9085130 8,23-25,89-92,138,174,176-178,199,203
+api-doc/api-v2.md
+  s_a6a8a3a6f43b3c::t_cb660574769770 184-187
+deploy/backend.Dockerfile
+  s_a6a8a3a6f43b3c::t_4c237c9c8789c6 22,28
+domain_packs/finance_ashare/skills/__init__.py
+  s_a6a8a3a6f43b3c::t_65baaa9e223949 1
+domain_packs/finance_ashare/subagents/runtime.py
+  s_a6a8a3a6f43b3c::t_d19db78ffd9b08 443
+domain_packs/finance_ashare/tools/financial_data_provider.yaml
+  s_a6a8a3a6f43b3c::t_ea2c7b26d00896 1
+frontend/README.md
+  s_a6a8a3a6f43b3c::t_7c5589e1dde5a6 3-4,6,13,15-16,19,21-23,26-27,29,31-35,37,39-42,45-46
+frontend/src/App.tsx
+  s_a6a8a3a6f43b3c::t_c15477e128e905 27,84-92,94
+frontend/src/components/ResearchComposer.tsx
+  s_a6a8a3a6f43b3c::t_e5efea382f16c0 2,29,31,80-89,163-176,178,180-185
+frontend/src/components/Runs.tsx
+  s_a6a8a3a6f43b3c::t_af030b8540d0e0 20-23,26,69-76,107,119
+frontend/src/components/Sidebar.tsx
+  s_a6a8a3a6f43b3c::t_552541519ea2d0 12,25-26,42,49,60-67
+frontend/src/components/Topbar.tsx
+  s_a6a8a3a6f43b3c::t_d51938b1e21fc8 2,13,16,28-34,36-39,42,44-58,72-103,119,121,138-147,149,151-160,164-181,185-214
+frontend/src/components/WorkspaceView.tsx
+  s_a6a8a3a6f43b3c::t_5541299c1375df 52
+frontend/src/styles.css
+  s_a6a8a3a6f43b3c::t_315dc72d4d272f 125-128,288-340,664,750-937,2365-2399,3603-3613
+plan/current-architecture.md
+  s_a6a8a3a6f43b3c::t_3398b08ae91fa7 1-69
+research_system/api/app.py
+  s_a6a8a3a6f43b3c::t_9ff8b99608684b 11,82,111-113
+research_system/api/chat_service.py
+  s_a6a8a3a6f43b3c::t_3d3d6273bb830c 7,17,34-37,49-50,75,87-88,102-104,116,132,144,155,168,173,272
+research_system/api/chat_store.py
+  s_a6a8a3a6f43b3c::t_bb6a5d57dceb08 3-6,10-34,38-39,49-71,74-81,84-493,507-519,521-523,525,527-535,538,540,543-562,565-572,574-583,586-587,589-597,599-601,603,607,609-618,620,624-629,631-643,645,647,651-674,677,681-693,695-718,720-841,844
+research_system/api/dependencies.py
+  s_a6a8a3a6f43b3c::t_6f2028570ceecc 63
+research_system/api/routes/runs.py
+  s_a6a8a3a6f43b3c::t_b09aef44c21e60 105-122
+research_system/api/sse.py
+  s_a6a8a3a6f43b3c::t_19418cec8e99a0 196-197
+research_system/runtime/agent_os.py
+  s_a6a8a3a6f43b3c::t_364aa66d515cd9 30,120,238,532,703,718,1222,1229,1232,1247,1256,1444,1448,1532-1534,1881,1942-1944
+research_system/runtime/config/settings_env.py
+  s_a6a8a3a6f43b3c::t_0609eca64781b5 47
+research_system/runtime/core/builtin_tools.py
+  s_a6a8a3a6f43b3c::t_64685cc4303a0a 3-31,34-96,98-102,104-114,116-121,123-139,141-156,158-172,174-187,189-201,203-204,206-211,214
+research_system/runtime/core/core_loop.py
+  s_a6a8a3a6f43b3c::t_8986ed48387b46 3-5,7-20,22,25-31,34-35,37-40,42-43,45-98,100-129,131-190,192-197,199-203,205-243,246-346,348-352,354-401,403-409,411-475,477-486,488-499,501-508,510-514,516-522,524-529,531-547,549-601,603-625,627-632,634-640,642-653,655-804,806-809,812-822,824-842,844-855,857-900,903-907,910-914,916,918-932,934-949,951-959,961-973,975-989,992-999,1001-1012,1014-1036,1038-1045,1047-1070,1072,1075-1080,1082-1086,1088-1091,1093-1153,1155-1209,1211-1227,1229-1235,1238-1257,1259
+research_system/runtime/core/main_agent.py
+  s_a6a8a3a6f43b3c::t_a0d48b26d2da8d 12,964
+research_system/runtime/core/main_agent_planner.py
+  s_a6a8a3a6f43b3c::t_446595eb2e56a2 3-24,26-27,29-36,38-61
+research_system/runtime/core/tool_registry.py
+  s_a6a8a3a6f43b3c::t_285c9b240df320 969-970,976,984
+research_system/runtime/domain_packs/registry.py
+  s_a6a8a3a6f43b3c::t_9055bdc7fb4280 541,543
+research_system/runtime/execution/__init__.py
+  s_a6a8a3a6f43b3c::t_bdd502e3815845 4
+research_system/runtime/execution/core/__init__.py
+  s_a6a8a3a6f43b3c::t_c04dc954bacac5 4
+research_system/runtime/execution/core/execution_context.py
+  s_a6a8a3a6f43b3c::t_944d6a15726943 3-77,79,81,83-89,91-95,97-132,134-138,140-141,143-148,150-160,162-199,202-210
+research_system/runtime/execution/core/graph_runner.py
+  s_a6a8a3a6f43b3c::t_948f7d8a95baf4 4,23,31-39,1014-1034,2388,2392
+research_system/runtime/follow_up.py
+  s_a6a8a3a6f43b3c::t_ca4fa68670bf7f 114,137
+research_system/runtime/graph_delivery.py
+  s_a6a8a3a6f43b3c::t_4afe27872bdcc0 3,5,7-8,11-70,72-75,78-81,83-91,93-127,129-182,184-223,225-262,264,266-291,294-308,310-326,329
+research_system/runtime/intake/__init__.py
+  s_a6a8a3a6f43b3c::t_6c1cf74c5edf4f 3
+research_system/runtime/intake/pack_intake.py
+  s_a6a8a3a6f43b3c::t_16294046c88610 3-114
+research_system/runtime/planning/__init__.py
+  s_a6a8a3a6f43b3c::t_e7df460b2c912a 5
+research_system/runtime/presentation/__init__.py
+  s_a6a8a3a6f43b3c::t_67f4310463d5e3 3,5
+research_system/runtime/turn_context.py
+  s_a6a8a3a6f43b3c::t_92bd9a9c4ca26f 4-9,11-40,44-50,52-78
+research_system/runtime/turn_runner.py
+  s_a6a8a3a6f43b3c::t_c89ea0613c1cc3 4,11,24,57-59,1257-1258,1824,1943,2007-2008,2084-2085,2097,2164,2498,2540,2593,3000-3001,3049
+research_system/schemas/artifacts.py
+  s_a6a8a3a6f43b3c::t_89580e4cc95077 16,20-21,31-35,83,115
+research_system/schemas/domain_pack.py
+  s_a6a8a3a6f43b3c::t_ae14814e22f543 69
+research_system/schemas/events.py
+  s_a6a8a3a6f43b3c::t_bc964498c50234 16-17
+research_system/schemas/subagents.py
+  s_a6a8a3a6f43b3c::t_4f3c1664387b08 28,53-55,73
+research_system/services/memory/__init__.py
+  s_a6a8a3a6f43b3c::t_fa4b9d57116d8b 1-6,12
+scripts/deploy.sh
+  s_a6a8a3a6f43b3c::t_31c58f4c904c40 32,193,470-471,594-601
+scripts/migrate_workspace.py
+  s_a6a8a3a6f43b3c::t_04b33cfc0b666e 3-6,9-15,18-31,33-126,128-131,133-182,184-198,200-221,224-241,244-263,265-268,270-278
+tests/api_test_support.py
+  s_a6a8a3a6f43b3c::t_5066cd522642f3 97-98,206-209,211-213
+tests/test_agent_os.py
+  s_a6a8a3a6f43b3c::t_33a4142c6a5dd9 28,33-37,39
+tests/test_agent_os_core_loop.py
+  s_a6a8a3a6f43b3c::t_215336d165eca0 918
+tests/test_agent_os_protocol_contracts.py
+  s_a6a8a3a6f43b3c::t_fdfc50d9a745e0 39,45-46,51,59-60
+tests/test_agent_os_task_intake.py
+  s_a6a8a3a6f43b3c::t_d7259f7ca9e5fe 13,57,69,90,100,122-123,155-156,180
+tests/test_api_v1_chat.py
+  s_a6a8a3a6f43b3c::t_215829c44e21ff 11-12,16,32,36,193
+tests/test_api_v1_errors.py
+  s_a6a8a3a6f43b3c::t_73d8a4baf55226 13-14,30,34,56,67,78,97,108,133,139,151,162,176
+tests/test_api_v1_runs.py
+  s_a6a8a3a6f43b3c::t_c0756141d73f6a 18-19,37-38,42,52-54,58,74,98,122-123,131,140,163,180,188,213,247,250-251,264,276,305,345,419,435
+tests/test_api_v1_sse_openapi.py
+  s_a6a8a3a6f43b3c::t_5f11d3d129f555 16-17,83,91
+tests/test_api_v2_finance.py
+  s_a6a8a3a6f43b3c::t_31df857f824175 11,144
+tests/test_execution_graph_runner.py
+  s_a6a8a3a6f43b3c::t_c67ac595a4805c 845-857,859,867,877-889,891,898
+tests/test_provider_health.py
+  s_a6a8a3a6f43b3c::t_1e1a8558a84b16 32,39-40
+tests/test_root_packages_runtime.py
+  s_a6a8a3a6f43b3c::t_d043b5927e7f82 7
+tests/test_schema_taxonomy_packages_runtime.py
+  s_a6a8a3a6f43b3c::t_c51c19aaa5d418 6,17
+tests/test_settings_runtime.py
+  s_a6a8a3a6f43b3c::t_9464f0a1c48a53 30-32
+tests/test_tool_definition_contract.py
+  s_a6a8a3a6f43b3c::t_3ea5264515f544 27,36,44,55,103
+tests/test_top_level_packages_runtime.py
+  s_a6a8a3a6f43b3c::t_69c6a59c8523ef 8
+tests/test_turn_extensions.py
+  s_a6a8a3a6f43b3c::t_a33f20dcd8fd58 207,332,398,815,865-873,894,914,932,1037,1123,1149,1368
+tests/test_turn_runner.py
+  s_a6a8a3a6f43b3c::t_50ed6ccb5fffc6 123,139,178,190
+tests/test_workspace_migration.py
+  s_a6a8a3a6f43b3c::t_68c220e3de7c4d 5,7-10,13-14,16-22,24-28,30-34,36-52,54-69,71-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "d5fb7bded804f961c061bf08431a19fcb021ccef",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
