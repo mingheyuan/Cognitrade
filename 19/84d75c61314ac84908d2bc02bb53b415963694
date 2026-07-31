@@ -1,0 +1,59 @@
+README.md
+  s_a6a8a3a6f43b3c::t_af0e4e2661d331 11-12,58-61,121,131-132
+api-doc/api-v2.md
+  s_a6a8a3a6f43b3c::t_903b664cb3f655 14,17-19,22,30,33-40,80-83,204-205,216-217,239-243,274,298-299,315-316,333-335,350-351,357-358,388-440
+deploy/backend-entrypoint.sh
+  s_a6a8a3a6f43b3c::t_31170263c8972e 10-11
+frontend/src/api-client.ts
+  s_a6a8a3a6f43b3c::t_234b274d88a1ed 15-17,24,241-281
+frontend/src/components/PaperTrading.tsx
+  s_a6a8a3a6f43b3c::t_4b0005d205f07d 6,13,20,31-32,34,47,50,54,81,102-103,105-110,136-165,183,195,201,210,217,222-225,227,243,247,259-260
+frontend/src/components/Sidebar.tsx
+  s_a6a8a3a6f43b3c::t_464668696f9efe 17,38
+frontend/src/components/Topbar.tsx
+  s_a6a8a3a6f43b3c::t_0592d709d25287 23
+frontend/src/components/WorkspaceView.tsx
+  s_a6a8a3a6f43b3c::t_9644c0d8557c11 12,51
+frontend/src/data.ts
+  s_a6a8a3a6f43b3c::t_c3a335dc858c56 1
+frontend/src/finance-contracts.ts
+  s_a6a8a3a6f43b3c::t_42ed29f1b5b390 20-21,65,92-93,100,112-113,130-132,134-135,144-168,170-206
+frontend/src/hooks/useViewNavigation.test.ts
+  s_a6a8a3a6f43b3c::t_1aea0daa026512 8,11
+frontend/src/hooks/useViewNavigation.ts
+  s_a6a8a3a6f43b3c::t_a5134ca848e9ea 9
+frontend/src/styles/finance-components.css
+  s_a6a8a3a6f43b3c::t_1b417859bbf912 29-605
+research_system/api/app.py
+  s_a6a8a3a6f43b3c::t_0d0234faf69700 18,48,68-73,100,111
+research_system/api/dependencies.py
+  s_a6a8a3a6f43b3c::t_1fa13e9852c204 44,91-94,213
+research_system/api/finance_market_data_service.py
+  s_a6a8a3a6f43b3c::t_6ed91ab38a04a1 147-156
+research_system/api/hikyuu_backtest_runner.py
+  s_a6a8a3a6f43b3c::t_fbc261b22d0aa7 1-33
+research_system/api/paper_trading_service.py
+  s_a6a8a3a6f43b3c::t_08e7f36ee1af77 14,54,61,115-116,124-133,169-176,178-194,220,232,242-247,284-287,310-314,363-385,448-452,460-462,469,491-884,927-933,953,957-978,1108,1117-1118,1125-1130,1147-1161,1163-1172,1176-1272
+research_system/api/routes/finance.py
+  s_a6a8a3a6f43b3c::t_6b9767d1295cd3 11,22,35-36,45-56,103-109,169-170,178-261,292-300
+tests/test_hikyuu_backtest_service.py
+  s_a6a8a3a6f43b3c::t_afbdac5070ce62 1-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "1984d75c61314ac84908d2bc02bb53b415963694",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
