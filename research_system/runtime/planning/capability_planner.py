@@ -816,12 +816,6 @@ class CapabilityPlanner:
         allowed_side_effects = set(request.allowed_side_effect_levels)
         allowed_capability_tags = set(request.allowed_capability_tags)
         preferred = set(request.preferred_capabilities)
-        allow_legacy = bool(request.metadata.get("allow_legacy_capabilities"))
-        requested_runtime_aliases = {
-            str(item).strip()
-            for item in list(request.metadata.get("runtime_role_aliases") or [])
-            if str(item).strip()
-        }
         excluded_subagent_types = {
             str(item).strip()
             for item in request.metadata.get("exclude_subagent_types") or []
@@ -844,33 +838,6 @@ class CapabilityPlanner:
             produces=artifact_type,
             version=(str(request.metadata.get("domain_version") or "").strip() or None),
         ):
-            capability_tags = set(capability.tags)
-            is_runtime_alias = "runtime_alias" in capability_tags
-            if requested_runtime_aliases:
-                if not is_runtime_alias:
-                    continue
-                alias_tags = {
-                    tag.split(":", 1)[1]
-                    for tag in capability_tags
-                    if tag.startswith("runtime_alias:")
-                }
-                activation_tags = {
-                    tag.split(":", 1)[1]
-                    for tag in capability_tags
-                    if tag.startswith("runtime_activation:")
-                }
-                if not (
-                    capability.subagent_type in requested_runtime_aliases
-                    or alias_tags & requested_runtime_aliases
-                    or activation_tags & requested_runtime_aliases
-                ):
-                    continue
-            elif is_runtime_alias:
-                # Activated aliases are explicit opt-in extensions. Do not
-                # silently change the executor selected for existing graphs.
-                continue
-            if "legacy:compat" in set(capability.tags) and not allow_legacy:
-                continue
             if capability.subagent_type in excluded_subagent_types:
                 continue
             intent_tags = {

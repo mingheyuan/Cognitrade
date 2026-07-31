@@ -29,7 +29,7 @@ class DoctorRuntimeTests(unittest.TestCase):
             self.assertEqual(payload["status_counts"]["failed"], 1)
             self.assertEqual(len(payload["recent_runs"]), 2)
 
-    def test_run_doctor_exposes_router_and_provider_checks(self) -> None:
+    def test_run_doctor_exposes_runtime_and_provider_checks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings.from_env(Path(temp_dir))
             ensure_workspace_layout(settings)
@@ -40,7 +40,7 @@ class DoctorRuntimeTests(unittest.TestCase):
                 payload = run_doctor(settings)
 
         check_names = {item["name"] for item in payload["checks"]}
-        self.assertIn("router_runtime", check_names)
+        self.assertIn("provider_policy", check_names)
         self.assertIn("provider_chain_market", check_names)
         self.assertIn("runs_presence", check_names)
 

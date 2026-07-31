@@ -4,22 +4,8 @@ from _thread import RLock as RLockType
 from threading import RLock
 from typing import Any
 
+from research_system.api.chat_store import ChatThreadStore
 from research_system.api.errors import ApiError
-from research_system.cli.memory.chat_memory import (
-    archive_session_thread,
-    compact_session_thread,
-    fork_session_thread,
-    hydrate_session_from_persistent_memory,
-    list_chat_threads,
-    read_session_thread,
-    rename_session_thread,
-    start_new_session_thread,
-    thread_preview_payload,
-    unarchive_session_thread,
-)
-from research_system.cli.memory.chat_thread_store import ChatThreadStore
-from research_system.cli.memory.chat_memory import build_thread_context
-from research_system.cli.state.chat_state_models import ChatSessionState
 from research_system.runtime.platform.settings import Settings
 from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
 
@@ -28,7 +14,7 @@ _CHAT_STORE_LOCK = RLock()
 
 
 class ChatService:
-    """Transport-neutral facade over the CLI chat thread persistence helpers."""
+    """Transport-neutral service for the versioned chat API."""
 
     identity_scoped = True
 
@@ -45,21 +31,10 @@ class ChatService:
         tenant_id: str | None = None,
     ) -> dict[str, str]:
         with self._lock:
-            state = ChatSessionState()
-            thread_id = start_new_session_thread(settings=self.settings, state=state)
-            defaults = {
-                key: value
-                for key, value in {
-                    "user_id": user_id,
-                    "tenant_id": tenant_id,
-                }.items()
-                if value not in (None, "")
-            }
-            if defaults:
-                ChatThreadStore(self.settings).ensure_thread_metadata(
-                    thread_id=thread_id,
-                    defaults=defaults,
-                )
+            thread_id = ChatThreadStore(self.settings).create_thread(
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
             return {"thread_id": thread_id}
 
     def list_threads(
@@ -71,14 +46,13 @@ class ChatService:
         tenant_id: str | None = None,
     ) -> list[dict[str, Any]]:
         with self._lock:
-            rows = list_chat_threads(
-                settings=self.settings,
+            store = ChatThreadStore(self.settings)
+            rows = store.list_threads(
                 limit=limit,
                 scope=scope,
             )
             if user_id is None and tenant_id is None:
                 return rows
-            store = ChatThreadStore(self.settings)
             return [
                 row
                 for row in rows
@@ -97,17 +71,8 @@ class ChatService:
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         with self._lock:
-            # read_session_thread currently normalizes missing metadata to `{}`
-            # before its existence check, so perform an explicit store preflight.
             self._assert_thread_scope(thread_id, user_id=user_id, tenant_id=tenant_id)
-            payload = read_session_thread(
-                settings=self.settings,
-                state=ChatSessionState(),
-                thread_id=thread_id,
-            )
-            if payload is None:
-                raise self._not_found(thread_id)
-            return payload
+            return ChatThreadStore(self.settings).thread_detail(thread_id)
 
     def preview_thread(
         self,
@@ -119,9 +84,8 @@ class ChatService:
     ) -> dict[str, Any]:
         with self._lock:
             self._assert_thread_scope(thread_id, user_id=user_id, tenant_id=tenant_id)
-            return thread_preview_payload(
-                settings=self.settings,
-                thread_id=thread_id,
+            return ChatThreadStore(self.settings).preview_thread(
+                thread_id,
                 turn_limit=turn_limit,
             )
 
@@ -135,18 +99,10 @@ class ChatService:
     ) -> dict[str, Any]:
         with self._lock:
             self._assert_thread_scope(thread_id, user_id=user_id, tenant_id=tenant_id)
-            payload = rename_session_thread(
-                settings=self.settings,
-                state=ChatSessionState(thread_id=thread_id),
-                thread_label=thread_label,
+            return ChatThreadStore(self.settings).rename_thread(
+                thread_id,
+                thread_label,
             )
-            if payload is None:
-                raise ApiError(
-                    status_code=422,
-                    code="invalid_thread_label",
-                    message="thread_label must not be empty",
-                )
-            return payload
 
     def fork_thread(
         self,
@@ -157,12 +113,7 @@ class ChatService:
     ) -> dict[str, str]:
         with self._lock:
             self._assert_thread_scope(thread_id, user_id=user_id, tenant_id=tenant_id)
-            state = self._hydrated_state(thread_id)
-            child_thread_id = fork_session_thread(
-                settings=self.settings,
-                state=state,
-                source_thread_id=thread_id,
-            )
+            child_thread_id = ChatThreadStore(self.settings).fork_thread(thread_id)
             return {
                 "thread_id": child_thread_id,
                 "parent_thread_id": thread_id,
@@ -178,17 +129,7 @@ class ChatService:
         with self._lock:
             self._assert_thread_scope(thread_id, user_id=user_id, tenant_id=tenant_id)
             self._ensure_index_record(thread_id)
-            # REST has no implicit active session. Passing a state without a current
-            # thread prevents the CLI lifecycle helper from creating a replacement.
-            payload = archive_session_thread(
-                settings=self.settings,
-                state=ChatSessionState(),
-                thread_id=thread_id,
-            )
-            if payload is None:
-                raise self._not_found(thread_id)
-            payload["next_thread_id"] = None
-            return payload
+            return ChatThreadStore(self.settings).archive_thread(thread_id)
 
     def unarchive_thread(
         self,
@@ -200,13 +141,7 @@ class ChatService:
         with self._lock:
             self._assert_thread_scope(thread_id, user_id=user_id, tenant_id=tenant_id)
             self._ensure_index_record(thread_id)
-            payload = unarchive_session_thread(
-                settings=self.settings,
-                thread_id=thread_id,
-            )
-            if payload is None:
-                raise self._not_found(thread_id)
-            return payload
+            return ChatThreadStore(self.settings).unarchive_thread(thread_id)
 
     def compact_thread(
         self,
@@ -217,8 +152,7 @@ class ChatService:
     ) -> dict[str, Any]:
         with self._lock:
             self._assert_thread_scope(thread_id, user_id=user_id, tenant_id=tenant_id)
-            state = self._hydrated_state(thread_id)
-            return compact_session_thread(settings=self.settings, state=state)
+            return ChatThreadStore(self.settings).compact_thread(thread_id)
 
     def submit_research(
         self,
@@ -231,12 +165,12 @@ class ChatService:
     ) -> ResponseEnvelope:
         with self._lock:
             self._assert_thread_scope(thread_id, user_id=user_id, tenant_id=tenant_id)
-            state = self._hydrated_state(thread_id)
+            store = ChatThreadStore(self.settings)
             effective_request = request.model_copy(
                 update={
                     "thread_id": thread_id,
                     "conversation_context": [
-                        *build_thread_context(settings=self.settings, state=state),
+                        *store.build_context(thread_id),
                         *list(request.conversation_context),
                     ],
                     "slots": {
@@ -250,7 +184,6 @@ class ChatService:
                 response = run_service.run(effective_request, run_id=pending_run_id)
             else:
                 response = run_service.run(effective_request)
-            store = ChatThreadStore(self.settings)
             recorded_at = response.updated_at.isoformat()
             store.append_turn(
                 thread_id=thread_id,
@@ -336,16 +269,7 @@ class ChatService:
 
     def _require_thread(self, thread_id: str) -> None:
         store = ChatThreadStore(self.settings)
-        if store.has_thread(thread_id=thread_id):
-            return
-        # Match read_session_thread's index recovery behavior: a thread can still
-        # be considered present when its index entry is missing but a record exists.
-        records = (
-            store.load_thread_checkpoint(thread_id=thread_id),
-            store.load_thread_metadata(thread_id=thread_id),
-            store.load_thread_summary(thread_id=thread_id),
-        )
-        if any(isinstance(record, dict) for record in records):
+        if store.thread_exists(thread_id):
             return
         raise self._not_found(thread_id)
 
@@ -391,22 +315,6 @@ class ChatService:
         store = ChatThreadStore(self.settings)
         if not store.has_thread(thread_id=thread_id):
             store.ensure_thread(thread_id)
-
-    def _hydrated_state(self, thread_id: str) -> ChatSessionState:
-        state = ChatSessionState(thread_id=thread_id)
-        store = ChatThreadStore(self.settings)
-        checkpoint = store.load_thread_checkpoint(thread_id=thread_id)
-        has_checkpoint = isinstance(checkpoint, dict) and isinstance(
-            checkpoint.get("session_state"),
-            dict,
-        )
-        has_turns = bool(store.read_recent_turns(thread_id=thread_id, limit=1))
-        if has_checkpoint or has_turns:
-            hydrate_session_from_persistent_memory(settings=self.settings, state=state)
-        # The hydration fallback can consult global memory. The API operation must
-        # always remain scoped to the path thread, even when that fallback is used.
-        state.thread_id = thread_id
-        return state
 
     @staticmethod
     def _result_summary(response: ResponseEnvelope) -> str:

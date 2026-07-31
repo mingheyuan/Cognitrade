@@ -8,14 +8,14 @@ from fastapi.testclient import TestClient
 
 from api_test_support import (
     API_TOKEN,
-    FakeOrchestrator,
-    FakeOrchestratorFactory,
+    FakeRunService,
+    FakeRunServiceFactory,
     auth_headers,
 )
 from research_system.api.app import create_app
+from research_system.api.chat_store import ChatThreadStore
 from research_system.api.config import ApiConfig
 from research_system.api.chat_service import ChatService
-from research_system.cli.memory.chat_thread_store import ChatThreadStore
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.schemas.protocol import ProgressState, ResponseEnvelope
 
@@ -29,11 +29,11 @@ class ApiV1ChatTests(unittest.TestCase):
         self.temp_dir = TemporaryDirectory()
         self.settings = Settings.from_env(Path(self.temp_dir.name))
         ensure_workspace_layout(self.settings)
-        self.orchestrator = FakeOrchestrator()
+        self.run_service = FakeRunService()
         self.app = create_app(
             settings=self.settings,
             api_config=ApiConfig(api_token=API_TOKEN),
-            orchestrator_factory=FakeOrchestratorFactory(self.orchestrator),
+            run_service_factory=FakeRunServiceFactory(self.run_service),
             repo_root=REPO_ROOT,
         )
         self.client_context = TestClient(self.app, raise_server_exceptions=False)
@@ -190,7 +190,7 @@ class ApiV1ChatTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["run_id"], "01J00000000000000000000002")
-        call = self.orchestrator.calls_for("run")[-1]
+        call = self.run_service.calls_for("run")[-1]
         request = call.args[0]
         self.assertEqual(request.intent, "stock_check")
         self.assertEqual(request.slots["chat_thread_id"], thread_id)

@@ -9,7 +9,6 @@ __all__ = [
     "build_environment_checks",
     "build_provider_checks",
     "build_qdrant_checks",
-    "build_router_checks",
     "build_runs_presence_check",
     "build_status",
     "build_workspace_path_checks",
@@ -40,10 +39,6 @@ _EXPORTS = {
     "build_qdrant_checks": (
         "research_system.runtime.diagnostics.doctoring.doctor_workspace_checks",
         "build_qdrant_checks",
-    ),
-    "build_router_checks": (
-        "research_system.runtime.diagnostics.doctoring.doctor_router_checks",
-        "build_router_checks",
     ),
     "build_runs_presence_check": (
         "research_system.runtime.diagnostics.doctoring.doctor_workspace_checks",

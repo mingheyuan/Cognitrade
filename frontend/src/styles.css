@@ -122,6 +122,10 @@ select:focus-visible {
     var(--bg);
 }
 
+.app-shell.is-sidebar-collapsed {
+  --sidebar-width: 72px;
+}
+
 .app-workspace {
   min-width: 0;
 }
@@ -279,6 +283,59 @@ select:focus-visible {
   height: 30px;
   border-color: transparent;
   background: transparent;
+}
+
+.sidebar.is-collapsed {
+  align-items: center;
+  padding-inline: 10px;
+}
+
+.sidebar.is-collapsed .brand-row {
+  width: 100%;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 14px;
+}
+
+.sidebar.is-collapsed .brand-copy,
+.sidebar.is-collapsed .new-research-button span,
+.sidebar.is-collapsed .new-research-button kbd,
+.sidebar.is-collapsed .nav-section-label,
+.sidebar.is-collapsed .nav-item span,
+.sidebar.is-collapsed .thread-section,
+.sidebar.is-collapsed .system-state,
+.sidebar.is-collapsed .profile-row > span:not(.avatar),
+.sidebar.is-collapsed .profile-row > svg {
+  display: none;
+}
+
+.sidebar.is-collapsed .new-research-button {
+  width: 42px;
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar.is-collapsed .primary-nav {
+  width: 100%;
+}
+
+.sidebar.is-collapsed .nav-item {
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar.is-collapsed .nav-item.is-active::before {
+  left: -11px;
+}
+
+.sidebar.is-collapsed .sidebar-footer {
+  margin-top: auto;
+  border: 0;
+}
+
+.sidebar.is-collapsed .profile-row {
+  display: flex;
+  padding: 0;
 }
 
 .new-research-button {
@@ -604,6 +661,7 @@ select:focus-visible {
 }
 
 .topbar-actions {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -687,6 +745,194 @@ select:focus-visible {
   border: 0;
   background: transparent;
   color: var(--muted);
+}
+
+.topbar-popover {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  z-index: 70;
+  width: 310px;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: rgba(13, 25, 22, 0.98);
+  box-shadow: var(--shadow);
+}
+
+.topbar-popover header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 7px 9px;
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar-popover header strong {
+  font-size: 11px;
+}
+
+.topbar-popover header span,
+.local-search-dialog header > span,
+.local-preview-badge {
+  color: var(--mint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+  letter-spacing: 0.06em;
+}
+
+.topbar-popover > button {
+  display: grid;
+  width: 100%;
+  min-height: 50px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  grid-template-columns: auto minmax(0, 1fr);
+  text-align: left;
+}
+
+.topbar-popover > button:hover {
+  background: var(--surface-hover);
+  color: var(--text-soft);
+}
+
+.topbar-popover > button span {
+  display: grid;
+  min-width: 0;
+}
+
+.topbar-popover > button strong,
+.topbar-popover > button small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-popover > button strong {
+  font-size: 10px;
+}
+
+.topbar-popover > button small,
+.topbar-popover p,
+.topbar-popover > small {
+  color: var(--muted-dim);
+  font-size: 9px;
+}
+
+.topbar-popover p {
+  margin: 10px 7px 6px;
+}
+
+.topbar-popover > small {
+  display: block;
+  overflow: hidden;
+  margin: 0 7px 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-search-backdrop {
+  position: fixed;
+  z-index: 100;
+  display: grid;
+  padding: 10vh 20px 20px;
+  background: rgba(2, 7, 6, 0.68);
+  inset: 0;
+  place-items: start center;
+  backdrop-filter: blur(8px);
+}
+
+.local-search-dialog {
+  width: min(680px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  background: var(--surface);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.48);
+}
+
+.local-search-dialog > header {
+  display: grid;
+  min-height: 56px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px 9px 15px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.local-search-dialog input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.local-search-results {
+  display: grid;
+  max-height: 430px;
+  padding: 7px;
+  overflow: auto;
+}
+
+.local-search-results > button {
+  display: grid;
+  min-height: 56px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  text-align: left;
+}
+
+.local-search-results > button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.local-search-results > button > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+}
+
+.local-search-results strong,
+.local-search-results small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-search-results strong {
+  font-size: 11px;
+}
+
+.local-search-results small,
+.local-search-results time,
+.local-search-results > p,
+.local-search-dialog > footer {
+  color: var(--muted-dim);
+  font-size: 9px;
+}
+
+.local-search-results > p {
+  margin: 28px;
+  text-align: center;
+}
+
+.local-search-dialog > footer {
+  padding: 9px 15px;
+  border-top: 1px solid var(--border);
 }
 
 .workspace-grid {
@@ -2116,6 +2362,41 @@ select:focus-visible {
   padding: 0 6px;
 }
 
+.composer-tool-button em {
+  color: var(--mint);
+  font-size: 7px;
+  font-style: normal;
+}
+
+.local-materials-preview {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted-dim);
+  font-size: 8px;
+}
+
+.local-materials-preview button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mint);
+  font-size: 8px;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  white-space: nowrap !important;
+}
+
 .intent-select-trigger:hover,
 .intent-select-trigger:focus-visible,
 .intent-select.is-open .intent-select-trigger,
@@ -3317,6 +3598,17 @@ select:focus-visible {
 
 .table-filter-button {
   min-height: 31px;
+}
+
+.local-preview-badge {
+  display: inline-flex;
+  min-height: 31px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid rgba(125, 226, 189, 0.14);
+  border-radius: 6px;
+  background: var(--mint-soft);
 }
 
 .screening-table {

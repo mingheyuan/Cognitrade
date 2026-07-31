@@ -1,86 +1,46 @@
 # Cognitrade Web
 
-Cognitrade Web 是现有 CLI-first A 股多 Agent 研究系统的前端工作台。它把自然语言研究入口、结构化研究产物、Agent 进度、证据链和方法论演进组织在同一套界面中。
+React + TypeScript + Vite 前端。所有研究、行情、模拟交易和运行状态均通过版本化
+FastAPI 获取，不直接读取 `workspace`，也没有 CLI 依赖。
 
-## 本地运行
-
-正式运行在项目根目录执行统一部署入口；该命令会同时构建并后台启动后端 `api` 和前端 `web` 容器，前端由 Nginx 发布：
-
-```bash
-./scripts/deploy.sh --yes
-```
-
-部署地址默认为 `http://127.0.0.1:8080/`，根目录 `.env` 中的 `COGNITRADE_API_TOKEN` 用于浏览器访问 API。
-
-如果只开发前端，则在当前 `frontend/` 目录执行：
+## 开发
 
 ```bash
 npm install
 npm run dev
 ```
 
-默认地址为 `http://127.0.0.1:4173/`。
+默认 API 地址：
 
-容器构建默认连接同源 `/api/v1`；本地开发模式默认连接 `http://127.0.0.1:8000/api/v1`。可以在页面右上角的 API 状态按钮中修改地址并输入 Bearer token；地址持久化到 `localStorage`，token 只保存在当前标签页的 `sessionStorage`。也可以只配置非敏感地址：
-
-```bash
-VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1 npm run dev
+```text
+http://127.0.0.1:8000/api/v1
 ```
 
-不要配置 `VITE_COGNITRADE_API_TOKEN`，所有 `VITE_*` 值都会进入浏览器构建产物。
+可以设置：
+
+```dotenv
+VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
+VITE_COGNITRADE_API_TOKEN=<token>
+```
+
+也可以在页面顶栏配置地址和 Token。Token 只进入当前标签页的
+`sessionStorage`。
+
+## 数据边界
+
+- 研究运行、Dashboard、事件和 Artifact：`/api/v1`
+- 行情聚合与模拟交易：`/api/v2/finance`
+- API 返回数据缺口时显示可读提示，不展示上游连接异常原文。
+- 没有后端合同的功能必须标记“本地预览”；只允许处理已加载数据或文件元信息，
+  不生成虚构行情、财务或 Agent 结论。
+
+## 验证
 
 ```bash
 npm run lint
+npm test -- --run
 npm run build
-npm run preview
 ```
 
-## 页面
-
-- `研究工作台`：真实研究入口、结构化报告、运行轨迹、指标和证据。
-- `研究总览`：运行统计、ArtifactBoard 筛选候选、板块信号和系统状态。
-- `智能筛选`：读取最新 `screening_result` Artifact 的候选、评分、数据缺口与来源运行。
-- `方法论`：读取 DomainPack 方法论契约和已验证的 Policy Memory；不显示未验证的提案或回测数据。
-- `运行记录`：当前 DAG、事件摘要和历史 run 操作入口。
-
-页面不再内置行情、公司、评分或运行样本。后端未提供的字段统一显示“—”或接口缺口提示，不会用演示值补齐。
-
-## 后端接入边界
-
-仓库已经在 `research_system/api/` 提供 FastAPI 薄传输层，浏览器不需要也不能直接调用 CLI 或读取 `workspace/runs`。服务复用现有稳定协议：
-
-- 请求 / 响应：`research_system.schemas.protocol.RequestEnvelope`、`ResponseEnvelope`
-- 研究入口：`research_system.runtime.orchestration.orchestrator.ResearchOrchestrator.run`
-- 实时进度：FastAPI 从持久化 `events.jsonl` 输出原始 `RunEvent` SSE
-- 历史与详情：`history / replay / events / steps / metrics / trace`
-
-前端主要使用的 HTTP 边界：
-
-```text
-POST /api/v1/runs
-GET  /api/v1/runs
-GET  /api/v1/runs/{run_id}/replay
-GET  /api/v1/runs/{run_id}/events
-GET  /api/v1/runs/{run_id}/events/stream
-GET  /api/v1/runs/{run_id}/steps
-GET  /api/v1/runs/{run_id}/metrics
-POST /api/v1/runs/{run_id}/cancel
-POST /api/v1/runs/{run_id}/reruns
-GET  /api/v1/system/status
-GET  /api/v1/dashboard/{domain_id}/{view_id}
-```
-
-完整的 v1 接口、请求/响应和错误合同见根目录 [`api-doc/api-v1.md`](../api-doc/api-v1.md)。`src/research-contracts.ts` 与 `src/api-client.ts` 已覆盖当前页面实际使用的运行、回放、事件、指标、系统状态与 Dashboard 合同；新增接口仍应以 OpenAPI 和版本化接口文档为准。
-
-当前 `POST /runs` 是同步请求，前端提交期间只能展示全局等待状态，完成并返回 `run_id` 后才加载详情。Dashboard v1 仅投影 Pack 声明的视图；通用版本化 Artifact 内容读取、实时行情、上传、派生研究和全局搜索等缺口同样见 [`api-todo/api-v2-todo.md`](../api-todo/api-v2-todo.md)。
-
-API 默认监听 `http://127.0.0.1:8000`，开发 CORS 白名单已包含 Vite 的 `http://127.0.0.1:4173` 和 `http://localhost:4173`。所有 `/api/v1` 请求都需要 Bearer token；前端接入时应通过受控登录/BFF 或运行时输入获得短期凭据，不能把服务端 token 写进 `VITE_*`。
-
-SSE 接口同样要求 Bearer token，而浏览器原生 `EventSource` 不能添加 `Authorization` header。当前页面通过 REST 轮询活动运行；后续切换 fetch-SSE 或同源 BFF 时，不要把 token 放进 URL query。
-
-## 安全边界
-
-- OpenAI、Qdrant、Redis 和数据供应商密钥只能存在服务端。
-- 不要把密钥写入任何 `VITE_*` 变量；它们会进入浏览器构建产物。
-- 普通研究视图只展示阶段、事件摘要和中间产物，不展示模型内部推理过程。
-- 所有估值与研究判断都必须保留数据截止时间、来源、缺失字段和降级原因。
+接口合同见 [`../api-doc/api-v1.md`](../api-doc/api-v1.md) 和
+[`../api-doc/api-v2.md`](../api-doc/api-v2.md)。

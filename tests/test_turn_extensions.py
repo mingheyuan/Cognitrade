@@ -204,7 +204,7 @@ class TurnExtensionTests(unittest.TestCase):
                 ),
             )
             root = run_store.load_run_paths(run_id).root
-            turn = TurnSnapshot.model_validate(read_json(root / "turn.json"))
+            turn = TurnSnapshot.model_validate(read_json(root / "turn_state.json"))
             self.assertEqual(len(turn.child_turns), 1)
             self.assertEqual(turn.child_turns[0].parent_node_id, "analyst")
             self.assertEqual(response.child_turn_ids, [turn.child_turns[0].child_turn_id])
@@ -329,7 +329,7 @@ class TurnExtensionTests(unittest.TestCase):
                 ),
             )
 
-            turn = TurnSnapshot.model_validate(read_json(paths.root / "turn.json"))
+            turn = TurnSnapshot.model_validate(read_json(paths.root / "turn_state.json"))
             self.assertEqual(response.status, "gated")
             self.assertEqual(turn.status, "gated")
             self.assertTrue(response.artifact_ids)
@@ -395,7 +395,7 @@ class TurnExtensionTests(unittest.TestCase):
                 ),
             )
             root = run_store.load_run_paths(run_id).root
-            turn = TurnSnapshot.model_validate(read_json(root / "turn.json"))
+            turn = TurnSnapshot.model_validate(read_json(root / "turn_state.json"))
             task = read_json(root / "task_state.json")
             events = read_jsonl(root / "execution_events.jsonl")
 
@@ -812,7 +812,7 @@ class TurnExtensionTests(unittest.TestCase):
             self.assertNotEqual(first.target_turn_id, "child-1")
             self.assertTrue(second.duplicate)
             persisted = TurnSnapshot.model_validate(
-                read_json(run_store.load_run_paths(run_id).root / "turn.json")
+                read_json(run_store.load_run_paths(run_id).root / "turn_state.json")
             )
             self.assertEqual(len(persisted.child_turns), 2)
             self.assertEqual(persisted.child_turns[-1].relation, "continuation")
@@ -862,6 +862,15 @@ class TurnExtensionTests(unittest.TestCase):
                 lambda value: child_stop_hooks.append(value)
                 or {"should_stop": False, "should_block": False},
             )
+            role = RoleContract(
+                role_id="analyst",
+                role_version="1.0.0",
+                display_name="Analyst",
+                objective="Recheck the supplied evidence.",
+                allowed_tools=["core.message.compose"],
+                allowed_permissions=["conversation:write"],
+                source="pack",
+            )
             request = RequestEnvelope(user_query="graph")
             run_id, _, _ = agent_os.run_store.create_run(request, "domain:test")
             turn = TurnSnapshot(
@@ -882,6 +891,7 @@ class TurnExtensionTests(unittest.TestCase):
                         "parent_run_id": run_id,
                         "parent_node_id": "analyst",
                         "role_id": "analyst",
+                        "role_contract": role.model_dump(mode="json"),
                         "status": "completed",
                     }
                 ],
@@ -901,7 +911,7 @@ class TurnExtensionTests(unittest.TestCase):
             self.assertEqual(result.delivery, "triggered_new_turn")
             continuation_root = root / "runs" / run_id / "child_turns" / str(result.target_turn_id)
             self.assertEqual(read_json(continuation_root / "main_agent_state.json")["status"], "completed")
-            child_turn = TurnSnapshot.model_validate(read_json(continuation_root / "turn.json"))
+            child_turn = TurnSnapshot.model_validate(read_json(continuation_root / "turn_state.json"))
             self.assertGreater(child_turn.sequence, 0)
             self.assertTrue(child_turn.last_event_id)
             child_events = read_jsonl(continuation_root / "execution_events.jsonl")
@@ -919,7 +929,7 @@ class TurnExtensionTests(unittest.TestCase):
                 Path(child_stop_hooks[0].agent_transcript_ref or ""),
                 continuation_root / "task_state.json",
             )
-            persisted = TurnSnapshot.model_validate(read_json(root / "runs" / run_id / "turn.json"))
+            persisted = TurnSnapshot.model_validate(read_json(root / "runs" / run_id / "turn_state.json"))
             self.assertEqual(persisted.child_turns[-1].status, "completed")
             self.assertGreater(persisted.child_turns[-1].sequence, 0)
             parent_board = ArtifactBoard(root / "runs" / run_id / "artifact_board.jsonl")
@@ -1024,7 +1034,7 @@ class TurnExtensionTests(unittest.TestCase):
             continuation_root = root / "runs" / run_id / "child_turns" / str(result.target_turn_id)
             child_state = read_json(continuation_root / "main_agent_state.json")
             self.assertEqual(child_state["status"], "completed_partial")
-            child_turn = TurnSnapshot.model_validate(read_json(continuation_root / "turn.json"))
+            child_turn = TurnSnapshot.model_validate(read_json(continuation_root / "turn_state.json"))
             self.assertEqual(child_turn.usage["model_turns"], 1)
             self.assertGreaterEqual(child_turn.usage["tool_calls"], 2)
             events = read_jsonl(continuation_root / "execution_events.jsonl")
@@ -1110,7 +1120,7 @@ class TurnExtensionTests(unittest.TestCase):
             )
             self.assertTrue(first.accepted)
             first_child_root = root / "runs" / run_id / "child_turns" / str(first.target_turn_id)
-            self.assertEqual(read_json(first_child_root / "turn.json")["status"], "waiting_approval")
+            self.assertEqual(read_json(first_child_root / "turn_state.json")["status"], "waiting_approval")
             approvals = HumanApprovalStore(root / "runs" / run_id / "approvals.jsonl")
             pending = approvals.list(status="pending")
             self.assertEqual(len(pending), 1)
@@ -1136,7 +1146,7 @@ class TurnExtensionTests(unittest.TestCase):
             )
             self.assertTrue(resumed.accepted)
             resumed_root = root / "runs" / run_id / "child_turns" / str(resumed.target_turn_id)
-            self.assertEqual(read_json(resumed_root / "turn.json")["status"], "completed")
+            self.assertEqual(read_json(resumed_root / "turn_state.json")["status"], "completed")
             self.assertEqual(provider.calls, 1)
 
     def test_running_child_followup_is_injected_at_graph_safe_point(self) -> None:
@@ -1355,7 +1365,7 @@ class TurnExtensionTests(unittest.TestCase):
             self.assertEqual(response.status, "gated")
             self.assertEqual(
                 TurnSnapshot.model_validate(
-                    read_json(run_store.load_run_paths(run_id).root / "turn.json")
+                    read_json(run_store.load_run_paths(run_id).root / "turn_state.json")
                 ).status,
                 "gated",
             )

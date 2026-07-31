@@ -12,6 +12,7 @@ from domain_packs.finance_ashare.tools import snapshot_collector
 from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
+from research_system.runtime.agent_os import AgentOS
 from research_system.runtime.platform.settings import Settings
 
 
@@ -36,6 +37,13 @@ class _SecurityMaster:
             {"symbol": "600003", "name": "Gamma", "amount": 1_000_000_000},
         ]
         return rows[:limit]
+
+
+def _offline_agent_os(settings: Settings) -> AgentOS:
+    agent_os = AgentOS(settings)
+    agent_os.main_agent.llm_provider = None
+    agent_os.request_intake.llm_provider = None
+    return agent_os
 
 
 class FinancePackMigrationCompletionTests(unittest.TestCase):
@@ -190,7 +198,11 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                 }
             )
             with TestClient(
-                create_app(settings=settings, api_config=ApiConfig(api_token="migration-completion"))
+                create_app(
+                    settings=settings,
+                    api_config=ApiConfig(api_token="migration-completion"),
+                    agent_os_factory=_offline_agent_os,
+                )
             ) as client:
                 headers = {"Authorization": "Bearer migration-completion"}
                 prior = client.post(
@@ -277,7 +289,11 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                 }
             )
             with TestClient(
-                create_app(settings=settings, api_config=ApiConfig(api_token="specialized-intents"))
+                create_app(
+                    settings=settings,
+                    api_config=ApiConfig(api_token="specialized-intents"),
+                    agent_os_factory=_offline_agent_os,
+                )
             ) as client:
                 headers = {"Authorization": "Bearer specialized-intents"}
 

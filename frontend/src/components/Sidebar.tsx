@@ -9,6 +9,7 @@ import {
   Command,
   LayoutDashboard,
   PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Search,
   Sparkles,
@@ -21,6 +22,8 @@ import { isActiveStatus, runListItem } from '../live-data'
 
 type SidebarProps = {
   activeView: ViewId
+  collapsed: boolean
+  onToggleCollapsed: () => void
   onNavigate: (view: ViewId) => void
   onNewResearch: () => void
   onOpenRun: (runId: string) => void
@@ -36,14 +39,14 @@ const navigation: Array<{ id: ViewId; label: string; icon: LucideIcon }> = [
   { id: 'runs', label: '运行记录', icon: Activity },
 ]
 
-export function Sidebar({ activeView, onNavigate, onNewResearch, onOpenRun }: SidebarProps) {
+export function Sidebar({ activeView, collapsed, onToggleCollapsed, onNavigate, onNewResearch, onOpenRun }: SidebarProps) {
   const { runs, selectedRunId, connectionState, systemStatus } = useCognitrade()
   const recentRuns = runs.slice(0, 4).map(runListItem)
   const providerName = typeof systemStatus?.provider_name === 'string' ? systemStatus.provider_name : 'provider'
   const totalRuns = typeof systemStatus?.total_runs === 'number' ? systemStatus.total_runs : runs.length
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${collapsed ? 'is-collapsed' : ''}`}>
       <div className="brand-row">
         <button className="brand" onClick={() => onNavigate('workbench')} aria-label="返回研究工作台">
           <span className="brand-mark" aria-hidden="true">
@@ -54,7 +57,14 @@ export function Sidebar({ activeView, onNavigate, onNewResearch, onOpenRun }: Si
           </span>
           <span className="brand-copy"><strong>COGNITRADE</strong><small>RESEARCH OS</small></span>
         </button>
-        <button className="icon-button sidebar-collapse" aria-label="收起侧边栏" disabled><PanelLeftClose size={17} /></button>
+        <button
+          className="icon-button sidebar-collapse"
+          aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
+          aria-pressed={collapsed}
+          onClick={onToggleCollapsed}
+        >
+          {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+        </button>
       </div>
 
       <button className="new-research-button" onClick={onNewResearch}>

@@ -538,11 +538,9 @@ class DomainPackRegistry:
         definitions: list[PackToolDefinition] = []
         for path in sorted((pack_root / "tools").glob("*.yaml")):
             payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-            if not isinstance(payload, dict) or not payload.get("tool_id"):
+            if not isinstance(payload, dict) or not payload.get("name"):
                 continue
-            # The canonical ToolDefinition uses conservative Core defaults;
-            # Pack-owned tools preserve their historical read-only/subagent
-            # defaults at the Registry boundary.
+            # Pack-owned tools use read-only/subagent defaults at the Registry boundary.
             payload = dict(payload)
             payload.setdefault("namespace", "pack")
             payload.setdefault("side_effect_level", "read_only")

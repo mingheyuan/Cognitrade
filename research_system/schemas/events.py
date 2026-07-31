@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from research_system.runtime.core.id_utils import generate_ulid
@@ -15,8 +13,8 @@ def utc_now() -> datetime:
 class EventEnvelope(BaseModel):
     """Canonical event envelope for the Agent OS execution stream.
 
-    Event-specific fields remain at the top level for existing UI and API
-    consumers. ``extra=allow`` makes the envelope additive while the fields
+    Event-specific fields remain at the top level for UI and API consumers.
+    ``extra=allow`` makes the envelope additive while the fields
     below are mandatory for every new canonical event.
     """
 
@@ -43,18 +41,6 @@ class EventEnvelope(BaseModel):
     operation_id: str | None = None
     artifact_ids: list[str] = Field(default_factory=list)
     child_turn_ids: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_legacy_aliases(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        payload = dict(value)
-        if not payload.get("tool_call_id") and payload.get("call_id"):
-            payload["tool_call_id"] = payload["call_id"]
-        if not payload.get("artifact_ids") and payload.get("artifact_id"):
-            payload["artifact_ids"] = [payload["artifact_id"]]
-        return payload
 
     @model_validator(mode="after")
     def validate_identity(self) -> "EventEnvelope":

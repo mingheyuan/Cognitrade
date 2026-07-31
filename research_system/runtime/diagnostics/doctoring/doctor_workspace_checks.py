@@ -12,15 +12,9 @@ def build_config_file_checks(settings: Settings) -> list[dict]:
             "path": str(path),
         }
         for name, path in {
-            "retrieval_policy": settings.retrieval_policy_path,
-            "methodology_manifest": settings.methodology_manifest_path,
             "provider_policy": settings.provider_policy_path,
             "data_sources": settings.data_sources_path,
             "mcp_servers": settings.mcp_servers_path,
-            "taxonomy_dimensions": settings.taxonomy_dimensions_path,
-            "taxonomy_dimension_aliases": settings.taxonomy_dimension_aliases_path,
-            "taxonomy_dimension_patterns": settings.taxonomy_dimension_patterns_path,
-            "review_policy": settings.review_policy_path,
         }.items()
     ]
 
@@ -37,7 +31,6 @@ def build_workspace_path_checks(settings: Settings) -> list[dict]:
             "runs_root": settings.runs_root,
             "reports_root": settings.reports_root,
             "memory_root": settings.memory_root,
-            "taxonomy_root": settings.taxonomy_root,
         }.items()
     ]
 

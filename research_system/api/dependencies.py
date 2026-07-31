@@ -60,17 +60,7 @@ def get_settings(request: Request) -> Settings:
 
 
 def get_agent_os(request: Request):
-    runtime = getattr(request.app.state, "api_runtime", None)
-    if isinstance(runtime, ApiRuntimeState):
-        return runtime.agent_os
-    agent_os = getattr(request.app.state, "agent_os", None)
-    if agent_os is None:
-        raise ApiError(
-            status_code=503,
-            code="agent_os_not_ready",
-            message="Agent OS runtime has not finished starting",
-        )
-    return agent_os
+    return get_api_runtime(request).agent_os
 
 
 def get_run_service(request: Request):
@@ -107,28 +97,6 @@ def require_principal(
 ) -> ApiPrincipal:
     config = get_api_runtime(request).config
     return _authenticate_principal(request, config, credentials)
-
-
-def get_workspace_principal(
-    request: Request,
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_BEARER_AUTH)] = None,
-) -> ApiPrincipal:
-    """Authenticate the legacy workspace API when the application is serving normally.
-
-    A TestClient can call the unversioned workspace routes without entering the
-    lifespan. That embedded mode has no runtime config and is treated as local
-    development; normal server requests always use the configured principal.
-    """
-    runtime = getattr(request.app.state, "api_runtime", None)
-    if not isinstance(runtime, ApiRuntimeState):
-        return ApiPrincipal(
-            actor_id="local_workspace",
-            authenticated=False,
-            user_id=request.headers.get("X-User-ID") or None,
-            tenant_id=request.headers.get("X-Tenant-ID") or None,
-            roles=("admin", "user"),
-        )
-    return _authenticate_principal(request, runtime.config, credentials)
 
 
 def _authenticate_principal(
@@ -241,7 +209,6 @@ __all__ = [
     "get_mutation_lock",
     "get_repo_root",
     "get_settings",
-    "get_workspace_principal",
     "require_principal",
     "require_role",
 ]

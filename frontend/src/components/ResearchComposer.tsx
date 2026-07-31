@@ -1,5 +1,5 @@
 import { ArrowUp, Check, ChevronDown, Paperclip, SlidersHorizontal, Sparkles } from 'lucide-react'
-import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
+import { type ChangeEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
 import type { ResearchIntent } from '../research-contracts'
 
 type ResearchComposerProps = {
@@ -26,7 +26,9 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
   const [intentMenuOpen, setIntentMenuOpen] = useState(false)
   const intentSelectRef = useRef<HTMLDivElement>(null)
   const intentTriggerRef = useRef<HTMLButtonElement>(null)
+  const materialInputRef = useRef<HTMLInputElement>(null)
   const intentOptionRefs = useRef<Partial<Record<IntentValue, HTMLButtonElement | null>>>({})
+  const [localMaterials, setLocalMaterials] = useState<Array<{ name: string; size: number }>>([])
 
   useEffect(() => {
     if (!intentMenuOpen) return
@@ -73,6 +75,16 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
     if (!normalized || running) return
     onSubmit(normalized, intent === 'auto' ? undefined : intent)
     setQuery('')
+  }
+
+  const previewMaterials = (event: ChangeEvent<HTMLInputElement>) => {
+    setLocalMaterials(
+      Array.from(event.target.files || []).map((file) => ({
+        name: file.name,
+        size: file.size,
+      })),
+    )
+    event.target.value = ''
   }
 
   return (
@@ -148,10 +160,29 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
             </div>
           )}
         </div>
-        <button className="composer-tool-button" type="button" disabled title="后端 v1 暂未提供材料上传接口">
+        <input
+          ref={materialInputRef}
+          className="visually-hidden"
+          type="file"
+          multiple
+          onChange={previewMaterials}
+          tabIndex={-1}
+        />
+        <button
+          className="composer-tool-button"
+          type="button"
+          title="本地预览：只读取文件名和大小，不上传文件"
+          onClick={() => materialInputRef.current?.click()}
+        >
           <Paperclip size={14} />
-          添加材料
+          添加材料 <em>本地预览</em>
         </button>
+        {localMaterials.length > 0 && (
+          <span className="local-materials-preview" title={localMaterials.map((file) => `${file.name} · ${Math.ceil(file.size / 1024)} KB`).join('\n')}>
+            已选择 {localMaterials.length} 个文件 · 未上传
+            <button type="button" onClick={() => setLocalMaterials([])} aria-label="清除本地材料预览">清除</button>
+          </span>
+        )}
         <span className="composer-hint">Enter 发送 · Shift + Enter 换行</span>
       </div>
     </form>

@@ -1,4 +1,4 @@
-tool_id: financial_data_provider
+name: financial_data_provider
 version: "1"
 side_effect_level: read_only
 description: Provider abstraction owned by the finance pack.

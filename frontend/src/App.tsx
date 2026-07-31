@@ -24,6 +24,7 @@ function App() {
     error: '',
   })
   const [selectedEvidence, setSelectedEvidence] = useState('')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [toast, setToast] = useState('')
   const toastTimer = useRef<number | undefined>(undefined)
 
@@ -80,10 +81,17 @@ function App() {
   }, [focusComposer])
 
   return (
-    <div className="app-shell">
-      <Sidebar activeView={activeView} onNavigate={navigate} onNewResearch={focusComposer} onOpenRun={openRun} />
+    <div className={`app-shell ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`}>
+      <Sidebar
+        activeView={activeView}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed((collapsed) => !collapsed)}
+        onNavigate={navigate}
+        onNewResearch={focusComposer}
+        onOpenRun={openRun}
+      />
       <section className="app-workspace">
-        <Topbar activeView={activeView} />
+        <Topbar activeView={activeView} onOpenRun={openRun} />
         {error && (
           <div className="api-error-banner" role="alert">
             <AlertTriangle size={16} />

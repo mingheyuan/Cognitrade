@@ -66,7 +66,7 @@ class PackIntegrity(BaseModel):
 
 
 def _version_key(value: str) -> tuple[int, ...]:
-    """Normalize the intentionally small Pack compatibility version format."""
+    """Normalize the supported numeric dotted Pack version format."""
 
     raw = str(value or "").strip()
     parts = raw.split(".")
@@ -254,16 +254,6 @@ class MethodInputRequirement(BaseModel):
         Literal["available", "degraded", "data_gap", "assumption_only"]
     ] = Field(default_factory=lambda: ["available"])
 
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_legacy_field(cls, value: Any) -> Any:
-        if isinstance(value, str):
-            return {
-                "artifact_type": "snapshot",
-                "required_fields": [{"path": value, "source_required": False}],
-            }
-        return value
-
     @model_validator(mode="after")
     def validate_input(self) -> "MethodInputRequirement":
         self.artifact_type = self.artifact_type.strip()
@@ -431,11 +421,6 @@ class DomainPackManifest(BaseModel):
                     f"Pack intent references undeclared artifacts: "
                     f"{intent.intent_id}:{sorted(unknown_artifacts)}"
                 )
-        legacy_intents = set(self.planner_policies.get("supported_intents") or [])
-        if declared_intents and legacy_intents and not declared_intents.issuperset(legacy_intents):
-            raise ValueError(
-                "Pack intake intents must include every legacy supported_intents entry"
-            )
         for capability in self.capabilities:
             unknown_fallback_capabilities = set(capability.fallback_capabilities) - capability_ids
             if unknown_fallback_capabilities:

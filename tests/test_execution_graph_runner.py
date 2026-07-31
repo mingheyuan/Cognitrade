@@ -842,8 +842,21 @@ def evidence_worker(context):
                 run_root=root / "run-1",
                 cache_root=cache_root,
             )
+            waiting = first.run(
+                graph=graph.model_copy(deep=True),
+                run_id="run-1",
+                thread_id="thread-1",
+                request_id="request-1",
+                seed_artifacts=[seed],
+            )
+            self.assertEqual(waiting.snapshot.status, "waiting_approval")
+            first_approval_id = next(
+                node.approval_id
+                for node in waiting.snapshot.graph.nodes
+                if node.node_id == "approved_write"
+            )
             first.approvals.approve(
-                approval_id="approval-1",
+                approval_id=first_approval_id,
                 run_id="run-1",
                 node_id="approved_write",
                 capability="legal.contract.clause.extract",
@@ -851,13 +864,7 @@ def evidence_worker(context):
                 reason="Approved test write.",
             )
             self.assertEqual(
-                first.run(
-                    graph=graph.model_copy(deep=True),
-                    run_id="run-1",
-                    thread_id="thread-1",
-                    request_id="request-1",
-                    seed_artifacts=[seed],
-                ).snapshot.status,
+                first.resume().snapshot.status,
                 "completed",
             )
             events: list[dict] = []
@@ -867,21 +874,28 @@ def evidence_worker(context):
                 cache_root=cache_root,
                 event_callback=events.append,
             )
-            second.approvals.approve(
-                approval_id="approval-1",
-                run_id="run-2",
-                node_id="approved_write",
-                capability="legal.contract.clause.extract",
-                approved_by="reviewer",
-                reason="Approved retry lookup.",
-            )
-            second_result = second.run(
+            waiting = second.run(
                 graph=graph.model_copy(deep=True),
                 run_id="run-2",
                 thread_id="thread-2",
                 request_id="request-2",
                 seed_artifacts=[seed],
             )
+            self.assertEqual(waiting.snapshot.status, "waiting_approval")
+            second_approval_id = next(
+                node.approval_id
+                for node in waiting.snapshot.graph.nodes
+                if node.node_id == "approved_write"
+            )
+            second.approvals.approve(
+                approval_id=second_approval_id,
+                run_id="run-2",
+                node_id="approved_write",
+                capability="legal.contract.clause.extract",
+                approved_by="reviewer",
+                reason="Approved retry lookup.",
+            )
+            second_result = second.resume()
 
             self.assertEqual(second_result.snapshot.status, "completed")
             self.assertEqual(

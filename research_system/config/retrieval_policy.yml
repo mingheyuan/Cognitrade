@@ -1,8 +1,0 @@
-policy_id: default_retrieval_policy
-version: 1
-final_top_k: 5
-recency_window_days: 30
-rerank_enabled: false
-score_weights:
-  metadata_match: 1.0
-  semantic_similarity: 1.0

@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.core.id_utils import generate_ulid
+from research_system.runtime.core.main_agent_planner import MainAgentPlanRole
 from research_system.runtime.core.tool_registry import (
     CoreToolContext,
     CoreToolRegistry,
@@ -24,7 +25,6 @@ from research_system.schemas.core_runtime import (
     AgentTurnResponse,
     MainAgentRunResult,
     MainAgentState,
-    PlanDecision,
     RequestIntakeDecision,
 )
 from research_system.schemas.events import EventEnvelope
@@ -886,30 +886,6 @@ class MainAgent:
         )
 
     @staticmethod
-    def _legacy_context_recall_answer(request: RequestEnvelope) -> str | None:
-        subject = ""
-        summary = ""
-        for item in reversed(list(request.conversation_context)):
-            if not isinstance(item, dict):
-                continue
-            content = str(item.get("content") or item.get("summary") or "").strip()
-            if not content:
-                continue
-            role = str(item.get("role") or "").strip()
-            turn_type = str(item.get("turn_type") or "").strip()
-            if not subject and role == "user" and turn_type == "research_query":
-                subject = content
-            if not summary and role == "assistant" and turn_type == "research_result":
-                summary = content
-        if not subject and not summary:
-            return None
-        if summary:
-            summary = summary[:600]
-        if subject and summary:
-            return f"\\u521a\\u521a\u4e3b\u8981\u7814\u7a76\u7684\u662f：{subject}。\n\n上一轮结果摘要：{summary}"
-        return f"\\u521a\\u521a\u4e3b\u8981\u7814\u7a76\u7684是：{subject or summary}"
-
-    @staticmethod
     def _context_recall_answer(request: RequestEnvelope) -> str | None:
         subject = ""
         summary = ""
@@ -985,9 +961,7 @@ class MainAgent:
 
     def _emit(self, root: Path, callback, event_type: str, **payload: Any) -> None:
         event_payload = dict(payload)
-        request_payload = read_json(root / "request.json") or read_json(root / "agent_os_request.json")
-        if isinstance(request_payload, dict) and isinstance(request_payload.get("request"), dict):
-            request_payload = request_payload["request"]
+        request_payload = read_json(root / "request.json")
         event_payload.setdefault("run_id", "unknown")
         event_payload.setdefault("thread_id", "unknown")
         event_payload.setdefault("request_id", "unknown")
@@ -1012,62 +986,6 @@ class MainAgent:
             event = append_canonical_event(root / "execution_events.jsonl", event)
         if callback is not None:
             callback(event)
-
-
-class MainAgentPlanRole:
-    """Planning role of the existing Main Agent; this is not another Agent."""
-
-    def __init__(self, planner) -> None:
-        self.planner = planner
-
-    def build_initial_graph(self, request):
-        """Materialize the initial lazy graph as the Main Agent planning role."""
-        return self.planner.planner.build_lazy_graph(request)
-
-    def expand_compound(self, **kwargs):
-        patch = self.planner.expand_compound(**kwargs)
-        return patch.model_copy(update={"actor": "main_agent.plan_agent"})
-
-    def decide_expand_compound(self, **kwargs) -> PlanDecision:
-        return self._decision_for_patch(self.expand_compound(**kwargs))
-
-    def evaluate_frontier(self, **kwargs):
-        evaluator = getattr(self.planner, "evaluate_frontier", None)
-        if evaluator is None:
-            return None
-        patch = evaluator(**kwargs)
-        if patch is None:
-            return None
-        return patch.model_copy(update={"actor": "main_agent.plan_agent"})
-
-    def decide_frontier(self, **kwargs) -> PlanDecision:
-        patch = self.evaluate_frontier(**kwargs)
-        if patch is None:
-            return PlanDecision(
-                action="continue",
-                reason="The current frontier satisfies the active capability requirements.",
-            )
-        return self._decision_for_patch(patch)
-
-    @staticmethod
-    def _decision_for_patch(patch) -> PlanDecision:
-        action = "continue"
-        if patch.decision_type == "replan":
-            action = "replan"
-        elif patch.decision_type == "stop":
-            action = "stop"
-        elif any(operation.op_type == "rerun_from" for operation in patch.operations):
-            action = "retry"
-        return PlanDecision(
-            action=action,
-            reason=(
-                patch.notes[-1]
-                if patch.notes
-                else "Main Agent planning role updated the execution frontier."
-            ),
-            graph_patch=patch,
-            confidence=patch.confidence,
-        )
 
 
 __all__ = ["MainAgent", "MainAgentPlanRole"]

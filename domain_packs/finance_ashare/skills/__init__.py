@@ -1,8 +1,4 @@
-"""Finance Pack-owned skills.
-
-The implementations in this package are loaded by the Finance Pack. The
-research_system.skills modules remain compatibility exports only.
-"""
+"""Finance Pack-owned skill implementations."""
 
 __all__ = [
     "capital_flow_snapshot",

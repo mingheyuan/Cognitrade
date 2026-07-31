@@ -193,53 +193,6 @@ class HumanApprovalStore:
         append_jsonl(self.path, revoked.model_dump(mode="json"))
         return revoked
 
-    def bind_legacy(
-        self,
-        approval_id: str,
-        *,
-        graph_revision: int,
-        domain_id: str,
-        domain_version: str | None,
-        user_id: str | None,
-        tenant_id: str | None,
-        policy_fingerprint: str,
-    ) -> HumanApproval:
-        """Attach canonical context to a pre-existing approved record once.
-
-        This is only for records created before context binding existed. It is
-        allowed at the initial graph revision and preserves the original human
-        decision; later graph revisions require a fresh approval.
-        """
-        approval = self.get(approval_id)
-        if approval is None:
-            raise KeyError(f"unknown approval: {approval_id}")
-        if approval.status != "approved":
-            raise ValueError("only an approved legacy record can be bound")
-        if any(
-            value is not None
-            for value in (
-                approval.graph_revision,
-                approval.domain_id,
-                approval.domain_version,
-                approval.user_id,
-                approval.tenant_id,
-                approval.policy_fingerprint,
-            )
-        ):
-            raise ValueError("approval already has a canonical binding")
-        bound = approval.model_copy(
-            update={
-                "graph_revision": graph_revision,
-                "domain_id": domain_id,
-                "domain_version": domain_version,
-                "user_id": user_id,
-                "tenant_id": tenant_id,
-                "policy_fingerprint": policy_fingerprint,
-            }
-        )
-        append_jsonl(self.path, bound.model_dump(mode="json"))
-        return bound
-
     def get(self, approval_id: str) -> HumanApproval | None:
         for payload in reversed(read_jsonl(self.path)):
             if payload.get("approval_id") == approval_id:

@@ -102,6 +102,24 @@ async def _call_run_resource(
             code="nested_resource_not_found",
             message="The requested nested run resource was not found",
         ) from exc
+    except ValueError as exc:
+        message = str(exc).lower()
+        if "unknown_rerun_node" in message:
+            raise ApiError(
+                status_code=422,
+                code="unknown_rerun_node",
+                message="The requested rerun node is not part of the source plan",
+            ) from exc
+        if (
+            "missing_request_payload" in message
+            or "missing_execution_graph_payload" in message
+        ):
+            raise ApiError(
+                status_code=409,
+                code="source_run_incomplete",
+                message="The source run does not contain the data required for rerun",
+            ) from exc
+        raise
 
 
 @router.post("/runs", response_model=ResponseEnvelope)

@@ -31,7 +31,6 @@ from domain_packs.finance_ashare.subagents.uzi_advanced_methodology import (
 )
 from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshots
 import domain_packs.finance_ashare.tools.snapshot_collector as snapshot_collector
-from domain_packs.finance_ashare.tools.uzi_cache_import import import_uzi_cache_file
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
@@ -291,61 +290,6 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertEqual(calls, {"market": 2, "fundamental": 1})
         self.assertEqual(second[0]["facts"]["value"], first[0]["facts"]["value"])
         self.assertEqual(third[1]["facts"]["value"], first[1]["facts"]["value"])
-
-    def test_uzi_cache_import_is_explicit_and_preserves_quality_lineage(self) -> None:
-        with TemporaryDirectory() as temporary_directory:
-            path = Path(temporary_directory) / "raw_data.json"
-            path.write_text(
-                '{"ticker":"300750","fetched_at":"2026-07-12","raw_data":'
-                '{"basic":{"price":100},"peers":{"data_gap":["peer_group_missing"]}}}',
-                encoding="utf-8",
-            )
-            drafts = import_uzi_cache_file(path)
-
-        self.assertEqual({draft.content["snapshot_type"] for draft in drafts}, {"market", "peers"})
-        peers = next(draft for draft in drafts if draft.content["snapshot_type"] == "peers")
-        self.assertEqual(peers.content["quality_status"], "degraded")
-        self.assertTrue(peers.metadata["cache_import"])
-        self.assertEqual(peers.source_refs[0]["type"], "uzi_cache")
-
-    def test_uzi_cache_import_unwraps_real_numbered_dimension_records(self) -> None:
-        with TemporaryDirectory() as temporary_directory:
-            path = Path(temporary_directory) / "raw_data.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "ticker": "300750.SZ",
-                        "fetched_at": "2026-07-12T01:51:47",
-                        "dimensions": {
-                            "0_basic": {
-                                "ticker": "300750.SZ",
-                                "data": {"name": "宁德时代", "price": 348.76},
-                                "source": "akshare:A",
-                            },
-                            "1_financials": {
-                                "ticker": "300750.SZ",
-                                "data": {"revenue_history": [100, 120]},
-                                "source": "akshare:financials",
-                            },
-                            "20_valuation_models": {
-                                "ticker": "300750.SZ",
-                                "data": {"summary": {"dcf_intrinsic": 420}},
-                            },
-                        }
-                    },
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
-            drafts = import_uzi_cache_file(path)
-
-        self.assertEqual(
-            {draft.content["snapshot_type"] for draft in drafts},
-            {"market", "fundamental"},
-        )
-        market = next(draft for draft in drafts if draft.content["snapshot_type"] == "market")
-        self.assertEqual(market.content["facts"]["price"], 348.76)
-        self.assertEqual(market.content["source"]["source_system"], "uzi_cache")
 
     def test_dimension_coverage_separates_raw_sources_from_derived_products(self) -> None:
         coverage = build_dimension_coverage(

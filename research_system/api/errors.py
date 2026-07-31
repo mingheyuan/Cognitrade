@@ -10,9 +10,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from research_system.runtime.orchestrator import OrchestratorError
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -37,7 +34,6 @@ def install_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(ApiError, _handle_api_error)
     app.add_exception_handler(RequestValidationError, _handle_request_validation_error)
     app.add_exception_handler(StarletteHTTPException, _handle_http_error)
-    app.add_exception_handler(OrchestratorError, _handle_orchestrator_error)
     app.add_exception_handler(Exception, _handle_unknown_error)
 
 
@@ -88,16 +84,6 @@ async def _handle_http_error(request: Request, exc: StarletteHTTPException) -> J
         message=str(message),
         details=details,
         headers=dict(exc.headers) if exc.headers else None,
-    )
-
-
-async def _handle_orchestrator_error(request: Request, exc: OrchestratorError) -> JSONResponse:
-    status_code, code = _classify_orchestrator_error(str(exc))
-    return _error_response(
-        request,
-        status_code=status_code,
-        code=code,
-        message=_orchestrator_error_message(code),
     )
 
 
@@ -153,35 +139,6 @@ def _request_id(request: Request) -> str | None:
         return state_request_id[:128]
     header_request_id = str(request.headers.get("X-Request-ID") or "").strip()
     return header_request_id[:128] or None
-
-
-def _classify_orchestrator_error(message: str) -> tuple[int, str]:
-    normalized = message.lower()
-    if "not found" in normalized:
-        return 404, "resource_not_found"
-    if "unknown_rerun_node" in normalized:
-        return 422, "unknown_rerun_node"
-    if "missing_request_payload" in normalized or "missing_execution_graph_payload" in normalized:
-        return 409, "source_run_incomplete"
-    if "must be approved before activation" in normalized:
-        return 409, "discovery_not_approved"
-    if "already exists" in normalized or "already finalized" in normalized:
-        return 409, "resource_conflict"
-    if "runtime registration" in normalized or "activation requires" in normalized:
-        return 422, "invalid_runtime_registration"
-    return 422, "orchestrator_error"
-
-
-def _orchestrator_error_message(code: str) -> str:
-    return {
-        "resource_not_found": "The requested resource was not found",
-        "unknown_rerun_node": "The requested rerun node is not part of the source plan",
-        "source_run_incomplete": "The source run does not contain the data required for rerun",
-        "discovery_not_approved": "The discovery ticket must be approved before activation",
-        "resource_conflict": "The requested resource transition conflicts with its current state",
-        "invalid_runtime_registration": "The runtime registration contract is invalid",
-        "orchestrator_error": "The orchestrator rejected the request",
-    }.get(code, "The orchestrator rejected the request")
 
 
 def _http_error_code(status_code: int) -> str:

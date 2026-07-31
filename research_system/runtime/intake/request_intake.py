@@ -180,7 +180,6 @@ class RequestIntakeService:
         for manifest in self.registry.list():
             supported = {
                 *(item.intent_id for item in manifest.intake.intents),
-                *(manifest.planner_policies.get("supported_intents") or []),
             }
             if not supported:
                 continue
@@ -202,7 +201,6 @@ class RequestIntakeService:
             for manifest in self.registry.list()
             for intent in [
                 *(item.intent_id for item in manifest.intake.intents),
-                *(manifest.planner_policies.get("supported_intents") or []),
             ]
         }
 
@@ -335,7 +333,6 @@ class RequestIntakeService:
             for manifest in self.registry.list()
             if intent in {
                 *(item.intent_id for item in manifest.intake.intents),
-                *(manifest.planner_policies.get("supported_intents") or []),
             }
         ]
         if domain_id:

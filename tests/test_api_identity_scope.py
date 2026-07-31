@@ -165,7 +165,7 @@ class ApiIdentityScopeTests(unittest.TestCase):
             run_id = created.json()["run_id"]
             replay = client.get(f"/api/v1/runs/{run_id}/replay", headers=headers)
             self.assertEqual(replay.status_code, 200, replay.text)
-            persisted_request = replay.json()["request"]["request"]
+            persisted_request = replay.json()["request"]
             self.assertEqual(persisted_request["user_id"], "user-a")
             self.assertEqual(persisted_request["tenant_id"], "tenant-a")
 

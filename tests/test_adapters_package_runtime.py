@@ -6,12 +6,7 @@ from research_system.adapters import sources as sources_package
 from research_system.adapters import storage as storage_package
 from research_system.adapters import vendors as vendors_package
 from research_system.adapters.sources.xueqiu_statuses import load_statuses
-from research_system.adapters.storage.local_memory_adapter import LocalMemoryAdapter
 from research_system.adapters.storage.qdrant_adapter import QdrantAdapter, QdrantUnavailableError
-from research_system.adapters.storage.redis_route_store import (
-    RedisRouteTableBackend,
-    RouteTableBackendError,
-)
 from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
 from research_system.adapters.vendors.fallback_merge import merge_provider_facts
 from research_system.adapters.vendors.http_json_source_registry import HttpJsonSourceRegistry
@@ -28,11 +23,8 @@ class AdaptersPackageRuntimeTests(unittest.TestCase):
         self.assertIs(sources_package.load_statuses, load_statuses)
 
     def test_storage_package_exports(self) -> None:
-        self.assertIs(storage_package.LocalMemoryAdapter, LocalMemoryAdapter)
         self.assertIs(storage_package.QdrantAdapter, QdrantAdapter)
         self.assertIs(storage_package.QdrantUnavailableError, QdrantUnavailableError)
-        self.assertIs(storage_package.RedisRouteTableBackend, RedisRouteTableBackend)
-        self.assertIs(storage_package.RouteTableBackendError, RouteTableBackendError)
 
     def test_vendors_package_exports(self) -> None:
         self.assertIs(vendors_package.DataSourceRegistry, DataSourceRegistry)

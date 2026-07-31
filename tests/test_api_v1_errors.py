@@ -10,13 +10,12 @@ from api_test_support import (
     API_TOKEN,
     RUN_ID,
     THREAD_ID,
-    FakeOrchestrator,
-    FakeOrchestratorFactory,
+    FakeRunService,
+    FakeRunServiceFactory,
     auth_headers,
 )
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
-from research_system.runtime.orchestration.orchestrator import OrchestratorError
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 
 
@@ -28,11 +27,11 @@ class ApiV1ErrorTests(unittest.TestCase):
         self.temp_dir = TemporaryDirectory()
         self.settings = Settings.from_env(Path(self.temp_dir.name))
         ensure_workspace_layout(self.settings)
-        self.orchestrator = FakeOrchestrator()
+        self.run_service = FakeRunService()
         self.app = create_app(
             settings=self.settings,
             api_config=ApiConfig(api_token=API_TOKEN),
-            orchestrator_factory=FakeOrchestratorFactory(self.orchestrator),
+            run_service_factory=FakeRunServiceFactory(self.run_service),
             repo_root=REPO_ROOT,
         )
         self.client_context = TestClient(self.app, raise_server_exceptions=False)
@@ -54,7 +53,7 @@ class ApiV1ErrorTests(unittest.TestCase):
         return error
 
     def test_missing_run_maps_file_not_found_to_404(self) -> None:
-        self.orchestrator.errors["replay"] = FileNotFoundError(f"run not found: {RUN_ID}")
+        self.run_service.errors["replay"] = FileNotFoundError(f"run not found: {RUN_ID}")
 
         response = self.client.get(
             f"/api/v1/runs/{RUN_ID}/replay",
@@ -65,7 +64,7 @@ class ApiV1ErrorTests(unittest.TestCase):
         self.assertIn("not_found", error["code"])
 
     def test_missing_nested_resource_maps_key_error_to_404(self) -> None:
-        self.orchestrator.errors["thread"] = KeyError(THREAD_ID)
+        self.run_service.errors["thread"] = KeyError(THREAD_ID)
 
         response = self.client.get(
             f"/api/v1/runs/{RUN_ID}/threads/{THREAD_ID}",
@@ -76,7 +75,7 @@ class ApiV1ErrorTests(unittest.TestCase):
         self.assertIn("not_found", error["code"])
 
     def test_unknown_rerun_node_maps_to_422(self) -> None:
-        self.orchestrator.errors["rerun_from"] = OrchestratorError(
+        self.run_service.errors["rerun_from"] = ValueError(
             "unknown_rerun_node:not_a_node"
         )
 
@@ -95,7 +94,7 @@ class ApiV1ErrorTests(unittest.TestCase):
             f"missing_execution_graph_payload:{RUN_ID}",
         ):
             with self.subTest(core_message=core_message):
-                self.orchestrator.errors["rerun_from"] = OrchestratorError(core_message)
+                self.run_service.errors["rerun_from"] = ValueError(core_message)
                 response = self.client.post(
                     f"/api/v1/runs/{RUN_ID}/reruns",
                     headers=auth_headers(),
@@ -106,7 +105,7 @@ class ApiV1ErrorTests(unittest.TestCase):
 
     def test_unhandled_exception_is_redacted_in_500_response(self) -> None:
         secret = "secret-provider-credential=abc123"
-        self.orchestrator.errors["trace"] = RuntimeError(secret)
+        self.run_service.errors["trace"] = RuntimeError(secret)
 
         with self.assertLogs("research_system.api.errors", level="ERROR"):
             response = self.client.get(
@@ -131,13 +130,13 @@ class ApiV1ErrorTests(unittest.TestCase):
 
         for operation, exception in cases:
             with self.subTest(operation=operation, exception=type(exception).__name__):
-                self.orchestrator.errors[operation] = exception
+                self.run_service.errors[operation] = exception
                 path = f"/api/v1/runs/{RUN_ID}/trace" if operation == "trace" else "/api/v1/runs"
                 with self.assertLogs("research_system.api.errors", level="ERROR"):
                     response = self.client.get(path, headers=auth_headers())
                 error = self.assert_error_envelope(response, status_code=500)
                 self.assertEqual(error["code"], "internal_server_error")
-                self.orchestrator.errors.pop(operation, None)
+                self.run_service.errors.pop(operation, None)
 
     def test_malformed_json_uses_error_envelope_and_does_not_call_core(self) -> None:
         headers = {**auth_headers(), "Content-Type": "application/json"}
@@ -149,7 +148,7 @@ class ApiV1ErrorTests(unittest.TestCase):
         )
 
         self.assert_error_envelope(response, status_code=400)
-        self.assertEqual(self.orchestrator.calls_for("run"), [])
+        self.assertEqual(self.run_service.calls_for("run"), [])
 
     def test_query_validation_errors_use_the_same_envelope(self) -> None:
         for query in ("limit=0", "limit=101", "status=not_a_status"):
@@ -160,7 +159,7 @@ class ApiV1ErrorTests(unittest.TestCase):
                 )
                 self.assert_error_envelope(response, status_code=422)
 
-        self.assertEqual(self.orchestrator.calls_for("history"), [])
+        self.assertEqual(self.run_service.calls_for("history"), [])
 
     def test_path_traversal_identifier_is_rejected_before_storage_access(self) -> None:
         paths = (
@@ -174,7 +173,7 @@ class ApiV1ErrorTests(unittest.TestCase):
                 error = self.assert_error_envelope(response, status_code=400)
                 self.assertEqual(error["code"], "invalid_identifier")
 
-        self.assertEqual(self.orchestrator.calls_for("replay"), [])
+        self.assertEqual(self.run_service.calls_for("replay"), [])
 
     def test_unknown_route_is_still_returned_as_error_envelope(self) -> None:
         response = self.client.get(

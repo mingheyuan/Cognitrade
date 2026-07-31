@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
 from research_system.runtime.agent_os import AgentOS
-from research_system.runtime.intake.task_intake import TaskIntakeService
+from research_system.runtime.intake.pack_intake import PackIntakeService
 from research_system.runtime.intake.request_intake import RequestIntakeService
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.platform.settings import Settings
@@ -54,7 +54,7 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
 
     def test_finance_pack_resolves_company_aliases_and_comparison_intent(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
-        service = TaskIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
+        service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
 
         decision = service.resolve(
             RequestEnvelope(user_query="\u5bf9\u6bd4\u5e73\u5b89\u94f6\u884c\u548c\u62db\u5546\u94f6\u884c")
@@ -66,7 +66,7 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
 
     def test_pack_intake_exposes_declared_capability_candidates(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
-        service = TaskIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
+        service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
 
         decision = service.resolve(
             RequestEnvelope(user_query="筛选最近值得关注的股票")
@@ -87,7 +87,7 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
 
     def test_finance_pack_returns_clarification_for_incomplete_target(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
-        service = TaskIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
+        service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
 
         decision = service.resolve(RequestEnvelope(user_query="compare one bank"))
 
@@ -97,7 +97,7 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
 
     def test_finance_pack_does_not_treat_unnamed_multiple_banks_as_sector_research(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
-        service = TaskIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
+        service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
 
         decision = service.resolve(RequestEnvelope(user_query="看看两家银行"))
 
@@ -119,6 +119,8 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
+                    "openai_api_key": None,
+                    "openai_base_url": None,
                 }
             )
             agent_os = AgentOS(settings)
@@ -150,6 +152,8 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
+                    "openai_api_key": None,
+                    "openai_base_url": None,
                 }
             )
             with TestClient(
@@ -173,7 +177,7 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["intent"], "stock_compare")
-        self.assertEqual(response.json()["status"], "completed")
+        self.assertEqual(response.json()["status"], "completed_partial")
 
     def test_versioned_api_persists_a_resumable_clarification_run(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
