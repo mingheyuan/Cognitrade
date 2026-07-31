@@ -50,7 +50,7 @@ class PaperTradingService:
         market_data: FinanceMarketDataService,
         trading_calendar: AShareTradingCalendar | None = None,
         clock: Callable[[], datetime] | None = None,
-        enforce_market_hours: bool = True,
+        enforce_market_hours: bool = False,
         matcher: VeighNaPaperAdapter | None = None,
     ) -> None:
         self.database_path = Path(database_path)

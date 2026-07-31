@@ -245,7 +245,7 @@ Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格�
 - 过户费为成交额 0.001%。
 - 卖出印花税为成交额 0.05%。
 - 买入数量必须为 100 股整数倍。
-- 默认只在上海时区交易日的 `09:30–11:30`、`13:00–15:00` 接受委托，可通过 `COGNITRADE_PAPER_ENFORCE_MARKET_HOURS=false` 为隔离演示环境关闭限制。
+- 默认采用全天模拟模式，非交易时段也可使用最新可用的服务端行情完成虚拟撮合。设置 `COGNITRADE_PAPER_ENFORCE_MARKET_HOURS=true` 后，仅在上海时区交易日的 `09:30–11:30`、`13:00–15:00` 接受委托。
 - 当日买入记为 T+1，持仓在下一交易日而不是下一自然日可卖；交易日来自离线 XSHG 日历，卖出采用 FIFO 成本。
 - 行情声明停牌、不可交易、涨跌停或无有效正价格时拒绝模拟成交。
 - 禁止融券和负持仓；清仓时允许卖出全部可用零股。
@@ -272,7 +272,7 @@ Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格�
     "short_selling": false,
     "price_source": "server-side Finance Pack quote",
     "matching_engine": "veighna-paperaccount",
-    "market_hours_enforced": true,
+    "market_hours_enforced": false,
     "calendar": "exchange_calendars:XSHG",
     "timezone": "Asia/Shanghai",
     "sessions": ["09:30-11:30", "13:00-15:00"]

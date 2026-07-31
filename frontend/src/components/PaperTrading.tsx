@@ -181,6 +181,12 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
   const quantityIsValid = Number.isInteger(quantity)
     && (side === 'buy' ? quantity >= 100 && quantity % 100 === 0 : quantity > 0)
   const estimate = estimateOrder(orderType === 'limit' ? limitPrice : quote?.latest_price, side, quantity)
+  const marketHoursEnforced = portfolio?.account.rules.market_hours_enforced
+  const tradingModeDescription = portfolio
+    ? marketHoursEnforced
+      ? '交易时段模式：仅在交易日 09:30–11:30、13:00–15:00 接受委托。'
+      : '全天模拟模式：非交易时段也可使用最新可用的服务端行情完成虚拟撮合。'
+    : '正在读取模拟盘交易规则。'
 
   return (
     <main className="finance-page paper-page">
@@ -198,7 +204,7 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
         </div>
       </section>
 
-      <div className="paper-safety-banner"><ShieldCheck size={17} /><div><strong>仅限模拟交易 · {engine?.engine || '正在检测撮合引擎'}</strong><span>VeighNa 负责订单与 Tick 到价撮合，Cognitrade 账本负责资金、费用、T+1 和审计；不会向券商发送请求。</span></div></div>
+      <div className="paper-safety-banner"><ShieldCheck size={17} /><div><strong>仅限模拟交易 · {engine?.engine || '正在检测撮合引擎'}</strong><span>{tradingModeDescription} VeighNa 负责订单与 Tick 到价撮合，Cognitrade 账本负责资金、费用、T+1 和审计；不会向券商发送请求。</span></div></div>
       {error && <div className="finance-alert" role="alert"><AlertCircle size={17} /><span>{error}</span><button onClick={() => setError('')}>关闭</button></div>}
       {success && <div className="finance-success" role="status"><ShieldCheck size={17} /><span>{success}</span><button onClick={() => setSuccess('')} aria-label="关闭提示"><X size={14} /></button></div>}
 
@@ -244,7 +250,7 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
                 {submitting ? <RefreshCw className="is-spinning" size={15} /> : side === 'buy' ? <ArrowDownToLine size={15} /> : <ArrowUpFromLine size={15} />}
                 {submitting ? '服务端撮合中' : `确认${side === 'buy' ? '买入' : '卖出'} ${quantity || 0} 股`}
               </button>
-              <p id="paper-order-rule" className="order-rule-note"><Clock3 size={13} />市价单按买一/卖一模拟成交；限价单未触价时冻结资金或可卖数量，可在下方撤单。</p>
+              <p id="paper-order-rule" className="order-rule-note"><Clock3 size={13} />{marketHoursEnforced ? '仅限连续竞价时段下单；' : '支持全天模拟下单；'}市价单按买一/卖一模拟成交，限价单未触价时可在下方撤单。</p>
             </form>
 
             <section className="paper-positions-card">

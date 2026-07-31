@@ -54,6 +54,7 @@ class PaperTradingCalendarTests(unittest.TestCase):
                 database_path=Path(temporary_directory) / "paper.sqlite3",
                 market_data=_MarketData(),
                 clock=lambda: datetime(2026, 7, 15, 8, 30, tzinfo=UTC),
+                enforce_market_hours=True,
             )
 
             with self.assertRaises(PaperTradingError) as context:
@@ -67,6 +68,27 @@ class PaperTradingCalendarTests(unittest.TestCase):
                 )
 
         self.assertEqual(context.exception.code, "market_closed")
+
+    def test_order_is_filled_outside_hours_when_market_hours_are_not_enforced(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            service = PaperTradingService(
+                database_path=Path(temporary_directory) / "paper.sqlite3",
+                market_data=_MarketData(),
+                clock=lambda: datetime(2026, 7, 15, 8, 30, tzinfo=UTC),
+                enforce_market_hours=False,
+            )
+
+            order = service.place_order(
+                tenant_id="tenant",
+                user_id="user",
+                symbol="600000",
+                side="buy",
+                quantity=100,
+                client_order_id="after-hours-order",
+            )
+
+        self.assertEqual(order["status"], "filled")
+        self.assertEqual(order["quantity"], 100)
 
     def test_calendar_reports_market_sessions_and_lunch_break(self) -> None:
         calendar = AShareTradingCalendar()

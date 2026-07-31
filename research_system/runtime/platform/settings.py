@@ -43,7 +43,7 @@ class Settings(BaseModel):
     skill_sources_path: Path
     provider_policy_overrides: dict[str, str] = Field(default_factory=dict)
     default_timezone: str = "Asia/Shanghai"
-    paper_trading_enforce_market_hours: bool = True
+    paper_trading_enforce_market_hours: bool = False
     log_level: str = "INFO"
     llm_request_timeout_seconds: int = 25
     max_llm_calls_per_turn: int = 1

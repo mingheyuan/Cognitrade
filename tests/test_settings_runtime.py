@@ -55,8 +55,21 @@ class SettingsRuntimeTests(unittest.TestCase):
             self.assertEqual(settings.openai_reasoning_effort, "xhigh")
             self.assertFalse(settings.openai_disable_response_storage)
             self.assertEqual(settings.default_timezone, "UTC")
+            self.assertFalse(settings.paper_trading_enforce_market_hours)
             self.assertEqual(settings.workspace_root, resolved_root / "workspace")
             self.assertEqual(settings.config_root, resolved_root / "workspace" / "config")
+
+    def test_market_hours_can_be_explicitly_enforced(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / ".env").write_text(
+                "COGNITRADE_PAPER_ENFORCE_MARKET_HOURS=true\n",
+                encoding="utf-8",
+            )
+
+            settings = Settings.from_env(root)
+
+            self.assertTrue(settings.paper_trading_enforce_market_hours)
 
 
 if __name__ == "__main__":
