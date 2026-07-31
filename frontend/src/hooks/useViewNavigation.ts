@@ -6,6 +6,7 @@ const VIEW_PATHS: Record<ViewId, string> = {
   overview: '/overview',
   market: '/market-data',
   paper: '/paper-trading',
+  backtest: '/backtesting',
   screening: '/screening',
   methodology: '/methodology',
   runs: '/runs',

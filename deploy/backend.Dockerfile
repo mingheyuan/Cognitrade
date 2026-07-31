@@ -1,6 +1,8 @@
 ARG PYTHON_IMAGE=public.ecr.aws/docker/library/python:3.11-slim-bookworm
 FROM ${PYTHON_IMAGE}
 
+USER root
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -22,10 +24,10 @@ COPY workspace/config ./workspace_templates/config
 COPY scripts/migrate_workspace.py ./scripts/migrate_workspace.py
 COPY deploy/backend-entrypoint.sh /usr/local/bin/cognitrade-entrypoint
 
-RUN groupadd --gid 10001 cognitrade \
-    && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin cognitrade \
+RUN if ! getent group cognitrade >/dev/null; then groupadd --gid 10001 cognitrade; fi \
+    && if ! id -u cognitrade >/dev/null 2>&1; then useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin cognitrade; fi \
     && chmod 0755 /usr/local/bin/cognitrade-entrypoint \
-    && mkdir -p workspace/runs workspace/chat_runs workspace/reports workspace/memory \
+    && mkdir -p workspace/runs workspace/chat_runs workspace/reports workspace/memory workspace/paper_trading workspace/backtests \
     && cp -a workspace_templates/. workspace/ \
     && chown -R cognitrade:cognitrade workspace /home/cognitrade \
     && python -c "import research_system.api.app"

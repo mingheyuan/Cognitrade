@@ -22,7 +22,7 @@ Web
 ```
 
 - `/api/v1` 提供研究运行、Chat、Dashboard、Admin 与 System。
-- `/api/v2/finance` 提供行情聚合和持久化模拟交易。
+- `/api/v2/finance` 提供行情聚合、VeighNa 模拟撮合和 Hikyuu 独立回测。
 - 未版本化 `/api/*` 业务路由不存在。
 - `TurnSnapshot` 与 `TaskSnapshot` 分别持久化为 `turn_state.json` 和
   `task_state.json`；旧别名只能通过显式迁移命令处理。
@@ -41,6 +41,9 @@ Web
 | `runtime/graph_delivery.py` | Graph 产物到 Main Agent 最终交付 |
 | `runtime/domain_packs` | Pack 加载、完整性和实现解析 |
 | `api` | 鉴权、验证、请求 ID、HTTP/SSE 和版本边界 |
+| `api/veighna_paper_adapter.py` | VeighNa PaperAccount 无界面订单建模与 Tick 撮合 |
+| `api/paper_trading_service.py` | SQLite 资金、费用、T+1、FIFO 持仓与挂单冻结账本 |
+| `api/hikyuu_backtest_service.py` | 隔离子进程执行 Hikyuu 策略并持久化结果 |
 
 ## 工作区
 
@@ -51,6 +54,7 @@ workspace/
   memory/                 # episodic/domain/policy memory
   cache/                  # 可重建缓存
   paper_trading/          # SQLite 模拟盘账本
+  backtests/              # Hikyuu 回测结果与隔离运行缓存
   .migrations/            # 已执行的显式迁移标记
 ```
 

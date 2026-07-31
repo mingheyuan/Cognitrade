@@ -1,4 +1,4 @@
-export type ViewId = 'workbench' | 'overview' | 'market' | 'paper' | 'screening' | 'methodology' | 'runs'
+export type ViewId = 'workbench' | 'overview' | 'market' | 'paper' | 'backtest' | 'screening' | 'methodology' | 'runs'
 
 export const INTENT_LABELS: Record<string, string> = {
   'core.conversation.answer': '普通对话',

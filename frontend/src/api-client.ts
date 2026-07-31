@@ -12,12 +12,16 @@ import type {
   SystemStatus,
 } from './research-contracts'
 import type {
+  BacktestRequest,
+  BacktestResult,
+  BacktestSummary,
   MarketDataResponse,
   MarketQuote,
   PaperAccount,
   PaperOrder,
   PaperOrderInput,
   PaperPortfolio,
+  QuantEngineStatus,
   SecuritySearchResponse,
 } from './finance-contracts'
 
@@ -232,6 +236,47 @@ export class CognitradeApiClient {
       method: 'POST',
       body: JSON.stringify(order),
     })
+  }
+
+  getPaperEngine(): Promise<QuantEngineStatus> {
+    return this.financeRequest('/finance/paper/engine')
+  }
+
+  matchPaperOrders(refresh = true): Promise<{
+    matched: PaperOrder[]
+    unchanged_order_ids: string[]
+    errors: Array<{ order_id: string; error: string }>
+    matched_count: number
+    pending_count: number
+  }> {
+    return this.financeRequest(`/finance/paper/orders/match?refresh=${refresh}`, {
+      method: 'POST',
+    })
+  }
+
+  cancelPaperOrder(orderId: string): Promise<PaperOrder> {
+    return this.financeRequest(`/finance/paper/orders/${encodeURIComponent(orderId)}/cancel`, {
+      method: 'POST',
+    })
+  }
+
+  getBacktestEngine(): Promise<QuantEngineStatus> {
+    return this.financeRequest('/finance/backtests/engine')
+  }
+
+  listBacktests(limit = 20): Promise<{ results: BacktestSummary[] }> {
+    return this.financeRequest(`/finance/backtests?limit=${limit}`)
+  }
+
+  runBacktest(request: BacktestRequest): Promise<BacktestResult> {
+    return this.financeRequest('/finance/backtests', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
+  }
+
+  getBacktest(backtestId: string): Promise<BacktestResult> {
+    return this.financeRequest(`/finance/backtests/${encodeURIComponent(backtestId)}`)
   }
 
   async getRunDetail(runId: string): Promise<RunDetail> {

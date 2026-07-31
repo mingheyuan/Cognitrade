@@ -11,11 +11,15 @@ Frontend
       -> finance_ashare DomainPack snapshots
       -> AkShare / CNInfo providers
     -> PaperTradingService
+      -> VeighNa PaperAccount headless tick crossing
       -> server-side quote
       -> SQLite paper ledger
+    -> HikyuuBacktestService
+      -> isolated Hikyuu subprocess
+      -> persisted backtest JSON
 ```
 
-v2 当前包含 8 个操作：
+v2 当前包含 15 个操作：
 
 | Method | Path | 用途 |
 | --- | --- | --- |
@@ -23,10 +27,17 @@ v2 当前包含 8 个操作：
 | `GET` | `/api/v2/finance/market-data/{symbol}` | 聚合八类 Finance Pack 快照 |
 | `GET` | `/api/v2/finance/quotes/{symbol}` | 获取服务端可成交行情 |
 | `GET` | `/api/v2/finance/paper/account` | 获取或创建当前模拟账户 |
+| `GET` | `/api/v2/finance/paper/engine` | 获取 VeighNa 撮合引擎状态 |
 | `POST` | `/api/v2/finance/paper/account/reset` | 归档并重置模拟账户 |
 | `GET` | `/api/v2/finance/paper/portfolio` | 获取现金、权益与持仓估值 |
-| `GET` | `/api/v2/finance/paper/orders` | 获取模拟成交记录 |
-| `POST` | `/api/v2/finance/paper/orders` | 提交并立即撮合模拟委托 |
+| `GET` | `/api/v2/finance/paper/orders` | 获取模拟委托与成交记录 |
+| `POST` | `/api/v2/finance/paper/orders` | 提交市价或限价模拟委托 |
+| `POST` | `/api/v2/finance/paper/orders/match` | 用最新行情撮合待成交委托 |
+| `POST` | `/api/v2/finance/paper/orders/{order_id}/cancel` | 撤销待成交委托 |
+| `GET` | `/api/v2/finance/backtests/engine` | 获取 Hikyuu 引擎状态 |
+| `GET` | `/api/v2/finance/backtests` | 获取历史回测摘要 |
+| `POST` | `/api/v2/finance/backtests` | 运行并持久化 Hikyuu 回测 |
+| `GET` | `/api/v2/finance/backtests/{backtest_id}` | 获取完整回测结果 |
 
 ## 认证、请求 ID 与错误
 
@@ -66,6 +77,10 @@ Authorization: Bearer <COGNITRADE_API_TOKEN>
 | `409` | `price_limit_reached` | 买入触及涨停或卖出触及跌停 |
 | `409` | `invalid_quote` | 行情价格缺失或不是正数 |
 | `422` | `invalid_board_lot` | 委托不符合 100 股规则 |
+| `409` | `order_not_cancellable` | 委托已成交或已撤销 |
+| `422` | `insufficient_kline_history` | K 线数量不足以运行策略 |
+| `503` | `backtest_engine_unavailable` | Hikyuu 未安装 |
+| `504` | `backtest_timeout` | 隔离回测超过 120 秒 |
 | `422` | `validation_error` | 请求字段或范围无效 |
 
 ## 证券解析
@@ -186,7 +201,8 @@ GET /api/v2/finance/securities?query=茅台&limit=8
 Pack 质量 Gate 还可能标记 `degraded`、`data_gap` 或 `assumption_only`。数据源失败
 不会被静默替换成演示数据，也不会向客户端暴露上游连接异常原文。
 
-K 线响应只有区间元数据与最后交易日记录；前端契约禁止用该接口绘制历史价格趋势。
+K 线响应包含区间元数据、`bars` 历史序列与最后交易日记录。前端行情图和
+Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格。
 
 ### `GET /api/v2/finance/quotes/{symbol}`
 
@@ -197,6 +213,8 @@ K 线响应只有区间元数据与最后交易日记录；前端契约禁止用
   "symbol": "600519",
   "name": "贵州茅台",
   "latest_price": 1420.5,
+  "bid_price_1": 1420.0,
+  "ask_price_1": 1421.0,
   "pct_change": 1.15,
   "as_of": "2026-07-13",
   "source": {"provider_id": "akshare_market", "vendor": "akshare"},
@@ -218,8 +236,11 @@ K 线响应只有区间元数据与最后交易日记录；前端契约禁止用
 
 当前撮合规则：
 
-- 立即按服务端 Finance Pack 报价成交，不提供挂单或撤单。
-- 买入价格增加 5 bps 模拟滑点；卖出价格减少 5 bps。
+- VeighNa `vnpy_paperaccount` 负责官方订单模型与到价撮合；Cognitrade
+  SQLite 账本负责现金、费用、T+1 和审计，因为 PaperAccount 本身不计算资金。
+- 市价单按卖一/买一成交；行情缺少盘口时以最新价上下 5 bps 合成保守买一/卖一。
+- 限价买单在限价不低于卖一时成交；限价卖单在限价不高于买一时成交。
+- 未触价限价单保持 `pending`，冻结对应现金或 T+1 可卖数量，可撤单或请求重新撮合。
 - 佣金为成交额 0.025%，单笔最低 5 元。
 - 过户费为成交额 0.001%。
 - 卖出印花税为成交额 0.05%。
@@ -250,6 +271,7 @@ K 线响应只有区间元数据与最后交易日记录；前端契约禁止用
     "settlement": "T+1",
     "short_selling": false,
     "price_source": "server-side Finance Pack quote",
+    "matching_engine": "veighna-paperaccount",
     "market_hours_enforced": true,
     "calendar": "exchange_calendars:XSHG",
     "timezone": "Asia/Shanghai",
@@ -273,6 +295,8 @@ K 线响应只有区间元数据与最后交易日记录；前端契约禁止用
   "symbol": "600519",
   "side": "buy",
   "quantity": 100,
+  "order_type": "limit",
+  "limit_price": 1400.0,
   "client_order_id": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
@@ -288,6 +312,8 @@ K 线响应只有区间元数据与最后交易日记录；前端契约禁止用
   "symbol": "600519",
   "name": "贵州茅台",
   "side": "buy",
+  "order_type": "limit",
+  "limit_price": 1400.0,
   "quantity": 100,
   "quote_price": 1420.5,
   "fill_price": 1421.21025,
@@ -304,6 +330,9 @@ K 线响应只有区间元数据与最后交易日记录；前端契约禁止用
   "quote_source": "akshare_market",
   "trade_date": "2026-07-13",
   "status": "filled",
+  "matching_engine": "veighna-paperaccount",
+  "reserved_cash": 0.0,
+  "reserved_quantity": 0,
   "created_at": "2026-07-13T09:00:00+00:00",
   "idempotent_replay": false
 }
@@ -318,12 +347,15 @@ K 线响应只有区间元数据与最后交易日记录；前端契约禁止用
   "account": {},
   "summary": {
     "cash": 857842.02,
+    "cash_balance": 857842.02,
+    "frozen_cash": 0.0,
     "market_value": 142050.0,
     "equity": 999892.02,
     "cost_basis": 142157.98,
     "total_pnl": -107.98,
     "total_return_pct": -0.0108,
-    "position_count": 1
+    "position_count": 1,
+    "open_order_count": 0
   },
   "positions": [
     {
@@ -352,6 +384,59 @@ K 线响应只有区间元数据与最后交易日记录；前端契约禁止用
 ```json
 {"orders": []}
 ```
+
+### `GET /api/v2/finance/paper/engine`
+
+返回 VeighNa 与 PaperAccount 的安装版本、当前是否使用原生 Tick crossing，以及
+资金账本仍由 Cognitrade 管理的边界说明。
+
+### `POST /api/v2/finance/paper/orders/match`
+
+查询最新服务端行情并依次检查当前账户的 `pending` 委托。`refresh=true` 默认跳过
+行情缓存。返回已成交委托、未触价 ID 和逐单错误；单个上游错误不会丢失其他挂单。
+
+### `POST /api/v2/finance/paper/orders/{order_id}/cancel`
+
+只有 `pending` 委托可撤销。撤单在同一数据库事务中把状态改为 `cancelled` 并释放
+`reserved_cash` 或 `reserved_quantity`。
+
+## Hikyuu 策略回测
+
+回测与模拟盘完全独立。服务端把 Finance Pack `kline.bars` 转换为 Hikyuu 外部
+`Stock/KRecord`，使用 `SYS_Simple + SG_Cross + MM_FixedCount` 执行双均线策略。
+每次回测在 120 秒受控子进程中运行，隔离 HOME 已预置本地空策略仓库，因此不会
+自动下载 Hikyuu Hub，也不会影响 API 主进程。
+
+### `POST /api/v2/finance/backtests`
+
+```json
+{
+  "symbol": "600519",
+  "strategy": "ma_cross",
+  "initial_cash": 1000000,
+  "fast_period": 5,
+  "slow_period": 20,
+  "trade_size": 1000,
+  "refresh": false
+}
+```
+
+约束：`slow_period > fast_period >= 2`，`trade_size` 为 100 股整数倍，并且有效
+K 线至少为 `slow_period + 5` 根。结果包含：
+
+- 回测 ID、Hikyuu 版本、标的、参数和数据来源；
+- 初始/期末权益、总收益、年化收益、最大回撤、胜率和盈亏比；
+- 全量账户权益曲线；
+- Hikyuu 原生成交记录及费用。
+
+结果默认持久化到：
+
+```text
+<workspace_root>/backtests/<backtest_id>.json
+```
+
+`GET /api/v2/finance/backtests` 返回摘要列表；`GET
+/api/v2/finance/backtests/{backtest_id}` 返回完整可回放结果。
 
 ## 前端配置
 

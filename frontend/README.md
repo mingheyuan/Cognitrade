@@ -29,7 +29,10 @@ VITE_COGNITRADE_API_TOKEN=<token>
 ## 数据边界
 
 - 研究运行、Dashboard、事件和 Artifact：`/api/v1`
-- 行情聚合与模拟交易：`/api/v2/finance`
+- 行情聚合、VeighNa 模拟撮合与 Hikyuu 独立回测：`/api/v2/finance`
+- 模拟盘现金、费用、持仓、T+1 与挂单冻结由服务端 SQLite 账本负责；
+  浏览器不提供可执行成交价。
+- 回测只消费 Finance Pack 的真实历史 K 线，结果独立持久化，不修改模拟账户。
 - API 返回数据缺口时显示可读提示，不展示上游连接异常原文。
 - 没有后端合同的功能必须标记“本地预览”；只允许处理已加载数据或文件元信息，
   不生成虚构行情、财务或 Agent 结论。

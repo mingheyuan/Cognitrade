@@ -144,6 +144,16 @@ class FinanceMarketDataService:
             "symbol": symbol,
             "name": name,
             "latest_price": price,
+            "bid_price_1": self._number(
+                overview.get("bid_price_1"),
+                overview.get("bid1"),
+                overview.get("买一"),
+            ),
+            "ask_price_1": self._number(
+                overview.get("ask_price_1"),
+                overview.get("ask1"),
+                overview.get("卖一"),
+            ),
             "pct_change": self._number(overview.get("pct_change")),
             "as_of": latest_bar.get("date") or overview.get("valuation_date") or market_snapshot.get("snapshot_date"),
             "source": self._source(market_snapshot),

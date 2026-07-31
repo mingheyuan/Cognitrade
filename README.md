@@ -8,7 +8,8 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 - 自然语言研究入口：个股体检、多股比较、股票筛选、行业研究与 Thesis Review。
 - 可追踪运行：Turn/Task、ExecutionGraph、事件流、子 Agent、Artifact、指标和重跑。
 - Finance Workspace：证券解析、行情、K 线摘要、基本面、资金流、舆情、公告、事件和龙虎榜。
-- 模拟交易：服务端报价、现金与持仓账本、费用、T+1、交易时段和幂等订单。
+- 模拟交易：VeighNa PaperAccount 到价撮合，服务端现金/持仓账本、限价挂单、资金冻结、撤单、费用、T+1 和幂等订单。
+- 策略回测：独立 Hikyuu 回测实验室，使用 Finance Pack 历史 K 线运行双均线策略并持久化资产曲线、绩效和成交记录。
 - DomainPack：`finance_ashare` 与 `legal_contract` 通过声明式能力、工具、Gate 和报告合同接入。
 - 治理：Bearer 鉴权、作用域隔离、高风险审批、质量 Gate、来源引用和分层记忆。
 
@@ -53,6 +54,10 @@ COGNITRADE_API_ALLOW_UNAUTHENTICATED=true \
 COGNITRADE_API_HOST=127.0.0.1 \
 .venv/bin/python -m uvicorn research_system.api.app:app --host 127.0.0.1 --port 8000
 ```
+
+首次安装会下载 VeighNa、Hikyuu 及其量化/绘图依赖，体积明显大于纯 API
+依赖。Hikyuu 回测在受控子进程和 `<workspace>/backtests/.hikyuu_runtime`
+隔离目录运行，不会初始化用户主目录或自动下载远程策略仓库。
 
 前端：
 
@@ -113,6 +118,7 @@ COGNITRADE_NGINX_IMAGE=public.ecr.aws/docker/library/nginx:alpine
 ```text
 research_system/
   api/                    # FastAPI、鉴权、SSE 与版本路由
+                            # VeighNa 模拟撮合与 Hikyuu 隔离回测 facade
   runtime/                # Agent OS、Turn、Graph、Tool、Pack、Memory
   schemas/                # Pydantic 协议
   services/methodologies/ # 当前被 Pack 调用的方法论计算
@@ -122,6 +128,8 @@ domain_packs/
 frontend/                 # React + TypeScript + Vite
 scripts/                  # 部署、迁移和校验
 workspace/                # 运行数据（生产由命名卷持久化）
+  paper_trading/          # SQLite 模拟盘账本
+  backtests/              # Hikyuu 回测结果与隔离运行目录
 ```
 
 当前架构说明见 [`plan/current-architecture.md`](./plan/current-architecture.md)。

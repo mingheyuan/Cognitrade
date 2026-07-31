@@ -15,6 +15,7 @@ from research_system.api.chat_service import ChatService
 from research_system.api.agent_os_run_service import AgentOSRunService
 from research_system.api.config import ApiConfig
 from research_system.api.finance_market_data_service import FinanceMarketDataService
+from research_system.api.hikyuu_backtest_service import HikyuuBacktestService
 from research_system.api.paper_trading_service import PaperTradingService
 from research_system.api.dependencies import (
     ApiRuntimeState,
@@ -44,6 +45,7 @@ def create_app(
     event_source_factory: Callable[[Settings, ApiConfig], Any] | None = None,
     finance_market_data_factory: Callable[[Settings], Any] | None = None,
     paper_trading_factory: Callable[[Settings, Any], Any] | None = None,
+    backtesting_factory: Callable[[Settings, Any], Any] | None = None,
     repo_root: Path | None = None,
 ) -> FastAPI:
     resolved_repo_root = (repo_root or _DEFAULT_REPO_ROOT).resolve()
@@ -61,6 +63,12 @@ def create_app(
             database_path=current_settings.workspace_root / "paper_trading" / "paper_trading.sqlite3",
             market_data=market_data,
             enforce_market_hours=current_settings.paper_trading_enforce_market_hours,
+        )
+    )
+    build_backtesting = backtesting_factory or (
+        lambda current_settings, market_data: HikyuuBacktestService(
+            result_root=current_settings.workspace_root / "backtests",
+            market_data=market_data,
         )
     )
 
@@ -89,6 +97,7 @@ def create_app(
                 bind_chat_completion(chat_service.record_run_completion)
             finance_market_data = build_finance_market_data(effective_settings)
             paper_trading = build_paper_trading(effective_settings, finance_market_data)
+            backtesting = build_backtesting(effective_settings, finance_market_data)
             runtime = ApiRuntimeState(
                 repo_root=resolved_repo_root,
                 settings=effective_settings,
@@ -99,6 +108,7 @@ def create_app(
                 event_source=build_event_source(effective_settings, resolved_api_config),
                 finance_market_data=finance_market_data,
                 paper_trading=paper_trading,
+                backtesting=backtesting,
                 mutation_lock=asyncio.Lock(),
             )
             application.state.api_runtime = runtime
