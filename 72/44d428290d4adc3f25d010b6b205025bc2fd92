@@ -1,0 +1,43 @@
+.env.example
+  s_a6a8a3a6f43b3c::t_f74c81dc349328 41-43
+README.md
+  s_a6a8a3a6f43b3c::t_66ce615517565c 11
+api-doc/api-v2.md
+  s_a6a8a3a6f43b3c::t_6c199a9c455fce 241,248-249,276-277,280-281,337,345-347
+frontend/src/components/PaperTrading.tsx
+  s_a6a8a3a6f43b3c::t_706992a9f798b2 109-110,186,189-191,257,270
+frontend/src/finance-contracts.ts
+  s_a6a8a3a6f43b3c::t_1757abf078003d 67,71,133
+research_system/api/app.py
+  s_a6a8a3a6f43b3c::t_30c08e23d0f082 66
+research_system/api/paper_trading_service.py
+  s_a6a8a3a6f43b3c::t_5c0527c496ec84 53-54,62,154-159,162,168,175-176,179,202,296,299,325,554-559,562,586-587,617,649,723,726,744,767,874,893,955,979,991-996,1142,1185-1189,1214-1225
+research_system/api/trading_calendar.py
+  s_a6a8a3a6f43b3c::t_45e0239efe2793 63-68,80
+research_system/runtime/config/settings_env.py
+  s_a6a8a3a6f43b3c::t_507a702fe92859 79-83
+research_system/runtime/platform/settings.py
+  s_a6a8a3a6f43b3c::t_a5dde425b1f231 46-47
+tests/test_paper_trading_calendar.py
+  s_a6a8a3a6f43b3c::t_69cc1a12106a33 56,72,78-79,93-115,122-123
+tests/test_settings_runtime.py
+  s_a6a8a3a6f43b3c::t_9690831cd1ef08 58-59,63,67-68,74-75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "7244d428290d4adc3f25d010b6b205025bc2fd92",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
