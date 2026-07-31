@@ -264,6 +264,130 @@ class ApiV2FinanceTests(unittest.TestCase):
         self.assertEqual(reset.json()["generation"], first["generation"] + 1)
         self.assertEqual(reset.json()["cash"], 500000)
 
+    def test_veighna_limit_order_reserves_and_releases_cash(self) -> None:
+        engine = self.client.get("/api/v2/finance/paper/engine", headers=auth_headers())
+        pending = self.client.post(
+            "/api/v2/finance/paper/orders",
+            headers=auth_headers(),
+            json={
+                "symbol": "600519",
+                "side": "buy",
+                "quantity": 100,
+                "order_type": "limit",
+                "limit_price": 99,
+                "client_order_id": "limit-order-1",
+            },
+        )
+
+        self.assertEqual(engine.status_code, 200, engine.text)
+        self.assertEqual(engine.json()["engine"], "veighna-paperaccount")
+        self.assertTrue(engine.json()["available"])
+        self.assertEqual(pending.status_code, 201, pending.text)
+        pending_payload = pending.json()
+        self.assertEqual(pending_payload["status"], "pending")
+        self.assertEqual(pending_payload["order_type"], "limit")
+        self.assertGreater(pending_payload["reserved_cash"], 0)
+
+        frozen = self.client.get(
+            "/api/v2/finance/paper/portfolio",
+            headers=auth_headers(),
+        ).json()
+        self.assertEqual(frozen["summary"]["open_order_count"], 1)
+        self.assertGreater(frozen["summary"]["frozen_cash"], 0)
+        self.assertLess(frozen["summary"]["cash"], frozen["summary"]["cash_balance"])
+
+        cancelled = self.client.post(
+            f"/api/v2/finance/paper/orders/{pending_payload['order_id']}/cancel",
+            headers=auth_headers(),
+        )
+        released = self.client.get(
+            "/api/v2/finance/paper/portfolio",
+            headers=auth_headers(),
+        ).json()
+        self.assertEqual(cancelled.status_code, 200, cancelled.text)
+        self.assertEqual(cancelled.json()["status"], "cancelled")
+        self.assertEqual(released["summary"]["open_order_count"], 0)
+        self.assertEqual(released["summary"]["frozen_cash"], 0)
+        self.assertEqual(released["summary"]["cash"], released["summary"]["cash_balance"])
+
+    def test_veighna_limit_order_matches_and_updates_the_ledger(self) -> None:
+        latest_price = 100.0
+
+        def mutable_quote(_symbol: str, *, refresh: bool = False):
+            del refresh
+            return {
+                "symbol": "600519",
+                "name": "贵州茅台",
+                "latest_price": latest_price,
+                "bid_price_1": latest_price * 0.9995,
+                "ask_price_1": latest_price * 1.0005,
+                "as_of": "2026-07-15T02:00:00+00:00",
+                "source": {"provider_id": "mutable-test"},
+                "tradable": True,
+            }
+
+        self.market.get_quote = mutable_quote  # type: ignore[method-assign]
+        pending = self.client.post(
+            "/api/v2/finance/paper/orders",
+            headers=auth_headers(),
+            json={
+                "symbol": "600519",
+                "side": "buy",
+                "quantity": 100,
+                "order_type": "limit",
+                "limit_price": 99,
+                "client_order_id": "limit-order-trigger",
+            },
+        )
+        self.assertEqual(pending.status_code, 201, pending.text)
+        self.assertEqual(pending.json()["status"], "pending")
+
+        latest_price = 98.0
+        matched = self.client.post(
+            "/api/v2/finance/paper/orders/match",
+            headers=auth_headers(),
+        )
+        portfolio = self.client.get(
+            "/api/v2/finance/paper/portfolio",
+            headers=auth_headers(),
+        ).json()
+
+        self.assertEqual(matched.status_code, 200, matched.text)
+        self.assertEqual(matched.json()["matched_count"], 1)
+        filled = matched.json()["matched"][0]
+        self.assertEqual(filled["status"], "filled")
+        self.assertEqual(filled["matching_engine"], "veighna-paperaccount")
+        self.assertLessEqual(filled["fill_price"], 99)
+        self.assertEqual(filled["reserved_cash"], 0)
+        self.assertEqual(portfolio["summary"]["open_order_count"], 0)
+        self.assertEqual(portfolio["summary"]["frozen_cash"], 0)
+        self.assertEqual(portfolio["positions"][0]["quantity"], 100)
+        self.assertAlmostEqual(
+            portfolio["summary"]["cash_balance"],
+            portfolio["account"]["initial_cash"] + filled["cash_effect"],
+            places=2,
+        )
+
+    def test_hikyuu_backtest_endpoint_validates_available_history(self) -> None:
+        engine = self.client.get("/api/v2/finance/backtests/engine", headers=auth_headers())
+        response = self.client.post(
+            "/api/v2/finance/backtests",
+            headers=auth_headers(),
+            json={
+                "symbol": "600519",
+                "initial_cash": 1_000_000,
+                "fast_period": 2,
+                "slow_period": 3,
+                "trade_size": 100,
+            },
+        )
+
+        self.assertEqual(engine.status_code, 200, engine.text)
+        self.assertEqual(engine.json()["engine"], "hikyuu")
+        self.assertTrue(engine.json()["available"])
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertEqual(response.json()["error"]["code"], "insufficient_kline_history")
+
 
 if __name__ == "__main__":
     unittest.main()

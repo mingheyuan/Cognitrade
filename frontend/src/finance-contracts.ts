@@ -17,6 +17,8 @@ export type MarketQuote = {
   symbol: string
   name: string
   latest_price: number
+  bid_price_1?: number | null
+  ask_price_1?: number | null
   pct_change?: number | null
   as_of?: string | null
   source: JsonRecord
@@ -60,6 +62,7 @@ export type PaperAccount = {
     settlement: string
     short_selling: boolean
     price_source: string
+    matching_engine: string
     market_hours_enforced: boolean
     calendar: string
     timezone: string
@@ -86,12 +89,15 @@ export type PaperPortfolio = {
   account: PaperAccount
   summary: {
     cash: number
+    cash_balance: number
+    frozen_cash: number
     market_value: number
     equity: number
     cost_basis: number
     total_pnl: number
     total_return_pct?: number | null
     position_count: number
+    open_order_count: number
   }
   positions: PaperPosition[]
   as_of: string
@@ -103,6 +109,8 @@ export type PaperOrder = {
   symbol: string
   name: string
   side: 'buy' | 'sell'
+  order_type: 'market' | 'limit'
+  limit_price?: number | null
   quantity: number
   quote_price: number
   fill_price: number
@@ -119,7 +127,12 @@ export type PaperOrder = {
   quote_source?: string
   trade_date?: string
   status: string
+  matching_engine: string
+  reserved_cash: number
+  reserved_quantity: number
   created_at: string
+  updated_at: string
+  filled_at?: string
   idempotent_replay: boolean
 }
 
@@ -128,4 +141,66 @@ export type PaperOrderInput = {
   side: 'buy' | 'sell'
   quantity: number
   client_order_id: string
+  order_type?: 'market' | 'limit'
+  limit_price?: number
 }
+
+export type QuantEngineStatus = {
+  engine: string
+  available: boolean
+  version?: string | null
+  versions?: Record<string, string | null>
+  mode: string
+  cash_ledger?: string
+  load_error?: string | null
+  capabilities?: Record<string, boolean>
+  strategies?: Array<{ id: string; name: string; description: string }>
+  data_source?: string
+}
+
+export type BacktestRequest = {
+  symbol: string
+  strategy?: 'ma_cross'
+  initial_cash: number
+  fast_period: number
+  slow_period: number
+  trade_size: number
+  refresh?: boolean
+}
+
+export type BacktestResult = {
+  backtest_id: string
+  created_at: string
+  engine: { name: string; version: string }
+  symbol: string
+  name: string
+  strategy: { id: string; name: string }
+  parameters: BacktestRequest & Record<string, number | string | boolean | undefined>
+  period: { start: string; end: string; bar_count: number; frequency: string }
+  metrics: {
+    initial_cash: number
+    final_equity: number
+    total_return_pct: number
+    annualized_return_pct: number
+    max_drawdown_pct: number
+    closed_trade_count: number
+    winning_trade_rate_pct: number
+    profit_loss_ratio: number
+  }
+  equity_curve: Array<{ date: string; equity: number }>
+  trades: Array<{
+    date: string
+    side: string
+    price: number
+    quantity: number
+    fees: number
+    cash_after: number
+  }>
+  data_quality_status?: string
+  data_source?: JsonRecord
+}
+
+export type BacktestSummary = Pick<
+  BacktestResult,
+  'backtest_id' | 'created_at' | 'symbol' | 'name' | 'strategy' | 'parameters' | 'period' | 'metrics'
+>
