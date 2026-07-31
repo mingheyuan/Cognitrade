@@ -1,0 +1,35 @@
+.env.example
+  s_a6a8a3a6f43b3c::t_69b3f9d4656645 41-43
+api-doc/api-v2.md
+  s_a6a8a3a6f43b3c::t_8ac4f7d2a791b8 248,275
+frontend/src/components/PaperTrading.tsx
+  s_a6a8a3a6f43b3c::t_19c064c196db2c 184-189,207,253
+research_system/api/paper_trading_service.py
+  s_a6a8a3a6f43b3c::t_06fd67b449ff5e 53
+research_system/runtime/config/settings_env.py
+  s_a6a8a3a6f43b3c::t_f3ddb2138ff7ea 79
+research_system/runtime/platform/settings.py
+  s_a6a8a3a6f43b3c::t_035f7fa66d59b4 46
+tests/test_paper_trading_calendar.py
+  s_a6a8a3a6f43b3c::t_201b62932d30a6 57,72-92
+tests/test_settings_runtime.py
+  s_a6a8a3a6f43b3c::t_0dddaa14bc1f82 58,62-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "79ff133bc1d034049547b2d48fb66874710c52ca",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
