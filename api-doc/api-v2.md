@@ -238,14 +238,15 @@ Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格�
 
 - VeighNa `vnpy_paperaccount` 负责官方订单模型与到价撮合；Cognitrade
   SQLite 账本负责现金、费用、T+1 和审计，因为 PaperAccount 本身不计算资金。
-- 市价单按卖一/买一成交；行情缺少盘口时以最新价上下 5 bps 合成保守买一/卖一。
+- 盘中市价单按卖一/买一成交；行情缺少盘口时以最新价上下 5 bps 合成保守买一/卖一。
 - 限价买单在限价不低于卖一时成交；限价卖单在限价不高于买一时成交。
 - 未触价限价单保持 `pending`，冻结对应现金或 T+1 可卖数量，可撤单或请求重新撮合。
 - 佣金为成交额 0.025%，单笔最低 5 元。
 - 过户费为成交额 0.001%。
 - 卖出印花税为成交额 0.05%。
 - 买入数量必须为 100 股整数倍。
-- 默认采用全天模拟模式，非交易时段也可使用最新可用的服务端行情完成虚拟撮合。设置 `COGNITRADE_PAPER_ENFORCE_MARKET_HOURS=true` 后，仅在上海时区交易日的 `09:30–11:30`、`13:00–15:00` 接受委托。
+- 默认在上海时区交易日的 `09:30–11:30`、`13:00–15:00` 按盘中行情撮合；交易日 `15:00` 后仍接受委托，但买一、卖一统一为当日收盘价，不再合成点差。
+- 开盘前、午休和非交易日拒绝委托。设置 `COGNITRADE_PAPER_SETTLE_AFTER_CLOSE=false` 可同时关闭盘后收盘价结算；`COGNITRADE_PAPER_ENFORCE_MARKET_HOURS=false` 仅用于需要全天模拟的隔离环境。
 - 当日买入记为 T+1，持仓在下一交易日而不是下一自然日可卖；交易日来自离线 XSHG 日历，卖出采用 FIFO 成本。
 - 行情声明停牌、不可交易、涨跌停或无有效正价格时拒绝模拟成交。
 - 禁止融券和负持仓；清仓时允许卖出全部可用零股。
@@ -272,10 +273,12 @@ Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格�
     "short_selling": false,
     "price_source": "server-side Finance Pack quote",
     "matching_engine": "veighna-paperaccount",
-    "market_hours_enforced": false,
+    "market_hours_enforced": true,
+    "after_close_settlement": true,
     "calendar": "exchange_calendars:XSHG",
     "timezone": "Asia/Shanghai",
-    "sessions": ["09:30-11:30", "13:00-15:00"]
+    "sessions": ["09:30-11:30", "13:00-15:00"],
+    "after_close_time": "15:00"
   }
 }
 ```
@@ -331,12 +334,16 @@ Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格�
   "trade_date": "2026-07-13",
   "status": "filled",
   "matching_engine": "veighna-paperaccount",
+  "pricing_mode": "live_quote",
   "reserved_cash": 0.0,
   "reserved_quantity": 0,
   "created_at": "2026-07-13T09:00:00+00:00",
   "idempotent_replay": false
 }
 ```
+
+`pricing_mode` 为 `live_quote` 时表示盘中盘口撮合；为 `closing_price` 时表示交易日
+15:00 后按当日收盘价撮合。
 
 ### `GET /api/v2/finance/paper/portfolio`
 

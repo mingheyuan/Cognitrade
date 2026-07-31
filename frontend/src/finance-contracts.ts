@@ -64,9 +64,11 @@ export type PaperAccount = {
     price_source: string
     matching_engine: string
     market_hours_enforced: boolean
+    after_close_settlement: boolean
     calendar: string
     timezone: string
     sessions: string[]
+    after_close_time: string
   }
 }
 
@@ -128,6 +130,7 @@ export type PaperOrder = {
   trade_date?: string
   status: string
   matching_engine: string
+  pricing_mode: 'live_quote' | 'closing_price'
   reserved_cash: number
   reserved_quantity: number
   created_at: string

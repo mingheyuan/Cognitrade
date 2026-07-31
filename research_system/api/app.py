@@ -63,6 +63,7 @@ def create_app(
             database_path=current_settings.workspace_root / "paper_trading" / "paper_trading.sqlite3",
             market_data=market_data,
             enforce_market_hours=current_settings.paper_trading_enforce_market_hours,
+            settle_after_close=current_settings.paper_trading_settle_after_close,
         )
     )
     build_backtesting = backtesting_factory or (

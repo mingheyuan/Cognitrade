@@ -8,7 +8,7 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 - 自然语言研究入口：个股体检、多股比较、股票筛选、行业研究与 Thesis Review。
 - 可追踪运行：Turn/Task、ExecutionGraph、事件流、子 Agent、Artifact、指标和重跑。
 - Finance Workspace：证券解析、行情、K 线摘要、基本面、资金流、舆情、公告、事件和龙虎榜。
-- 模拟交易：VeighNa PaperAccount 到价撮合，服务端现金/持仓账本、限价挂单、资金冻结、撤单、费用、T+1 和幂等订单。
+- 模拟交易：VeighNa PaperAccount 到价撮合，盘中按实时行情、交易日 15:00 后按收盘价结算，并提供服务端现金/持仓账本、限价挂单、资金冻结、撤单、费用、T+1 和幂等订单。
 - 策略回测：独立 Hikyuu 回测实验室，使用 Finance Pack 历史 K 线运行双均线策略并持久化资产曲线、绩效和成交记录。
 - DomainPack：`finance_ashare` 与 `legal_contract` 通过声明式能力、工具、Gate 和报告合同接入。
 - 治理：Bearer 鉴权、作用域隔离、高风险审批、质量 Gate、来源引用和分层记忆。

@@ -76,7 +76,11 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         },
         "default_timezone": env_values.get("DEFAULT_TIMEZONE", "Asia/Shanghai"),
         "paper_trading_enforce_market_hours": env_values.get(
-            "COGNITRADE_PAPER_ENFORCE_MARKET_HOURS", "false"
+            "COGNITRADE_PAPER_ENFORCE_MARKET_HOURS", "true"
+        ).strip().lower()
+        in {"1", "true", "yes", "on"},
+        "paper_trading_settle_after_close": env_values.get(
+            "COGNITRADE_PAPER_SETTLE_AFTER_CLOSE", "true"
         ).strip().lower()
         in {"1", "true", "yes", "on"},
         "log_level": env_values.get("LOG_LEVEL", "INFO"),

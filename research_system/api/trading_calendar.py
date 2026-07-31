@@ -60,6 +60,12 @@ class AShareTradingCalendar:
         current = local.time().replace(tzinfo=None)
         return _MORNING_OPEN <= current <= _MORNING_CLOSE or _AFTERNOON_OPEN <= current <= _AFTERNOON_CLOSE
 
+    def is_after_close(self, moment: datetime) -> bool:
+        local = self.localize(moment)
+        if not self.is_trading_day(local.date()):
+            return False
+        return local.time().replace(tzinfo=None) >= _AFTERNOON_CLOSE
+
     def next_session_date(self, moment: datetime) -> date:
         local = self.localize(moment)
         if self.is_trading_day(local.date()) and local.time().replace(tzinfo=None) < _MORNING_OPEN:
@@ -71,6 +77,7 @@ class AShareTradingCalendar:
             "calendar": self.backend,
             "timezone": "Asia/Shanghai",
             "sessions": ["09:30-11:30", "13:00-15:00"],
+            "after_close_time": "15:00",
         }
 
 

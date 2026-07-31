@@ -106,7 +106,8 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
         setSuccess(`${result.name} ${result.side === 'buy' ? '买入' : '卖出'} ${result.quantity} 股限价委托已进入 VeighNa 撮合队列，等待行情触价。`)
       } else {
         const cashAction = result.side === 'buy' ? '实际占用资金' : '实际回笼资金'
-        setSuccess(`${result.name} ${result.side === 'buy' ? '买入' : '卖出'} ${result.quantity} 股已模拟成交，成交价 ${formatMoney(result.fill_price)}；${cashAction} ${formatMoney(Math.abs(result.cash_effect))}，其中费用 ${formatMoney(result.fees.total)}。`)
+        const pricingLabel = result.pricing_mode === 'closing_price' ? '15:00 收盘价' : '盘中行情'
+        setSuccess(`${result.name} ${result.side === 'buy' ? '买入' : '卖出'} ${result.quantity} 股已按${pricingLabel}模拟成交，成交价 ${formatMoney(result.fill_price)}；${cashAction} ${formatMoney(Math.abs(result.cash_effect))}，其中费用 ${formatMoney(result.fees.total)}。`)
       }
       await Promise.all([refresh(true), loadQuote(result.symbol)])
     } catch (orderError) {
@@ -182,9 +183,12 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
     && (side === 'buy' ? quantity >= 100 && quantity % 100 === 0 : quantity > 0)
   const estimate = estimateOrder(orderType === 'limit' ? limitPrice : quote?.latest_price, side, quantity)
   const marketHoursEnforced = portfolio?.account.rules.market_hours_enforced
+  const afterCloseSettlement = portfolio?.account.rules.after_close_settlement
   const tradingModeDescription = portfolio
     ? marketHoursEnforced
-      ? '交易时段模式：仅在交易日 09:30–11:30、13:00–15:00 接受委托。'
+      ? afterCloseSettlement
+        ? '盘中实时 + 盘后收盘：交易时段按实时行情撮合，交易日 15:00 后按当日收盘价结算。'
+        : '交易时段模式：仅在交易日 09:30–11:30、13:00–15:00 接受委托。'
       : '全天模拟模式：非交易时段也可使用最新可用的服务端行情完成虚拟撮合。'
     : '正在读取模拟盘交易规则。'
 
@@ -250,7 +254,7 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
                 {submitting ? <RefreshCw className="is-spinning" size={15} /> : side === 'buy' ? <ArrowDownToLine size={15} /> : <ArrowUpFromLine size={15} />}
                 {submitting ? '服务端撮合中' : `确认${side === 'buy' ? '买入' : '卖出'} ${quantity || 0} 股`}
               </button>
-              <p id="paper-order-rule" className="order-rule-note"><Clock3 size={13} />{marketHoursEnforced ? '仅限连续竞价时段下单；' : '支持全天模拟下单；'}市价单按买一/卖一模拟成交，限价单未触价时可在下方撤单。</p>
+              <p id="paper-order-rule" className="order-rule-note"><Clock3 size={13} />{marketHoursEnforced ? afterCloseSettlement ? '盘中按实时行情、15:00 后按收盘价；' : '仅限连续竞价时段下单；' : '支持全天模拟下单；'}限价单未触价时可在下方撤单。</p>
             </form>
 
             <section className="paper-positions-card">
@@ -263,7 +267,7 @@ export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => voi
 
           <section className="paper-orders-card">
             <header><div><span className="section-kicker">ORDER HISTORY</span><h2>委托与成交记录</h2></div><small>{portfolio.summary.open_order_count} 笔待成交 · 最近 {orders.length} 笔</small></header>
-            {orders.length ? <div className="finance-table-scroll"><table className="finance-table"><thead><tr><th>时间</th><th>方向 / 类型</th><th>证券</th><th>数量</th><th>限价 / 成交价</th><th>成交额</th><th>费用 / 冻结</th><th>资金变动</th><th>状态</th><th /></tr></thead><tbody>{orders.map((order) => <tr key={order.order_id}><td>{formatDateTime(order.created_at)}<small>{order.matching_engine}</small></td><td><span className={`order-side-label order-side-label--${order.side}`}>{order.side === 'buy' ? '买入' : '卖出'}</span><small>{order.order_type === 'limit' ? '限价单' : '市价单'}</small></td><td><strong>{order.name}</strong><small>{order.symbol}</small></td><td>{order.quantity.toLocaleString()}</td><td>{order.limit_price ? formatMoney(order.limit_price) : '市价'}<small>{order.status === 'filled' ? formatMoney(order.fill_price) : '等待触价'}</small></td><td>{order.status === 'filled' ? formatMoney(order.gross_amount) : '—'}</td><td>{order.status === 'pending' ? (order.reserved_cash ? formatMoney(order.reserved_cash) : `${order.reserved_quantity} 股`) : formatMoney(order.fees.total)}</td><td className={order.cash_effect >= 0 ? 'number-up' : 'number-down'}>{order.status === 'filled' ? formatSignedMoney(order.cash_effect) : '—'}</td><td><span className={`paper-order-status paper-order-status--${order.status}`}>{order.status === 'filled' ? '已成交' : order.status === 'pending' ? '待成交' : order.status === 'cancelled' ? '已撤单' : order.status}</span></td><td>{order.status === 'pending' && <button className="paper-cancel-order" onClick={() => void cancelOrder(order.order_id)} disabled={submitting} aria-label={`撤销 ${order.name} 委托`}><Trash2 size={13} />撤单</button>}</td></tr>)}</tbody></table></div> : <div className="paper-empty paper-empty--compact"><Clock3 size={22} /><span>还没有模拟委托记录</span></div>}
+            {orders.length ? <div className="finance-table-scroll"><table className="finance-table"><thead><tr><th>时间</th><th>方向 / 类型</th><th>证券</th><th>数量</th><th>限价 / 成交价</th><th>成交额</th><th>费用 / 冻结</th><th>资金变动</th><th>状态</th><th /></tr></thead><tbody>{orders.map((order) => <tr key={order.order_id}><td>{formatDateTime(order.created_at)}<small>{order.matching_engine} · {order.pricing_mode === 'closing_price' ? '15:00 收盘价' : '盘中行情'}</small></td><td><span className={`order-side-label order-side-label--${order.side}`}>{order.side === 'buy' ? '买入' : '卖出'}</span><small>{order.order_type === 'limit' ? '限价单' : '市价单'}</small></td><td><strong>{order.name}</strong><small>{order.symbol}</small></td><td>{order.quantity.toLocaleString()}</td><td>{order.limit_price ? formatMoney(order.limit_price) : '市价'}<small>{order.status === 'filled' ? formatMoney(order.fill_price) : '等待触价'}</small></td><td>{order.status === 'filled' ? formatMoney(order.gross_amount) : '—'}</td><td>{order.status === 'pending' ? (order.reserved_cash ? formatMoney(order.reserved_cash) : `${order.reserved_quantity} 股`) : formatMoney(order.fees.total)}</td><td className={order.cash_effect >= 0 ? 'number-up' : 'number-down'}>{order.status === 'filled' ? formatSignedMoney(order.cash_effect) : '—'}</td><td><span className={`paper-order-status paper-order-status--${order.status}`}>{order.status === 'filled' ? '已成交' : order.status === 'pending' ? '待成交' : order.status === 'cancelled' ? '已撤单' : order.status}</span></td><td>{order.status === 'pending' && <button className="paper-cancel-order" onClick={() => void cancelOrder(order.order_id)} disabled={submitting} aria-label={`撤销 ${order.name} 委托`}><Trash2 size={13} />撤单</button>}</td></tr>)}</tbody></table></div> : <div className="paper-empty paper-empty--compact"><Clock3 size={22} /><span>还没有模拟委托记录</span></div>}
           </section>
         </>
       )}

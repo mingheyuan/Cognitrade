@@ -50,7 +50,8 @@ class PaperTradingService:
         market_data: FinanceMarketDataService,
         trading_calendar: AShareTradingCalendar | None = None,
         clock: Callable[[], datetime] | None = None,
-        enforce_market_hours: bool = False,
+        enforce_market_hours: bool = True,
+        settle_after_close: bool = True,
         matcher: VeighNaPaperAdapter | None = None,
     ) -> None:
         self.database_path = Path(database_path)
@@ -58,6 +59,7 @@ class PaperTradingService:
         self.trading_calendar = trading_calendar or AShareTradingCalendar()
         self.clock = clock or (lambda: datetime.now(UTC))
         self.enforce_market_hours = bool(enforce_market_hours)
+        self.settle_after_close = bool(settle_after_close)
         self.matcher = matcher or VeighNaPaperAdapter()
         self._lock = RLock()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -149,23 +151,32 @@ class PaperTradingService:
                 return payload
 
         trade_moment = self.clock()
-        if self.enforce_market_hours and not self.trading_calendar.is_market_open(trade_moment):
+        after_close = self._after_close_settlement_applies(trade_moment)
+        if (
+            self.enforce_market_hours
+            and not self.trading_calendar.is_market_open(trade_moment)
+            and not after_close
+        ):
             raise PaperTradingError(
                 "market_closed",
-                "当前不在 A 股连续竞价交易时段",
+                "当前不在 A 股连续竞价交易时段；交易日 15:00 后可按收盘价结算",
                 status_code=409,
                 details={
                     "timezone": "Asia/Shanghai",
                     "next_session_date": self.trading_calendar.next_session_date(trade_moment).isoformat(),
                     "sessions": ["09:30-11:30", "13:00-15:00"],
+                    "after_close_settlement": self.settle_after_close,
                 },
             )
 
         # The browser never supplies an executable price. Every fill starts from
         # a fresh server-side quote so a stale/tampered client cannot mint cash.
         quote = self.market_data.get_quote(symbol, refresh=True)
+        if after_close:
+            quote = self._as_closing_quote(quote)
         self._validate_tradable_quote(quote, side=normalized_side)
         quote_price = self._decimal(quote["latest_price"])
+        pricing_mode = "closing_price" if after_close else "live_quote"
         match = self.matcher.match(
             symbol=str(quote["symbol"]),
             side=normalized_side,
@@ -188,6 +199,7 @@ class PaperTradingService:
                 quote_price=quote_price,
                 trade_moment=trade_moment,
                 engine=match.engine,
+                pricing_mode=pricing_mode,
             )
         fill_price = match.fill_price
         gross = (fill_price * normalized_quantity).quantize(_CENT, rounding=ROUND_HALF_UP)
@@ -281,10 +293,10 @@ class PaperTradingService:
                     commission_cents, transfer_fee_cents, stamp_duty_cents,
                     total_fees_cents, cash_effect_cents, realized_pnl_cents,
                     quote_as_of, quote_source, trade_date, status, created_at
-                    , order_type, limit_price_micros, matching_engine,
+                    , order_type, limit_price_micros, matching_engine, pricing_mode,
                     reserved_cash_cents, reserved_quantity, updated_at, filled_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'filled', ?,
-                    ?, ?, ?, 0, 0, ?, ?)
+                    ?, ?, ?, ?, 0, 0, ?, ?)
                 """,
                 (
                     order_id,
@@ -310,6 +322,7 @@ class PaperTradingService:
                     normalized_order_type,
                     self._to_micros(normalized_limit_price) if normalized_limit_price is not None else None,
                     match.engine,
+                    pricing_mode,
                     now,
                     now,
                 ),
@@ -538,10 +551,15 @@ class PaperTradingService:
         refresh: bool = True,
     ) -> dict[str, Any]:
         trade_moment = self.clock()
-        if self.enforce_market_hours and not self.trading_calendar.is_market_open(trade_moment):
+        after_close = self._after_close_settlement_applies(trade_moment)
+        if (
+            self.enforce_market_hours
+            and not self.trading_calendar.is_market_open(trade_moment)
+            and not after_close
+        ):
             raise PaperTradingError(
                 "market_closed",
-                "当前不在 A 股连续竞价交易时段，挂单保持待成交",
+                "当前不在 A 股连续竞价交易时段，挂单保持待成交；交易日 15:00 后可按收盘价撮合",
                 status_code=409,
             )
         with self._lock, self._connection() as connection:
@@ -565,6 +583,8 @@ class PaperTradingService:
                 quote = quote_cache.get(symbol)
                 if quote is None:
                     quote = self.market_data.get_quote(symbol, refresh=refresh)
+                    if after_close:
+                        quote = self._as_closing_quote(quote)
                     quote_cache[symbol] = quote
                 self._validate_tradable_quote(quote, side=str(order["side"]))
                 limit_micros = order["limit_price_micros"]
@@ -594,6 +614,7 @@ class PaperTradingService:
                         fill_price=match.fill_price,
                         trade_moment=trade_moment,
                         engine=match.engine,
+                        pricing_mode="closing_price" if after_close else "live_quote",
                     )
                 )
             except Exception as exc:
@@ -625,6 +646,7 @@ class PaperTradingService:
         quote_price: Decimal,
         trade_moment: datetime,
         engine: str,
+        pricing_mode: str,
     ) -> dict[str, Any]:
         if order_type != "limit" or limit_price is None:
             raise PaperTradingError(
@@ -698,10 +720,10 @@ class PaperTradingService:
                     commission_cents, transfer_fee_cents, stamp_duty_cents,
                     total_fees_cents, cash_effect_cents, realized_pnl_cents,
                     quote_as_of, quote_source, trade_date, status, created_at,
-                    order_type, limit_price_micros, matching_engine,
+                    order_type, limit_price_micros, matching_engine, pricing_mode,
                     reserved_cash_cents, reserved_quantity, updated_at, filled_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, NULL,
-                    ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, NULL)
+                    ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 """,
                 (
                     order_id,
@@ -719,6 +741,7 @@ class PaperTradingService:
                     order_type,
                     self._to_micros(limit_price),
                     engine,
+                    pricing_mode,
                     reserved_cash_cents,
                     reserved_quantity,
                     now,
@@ -741,6 +764,7 @@ class PaperTradingService:
         fill_price: Decimal,
         trade_moment: datetime,
         engine: str,
+        pricing_mode: str,
     ) -> dict[str, Any]:
         now = self._format_moment(trade_moment)
         trade_date = self.trading_calendar.trading_date(trade_moment)
@@ -847,7 +871,7 @@ class PaperTradingService:
                     transfer_fee_cents = ?, stamp_duty_cents = ?,
                     total_fees_cents = ?, cash_effect_cents = ?,
                     realized_pnl_cents = ?, quote_as_of = ?, quote_source = ?,
-                    trade_date = ?, status = 'filled', matching_engine = ?,
+                    trade_date = ?, status = 'filled', matching_engine = ?, pricing_mode = ?,
                     reserved_cash_cents = 0, reserved_quantity = 0,
                     updated_at = ?, filled_at = ?
                 WHERE order_id = ?
@@ -866,6 +890,7 @@ class PaperTradingService:
                     self._quote_source(quote),
                     trade_date.isoformat(),
                     engine,
+                    pricing_mode,
                     now,
                     now,
                     order_id,
@@ -927,6 +952,7 @@ class PaperTradingService:
                     order_type TEXT NOT NULL DEFAULT 'market',
                     limit_price_micros INTEGER,
                     matching_engine TEXT NOT NULL DEFAULT 'cognitrade-compatible',
+                    pricing_mode TEXT NOT NULL DEFAULT 'live_quote',
                     reserved_cash_cents INTEGER NOT NULL DEFAULT 0,
                     reserved_quantity INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT,
@@ -950,7 +976,7 @@ class PaperTradingService:
                 );
                 CREATE INDEX IF NOT EXISTS paper_lots_account_symbol
                     ON paper_position_lots (account_id, symbol, available_date);
-                PRAGMA user_version = 3;
+                PRAGMA user_version = 4;
                 """
             )
             self._ensure_column(connection, "paper_orders", "trade_date", "TEXT")
@@ -961,6 +987,12 @@ class PaperTradingService:
                 "paper_orders",
                 "matching_engine",
                 "TEXT NOT NULL DEFAULT 'cognitrade-compatible'",
+            )
+            self._ensure_column(
+                connection,
+                "paper_orders",
+                "pricing_mode",
+                "TEXT NOT NULL DEFAULT 'live_quote'",
             )
             self._ensure_column(
                 connection,
@@ -1107,6 +1139,7 @@ class PaperTradingService:
                 "price_source": "server-side Finance Pack quote",
                 "matching_engine": self.matcher.status()["engine"],
                 "market_hours_enforced": self.enforce_market_hours,
+                "after_close_settlement": self.settle_after_close,
                 **self.trading_calendar.rule_summary(),
             },
         }
@@ -1149,6 +1182,11 @@ class PaperTradingService:
                 if "matching_engine" in keys
                 else "cognitrade-compatible"
             ),
+            "pricing_mode": (
+                str(order["pricing_mode"] or "live_quote")
+                if "pricing_mode" in keys
+                else "live_quote"
+            ),
             "reserved_cash": (
                 PaperTradingService._from_cents(int(order["reserved_cash_cents"] or 0))
                 if "reserved_cash_cents" in keys
@@ -1171,6 +1209,18 @@ class PaperTradingService:
                 else (str(order["created_at"]) if str(order["status"]) == "filled" else "")
             ),
             "idempotent_replay": False,
+        }
+
+    def _after_close_settlement_applies(self, moment: datetime) -> bool:
+        return self.settle_after_close and self.trading_calendar.is_after_close(moment)
+
+    def _as_closing_quote(self, quote: dict[str, Any]) -> dict[str, Any]:
+        closing_price = self._decimal(quote.get("latest_price"))
+        return {
+            **quote,
+            "latest_price": float(closing_price),
+            "bid_price_1": float(closing_price),
+            "ask_price_1": float(closing_price),
         }
 
     @staticmethod
