@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -20,13 +20,22 @@ from research_system.runtime.core.approvals import (
     approval_policy_fingerprint,
 )
 from research_system.runtime.core.id_utils import generate_ulid
-from research_system.runtime.core.tool_registry import CoreToolContext, CoreToolRegistry
+from research_system.runtime.core.tool_registry import CoreToolRegistry
 from research_system.runtime.event_store import append_canonical_event
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.execution.core.execution_graph import (
     ExecutionGraphScheduler,
     affected_node_ids_for_patch,
     apply_execution_graph_patch,
+)
+from research_system.runtime.execution.core.execution_context import (
+    ExecutionNodeContext,
+    GateEvaluationContext,
+    GraphCancelledError,
+    GraphExecutionError,
+    GraphGovernanceError,
+    GraphNodeTimeoutError,
+    GraphTimedOutError,
 )
 from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
 from research_system.schemas.artifacts import ArtifactDraft, ArtifactProducer, ArtifactRecord
@@ -57,26 +66,6 @@ if TYPE_CHECKING:
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-class GraphExecutionError(RuntimeError):
-    pass
-
-
-class GraphGovernanceError(GraphExecutionError):
-    pass
-
-
-class GraphCancelledError(GraphExecutionError):
-    pass
-
-
-class GraphTimedOutError(GraphExecutionError):
-    pass
-
-
-class GraphNodeTimeoutError(GraphExecutionError):
-    pass
 
 
 class DynamicGraphPlanner(Protocol):
@@ -111,172 +100,6 @@ class DynamicGraphPlanner(Protocol):
         frontier: list[ExecutionNode],
         artifacts: list[ArtifactRecord],
     ) -> PlanDecision: ...
-
-
-@dataclass(frozen=True)
-class ExecutionNodeContext:
-    run_id: str
-    thread_id: str
-    request_id: str
-    user_id: str | None
-    tenant_id: str | None
-    graph: ExecutionGraph
-    node: ExecutionNode
-    input_artifacts: list[ArtifactRecord]
-    artifact_board: ArtifactBoard
-    cache_root: Path
-    cancellation: Event
-    tool_registry: CoreToolRegistry | None = None
-    skill_runtime: Any | None = None
-    memory_store: Any | None = None
-    settings: Any | None = None
-    event_callback: Callable[[dict[str, Any]], None] | None = None
-    turn_id: str | None = None
-    progress_observer: Callable[[dict[str, Any]], dict[str, str] | None] | None = None
-    progress_emitter: Callable[[dict[str, Any]], None] | None = None
-    authorize_tool_call: Callable[[], bool] | None = None
-    tool_semaphore: Semaphore | None = None
-    approval_store: HumanApprovalStore | None = None
-    failure_injection: Callable[[str, str], str | None] | None = None
-    follow_up_messages: list[dict[str, Any]] = field(default_factory=list)
-
-    def artifacts(self, artifact_type: str) -> list[ArtifactRecord]:
-        return [
-            artifact
-            for artifact in self.input_artifacts
-            if artifact.artifact_type == artifact_type
-        ]
-
-    def require_artifact(self, artifact_type: str) -> ArtifactRecord:
-        artifacts = self.artifacts(artifact_type)
-        if not artifacts:
-            raise GraphExecutionError(
-                f"missing required artifact for {self.node.node_id}: {artifact_type}"
-            )
-        return artifacts[-1]
-
-    def call_tool(
-        self,
-        tool_name: str,
-        arguments: dict[str, Any] | None = None,
-    ):
-        """Invoke a node-declared tool through the shared governed registry."""
-        if self.tool_registry is None:
-            raise GraphExecutionError(
-                f"Tool Registry is not configured for node: {self.node.node_id}"
-            )
-        if self.failure_injection is not None:
-            injected_reason = self.failure_injection("tool", tool_name)
-            if injected_reason:
-                raise GraphExecutionError(
-                    f"injected Tool failure for {tool_name}: {injected_reason}"
-                )
-        context = CoreToolContext(
-            run_id=self.run_id,
-            thread_id=self.thread_id,
-            request_id=self.request_id,
-            user_id=self.user_id,
-            tenant_id=self.tenant_id,
-            run_root=Path(self.artifact_board.path).parent,
-            actor=f"subagent:{self.node.node_id}",
-            turn_id=self.turn_id,
-            cache_root=self.cache_root,
-            artifact_board=self.artifact_board,
-            skill_runtime=self.skill_runtime,
-            memory_store=self.memory_store,
-            settings=self.settings,
-            graph_supplier=lambda: self.graph.model_dump(mode="json"),
-            cancellation=self.cancellation,
-            event_callback=self.event_callback,
-            allowed_tools=frozenset(self.node.tools),
-            allowed_permissions=frozenset(self.node.permissions),
-            authorize_call=self.authorize_tool_call,
-            authorize_approval=(
-                lambda approval_id: self.approval_store.validate(
-                    approval_id=approval_id,
-                    run_id=self.run_id,
-                    node_id=self.node.node_id,
-                    capability=str(self.node.capability),
-                    graph_revision=self.graph.revision,
-                    domain_id=self.graph.domain_id,
-                    domain_version=str(self.graph.metadata.get("domain_version") or "") or None,
-                    user_id=self.user_id,
-                    tenant_id=self.tenant_id,
-                    policy_fingerprint=approval_policy_fingerprint(
-                        self.graph,
-                        self.node,
-                    ),
-                    require_binding=True,
-                )
-                if self.approval_store is not None
-                else False
-            ),
-            approval_id=self.node.approval_id,
-            idempotency_key=(
-                f"{self.node.idempotency_key}:{tool_name}"
-                if self.node.idempotency_key
-                else None
-            ),
-            rate_limit_key=self.thread_id,
-            tool_semaphore=self.tool_semaphore,
-        )
-        result = self.tool_registry.invoke(
-            tool_name=tool_name,
-            arguments=arguments,
-            context=context,
-            graph_revision=self.graph.revision,
-            node_id=self.node.node_id,
-        )
-        if self.progress_observer is not None and self.progress_emitter is not None:
-            facts = {
-                "event": "tool_completed",
-                "run_id": self.run_id,
-                "graph_revision": self.graph.revision,
-                "node_id": self.node.node_id,
-                "capability": self.node.capability,
-                "tool_name": tool_name,
-                "status": result.status,
-                "output": json.dumps(result.output, ensure_ascii=False, default=str)[:2_000],
-                "error": result.error,
-            }
-            try:
-                progress = self.progress_observer(facts)
-            except Exception:
-                progress = None
-            if progress:
-                self.progress_emitter(
-                    {
-                        "node_id": self.node.node_id,
-                        "phase": "tool_result",
-                        "status": result.status,
-                        "progress_source": "llm",
-                        "current_action": progress["current"],
-                        "next_action": progress["next"],
-                    }
-                )
-        return result
-
-
-@dataclass(frozen=True)
-class GateEvaluationContext:
-    """Read-only context exposed to a DomainPack quality-gate evaluator."""
-
-    run_id: str
-    thread_id: str
-    request_id: str
-    graph: ExecutionGraph
-    artifact: ArtifactRecord
-    artifacts: tuple[ArtifactRecord, ...]
-    artifact_board: ArtifactBoard
-    config: dict[str, Any]
-
-    def require_artifact(self, artifact_type: str) -> ArtifactRecord:
-        for artifact in reversed(self.artifacts):
-            if artifact.artifact_type == artifact_type:
-                return artifact
-        raise GraphExecutionError(
-            f"quality-gate evaluator input is missing: {artifact_type}"
-        )
 
 
 @dataclass(frozen=True)
@@ -1188,51 +1011,27 @@ class ExecutionGraphRunner:
                     policy_fingerprint=policy_fingerprint,
                 )
             elif existing.status == "approved" and not bound:
-                if (
-                    graph.revision == 1
-                    and existing.graph_revision is None
-                    and existing.domain_id is None
-                    and existing.domain_version is None
-                    and existing.policy_fingerprint is None
-                ):
-                    self.approvals.bind_legacy(
-                        approval_id,
-                        graph_revision=graph.revision,
-                        domain_id=graph.domain_id,
-                        domain_version=domain_version,
-                        user_id=user_id,
-                        tenant_id=tenant_id,
-                        policy_fingerprint=policy_fingerprint,
-                    )
-                    self._emit(
-                        "approval_legacy_record_bound",
-                        node_id=node.node_id,
-                        approval_id=approval_id,
-                        reason="Migrated an initial-revision approval to canonical context binding.",
-                    )
-                    bound = True
-                else:
-                    # A prior decision must never silently authorize a changed
-                    # graph, Pack version, policy, or identity scope.
-                    approval_id = f"approval_{generate_ulid()}"
-                    node = node.model_copy(update={"approval_id": approval_id})
-                    changed = True
-                    self.approvals.request(
-                        approval_id=approval_id,
-                        run_id=run_id,
-                        node_id=node.node_id,
-                        capability=str(node.capability),
-                        reason=(
-                            f"Fresh approval required after governed context changed "
-                            f"for {node.node_id} ({node.capability})."
-                        ),
-                        graph_revision=graph.revision,
-                        domain_id=graph.domain_id,
-                        domain_version=domain_version,
-                        user_id=user_id,
-                        tenant_id=tenant_id,
-                        policy_fingerprint=policy_fingerprint,
-                    )
+                # A prior decision must never silently authorize an unbound or
+                # changed graph, Pack version, policy, or identity scope.
+                approval_id = f"approval_{generate_ulid()}"
+                node = node.model_copy(update={"approval_id": approval_id})
+                changed = True
+                self.approvals.request(
+                    approval_id=approval_id,
+                    run_id=run_id,
+                    node_id=node.node_id,
+                    capability=str(node.capability),
+                    reason=(
+                        f"Fresh approval required after governed context changed "
+                        f"for {node.node_id} ({node.capability})."
+                    ),
+                    graph_revision=graph.revision,
+                    domain_id=graph.domain_id,
+                    domain_version=domain_version,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    policy_fingerprint=policy_fingerprint,
+                )
             if approval_id != node.approval_id:
                 node = node.model_copy(update={"approval_id": approval_id})
                 changed = True
@@ -2586,11 +2385,11 @@ class ExecutionGraphRunner:
             ).hexdigest()
         providers = sorted(
             {
-                str(ref.get("provider") or ref.get("provider_id") or ref.get("source_id") or "")
+                str(ref.get("provider") or ref.get("provider_id") or ref.get("id") or "")
                 for artifact in inputs
                 for ref in artifact.source_refs
                 if isinstance(ref, dict)
-                and str(ref.get("provider") or ref.get("provider_id") or ref.get("source_id") or "")
+                and str(ref.get("provider") or ref.get("provider_id") or ref.get("id") or "")
             }
         )
         return {

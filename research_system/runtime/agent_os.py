@@ -14,12 +14,7 @@ from research_system.runtime.core.tool_registry import (
     register_mcp_tools,
 )
 from research_system.runtime.execution.core.graph_runner import ExecutionGraphRunner
-from research_system.runtime.intake.task_intake import TaskIntakeService
 from research_system.runtime.intake.request_intake import RequestIntakeService
-from research_system.runtime.orchestration.runtime_role_overlay import RuntimeRoleOverlay
-from research_system.runtime.orchestration.subagent_discovery_store import (
-    SubagentDiscoveryStore,
-)
 from research_system.runtime.planning.capability_planner import (
     CapabilityDynamicPlanner,
     CapabilityPlanner,
@@ -32,7 +27,7 @@ from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.event_store import append_canonical_event
 from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.runtime.turn_runner import TurnContext, TurnRunner
-from research_system.schemas.artifacts import ArtifactDraft, ArtifactProducer, ArtifactRecord
+from research_system.schemas.artifacts import ArtifactDraft
 from research_system.schemas.core_runtime import (
     MainAgentRunResult,
     MainAgentState,
@@ -122,17 +117,8 @@ class AgentOS:
             require_integrity=settings.domain_pack_require_integrity,
             trusted_digests=settings.domain_pack_trusted_digests,
         )
-        self.subagent_discovery_store = SubagentDiscoveryStore(
-            settings.subagent_discovery_root
-        )
-        self.runtime_role_overlay = RuntimeRoleOverlay(
-            self.registry,
-            self.subagent_discovery_store,
-            settings=settings,
-        )
-        self.planner = CapabilityPlanner(self.runtime_role_overlay)
+        self.planner = CapabilityPlanner(self.registry)
         self.provider = ProviderRegistry(settings).default()
-        self.task_intake = TaskIntakeService(self.registry)
         self.request_intake = RequestIntakeService(self.registry, llm_provider=self.provider)
         self.run_store = RunStore(settings.runs_root)
         memory_retrieval_backend = self._memory_retrieval_backend()
@@ -165,8 +151,6 @@ class AgentOS:
             graph_adapter=_AgentOSGraphRunnerAdapter(self),
             timeout_seconds=float(settings.run_timeout_seconds),
         )
-        self._runtime_role_ids: set[str] = set()
-        self._sync_runtime_roles()
         self.main_agent.bind_turn_runner(self.turn_runner)
 
     def list_domain_packs(self) -> list[dict[str, Any]]:
@@ -251,13 +235,7 @@ class AgentOS:
         """Rebind all capability-facing services to one registry snapshot."""
 
         self.registry = registry
-        self.runtime_role_overlay = RuntimeRoleOverlay(
-            self.registry,
-            self.subagent_discovery_store,
-            settings=self.settings,
-        )
-        self.planner = CapabilityPlanner(self.runtime_role_overlay)
-        self.task_intake = TaskIntakeService(self.registry)
+        self.planner = CapabilityPlanner(self.registry)
         self.request_intake = RequestIntakeService(self.registry, llm_provider=self.provider)
         self.tool_registry = register_mcp_tools(
             register_domain_pack_tools(
@@ -269,35 +247,6 @@ class AgentOS:
         self.main_agent.tools = self.tool_registry
         self.dynamic_planner = CapabilityDynamicPlanner(self.planner)
         self.plan_agent = MainAgentPlanRole(self.dynamic_planner)
-        self._sync_runtime_roles()
-
-    def _sync_runtime_roles(self) -> None:
-        """Project active discovery aliases into the Turn role registry."""
-        if not hasattr(self, "turn_runner"):
-            return
-        contracts = self.runtime_role_overlay.role_contracts()
-        current_ids = {contract.role_id for contract in contracts}
-        for role_id in self._runtime_role_ids - current_ids:
-            self.turn_runner.role_registry.remove(role_id)
-        for contract in contracts:
-            self.turn_runner.role_registry.replace(contract)
-        self._runtime_role_ids = current_ids
-
-    def _refresh_runtime_roles(self) -> None:
-        self.runtime_role_overlay.refresh()
-        self._sync_runtime_roles()
-
-    @staticmethod
-    def _runtime_role_aliases(request: RequestEnvelope) -> list[str]:
-        raw = (request.constraints or {}).get("runtime_role_aliases")
-        if isinstance(raw, str):
-            raw = [raw]
-        aliases = [
-            str(item).strip()
-            for item in list(raw or [])
-            if str(item).strip()
-        ]
-        return list(dict.fromkeys(aliases))
 
     def _assert_pack_reload_safe(self, *, domain_id: str | None = None) -> None:
         if self._active:
@@ -344,7 +293,6 @@ class AgentOS:
                 for manifest in self.registry.list()
                 for intent in [
                     *(item.intent_id for item in manifest.intake.intents),
-                    *(manifest.planner_policies.get("supported_intents") or []),
                 ]
                 if str(intent).strip()
             }
@@ -386,13 +334,11 @@ class AgentOS:
         input_artifacts: list[ArtifactDraft],
         required_artifact_types: list[str] | None = None,
         preferred_capabilities: list[str] | None = None,
-        runtime_role_aliases: list[str] | None = None,
         run_id: str | None = None,
         user_id: str | None = None,
         tenant_id: str | None = None,
         event_callback=None,
     ) -> ExecutionRunResult:
-        self._refresh_runtime_roles()
         manifest = self.registry.get(domain_id)
         required = list(required_artifact_types or [])
         if not required:
@@ -406,11 +352,6 @@ class AgentOS:
                 "domain_id": domain_id,
                 "required_artifact_types": required,
             },
-            constraints=(
-                {"runtime_role_aliases": list(runtime_role_aliases)}
-                if runtime_role_aliases
-                else {}
-            ),
         )
         effective_run_id, _, _ = self.run_store.create_run(
             request,
@@ -433,7 +374,6 @@ class AgentOS:
                 metadata={
                     "request_id": request.request_id,
                     "intent": request.intent or f"domain:{domain_id}",
-                    "runtime_role_aliases": self._runtime_role_aliases(request),
                 },
             )
         )
@@ -589,7 +529,7 @@ class AgentOS:
                 self._active.pop(run_id, None)
 
     def _execute_prebuilt_graph(self, context: TurnContext) -> ExecutionRunResult:
-        """Execute a graph prepared by a compatibility domain API in a Turn."""
+        """Execute a caller-supplied graph inside the canonical Turn lifecycle."""
         graph = context.graph
         if graph is None:
             raise ValueError("prebuilt Graph execution requires a graph")
@@ -760,7 +700,7 @@ class AgentOS:
         root = self.run_store.load_run_paths(run_id).root
         request_payload = read_json(root / "request.json") or {}
         request = RequestEnvelope.model_validate(request_payload)
-        turn = read_json(root / "turn_state.json") or read_json(root / "turn.json") or {}
+        turn = read_json(root / "turn_state.json") or {}
         if not isinstance(turn, dict):
             turn = {}
         raw_status = str(turn.get("status") or "received")
@@ -775,7 +715,7 @@ class AgentOS:
             "cancelled",
             "timed_out",
         } else "running"
-        task = read_json(root / "task_state.json") or read_json(root / "task.json") or {}
+        task = read_json(root / "task_state.json") or {}
         continuation = task.get("continuation") if isinstance(task, dict) else None
         return ResponseEnvelope(
             request_id=request.request_id,
@@ -1205,13 +1145,6 @@ class AgentOS:
         with self._lock:
             self._prepared_run_ids.add(run_id)
 
-    def intake(self, request: RequestEnvelope):
-        """Legacy Pack-only intake adapter; normal entry uses request_intake_decision."""
-        return self.task_intake.resolve(
-            request,
-            runtime_context={"recent_runs": self.run_store.list_runs()},
-        )
-
     def request_intake_decision(self, request: RequestEnvelope):
         return self.request_intake.resolve(
             request,
@@ -1225,7 +1158,6 @@ class AgentOS:
         decision: RequestIntakeDecision,
     ):
         """Build a lazy graph from the accepted request and installed Pack contracts."""
-        self._refresh_runtime_roles()
         domain_id = str(decision.domain_id or request.slots.get("domain_id") or "").strip()
         if not domain_id:
             raise ValueError("accepted domain request has no DomainPack")
@@ -1274,7 +1206,6 @@ class AgentOS:
                     **dict(request.constraints),
                 },
                 "request_constraints": dict(request.constraints),
-                "runtime_role_aliases": self._runtime_role_aliases(request),
                 "required_outputs_source": required_outputs_source,
                 "chat_dispatch": (
                     dict(request.constraints.get("chat_dispatch") or {})
@@ -1288,17 +1219,17 @@ class AgentOS:
 
     def inspect_run(self, run_id: str) -> dict[str, Any]:
         root = self.run_store.load_run_paths(run_id).root
-        turn_state = read_json(root / "turn_state.json") or read_json(root / "turn.json")
+        turn_state = read_json(root / "turn_state.json")
         snapshot = read_json(root / "execution_snapshot.json")
         if snapshot is None:
             core_state = read_json(root / "main_agent_state.json")
             if core_state is not None:
                 return {
                     "mode": "core",
-                    "request": read_json(root / "agent_os_request.json") or read_json(root / "request.json"),
+                    "request": read_json(root / "request.json"),
                     "snapshot": core_state,
                     "turn": turn_state,
-                    "task": read_json(root / "task_state.json") or read_json(root / "task.json"),
+                    "task": read_json(root / "task_state.json"),
                     "artifacts": [
                         artifact.model_dump(mode="json")
                         for artifact in self._runner_board(run_id).list_artifacts(thread_id=None)
@@ -1313,7 +1244,7 @@ class AgentOS:
                         "status": "received",
                     },
                     "turn": turn_state,
-                    "task": read_json(root / "task_state.json") or read_json(root / "task.json"),
+                    "task": read_json(root / "task_state.json"),
                     "artifacts": [],
                 }
             raise KeyError(f"run has no canonical execution snapshot: {run_id}")
@@ -1322,7 +1253,7 @@ class AgentOS:
             "request": read_json(root / "agent_os_request.json"),
             "snapshot": snapshot,
             "turn": turn_state,
-            "task": read_json(root / "task_state.json") or read_json(root / "task.json"),
+            "task": read_json(root / "task_state.json"),
             "main_agent_state": read_json(root / "main_agent_state.json"),
             "artifacts": [
                 artifact.model_dump(mode="json")
@@ -1509,13 +1440,12 @@ class AgentOS:
         turn_id: str | None = None,
         deadline_at: float | None = None,
     ) -> ExecutionGraphRunner:
-        self._refresh_runtime_roles()
         paths = self.run_store.load_run_paths(run_id)
-        request_payload = read_json(paths.request) or read_json(paths.root / "agent_os_request.json") or {}
+        request_payload = read_json(paths.request) or {}
         if isinstance(request_payload, dict) and isinstance(request_payload.get("request"), dict):
             request_payload = request_payload["request"]
         return ExecutionGraphRunner(
-            registry=self.runtime_role_overlay,
+            registry=self.registry,
             run_root=paths.root,
             dynamic_planner=self.plan_agent,
             memory_store=self.memory,
@@ -1599,19 +1529,9 @@ class AgentOS:
         if not isinstance(payload, dict):
             raise ValueError(f"graph run request is missing: {run_id}")
         request_payload = payload.get("request")
-        if isinstance(request_payload, dict):
-            request = RequestEnvelope.model_validate(request_payload)
-        else:
-            # ``run_domain`` predates the standard request envelope and only
-            # persisted the graph-facing fields. Reconstruct a stable request
-            # for resume without re-running intake or creating a new Run.
-            request = RequestEnvelope(
-                request_id=str(payload.get("request_id") or generate_ulid()),
-                thread_id=str(payload.get("thread_id") or f"thread_{run_id}"),
-                intent=str(payload.get("intent") or payload.get("domain_id") or "domain_task"),
-                user_query=str(payload.get("objective") or "Resume the domain graph."),
-                slots={"domain_id": payload.get("domain_id")},
-            )
+        if not isinstance(request_payload, dict):
+            raise ValueError(f"graph run request envelope is missing: {run_id}")
+        request = RequestEnvelope.model_validate(request_payload)
         decision = RequestIntakeDecision(
             status="accepted",
             request_kind="domain_task",
@@ -1958,7 +1878,7 @@ class AgentOS:
         request: RequestEnvelope,
         result: MainAgentRunResult,
     ) -> ResponseEnvelope:
-        """Build the legacy Core response inside TurnRunner.finalize."""
+        """Build the Core response inside TurnRunner.finalize."""
         self._write_core_summary(result)
         return self._response_from_core(request, result)
 
@@ -2019,317 +1939,9 @@ class AgentOS:
         self,
         result: ExecutionRunResult,
     ) -> ExecutionRunResult:
-        runner = self._runner(result.snapshot.run_id)
-        existing = runner.board.list_artifacts(
-            run_id=result.snapshot.run_id,
-            artifact_type="assistant_message",
-            status="active",
-        )
-        if existing:
-            assistant_id = existing[-1].artifact_id
-            existing_content = existing[-1].content if isinstance(existing[-1].content, dict) else {}
-            existing_delivery_status = str(
-                existing_content.get("delivery_status") or result.snapshot.status
-            )
-            has_synthesis = bool(
-                runner.board.list_artifacts(
-                    run_id=result.snapshot.run_id,
-                    artifact_type="main_agent_synthesis",
-                    status="active",
-                )
-            )
-            if (
-                result.snapshot.status == "completed"
-                and result.snapshot.graph.domain_id == "finance_ashare"
-                and not has_synthesis
-                and existing_delivery_status == "completed"
-            ):
-                # A Pack may have emitted an assistant message before the
-                # canonical Main Agent synthesis stage. Preserve the old
-                # artifact for replay, but supersede it so delivery status
-                # cannot claim a complete user-facing answer.
-                self._mark_graph_partial_delivery(result=result, runner=runner)
-                partial_artifact = runner.board.add(
-                    existing[-1].model_copy(
-                        update={
-                            "artifact_id": generate_ulid(),
-                            "artifact_version": existing[-1].artifact_version + 1,
-                            "supersedes_artifact_id": existing[-1].artifact_id,
-                            "content": {
-                                **existing_content,
-                                "delivery_status": "synthesis_unavailable",
-                                "synthesis_unavailable": True,
-                            },
-                        }
-                    )
-                )
-                runner._emit(
-                    "assistant_message_status",
-                    run_id=result.snapshot.run_id,
-                    thread_id=result.snapshot.thread_id,
-                    request_id=result.snapshot.request_id,
-                    mode="graph",
-                    delivery_status="synthesis_unavailable",
-                    synthesis_unavailable=True,
-                    message=str(existing_content.get("message") or ""),
-                    artifact_ids=[partial_artifact.artifact_id],
-                )
-                return result.model_copy(
-                    update={
-                        "artifact_ids": [
-                            *result.artifact_ids,
-                            partial_artifact.artifact_id,
-                        ],
-                    }
-                )
-            existing_event_type = (
-                "assistant_message_ready"
-                if existing_delivery_status == "completed"
-                else "assistant_message_status"
-            )
-            runner._emit(
-                existing_event_type,
-                run_id=result.snapshot.run_id,
-                thread_id=result.snapshot.thread_id,
-                request_id=result.snapshot.request_id,
-                mode="graph",
-                delivery_status=existing_delivery_status,
-                message=str(existing_content.get("message") or ""),
-                artifact_ids=[assistant_id],
-            )
-            return result.model_copy(
-                update={
-                    "artifact_ids": [*result.artifact_ids, assistant_id]
-                    if assistant_id not in result.artifact_ids
-                    else result.artifact_ids,
-                }
-            )
-        artifacts = runner.board.list_artifacts(run_id=result.snapshot.run_id, status="active")
-        report = next(
-            (
-                artifact
-                for artifact in reversed(artifacts)
-                if artifact.artifact_type == "research_report"
-            ),
-            None,
-        )
-        delivery_artifacts = [
-            artifact
-            for artifact in artifacts
-            if artifact.artifact_type not in {"assistant_message", "main_agent_synthesis"}
-        ]
-        synthesis = None
-        synthesis_artifact = None
-        synthesis_unavailable = False
-        if (
-            result.snapshot.status == "completed"
-            and (report is not None or delivery_artifacts)
-            and result.snapshot.graph.domain_id == "finance_ashare"
-        ):
-            request_payload = read_json(runner.run_root / "request.json") or {}
-            request_text = str(
-                request_payload.get("user_query")
-                or request_payload.get("query")
-                or result.snapshot.graph.objective
-                or ""
-            )
-            board_facts = [artifact.model_dump(mode="json") for artifact in delivery_artifacts]
-            synthesis = self.main_agent.compose_research_synthesis(
-                request=request_text,
-                report=dict(report.content) if report is not None else {
-                    "delivery_mode": "method_specific",
-                    "artifact_types": [artifact.artifact_type for artifact in delivery_artifacts],
-                },
-                artifacts=board_facts,
-            )
-            if synthesis:
-                source_refs: list[dict] = []
-                for artifact in delivery_artifacts:
-                    for source_ref in artifact.source_refs:
-                        if source_ref not in source_refs:
-                            source_refs.append(source_ref)
-                synthesis_artifact = runner.board.add(
-                    ArtifactRecord(
-                        artifact_type="main_agent_synthesis",
-                        schema_version="1",
-                        run_id=result.snapshot.run_id,
-                        thread_id=result.snapshot.thread_id,
-                        request_id=result.snapshot.request_id,
-                        user_id=result.snapshot.user_id,
-                        tenant_id=result.snapshot.tenant_id,
-                        producer=ArtifactProducer(
-                            executor="main_agent",
-                            capability="core.research.synthesize",
-                            domain_id=result.snapshot.graph.domain_id,
-                            responsibility_node_id="main_agent",
-                        ),
-                        content={
-                            **synthesis,
-                            "source_artifact_id": (
-                                report.artifact_id
-                                if report is not None
-                                else delivery_artifacts[0].artifact_id
-                            ),
-                            "source_artifact_ids": [artifact.artifact_id for artifact in delivery_artifacts],
-                            "model_generated": True,
-                        },
-                        source_refs=source_refs,
-                        parent_artifact_ids=[artifact.artifact_id for artifact in delivery_artifacts],
-                        confidence=min(
-                            [float(artifact.confidence or 0.0) for artifact in delivery_artifacts]
-                            or [0.0]
-                        ),
-                        risk_flags=[
-                            *dict.fromkeys(
-                                flag
-                                for artifact in delivery_artifacts
-                                for flag in artifact.risk_flags
-                            ),
-                            "main_agent_synthesis",
-                        ],
-                    )
-                )
-            else:
-                synthesis_unavailable = True
-                # A graph can finish its Pack work without having a user-facing
-                # Main Agent synthesis. Keep that distinction in the canonical
-                # Run state instead of reporting a complete delivery.
-                self._mark_graph_partial_delivery(result=result, runner=runner)
-                result = result.model_copy(
-                    update={
-                        "snapshot": result.snapshot.model_copy(deep=True),
-                    }
-                )
-        content = report.content if report is not None else {}
-        if synthesis_unavailable:
-            message = "专业研究产物已完成，但主 Agent 暂时无法生成最终答复，请稍后重试。"
-            source_refs = list(report.source_refs) if report is not None else []
-        elif result.snapshot.status == "completed":
-            if synthesis:
-                message = str(synthesis.get("assistant_message") or "主 Agent 已完成研究交付。")
-            else:
-                message = str(content.get("conclusion") or content.get("summary") or "Agent OS 图运行已完成。")
-            source_refs = list(report.source_refs) if report is not None else []
-            if not source_refs:
-                for artifact in delivery_artifacts:
-                    for source_ref in artifact.source_refs:
-                        if source_ref not in source_refs:
-                            source_refs.append(source_ref)
-            if not source_refs:
-                source_refs = [{"type": "request", "id": result.snapshot.request_id}]
-        elif result.snapshot.clarification_question:
-            message = result.snapshot.clarification_question
-            source_refs = [{"type": "request", "id": result.snapshot.request_id}]
-        else:
-            message = {
-                "gated": "Agent OS produced professional artifacts, but delivery is blocked by a quality gate or approval.",
-                "waiting_approval": "Agent OS is waiting for the required approval before delivery.",
-                "failed": "Agent OS could not complete the professional run; produced artifacts remain available for inspection.",
-            }.get(
-                result.snapshot.status,
-                f"Agent OS graph run {result.snapshot.status}.",
-            )
-            source_refs = [{"type": "request", "id": result.snapshot.request_id}]
-        delivery_status = (
-            "synthesis_unavailable"
-            if synthesis_unavailable
-            else ("completed" if result.snapshot.status == "completed" else result.snapshot.status)
-        )
-        assistant_event_type = (
-            "assistant_message_ready"
-            if delivery_status == "completed"
-            else "assistant_message_status"
-        )
-        assistant = runner.board.add(
-            ArtifactRecord(
-                artifact_type="assistant_message",
-                schema_version="1",
-                run_id=result.snapshot.run_id,
-                thread_id=result.snapshot.thread_id,
-                request_id=result.snapshot.request_id,
-                user_id=result.snapshot.user_id,
-                tenant_id=result.snapshot.tenant_id,
-                producer=ArtifactProducer(
-                    executor="main_agent",
-                    capability="core.message.compose",
-                    domain_id=result.snapshot.graph.domain_id,
-                    responsibility_node_id="main_agent",
-                ),
-                content={
-                    "message": message,
-                    "source_artifact_ids": [
-                        artifact_id
-                        for artifact_id in (
-                            report.artifact_id if report is not None else None,
-                            synthesis_artifact.artifact_id if synthesis_artifact is not None else None,
-                            *(
-                                artifact.artifact_id
-                                for artifact in delivery_artifacts
-                                if report is None
-                            ),
-                        )
-                        if artifact_id
-                    ],
-                    "mode": "graph",
-                    "delivery_status": delivery_status,
-                    "synthesis_unavailable": synthesis_unavailable,
-                },
-                source_refs=source_refs,
-                parent_artifact_ids=[
-                    artifact_id
-                    for artifact_id in (
-                        report.artifact_id if report is not None else None,
-                        synthesis_artifact.artifact_id if synthesis_artifact is not None else None,
-                        *(
-                            artifact.artifact_id
-                            for artifact in delivery_artifacts
-                            if report is None
-                        ),
-                    )
-                    if artifact_id
-                ],
-                confidence=(
-                    report.confidence
-                    if result.snapshot.status == "completed" and report is not None and not synthesis_unavailable
-                    else (
-                        min([float(artifact.confidence or 0.0) for artifact in delivery_artifacts] or [0.0])
-                        if result.snapshot.status == "completed" and not synthesis_unavailable
-                        else 0.0
-                    )
-                ),
-            )
-        )
-        runner._emit(
-            assistant_event_type,
-            run_id=result.snapshot.run_id,
-            thread_id=result.snapshot.thread_id,
-            request_id=result.snapshot.request_id,
-            mode="graph",
-            delivery_status=delivery_status,
-            message=message,
-            artifact_ids=[assistant.artifact_id],
-            source_artifact_ids=[
-                artifact_id
-                for artifact_id in (
-                    report.artifact_id if report is not None else None,
-                    synthesis_artifact.artifact_id if synthesis_artifact is not None else None,
-                )
-                if artifact_id
-            ],
-        )
-        return result.model_copy(
-            update={
-                "artifact_ids": [
-                    *result.artifact_ids,
-                    *(
-                        [synthesis_artifact.artifact_id]
-                        if synthesis_artifact is not None
-                        else []
-                    ),
-                    assistant.artifact_id,
-                ],
-            }
-        )
+        from research_system.runtime.graph_delivery import ensure_graph_assistant_message
+
+        return ensure_graph_assistant_message(self, result)
 
     @staticmethod
     def _mark_graph_partial_delivery(*, result: ExecutionRunResult, runner) -> None:

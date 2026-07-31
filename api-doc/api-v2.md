@@ -181,7 +181,10 @@ GET /api/v2/finance/securities?query=茅台&limit=8
 }
 ```
 
-`quality_status` 为 `available`、`partial` 或具体不可用状态。每个快照统一使用 `available`、`no_data`、`provider_unavailable`、`rate_limited`、`parse_failed`；兼容历史 Artifact 时仍可能读取到 `degraded`、`data_gap` 或 `assumption_only`。数据源失败不会被静默替换成演示数据，也不会向客户端暴露上游连接异常原文。
+`quality_status` 为 `available`、`partial` 或具体不可用状态。数据源快照使用
+`available`、`no_data`、`provider_unavailable`、`rate_limited`、`parse_failed`；
+Pack 质量 Gate 还可能标记 `degraded`、`data_gap` 或 `assumption_only`。数据源失败
+不会被静默替换成演示数据，也不会向客户端暴露上游连接异常原文。
 
 K 线响应只有区间元数据与最后交易日记录；前端契约禁止用该接口绘制历史价格趋势。
 

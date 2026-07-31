@@ -61,7 +61,18 @@ class PackPlannerContractTests(unittest.TestCase):
                     "audit_summary": {
                         "capability": "audit.read",
                         "output_artifact_types": ["audit_report"],
-                        "required_inputs": ["audit_evidence"],
+                        "required_inputs": [
+                            {
+                                "artifact_type": "audit_evidence",
+                                "required_fields": [
+                                    {
+                                        "path": "evidence",
+                                        "type": "any",
+                                        "source_required": False,
+                                    }
+                                ],
+                            }
+                        ],
                         "allowed_quality_statuses": ["available"],
                     }
                 },

@@ -29,6 +29,7 @@ Usage:
   ./scripts/deploy.sh init [options]           Initialize secure deployment configuration
   ./scripts/deploy.sh check [options]          Validate Docker, configuration, and Compose
   ./scripts/deploy.sh build [options]          Build API and frontend web images
+  ./scripts/deploy.sh migrate [options]        Explicitly migrate an existing workspace volume once
   ./scripts/deploy.sh start [options]          Start API + frontend web from existing images
   ./scripts/deploy.sh restart [options]        Recreate API + frontend web containers
   ./scripts/deploy.sh stop [options]           Stop API + frontend web without removing them
@@ -189,7 +190,7 @@ while (( $# )); do
 done
 
 case "$COMMAND" in
-    deploy|install|init|check|build|start|restart|stop|down|status|logs|token) ;;
+    deploy|install|init|check|build|migrate|start|restart|stop|down|status|logs|token) ;;
     *) fail "unknown command: $COMMAND" ;;
 esac
 
@@ -466,8 +467,8 @@ validate_environment() {
         (( ! REQUIRE_OPENAI )) || fail "OPENAI_API_KEY is required by --require-openai"
         warn "OPENAI_API_KEY is empty; research will use supported degraded behavior"
     fi
-    [[ -d "$ROOT_DIR/workspace/config" && -d "$ROOT_DIR/workspace/taxonomy" ]] \
-        || fail "workspace config and taxonomy templates are required"
+    [[ -d "$ROOT_DIR/workspace/config" ]] \
+        || fail "workspace config templates are required"
 }
 
 compose() {
@@ -589,6 +590,14 @@ case "$COMMAND" in
         validate_environment
         check_compose_configuration
         build_images
+        ;;
+    migrate)
+        ensure_docker 0
+        validate_environment
+        check_compose_configuration
+        log "migrating the workspace volume to canonical Run filenames"
+        run_compose run --rm --no-deps api \
+            python -m scripts.migrate_workspace --workspace /app/workspace
         ;;
     start)
         ensure_docker "$((1 - SKIP_SYSTEM_INSTALL))"

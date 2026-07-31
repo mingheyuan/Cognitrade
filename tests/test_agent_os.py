@@ -25,23 +25,18 @@ class AgentOSTests(unittest.TestCase):
             }
         )
 
-    def test_standard_request_entry_does_not_call_legacy_pack_intake(self) -> None:
+    def test_standard_request_entry_routes_through_request_intake(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             agent_os = AgentOS(self._settings(repository_root, root))
-            with patch.object(
-                agent_os.task_intake,
-                "resolve",
-                side_effect=AssertionError("legacy TaskIntake must not run on the standard entry"),
-            ):
-                response = agent_os.handle_request(
-                    RequestEnvelope(
-                        intent="stock_screen",
-                        user_query="Screen the supplied candidate.",
-                        slots={"symbols": ["600000"]},
-                    )
+            response = agent_os.handle_request(
+                RequestEnvelope(
+                    intent="stock_screen",
+                    user_query="Screen the supplied candidate.",
+                    slots={"symbols": ["600000"]},
                 )
+            )
 
             self.assertEqual(response.status, "completed_partial")
             self.assertEqual(response.mode, "graph")

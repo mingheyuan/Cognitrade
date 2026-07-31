@@ -252,11 +252,6 @@ def collect_snapshot(context):
         risk_flags=list(collection.get("degrade_reasons") or []),
         metadata={"quality_status": str(collection.get("quality_status") or "data_gap")},
     )
-    # Production execution has a governed Tool caller and can commit the
-    # independent Snapshot records. Minimal direct Pack contexts retain the
-    # historical single-draft return shape for unit-level equivalence tests.
-    if not callable(getattr(context, "call_tool", None)):
-        return bundle_draft
     return NodeExecutionOutput(artifacts=[*snapshot_drafts, bundle_draft])
 
 
@@ -445,13 +440,7 @@ def _context_artifacts(context, artifact_type: str) -> list:
 
 
 def _snapshot_context(context) -> tuple[list[dict], list[str], str, list[dict], list[str]]:
-    """Read independent Snapshot artifacts and retain a compatibility fallback.
-
-    The normal Graph contract supplies individual ``snapshot`` artifacts.  The
-    bundle fallback is intentionally limited to direct legacy/unit contexts so
-    the production path cannot silently make the bundle the shared data plane.
-    """
-
+    """Read the independent Snapshot artifacts used as the shared data plane."""
     artifacts = _context_artifacts(context, "snapshot")
     rows: list[dict] = []
     source_refs: list[dict] = []
@@ -476,16 +465,6 @@ def _snapshot_context(context) -> tuple[list[dict], list[str], str, list[dict], 
             symbols.append(symbol)
         if not query:
             query = str(content.get("query") or "")
-
-    if not rows:
-        bundles = _context_artifacts(context, "stock_snapshot_bundle")
-        if bundles:
-            bundle = bundles[-1]
-            rows = [dict(row) for row in bundle.content.get("snapshots") or [] if isinstance(row, dict)]
-            symbols = _unique_strings(bundle.content.get("symbols") or [])
-            query = str(bundle.content.get("query") or query)
-            source_refs = list(bundle.source_refs)
-            parent_ids = [bundle.artifact_id]
 
     symbols = _unique_strings([*symbols, *[str(row.get("symbol") or "") for row in rows]])
     return rows, symbols, query, _unique_source_refs(source_refs), list(dict.fromkeys(parent_ids))
@@ -993,55 +972,6 @@ def evaluate_methodology_quality_gate(context):
         "evidence_refs": list(context.artifact.source_refs),
         "score": float(context.artifact.confidence or 0.0),
     }
-
-
-def compose_report(context):
-    evidence = context.require_artifact("evidence_set")
-    analysis = context.require_artifact("financial_analysis")
-    items = list(evidence.content.get("items") or [])
-    report_evidence = [_report_evidence_item(item, index) for index, item in enumerate(items)]
-    methodologies = list(analysis.content.get("methodologies") or [])
-    scorecards = list(analysis.content.get("scorecards") or [])
-    assessment = _build_assessment(methodologies)
-    available = [item for item in report_evidence if not item["metadata"].get("degraded")]
-    degraded = [item for item in report_evidence if item["metadata"].get("degraded")]
-    if not report_evidence:
-        conclusion = "No verifiable market or fundamental snapshots were available for this request."
-        risks = ["No financial evidence was collected, so no investment conclusion can be made."]
-        follow_up = ["Provide one or more six-digit A-share codes, or supply source snapshots."]
-    else:
-        summaries = [str(item["summary"]) for item in available[:4] if item.get("summary")]
-        evidence_summary = "; ".join(summaries) or "snapshot details are available below."
-        conclusion = f"Preliminary assessment: {assessment['summary']} Evidence: {evidence_summary}"
-        methodology_summary = str(analysis.content.get("summary") or "")
-        if methodology_summary:
-            conclusion = f"{conclusion} Methodology: {methodology_summary}"
-        risks = ["Evidence may be incomplete or stale."]
-        if degraded:
-            risks.append(f"{len(degraded)} provider snapshot(s) were degraded; inspect the evidence source details.")
-        methodology_warnings = _methodology_warnings(methodologies)
-        if methodology_warnings:
-            risks.append("Model assumptions or incomplete inputs: " + ", ".join(methodology_warnings[:6]))
-        follow_up = ["Review the cited snapshots and refresh material filings and market data before acting."]
-    return ArtifactDraft(
-        artifact_type="research_report",
-        content={
-            "conclusion": conclusion,
-            "assessment": assessment,
-            "evidence": report_evidence,
-            "methodologies": methodologies,
-            "scorecard": scorecards[0] if scorecards else None,
-            "risk": risks,
-            "follow_up": follow_up,
-        },
-        source_refs=list(evidence.source_refs),
-        parent_artifact_ids=[evidence.artifact_id, analysis.artifact_id],
-        confidence=min(
-            _artifact_confidence(evidence.confidence),
-            _artifact_confidence(analysis.confidence),
-        ),
-        risk_flags=["decision_support_only"],
-    )
 
 
 def _build_assessment(methodologies: list[dict]) -> dict:

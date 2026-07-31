@@ -49,5 +49,5 @@ export function WorkspaceView({
   if (activeView === 'paper') return <PaperTrading onOpenMarketData={() => navigate('market')} />
   if (activeView === 'screening') return <Screening onSubmit={onResearch} onOpenRun={onOpenRun} />
   if (activeView === 'methodology') return <Methodology />
-  return <Runs onOpenRun={onOpenRun} />
+  return <Runs onOpenRun={onOpenRun} onResearch={onResearch} />
 }

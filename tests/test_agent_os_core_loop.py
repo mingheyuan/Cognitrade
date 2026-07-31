@@ -915,7 +915,7 @@ def read_with_tool(context):
             )
             run_id, paths, _ = agent_os.run_store.create_run(request, "core.conversation.answer")
             write_json(
-                paths.root / "turn.json",
+                paths.root / "turn_state.json",
                 {
                     "run_id": run_id,
                     "thread_id": "thread-1",

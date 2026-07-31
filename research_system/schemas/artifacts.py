@@ -13,12 +13,12 @@ def utc_now() -> datetime:
 
 
 class SourceRef(BaseModel):
-    """Canonical provenance contract with legacy ``type/id`` aliases."""
+    """Canonical provenance contract."""
 
     model_config = ConfigDict(extra="allow")
 
-    source_type: str
-    source_id: str | None = None
+    type: str
+    id: str | None = None
     uri: str | None = None
     retrieved_at: datetime | None = None
     content_hash: str | None = None
@@ -26,24 +26,13 @@ class SourceRef(BaseModel):
     provider: str | None = None
     version: str | None = None
 
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_aliases(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        payload = dict(value)
-        payload.setdefault("source_type", payload.get("type"))
-        payload.setdefault("source_id", payload.get("id") or payload.get("path"))
-        payload.setdefault("locator", payload.get("path"))
-        return payload
-
     @model_validator(mode="after")
     def validate_reference(self) -> "SourceRef":
-        self.source_type = self.source_type.strip()
-        if not self.source_type:
-            raise ValueError("source ref source_type is required")
-        if not any((self.source_id, self.uri, self.locator)):
-            raise ValueError("source ref requires source_id, uri, or locator")
+        self.type = self.type.strip()
+        if not self.type:
+            raise ValueError("source ref type is required")
+        if not any((self.id, self.uri, self.locator)):
+            raise ValueError("source ref requires id, uri, or locator")
         return self
 
 
@@ -58,10 +47,6 @@ def normalize_source_refs(value: Any) -> list[dict[str, Any]]:
         payload = dict(item)
         canonical = reference.model_dump(mode="json", exclude_none=True)
         payload.update(canonical)
-        # Preserve the fields used by existing Packs and historical runs.
-        payload.setdefault("type", reference.source_type)
-        if reference.source_id is not None:
-            payload.setdefault("id", reference.source_id)
         normalized.append(payload)
     return normalized
 
@@ -95,19 +80,10 @@ class ArtifactDraft(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def accept_contract_parent_name(cls, value):
-        if isinstance(value, dict) and "parent_artifacts" in value and "parent_artifact_ids" not in value:
-            value = {
-                **{key: item for key, item in value.items() if key != "parent_artifacts"},
-                "parent_artifact_ids": value["parent_artifacts"],
-            }
+    def validate_source_refs(cls, value):
         if isinstance(value, dict) and "source_refs" in value:
             value = {**value, "source_refs": normalize_source_refs(value["source_refs"])}
         return value
-
-    @property
-    def parent_artifacts(self) -> list[str]:
-        return list(self.parent_artifact_ids)
 
 
 class ArtifactRecord(BaseModel):
@@ -136,12 +112,7 @@ class ArtifactRecord(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def accept_contract_parent_name(cls, value):
-        if isinstance(value, dict) and "parent_artifacts" in value and "parent_artifact_ids" not in value:
-            value = {
-                **{key: item for key, item in value.items() if key != "parent_artifacts"},
-                "parent_artifact_ids": value["parent_artifacts"],
-            }
+    def validate_source_refs(cls, value):
         if isinstance(value, dict) and "source_refs" in value:
             value = {**value, "source_refs": normalize_source_refs(value["source_refs"])}
         return value
@@ -161,11 +132,5 @@ class ArtifactRecord(BaseModel):
         if self.producer.responsibility_node_id is None and self.producer.node_id is not None:
             self.producer.responsibility_node_id = self.producer.node_id
         return self
-
-    @property
-    def parent_artifacts(self) -> list[str]:
-        """Canonical contract name retained alongside the storage field."""
-        return list(self.parent_artifact_ids)
-
 
 __all__ = ["ArtifactDraft", "ArtifactProducer", "ArtifactRecord", "SourceRef", "normalize_source_refs"]

@@ -15,8 +15,8 @@ from api_test_support import (
     RERUN_ID,
     RUN_ID,
     THREAD_ID,
-    FakeOrchestrator,
-    FakeOrchestratorFactory,
+    FakeRunService,
+    FakeRunServiceFactory,
     auth_headers,
     completed_response,
 )
@@ -34,12 +34,12 @@ class ApiV1RunsTests(unittest.TestCase):
         self.temp_dir = TemporaryDirectory()
         self.settings = Settings.from_env(Path(self.temp_dir.name))
         ensure_workspace_layout(self.settings)
-        self.orchestrator = FakeOrchestrator()
-        self.orchestrator_factory = FakeOrchestratorFactory(self.orchestrator)
+        self.run_service = FakeRunService()
+        self.run_service_factory = FakeRunServiceFactory(self.run_service)
         self.app = create_app(
             settings=self.settings,
             api_config=ApiConfig(api_token=API_TOKEN),
-            orchestrator_factory=self.orchestrator_factory,
+            run_service_factory=self.run_service_factory,
             repo_root=REPO_ROOT,
         )
         self.client_context = TestClient(self.app, raise_server_exceptions=False)
@@ -49,13 +49,13 @@ class ApiV1RunsTests(unittest.TestCase):
         self.client_context.__exit__(None, None, None)
         self.temp_dir.cleanup()
 
-    def test_lifespan_constructs_one_orchestrator_and_closes_it(self) -> None:
-        self.assertEqual(self.orchestrator_factory.settings_seen, [self.settings])
-        self.assertFalse(self.orchestrator.closed)
+    def test_lifespan_constructs_one_run_service_and_closes_it(self) -> None:
+        self.assertEqual(len(self.run_service_factory.agent_os_seen), 1)
+        self.assertFalse(self.run_service.closed)
 
         self.client_context.__exit__(None, None, None)
 
-        self.assertTrue(self.orchestrator.closed)
+        self.assertTrue(self.run_service.closed)
         self.client_context = _ClosedClientContext()
 
     def test_bearer_authentication_is_required(self) -> None:
@@ -71,7 +71,7 @@ class ApiV1RunsTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 401)
                 self.assertEqual(response.json()["error"]["code"], expected_code)
 
-        self.assertEqual(self.orchestrator.calls, [])
+        self.assertEqual(self.run_service.calls, [])
 
     def test_transport_request_id_cache_and_cors_headers(self) -> None:
         response = self.client.get(
@@ -95,7 +95,7 @@ class ApiV1RunsTests(unittest.TestCase):
         app = create_app(
             settings=self.settings,
             api_config=ApiConfig(api_token=None),
-            orchestrator_factory=FakeOrchestratorFactory(FakeOrchestrator()),
+            run_service_factory=FakeRunServiceFactory(FakeRunService()),
             repo_root=REPO_ROOT,
         )
 
@@ -119,8 +119,8 @@ class ApiV1RunsTests(unittest.TestCase):
             host="127.0.0.1",
         ).validate()
 
-    def test_startup_failure_closes_constructed_orchestrator(self) -> None:
-        orchestrator = FakeOrchestrator()
+    def test_startup_failure_closes_constructed_run_service(self) -> None:
+        run_service = FakeRunService()
 
         def fail_chat_service(_settings: Settings):
             raise RuntimeError("chat startup failed")
@@ -128,7 +128,7 @@ class ApiV1RunsTests(unittest.TestCase):
         app = create_app(
             settings=self.settings,
             api_config=ApiConfig(api_token=API_TOKEN),
-            orchestrator_factory=FakeOrchestratorFactory(orchestrator),
+            run_service_factory=FakeRunServiceFactory(run_service),
             chat_service_factory=fail_chat_service,
             repo_root=REPO_ROOT,
         )
@@ -137,7 +137,7 @@ class ApiV1RunsTests(unittest.TestCase):
             with TestClient(app, raise_server_exceptions=False):
                 pass
 
-        self.assertTrue(orchestrator.closed)
+        self.assertTrue(run_service.closed)
 
     def test_post_runs_validates_and_forwards_request_envelope(self) -> None:
         response = self.client.post(
@@ -160,7 +160,7 @@ class ApiV1RunsTests(unittest.TestCase):
         self.assertEqual(response.json()["request_id"], REQUEST_ID)
         self.assertEqual(response.json()["run_id"], RUN_ID)
         self.assertEqual(response.json()["status"], "completed")
-        calls = self.orchestrator.calls_for("run")
+        calls = self.run_service.calls_for("run")
         self.assertEqual(len(calls), 1)
         request = calls[0].args[0]
         self.assertIsInstance(request, RequestEnvelope)
@@ -177,7 +177,7 @@ class ApiV1RunsTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        calls = self.orchestrator.calls_for("run")
+        calls = self.run_service.calls_for("run")
         self.assertEqual(len(calls), 1)
         request = calls[0].args[0]
         self.assertIsNone(request.intent)
@@ -185,7 +185,7 @@ class ApiV1RunsTests(unittest.TestCase):
     def test_domain_terminal_statuses_remain_http_200(self) -> None:
         for status in ("needs_clarification", "failed", "cancelled", "timed_out"):
             with self.subTest(status=status):
-                self.orchestrator.outputs["run"] = completed_response(status=status)
+                self.run_service.outputs["run"] = completed_response(status=status)
                 response = self.client.post(
                     "/api/v1/runs",
                     headers=auth_headers(),
@@ -210,7 +210,7 @@ class ApiV1RunsTests(unittest.TestCase):
             response.json(),
             [{"run_id": RERUN_ID, "status": "failed", "intent": "stock_compare"}],
         )
-        self.assertEqual(len(self.orchestrator.calls_for("history")), 1)
+        self.assertEqual(len(self.run_service.calls_for("history")), 1)
 
     def test_observability_routes_forward_identifiers_without_rewriting_payloads(self) -> None:
         cases = (
@@ -244,11 +244,11 @@ class ApiV1RunsTests(unittest.TestCase):
 
         for path, method_name, expected_args in cases:
             with self.subTest(path=path):
-                before = len(self.orchestrator.calls_for(method_name))
+                before = len(self.run_service.calls_for(method_name))
                 response = self.client.get(path, headers=auth_headers())
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual(response.json(), self.orchestrator.outputs[method_name])
-                calls = self.orchestrator.calls_for(method_name)
+                self.assertEqual(response.json(), self.run_service.outputs[method_name])
+                calls = self.run_service.calls_for(method_name)
                 self.assertEqual(len(calls), before + 1)
                 self.assertEqual(calls[-1].args, expected_args)
                 self.assertEqual(calls[-1].kwargs, {})
@@ -261,7 +261,7 @@ class ApiV1RunsTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["cancellation_requested"])
-        call = self.orchestrator.calls_for("cancel")[-1]
+        call = self.run_service.calls_for("cancel")[-1]
         self.assertEqual(call.args, (RUN_ID,))
         self.assertEqual(call.kwargs, {})
 
@@ -273,7 +273,7 @@ class ApiV1RunsTests(unittest.TestCase):
         )
         self.assertEqual(top_level.status_code, 200)
         self.assertEqual(top_level.json()["run_id"], RERUN_ID)
-        top_call = self.orchestrator.calls_for("rerun_from")[-1]
+        top_call = self.run_service.calls_for("rerun_from")[-1]
         self.assertEqual(top_call.args, (RUN_ID,))
         self.assertEqual(top_call.kwargs, {"from_node": "retrieve"})
 
@@ -302,7 +302,7 @@ class ApiV1RunsTests(unittest.TestCase):
                 active_count -= 1
             return completed_response()
 
-        self.orchestrator.outputs["run"] = blocking_run
+        self.run_service.outputs["run"] = blocking_run
         request_json = {
             "intent": "stock_check",
             "user_query": "分析 600519",
@@ -342,7 +342,7 @@ class ApiV1RunsTests(unittest.TestCase):
             release_run.wait(timeout=2.0)
             return completed_response()
 
-        self.orchestrator.outputs["run"] = blocking_run
+        self.run_service.outputs["run"] = blocking_run
         request_json = {
             "intent": "stock_check",
             "user_query": "分析 600519",
@@ -416,7 +416,7 @@ class ApiV1RunsTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 422)
                 self.assertIn("code", response.json()["error"])
 
-        self.assertEqual(self.orchestrator.calls_for("run"), [])
+        self.assertEqual(self.run_service.calls_for("run"), [])
 
     def test_request_envelope_rejects_unknown_top_level_fields(self) -> None:
         response = self.client.post(
@@ -432,7 +432,7 @@ class ApiV1RunsTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertIn("error", response.json())
-        self.assertEqual(self.orchestrator.calls_for("run"), [])
+        self.assertEqual(self.run_service.calls_for("run"), [])
 
 
 class _ClosedClientContext:

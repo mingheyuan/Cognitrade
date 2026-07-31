@@ -17,11 +17,7 @@ class RunPaths:
         self.run_state = root / "run_state.json"
         self.thread_state = root / "thread_state.json"
         self.turn_state = root / "turn_state.json"
-        # Canonical Turn/Task names used by the Codex-style runtime. The
-        # legacy aliases above remain for existing API and replay consumers.
-        self.turn = root / "turn.json"
         self.task_state = root / "task_state.json"
-        self.task = root / "task.json"
         self.items = root / "items.jsonl"
         self.run_control = root / "run_control.json"
         self.checkpoint = root / "checkpoint.json"

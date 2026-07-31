@@ -13,8 +13,8 @@ from api_test_support import (
     API_TOKEN,
     EVENT_ID,
     RUN_ID,
-    FakeOrchestrator,
-    FakeOrchestratorFactory,
+    FakeRunService,
+    FakeRunServiceFactory,
     auth_headers,
     run_event,
 )
@@ -80,7 +80,7 @@ class ApiV1SseOpenApiTests(unittest.TestCase):
         self.temp_dir = TemporaryDirectory()
         self.settings = Settings.from_env(Path(self.temp_dir.name))
         ensure_workspace_layout(self.settings)
-        self.orchestrator = FakeOrchestrator()
+        self.run_service = FakeRunService()
         self.app = create_app(
             settings=self.settings,
             api_config=ApiConfig(
@@ -88,7 +88,7 @@ class ApiV1SseOpenApiTests(unittest.TestCase):
                 sse_poll_interval_seconds=0.001,
                 sse_heartbeat_seconds=1.0,
             ),
-            orchestrator_factory=FakeOrchestratorFactory(self.orchestrator),
+            run_service_factory=FakeRunServiceFactory(self.run_service),
             repo_root=REPO_ROOT,
         )
         self.client_context = TestClient(self.app, raise_server_exceptions=False)

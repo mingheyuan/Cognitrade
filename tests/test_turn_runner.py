@@ -120,7 +120,7 @@ class TurnRunnerTests(unittest.TestCase):
                 turn_config=TurnConfig(execution_mode="core", timeout_seconds=60),
             )
             timed_out = TurnSnapshot.model_validate(
-                read_json(run_store.load_run_paths(run_id).root / "turn.json")
+                read_json(run_store.load_run_paths(run_id).root / "turn_state.json")
             )
             self.assertEqual(first.status, "timed_out")
             self.assertEqual(timed_out.status, "timed_out")
@@ -136,7 +136,7 @@ class TurnRunnerTests(unittest.TestCase):
                 recover=True,
             )
             continuation = TurnSnapshot.model_validate(
-                read_json(run_store.load_run_paths(run_id).root / "turn.json")
+                read_json(run_store.load_run_paths(run_id).root / "turn_state.json")
             )
             history = read_jsonl(run_store.load_run_paths(run_id).root / "turn_history.jsonl")
             self.assertEqual(recovered.status, "completed")
@@ -175,7 +175,7 @@ class TurnRunnerTests(unittest.TestCase):
                 turn_config=TurnConfig(execution_mode="core", timeout_seconds=60),
             )
             first = TurnSnapshot.model_validate(
-                read_json(run_store.load_run_paths(run_id).root / "turn.json")
+                read_json(run_store.load_run_paths(run_id).root / "turn_state.json")
             )
 
             runner.execute_task(
@@ -187,7 +187,7 @@ class TurnRunnerTests(unittest.TestCase):
                 resume=True,
             )
             second = TurnSnapshot.model_validate(
-                read_json(run_store.load_run_paths(run_id).root / "turn.json")
+                read_json(run_store.load_run_paths(run_id).root / "turn_state.json")
             )
 
             self.assertIsNotNone(first.deadline_at)

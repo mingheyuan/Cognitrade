@@ -462,20 +462,6 @@ capabilities:
     reliability: 0.9
     cache_scope: run
     tags: [intent:distill_kol_logic]
-  - subagent_type: llm_report_composer
-    capability: finance.report.compose
-    implementation: subagents.runtime:compose_report
-    consumes:
-      - artifact_type: evidence_set
-      - artifact_type: financial_analysis
-    produces:
-      - artifact_type: research_report
-    requires_llm: true
-    cost_class: high
-    latency_class: high
-    reliability: 0.85
-    cache_scope: run
-    tags: [legacy:compat]
   - subagent_type: uzi_report_composer
     capability: finance.uzi.report.compose
     capability_version: "1"
@@ -653,7 +639,6 @@ report_contracts:
     required_source_refs: true
     required_gate_ids: [finance.presentation.lineage]
 planner_policies:
-  task_intake: subagents.task_intake:resolve_request
   prefer_evidence_backed_paths: true
   default_profile: lite
   profile_intents: [stock_check, stock_compare, stock_screen, sector_research, review_thesis]
@@ -905,13 +890,6 @@ planner_policies:
       required_gate_ids: [finance.sources_required, finance.research_safety]
       allowed_quality_statuses: [available, degraded]
       result_equivalence: {level: semantic, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json}
-  supported_intents:
-    - stock_check
-    - stock_compare
-    - stock_screen
-    - sector_research
-    - review_thesis
-    - distill_kol_logic
   intent_outputs:
     stock_screen: [screening_result]
     sector_research: [sector_analysis]

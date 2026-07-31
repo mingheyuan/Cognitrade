@@ -193,8 +193,8 @@ class RunEventSource:
 
         # Graph execution can finish before Main Agent has composed and emitted
         # the final assistant message. Keep SSE open until delivery is durable.
-        # Minimal legacy/test run folders without a Board retain the old terminal
-        # behavior because they have no deferred delivery phase to observe.
+        # Minimal test run folders without a Board have no deferred delivery
+        # phase to observe.
         board_path = root / "artifact_board.jsonl"
         if not board_path.exists():
             return True

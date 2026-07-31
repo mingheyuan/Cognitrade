@@ -5,7 +5,7 @@
 External clients use FastAPI. They do not call the runtime directly.
 
 ```text
-Frontend / CLI client
+Web / API client
   -> FastAPI /api/v1
     -> AgentOSRunService
       -> AgentOS
@@ -20,8 +20,9 @@ FastAPI owns authentication, validation, CORS, error envelopes, request IDs,
 SSE transport, and mutation serialization. AgentOS owns planning, execution,
 artifacts, gates, replay, and long-term memory.
 
-There are 36 versioned operations. The old proposal, subagent-discovery,
-ActionPlan, Supervisor, Handler, and Blackboard APIs are not part of v1.
+There are 42 versioned operations. Proposal, dynamic subagent-discovery,
+ActionPlan, Supervisor, Handler, Blackboard, CLI, and unversioned business APIs
+are not part of the current runtime.
 
 ## Authentication
 
@@ -85,8 +86,10 @@ The response identifies the canonical protocol and graph state:
 
 | Method | Path | Canonical source |
 | --- | --- | --- |
-| `POST` | `/runs` | `AgentOS.run_request()` |
-| `GET` | `/runs` | `execution_snapshot.json` history |
+| `POST` | `/runs` | `AgentOSRunService` → canonical TurnRunner |
+| `GET` | `/runs` | canonical Run history |
+| `GET` | `/runs/{run_id}` | complete run detail projection |
+| `GET` | `/runs/{run_id}/artifacts` | active ArtifactBoard records |
 | `GET` | `/runs/{run_id}/replay` | snapshot, artifacts, and events |
 | `GET` | `/runs/{run_id}/events` | `execution_events.jsonl` |
 | `GET` | `/runs/{run_id}/events/stream` | canonical SSE stream |
@@ -132,7 +135,7 @@ performance or invented methodology claims.
 
 Use `Last-Event-ID` to resume after a received `event_id`. An unknown cursor
 returns `409 event_cursor_not_found`. Terminal statuses are `completed`,
-`cancelled`, `failed`, and `gated`.
+`completed_partial`, `cancelled`, `failed`, `timed_out`, and `gated`.
 
 Native browser `EventSource` cannot attach a Bearer header. The frontend uses
 authenticated fetch-SSE for this endpoint.
@@ -168,7 +171,11 @@ Administrative resources expose canonical AgentOS state only:
 | `GET` | `/admin/domain-packs/{domain_id}` | full manifest and installed path |
 | `GET` | `/admin/runs/{run_id}/approvals` | immutable approval audit records |
 | `POST` | `/admin/runs/{run_id}/approvals` | approve a declared high-risk leaf node |
+| `POST` | `/admin/runs/{run_id}/approvals/{approval_id}/reject` | reject a pending approval |
 | `GET` | `/admin/memory` | episodic, domain, or policy memory |
+| `POST` | `/admin/memory/expire` | expire due memory records |
+| `POST` | `/admin/memory/{memory_id}/promote` | promote a reviewed memory record |
+| `POST` | `/admin/memory/{memory_id}/revoke` | revoke a memory record |
 | `GET` | `/dashboard/{domain_id}/{view_id}` | DomainPack-configured ArtifactBoard and memory projection |
 | `POST` | `/admin/artifacts/cleanup` | run artifact retention cleanup |
 | `POST` | `/admin/qdrant/reindex` | rebuild from ArtifactBoard records |
@@ -189,12 +196,11 @@ ExecutionGraph leaf node, so the Admin API cannot bypass graph governance.
 | `GET` | `/system/status` | operational summary |
 | `POST` | `/system/doctor` | diagnostics |
 
-## Unversioned Workspace API
+## Version Boundary
 
-The lightweight `/api` routes are an embedded workspace convenience surface.
-They also call AgentOS directly and are not used by the production frontend.
 The frontend uses `/api/v1` for Agent OS research and the separately documented
 `/api/v2/finance` surface for Finance Workspace data and paper trading.
+Unversioned `/api/*` business routes do not exist.
 
 ## Frontend Configuration
 

@@ -29,14 +29,15 @@ class ProviderHealthTests(unittest.TestCase):
         self.assertGreaterEqual(rows["notice"]["configured_provider_count"], 2)
         self.assertIn("sse_notice", rows["notice"]["disabled_provider_ids"])
 
-    def test_doctor_checks_include_dimension_aliases_file(self) -> None:
+    def test_doctor_checks_include_provider_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings.from_env(Path(temp_dir))
             ensure_workspace_layout(settings)
             payload = run_doctor(settings)
 
         check_names = {item["name"] for item in payload["checks"]}
-        self.assertIn("taxonomy_dimension_aliases", check_names)
+        self.assertIn("provider_policy", check_names)
+        self.assertIn("data_sources", check_names)
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ from research_system.schemas.turn_runtime import FollowupTaskResult
 
 
 class ToolDefinitionContractTests(unittest.TestCase):
-    def test_core_and_pack_names_are_compatibility_aliases_of_one_contract(self) -> None:
+    def test_core_and_pack_tools_share_one_contract(self) -> None:
         self.assertIs(CoreToolDefinition, ToolDefinition)
         self.assertIs(PackToolDefinition, ToolDefinition)
 
@@ -33,17 +33,15 @@ class ToolDefinitionContractTests(unittest.TestCase):
             description="Core example tool.",
         )
         pack = PackToolDefinition(
-            tool_id="pack.example",
+            name="pack.example",
             description="Pack example tool.",
             side_effect_level="read_only",
         )
 
         self.assertEqual(core.name, "core.example")
-        self.assertEqual(core.tool_id, "core.example")
         self.assertEqual(pack.name, "pack.example")
-        self.assertEqual(pack.tool_id, "pack.example")
 
-    def test_mismatched_identifiers_are_rejected(self) -> None:
+    def test_unknown_identifier_field_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             ToolDefinition(
                 name="core.example",
@@ -54,7 +52,7 @@ class ToolDefinitionContractTests(unittest.TestCase):
     def test_registry_normalizes_core_namespace(self) -> None:
         core = build_core_tool_registry().definition("core.run.status")
         self.assertEqual(core.namespace, "core")
-        self.assertEqual(core.name, core.tool_id)
+        self.assertEqual(core.name, "core.run.status")
 
     def test_followup_task_is_governed_by_the_core_tool_registry(self) -> None:
         with TemporaryDirectory() as temporary_directory:
@@ -102,7 +100,7 @@ class ToolDefinitionContractTests(unittest.TestCase):
         registry = register_domain_pack_tools(build_core_tool_registry(), packs)
         definition = registry.definition("financial_data_provider")
         self.assertEqual(definition.namespace, "pack")
-        self.assertEqual(definition.name, definition.tool_id)
+        self.assertEqual(definition.name, "financial_data_provider")
 
     def test_resource_lease_coordinates_two_worker_registries(self) -> None:
         with TemporaryDirectory() as temporary_directory:

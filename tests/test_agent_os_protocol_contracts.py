@@ -36,28 +36,28 @@ class AgentOSProtocolContractTests(unittest.TestCase):
         self.assertEqual(decision.actor, "main_agent.plan_agent")
         self.assertEqual(decision.graph_patch.patch_id, patch.patch_id)
 
-    def test_event_envelope_normalizes_tool_and_artifact_aliases(self) -> None:
+    def test_event_envelope_uses_canonical_tool_and_artifact_fields(self) -> None:
         event = EventEnvelope(
             event_type="tool_call_completed",
             run_id="run-1",
             thread_id="thread-1",
             request_id="request-1",
-            call_id="call-1",
-            artifact_id="artifact-1",
+            tool_call_id="call-1",
+            artifact_ids=["artifact-1"],
         )
         self.assertEqual(event.tool_call_id, "call-1")
         self.assertEqual(event.artifact_ids, ["artifact-1"])
 
-    def test_artifact_source_refs_expose_canonical_and_legacy_fields(self) -> None:
+    def test_artifact_source_refs_use_one_canonical_shape(self) -> None:
         artifact = ArtifactDraft(
             artifact_type="evidence",
             content={"value": "verified"},
             source_refs=[{"type": "provider", "id": "provider-1"}],
         )
-        self.assertEqual(artifact.source_refs[0]["source_type"], "provider")
-        self.assertEqual(artifact.source_refs[0]["source_id"], "provider-1")
         self.assertEqual(artifact.source_refs[0]["type"], "provider")
         self.assertEqual(artifact.source_refs[0]["id"], "provider-1")
+        self.assertNotIn("source_type", artifact.source_refs[0])
+        self.assertNotIn("source_id", artifact.source_refs[0])
 
     def test_approval_binding_rejects_revision_and_scope_mismatch(self) -> None:
         with TemporaryDirectory() as directory:

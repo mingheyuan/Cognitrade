@@ -94,13 +94,8 @@ class RecordedCall:
     kwargs: dict[str, Any]
 
 
-class FakeOrchestrator:
-    """Deterministic facade fake for API adapter tests.
-
-    The fake deliberately mirrors the public ResearchOrchestrator methods instead
-    of relying on ``Mock``. That makes argument-forwarding assertions explicit and
-    keeps the tests aligned with the repository's existing hand-written-stub style.
-    """
+class FakeRunService:
+    """Deterministic run-service fake for API adapter tests."""
 
     def __init__(
         self,
@@ -147,15 +142,6 @@ class FakeOrchestrator:
                 "cancellation_requested": True,
             },
             "rerun_from": completed_response(run_id=RERUN_ID),
-            "list_proposals": [],
-            "show_proposal": {"proposal_id": "proposal_test", "status": "pending"},
-            "review_proposal": {"proposal_id": "proposal_test", "status": "approved"},
-            "list_subagent_discovery_requests": [],
-            "show_subagent_discovery_request": {"ticket_id": "ticket_test", "status": "pending"},
-            "review_subagent_discovery_request": {"ticket_id": "ticket_test", "status": "approved"},
-            "activate_subagent_discovery_request": {"ticket_id": "ticket_test", "status": "approved"},
-            "cleanup": {"removed_files": [], "skipped_runs": []},
-            "rebuild_qdrant": {"status": "completed", "indexed_runs": 0, "indexed_entries": 0},
         }
 
     def _call(self, name: str, *args: Any, **kwargs: Any) -> Any:
@@ -213,78 +199,18 @@ class FakeOrchestrator:
     def rerun_from(self, run_id: str, *, from_node: str) -> ResponseEnvelope:
         return self._call("rerun_from", run_id, from_node=from_node)
 
-    def list_proposals(self, *, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
-        return self._call("list_proposals", status=status, limit=limit)
-
-    def show_proposal(self, proposal_id: str) -> dict[str, Any]:
-        return self._call("show_proposal", proposal_id)
-
-    def review_proposal(
-        self,
-        proposal_id: str,
-        *,
-        decision: str,
-        reviewer: str,
-        reason: str | None = None,
-    ) -> dict[str, Any]:
-        return self._call(
-            "review_proposal",
-            proposal_id,
-            decision=decision,
-            reviewer=reviewer,
-            reason=reason,
-        )
-
-    def list_subagent_discovery_requests(
-        self,
-        *,
-        status: str | None = None,
-        limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        return self._call("list_subagent_discovery_requests", status=status, limit=limit)
-
-    def show_subagent_discovery_request(self, ticket_id: str) -> dict[str, Any]:
-        return self._call("show_subagent_discovery_request", ticket_id)
-
-    def review_subagent_discovery_request(
-        self,
-        ticket_id: str,
-        *,
-        decision: str,
-        reviewer: str,
-        reason: str | None = None,
-        candidate_catalog_entries: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
-        return self._call(
-            "review_subagent_discovery_request",
-            ticket_id,
-            decision=decision,
-            reviewer=reviewer,
-            reason=reason,
-            candidate_catalog_entries=candidate_catalog_entries,
-        )
-
-    def activate_subagent_discovery_request(self, ticket_id: str, **kwargs: Any) -> dict[str, Any]:
-        return self._call("activate_subagent_discovery_request", ticket_id, **kwargs)
-
-    def cleanup(self) -> dict[str, Any]:
-        return self._call("cleanup")
-
-    def rebuild_qdrant(self) -> dict[str, Any]:
-        return self._call("rebuild_qdrant")
-
     def close(self) -> None:
         self.closed = True
 
 
-class FakeOrchestratorFactory:
-    def __init__(self, orchestrator: FakeOrchestrator) -> None:
-        self.orchestrator = orchestrator
-        self.settings_seen: list[Any] = []
+class FakeRunServiceFactory:
+    def __init__(self, service: FakeRunService) -> None:
+        self.service = service
+        self.agent_os_seen: list[Any] = []
 
-    def __call__(self, settings: Any) -> FakeOrchestrator:
-        self.settings_seen.append(settings)
-        return self.orchestrator
+    def __call__(self, agent_os: Any) -> FakeRunService:
+        self.agent_os_seen.append(agent_os)
+        return self.service
 
 
 class FakeEventSource:

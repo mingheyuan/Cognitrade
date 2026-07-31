@@ -3,17 +3,13 @@ from __future__ import annotations
 from importlib import import_module
 
 __all__ = [
-    "LocalSkillBackend",
     "Settings",
-    "SkillRuntime",
     "ensure_workspace_layout",
     "run_checks",
 ]
 
 _EXPORTS = {
-    "LocalSkillBackend": ("research_system.runtime.platform.skill_runtime", "LocalSkillBackend"),
     "Settings": ("research_system.runtime.platform.settings", "Settings"),
-    "SkillRuntime": ("research_system.runtime.platform.skill_runtime", "SkillRuntime"),
     "ensure_workspace_layout": ("research_system.runtime.platform.settings", "ensure_workspace_layout"),
     "run_checks": ("research_system.runtime.platform.checks", "run_checks"),
 }

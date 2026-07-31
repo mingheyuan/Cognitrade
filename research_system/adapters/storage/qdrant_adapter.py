@@ -230,8 +230,6 @@ class QdrantAdapter:
             "methodology_tags": content.get("methodology_tags", []),
             "dimension_key": content.get("dimension_key"),
             "methodology_type": content.get("methodology_type"),
-            "proposal_type": (content.get("proposal") or {}).get("proposal_type"),
-            "proposal_status": (content.get("proposal") or {}).get("status"),
             "peer_group_tags": content.get("peer_group_tags", []),
             "assumption_tags": content.get("assumption_tags", []),
             "sensitivity_tags": content.get("sensitivity_tags", []),
@@ -434,20 +432,6 @@ class QdrantAdapter:
                 parts.append(f"valuation_band: {payload.get('valuation_band')}")
             if payload.get("methodology_result"):
                 parts.append(f"methodology_result: {payload.get('methodology_result')}")
-            return "\n".join(parts)
-
-        if payload.get("proposal"):
-            proposal = payload.get("proposal") or {}
-            parts = [
-                f"proposal draft: {proposal.get('proposal_type')}",
-                f"status: {proposal.get('status')}",
-                f"title: {proposal.get('title')}",
-                f"summary: {proposal.get('summary')}",
-            ]
-            if payload.get("manifest"):
-                parts.append(f"manifest: {payload.get('manifest')}")
-            if payload.get("memory_record"):
-                parts.append(f"memory_record: {payload.get('memory_record')}")
             return "\n".join(parts)
 
         text_parts = []

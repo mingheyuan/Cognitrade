@@ -17,10 +17,13 @@ import { useMemo, useState } from 'react'
 import { useCognitrade } from '../CognitradeContext'
 import { asString, isActiveStatus, runListItem, statusTone } from '../live-data'
 
-type RunsProps = { onOpenRun: (runId: string) => void }
+type RunsProps = {
+  onOpenRun: (runId: string) => void
+  onResearch: (query: string) => Promise<void>
+}
 type RunFilter = '全部' | '已完成' | '运行中' | '异常'
 
-export function Runs({ onOpenRun }: RunsProps) {
+export function Runs({ onOpenRun, onResearch }: RunsProps) {
   const { runs, selectedRun, refresh, cancelRun, rerunRun, submitting } = useCognitrade()
   const [filter, setFilter] = useState<RunFilter>('全部')
   const [query, setQuery] = useState('')
@@ -63,6 +66,14 @@ export function Runs({ onOpenRun }: RunsProps) {
     }
   }
 
+  const deriveResearch = (title: string, summary: string) => {
+    const draft = window.prompt(
+      '本地预览：编辑研究问题后，将通过现有 /api/v1/runs 创建一条独立研究运行。',
+      `基于“${title}”继续研究：${summary}`,
+    )?.trim()
+    if (draft) void onResearch(draft)
+  }
+
   return (
     <main className="page-content runs-page">
       <header className="page-heading">
@@ -93,7 +104,7 @@ export function Runs({ onOpenRun }: RunsProps) {
         <div className="run-history-toolbar">
           <div className="segmented-control">{(['全部', '已完成', '运行中', '异常'] as RunFilter[]).map((item) => <button key={item} className={filter === item ? 'is-active' : ''} onClick={() => setFilter(item)}>{item}</button>)}</div>
           <label className="table-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 run ID、摘要或意图" /></label>
-          <button className="secondary-button table-filter-button" disabled><Filter size={14} />服务端筛选</button>
+          <span className="local-preview-badge"><Filter size={13} />本地筛选 · 已加载 {items.length} 条</span>
         </div>
         <div className="candidate-table-wrap">
           <table className="candidate-table run-history-table">
@@ -105,7 +116,7 @@ export function Runs({ onOpenRun }: RunsProps) {
                   <td><span className="intent-table-badge">{run.intent}</span></td>
                   <td><span className={`status-table-badge status-table-badge--${statusTone(run.status)}`}>{['completed', 'completed_partial'].includes(run.status) ? <CheckCircle2 size={12} /> : isActiveStatus(run.status) ? <Activity size={12} /> : <CircleAlert size={12} />}{run.statusLabel}</span></td>
                   <td>{run.childThreadCount}</td><td>{run.time}</td>
-                  <td><div className="table-row-actions"><button aria-label={`打开${run.id}`} onClick={() => onOpenRun(run.id)}><Play size={13} /></button><button aria-label="派生研究（暂不可用）" disabled title="后端 v1 未提供从 run 派生新研究接口"><GitBranch size={13} /></button><button aria-label={`重新运行${run.id}`} onClick={() => void rerun(run.id)} disabled={submitting}><RotateCcw size={13} /></button></div></td>
+                  <td><div className="table-row-actions"><button aria-label={`打开${run.id}`} onClick={() => onOpenRun(run.id)}><Play size={13} /></button><button aria-label={`基于${run.id}创建研究草稿`} title="本地预览：生成草稿后调用现有新建运行接口" onClick={() => deriveResearch(run.title, run.summary)}><GitBranch size={13} /></button><button aria-label={`重新运行${run.id}`} onClick={() => void rerun(run.id)} disabled={submitting}><RotateCcw size={13} /></button></div></td>
                 </tr>
               ))}
             </tbody>

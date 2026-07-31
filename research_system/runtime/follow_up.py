@@ -93,7 +93,6 @@ class FollowUpRuntime:
         self.config = config or FollowUpConfig()
         self._emitter = emitter
         self.path = root / "task_state.json"
-        self.legacy_path = root / "task.json"
         self.state = self._load()
         self._baseline = self.state.model_copy(deep=True)
         if self.state.active_turn_id != self.turn_id:
@@ -112,7 +111,7 @@ class FollowUpRuntime:
             return self._persist_unlocked()
 
     def _load(self) -> TaskSnapshot:
-        payload = read_json(self.path) or read_json(self.legacy_path)
+        payload = read_json(self.path)
         if isinstance(payload, dict):
             return TaskSnapshot.model_validate(payload)
         return TaskSnapshot()
@@ -131,12 +130,11 @@ class FollowUpRuntime:
     def _persist_unlocked(self) -> TaskSnapshot:
         self.state = self.state.model_copy(update={"updated_at": _now()})
         write_json(self.path, self.state.model_dump(mode="json"))
-        write_json(self.legacy_path, self.state.model_dump(mode="json"))
         self._baseline = self.state.model_copy(deep=True)
         return self.state
 
     def _refresh_unlocked(self) -> None:
-        payload = read_json(self.path) or read_json(self.legacy_path)
+        payload = read_json(self.path)
         if isinstance(payload, dict):
             latest = TaskSnapshot.model_validate(payload)
             self.state = latest

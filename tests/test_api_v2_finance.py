@@ -8,7 +8,7 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from api_test_support import API_TOKEN, FakeOrchestrator, FakeOrchestratorFactory, auth_headers
+from api_test_support import API_TOKEN, FakeRunService, FakeRunServiceFactory, auth_headers
 from domain_packs.finance_ashare.tools.security_master import SecurityResolution
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
@@ -141,7 +141,7 @@ class ApiV2FinanceTests(unittest.TestCase):
         self.app = create_app(
             settings=self.settings,
             api_config=ApiConfig(api_token=API_TOKEN),
-            orchestrator_factory=FakeOrchestratorFactory(FakeOrchestrator()),
+            run_service_factory=FakeRunServiceFactory(FakeRunService()),
             finance_market_data_factory=lambda _settings: self.market,
             paper_trading_factory=lambda _settings, _market: self.paper,
             repo_root=REPO_ROOT,

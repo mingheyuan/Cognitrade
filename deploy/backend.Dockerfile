@@ -19,13 +19,13 @@ RUN python -m pip install --upgrade pip \
 COPY research_system ./research_system
 COPY domain_packs ./domain_packs
 COPY workspace/config ./workspace_templates/config
-COPY workspace/taxonomy ./workspace_templates/taxonomy
+COPY scripts/migrate_workspace.py ./scripts/migrate_workspace.py
 COPY deploy/backend-entrypoint.sh /usr/local/bin/cognitrade-entrypoint
 
 RUN groupadd --gid 10001 cognitrade \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin cognitrade \
     && chmod 0755 /usr/local/bin/cognitrade-entrypoint \
-    && mkdir -p workspace/runs workspace/chat_runs workspace/proposals workspace/reports workspace/memory \
+    && mkdir -p workspace/runs workspace/chat_runs workspace/reports workspace/memory \
     && cp -a workspace_templates/. workspace/ \
     && chown -R cognitrade:cognitrade workspace /home/cognitrade \
     && python -c "import research_system.api.app"

@@ -7,25 +7,18 @@ __version__ = "0.1.0"
 __all__ = [
     "__version__",
     "adapters",
-    "agents",
-    "cli",
     "runtime",
     "schemas",
     "services",
-    "skills",
     "subagents",
-    "taxonomy",
 ]
 
 _EXPORTS = {
     "adapters": "research_system.adapters",
-    "cli": "research_system.cli",
     "runtime": "research_system.runtime",
     "schemas": "research_system.schemas",
     "services": "research_system.services",
-    "skills": "research_system.skills",
     "subagents": "research_system.subagents",
-    "taxonomy": "research_system.taxonomy",
 }
 
 
