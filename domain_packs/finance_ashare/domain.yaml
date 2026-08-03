@@ -1,5 +1,5 @@
 domain_id: finance_ashare
-version: 0.1.0
+version: 0.2.0
 description: A-share evidence-backed professional research pack.
 artifact_types:
   - artifact_type: user_request
@@ -24,6 +24,8 @@ artifact_types:
   - artifact_type: research_workflow
   - artifact_type: deep_analysis
   - artifact_type: uzi_dimension_coverage
+  - artifact_type: fund_snapshot
+  - artifact_type: fund_analysis
 skills:
   - skill_name: market_snapshot_skill
     version: "1"
@@ -34,6 +36,11 @@ skills:
     version: "1"
     description: Collect A-share fundamental snapshots with provider provenance.
     implementation: skills.fundamental_snapshot.skill:FundamentalSnapshotSkill
+    allowed_callers: [subagent]
+  - skill_name: fund_snapshot_skill
+    version: "1"
+    description: Collect public-fund identity, ranking, NAV risk and disclosed holdings from real providers.
+    implementation: skills.fund_snapshot.skill:FundSnapshotSkill
     allowed_callers: [subagent]
   - skill_name: notice_snapshot_skill
     version: "1"
@@ -177,6 +184,16 @@ intake:
         - finance.stock.screen
         - finance.screen.report.compose
       output_artifact_types: [research_report]
+    - intent_id: fund_research
+      description: Compare or assess Chinese public funds using real NAV, return, fee and disclosed-holdings evidence.
+      required_slots: []
+      optional_slots: [fund_codes, fund_category]
+      candidate_capabilities:
+        - finance.query.normalize
+        - finance.fund.snapshot.collect
+        - finance.fund.analyze
+        - finance.fund.report.compose
+      output_artifact_types: [fund_analysis, research_report]
     - intent_id: sector_research
       description: Research a sector or industry using current evidence.
       required_slots: [sector]
@@ -238,6 +255,55 @@ capabilities:
     latency_class: medium
     reliability: 0.9
     cache_scope: run
+  - subagent_type: fund_snapshot_collector
+    capability: finance.fund.snapshot.collect
+    capability_version: "1"
+    implementation: subagents.runtime:collect_fund_snapshot
+    consumes:
+      - artifact_type: normalized_query
+    produces:
+      - artifact_type: fund_snapshot
+    tools:
+      - fund_data_provider
+    permissions:
+      - finance:data:read
+    side_effect_level: read_only
+    parallel_safe: false
+    cost_class: medium
+    latency_class: medium
+    reliability: 0.84
+    cache_scope: run
+    freshness_ttl_seconds: 43200
+    tags: [intent:fund_research]
+  - subagent_type: fund_research_analyst
+    capability: finance.fund.analyze
+    capability_version: "1"
+    methodology_version: "uzi-3.9.2-fund-selection-v1"
+    implementation: subagents.runtime:analyze_funds
+    consumes:
+      - artifact_type: fund_snapshot
+    produces:
+      - artifact_type: fund_analysis
+    parallel_safe: true
+    cost_class: low
+    latency_class: low
+    reliability: 0.92
+    cache_scope: run
+    tags: [intent:fund_research]
+  - subagent_type: fund_report_composer
+    capability: finance.fund.report.compose
+    capability_version: "1"
+    methodology_version: "uzi-3.9.2-fund-selection-v1"
+    implementation: subagents.runtime:compose_fund_report
+    consumes:
+      - artifact_type: fund_analysis
+    produces:
+      - artifact_type: research_report
+    cost_class: low
+    latency_class: low
+    reliability: 0.95
+    cache_scope: run
+    tags: [intent:fund_research]
   - subagent_type: retrieval_decider
     capability: evidence.select
     implementation: subagents.runtime:select_evidence
@@ -267,7 +333,7 @@ capabilities:
   - subagent_type: uzi_valuation_analyst
     capability: finance.uzi.valuation.evaluate
     capability_version: "1"
-    methodology_version: "3.9.1-adapted"
+    methodology_version: "3.9.2-adapted"
     implementation: subagents.runtime:evaluate_uzi_valuation
     consumes:
       - *finance_snapshot_input
@@ -284,7 +350,7 @@ capabilities:
   - subagent_type: uzi_panel_reviewer
     capability: finance.uzi.panel.review
     capability_version: "1"
-    methodology_version: "3.9.1-adapted"
+    methodology_version: "3.9.2-adapted"
     implementation: subagents.runtime:evaluate_uzi_panel
     consumes:
       - *finance_snapshot_input
@@ -300,7 +366,7 @@ capabilities:
   - subagent_type: uzi_risk_scanner
     capability: finance.uzi.risk.scan
     capability_version: "1"
-    methodology_version: "3.9.1-adapted"
+    methodology_version: "3.9.2-adapted"
     implementation: subagents.runtime:evaluate_uzi_risk
     consumes:
       - *finance_snapshot_input
@@ -316,7 +382,7 @@ capabilities:
   - subagent_type: uzi_institutional_analyst
     capability: finance.uzi.institutional.evaluate
     capability_version: "1"
-    methodology_version: "3.9.1-adapted"
+    methodology_version: "3.9.2-adapted"
     implementation: subagents.runtime:evaluate_uzi_institutional
     consumes:
       - *finance_snapshot_input
@@ -334,7 +400,7 @@ capabilities:
   - subagent_type: uzi_workflow_analyst
     capability: finance.uzi.workflow.evaluate
     capability_version: "1"
-    methodology_version: "3.9.1-adapted"
+    methodology_version: "3.9.2-adapted"
     implementation: subagents.runtime:evaluate_uzi_workflow
     consumes:
       - *finance_snapshot_input
@@ -352,7 +418,7 @@ capabilities:
   - subagent_type: uzi_deep_analyst
     capability: finance.uzi.deep.evaluate
     capability_version: "1"
-    methodology_version: "3.9.1-adapted"
+    methodology_version: "3.9.2-adapted"
     implementation: subagents.runtime:evaluate_uzi_deep
     consumes:
       - *finance_snapshot_input
@@ -370,7 +436,7 @@ capabilities:
   - subagent_type: uzi_dimension_coverage_analyzer
     capability: finance.uzi.dimensions.cover
     capability_version: "1"
-    methodology_version: "3.9.1-adapted"
+    methodology_version: "3.9.2-adapted"
     implementation: subagents.runtime:evaluate_uzi_dimension_coverage
     consumes:
       - *finance_snapshot_input
@@ -465,7 +531,7 @@ capabilities:
   - subagent_type: uzi_report_composer
     capability: finance.uzi.report.compose
     capability_version: "1"
-    methodology_version: "3.9.1-adapted"
+    methodology_version: "3.9.2-adapted"
     implementation: subagents.runtime:compose_uzi_report
     consumes:
       - artifact_type: evidence_set
@@ -604,6 +670,13 @@ quality_gates:
     evaluator_capability: finance.methodology.quality.gate
     blocking: true
     description: Screening outputs must preserve candidate evidence, ranking inputs and data gaps.
+    config:
+      allowed_quality_statuses: [available, degraded, data_gap]
+  - gate_id: finance.fund.analysis
+    artifact_type: fund_analysis
+    evaluator_capability: finance.methodology.quality.gate
+    blocking: true
+    description: Fund selection must expose comparable sample size, observed fields, score coverage and data gaps.
     config:
       allowed_quality_statuses: [available, degraded, data_gap]
   - gate_id: finance.sector.analysis
@@ -891,6 +964,7 @@ planner_policies:
       allowed_quality_statuses: [available, degraded]
       result_equivalence: {level: semantic, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json}
   intent_outputs:
+    fund_research: [fund_analysis, research_report]
     stock_screen: [screening_result]
     sector_research: [sector_analysis]
     review_thesis: [thesis_review]
@@ -907,15 +981,15 @@ governance:
   max_concurrency: 16
   max_retries_per_node: 2
   required_gate_ids: []
-  allowed_tools: [financial_data_provider]
+  allowed_tools: [financial_data_provider, fund_data_provider]
   allowed_permissions: [finance:data:read]
 metadata:
   migration:
     uzi_source_mapping: migration/uzi_source_mapping.yaml
     uzi_source_mapping_schema: migration/uzi_source_mapping.schema.json
     uzi_source_mapping_schema_version: "2"
-    source_commit: 775c76101e8890492d21c2e2827692456fcddb58
-    methodology_version: 3.9.1-adapted
+    source_commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
+    methodology_version: 3.9.2-adapted
   dashboard_views:
     overview:
       resources:

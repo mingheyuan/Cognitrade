@@ -8,8 +8,8 @@ methodology perspectives.
 from __future__ import annotations
 
 
-UZI_PANEL_VERSION = "3.9.1-adapted"
-UZI_PANEL_SOURCE_COMMIT = "775c76101e8890492d21c2e2827692456fcddb58"
+UZI_PANEL_VERSION = "3.9.2-adapted"
+UZI_PANEL_SOURCE_COMMIT = "fce996c33e70eddce8e375f53cd252b549eb3d7c"
 
 
 PANEL_REGISTRY: tuple[dict[str, object], ...] = (
@@ -83,7 +83,7 @@ PANEL_REGISTRY: tuple[dict[str, object], ...] = (
 
 
 def panel_for_profile(profile: str) -> list[dict[str, object]]:
-    count = {"quick": 5, "lite": 10, "medium": 51, "deep": 51}.get(str(profile), 10)
+    count = {"quick": 5, "lite": 10, "medium": 66, "deep": 66}.get(str(profile), 10)
     return [dict(item) for item in PANEL_REGISTRY[:count]]
 
 

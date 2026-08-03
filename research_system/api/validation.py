@@ -14,6 +14,7 @@ SUPPORTED_RESEARCH_INTENTS = frozenset(
         "stock_check",
         "stock_compare",
         "stock_screen",
+        "fund_research",
         "sector_research",
         "distill_kol_logic",
         "review_thesis",
@@ -22,6 +23,7 @@ SUPPORTED_RESEARCH_INTENTS = frozenset(
 
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _INVESTMENT_CYCLES = frozenset({"short_term", "mid_term", "long_term"})
+_FUND_CATEGORIES = frozenset({"全部", "股票型", "混合型", "债券型", "指数型", "ETF", "LOF", "QDII", "FOF"})
 _STOCK_SNAPSHOT_TYPES = frozenset(
     {
         "market",
@@ -93,6 +95,13 @@ _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
         "watchlist_min_score",
         "enrichment_top_n",
         "skip_enrichment",
+        *_PLANNING_FIELDS,
+    },
+    "fund_research": {
+        "fund_codes",
+        "fund_category",
+        "candidate_pool_size",
+        "investment_cycle",
         *_PLANNING_FIELDS,
     },
     "sector_research": {"sector_query", "include_policy_snapshot", *_PLANNING_FIELDS},
@@ -192,6 +201,8 @@ def validate_research_request(
         _validate_stock_compare_constraints(constraints)
     elif intent == "stock_screen":
         _validate_stock_screen_constraints(constraints)
+    elif intent == "fund_research":
+        _validate_fund_research_constraints(constraints)
     return request.model_copy(update={"intent": intent, "user_query": query, "constraints": constraints})
 
 
@@ -328,6 +339,29 @@ def _validate_stock_screen_constraints(constraints: dict[str, Any]) -> None:
         value = int(constraints.get(field_name, default))
         if value > candidate_pool_size:
             _invalid_constraint(field_name, "must not exceed candidate_pool_size")
+
+
+def _validate_fund_research_constraints(constraints: dict[str, Any]) -> None:
+    if "fund_category" in constraints:
+        _require_enum(
+            constraints["fund_category"],
+            field_name="fund_category",
+            allowed=_FUND_CATEGORIES,
+        )
+    if "fund_codes" in constraints:
+        codes = _require_string_list(
+            constraints["fund_codes"],
+            field_name="fund_codes",
+            min_items=1,
+            max_items=20,
+        )
+        if len(codes) != len(set(codes)):
+            _invalid_constraint("fund_codes", "must not contain duplicate values")
+        invalid = [code for code in codes if not re.fullmatch(r"\d{6}", code)]
+        if invalid:
+            _invalid_constraint("fund_codes", "must contain six-digit fund codes")
+    if int(constraints.get("candidate_pool_size", 8)) > 20:
+        _invalid_constraint("candidate_pool_size", "must not exceed 20 for fund research")
 
 
 def _require_non_empty_string(value: Any, *, field_name: str) -> str:

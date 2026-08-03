@@ -1,4 +1,4 @@
-"""Quantified evaluation criteria for all 51 投资大佬.
+"""Quantified evaluation criteria for the UZI 3.9.2 66-seat investor panel.
 
 Each investor has a list of `Rule` objects with:
   - rule_id: stable identifier
@@ -15,8 +15,10 @@ To add a new investor: add to INVESTOR_RULES with their criteria list.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import dis
+from dataclasses import dataclass
 import re
+from string import Formatter
 from typing import Callable, Any
 
 
@@ -28,6 +30,7 @@ class Rule:
     check: Callable[[dict], bool]
     pass_msg: str = ""  # e.g. "ROE 18.7% 连续 5 年 > 15%"
     fail_msg: str = ""  # e.g. "ROE 仅 11.8%，不达持续 15% 标准"
+    required_fields: tuple[str, ...] = ()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -886,9 +889,10 @@ CHANOS_RULES = [
          pass_msg="审计 clean · 无保留意见",
          fail_msg="审计有保留意见 · 立即怀疑"),
     Rule("cash_matches_eps", "现金匹配利润", 5,
-         check=lambda f: abs(f.get("ocf_to_net_income_ratio", 1.0) - 1.0) < 0.4,
+         check=lambda f: abs(f["ocf_to_net_income_ratio"] - 1.0) < 0.4,
          pass_msg="OCF/净利 {ocf_to_net_income_ratio:.1f} · 比例合理",
-         fail_msg="OCF/净利 {ocf_to_net_income_ratio:.1f} · 大幅背离 · 可能账面利润"),
+         fail_msg="OCF/净利 {ocf_to_net_income_ratio:.1f} · 大幅背离 · 可能账面利润",
+         required_fields=("ocf_to_net_income_ratio",)),
     Rule("not_china_concept", "非中概雷区", 3,
          check=lambda f: not (f.get("market") == "US" and "China" in (f.get("industry","") + f.get("country",""))),
          pass_msg="非美上市中概 · 跳过 Chanos 黑名单",
@@ -1178,6 +1182,32 @@ def _format_rule_message(template: str, features: dict[str, Any]) -> str:
         return re.sub(r"\{[^{}]+\}", "—", template)
 
 
+def _rule_source_fields(rule: Rule) -> tuple[str, ...]:
+    """Extract feature reads without treating lambda fallback defaults as data."""
+
+    fields = set(rule.required_fields)
+    instructions = list(dis.get_instructions(rule.check))
+    for index, instruction in enumerate(instructions):
+        if instruction.opname in {"LOAD_METHOD", "LOAD_ATTR"} and instruction.argval == "get":
+            for following in instructions[index + 1:index + 5]:
+                if following.opname == "LOAD_CONST" and isinstance(following.argval, str):
+                    fields.add(following.argval)
+                    break
+                if following.opname.startswith("CALL") or following.opname == "PRECALL":
+                    break
+        if instruction.opname == "LOAD_CONST" and isinstance(instruction.argval, str):
+            if any(
+                following.opname == "BINARY_SUBSCR"
+                for following in instructions[index + 1:index + 3]
+            ):
+                fields.add(instruction.argval)
+    for template in (rule.pass_msg, rule.fail_msg):
+        for _literal, field_name, _format_spec, _conversion in Formatter().parse(template):
+            if field_name:
+                fields.add(field_name.split(".", 1)[0].split("[", 1)[0])
+    return tuple(sorted(fields))
+
+
 def evaluate_investor(investor_id: str, features: dict[str, Any]) -> dict[str, Any]:
     """Evaluate one registered seat using the migrated UZI rule engine."""
 
@@ -1196,10 +1226,25 @@ def evaluate_investor(investor_id: str, features: dict[str, Any]) -> dict[str, A
         }
     passed: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     weight_pass = 0
     weight_total = 0
     for rule in rules:
         weight = max(int(rule.weight), 0)
+        missing_fields = [
+            field_name
+            for field_name in _rule_source_fields(rule)
+            if features.get(field_name) is None
+        ]
+        if missing_fields:
+            skipped.append({
+                "rule_id": rule.rule_id,
+                "name": rule.name,
+                "weight": weight,
+                "missing_fields": missing_fields,
+                "msg": f"缺少字段：{', '.join(missing_fields)}",
+            })
+            continue
         weight_total += weight
         if _safe_check(rule, features):
             weight_pass += weight
@@ -1217,11 +1262,22 @@ def evaluate_investor(investor_id: str, features: dict[str, Any]) -> dict[str, A
                 "msg": _format_rule_message(rule.fail_msg or f"未达{rule.name}", features),
             })
     score = round(weight_pass / weight_total * 100, 1) if weight_total else 0.0
-    signal = "bullish" if score >= 65 else "bearish" if score < 35 else "neutral"
-    confidence = round(min(1.0, 0.35 + len(rules) * 0.04), 4)
+    signal = (
+        "insufficient_evidence"
+        if not weight_total
+        else "bullish"
+        if score >= 65
+        else "bearish"
+        if score < 35
+        else "neutral"
+    )
+    evaluated_ratio = (len(passed) + len(failed)) / len(rules) if rules else 0.0
+    confidence = round(min(1.0, 0.35 + (len(passed) + len(failed)) * 0.04) * evaluated_ratio, 4)
     passed.sort(key=lambda row: -int(row["weight"]))
     failed.sort(key=lambda row: -int(row["weight"]))
-    if signal == "bullish" and passed:
+    if signal == "insufficient_evidence":
+        headline = "数据不足，暂无判断。"
+    elif signal == "bullish" and passed:
         headline = f"看多核心：{passed[0]['msg']}"
     elif signal == "bearish" and failed:
         headline = f"看空核心：{failed[0]['msg']}"
@@ -1242,11 +1298,14 @@ def evaluate_investor(investor_id: str, features: dict[str, Any]) -> dict[str, A
         "weight_total": weight_total,
         "pass_count": len(passed),
         "fail_count": len(failed),
+        "skipped_count": len(skipped),
         "pass_rules": passed,
         "fail_rules": failed,
+        "skipped_rules": skipped,
+        "data_gap_rules": [row["rule_id"] for row in skipped],
         "headline": headline,
         "rationale": rationale or "没有规则命中。",
-        "rule_engine_version": "uzi-3.9.1-adapted",
+        "rule_engine_version": "uzi-3.9.2-adapted",
     }
 
 

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["query", "fund_codes", "fund_category", "funds", "quality_status", "data_gap", "retrieved_at"],
+  "properties": {
+    "query": {"type": "string"},
+    "fund_codes": {"type": "array", "items": {"type": "string"}},
+    "fund_category": {"type": "string"},
+    "investment_cycle": {"type": "string"},
+    "funds": {"type": "array", "items": {"type": "object"}},
+    "quality_status": {"enum": ["available", "degraded", "data_gap"]},
+    "data_gap": {"type": "array", "items": {"type": "string"}},
+    "provider_errors": {"type": "array", "items": {"type": "object"}},
+    "retrieved_at": {"type": "string"}
+  }
+}

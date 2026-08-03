@@ -84,6 +84,48 @@ The response identifies the canonical protocol and graph state:
 }
 ```
 
+The installed `finance_ashare` Pack accepts these intents through the same
+endpoint: `stock_check`, `stock_compare`, `stock_screen`, `fund_research`,
+`sector_research`, `review_thesis`, and `distill_kol_logic`. When `intent` is
+omitted, Pack Task Intake resolves it from the query or returns a structured
+clarification instead of silently defaulting to stock analysis.
+
+### Fund research
+
+`fund_research` uses the Agent OS fund chain and real public-fund evidence; it
+does not add a finance-specific HTTP endpoint.
+
+```http
+POST /api/v1/runs
+Content-Type: application/json
+
+{
+  "intent": "fund_research",
+  "user_query": "比较 110011 和 005827，按长期持有评估",
+  "constraints": {
+    "fund_codes": ["110011", "005827"],
+    "fund_category": "混合型",
+    "candidate_pool_size": 8,
+    "investment_cycle": "long_term"
+  }
+}
+```
+
+Fund constraints:
+
+| Field | Type | Constraint |
+| --- | --- | --- |
+| `fund_codes` | string array | one to 20 unique six-digit codes |
+| `fund_category` | string | `全部`, `股票型`, `混合型`, `债券型`, `指数型`, `ETF`, `LOF`, `QDII`, or `FOF` |
+| `candidate_pool_size` | integer | 1–20; the Web UI uses a minimum of 2 for comparison |
+| `investment_cycle` | string | `short_term`, `mid_term`, or `long_term` |
+
+The graph produces `fund_snapshot`, `fund_analysis`, and `research_report`
+Artifacts. Ranking requires at least two comparable funds and at least 60%
+observed scoring-field coverage. Missing NAV, ranking, fee, or disclosed
+holdings fields remain `data_gap`; the service does not insert simulated or
+neutral values.
+
 | Method | Path | Canonical source |
 | --- | --- | --- |
 | `POST` | `/runs` | `AgentOSRunService` → canonical TurnRunner |

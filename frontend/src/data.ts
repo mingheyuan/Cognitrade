@@ -1,10 +1,11 @@
-export type ViewId = 'workbench' | 'overview' | 'market' | 'paper' | 'backtest' | 'screening' | 'methodology' | 'runs'
+export type ViewId = 'workbench' | 'overview' | 'market' | 'paper' | 'backtest' | 'screening' | 'funds' | 'methodology' | 'runs'
 
 export const INTENT_LABELS: Record<string, string> = {
   'core.conversation.answer': '普通对话',
   stock_check: '个股体检',
   stock_compare: '多股比较',
   stock_screen: '股票筛选',
+  fund_research: '基金研究',
   sector_research: '行业研究',
   distill_kol_logic: '逻辑蒸馏',
   review_thesis: '判断复核',

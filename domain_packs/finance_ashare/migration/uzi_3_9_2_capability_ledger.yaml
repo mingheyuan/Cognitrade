@@ -1,0 +1,121 @@
+schema_version: "1"
+upstream:
+  repository: https://github.com/wbh604/UZI-Skill
+  commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
+  version: 3.9.2
+  adapted_version: 3.9.2-adapted
+  previous_commit: 775c76101e8890492d21c2e2827692456fcddb58
+inventory:
+  fetcher_count: 22
+  command_count: 20
+  marketed_method_count: 22
+  implementation_method_count: 23
+  panel_seat_count: 66
+count_note: >-
+  README says 17 initial methods plus 5 Tier-1 methods, but the initial bullet list
+  contains 18 distinct implementation units. Portfolio rebalance and Tier-1 per-holding
+  rebalance remain separate, so migration acceptance uses 23 units.
+invariants:
+  external_uzi_runtime_dependency: forbidden
+  missing_observation: data_gap
+  explicit_model_assumption: assumption_only
+  simulated_market_or_fund_data: forbidden
+  sensitive_browser_provider: explicit_enable_only
+  source_lineage_required: true
+
+fetchers:
+  - {id: 0_basic, target: market_snapshot_skill, status: pack_native}
+  - {id: 1_financials, target: fundamental_snapshot_skill, status: pack_native, delta_3_9_2: ocf_contract_aligned}
+  - {id: 2_kline, target: uzi_kline_snapshot_skill, status: pack_native}
+  - {id: 3_macro, target: uzi_macro_snapshot_skill, status: partial_provider_gap}
+  - {id: 4_peers, target: uzi_peers_snapshot_skill, status: partial_provider_gap, delta_3_9_2: self_only_fallback_aligned}
+  - {id: 5_chain, target: uzi_chain_snapshot_skill, status: partial_provider_gap}
+  - {id: 6_research, target: uzi_research_snapshot_skill, status: partial_provider_gap}
+  - {id: 7_industry, target: uzi_industry_snapshot_skill, status: partial_provider_gap}
+  - {id: 8_materials, target: uzi_materials_snapshot_skill, status: partial_provider_gap}
+  - {id: 9_futures, target: uzi_futures_snapshot_skill, status: partial_provider_gap}
+  - {id: 10_valuation, target: uzi_valuation_snapshot_skill, status: pack_native, delta_3_9_2: cninfo_market_weighted_pe_fallback_aligned}
+  - {id: 11_governance, target: uzi_governance_snapshot_skill, status: pack_native}
+  - {id: 12_capital_flow, target: capital_flow_snapshot_skill, status: pack_native}
+  - {id: 13_policy, target: policy_snapshot_skill, status: partial_provider_gap}
+  - {id: 14_moat, target: uzi_moat_snapshot_skill, status: partial_provider_gap}
+  - {id: 15_events, target: events_snapshot_skill, status: pack_native}
+  - {id: 16_lhb, target: lhb_snapshot_skill, status: pack_native}
+  - {id: 17_sentiment, target: sentiment_snapshot_skill, status: partial_provider_gap}
+  - {id: 18_trap, target: uzi_trap_snapshot_skill, status: partial_provider_gap}
+  - {id: 19_contests, target: uzi_contests_snapshot_skill, status: partial_sensitive_provider}
+  - {id: fund_holders, target: uzi_fund_holders_snapshot_skill, status: partial_provider_gap}
+  - {id: similar_stocks, target: uzi_similar_stocks_snapshot_skill, status: partial_provider_gap}
+
+commands:
+  - {id: analyze-stock, target: stock_check+research_profile, status: adapted}
+  - {id: quick-scan, target: stock_check+quick, status: adapted}
+  - {id: panel-only, target: finance.uzi.panel.review, status: adapted}
+  - {id: scan-trap, target: finance.uzi.risk.scan, status: adapted_partial}
+  - {id: dcf, target: finance.uzi.valuation.evaluate, status: adapted}
+  - {id: comps, target: finance.uzi.valuation.evaluate, status: adapted}
+  - {id: lbo, target: finance.uzi.institutional.evaluate, status: adapted_partial}
+  - {id: segmental-model, target: finance.uzi.deep.evaluate, status: adapted_partial}
+  - {id: initiate, target: finance.uzi.workflow.evaluate, status: adapted_partial}
+  - {id: earnings, target: finance.uzi.workflow.evaluate, status: adapted_partial}
+  - {id: catalysts, target: finance.uzi.workflow.evaluate, status: adapted_partial}
+  - {id: thesis, target: review_thesis, status: adapted_partial}
+  - {id: screen, target: stock_screen, status: adapted}
+  - {id: dd, target: finance.uzi.deep.evaluate, status: adapted_partial}
+  - {id: ic-memo, target: finance.uzi.deep.evaluate, status: adapted_partial}
+  - {id: ai-readiness, target: finance.uzi.tier1.ai_readiness, status: planned}
+  - {id: earnings-preview, target: finance.uzi.tier1.earnings_preview, status: planned}
+  - {id: model-update, target: finance.uzi.tier1.model_update, status: planned}
+  - {id: returns, target: finance.uzi.tier1.returns_attribution, status: planned}
+  - {id: rebalance, target: finance.uzi.tier1.holding_rebalance, status: planned}
+
+methods:
+  - {id: dcf, group: valuation, target: finance.uzi.valuation.evaluate, status: adapted}
+  - {id: comps, group: valuation, target: finance.uzi.valuation.evaluate, status: adapted}
+  - {id: three_statement, group: valuation, target: finance.uzi.institutional.evaluate, status: adapted_partial}
+  - {id: quick_lbo, group: valuation, target: finance.uzi.institutional.evaluate, status: adapted_partial}
+  - {id: accretion_dilution, group: valuation, target: finance.uzi.institutional.evaluate, status: adapted_partial}
+  - {id: initiation_report, group: workflow, target: finance.uzi.workflow.evaluate, status: adapted_partial}
+  - {id: earnings_review, group: workflow, target: finance.uzi.workflow.evaluate, status: adapted_partial}
+  - {id: catalyst_calendar, group: workflow, target: finance.uzi.workflow.evaluate, status: adapted_partial}
+  - {id: thesis_tracker, group: workflow, target: finance.thesis.review, status: adapted_partial}
+  - {id: morning_note, group: workflow, target: finance.uzi.workflow.evaluate, status: planned}
+  - {id: quantitative_screen, group: workflow, target: finance.stock.screen, status: adapted}
+  - {id: sector_review, group: workflow, target: finance.sector.research, status: adapted}
+  - {id: ic_memo, group: decision, target: finance.uzi.deep.evaluate, status: adapted_partial}
+  - {id: porter_bcg, group: decision, target: finance.uzi.deep.evaluate, status: adapted_partial}
+  - {id: dd_checklist, group: decision, target: finance.uzi.deep.evaluate, status: adapted_partial}
+  - {id: unit_economics, group: decision, target: finance.uzi.deep.evaluate, status: adapted_partial}
+  - {id: value_creation_plan, group: decision, target: finance.uzi.deep.evaluate, status: adapted_partial}
+  - {id: portfolio_rebalance, group: decision, target: finance.uzi.portfolio.rebalance, status: planned}
+  - {id: ai_readiness, group: tier1, target: finance.uzi.tier1.ai_readiness, status: planned}
+  - {id: earnings_preview, group: tier1, target: finance.uzi.tier1.earnings_preview, status: planned}
+  - {id: model_update, group: tier1, target: finance.uzi.tier1.model_update, status: planned}
+  - {id: returns_attribution, group: tier1, target: finance.uzi.tier1.returns_attribution, status: planned}
+  - {id: holding_rebalance, group: tier1, target: finance.uzi.tier1.holding_rebalance, status: planned}
+
+fund_extension:
+  intent: fund_research
+  status: implemented_v1
+  capabilities:
+    - finance.fund.snapshot.collect
+    - finance.fund.analyze
+    - finance.fund.report.compose
+  artifacts: [fund_snapshot, fund_analysis, research_report]
+  real_sources:
+    - eastmoney_fund_catalog_via_akshare
+    - eastmoney_fund_ranking_via_akshare
+    - eastmoney_nav_via_akshare
+    - eastmoney_fund_archives_holdings
+  selection_gate:
+    minimum_comparable_sample: 2
+    minimum_score_coverage: 0.6
+    missing_metric_imputation: forbidden
+
+panel:
+  registry: domain_packs/finance_ashare/subagents/uzi_panel_registry.py
+  quick: 5
+  lite: 10
+  medium: 66
+  deep: 66
+  missing_rule_input: skip_and_record_data_gap

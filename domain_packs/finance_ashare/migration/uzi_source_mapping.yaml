@@ -2,24 +2,24 @@ schema_version: "2"
 source:
   repository: https://github.com/wbh604/UZI-Skill
   local_reference: D:\Cognitrade\_tmp_uzi_skill
-  commit: 775c76101e8890492d21c2e2827692456fcddb58
-  methodology_version: 3.9.1
+  commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
+  methodology_version: 3.9.2
   version_file: .claude-plugin/plugin.json
-  version_file_sha256: 3D7BDA4C6E82A7B6038A839FC92F767A8A946423D12B635C1451C92AA7ED5532
+  version_file_sha256: 073F688721698FC4BAD5A2E5E0B93FB95661BA6DB2067DB548D8132A67D99B70
   license: MIT
   license_file: LICENSE
-  license_sha256: 28D4522719947F92BCA76070FEC569FF5CFD5FB2D11B9AE0E517C6FCBB5D4DF9
+  license_sha256: 78BEBB5232741327C31B0DA4F5BBD570DC59AB3C3230582A4D1B4650238A7D58
   replay_fixtures:
     - tests/fixtures/uzi_source_snapshot_replay.json
     - tests/fixtures/uzi_finance_snapshot_replay.json
     - tests/fixtures/uzi_methodology_baseline.json
   replay_fixture_sha256:
-    tests/fixtures/uzi_source_snapshot_replay.json: F40C763A44D1661F4B29F9D03FE128587812D5F9F1CAF76E48E9873F76D908B2
-    tests/fixtures/uzi_finance_snapshot_replay.json: 37C80DEC0EE4171794DFEAD614DA06290670DB3BC2996F821BF1608A0D29B091
-    tests/fixtures/uzi_methodology_baseline.json: 147C235E64B4B8277035F60233D392C6418F28D528DDEBE46D27F02D39F54164
+    tests/fixtures/uzi_source_snapshot_replay.json: E4352EA11CBF0469D331F6DACFF333441C9CD269EBE3EBA479A2691F0A727F9A
+    tests/fixtures/uzi_finance_snapshot_replay.json: E81ABE9C4AABB39BE79D73561D51760BAA16EA72D52CA876B386A23E97428735
+    tests/fixtures/uzi_methodology_baseline.json: E7C3CACBF80178DA5583099EFC550A2AD8BFF41FFAD34A37A6D2396E268D2D89
 
 source_defaults: &source_defaults
-  source_commit: 775c76101e8890492d21c2e2827692456fcddb58
+  source_commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
   target_artifact_type: snapshot
   quality_policy:
     provider_error: data_gap
@@ -213,15 +213,15 @@ profiles:
     methodology_capabilities: [finance.uzi.valuation.evaluate, finance.uzi.panel.review, finance.uzi.risk.scan]
   medium:
     source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests]
-    panel_seats: 51
+    panel_seats: 66
   deep:
     source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests]
-    panel_seats: 51
+    panel_seats: 66
 
 panel:
   source_path: domain_packs/finance_ashare/subagents/uzi_panel_registry.py
-  source_commit: 775c76101e8890492d21c2e2827692456fcddb58
-  registry_version: 3.9.1-adapted
+  source_commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
+  registry_version: 3.9.2-adapted
   provider: finance_pack.panel_registry
   target_artifact_type: investor_panel_review
   field_mapping: {id: id, name: name, group: group, fields: fields}
@@ -232,11 +232,11 @@ panel:
   migration_status: pack_native
   result_equivalence: not_equivalent
   baseline_fixture: tests/fixtures/uzi_source_snapshot_replay.json
-  profile_seats: {lite: 10, medium: 51, deep: 51}
+  profile_seats: {lite: 10, medium: 66, deep: 66}
   member_ids: [buffett, graham, fisher, munger, templeton, klarman, lynch, oneill, thiel, wood, andreessen, gurley, naval, gerstner, chamath, soros, dalio, marks, druck, robertson, burry, chanos, livermore, minervini, darvas, gann, duan, zhangkun, zhushaoxing, xiezhiyu, fengliu, dengxiaofeng, zhang_lei, zhang_mz, sun_ge, zhao_lg, fs_wyj, yangjia, chen_xq, hu_jl, fang_xx, zuoshou, xiao_ey, jiao_yy, mao_lb, xiao_xian, lasa, chengdu, sunan, ningbo_st, liuyi_zl, liu_sh, gu_bl, bj_cj, wang_zr, xin_dd, ghzw, simons, thorp, shaw, asness, jensen_huang, musk, altman, saylor, serenity]
 
 derived_defaults: &derived_defaults
-  source_commit: 775c76101e8890492d21c2e2827692456fcddb58
+  source_commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
   provider: finance_pack.artifact_board
   quality_policy:
     missing_inputs: data_gap

@@ -114,10 +114,10 @@ class UziFinancePackTests(unittest.TestCase):
                 "16_lhb", "17_sentiment", "18_trap", "19_contests", "fund_holders", "similar_stocks",
             },
         )
-        self.assertEqual(mapping["source"]["commit"], "775c76101e8890492d21c2e2827692456fcddb58")
+        self.assertEqual(mapping["source"]["commit"], "fce996c33e70eddce8e375f53cd252b549eb3d7c")
         self.assertEqual(mapping["profiles"]["lite"]["panel_seats"], 10)
-        self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 51)
-        self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 51)
+        self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 66)
+        self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 66)
         self.assertEqual(len(mapping["panel"]["member_ids"]), 66)
         required_mapping_fields = {
             "source_commit",
@@ -685,9 +685,9 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertTrue(all(vote["is_methodology_perspective"] for vote in panel["votes"]))
         medium_panel = build_panel_review(rows, ["600000"], select_profile({"research_profile": "medium"}))
         deep_panel = build_panel_review(rows, ["600000"], select_profile({"research_profile": "deep"}))
-        self.assertEqual(len(medium_panel["votes"]), 51)
-        self.assertEqual(len(deep_panel["votes"]), 51)
-        self.assertEqual(medium_panel["registered_seat_count"], 51)
+        self.assertEqual(len(medium_panel["votes"]), 66)
+        self.assertEqual(len(deep_panel["votes"]), 66)
+        self.assertEqual(medium_panel["registered_seat_count"], 66)
         self.assertEqual(len(risk["signals"]), 8)
         self.assertIn("external_search_not_claimed", risk["risk_flags"])
 

@@ -8,7 +8,7 @@ import akshare as ak
 from research_system.adapters.vendors.akshare_catalyst_adapter import AkShareCatalystAdapter
 from research_system.adapters.vendors.akshare_market_adapter import AkShareMarketAdapter
 from research_system.adapters.vendors.akshare_sector_adapter import AkShareSectorAdapter
-from research_system.adapters.vendors.akshare_utils import call_with_retry, normalize_value
+from research_system.adapters.vendors.akshare_utils import call_with_retry, coerce_numeric, normalize_value
 from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
 from domain_packs.finance_ashare.skills.fundamental_snapshot.skill import FundamentalSnapshotSkill
 
@@ -37,7 +37,8 @@ class UziSourceSnapshotSkill:
         )
         try:
             facts = self._collect(query=query, symbol=symbol)
-            if not facts or str(facts.get("availability") or "").lower() == "data_gap":
+            availability = str((facts or {}).get("availability") or "").lower()
+            if not facts or availability in {"data_gap", "degraded"}:
                 return self._degraded(
                     query=query,
                     symbol=symbol,
@@ -79,10 +80,38 @@ class UziSourceSnapshotSkill:
         if self.snapshot_type == "valuation":
             market = AkShareMarketAdapter().get_market_overview(symbol=symbol, latest_bar=None)
             valuation = dict(market.get("valuation") or {}) if isinstance(market, dict) else {}
+            industry_context = self._industry_context(symbol)
+            industry = str(industry_context.get("industry") or "").strip()
+            market_pe, pe_date, pe_column = self._cninfo_market_weighted_pe()
+            gaps: list[str] = []
+            if market_pe is not None:
+                valuation["industry_pe"] = market_pe
+                valuation["industry_pe_fallback_reason"] = (
+                    f"行业 {industry} 未匹配 · 使用 cninfo 市场加权均值"
+                    if industry
+                    else "basic.industry 缺失 · 使用 cninfo 市场加权均值"
+                )
+                valuation["industry_pe_source"] = {
+                    "provider": "cninfo_via_akshare",
+                    "date": pe_date,
+                    "column": pe_column,
+                    "scope": "market_weighted_average",
+                }
+            else:
+                gaps.append("industry_pe_fallback_missing")
+            availability = (
+                "available"
+                if valuation and not gaps
+                else "degraded"
+                if valuation
+                else "data_gap"
+            )
             return {
                 "valuation": valuation,
-                "availability": "available" if valuation else "data_gap",
-                "data_gap": [] if valuation else ["valuation_snapshot_missing"],
+                "industry": industry or None,
+                "availability": availability,
+                "data_gap": gaps if valuation else ["valuation_snapshot_missing", *gaps],
+                "degrade_reason": gaps[0] if gaps else None,
             }
         if self.snapshot_type == "governance":
             fundamental = FundamentalSnapshotSkill().run(query=query, symbol=symbol)
@@ -171,27 +200,58 @@ class UziSourceSnapshotSkill:
             fundamental = FundamentalSnapshotSkill().run(query=query, symbol=symbol)
             facts = dict(fundamental.get("facts") or {})
             comparison = dict(facts.get("bank_peer_comparison") or {})
-            if not comparison:
-                context = self._industry_context(symbol)
-                resolved = dict(context.get("resolved_sector") or {})
-                sector = AkShareSectorAdapter().get_sector_snapshot(
-                    query=str(context.get("industry") or symbol),
-                    sector_name=str(resolved.get("sector_name") or ""),
-                    sector_type=str(resolved.get("sector_type") or "industry"),
-                ) if context.get("availability") == "available" else {}
-                sector_facts = dict(sector.get("facts") or {}) if isinstance(sector, dict) else {}
-                comparison = {
-                    "industry": context.get("industry"),
-                    "peers": [
-                        dict(row)
-                        for row in list(sector_facts.get("top_constituents") or [])
-                        if isinstance(row, dict) and str(row.get("symbol") or row.get("代码") or "") != symbol
-                    ][:10],
+            if comparison:
+                return {
+                    "comparison": comparison,
+                    "availability": "available",
+                    "data_gap": [],
                 }
+            context = self._industry_context(symbol)
+            resolved = dict(context.get("resolved_sector") or {})
+            sector = AkShareSectorAdapter().get_sector_snapshot(
+                query=str(context.get("industry") or symbol),
+                sector_name=str(resolved.get("sector_name") or ""),
+                sector_type=str(resolved.get("sector_type") or "industry"),
+            ) if context.get("availability") == "available" else {}
+            sector_facts = dict(sector.get("facts") or {}) if isinstance(sector, dict) else {}
+            peers = [
+                dict(row)
+                for row in list(sector_facts.get("top_constituents") or [])
+                if isinstance(row, dict)
+                and str(row.get("symbol") or row.get("代码") or "") != symbol
+            ][:10]
+            if peers:
+                return {
+                    "comparison": {
+                        "industry": context.get("industry"),
+                        "peers": peers,
+                        "fallback_used": False,
+                    },
+                    "availability": "available",
+                    "data_gap": [],
+                }
+            info = dict(facts.get("info") or {})
+            fallback_reason = (
+                "basic.industry 缺失 · 仅返回公司自身"
+                if not context.get("industry")
+                else "行业成分数据缺失 · 仅返回公司自身"
+            )
             return {
-                "comparison": comparison,
-                "availability": "available" if comparison else "data_gap",
-                "data_gap": [] if comparison else ["peer_group_missing"],
+                "comparison": {
+                    "industry": context.get("industry"),
+                    "peers": [],
+                    "self_only": [
+                        {
+                            "symbol": symbol,
+                            "name": info.get("股票简称") or info.get("名称") or info.get("公司名称"),
+                        }
+                    ],
+                    "fallback_used": True,
+                    "fallback_reason": fallback_reason,
+                },
+                "availability": "degraded",
+                "data_gap": ["peer_group_missing"],
+                "degrade_reason": fallback_reason,
             }
         if self.snapshot_type == "fund_holders":
             fetcher = getattr(ak, "stock_fund_stock_holder", None)
@@ -253,6 +313,42 @@ class UziSourceSnapshotSkill:
             "resolved_sector": resolved,
             "availability": "available",
         }
+
+    @staticmethod
+    def _cninfo_market_weighted_pe() -> tuple[float | None, str | None, str | None]:
+        for offset in range(1, 8):
+            snapshot_date = date.today() - timedelta(days=offset)
+            try:
+                frame = call_with_retry(
+                    lambda snapshot_date=snapshot_date: ak.stock_industry_pe_ratio_cninfo(
+                        symbol="证监会行业分类",
+                        date=snapshot_date.strftime("%Y%m%d"),
+                    ),
+                    retries=1,
+                    delay_seconds=0.2,
+                )
+            except Exception:
+                continue
+            if frame is None or getattr(frame, "empty", True):
+                continue
+            pe_column = next(
+                (str(column) for column in frame.columns if "市盈率" in str(column) and "加权" in str(column)),
+                None,
+            )
+            if not pe_column:
+                continue
+            values = [
+                number
+                for number in (coerce_numeric(value) for value in frame[pe_column].tolist())
+                if number is not None and 0 < float(number) < 500
+            ]
+            if values:
+                return (
+                    round(sum(float(value) for value in values) / len(values), 2),
+                    snapshot_date.isoformat(),
+                    pe_column,
+                )
+        return None, None, None
 
     @staticmethod
     def _futures_rows(symbols: tuple[str, ...]) -> list[dict[str, Any]]:

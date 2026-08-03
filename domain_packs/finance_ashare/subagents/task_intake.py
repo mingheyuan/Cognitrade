@@ -4,8 +4,10 @@ import re
 from typing import Any
 
 from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
+from domain_packs.finance_ashare.tools.fund_master import FundSecurityMaster
 
 _SECURITY_MASTER = AShareSecurityMaster()
+_FUND_MASTER = FundSecurityMaster()
 _SECTOR_ALIASES = {
     "\u534a\u5bfc\u4f53": "\u534a\u5bfc\u4f53",
     "\u4eba\u5f62\u673a\u5668\u4eba": "\u4eba\u5f62\u673a\u5668\u4eba",
@@ -38,7 +40,30 @@ _ANALYSIS_KEYWORDS = (
     "股票",
     "个股",
 )
+_FUND_KEYWORDS = (
+    "fund",
+    "etf",
+    "lof",
+    "基金",
+    "基民",
+    "申购",
+    "赎回",
+    "净值",
+    "重仓基金",
+    "基金持仓",
+)
+_FUND_CATEGORY_ALIASES = {
+    "股票型": "股票型",
+    "混合型": "混合型",
+    "债券型": "债券型",
+    "指数型": "指数型",
+    "qdii": "QDII",
+    "fof": "FOF",
+    "etf": "ETF",
+    "lof": "LOF",
+}
 _RUN_ID_PATTERN = re.compile(r"(?:run|运行)(?:\s*id)?\s*[#：:=]?\s*([A-Za-z0-9][A-Za-z0-9_-]{5,127})", re.IGNORECASE)
+_CODE_PATTERN = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 
 
 def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
@@ -47,6 +72,33 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
     slots = dict(request.get("slots") or {})
     constraints = dict(request.get("constraints") or {})
     runtime_context = dict(request.get("_runtime_context") or {})
+    fund_category = _fund_category(query, slots=slots, constraints=constraints)
+    supplied_fund_codes = [
+        *_as_list(slots.get("fund_codes")),
+        *_as_list(constraints.get("fund_codes")),
+    ]
+    should_resolve_funds = (
+        explicit_intent == "fund_research"
+        or _contains(query, query.casefold(), _FUND_KEYWORDS)
+        or fund_category is not None
+        or any(not _looks_like_equity_code(code) for code in _CODE_PATTERN.findall(query))
+        or bool(supplied_fund_codes)
+    )
+    fund_resolution = _FUND_MASTER.resolve(
+        query,
+        supplied_codes=supplied_fund_codes,
+        allow_network=should_resolve_funds,
+    )
+    fund_codes = list(fund_resolution.fund_codes)
+    if explicit_intent == "fund_research":
+        for value in supplied_fund_codes:
+            normalized = FundSecurityMaster.normalize_code(value)
+            if normalized and normalized not in fund_codes:
+                fund_codes.append(normalized)
+    if fund_codes:
+        slots["fund_codes"] = fund_codes
+    if fund_category:
+        slots["fund_category"] = fund_category
     sector = _sector(query, slots=slots, constraints=constraints)
     resolution = _symbols(
         query,
@@ -54,13 +106,19 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
         constraints=constraints,
         allow_network=not sector and not _looks_like_multi_target_request(query),
     )
-    symbols = resolution.symbols
+    symbols = [symbol for symbol in resolution.symbols if symbol not in fund_codes]
     if symbols:
         slots["symbols"] = symbols
     if sector:
         slots["sector"] = sector
 
-    intent = explicit_intent or _infer_intent(query=query, symbols=symbols, sector=sector)
+    intent = explicit_intent or _infer_intent(
+        query=query,
+        symbols=symbols,
+        sector=sector,
+        fund_codes=fund_codes,
+        fund_category=fund_category,
+    )
     if intent is None:
         return _clarify(
             ["intent_or_target"],
@@ -80,6 +138,19 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
             context={
                 "reason": "comparison_targets_missing",
                 "target_scope": sector,
+            },
+        )
+    if intent == "fund_research" and not fund_codes and not fund_category:
+        return _clarify(
+            ["fund_category_or_codes"],
+            query=query,
+            intent=intent,
+            slots=slots,
+            constraints=constraints,
+            context={
+                "reason": "fund_scope_missing",
+                "ambiguous_fund_terms": fund_resolution.ambiguous_terms,
+                "provider_error": fund_resolution.provider_error,
             },
         )
     if intent == "stock_check" and not symbols and not slots.get("snapshots"):
@@ -136,6 +207,10 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
             "security_resolution_source": resolution.source,
             "security_matches": resolution.matches,
             "ambiguous_security_terms": resolution.ambiguous_terms,
+            "fund_resolution_source": fund_resolution.source,
+            "fund_matches": fund_resolution.matches,
+            "ambiguous_fund_terms": fund_resolution.ambiguous_terms,
+            "fund_provider_error": fund_resolution.provider_error,
         },
     }
 
@@ -218,8 +293,17 @@ def _review_target_run_id(
     return str(eligible[0].get("run_id")) if eligible else None
 
 
-def _infer_intent(*, query: str, symbols: list[str], sector: str | None) -> str | None:
+def _infer_intent(
+    *,
+    query: str,
+    symbols: list[str],
+    sector: str | None,
+    fund_codes: list[str],
+    fund_category: str | None,
+) -> str | None:
     lowered = query.casefold()
+    if fund_codes or fund_category or _contains(query, lowered, _FUND_KEYWORDS):
+        return "fund_research"
     if _contains(query, lowered, _REVIEW_KEYWORDS):
         return "review_thesis"
     if _contains(query, lowered, _DISTILL_KEYWORDS):
@@ -235,6 +319,49 @@ def _infer_intent(*, query: str, symbols: list[str], sector: str | None) -> str 
     if _contains(query, lowered, _ANALYSIS_KEYWORDS):
         return "stock_check"
     return "stock_check" if symbols else None
+
+
+def _fund_category(
+    query: str,
+    *,
+    slots: dict[str, Any],
+    constraints: dict[str, Any],
+) -> str | None:
+    supplied = str(slots.get("fund_category") or constraints.get("fund_category") or "").strip()
+    if supplied:
+        lowered = supplied.casefold()
+        return next(
+            (
+                category
+                for alias, category in _FUND_CATEGORY_ALIASES.items()
+                if alias.casefold() in lowered
+            ),
+            supplied,
+        )
+    lowered = query.casefold()
+    return next(
+        (
+            category
+            for alias, category in _FUND_CATEGORY_ALIASES.items()
+            if alias.casefold() in lowered
+        ),
+        None,
+    )
+
+
+def _looks_like_equity_code(value: object) -> bool:
+    code = str(value or "").strip()
+    return len(code) == 6 and code.startswith(
+        ("000", "001", "002", "003", "300", "301", "600", "601", "603", "605", "606", "688", "689", "4", "8", "92")
+    )
+
+
+def _as_list(value: object) -> list[object]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    return [value]
 
 
 def _looks_like_multi_target_request(query: str) -> bool:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshot_bundle, collect_snapshots
+from domain_packs.finance_ashare.subagents.fund_methodology import build_fund_analysis
 from domain_packs.finance_ashare.subagents.uzi_methodology import (
     build_delivery_conclusion,
     build_panel_review,
@@ -87,14 +88,171 @@ def normalize_query(context):
     request = context.require_artifact("user_request")
     query = str(request.content.get("query") or request.content.get("text") or "").strip()
     symbols = _unique_strings(request.content.get("symbols") or [])
+    inputs = dict(context.node.inputs or {})
+    fund_codes = _unique_strings(
+        request.content.get("fund_codes")
+        or inputs.get("fund_codes")
+        or inputs.get("funds")
+        or []
+    )
     for symbol in _STOCK_CODE_PATTERN.findall(query):
-        if symbol not in symbols:
+        if symbol not in fund_codes and symbol not in symbols:
             symbols.append(symbol)
     return ArtifactDraft(
         artifact_type="normalized_query",
-        content={"query": query, "symbols": symbols},
+        content={
+            "query": query,
+            "symbols": symbols,
+            "fund_codes": fund_codes,
+            "fund_category": str(
+                request.content.get("fund_category")
+                or inputs.get("fund_category")
+                or ""
+            ).strip()
+            or None,
+        },
         parent_artifact_ids=[request.artifact_id],
         confidence=1.0,
+    )
+
+
+def collect_fund_snapshot(context):
+    query_artifact = context.require_artifact("normalized_query")
+    inputs = dict(context.node.inputs or {})
+    arguments = {
+        "query": str(query_artifact.content.get("query") or ""),
+        "fund_codes": _unique_strings(
+            query_artifact.content.get("fund_codes")
+            or inputs.get("fund_codes")
+            or []
+        ),
+        "fund_category": str(
+            query_artifact.content.get("fund_category")
+            or inputs.get("fund_category")
+            or ""
+        ).strip()
+        or None,
+        "candidate_pool_size": int(inputs.get("candidate_pool_size") or 8),
+        "investment_cycle": str(inputs.get("investment_cycle") or "mid_term"),
+    }
+    call_tool = getattr(context, "call_tool", None)
+    if callable(call_tool):
+        tool_result = call_tool("fund_data_provider", arguments)
+        if tool_result.status != "completed":
+            raise RuntimeError(tool_result.error or "fund_data_provider failed")
+        payload = dict(tool_result.output or {})
+        governed_source_refs = list(tool_result.source_refs or [])
+    else:
+        # Direct Pack unit tests can use a minimal execution context. Production
+        # Graph execution always invokes the governed Pack tool above.
+        from domain_packs.finance_ashare.skills.fund_snapshot.skill import FundSnapshotSkill
+
+        payload = FundSnapshotSkill().run(**arguments)
+        governed_source_refs = []
+    source_refs = [
+        dict(row)
+        for row in payload.pop("source_refs", [])
+        if isinstance(row, dict)
+    ]
+    source_refs = governed_source_refs or source_refs
+    quality_status = str(payload.get("quality_status") or "data_gap")
+    return ArtifactDraft(
+        artifact_type="fund_snapshot",
+        content=payload,
+        source_refs=source_refs,
+        parent_artifact_ids=[query_artifact.artifact_id],
+        confidence=0.8 if quality_status == "available" else 0.45 if payload.get("funds") else 0.0,
+        risk_flags=list(payload.get("data_gap") or []),
+        metadata={"quality_status": quality_status},
+    )
+
+
+def analyze_funds(context):
+    snapshot = context.require_artifact("fund_snapshot")
+    content = build_fund_analysis(dict(snapshot.content or {}))
+    quality_status = str(content.get("quality_status") or "data_gap")
+    candidates = list(content.get("candidates") or [])
+    coverage = [
+        float(row.get("score_coverage") or 0.0)
+        for row in candidates
+        if isinstance(row, dict)
+    ]
+    confidence = round(sum(coverage) / len(coverage), 4) if coverage else 0.0
+    return ArtifactDraft(
+        artifact_type="fund_analysis",
+        content=content,
+        source_refs=list(snapshot.source_refs),
+        parent_artifact_ids=[snapshot.artifact_id],
+        confidence=confidence,
+        risk_flags=list(content.get("data_gap") or []),
+        metadata={
+            "quality_status": quality_status,
+            "methodology_version": content.get("methodology_version"),
+        },
+    )
+
+
+def compose_fund_report(context):
+    analysis = context.require_artifact("fund_analysis")
+    content = dict(analysis.content or {})
+    recommendations = [
+        dict(row)
+        for row in content.get("recommendations") or []
+        if isinstance(row, dict)
+    ]
+    if recommendations:
+        leaders = "、".join(
+            f"{row.get('fund_name')}（{row.get('fund_code')}，{float(row.get('score') or 0):.1f}分）"
+            for row in recommendations[:3]
+        )
+        conclusion = f"基于同类真实收益与风险数据，当前证据门槛内的优先候选为：{leaders}。"
+    else:
+        conclusion = "当前真实数据不足以形成可审计的基金优先候选，结果保留为数据缺口。"
+    provider_errors = [
+        f"{row.get('stage')}: {row.get('error_type')}"
+        for row in content.get("provider_errors") or []
+        if isinstance(row, dict)
+    ]
+    risks = [
+        *list(content.get("data_gap") or []),
+        *provider_errors,
+        "历史收益不代表未来表现；基金比较只在同类样本内有效。",
+    ]
+    evidence = [
+        {
+            "fund_code": row.get("fund_code"),
+            "fund_name": row.get("fund_name"),
+            "comparison_group": row.get("comparison_group"),
+            "rank": row.get("rank"),
+            "score": row.get("score"),
+            "score_coverage": row.get("score_coverage"),
+            "returns_pct": row.get("returns_pct"),
+            "risk": row.get("risk"),
+            "holdings_period": row.get("holdings_period"),
+            "top10_concentration_pct": row.get("top10_concentration_pct"),
+            "data_gap": row.get("data_gap"),
+        }
+        for row in content.get("candidates") or []
+        if isinstance(row, dict)
+    ]
+    return ArtifactDraft(
+        artifact_type="research_report",
+        content={
+            "conclusion": conclusion,
+            "evidence": evidence,
+            "risk": list(dict.fromkeys(str(item) for item in risks if str(item).strip())),
+            "follow_up": [
+                "补齐缺失的最新持仓或净值历史后重新运行。",
+                "结合自身风险承受能力、持有期限和申赎规则做最终决策。",
+            ],
+            "fund_analysis": content,
+            "quality_status": content.get("quality_status"),
+        },
+        source_refs=list(analysis.source_refs),
+        parent_artifact_ids=[analysis.artifact_id],
+        confidence=analysis.confidence,
+        risk_flags=list(dict.fromkeys(str(item) for item in risks if str(item).strip())),
+        metadata={"quality_status": content.get("quality_status")},
     )
 
 
@@ -881,7 +1039,7 @@ def compose_uzi_report(context):
                 ]
             )
         ),
-        metadata={"profile": profile, "methodology_version": "3.9.1-adapted", "source_commit": profile.get("source_commit")},
+        metadata={"profile": profile, "methodology_version": "3.9.2-adapted", "source_commit": profile.get("source_commit")},
     )
     presentation_content = build_presentation(
         report_content,
@@ -905,7 +1063,7 @@ def compose_uzi_report(context):
         parent_artifact_ids=parents,
         confidence=report.confidence,
         risk_flags=list(report.risk_flags),
-        metadata={"profile": profile, "methodology_version": "3.9.1-adapted", "source_commit": profile.get("source_commit")},
+        metadata={"profile": profile, "methodology_version": "3.9.2-adapted", "source_commit": profile.get("source_commit")},
     )
     return [report, presentation]
 

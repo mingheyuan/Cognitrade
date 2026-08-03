@@ -22,6 +22,7 @@ const viewTitles: Record<ViewId, { eyebrow: string; title: string }> = {
   paper: { eyebrow: '交易实验室', title: '模拟交易' },
   backtest: { eyebrow: '量化实验室', title: '策略回测' },
   screening: { eyebrow: '研究工具', title: '智能筛选' },
+  funds: { eyebrow: '资产研究', title: '基金研究与选择' },
   methodology: { eyebrow: '认知系统', title: '方法论' },
   runs: { eyebrow: '运行时', title: '运行记录' },
 }

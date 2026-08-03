@@ -11,6 +11,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
+  PieChart,
   Search,
   Sparkles,
   WalletCards,
@@ -37,6 +38,7 @@ const navigation: Array<{ id: ViewId; label: string; icon: LucideIcon }> = [
   { id: 'paper', label: '模拟交易', icon: WalletCards },
   { id: 'backtest', label: '策略回测', icon: FlaskConical },
   { id: 'screening', label: '智能筛选', icon: BarChart3 },
+  { id: 'funds', label: '基金研究', icon: PieChart },
   { id: 'methodology', label: '方法论', icon: BrainCircuit },
   { id: 'runs', label: '运行记录', icon: Activity },
 ]

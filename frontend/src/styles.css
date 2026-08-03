@@ -8050,6 +8050,309 @@ select:focus-visible {
   }
 }
 
+.fund-workspace {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.fund-config-card,
+.fund-result-shell {
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border-radius: 18px;
+  box-shadow: var(--shadow-sm);
+}
+
+.fund-config-card {
+  display: grid;
+  gap: 15px;
+  padding: 20px;
+  position: sticky;
+  top: 82px;
+}
+
+.fund-config-card > header,
+.fund-result-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fund-config-card h2,
+.fund-result-header h2 {
+  margin: 4px 0 0;
+  font-size: 20px;
+}
+
+.fund-config-card label {
+  display: grid;
+  gap: 7px;
+}
+
+.fund-config-card label > span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fund-config-card input,
+.fund-config-card select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-soft);
+  color: var(--text);
+  padding: 0 11px;
+  outline: none;
+}
+
+.fund-config-card input:focus,
+.fund-config-card select:focus {
+  border-color: var(--mint);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mint) 15%, transparent);
+}
+
+.fund-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.fund-run-button {
+  justify-content: center;
+  width: 100%;
+}
+
+.fund-config-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.fund-config-note svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.fund-result-shell {
+  min-height: 480px;
+  overflow: hidden;
+}
+
+.fund-result-header {
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fund-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 16px 18px 4px;
+}
+
+.fund-summary-grid article {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 8px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-soft);
+}
+
+.fund-summary-grid article svg {
+  grid-row: 1 / 4;
+  color: var(--mint);
+  margin-top: 2px;
+}
+
+.fund-summary-grid span,
+.fund-summary-grid small {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.fund-summary-grid strong {
+  color: var(--text);
+  font-size: 20px;
+}
+
+.fund-candidate-list {
+  display: grid;
+  gap: 10px;
+  padding: 14px 18px 20px;
+}
+
+.fund-candidate-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel-soft);
+  overflow: hidden;
+}
+
+.fund-candidate-card.is-eligible {
+  border-color: color-mix(in srgb, var(--mint) 45%, var(--border));
+}
+
+.fund-candidate-card > header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.fund-rank {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--mint) 12%, transparent);
+  color: var(--mint);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.fund-candidate-card > header > div:nth-child(2) {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fund-candidate-card > header > div:nth-child(2) strong {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fund-candidate-card > header small,
+.fund-score span,
+.fund-score small {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.fund-score {
+  display: grid;
+  justify-items: end;
+  gap: 1px;
+}
+
+.fund-score strong {
+  color: var(--gold);
+  font-size: 22px;
+}
+
+.fund-metric-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.fund-metric-row > div {
+  display: grid;
+  gap: 5px;
+  padding: 11px 15px;
+  border-right: 1px solid var(--border);
+}
+
+.fund-metric-row > div:last-child {
+  border-right: 0;
+}
+
+.fund-metric-row span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.fund-metric-row strong {
+  font-size: 14px;
+}
+
+.fund-holdings-row {
+  display: grid;
+  grid-template-columns: minmax(100px, auto) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 11px 15px;
+}
+
+.fund-holdings-row > span {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.fund-holdings-row > div {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.fund-holdings-row em {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.fund-candidate-card > footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 15px 11px;
+  color: var(--gold);
+  font-size: 10px;
+}
+
+.fund-empty {
+  display: grid;
+  place-items: center;
+  gap: 9px;
+  min-height: 390px;
+  padding: 30px;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.fund-empty strong {
+  color: var(--text-muted);
+}
+
+.fund-empty p {
+  max-width: 460px;
+  margin: 0;
+  font-size: 12px;
+}
+
+@media (max-width: 1120px) {
+  .fund-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .fund-config-card {
+    position: static;
+  }
+}
+
 @media (max-width: 760px) {
   .finance-page {
     padding: 16px 12px 44px;
@@ -8121,9 +8424,41 @@ select:focus-visible {
   .paper-positions-card {
     min-height: 320px;
   }
+
+  .fund-summary-grid,
+  .fund-metric-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .fund-metric-row > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .fund-metric-row > div:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .fund-holdings-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 440px) {
+  .fund-form-grid,
+  .fund-summary-grid,
+  .fund-metric-row {
+    grid-template-columns: 1fr;
+  }
+
+  .fund-metric-row > div {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .fund-metric-row > div:last-child {
+    border-bottom: 0;
+  }
+
   .metric-grid--market,
   .metric-grid--valuation,
   .kline-meta-grid,

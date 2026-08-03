@@ -18,8 +18,8 @@ from domain_packs.finance_ashare.subagents.uzi_panel_registry import (
 from domain_packs.finance_ashare.subagents.uzi_panel_rules import evaluate_investor
 
 
-UZI_METHOD_VERSION = "3.9.1-adapted"
-UZI_SOURCE_COMMIT = "775c76101e8890492d21c2e2827692456fcddb58"
+UZI_METHOD_VERSION = "3.9.2-adapted"
+UZI_SOURCE_COMMIT = "fce996c33e70eddce8e375f53cd252b549eb3d7c"
 
 _PROFILES: dict[str, dict[str, Any]] = {
     "quick": {
@@ -50,7 +50,7 @@ _PROFILES: dict[str, dict[str, Any]] = {
     "medium": {
         "depth": "medium",
         "max_duration_seconds": 480,
-        "investors_count": 51,
+        "investors_count": 66,
         "methods": ["dcf", "comps", "three_statement", "quick_lbo", "accretion_dilution", "panel", "risk", "workflow"],
         "snapshot_types": [
             "market",
@@ -85,7 +85,7 @@ _PROFILES: dict[str, dict[str, Any]] = {
     "deep": {
         "depth": "deep",
         "max_duration_seconds": 1200,
-        "investors_count": 51,
+        "investors_count": 66,
         "methods": [
             "dcf",
             "comps",
@@ -335,11 +335,33 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         (
             "fcf_latest_yi",
             "free_cash_flow",
+            "free_cash_flow_yi",
+            "自由现金流",
+        )
+    )
+    operating_cash_flow, operating_cash_flow_source = first_amount_with_source(
+        (
+            "operating_cash_flow_yi",
             "operating_cash_flow",
+            "ocf",
             "经营活动现金流净额",
             "经营活动产生的现金流量净额",
         )
     )
+    ocf_to_net_income_ratio, ocf_ratio_source = first_number_with_source(
+        ("ocf_to_net_income_ratio", "经营现金流净额/净利润")
+    )
+    ocf_ratio_derivation = None
+    if (
+        ocf_to_net_income_ratio is None
+        and operating_cash_flow is not None
+        and net_profit not in (None, 0)
+    ):
+        ocf_to_net_income_ratio = operating_cash_flow / net_profit
+        ocf_ratio_source = "+".join(
+            item for item in (operating_cash_flow_source, net_profit_source) if item
+        )
+        ocf_ratio_derivation = "operating_cash_flow_yi / net_profit_latest_yi"
     total_assets, total_assets_source = first_amount_with_source(
         ("total_assets_yi", "total_assets", "资产总计", "资产总额")
     )
@@ -425,6 +447,8 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         "revenue_latest_yi": revenue,
         "net_profit_latest_yi": net_profit,
         "fcf_latest_yi": fcf,
+        "operating_cash_flow_yi": operating_cash_flow,
+        "ocf_to_net_income_ratio": ocf_to_net_income_ratio,
         "total_assets_yi": total_assets,
         "total_liabilities_yi": total_liabilities,
         "cash_yi": cash,
@@ -450,6 +474,8 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
             "revenue_latest_yi": revenue_source,
             "net_profit_latest_yi": net_profit_source,
             "fcf_latest_yi": fcf_source,
+            "operating_cash_flow_yi": operating_cash_flow_source,
+            "ocf_to_net_income_ratio": ocf_ratio_source,
             "total_assets_yi": total_assets_source,
             "total_liabilities_yi": total_liabilities_source,
             "cash_yi": cash_source,
@@ -467,7 +493,11 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
             "market_cap_yi": "market_snapshot",
             "pct_change": "market_snapshot",
         })
-    assumptions = [debt_derivation] if debt_derivation else []
+    assumptions = [
+        item
+        for item in (debt_derivation, ocf_ratio_derivation)
+        if item
+    ]
     return {
         "symbol": symbol,
         "name": name,
@@ -857,6 +887,18 @@ def build_panel_review(snapshot_rows: list[dict[str, Any]], symbols: list[str], 
             votes.append({"symbol": symbol, **vote})
     distribution = Counter(vote["signal"] for vote in votes)
     scores = [float(vote["score"]) for vote in votes if vote["score"] > 0]
+    evaluated_rule_count = sum(
+        int(vote.get("pass_count") or 0) + int(vote.get("fail_count") or 0)
+        for vote in votes
+    )
+    skipped_rule_count = sum(int(vote.get("skipped_count") or 0) for vote in votes)
+    quality_status = (
+        "data_gap"
+        if not evaluated_rule_count
+        else "degraded"
+        if skipped_rule_count
+        else "available"
+    )
     return {
         "methodology_version": UZI_METHOD_VERSION,
         "profile": profile["selected"],
@@ -868,6 +910,10 @@ def build_panel_review(snapshot_rows: list[dict[str, Any]], symbols: list[str], 
         "votes": votes,
         "distribution": dict(distribution),
         "average_score": round(sum(scores) / len(scores), 2) if scores else None,
+        "evaluated_rule_count": evaluated_rule_count,
+        "skipped_rule_count": skipped_rule_count,
+        "quality_status": quality_status,
+        "data_gap": ["panel_rule_inputs_missing"] if skipped_rule_count else [],
         "disagreement": {
             "exists": len({vote["signal"] for vote in votes}) > 1,
             "summary": "不同方法论视角对证据解释存在分歧。" if votes else "没有足够证据形成 Panel 视角。",
@@ -931,6 +977,11 @@ def _registered_panel_vote(investor: dict[str, object], features: dict[str, Any]
         "headline": str(rule_result.get("headline") or "数据不足，暂无判断。"),
         "pass_rules": list(rule_result.get("pass_rules") or []),
         "fail_rules": list(rule_result.get("fail_rules") or []),
+        "skipped_rules": list(rule_result.get("skipped_rules") or []),
+        "data_gap_rules": list(rule_result.get("data_gap_rules") or []),
+        "pass_count": int(rule_result.get("pass_count") or 0),
+        "fail_count": int(rule_result.get("fail_count") or 0),
+        "skipped_count": int(rule_result.get("skipped_count") or 0),
         "weight_pass": int(rule_result.get("weight_pass") or 0),
         "weight_total": int(rule_result.get("weight_total") or 0),
         "rule_engine_version": str(rule_result.get("rule_engine_version") or ""),
