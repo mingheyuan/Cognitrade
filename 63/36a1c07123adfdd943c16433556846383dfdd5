@@ -1,0 +1,65 @@
+api-doc/api-v1.md
+  s_a6a8a3a6f43b3c::t_5983ebeb66c989 89-90,130-167
+domain_packs/finance_ashare/artifact_schemas/ai_readiness.json
+  s_a6a8a3a6f43b3c::t_3485891689e611 1-14
+domain_packs/finance_ashare/artifact_schemas/earnings_preview.json
+  s_a6a8a3a6f43b3c::t_09e0ee2823f28d 1-14
+domain_packs/finance_ashare/artifact_schemas/holding_rebalance.json
+  s_a6a8a3a6f43b3c::t_c3846eda4e531e 1-19
+domain_packs/finance_ashare/artifact_schemas/model_update.json
+  s_a6a8a3a6f43b3c::t_4fa19b4d3b056b 1-15
+domain_packs/finance_ashare/artifact_schemas/returns_attribution.json
+  s_a6a8a3a6f43b3c::t_28a4ddd0f1b18c 1-19
+domain_packs/finance_ashare/domain.yaml
+  s_a6a8a3a6f43b3c::t_9482a6da007730 2,29-33,202-210,472-551,797-831,926-930,1100-1160,1163
+domain_packs/finance_ashare/migration/uzi_3_9_2_capability_ledger.yaml
+  s_a6a8a3a6f43b3c::t_ac1a26060090bf 66-70,91-112
+domain_packs/finance_ashare/subagents/runtime.py
+  s_a6a8a3a6f43b3c::t_b30dbb9dd0da92 21-27,120-144,146,924-1051,1742-1754,1757,1766-1770
+domain_packs/finance_ashare/subagents/task_intake.py
+  s_a6a8a3a6f43b3c::t_e3379bb2dac869 55-66,87-100,147,183-191,250,340,343-344
+frontend/src/components/ResearchComposer.tsx
+  s_a6a8a3a6f43b3c::t_5f2e301226253d 17
+frontend/src/components/Sidebar.tsx
+  s_a6a8a3a6f43b3c::t_20d9ac4d9e6243 18,43
+frontend/src/components/Topbar.tsx
+  s_a6a8a3a6f43b3c::t_fced94001da02e 26
+frontend/src/components/UziMethods.test.tsx
+  s_a6a8a3a6f43b3c::t_6d6060ee75b771 1-85
+frontend/src/components/UziMethods.tsx
+  s_a6a8a3a6f43b3c::t_56abbb3dc9038e 1-276
+frontend/src/components/WorkspaceView.tsx
+  s_a6a8a3a6f43b3c::t_7321d820b31b4b 15,56
+frontend/src/data.ts
+  s_a6a8a3a6f43b3c::t_a1cdb3feb101f9 1,9
+frontend/src/hooks/useViewNavigation.ts
+  s_a6a8a3a6f43b3c::t_dcc5943faa3a03 12
+frontend/src/research-contracts.ts
+  s_a6a8a3a6f43b3c::t_c064ac2c3ddf2c 6
+frontend/src/styles.css
+  s_a6a8a3a6f43b3c::t_d2c817fc64e245 4591-4956
+plan/uzi-3.9.2-domainpack-migration.md
+  s_a6a8a3a6f43b3c::t_1d593558b1ffb5 164-166
+research_system/api/validation.py
+  s_a6a8a3a6f43b3c::t_158efcda788c3f 18,61-65,87,114-121,221-222,287-288,386-491
+research_system/runtime/agent_os.py
+  s_a6a8a3a6f43b3c::t_7925b7a5c60e85 612-616
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "6336a1c07123adfdd943c16433556846383dfdd5",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
