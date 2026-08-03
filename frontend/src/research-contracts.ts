@@ -3,6 +3,7 @@ export type ResearchIntent =
   | 'stock_compare'
   | 'stock_screen'
   | 'fund_research'
+  | 'portfolio_research'
   | 'sector_research'
   | 'distill_kol_logic'
   | 'review_thesis'

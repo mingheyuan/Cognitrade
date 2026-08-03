@@ -161,8 +161,9 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 
 - [ ] 按账本逐个实现 Pack-native capability；
 - [ ] 每个方法补齐 input contract、quality gate、fixture 和等价性级别；
-- [ ] 两种 rebalance 语义拆开验收；
-- [ ] Tier‑1 五方法全部提供专属 Artifact 与 Web 视图。
+- [x] Tier‑1 的逐持仓 rebalance 已与旧组合再平衡语义拆开；旧组合再平衡仍单独保留在账本；
+- [x] Tier‑1 五方法全部提供专属 Capability、Artifact、质量门、测试与 Web 视图；
+- [x] 新增 `portfolio_research`，组合收益缺失不补零、费用模型不硬编码、等权目标标记为策略假设；
 
 ### Phase D：20 个命令的 Web/Intent 等价交付
 

@@ -9,6 +9,7 @@ const VIEW_PATHS: Record<ViewId, string> = {
   backtest: '/backtesting',
   screening: '/screening',
   funds: '/funds',
+  uzi: '/uzi-methods',
   methodology: '/methodology',
   runs: '/runs',
 }

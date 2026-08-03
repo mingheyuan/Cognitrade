@@ -13,10 +13,12 @@ source:
     - tests/fixtures/uzi_source_snapshot_replay.json
     - tests/fixtures/uzi_finance_snapshot_replay.json
     - tests/fixtures/uzi_methodology_baseline.json
+    - tests/fixtures/uzi_tier1_baseline.json
   replay_fixture_sha256:
     tests/fixtures/uzi_source_snapshot_replay.json: E4352EA11CBF0469D331F6DACFF333441C9CD269EBE3EBA479A2691F0A727F9A
     tests/fixtures/uzi_finance_snapshot_replay.json: E81ABE9C4AABB39BE79D73561D51760BAA16EA72D52CA876B386A23E97428735
     tests/fixtures/uzi_methodology_baseline.json: E7C3CACBF80178DA5583099EFC550A2AD8BFF41FFAD34A37A6D2396E268D2D89
+    tests/fixtures/uzi_tier1_baseline.json: 898C1E49E70FAE206C72E90471C4A81286C844E8D8A7F27D419442E872B8AC2B
 
 source_defaults: &source_defaults
   source_commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
@@ -361,3 +363,53 @@ derived_methods:
     migration_status: pack_native
     result_equivalence: not_equivalent
     baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: ai_readiness
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/tier1/ai_readiness.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py
+    target_capability: finance.uzi.tier1.ai_readiness
+    target_artifact_type: ai_readiness
+    field_mapping: {chain: facts, industry: facts, events: facts, moat: facts}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_tier1_baseline.json
+  - source_id: earnings_preview
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/tier1/earnings_preview.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py
+    target_capability: finance.uzi.tier1.earnings_preview
+    target_artifact_type: earnings_preview
+    field_mapping: {fundamental: facts.financial_abstract, research: facts, events: facts}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_tier1_baseline.json
+  - source_id: model_update
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/tier1/model_update.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py
+    target_capability: finance.uzi.tier1.model_update
+    target_artifact_type: model_update
+    field_mapping: {updates: request.model_updates, baseline: facts.financial_abstract, valuation: artifact_board.valuation_model}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_tier1_baseline.json
+  - source_id: returns_attribution
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/tier1/returns_attrib.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py
+    target_capability: finance.uzi.tier1.returns_attribution
+    target_artifact_type: returns_attribution
+    field_mapping: {holdings: request.portfolio_holdings, benchmark: request.benchmark_return}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_tier1_baseline.json
+  - source_id: holding_rebalance
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/tier1/rebalance.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py
+    target_capability: finance.uzi.tier1.holding_rebalance
+    target_artifact_type: holding_rebalance
+    field_mapping: {holdings: request.portfolio_holdings, targets: request.rebalance_targets, fees: request.fee_model}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_tier1_baseline.json

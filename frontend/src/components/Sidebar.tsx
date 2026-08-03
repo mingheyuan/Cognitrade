@@ -15,6 +15,7 @@ import {
   Search,
   Sparkles,
   WalletCards,
+  Workflow,
   FlaskConical,
   type LucideIcon,
 } from 'lucide-react'
@@ -39,6 +40,7 @@ const navigation: Array<{ id: ViewId; label: string; icon: LucideIcon }> = [
   { id: 'backtest', label: '策略回测', icon: FlaskConical },
   { id: 'screening', label: '智能筛选', icon: BarChart3 },
   { id: 'funds', label: '基金研究', icon: PieChart },
+  { id: 'uzi', label: 'UZI 专项方法', icon: Workflow },
   { id: 'methodology', label: '方法论', icon: BrainCircuit },
   { id: 'runs', label: '运行记录', icon: Activity },
 ]

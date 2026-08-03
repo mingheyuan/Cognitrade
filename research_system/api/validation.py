@@ -15,6 +15,7 @@ SUPPORTED_RESEARCH_INTENTS = frozenset(
         "stock_compare",
         "stock_screen",
         "fund_research",
+        "portfolio_research",
         "sector_research",
         "distill_kol_logic",
         "review_thesis",
@@ -57,6 +58,11 @@ _METHODOLOGIES = frozenset(
         "lbo",
         "ma_accretion",
         "segmental",
+        "ai_readiness",
+        "earnings_preview",
+        "model_update",
+        "returns_attribution",
+        "holding_rebalance",
     }
 )
 _RESEARCH_METHODS = frozenset(
@@ -78,6 +84,7 @@ _STOCK_FIELDS = {
     "investment_cycle",
     "research_profile",
     "requested_methods",
+    "model_updates",
     *_PLANNING_FIELDS,
 }
 _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
@@ -102,6 +109,14 @@ _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
         "fund_category",
         "candidate_pool_size",
         "investment_cycle",
+        *_PLANNING_FIELDS,
+    },
+    "portfolio_research": {
+        "portfolio_holdings",
+        "benchmark_return",
+        "rebalance_targets",
+        "drift_threshold",
+        "fee_model",
         *_PLANNING_FIELDS,
     },
     "sector_research": {"sector_query", "include_policy_snapshot", *_PLANNING_FIELDS},
@@ -203,6 +218,8 @@ def validate_research_request(
         _validate_stock_screen_constraints(constraints)
     elif intent == "fund_research":
         _validate_fund_research_constraints(constraints)
+    elif intent == "portfolio_research":
+        _validate_portfolio_research_constraints(constraints)
     return request.model_copy(update={"intent": intent, "user_query": query, "constraints": constraints})
 
 
@@ -267,6 +284,8 @@ def _validate_common_constraints(
             _invalid_constraint("snapshot_types", f"contains unsupported values: {', '.join(unsupported)}")
         if len(snapshots) != len(set(snapshots)):
             _invalid_constraint("snapshot_types", "must not contain duplicate values")
+    if "model_updates" in constraints:
+        _validate_model_updates(constraints["model_updates"])
 
     for field_name in (
         "allow_partial_snapshot_types",
@@ -362,6 +381,112 @@ def _validate_fund_research_constraints(constraints: dict[str, Any]) -> None:
             _invalid_constraint("fund_codes", "must contain six-digit fund codes")
     if int(constraints.get("candidate_pool_size", 8)) > 20:
         _invalid_constraint("candidate_pool_size", "must not exceed 20 for fund research")
+
+
+def _validate_model_updates(value: Any) -> None:
+    if not isinstance(value, dict) or not value:
+        _invalid_constraint("model_updates", "must be a non-empty object")
+    allowed = {
+        "rev_growth",
+        "gross_margin",
+        "net_margin",
+        "capex_pct",
+        "stage1_growth",
+        "terminal_g",
+        "beta",
+        "target_pe",
+        "target_price",
+    }
+    unknown = sorted(str(key) for key in value if str(key) not in allowed)
+    if unknown:
+        _invalid_constraint("model_updates", f"contains unsupported values: {', '.join(unknown)}")
+    for key, item in value.items():
+        _require_finite_number(item, field_name=f"model_updates.{key}")
+
+
+def _validate_portfolio_research_constraints(constraints: dict[str, Any]) -> None:
+    holdings = constraints.get("portfolio_holdings")
+    if not isinstance(holdings, list) or not holdings:
+        _invalid_constraint("portfolio_holdings", "must be a non-empty array")
+    if len(holdings) > 100:
+        _invalid_constraint("portfolio_holdings", "must contain at most 100 items")
+    tickers: list[str] = []
+    total_weight = 0.0
+    for index, holding in enumerate(holdings):
+        if not isinstance(holding, dict):
+            _invalid_constraint("portfolio_holdings", f"item {index} must be an object")
+        ticker = _require_non_empty_string(
+            holding.get("ticker") or holding.get("symbol"),
+            field_name=f"portfolio_holdings.{index}.ticker",
+        )
+        tickers.append(ticker)
+        weight = _require_finite_number(
+            holding.get("weight"),
+            field_name=f"portfolio_holdings.{index}.weight",
+        )
+        if weight < 0:
+            _invalid_constraint(f"portfolio_holdings.{index}.weight", "must be non-negative")
+        total_weight += weight
+        for field_name in ("return_pct", "value", "market_value", "quantity", "price"):
+            if holding.get(field_name) is None:
+                continue
+            number = _require_finite_number(
+                holding[field_name],
+                field_name=f"portfolio_holdings.{index}.{field_name}",
+            )
+            if field_name in {"value", "market_value", "quantity", "price"} and number < 0:
+                _invalid_constraint(f"portfolio_holdings.{index}.{field_name}", "must be non-negative")
+        for field_name in ("name", "industry", "market"):
+            if holding.get(field_name) is not None:
+                _require_non_empty_string(
+                    holding[field_name],
+                    field_name=f"portfolio_holdings.{index}.{field_name}",
+                )
+    if len(tickers) != len(set(tickers)):
+        _invalid_constraint("portfolio_holdings", "must not contain duplicate tickers")
+    if total_weight <= 0:
+        _invalid_constraint("portfolio_holdings", "weight total must be positive")
+
+    if "benchmark_return" in constraints:
+        _require_finite_number(constraints["benchmark_return"], field_name="benchmark_return")
+    if "drift_threshold" in constraints:
+        threshold = _require_finite_number(constraints["drift_threshold"], field_name="drift_threshold")
+        if threshold < 0 or threshold > 100:
+            _invalid_constraint("drift_threshold", "must be between 0 and 100")
+
+    if "rebalance_targets" in constraints:
+        targets = constraints["rebalance_targets"]
+        if not isinstance(targets, dict) or not targets:
+            _invalid_constraint("rebalance_targets", "must be a non-empty object")
+        if set(map(str, targets)) != set(tickers):
+            _invalid_constraint("rebalance_targets", "must contain exactly one target for each holding")
+        total_target = 0.0
+        for ticker, target in targets.items():
+            number = _require_finite_number(target, field_name=f"rebalance_targets.{ticker}")
+            if number < 0:
+                _invalid_constraint(f"rebalance_targets.{ticker}", "must be non-negative")
+            total_target += number
+        if total_target <= 0:
+            _invalid_constraint("rebalance_targets", "target total must be positive")
+
+    if "fee_model" in constraints:
+        fee_model = constraints["fee_model"]
+        if not isinstance(fee_model, dict) or not fee_model:
+            _invalid_constraint("fee_model", "must be a non-empty object")
+        for market, raw_spec in fee_model.items():
+            if not isinstance(raw_spec, dict) or not raw_spec:
+                _invalid_constraint(f"fee_model.{market}", "must be a non-empty object")
+            unknown = sorted(
+                str(key)
+                for key in raw_spec
+                if str(key) not in {"commission_rate", "buy_stamp_rate", "sell_stamp_rate"}
+            )
+            if unknown:
+                _invalid_constraint(f"fee_model.{market}", f"contains unsupported fields: {', '.join(unknown)}")
+            for key, rate in raw_spec.items():
+                number = _require_finite_number(rate, field_name=f"fee_model.{market}.{key}")
+                if number < 0 or number > 1:
+                    _invalid_constraint(f"fee_model.{market}.{key}", "must be between 0 and 1")
 
 
 def _require_non_empty_string(value: Any, *, field_name: str) -> str:

@@ -63,11 +63,11 @@ commands:
   - {id: screen, target: stock_screen, status: adapted}
   - {id: dd, target: finance.uzi.deep.evaluate, status: adapted_partial}
   - {id: ic-memo, target: finance.uzi.deep.evaluate, status: adapted_partial}
-  - {id: ai-readiness, target: finance.uzi.tier1.ai_readiness, status: planned}
-  - {id: earnings-preview, target: finance.uzi.tier1.earnings_preview, status: planned}
-  - {id: model-update, target: finance.uzi.tier1.model_update, status: planned}
-  - {id: returns, target: finance.uzi.tier1.returns_attribution, status: planned}
-  - {id: rebalance, target: finance.uzi.tier1.holding_rebalance, status: planned}
+  - {id: ai-readiness, target: finance.uzi.tier1.ai_readiness, status: adapted, deviation: missing_sources_are_data_gap_not_negative_evidence}
+  - {id: earnings-preview, target: finance.uzi.tier1.earnings_preview, status: adapted, deviation: projections_are_labeled_assumption_only}
+  - {id: model-update, target: finance.uzi.tier1.model_update, status: adapted, deviation: explicit_updates_required_no_demo_mode}
+  - {id: returns, target: finance.uzi.tier1.returns_attribution, status: adapted, deviation: missing_returns_never_zero_imputed}
+  - {id: rebalance, target: finance.uzi.tier1.holding_rebalance, status: adapted, deviation: fees_are_request_supplied_no_hardcoded_rates}
 
 methods:
   - {id: dcf, group: valuation, target: finance.uzi.valuation.evaluate, status: adapted}
@@ -88,11 +88,28 @@ methods:
   - {id: unit_economics, group: decision, target: finance.uzi.deep.evaluate, status: adapted_partial}
   - {id: value_creation_plan, group: decision, target: finance.uzi.deep.evaluate, status: adapted_partial}
   - {id: portfolio_rebalance, group: decision, target: finance.uzi.portfolio.rebalance, status: planned}
-  - {id: ai_readiness, group: tier1, target: finance.uzi.tier1.ai_readiness, status: planned}
-  - {id: earnings_preview, group: tier1, target: finance.uzi.tier1.earnings_preview, status: planned}
-  - {id: model_update, group: tier1, target: finance.uzi.tier1.model_update, status: planned}
-  - {id: returns_attribution, group: tier1, target: finance.uzi.tier1.returns_attribution, status: planned}
-  - {id: holding_rebalance, group: tier1, target: finance.uzi.tier1.holding_rebalance, status: planned}
+  - {id: ai_readiness, group: tier1, target: finance.uzi.tier1.ai_readiness, status: adapted}
+  - {id: earnings_preview, group: tier1, target: finance.uzi.tier1.earnings_preview, status: adapted}
+  - {id: model_update, group: tier1, target: finance.uzi.tier1.model_update, status: adapted}
+  - {id: returns_attribution, group: tier1, target: finance.uzi.tier1.returns_attribution, status: adapted}
+  - {id: holding_rebalance, group: tier1, target: finance.uzi.tier1.holding_rebalance, status: adapted}
+
+tier1_extension:
+  status: implemented_v1
+  intent: portfolio_research
+  capabilities:
+    - finance.uzi.tier1.ai_readiness
+    - finance.uzi.tier1.earnings_preview
+    - finance.uzi.tier1.model_update
+    - finance.uzi.tier1.returns_attribution
+    - finance.uzi.tier1.holding_rebalance
+  artifacts: [ai_readiness, earnings_preview, model_update, returns_attribution, holding_rebalance]
+  frontend_route: /uzi-methods
+  invariants:
+    missing_return_imputation: forbidden
+    implicit_fee_model: forbidden
+    demo_model_updates: forbidden
+    equal_weight_target: assumption_only
 
 fund_extension:
   intent: fund_research

@@ -18,6 +18,13 @@ from domain_packs.finance_ashare.subagents.uzi_advanced_methodology import (
     build_institutional_analysis,
     build_research_workflow,
 )
+from domain_packs.finance_ashare.subagents.uzi_tier1_methodology import (
+    build_ai_readiness,
+    build_earnings_preview,
+    build_holding_rebalance,
+    build_model_update,
+    build_returns_attribution,
+)
 from research_system.adapters.vendors.akshare_utils import coerce_numeric
 from research_system.services.methodologies import (
     CashflowResilienceService,
@@ -110,7 +117,33 @@ def normalize_query(context):
                 or ""
             ).strip()
             or None,
+            "portfolio_holdings": list(
+                request.content.get("portfolio_holdings")
+                or inputs.get("portfolio_holdings")
+                or []
+            ),
+            "benchmark_return": (
+                request.content.get("benchmark_return")
+                if request.content.get("benchmark_return") is not None
+                else inputs.get("benchmark_return")
+            ),
+            "rebalance_targets": dict(
+                request.content.get("rebalance_targets")
+                or inputs.get("rebalance_targets")
+                or {}
+            ) or None,
+            "drift_threshold": (
+                request.content.get("drift_threshold")
+                if request.content.get("drift_threshold") is not None
+                else inputs.get("drift_threshold", 5.0)
+            ),
+            "fee_model": dict(
+                request.content.get("fee_model")
+                or inputs.get("fee_model")
+                or {}
+            ) or None,
         },
+        source_refs=list(request.source_refs),
         parent_artifact_ids=[request.artifact_id],
         confidence=1.0,
     )
@@ -888,6 +921,134 @@ def evaluate_uzi_dimension_coverage(context):
         risk_flags=list(content.get("risk_flags") or []),
         metadata={"profile": profile, "methodology_version": content["methodology_version"], "source_commit": profile.get("source_commit")},
     )
+
+
+def evaluate_uzi_ai_readiness(context):
+    rows, symbols, _, source_refs, parent_ids = _snapshot_context(context)
+    content = build_ai_readiness(rows, symbols)
+    return _tier1_snapshot_artifact(
+        artifact_type="ai_readiness",
+        content=content,
+        source_refs=source_refs,
+        parent_ids=parent_ids,
+    )
+
+
+def evaluate_uzi_earnings_preview(context):
+    rows, symbols, _, source_refs, parent_ids = _snapshot_context(context)
+    content = build_earnings_preview(rows, symbols)
+    return _tier1_snapshot_artifact(
+        artifact_type="earnings_preview",
+        content=content,
+        source_refs=source_refs,
+        parent_ids=parent_ids,
+    )
+
+
+def evaluate_uzi_model_update(context):
+    rows, symbols, _, source_refs, parent_ids = _snapshot_context(context)
+    valuation = (context.artifacts("valuation_model") or [None])[-1]
+    inputs = dict(context.node.inputs or {})
+    content = build_model_update(
+        rows,
+        symbols,
+        inputs.get("model_updates") if isinstance(inputs.get("model_updates"), dict) else None,
+        valuation.content if valuation is not None else None,
+    )
+    if valuation is not None:
+        parent_ids.append(valuation.artifact_id)
+        source_refs = _unique_source_refs([*source_refs, *valuation.source_refs])
+    return _tier1_snapshot_artifact(
+        artifact_type="model_update",
+        content=content,
+        source_refs=source_refs,
+        parent_ids=parent_ids,
+    )
+
+
+def evaluate_uzi_returns_attribution(context):
+    query = context.require_artifact("normalized_query")
+    inputs = dict(context.node.inputs or {})
+    holdings = list(
+        query.content.get("portfolio_holdings")
+        or inputs.get("portfolio_holdings")
+        or []
+    )
+    benchmark_return = (
+        query.content.get("benchmark_return")
+        if query.content.get("benchmark_return") is not None
+        else inputs.get("benchmark_return")
+    )
+    content = build_returns_attribution(holdings, benchmark_return)
+    return _tier1_request_artifact(
+        artifact_type="returns_attribution",
+        content=content,
+        query=query,
+    )
+
+
+def evaluate_uzi_holding_rebalance(context):
+    query = context.require_artifact("normalized_query")
+    inputs = dict(context.node.inputs or {})
+    holdings = list(
+        query.content.get("portfolio_holdings")
+        or inputs.get("portfolio_holdings")
+        or []
+    )
+    targets = query.content.get("rebalance_targets") or inputs.get("rebalance_targets")
+    fee_model = query.content.get("fee_model") or inputs.get("fee_model")
+    drift_threshold = (
+        query.content.get("drift_threshold")
+        if query.content.get("drift_threshold") is not None
+        else inputs.get("drift_threshold", 5.0)
+    )
+    content = build_holding_rebalance(
+        holdings,
+        targets if isinstance(targets, dict) else None,
+        drift_threshold,
+        fee_model if isinstance(fee_model, dict) else None,
+    )
+    return _tier1_request_artifact(
+        artifact_type="holding_rebalance",
+        content=content,
+        query=query,
+    )
+
+
+def _tier1_snapshot_artifact(
+    *,
+    artifact_type: str,
+    content: dict,
+    source_refs: list[dict],
+    parent_ids: list[str],
+) -> ArtifactDraft:
+    quality = str(content.get("quality_status") or "data_gap")
+    gaps = list(content.get("data_gap") or [])
+    assumptions = list(content.get("assumption_flags") or [])
+    confidence = 0.0 if quality == "data_gap" else 0.55 if quality in {"degraded", "assumption_only"} else 0.82
+    return ArtifactDraft(
+        artifact_type=artifact_type,
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=confidence,
+        risk_flags=list(dict.fromkeys([*gaps, *assumptions])),
+        metadata={
+            "quality_status": quality,
+            "methodology_version": content.get("methodology_version"),
+        },
+    )
+
+
+def _tier1_request_artifact(*, artifact_type: str, content: dict, query) -> ArtifactDraft:
+    return _tier1_snapshot_artifact(
+        artifact_type=artifact_type,
+        content=content,
+        source_refs=list(query.source_refs),
+        parent_ids=[query.artifact_id],
+    )
+
+
 def compose_uzi_report(context):
     evidence = context.require_artifact("evidence_set")
     valuation = context.require_artifact("valuation_model")
@@ -1578,9 +1739,22 @@ def _number(value: object) -> float | None:
 
 
 def _requested_snapshot_types(*, inputs: dict, sector: str | None) -> list[str]:
+    requested_methods = _unique_strings(inputs.get("requested_methods") or [])
+    method_snapshot_types: dict[str, tuple[str, ...]] = {
+        "ai_readiness": ("market", "chain", "industry", "events", "research", "moat"),
+        "earnings_preview": ("market", "fundamental", "research", "events", "kline"),
+        "model_update": ("market", "fundamental", "valuation", "peers"),
+    }
+    method_required = _unique_strings(
+        [
+            snapshot_type
+            for method in requested_methods
+            for snapshot_type in method_snapshot_types.get(method, ())
+        ]
+    )
     explicit = inputs.get("snapshot_types")
     if isinstance(explicit, list) and explicit:
-        return _unique_strings(explicit)
+        return _unique_strings([*explicit, *method_required])
     intent = str(inputs.get("intent") or "").strip()
     if intent == "sector_research":
         return [
@@ -1589,8 +1763,11 @@ def _requested_snapshot_types(*, inputs: dict, sector: str | None) -> list[str]:
         ]
     if intent == "stock_screen":
         return ["sector", "market", "fundamental", "notice"] if sector else ["market", "fundamental", "notice"]
-    return list(select_profile(inputs).get("snapshot_types") or [
-        "market", "fundamental", "notice", "capital_flow", "sentiment", "events", "lhb"
+    return _unique_strings([
+        *(select_profile(inputs).get("snapshot_types") or [
+            "market", "fundamental", "notice", "capital_flow", "sentiment", "events", "lhb"
+        ]),
+        *method_required,
     ])
 
 

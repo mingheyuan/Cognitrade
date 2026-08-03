@@ -4588,6 +4588,372 @@ select:focus-visible {
   }
 }
 
+/* UZI 3.9.2 Pack-native methods */
+.uzi-methods-page {
+  display: grid;
+  gap: 18px;
+}
+
+.uzi-methods-hero {
+  background:
+    radial-gradient(circle at 86% 15%, rgba(103, 232, 196, 0.12), transparent 28%),
+    linear-gradient(135deg, rgba(13, 42, 36, 0.94), rgba(8, 25, 22, 0.98));
+}
+
+.uzi-mode-tabs {
+  display: inline-flex;
+  width: fit-content;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: rgba(8, 24, 21, 0.82);
+}
+
+.uzi-mode-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 15px;
+  border: 0;
+  border-radius: 9px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.uzi-mode-tabs button.is-active {
+  color: var(--text);
+  background: rgba(86, 205, 171, 0.15);
+  box-shadow: inset 0 0 0 1px rgba(86, 205, 171, 0.22);
+}
+
+.uzi-methods-layout {
+  display: grid;
+  grid-template-columns: minmax(420px, 0.9fr) minmax(480px, 1.1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.uzi-config-card,
+.uzi-result-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: rgba(8, 26, 22, 0.9);
+}
+
+.uzi-config-card {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+}
+
+.uzi-config-card > header,
+.uzi-result-card > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.uzi-config-card h2,
+.uzi-result-card h2 {
+  margin: 5px 0 0;
+  font-size: 19px;
+}
+
+.uzi-config-card label {
+  display: grid;
+  gap: 7px;
+}
+
+.uzi-config-card label > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.uzi-config-card input,
+.uzi-config-card select {
+  min-width: 0;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  background: rgba(3, 16, 14, 0.76);
+}
+
+.uzi-method-picker {
+  display: grid;
+  gap: 9px;
+}
+
+.uzi-method-picker > button {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--muted);
+  text-align: left;
+  background: rgba(4, 20, 17, 0.62);
+}
+
+.uzi-method-picker > button.is-active {
+  border-color: rgba(86, 205, 171, 0.55);
+  color: var(--accent);
+  background: rgba(86, 205, 171, 0.1);
+}
+
+.uzi-method-picker span {
+  display: grid;
+  gap: 4px;
+}
+
+.uzi-method-picker strong {
+  color: var(--text);
+}
+
+.uzi-method-picker small {
+  line-height: 1.45;
+}
+
+.uzi-inline-form,
+.uzi-portfolio-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.uzi-run-button {
+  justify-content: center;
+  width: 100%;
+}
+
+.uzi-holding-list {
+  display: grid;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.uzi-holding-row {
+  display: grid;
+  grid-template-columns: 90px 125px repeat(5, 100px) 34px;
+  gap: 7px;
+  min-width: 850px;
+}
+
+.uzi-holding-row input {
+  height: 38px;
+  padding: 0 9px;
+}
+
+.uzi-holding-row > button {
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.uzi-policy-note,
+.uzi-gap-list,
+.uzi-no-gap {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.uzi-result-card > header {
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.uzi-result-body {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+}
+
+.uzi-result-headline {
+  display: grid;
+  gap: 5px;
+}
+
+.uzi-result-headline > span {
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.uzi-result-headline > strong {
+  font-size: 24px;
+}
+
+.uzi-result-headline > small {
+  color: var(--muted);
+}
+
+.uzi-gate-list {
+  display: grid;
+  gap: 8px;
+}
+
+.uzi-gate-list article {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+}
+
+.uzi-gate-list article.is-pass {
+  border-color: rgba(86, 205, 171, 0.35);
+}
+
+.uzi-gate-list article > div {
+  display: grid;
+  gap: 4px;
+}
+
+.uzi-gate-list small {
+  color: var(--muted);
+}
+
+.uzi-mini-table {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.uzi-mini-table > div {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) minmax(110px, 0.8fr);
+  gap: 12px;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--border);
+}
+
+.uzi-mini-table > div:first-child {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.uzi-mini-table > div:last-child {
+  border-bottom: 0;
+}
+
+.uzi-scenario-row,
+.uzi-result-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.uzi-scenario-row article,
+.uzi-result-kpis article {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+}
+
+.uzi-scenario-row span,
+.uzi-result-kpis span {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.uzi-scenario-row small {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.uzi-result-kpis strong {
+  font-size: 20px;
+}
+
+.uzi-gap-list {
+  flex-wrap: wrap;
+  padding: 11px 12px;
+  border-radius: 10px;
+  color: #d6b66a;
+  background: rgba(214, 182, 106, 0.08);
+}
+
+.uzi-gap-list p {
+  flex-basis: 100%;
+  margin: 0 0 0 22px;
+  color: var(--muted);
+}
+
+.uzi-no-gap {
+  color: var(--accent);
+}
+
+.uzi-empty {
+  display: grid;
+  place-items: center;
+  min-height: 430px;
+  padding: 40px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.uzi-empty strong {
+  margin-top: 12px;
+  color: var(--text);
+}
+
+.uzi-empty p {
+  max-width: 440px;
+  line-height: 1.65;
+}
+
+@media (max-width: 1180px) {
+  .uzi-methods-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 680px) {
+  .uzi-mode-tabs,
+  .uzi-mode-tabs button {
+    width: 100%;
+  }
+
+  .uzi-mode-tabs button {
+    justify-content: center;
+  }
+
+  .uzi-inline-form,
+  .uzi-portfolio-settings,
+  .uzi-scenario-row,
+  .uzi-result-kpis {
+    grid-template-columns: 1fr;
+  }
+
+  .uzi-mini-table {
+    overflow-x: auto;
+  }
+
+  .uzi-mini-table > div {
+    min-width: 520px;
+  }
+}
+
 .muted-icon {
   color: var(--muted-dim);
 }

@@ -52,6 +52,18 @@ _FUND_KEYWORDS = (
     "重仓基金",
     "基金持仓",
 )
+_PORTFOLIO_KEYWORDS = (
+    "portfolio",
+    "returns attribution",
+    "return attribution",
+    "rebalance",
+    "组合",
+    "收益归因",
+    "业绩归因",
+    "再平衡",
+    "调仓",
+    "持仓权重",
+)
 _FUND_CATEGORY_ALIASES = {
     "股票型": "股票型",
     "混合型": "混合型",
@@ -72,6 +84,20 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
     slots = dict(request.get("slots") or {})
     constraints = dict(request.get("constraints") or {})
     runtime_context = dict(request.get("_runtime_context") or {})
+    portfolio_holdings = [
+        dict(item)
+        for item in (
+            constraints.get("portfolio_holdings")
+            or slots.get("portfolio_holdings")
+            or []
+        )
+        if isinstance(item, dict)
+    ]
+    if portfolio_holdings:
+        slots["portfolio_holdings"] = portfolio_holdings
+    for field_name in ("benchmark_return", "rebalance_targets", "drift_threshold", "fee_model"):
+        if field_name in constraints:
+            slots[field_name] = constraints[field_name]
     fund_category = _fund_category(query, slots=slots, constraints=constraints)
     supplied_fund_codes = [
         *_as_list(slots.get("fund_codes")),
@@ -118,6 +144,7 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
         sector=sector,
         fund_codes=fund_codes,
         fund_category=fund_category,
+        portfolio_holdings=portfolio_holdings,
     )
     if intent is None:
         return _clarify(
@@ -152,6 +179,15 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
                 "ambiguous_fund_terms": fund_resolution.ambiguous_terms,
                 "provider_error": fund_resolution.provider_error,
             },
+        )
+    if intent == "portfolio_research" and not portfolio_holdings:
+        return _clarify(
+            ["portfolio_holdings"],
+            query=query,
+            intent=intent,
+            slots=slots,
+            constraints=constraints,
+            context={"reason": "portfolio_holdings_missing"},
         )
     if intent == "stock_check" and not symbols and not slots.get("snapshots"):
         if _is_contextual_continuation(query, request, runtime_context):
@@ -211,6 +247,7 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
             "fund_matches": fund_resolution.matches,
             "ambiguous_fund_terms": fund_resolution.ambiguous_terms,
             "fund_provider_error": fund_resolution.provider_error,
+            "portfolio_holding_count": len(portfolio_holdings),
         },
     }
 
@@ -300,8 +337,11 @@ def _infer_intent(
     sector: str | None,
     fund_codes: list[str],
     fund_category: str | None,
+    portfolio_holdings: list[dict[str, Any]],
 ) -> str | None:
     lowered = query.casefold()
+    if portfolio_holdings or _contains(query, lowered, _PORTFOLIO_KEYWORDS):
+        return "portfolio_research"
     if fund_codes or fund_category or _contains(query, lowered, _FUND_KEYWORDS):
         return "fund_research"
     if _contains(query, lowered, _REVIEW_KEYWORDS):

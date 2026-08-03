@@ -86,7 +86,8 @@ The response identifies the canonical protocol and graph state:
 
 The installed `finance_ashare` Pack accepts these intents through the same
 endpoint: `stock_check`, `stock_compare`, `stock_screen`, `fund_research`,
-`sector_research`, `review_thesis`, and `distill_kol_logic`. When `intent` is
+`portfolio_research`, `sector_research`, `review_thesis`, and
+`distill_kol_logic`. When `intent` is
 omitted, Pack Task Intake resolves it from the query or returns a structured
 clarification instead of silently defaulting to stock analysis.
 
@@ -125,6 +126,44 @@ Artifacts. Ranking requires at least two comparable funds and at least 60%
 observed scoring-field coverage. Missing NAV, ranking, fee, or disclosed
 holdings fields remain `data_gap`; the service does not insert simulated or
 neutral values.
+
+### UZI Tier-1 and portfolio research
+
+Stock intents accept `requested_methods` values `ai_readiness`,
+`earnings_preview`, and `model_update`. `model_update` additionally requires a
+non-empty `model_updates` object; the service does not infer a demo delta.
+
+`portfolio_research` produces `returns_attribution` and `holding_rebalance`
+Artifacts from explicit holdings:
+
+```http
+POST /api/v1/runs
+Content-Type: application/json
+
+{
+  "intent": "portfolio_research",
+  "user_query": "对持仓做收益归因和再平衡",
+  "constraints": {
+    "portfolio_holdings": [
+      {"ticker": "600519", "weight": 60, "return_pct": 8, "value": 600000, "market": "A", "price": 1500},
+      {"ticker": "300750", "weight": 40, "return_pct": -2, "value": 400000, "market": "A", "price": 200}
+    ],
+    "benchmark_return": 3,
+    "rebalance_targets": {"600519": 50, "300750": 50},
+    "drift_threshold": 5,
+    "fee_model": {
+      "A": {"commission_rate": 0.00025, "buy_stamp_rate": 0, "sell_stamp_rate": 0.0005}
+    }
+  }
+}
+```
+
+`weight` values are normalized but must be explicit and have a positive total.
+If a holding lacks `return_pct`, its contribution remains null, observed-weight
+coverage is reduced, and no complete portfolio return or excess return is
+reported. `rebalance_targets` must cover every holding when supplied. Without
+targets, equal weight is an explicit `assumption_only` policy. Without a
+request-supplied `fee_model`, the service does not estimate transaction cost.
 
 | Method | Path | Canonical source |
 | --- | --- | --- |

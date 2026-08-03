@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["methodology_version", "method", "updates", "impacts", "quality_status", "data_gap", "assumption_flags", "generated_at"],
+  "properties": {
+    "methodology_version": {"type": "string"},
+    "method": {"const": "model_update"},
+    "updates": {"type": "array", "items": {"type": "object"}},
+    "impacts": {"type": "array", "items": {"type": "object"}},
+    "quality_status": {"enum": ["available", "degraded", "data_gap", "assumption_only"]},
+    "data_gap": {"type": "array", "items": {"type": "string"}},
+    "assumption_flags": {"type": "array", "items": {"type": "string"}},
+    "generated_at": {"type": "string"}
+  }
+}
