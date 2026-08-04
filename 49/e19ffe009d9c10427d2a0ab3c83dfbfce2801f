@@ -1,0 +1,95 @@
+.env.example
+  s_a6a8a3a6f43b3c::t_e113719cd29fcd 22-27
+domain_packs/finance_ashare/artifact_schemas/accretion_dilution.json
+  s_a6a8a3a6f43b3c::t_e26eee9c9b44b4 1
+domain_packs/finance_ashare/artifact_schemas/catalyst_calendar.json
+  s_a6a8a3a6f43b3c::t_c7251721e0f1a7 1
+domain_packs/finance_ashare/artifact_schemas/dd_checklist.json
+  s_a6a8a3a6f43b3c::t_c7424ae9dca942 1
+domain_packs/finance_ashare/artifact_schemas/earnings_review.json
+  s_a6a8a3a6f43b3c::t_f5382b01d79dff 1
+domain_packs/finance_ashare/artifact_schemas/ic_memo.json
+  s_a6a8a3a6f43b3c::t_d8d566a04b33fa 1
+domain_packs/finance_ashare/artifact_schemas/initiation_report.json
+  s_a6a8a3a6f43b3c::t_e734f095004af9 1
+domain_packs/finance_ashare/artifact_schemas/morning_note.json
+  s_a6a8a3a6f43b3c::t_cc69973495ce45 1
+domain_packs/finance_ashare/artifact_schemas/porter_bcg.json
+  s_a6a8a3a6f43b3c::t_dfc2bfc3698e47 1
+domain_packs/finance_ashare/artifact_schemas/portfolio_rebalance.json
+  s_a6a8a3a6f43b3c::t_f2cec02fe3dda8 1
+domain_packs/finance_ashare/artifact_schemas/quick_lbo.json
+  s_a6a8a3a6f43b3c::t_93d5373e8a5665 1
+domain_packs/finance_ashare/artifact_schemas/segmental_model.json
+  s_a6a8a3a6f43b3c::t_5292a9e749164f 1
+domain_packs/finance_ashare/artifact_schemas/thesis_tracker.json
+  s_a6a8a3a6f43b3c::t_db0cbdb658d8ba 1
+domain_packs/finance_ashare/artifact_schemas/three_statement_model.json
+  s_a6a8a3a6f43b3c::t_df4e7d6bd64521 1
+domain_packs/finance_ashare/artifact_schemas/unit_economics.json
+  s_a6a8a3a6f43b3c::t_9a9a307d9d7fcc 1
+domain_packs/finance_ashare/artifact_schemas/value_creation_plan.json
+  s_a6a8a3a6f43b3c::t_50ac4b694a95d0 1
+domain_packs/finance_ashare/domain.yaml
+  s_a6a8a3a6f43b3c::t_52de873bbc3909 2,34-48,220,225,346,568-750,1031-1120,1168-1171,1190,1196,1200-1201,1206-1221,1234,1274-1275,1280-1282,1285-1286,1291-1293,1296-1297,1302-1304,1306-1307,1312-1314,1317-1318,1323-1325,1327-1328,1333-1335,1337-1396,1525-1535
+domain_packs/finance_ashare/migration/uzi_3_9_2_capability_ledger.yaml
+  s_a6a8a3a6f43b3c::t_e85f98c4970eb3 18-53,66-72,76-77,80-84,90,93-98,100-101,111-118,121-126,175-200
+domain_packs/finance_ashare/migration/uzi_source_mapping.yaml
+  s_a6a8a3a6f43b3c::t_3e4cad02276cfa 4,190,192-198,301-307,311-317,321-327,331-334,336-407,409-448
+domain_packs/finance_ashare/subagents/runtime.py
+  s_a6a8a3a6f43b3c::t_9d3479bf2bca06 26,29-32,150-164,989-1069,1119-1144,1874-1889
+domain_packs/finance_ashare/subagents/task_intake.py
+  s_a6a8a3a6f43b3c::t_6bd8d95b2837d8 98-107
+domain_packs/finance_ashare/subagents/uzi_advanced_methodology.py
+  s_a6a8a3a6f43b3c::t_3946f7f652dcc5 40-41
+domain_packs/finance_ashare/subagents/uzi_method_products.py
+  s_a6a8a3a6f43b3c::t_03500b46ba53d3 1-740
+domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py
+  s_a6a8a3a6f43b3c::t_f49b10ef84a782 492-579,865
+frontend/src/components/UziMethods.tsx
+  s_a6a8a3a6f43b3c::t_e34602c17758af 16,32-33,37,40,44-57,60-65,70,79,86,103-105,107,126,146-155,164,172,182,193-194,209-210,222,229,236-278,302-311,316-327,378-388
+frontend/src/styles.css
+  s_a6a8a3a6f43b3c::t_45317a8459ca80 4689-4692,4734-4751,4765,4767,4869-4873
+plan/uzi-3.9.2-domainpack-migration.md
+  s_a6a8a3a6f43b3c::t_30f9a3b5f3f6ee 37,149,162-163,170-173,179,201-202
+research_system/adapters/vendors/data_source_registry.py
+  s_a6a8a3a6f43b3c::t_6b2932e5d0de16 159,165
+research_system/adapters/vendors/provider_registry.py
+  s_a6a8a3a6f43b3c::t_38aa3d721595d8 73-78,263-272
+research_system/api/validation.py
+  s_a6a8a3a6f43b3c::t_1117b1086d47c7 33,38,52-53,63,65,67-77,105,138-139,309-310,461,513-712
+research_system/runtime/agent_os.py
+  s_a6a8a3a6f43b3c::t_27189e302b54e6 615,618-620
+research_system/runtime/config/settings_env.py
+  s_a6a8a3a6f43b3c::t_c8eb4deb5c0de9 77-86
+research_system/runtime/diagnostics/status/provider_health.py
+  s_a6a8a3a6f43b3c::t_cfc67e8347c98b 19,53-57
+research_system/runtime/planning/capability_planner.py
+  s_a6a8a3a6f43b3c::t_75a9f78c318e18 637
+research_system/runtime/platform/settings.py
+  s_a6a8a3a6f43b3c::t_803627359b4dd2 45-47
+research_system/schemas/snapshots.py
+  s_a6a8a3a6f43b3c::t_a06b0976162fe6 36-37
+tests/test_provider_health.py
+  s_a6a8a3a6f43b3c::t_3dc8a75a606567 11,32-48
+tests/test_uzi_finance_pack.py
+  s_a6a8a3a6f43b3c::t_d8c25ee7154ad8 301,303,354-357,432,601,800,834-836,842-844
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "49e19ffe009d9c10427d2a0ab3c83dfbfce2801f",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
