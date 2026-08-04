@@ -1,0 +1,67 @@
+README.md
+  s_a6a8a3a6f43b3c::t_14d9cca26f583d 34-46
+api-doc/api-v1.md
+  s_a6a8a3a6f43b3c::t_ec147fdd87b4e8 128-135
+domain_packs/finance_ashare/artifact_schemas/fund_analysis.json
+  s_a6a8a3a6f43b3c::t_194795957d2093 10-22
+domain_packs/finance_ashare/artifact_schemas/fund_snapshot.json
+  s_a6a8a3a6f43b3c::t_93eba63508b970 10-23
+domain_packs/finance_ashare/domain.yaml
+  s_a6a8a3a6f43b3c::t_48f129c37ed59f 311,326
+domain_packs/finance_ashare/migration/uzi_3_9_2_capability_ledger.yaml
+  s_a6a8a3a6f43b3c::t_bd7b78b4cea055 152,163-165,171-184
+domain_packs/finance_ashare/skills/fund_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_5ea7ba57fb2866 58-61,76-79,190-265,471-709,825
+domain_packs/finance_ashare/subagents/fund_methodology.py
+  s_a6a8a3a6f43b3c::t_2380ef5a0e74eb 9,12-15,142,179-186,190,212-216,247-248,261-263
+domain_packs/finance_ashare/subagents/runtime.py
+  s_a6a8a3a6f43b3c::t_1f9f29e6b8d294 261,286-289
+domain_packs/finance_ashare/tools/fund_data_provider.yaml
+  s_a6a8a3a6f43b3c::t_7bf467cdb073ee 4
+domain_packs/finance_ashare/tools/fund_master.py
+  s_a6a8a3a6f43b3c::t_b31f392765271c 66
+frontend/src/components/Funds.test.tsx
+  s_a6a8a3a6f43b3c::t_0a10dd1d0f7d84 41-53,83-85
+frontend/src/components/Funds.tsx
+  s_a6a8a3a6f43b3c::t_a0b15d230072a3 34-37,198-204,218-234,239,261-278
+frontend/src/styles.css
+  s_a6a8a3a6f43b3c::t_166a6f6c906eea 8681-8719,8876-8879
+plan/uzi-3.9.2-domainpack-migration.md
+  s_a6a8a3a6f43b3c::t_543a19073c0b93 92-94,100,161,180-181,183,207
+research_system/adapters/vendors/data_source_registry.py
+  s_a6a8a3a6f43b3c::t_7bf4f9ff244e63 80,167-179
+research_system/adapters/vendors/provider_registry.py
+  s_a6a8a3a6f43b3c::t_cc21ae709e1c17 273-290
+research_system/runtime/diagnostics/status/__init__.py
+  s_a6a8a3a6f43b3c::t_17a345273a3900 7,9,17-20,25-28
+research_system/runtime/diagnostics/status/provider_health.py
+  s_a6a8a3a6f43b3c::t_b8bb58b7a9eaeb 19,22
+research_system/runtime/diagnostics/status/uzi_provider_smoke.py
+  s_a6a8a3a6f43b3c::t_6e0385144258f7 1-261
+scripts/deploy.sh
+  s_a6a8a3a6f43b3c::t_e2fecf51ce1fb9 21-23,41,69,198,640-656
+tests/test_fund_research.py
+  s_a6a8a3a6f43b3c::t_450649127609bd 76-138,180-203,271-305,344-347,364-367,376-379,397-398
+tests/test_provider_health.py
+  s_a6a8a3a6f43b3c::t_b48acea5f0568b 34-35
+tests/test_uzi_provider_smoke.py
+  s_a6a8a3a6f43b3c::t_cf86dcc3985fef 1-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "f2af50108d42882fa9ecdc68866f531b9fc83b8e",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
