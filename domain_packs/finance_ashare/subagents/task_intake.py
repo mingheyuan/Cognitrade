@@ -95,7 +95,16 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
     ]
     if portfolio_holdings:
         slots["portfolio_holdings"] = portfolio_holdings
-    for field_name in ("benchmark_return", "rebalance_targets", "drift_threshold", "fee_model"):
+    for field_name in (
+        "benchmark_return",
+        "rebalance_targets",
+        "asset_class_targets",
+        "drift_threshold",
+        "fee_model",
+        "requested_methods",
+        "model_updates",
+        "method_assumptions",
+    ):
         if field_name in constraints:
             slots[field_name] = constraints[field_name]
     fund_category = _fund_category(query, slots=slots, constraints=constraints)

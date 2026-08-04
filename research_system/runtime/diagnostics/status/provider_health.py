@@ -16,7 +16,7 @@ class ProviderHealthService:
         self.network_profile = NetworkProfile(timeout_seconds=settings.provider_probe_timeout_seconds)
 
     def build_report(self) -> dict[str, Any]:
-        market_dims = ("market", "fundamental", "notice", "sector", "lhb", "capital_flow", "sentiment", "events", "policy")
+        market_dims = ("market", "fundamental", "notice", "sector", "lhb", "capital_flow", "sentiment", "events", "policy", "contests")
         provider_rows = []
         for dim in market_dims:
             market = "cn_sector" if dim in {"sector", "policy"} else "cn_equity"
@@ -50,4 +50,9 @@ class ProviderHealthService:
                 for item in self.data_sources.list_all()
             ],
             "network_profile": self.network_profile.probe_defaults(),
+            "sensitive_sources": {
+                "enabled": self.settings.sensitive_sources_enabled,
+                "allowlist": list(self.settings.sensitive_source_allowlist),
+                "xueqiu_cookie_configured": bool(self.settings.xueqiu_cookie),
+            },
         }

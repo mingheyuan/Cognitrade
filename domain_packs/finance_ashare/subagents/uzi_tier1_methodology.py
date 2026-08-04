@@ -489,6 +489,94 @@ def build_holding_rebalance(
     }
 
 
+def build_portfolio_rebalance(
+    holdings: list[Mapping[str, Any]],
+    asset_class_targets: Mapping[str, Any] | None,
+    drift_threshold: Any = 5.0,
+) -> dict[str, Any]:
+    """Rebalance at asset-class level using only explicit policy targets.
+
+    Unlike holding-level equal-weight analysis, this method never invents a
+    strategic asset allocation. Missing classifications or targets stop the
+    calculation and are returned as data gaps.
+    """
+
+    if not holdings:
+        return _portfolio_gap("portfolio_rebalance", "portfolio_holdings_missing")
+    normalized, errors = _normalize_holdings(holdings)
+    if errors:
+        return _portfolio_gap("portfolio_rebalance", *errors)
+    threshold = _number(drift_threshold)
+    if threshold is None or threshold < 0:
+        return _portfolio_gap("portfolio_rebalance", "drift_threshold_invalid")
+    missing_classes = [
+        str(row["ticker"])
+        for row in normalized
+        if not str(row.get("asset_class") or "").strip()
+    ]
+    if missing_classes:
+        return _portfolio_gap(
+            "portfolio_rebalance",
+            *(f"asset_class_missing:{ticker}" for ticker in missing_classes),
+        )
+    if not asset_class_targets:
+        return _portfolio_gap("portfolio_rebalance", "asset_class_targets_missing")
+
+    classes = {str(row.get("asset_class") or "").strip() for row in normalized}
+    raw_targets = {
+        str(key).strip(): _number(value)
+        for key, value in dict(asset_class_targets).items()
+        if str(key).strip()
+    }
+    if set(raw_targets) != classes:
+        return _portfolio_gap(
+            "portfolio_rebalance",
+            "asset_class_targets_must_cover_observed_classes_exactly",
+        )
+    if any(value is None or value < 0 for value in raw_targets.values()):
+        return _portfolio_gap("portfolio_rebalance", "asset_class_targets_invalid")
+    target_total = sum(float(value) for value in raw_targets.values() if value is not None)
+    if target_total <= 0:
+        return _portfolio_gap("portfolio_rebalance", "asset_class_targets_total_must_be_positive")
+    targets = {key: float(value) / target_total for key, value in raw_targets.items() if value is not None}
+
+    current: dict[str, float] = {asset_class: 0.0 for asset_class in classes}
+    for holding in normalized:
+        current[str(holding["asset_class"]).strip()] += float(holding["normalized_weight"])
+    total_value, value_gap = _portfolio_total_value(normalized)
+    rows: list[dict[str, Any]] = []
+    for asset_class in sorted(classes):
+        current_weight = current[asset_class]
+        target_weight = targets[asset_class]
+        drift_pp = (current_weight - target_weight) * 100
+        delta_weight = target_weight - current_weight
+        breached = abs(drift_pp) > threshold
+        rows.append(
+            {
+                "asset_class": asset_class,
+                "current_weight": round(current_weight, 8),
+                "target_weight": round(target_weight, 8),
+                "drift_pp": round(drift_pp, 6),
+                "breached": breached,
+                "action": "increase" if breached and delta_weight > 0 else "decrease" if breached and delta_weight < 0 else "hold",
+                "suggested_value_change": round(delta_weight * total_value, 4) if breached and total_value is not None else None,
+            }
+        )
+    data_gap = [value_gap] if value_gap else []
+    return {
+        "methodology_version": UZI_TIER1_METHOD_VERSION,
+        "method": "portfolio_rebalance",
+        "target_mode": "explicit_asset_class_targets",
+        "drift_threshold_pp": threshold,
+        "asset_classes": rows,
+        "portfolio_value": total_value,
+        "quality_status": "degraded" if data_gap else "available",
+        "data_gap": data_gap,
+        "assumption_flags": ["user_supplied_strategic_asset_allocation"],
+        "generated_at": _now(),
+    }
+
+
 def _portfolio_gap(method: str, *reasons: str) -> dict[str, Any]:
     return {
         "methodology_version": UZI_TIER1_METHOD_VERSION,
@@ -774,5 +862,6 @@ __all__ = [
     "build_earnings_preview",
     "build_holding_rebalance",
     "build_model_update",
+    "build_portfolio_rebalance",
     "build_returns_attribution",
 ]

@@ -23,7 +23,12 @@ from domain_packs.finance_ashare.subagents.uzi_tier1_methodology import (
     build_earnings_preview,
     build_holding_rebalance,
     build_model_update,
+    build_portfolio_rebalance,
     build_returns_attribution,
+)
+from domain_packs.finance_ashare.subagents.uzi_method_products import (
+    METHOD_ARTIFACT_TYPES,
+    build_method_product,
 )
 from research_system.adapters.vendors.akshare_utils import coerce_numeric
 from research_system.services.methodologies import (
@@ -140,6 +145,21 @@ def normalize_query(context):
             "fee_model": dict(
                 request.content.get("fee_model")
                 or inputs.get("fee_model")
+                or {}
+            ) or None,
+            "asset_class_targets": dict(
+                request.content.get("asset_class_targets")
+                or inputs.get("asset_class_targets")
+                or {}
+            ) or None,
+            "requested_methods": _unique_strings(
+                request.content.get("requested_methods")
+                or inputs.get("requested_methods")
+                or []
+            ),
+            "method_assumptions": dict(
+                request.content.get("method_assumptions")
+                or inputs.get("method_assumptions")
                 or {}
             ) or None,
         },
@@ -966,6 +986,87 @@ def evaluate_uzi_model_update(context):
     )
 
 
+def _evaluate_uzi_method_product(context, method_id: str) -> ArtifactDraft:
+    rows, symbols, _, source_refs, parent_ids = _snapshot_context(context)
+    inputs = dict(context.node.inputs or {})
+    valuation = (context.artifacts("valuation_model") or [None])[-1]
+    risk = (context.artifacts("risk_scan") or [None])[-1]
+    content = build_method_product(
+        method_id,
+        rows,
+        symbols,
+        inputs,
+        valuation.content if valuation is not None else None,
+        risk.content if risk is not None else None,
+    )
+    for artifact in (valuation, risk):
+        if artifact is not None:
+            parent_ids.append(artifact.artifact_id)
+            source_refs = _unique_source_refs([*source_refs, *artifact.source_refs])
+    return _tier1_snapshot_artifact(
+        artifact_type=METHOD_ARTIFACT_TYPES[method_id],
+        content=content,
+        source_refs=source_refs,
+        parent_ids=list(dict.fromkeys(parent_ids)),
+    )
+
+
+def evaluate_uzi_three_statement(context):
+    return _evaluate_uzi_method_product(context, "three_statement")
+
+
+def evaluate_uzi_quick_lbo(context):
+    return _evaluate_uzi_method_product(context, "quick_lbo")
+
+
+def evaluate_uzi_accretion_dilution(context):
+    return _evaluate_uzi_method_product(context, "accretion_dilution")
+
+
+def evaluate_uzi_segmental(context):
+    return _evaluate_uzi_method_product(context, "segmental")
+
+
+def evaluate_uzi_initiation_report(context):
+    return _evaluate_uzi_method_product(context, "initiation_report")
+
+
+def evaluate_uzi_earnings_review(context):
+    return _evaluate_uzi_method_product(context, "earnings_review")
+
+
+def evaluate_uzi_catalyst_calendar(context):
+    return _evaluate_uzi_method_product(context, "catalyst_calendar")
+
+
+def evaluate_uzi_thesis_tracker(context):
+    return _evaluate_uzi_method_product(context, "thesis_tracker")
+
+
+def evaluate_uzi_morning_note(context):
+    return _evaluate_uzi_method_product(context, "morning_note")
+
+
+def evaluate_uzi_ic_memo(context):
+    return _evaluate_uzi_method_product(context, "ic_memo")
+
+
+def evaluate_uzi_porter_bcg(context):
+    return _evaluate_uzi_method_product(context, "porter_bcg")
+
+
+def evaluate_uzi_dd_checklist(context):
+    return _evaluate_uzi_method_product(context, "dd_checklist")
+
+
+def evaluate_uzi_unit_economics(context):
+    return _evaluate_uzi_method_product(context, "unit_economics")
+
+
+def evaluate_uzi_value_creation_plan(context):
+    return _evaluate_uzi_method_product(context, "value_creation_plan")
+
+
 def evaluate_uzi_returns_attribution(context):
     query = context.require_artifact("normalized_query")
     inputs = dict(context.node.inputs or {})
@@ -1010,6 +1111,32 @@ def evaluate_uzi_holding_rebalance(context):
     )
     return _tier1_request_artifact(
         artifact_type="holding_rebalance",
+        content=content,
+        query=query,
+    )
+
+
+def evaluate_uzi_portfolio_rebalance(context):
+    query = context.require_artifact("normalized_query")
+    inputs = dict(context.node.inputs or {})
+    holdings = list(
+        query.content.get("portfolio_holdings")
+        or inputs.get("portfolio_holdings")
+        or []
+    )
+    targets = query.content.get("asset_class_targets") or inputs.get("asset_class_targets")
+    drift_threshold = (
+        query.content.get("drift_threshold")
+        if query.content.get("drift_threshold") is not None
+        else inputs.get("drift_threshold", 5.0)
+    )
+    content = build_portfolio_rebalance(
+        holdings,
+        targets if isinstance(targets, dict) else None,
+        drift_threshold,
+    )
+    return _tier1_request_artifact(
+        artifact_type="portfolio_rebalance",
         content=content,
         query=query,
     )
@@ -1744,6 +1871,22 @@ def _requested_snapshot_types(*, inputs: dict, sector: str | None) -> list[str]:
         "ai_readiness": ("market", "chain", "industry", "events", "research", "moat"),
         "earnings_preview": ("market", "fundamental", "research", "events", "kline"),
         "model_update": ("market", "fundamental", "valuation", "peers"),
+        "three_statement": ("fundamental",),
+        "quick_lbo": ("fundamental",),
+        "lbo": ("fundamental",),
+        "accretion_dilution": ("fundamental",),
+        "ma_accretion": ("fundamental",),
+        "segmental": ("fundamental",),
+        "initiation_report": ("market", "fundamental", "chain", "industry", "events", "valuation"),
+        "earnings_review": ("fundamental", "research"),
+        "catalyst_calendar": ("events",),
+        "thesis_tracker": ("market", "fundamental", "valuation"),
+        "morning_note": ("market", "capital_flow", "sentiment", "events"),
+        "ic_memo": ("market", "fundamental", "chain", "industry", "events", "valuation", "governance", "trap"),
+        "porter_bcg": ("moat", "industry", "peers", "chain"),
+        "dd_checklist": ("fundamental", "valuation", "industry", "peers", "chain", "governance", "notice", "policy", "sentiment", "events", "trap"),
+        "unit_economics": ("fundamental",),
+        "value_creation_plan": ("fundamental",),
     }
     method_required = _unique_strings(
         [

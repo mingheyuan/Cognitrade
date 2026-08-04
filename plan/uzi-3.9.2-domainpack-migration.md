@@ -34,7 +34,7 @@
 - 研究工作流 7：首次覆盖、财报解读、催化剂日历、投资逻辑追踪、晨报、量化筛选、行业综述；
 - 深度决策 6：IC Memo、Porter/BCG、DD、单位经济、VCP、组合再平衡。
 
-再加 Tier‑1 的 AI Readiness、Earnings Preview、Model Update、Returns Attribution、逐持仓 Rebalance，共 **23 个不同实现语义**。其中“组合再平衡”和“逐持仓再平衡”不是同一个能力，Cognitrade 账本按 23 个实现单元验收，同时保留上游“22”的宣传口径注记。
+再加 Tier‑1 的 AI Readiness、Earnings Preview、Model Update、Returns Attribution、逐持仓 Rebalance，共 **23 个不同实现语义**。其中“组合再平衡”和“逐持仓再平衡”不是同一个能力，Cognitrade 账本按 23 个实现单元验收，同时保留上游“22”的宣传口径注记。`segmental-model` 是上游额外命令级产品，虽未进入 23 方法宣传清单，也已作为独立 Capability 和 Artifact 落地，避免只核对方法清单时遗漏。
 
 ### 2.2 UZI 3.9.2 必须对齐的回归修复
 
@@ -146,7 +146,7 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 - [x] OCF 与 FCF 分离，OCF 缺失规则不再默认通过；
 - [x] 所有评审规则字段均进入证据门，lambda 默认值不再当作观测值参与投票；
 - [x] 更新 replay fixture 版本与哈希；
-- [ ] 将上游 8 个 3.9.2 回归逐个转换为 Pack 原生测试。
+- [x] 将上游 8 个 3.9.2 回归逐个映射为 Pack 原生测试或明确拒绝迁入的运行边界测试。
 
 ### Phase B：基金研究 MVP
 
@@ -159,24 +159,24 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 
 ### Phase C：23 个方法完整能力化
 
-- [ ] 按账本逐个实现 Pack-native capability；
-- [ ] 每个方法补齐 input contract、quality gate、fixture 和等价性级别；
+- [x] 按账本逐个实现 Pack-native capability；
+- [x] 每个方法补齐 input contract、quality gate、fixture 和等价性级别；
 - [x] Tier‑1 的逐持仓 rebalance 已与旧组合再平衡语义拆开；旧组合再平衡仍单独保留在账本；
 - [x] Tier‑1 五方法全部提供专属 Capability、Artifact、质量门、测试与 Web 视图；
 - [x] 新增 `portfolio_research`，组合收益缺失不补零、费用模型不硬编码、等权目标标记为策略假设；
 
 ### Phase D：20 个命令的 Web/Intent 等价交付
 
-- [ ] 快速扫描、面板、陷阱、DCF/Comps/LBO 等转为 requested methods；
-- [ ] 首次覆盖、财报、催化剂、thesis、DD、IC Memo 等转为专属交付链；
-- [ ] 组合、对比、归因与再平衡接入现有模拟盘/回测边界；
-- [ ] 删除所有临时兼容入口。
+- [x] 快速扫描、面板、陷阱、DCF/Comps/LBO 等转为 requested methods；
+- [x] 首次覆盖、财报、催化剂、thesis、DD、IC Memo 等转为独立 Artifact 交付链；
+- [x] 组合、对比、归因与两类再平衡接入 Agent OS 与现有 Web 边界；
+- [x] 不迁入 UZI CLI、缓存、HTML 服务或临时兼容入口。
 
 ### Phase E：Provider 完整性与敏感源开关
 
 - [ ] 为 22 个维度逐个做真实 provider smoke；
 - [ ] 公开 provider 全部具备失败降级与来源引用；
-- [ ] 浏览器/登录态源默认关闭并有管理员预检；
+- [x] 登录态源默认关闭，并要求总开关、来源 allowlist 和 Cookie 三项同时配置；
 - [ ] 端到端验证 API、SSE、ArtifactBoard 与 Web 一致。
 
 ## 8. 完成定义
@@ -198,4 +198,6 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 - DomainPack 清单：`domain_packs/finance_ashare/domain.yaml`
 - 基金方法：`domain_packs/finance_ashare/subagents/fund_methodology.py`
 - UZI 方法：`domain_packs/finance_ashare/subagents/uzi_methodology.py`
+- UZI 独立方法产品：`domain_packs/finance_ashare/subagents/uzi_method_products.py`
+- UZI Tier‑1 与组合方法：`domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py`
 - UZI 规则：`domain_packs/finance_ashare/subagents/uzi_panel_rules.py`

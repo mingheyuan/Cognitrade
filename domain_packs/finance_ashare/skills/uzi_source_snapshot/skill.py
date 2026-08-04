@@ -4,12 +4,14 @@ from datetime import date, timedelta
 from typing import Any
 
 import akshare as ak
+import requests
 
 from research_system.adapters.vendors.akshare_catalyst_adapter import AkShareCatalystAdapter
 from research_system.adapters.vendors.akshare_market_adapter import AkShareMarketAdapter
 from research_system.adapters.vendors.akshare_sector_adapter import AkShareSectorAdapter
 from research_system.adapters.vendors.akshare_utils import call_with_retry, coerce_numeric, normalize_value
 from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
+from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
 from domain_packs.finance_ashare.skills.fundamental_snapshot.skill import FundamentalSnapshotSkill
 
 
@@ -24,14 +26,18 @@ class UziSourceSnapshotSkill:
     skill_name = "uzi_source_snapshot_skill"
     snapshot_type = ""
 
+    def __init__(self, provider_registry: VendorProviderRegistry | None = None) -> None:
+        self.provider_registry = provider_registry
+
     def run(self, *, query: str, symbol: str | None = None) -> dict[str, Any]:
         snapshot_date = date.today().isoformat()
+        provider = self._selected_provider()
         source = SnapshotSource(
             skill=self.skill_name,
-            vendor="finance_pack",
+            vendor=provider.vendor_name if provider is not None else "finance_pack",
             from_cache=False,
-            provider_id=f"finance_pack.{self.snapshot_type or 'unknown'}",
-            source_id="finance_pack",
+            provider_id=provider.provider_id if provider is not None else f"finance_pack.{self.snapshot_type or 'unknown'}",
+            source_id=provider.source_id if provider is not None else "finance_pack",
             chain_position=0,
             dim=self.snapshot_type or "unknown",
         )
@@ -64,7 +70,10 @@ class UziSourceSnapshotSkill:
                 snapshot_date=snapshot_date,
                 source=source,
                 reason=f"provider_failure:{exc.__class__.__name__}",
-                facts={"error": str(exc)},
+                facts={
+                    "availability": "data_gap",
+                    "error_type": exc.__class__.__name__,
+                },
             )
 
     def _collect(self, *, query: str, symbol: str | None) -> dict[str, Any]:
@@ -291,11 +300,112 @@ class UziSourceSnapshotSkill:
                 "availability": "available" if similar else "data_gap",
                 "data_gap": [] if similar else ["similar_stocks_missing"],
             }
+        if self.snapshot_type == "contests":
+            return self._collect_contests(symbol)
         return {
             "availability": "data_gap",
             "data_gap": [f"{self.snapshot_type}_provider_not_configured"],
             "degrade_reason": "provider_not_configured",
         }
+
+    def _selected_provider(self):
+        if self.provider_registry is None or not self.snapshot_type:
+            return None
+        chain = self.provider_registry.get_provider_chain(self.snapshot_type, "cn_equity")
+        return chain[0] if chain else None
+
+    def _collect_contests(self, symbol: str) -> dict[str, Any]:
+        settings = self.provider_registry.settings if self.provider_registry is not None else None
+        if settings is None or not settings.sensitive_sources_enabled:
+            return {
+                "availability": "data_gap",
+                "data_gap": ["sensitive_source_disabled:xueqiu"],
+                "degrade_reason": "sensitive_source_disabled",
+            }
+        if "xueqiu" not in settings.sensitive_source_allowlist:
+            return {
+                "availability": "data_gap",
+                "data_gap": ["sensitive_source_not_allowlisted:xueqiu"],
+                "degrade_reason": "sensitive_source_not_allowlisted",
+            }
+        cookie = str(settings.xueqiu_cookie or "").strip()
+        if not cookie:
+            return {
+                "availability": "data_gap",
+                "data_gap": ["sensitive_source_credentials_missing:xueqiu"],
+                "degrade_reason": "sensitive_source_credentials_missing",
+            }
+        xueqiu_symbol = self._xueqiu_symbol(symbol)
+        response = requests.get(
+            "https://xueqiu.com/query/v1/search/cube/stock.json",
+            params={"q": xueqiu_symbol, "count": 50, "page": 1},
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; Cognitrade/1.0; +https://github.com)",
+                "Referer": f"https://xueqiu.com/S/{xueqiu_symbol}",
+                "Cookie": cookie,
+            },
+            timeout=15,
+        )
+        if response.status_code != 200:
+            reason = "sensitive_source_authentication_failed" if response.status_code in {400, 401, 403} else "sensitive_source_request_failed"
+            return {
+                "availability": "data_gap",
+                "data_gap": [f"{reason}:xueqiu"],
+                "degrade_reason": reason,
+                "http_status": response.status_code,
+            }
+        try:
+            payload = response.json()
+        except ValueError:
+            return {
+                "availability": "data_gap",
+                "data_gap": ["sensitive_source_parse_failed:xueqiu"],
+                "degrade_reason": "sensitive_source_parse_failed",
+            }
+        raw_rows = payload.get("list") or payload.get("cubes") or []
+        cubes = []
+        for row in raw_rows if isinstance(raw_rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            owner = row.get("owner") if isinstance(row.get("owner"), dict) else {}
+            cube_symbol = str(row.get("symbol") or "").strip()
+            cubes.append(
+                {
+                    "name": row.get("name"),
+                    "owner": owner.get("screen_name"),
+                    "symbol": cube_symbol or None,
+                    "daily_gain": normalize_value(row.get("daily_gain")),
+                    "monthly_gain": normalize_value(row.get("monthly_gain")),
+                    "total_gain": normalize_value(row.get("total_gain")),
+                    "annualized_gain_rate": normalize_value(row.get("annualized_gain_rate")),
+                    "stocks_count": normalize_value(row.get("stocks_count")),
+                    "url": f"https://xueqiu.com/P/{cube_symbol}" if cube_symbol else None,
+                }
+            )
+        return {
+            "xueqiu_cubes": cubes,
+            "summary": {
+                "cube_count": len(cubes),
+                "high_return_cube_count": sum(
+                    1
+                    for row in cubes
+                    if (coerce_numeric(row.get("total_gain")) or float("-inf")) > 50
+                ),
+            },
+            "availability": "available" if cubes else "data_gap",
+            "data_gap": [] if cubes else ["xueqiu_contests_empty"],
+            "degrade_reason": None if cubes else "xueqiu_contests_empty",
+            "source_policy": "explicit_sensitive_source",
+        }
+
+    @staticmethod
+    def _xueqiu_symbol(symbol: str) -> str:
+        normalized = str(symbol or "").strip().upper()
+        if normalized.startswith(("SH", "SZ", "BJ")):
+            return normalized
+        if normalized.startswith(("4", "8")):
+            return f"BJ{normalized}"
+        return f"SH{normalized}" if normalized.startswith(("5", "6", "9")) else f"SZ{normalized}"
 
     def _industry_context(self, symbol: str) -> dict[str, Any]:
         info_df = call_with_retry(lambda: ak.stock_individual_info_em(symbol=symbol))

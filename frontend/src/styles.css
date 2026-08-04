@@ -4686,6 +4686,10 @@ select:focus-visible {
 .uzi-method-picker {
   display: grid;
   gap: 9px;
+  max-height: 520px;
+  padding-right: 5px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .uzi-method-picker > button {
@@ -4727,6 +4731,24 @@ select:focus-visible {
   gap: 12px;
 }
 
+.uzi-assumption-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(214, 182, 106, 0.24);
+  border-radius: 12px;
+  background: rgba(214, 182, 106, 0.06);
+}
+
+.uzi-assumption-panel > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.uzi-assumption-panel small {
+  color: var(--muted);
+}
+
 .uzi-run-button {
   justify-content: center;
   width: 100%;
@@ -4740,9 +4762,9 @@ select:focus-visible {
 
 .uzi-holding-row {
   display: grid;
-  grid-template-columns: 90px 125px repeat(5, 100px) 34px;
+  grid-template-columns: 90px 125px repeat(7, 100px) 34px;
   gap: 7px;
-  min-width: 850px;
+  min-width: 1065px;
 }
 
 .uzi-holding-row input {
@@ -4842,6 +4864,11 @@ select:focus-visible {
   gap: 12px;
   padding: 11px 13px;
   border-bottom: 1px solid var(--border);
+}
+
+.uzi-method-result-table span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .uzi-mini-table > div:first-child {

@@ -30,10 +30,12 @@ _STOCK_SNAPSHOT_TYPES = frozenset(
         "market",
         "fundamental",
         "notice",
+        "sector",
         "lhb",
         "capital_flow",
         "sentiment",
         "events",
+        "policy",
         "kline",
         "macro",
         "peers",
@@ -47,6 +49,8 @@ _STOCK_SNAPSHOT_TYPES = frozenset(
         "moat",
         "trap",
         "contests",
+        "fund_holders",
+        "similar_stocks",
     }
 )
 _METHODOLOGIES = frozenset(
@@ -56,8 +60,21 @@ _METHODOLOGIES = frozenset(
         "cashflow_resilience",
         "three_statement",
         "lbo",
+        "quick_lbo",
         "ma_accretion",
+        "accretion_dilution",
         "segmental",
+        "initiation_report",
+        "earnings_review",
+        "catalyst_calendar",
+        "thesis_tracker",
+        "morning_note",
+        "ic_memo",
+        "porter_bcg",
+        "dd_checklist",
+        "unit_economics",
+        "value_creation_plan",
+        "portfolio_rebalance",
         "ai_readiness",
         "earnings_preview",
         "model_update",
@@ -85,6 +102,7 @@ _STOCK_FIELDS = {
     "research_profile",
     "requested_methods",
     "model_updates",
+    "method_assumptions",
     *_PLANNING_FIELDS,
 }
 _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
@@ -117,6 +135,8 @@ _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
         "rebalance_targets",
         "drift_threshold",
         "fee_model",
+        "asset_class_targets",
+        "requested_methods",
         *_PLANNING_FIELDS,
     },
     "sector_research": {"sector_query", "include_policy_snapshot", *_PLANNING_FIELDS},
@@ -286,6 +306,8 @@ def _validate_common_constraints(
             _invalid_constraint("snapshot_types", "must not contain duplicate values")
     if "model_updates" in constraints:
         _validate_model_updates(constraints["model_updates"])
+    if "method_assumptions" in constraints:
+        _validate_method_assumptions(constraints["method_assumptions"])
 
     for field_name in (
         "allow_partial_snapshot_types",
@@ -436,7 +458,7 @@ def _validate_portfolio_research_constraints(constraints: dict[str, Any]) -> Non
             )
             if field_name in {"value", "market_value", "quantity", "price"} and number < 0:
                 _invalid_constraint(f"portfolio_holdings.{index}.{field_name}", "must be non-negative")
-        for field_name in ("name", "industry", "market"):
+        for field_name in ("name", "industry", "market", "asset_class"):
             if holding.get(field_name) is not None:
                 _require_non_empty_string(
                     holding[field_name],
@@ -487,6 +509,206 @@ def _validate_portfolio_research_constraints(constraints: dict[str, Any]) -> Non
                 number = _require_finite_number(rate, field_name=f"fee_model.{market}.{key}")
                 if number < 0 or number > 1:
                     _invalid_constraint(f"fee_model.{market}.{key}", "must be between 0 and 1")
+
+    if "asset_class_targets" in constraints:
+        targets = constraints["asset_class_targets"]
+        if not isinstance(targets, dict) or not targets:
+            _invalid_constraint("asset_class_targets", "must be a non-empty object")
+        classes = {
+            str(holding.get("asset_class") or "").strip()
+            for holding in holdings
+            if str(holding.get("asset_class") or "").strip()
+        }
+        if len(classes) != len({str(key).strip() for key in targets}):
+            _invalid_constraint("asset_class_targets", "must contain exactly one target for each observed asset class")
+        if set(map(str, targets)) != classes:
+            _invalid_constraint("asset_class_targets", "must match the asset_class values in portfolio_holdings")
+        total_target = 0.0
+        for asset_class, target in targets.items():
+            number = _require_finite_number(target, field_name=f"asset_class_targets.{asset_class}")
+            if number < 0:
+                _invalid_constraint(f"asset_class_targets.{asset_class}", "must be non-negative")
+            total_target += number
+        if total_target <= 0:
+            _invalid_constraint("asset_class_targets", "target total must be positive")
+
+
+def _validate_method_assumptions(value: Any) -> None:
+    if not isinstance(value, dict) or not value:
+        _invalid_constraint("method_assumptions", "must be a non-empty object")
+    allowed_methods = {
+        "three_statement",
+        "quick_lbo",
+        "accretion_dilution",
+        "value_creation_plan",
+    }
+    unknown = sorted(str(key) for key in value if str(key) not in allowed_methods)
+    if unknown:
+        _invalid_constraint("method_assumptions", f"contains unsupported methods: {', '.join(unknown)}")
+
+    def visit(item: Any, path: str) -> None:
+        if item is None or isinstance(item, str):
+            return
+        if isinstance(item, bool):
+            _invalid_constraint(path, "must not contain boolean values")
+        if isinstance(item, (int, float)):
+            _require_finite_number(item, field_name=path)
+            return
+        if isinstance(item, list):
+            if not item:
+                _invalid_constraint(path, "must not contain an empty array")
+            for index, nested in enumerate(item):
+                visit(nested, f"{path}.{index}")
+            return
+        if isinstance(item, dict):
+            if not item:
+                _invalid_constraint(path, "must not contain an empty object")
+            for key, nested in item.items():
+                if not str(key).strip():
+                    _invalid_constraint(path, "must not contain an empty key")
+                visit(nested, f"{path}.{key}")
+            return
+        _invalid_constraint(path, "contains an unsupported value type")
+
+    for method, assumptions in value.items():
+        if not isinstance(assumptions, dict) or not assumptions:
+            _invalid_constraint(f"method_assumptions.{method}", "must be a non-empty object")
+        visit(assumptions, f"method_assumptions.{method}")
+        _validate_method_assumption_contract(str(method), assumptions)
+
+
+def _validate_method_assumption_contract(method: str, assumptions: dict[str, Any]) -> None:
+    required_keys = {
+        "three_statement": {
+            "revenue_growth_path", "capex_to_revenue",
+            "working_capital_to_incremental_revenue",
+        },
+        "quick_lbo": {
+            "entry_multiple", "debt_multiple", "exit_multiple",
+            "annual_ebitda_growth", "annual_debt_paydown_pct", "hold_years",
+        },
+        "accretion_dilution": {
+            "target_net_income", "new_shares", "after_tax_synergies",
+            "after_tax_financing_cost",
+        },
+        "value_creation_plan": {"levers"},
+    }[method]
+    actual_keys = {str(key) for key in assumptions}
+    missing = sorted(required_keys - actual_keys)
+    unknown = sorted(actual_keys - required_keys)
+    if missing:
+        _invalid_constraint(
+            f"method_assumptions.{method}",
+            f"missing required fields: {', '.join(missing)}",
+        )
+    if unknown:
+        _invalid_constraint(
+            f"method_assumptions.{method}",
+            f"contains unsupported fields: {', '.join(unknown)}",
+        )
+
+    if method == "three_statement":
+        growth_path = assumptions["revenue_growth_path"]
+        if not isinstance(growth_path, list) or not growth_path:
+            _invalid_constraint(
+                "method_assumptions.three_statement.revenue_growth_path",
+                "must be a non-empty array of finite numbers",
+            )
+        if len(growth_path) > 20:
+            _invalid_constraint(
+                "method_assumptions.three_statement.revenue_growth_path",
+                "must contain at most 20 periods",
+            )
+        for index, item in enumerate(growth_path):
+            growth = _require_finite_number(
+                item,
+                field_name=f"method_assumptions.three_statement.revenue_growth_path.{index}",
+            )
+            if growth <= -1:
+                _invalid_constraint(
+                    f"method_assumptions.three_statement.revenue_growth_path.{index}",
+                    "must be greater than -1",
+                )
+        capex = _require_finite_number(
+            assumptions["capex_to_revenue"],
+            field_name="method_assumptions.three_statement.capex_to_revenue",
+        )
+        if capex < 0:
+            _invalid_constraint(
+                "method_assumptions.three_statement.capex_to_revenue",
+                "must be non-negative",
+            )
+        _require_finite_number(
+            assumptions["working_capital_to_incremental_revenue"],
+            field_name="method_assumptions.three_statement.working_capital_to_incremental_revenue",
+        )
+        return
+
+    if method == "quick_lbo":
+        numbers = {
+            key: _require_finite_number(
+                assumptions[key], field_name=f"method_assumptions.quick_lbo.{key}"
+            )
+            for key in required_keys
+        }
+        if numbers["entry_multiple"] <= 0 or numbers["exit_multiple"] <= 0:
+            _invalid_constraint(
+                "method_assumptions.quick_lbo",
+                "entry_multiple and exit_multiple must be positive",
+            )
+        if numbers["debt_multiple"] < 0:
+            _invalid_constraint(
+                "method_assumptions.quick_lbo.debt_multiple", "must be non-negative"
+            )
+        if numbers["annual_ebitda_growth"] <= -1:
+            _invalid_constraint(
+                "method_assumptions.quick_lbo.annual_ebitda_growth",
+                "must be greater than -1",
+            )
+        if not 0 <= numbers["annual_debt_paydown_pct"] <= 1:
+            _invalid_constraint(
+                "method_assumptions.quick_lbo.annual_debt_paydown_pct",
+                "must be between 0 and 1",
+            )
+        hold_years = numbers["hold_years"]
+        if hold_years <= 0 or hold_years != int(hold_years):
+            _invalid_constraint(
+                "method_assumptions.quick_lbo.hold_years",
+                "must be a positive integer",
+            )
+        return
+
+    if method == "accretion_dilution":
+        numbers = {
+            key: _require_finite_number(
+                assumptions[key], field_name=f"method_assumptions.accretion_dilution.{key}"
+            )
+            for key in required_keys
+        }
+        if numbers["new_shares"] < 0:
+            _invalid_constraint(
+                "method_assumptions.accretion_dilution.new_shares",
+                "must be non-negative",
+            )
+        if numbers["after_tax_financing_cost"] < 0:
+            _invalid_constraint(
+                "method_assumptions.accretion_dilution.after_tax_financing_cost",
+                "must be non-negative",
+            )
+        return
+
+    levers = assumptions["levers"]
+    if not isinstance(levers, list) or not levers:
+        _invalid_constraint(
+            "method_assumptions.value_creation_plan.levers",
+            "must be a non-empty array",
+        )
+    for index, lever in enumerate(levers):
+        path = f"method_assumptions.value_creation_plan.levers.{index}"
+        if not isinstance(lever, dict) or set(lever) != {"name", "ebitda_impact"}:
+            _invalid_constraint(path, "must contain exactly name and ebitda_impact")
+        _require_non_empty_string(lever["name"], field_name=f"{path}.name")
+        _require_finite_number(lever["ebitda_impact"], field_name=f"{path}.ebitda_impact")
 
 
 def _require_non_empty_string(value: Any, *, field_name: str) -> str:

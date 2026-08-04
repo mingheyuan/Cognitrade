@@ -70,6 +70,12 @@ class VendorProviderRegistry:
         return source.stability if source is not None else "low"
 
     def _credentials_available(self, provider: ProviderSpec) -> bool:
+        if provider.access == "browser":
+            return (
+                self.settings.sensitive_sources_enabled
+                and provider.source_id.lower() in self.settings.sensitive_source_allowlist
+                and (provider.source_id != "xueqiu" or bool(self.settings.xueqiu_cookie))
+            )
         if not provider.requires_key:
             return True
         if provider.provider_id.startswith("tushare_"):
@@ -253,5 +259,15 @@ class VendorProviderRegistry:
                 dims=("policy",),
                 access="sdk",
                 notes="Primary policy snapshot provider derived from catalyst signals.",
+            ),
+            ProviderSpec(
+                provider_id="xueqiu_contests",
+                source_id="xueqiu",
+                vendor_name="xueqiu",
+                markets=("cn", "cn_equity"),
+                dims=("contests",),
+                access="browser",
+                requires_key=True,
+                notes="Authenticated Xueqiu cube source; disabled unless the global sensitive-source switch, xueqiu allowlist entry and cookie are all configured.",
             ),
         ]

@@ -129,12 +129,53 @@ neutral values.
 
 ### UZI Tier-1 and portfolio research
 
-Stock intents accept `requested_methods` values `ai_readiness`,
-`earnings_preview`, and `model_update`. `model_update` additionally requires a
-non-empty `model_updates` object; the service does not infer a demo delta.
+Stock intents accept Pack-declared `requested_methods`. UZI-specific values are:
+
+- Tier-1: `ai_readiness`, `earnings_preview`, `model_update`;
+- modeling: `three_statement`, `quick_lbo`, `accretion_dilution`, `segmental`;
+- workflow: `initiation_report`, `earnings_review`, `catalyst_calendar`,
+  `thesis_tracker`, `morning_note`;
+- decision support: `ic_memo`, `porter_bcg`, `dd_checklist`,
+  `unit_economics`, `value_creation_plan`.
+
+Each value selects an independent Pack capability and Artifact rather than the
+old aggregate UZI runtime. `model_update` requires a non-empty `model_updates`
+object. `three_statement`, `quick_lbo`, `accretion_dilution`, and
+`value_creation_plan` require a corresponding `method_assumptions` entry for
+calculation; omitted values produce `data_gap` and are never default-filled.
+The assumption object is an exact contract: unknown or missing fields are
+rejected. Growth rates use decimal ratios (`0.08` means 8%); LBO debt paydown
+must be between `0` and `1`, holding years must be a positive integer, and
+entry/exit multiples must be positive. Three-statement growth values must be
+greater than `-1`, while capex/revenue must be non-negative. Invalid inputs are
+rejected at API validation and are never coerced into a plausible scenario.
+
+```json
+{
+  "intent": "stock_check",
+  "user_query": "为 300750 建立快速 LBO",
+  "constraints": {
+    "symbol": "300750",
+    "requested_methods": ["quick_lbo"],
+    "method_assumptions": {
+      "quick_lbo": {
+        "entry_multiple": 8,
+        "debt_multiple": 4,
+        "exit_multiple": 8,
+        "annual_ebitda_growth": 0.08,
+        "annual_debt_paydown_pct": 0.10,
+        "hold_years": 5
+      }
+    }
+  }
+}
+```
 
 `portfolio_research` produces `returns_attribution` and `holding_rebalance`
-Artifacts from explicit holdings:
+Artifacts from explicit holdings. When `requested_methods` contains
+`portfolio_rebalance`, every holding must provide `asset_class` and
+`asset_class_targets` must exactly cover those classes; the additional output
+is `portfolio_rebalance`.
 
 ```http
 POST /api/v1/runs
@@ -164,6 +205,24 @@ coverage is reduced, and no complete portfolio return or excess return is
 reported. `rebalance_targets` must cover every holding when supplied. Without
 targets, equal weight is an explicit `assumption_only` policy. Without a
 request-supplied `fee_model`, the service does not estimate transaction cost.
+Strategic asset-allocation targets never fall back to a balanced or equal-weight
+portfolio: missing classifications or targets produce `data_gap`.
+
+### Sensitive authenticated source policy
+
+Authenticated sources are disabled by default. The Xueqiu contest/cube source
+becomes eligible only when all three runtime settings are configured:
+
+```dotenv
+COGNITRADE_SENSITIVE_SOURCES_ENABLED=true
+COGNITRADE_SENSITIVE_SOURCE_ALLOWLIST=xueqiu
+COGNITRADE_XUEQIU_COOKIE=<runtime secret>
+```
+
+The Cookie is read only from the environment and must not be submitted in an
+API request or committed to the repository. If any gate is missing, the
+`contests` snapshot returns a sanitized `data_gap`; no mock standings or
+holdings are generated.
 
 | Method | Path | Canonical source |
 | --- | --- | --- |

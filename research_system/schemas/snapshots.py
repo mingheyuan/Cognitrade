@@ -33,6 +33,8 @@ SnapshotType = Literal[
     "moat",
     "trap",
     "contests",
+    "fund_holders",
+    "similar_stocks",
 ]
 
 

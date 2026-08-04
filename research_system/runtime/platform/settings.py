@@ -42,6 +42,9 @@ class Settings(BaseModel):
     openapi_sources_path: Path
     skill_sources_path: Path
     provider_policy_overrides: dict[str, str] = Field(default_factory=dict)
+    sensitive_sources_enabled: bool = False
+    sensitive_source_allowlist: list[str] = Field(default_factory=list)
+    xueqiu_cookie: str | None = None
     default_timezone: str = "Asia/Shanghai"
     paper_trading_enforce_market_hours: bool = True
     log_level: str = "INFO"
