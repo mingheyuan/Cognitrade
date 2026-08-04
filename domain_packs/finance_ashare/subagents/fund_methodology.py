@@ -6,12 +6,13 @@ import math
 from typing import Any
 
 
-FUND_METHODOLOGY_VERSION = "uzi-3.9.2-fund-selection-v1"
+FUND_METHODOLOGY_VERSION = "uzi-3.9.2-fund-selection-v2"
 
 _COMPONENTS: tuple[tuple[str, float, bool], ...] = (
-    ("return_1y", 0.25, True),
-    ("return_3y_annualized", 0.20, True),
-    ("max_drawdown", 0.25, True),
+    ("return_1y", 0.20, True),
+    ("return_3y_annualized", 0.15, True),
+    ("benchmark_excess_1y", 0.15, True),
+    ("max_drawdown", 0.20, True),
     ("volatility", 0.15, False),
     ("fee", 0.05, False),
     ("return_consistency", 0.10, True),
@@ -138,7 +139,7 @@ def build_fund_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
         "candidates": evaluated,
         "recommendations": recommendations,
         "selection_policy": {
-            "description": "同类基金横向比较；仅使用真实收益、净值回撤、波动率和费率字段。",
+            "description": "同类基金横向比较；仅使用真实收益、benchmark 超额收益、净值回撤、波动率和费率字段。",
             "minimum_score_coverage": 0.6,
             "minimum_comparable_sample": 2,
             "components": [
@@ -175,9 +176,18 @@ def _candidate_metrics(row: dict[str, Any]) -> dict[str, Any]:
         if observed_returns
         else None
     )
+    benchmark_1y = next(
+        (
+            row
+            for row in list(row.get("benchmark_performance") or [])
+            if isinstance(row, dict) and str(row.get("period") or "").replace(" ", "") in {"近1年", "1年"}
+        ),
+        {},
+    )
     metrics = {
         "return_1y": _number(returns.get("year_1")),
         "return_3y_annualized": round(annualized_3y, 4) if annualized_3y is not None else None,
+        "benchmark_excess_1y": _number(benchmark_1y.get("excess_return_pct")),
         # A less-negative drawdown is better, so the raw value can use the normal higher-is-better rank.
         "max_drawdown": _number(risk.get("max_drawdown_pct")),
         "volatility": _number(risk.get("annualized_volatility_pct")),
@@ -199,6 +209,11 @@ def _candidate_metrics(row: dict[str, Any]) -> dict[str, Any]:
         "top_holdings": list(row.get("top_holdings") or []),
         "holdings_period": row.get("holdings_period"),
         "top10_concentration_pct": row.get("top10_concentration_pct"),
+        "benchmark_definition": row.get("benchmark_definition"),
+        "benchmark_performance": list(row.get("benchmark_performance") or []),
+        "manager_tenures": list(row.get("manager_tenures") or []),
+        "scale_history": list(row.get("scale_history") or []),
+        "scale_change": dict(row.get("scale_change") or {}),
         "data_gap": list(dict.fromkeys(data_gap)),
     }
 
@@ -229,6 +244,8 @@ def _selection_reason(row: dict[str, Any]) -> str:
         parts.append(f"近1年收益 {metrics['return_1y']:.2f}%")
     if metrics.get("max_drawdown") is not None:
         parts.append(f"样本期最大回撤 {metrics['max_drawdown']:.2f}%")
+    if metrics.get("benchmark_excess_1y") is not None:
+        parts.append(f"近1年相对基准 {metrics['benchmark_excess_1y']:+.2f}%")
     parts.append(f"证据覆盖 {float(row.get('score_coverage') or 0) * 100:.0f}%")
     return "；".join(parts)
 
@@ -241,6 +258,9 @@ def _risk_summary(row: dict[str, Any]) -> str:
         parts.append(f"年化波动 {float(risk['annualized_volatility_pct']):.2f}%")
     if concentration is not None:
         parts.append(f"前十大持仓 {concentration:.2f}%")
+    scale_change = dict(row.get("scale_change") or {})
+    if _number(scale_change.get("total_share_change_pct")) is not None:
+        parts.append(f"最新份额变化 {float(scale_change['total_share_change_pct']):+.2f}%")
     if row.get("data_gap"):
         parts.append(f"仍有 {len(row['data_gap'])} 项数据缺口")
     return "；".join(parts) or "暂无足够风险字段"

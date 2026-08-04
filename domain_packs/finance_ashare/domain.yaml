@@ -308,7 +308,7 @@ capabilities:
   - subagent_type: fund_research_analyst
     capability: finance.fund.analyze
     capability_version: "1"
-    methodology_version: "uzi-3.9.2-fund-selection-v1"
+    methodology_version: "uzi-3.9.2-fund-selection-v2"
     implementation: subagents.runtime:analyze_funds
     consumes:
       - artifact_type: fund_snapshot
@@ -323,7 +323,7 @@ capabilities:
   - subagent_type: fund_report_composer
     capability: finance.fund.report.compose
     capability_version: "1"
-    methodology_version: "uzi-3.9.2-fund-selection-v1"
+    methodology_version: "uzi-3.9.2-fund-selection-v2"
     implementation: subagents.runtime:compose_fund_report
     consumes:
       - artifact_type: fund_analysis

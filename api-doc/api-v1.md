@@ -125,7 +125,14 @@ The graph produces `fund_snapshot`, `fund_analysis`, and `research_report`
 Artifacts. Ranking requires at least two comparable funds and at least 60%
 observed scoring-field coverage. Missing NAV, ranking, fee, or disclosed
 holdings fields remain `data_gap`; the service does not insert simulated or
-neutral values.
+neutral values. Fund methodology v2 also records the declared performance
+benchmark, fund-versus-benchmark period returns, manager tenure segments, and
+single-fund scale/share history. The 1-year benchmark excess return is an
+optional scoring component; when it is unavailable, its weight reduces
+coverage rather than becoming zero. Manager tenure and scale changes remain
+descriptive evidence and do not receive an automatic positive/negative score.
+Provider errors contain only the failed stage and error class; raw upstream
+exception text is not exposed in Artifacts or the Web UI.
 
 ### UZI Tier-1 and portfolio research
 

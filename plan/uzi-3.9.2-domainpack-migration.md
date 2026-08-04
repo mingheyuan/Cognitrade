@@ -89,12 +89,15 @@ API / SSE / Web（不输出 UZI 原始 HTML）
 - 场内基金排行：EastMoney，经 AkShare `fund_exchange_rank_em` 适配；
 - 历史净值：EastMoney，经 AkShare `fund_open_fund_info_em` 适配；
 - 定期披露持仓：优先 AkShare，必要时使用 EastMoney FundArchives 的公开响应。
+- benchmark：蛋卷基金公开接口返回的基准定义、基金/基准区间收益和回撤；
+- 基金经理任期：EastMoney 基金档案中的历史任职分段与任期回报；
+- 单基金规模/份额：EastMoney 基金档案中的申购、赎回、总份额与净资产序列。
 
 provider 失败时保留失败阶段和异常类型。前端只展示用户可理解的缺口，不直接泄漏网络异常原文。
 
 ### 4.3 分析方法
 
-只在相同粗分类内比较；观察字段包括近 1 年收益、3 年年化收益、最大回撤、年化波动、费率与收益一致性。缺失字段不补 0、不补中性值，只降低覆盖率并记录 `data_gap`。
+只在相同粗分类内比较；观察字段包括近 1 年收益、3 年年化收益、近 1 年基准超额收益、最大回撤、年化波动、费率与收益一致性。经理任期和规模/份额变化作为解释性证据，不在缺乏充分校准前直接加减分。缺失字段不补 0、不补中性值，只降低覆盖率并记录 `data_gap`。
 
 推荐门槛：
 
@@ -155,7 +158,7 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 - [x] 排行、净值、风险和披露持仓采集；
 - [x] 同类评分、覆盖率门槛与无填充规则；
 - [x] 基金 Artifact、质量门和专属 Web 页面；
-- [ ] 加入基金 benchmark、基金经理任职分段、规模与份额变化后升级为 v2 方法。
+- [x] 加入基金 benchmark、基金经理任职分段、规模与份额变化并升级为 v2 方法。
 
 ### Phase C：23 个方法完整能力化
 
@@ -174,10 +177,10 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 
 ### Phase E：Provider 完整性与敏感源开关
 
-- [ ] 为 22 个维度逐个做真实 provider smoke；
-- [ ] 公开 provider 全部具备失败降级与来源引用；
+- [x] 为 22 个维度逐个做真实 provider smoke；显式串行命令已实测 22/22 返回、来源契约通过，实测时 15 available / 6 data_gap / 1 sensitive-disabled；
+- [x] 公开 provider 全部具备失败降级与来源引用；smoke 输出仅保留标准缺口、错误类型和 source ref，不泄漏原始异常或原始观测；
 - [x] 登录态源默认关闭，并要求总开关、来源 allowlist 和 Cookie 三项同时配置；
-- [ ] 端到端验证 API、SSE、ArtifactBoard 与 Web 一致。
+- [x] 端到端验证 API、SSE、ArtifactBoard 与 Web 一致；基金 v2 字段已覆盖 API 运行、Artifact、Replay、事件和前端渲染测试。
 
 ## 8. 完成定义
 
@@ -201,3 +204,4 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 - UZI 独立方法产品：`domain_packs/finance_ashare/subagents/uzi_method_products.py`
 - UZI Tier‑1 与组合方法：`domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py`
 - UZI 规则：`domain_packs/finance_ashare/subagents/uzi_panel_rules.py`
+- 22 维真实源核验：`python -m research_system.runtime.diagnostics.status.uzi_provider_smoke --symbol 600519 --sector 白酒`

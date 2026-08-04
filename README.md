@@ -31,6 +31,19 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 ./scripts/deploy.sh down
 ```
 
+部署镜像内可显式核验 UZI 3.9.2 的 22 类真实数据链；该检查不会在启动时自动执行，
+数据源无返回会记录为 `data_gap`，不会生成模拟数据：
+
+```bash
+COGNITRADE_PROVIDER_SMOKE_SYMBOL=600519 \
+COGNITRADE_PROVIDER_SMOKE_SECTOR=白酒 \
+./scripts/deploy.sh provider-smoke
+```
+
+可用 `COGNITRADE_PROVIDER_SMOKE_DIMENSIONS=market,kline,events` 只检查指定维度。
+雪球组合竞赛来源仍需同时显式开启敏感来源、加入 `xueqiu` allowlist 并配置 Cookie。
+全量检查固定串行执行，避免多个 AkShare 路径并发初始化其进程级 JavaScript 运行时。
+
 默认访问地址是 `http://127.0.0.1:8080`。浏览器 Token 可通过
 `./scripts/deploy.sh token` 获取。
 

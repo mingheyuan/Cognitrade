@@ -4,7 +4,9 @@ from importlib import import_module
 
 __all__ = [
     "ProviderHealthService",
+    "UZI_FETCHER_DIMENSIONS",
     "build_runtime_status",
+    "run_uzi_provider_smoke",
 ]
 
 _EXPORTS = {
@@ -12,9 +14,17 @@ _EXPORTS = {
         "research_system.runtime.diagnostics.status.provider_health",
         "ProviderHealthService",
     ),
+    "UZI_FETCHER_DIMENSIONS": (
+        "research_system.runtime.diagnostics.status.uzi_provider_smoke",
+        "UZI_FETCHER_DIMENSIONS",
+    ),
     "build_runtime_status": (
         "research_system.runtime.diagnostics.status.status_runtime",
         "build_runtime_status",
+    ),
+    "run_uzi_provider_smoke": (
+        "research_system.runtime.diagnostics.status.uzi_provider_smoke",
+        "run_uzi_provider_smoke",
     ),
 }
 

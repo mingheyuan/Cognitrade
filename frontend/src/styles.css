@@ -8678,6 +8678,45 @@ select:focus-visible {
   font-size: 14px;
 }
 
+.fund-context-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 11px 15px 0;
+}
+
+.fund-context-grid article {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 76%, transparent);
+}
+
+.fund-context-grid span,
+.fund-context-grid small {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.fund-context-grid strong {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fund-context-grid small {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .fund-holdings-row {
   display: grid;
   grid-template-columns: minmax(100px, auto) minmax(0, 1fr);
@@ -8832,6 +8871,10 @@ select:focus-visible {
   }
 
   .fund-holdings-row {
+    grid-template-columns: 1fr;
+  }
+
+  .fund-context-grid {
     grid-template-columns: 1fr;
   }
 }

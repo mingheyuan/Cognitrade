@@ -31,6 +31,8 @@ class ProviderHealthTests(unittest.TestCase):
         self.assertIn("sse_notice", rows["notice"]["disabled_provider_ids"])
         self.assertEqual(rows["contests"]["provider_count"], 0)
         self.assertEqual(rows["contests"]["configured_provider_count"], 1)
+        self.assertEqual(rows["fund"]["provider_count"], 2)
+        self.assertEqual(rows["fund"]["configured_provider_count"], 2)
         self.assertFalse(payload["sensitive_sources"]["enabled"])
 
     def test_sensitive_source_requires_switch_allowlist_and_credentials(self) -> None:

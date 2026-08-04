@@ -63,7 +63,7 @@ class FundSecurityMaster:
                 [],
                 [],
                 "fund_catalog_unavailable",
-                f"{exc.__class__.__name__}:{exc}",
+                exc.__class__.__name__,
             )
 
         by_code = {str(row["fund_code"]): row for row in rows if row.get("fund_code")}

@@ -7,7 +7,19 @@
     "fund_category": {"type": ["string", "null"]},
     "investment_cycle": {"type": ["string", "null"]},
     "candidate_count": {"type": "integer", "minimum": 0},
-    "candidates": {"type": "array", "items": {"type": "object"}},
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "benchmark_definition": {"type": ["string", "null"]},
+          "benchmark_performance": {"type": "array", "items": {"type": "object"}},
+          "manager_tenures": {"type": "array", "items": {"type": "object"}},
+          "scale_history": {"type": "array", "items": {"type": "object"}},
+          "scale_change": {"type": "object"}
+        }
+      }
+    },
     "recommendations": {"type": "array", "items": {"type": "object"}},
     "selection_policy": {"type": "object"},
     "quality_status": {"enum": ["available", "degraded", "data_gap"]},

@@ -270,4 +270,22 @@ class VendorProviderRegistry:
                 requires_key=True,
                 notes="Authenticated Xueqiu cube source; disabled unless the global sensitive-source switch, xueqiu allowlist entry and cookie are all configured.",
             ),
+            ProviderSpec(
+                provider_id="eastmoney_fund",
+                source_id="eastmoney",
+                vendor_name="eastmoney",
+                markets=("cn",),
+                dims=("fund",),
+                access="http",
+                notes="Public fund catalog, ranking, NAV, holdings, manager tenure and scale/share source.",
+            ),
+            ProviderSpec(
+                provider_id="danjuan_fund",
+                source_id="danjuan_public",
+                vendor_name="danjuan",
+                markets=("cn",),
+                dims=("fund",),
+                access="http",
+                notes="Public no-login fund overview and benchmark-performance source.",
+            ),
         ]

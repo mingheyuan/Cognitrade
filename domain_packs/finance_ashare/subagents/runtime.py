@@ -258,7 +258,7 @@ def compose_fund_report(context):
             f"{row.get('fund_name')}（{row.get('fund_code')}，{float(row.get('score') or 0):.1f}分）"
             for row in recommendations[:3]
         )
-        conclusion = f"基于同类真实收益与风险数据，当前证据门槛内的优先候选为：{leaders}。"
+        conclusion = f"基于同类真实收益、benchmark 超额收益与风险数据，当前证据门槛内的优先候选为：{leaders}。"
     else:
         conclusion = "当前真实数据不足以形成可审计的基金优先候选，结果保留为数据缺口。"
     provider_errors = [
@@ -283,6 +283,10 @@ def compose_fund_report(context):
             "risk": row.get("risk"),
             "holdings_period": row.get("holdings_period"),
             "top10_concentration_pct": row.get("top10_concentration_pct"),
+            "benchmark_definition": row.get("benchmark_definition"),
+            "benchmark_performance": row.get("benchmark_performance"),
+            "manager_tenures": row.get("manager_tenures"),
+            "scale_change": row.get("scale_change"),
             "data_gap": row.get("data_gap"),
         }
         for row in content.get("candidates") or []

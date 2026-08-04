@@ -73,6 +73,69 @@ def _holdings_frame(_code: str, _year: str) -> pd.DataFrame:
     )
 
 
+def _overview_frame(code: str) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"item": "基金经理", "value": f"经理{code[-1]}"},
+            {"item": "最新规模", "value": "100亿元"},
+            {"item": "业绩比较基准", "value": "沪深300指数收益率×80%+中债指数收益率×20%"},
+        ]
+    )
+
+
+def _achievement_payload(code: str) -> dict:
+    fund_return = {"110011": 35.0, "005827": 22.0, "000001": 12.0}[code]
+    benchmark_return = 10.0
+    return {
+        "stage_performance_list": [
+            {
+                "period_time": "近1年",
+                "self_nav": str(fund_return),
+                "standard_index_nav": str(benchmark_return),
+                "self_max_draw_down": "12.0%",
+                "standard_index_max_draw_down": "10.0%",
+                "self_nav_rank": "1/10",
+            }
+        ],
+        "annual_performance_list": [],
+    }
+
+
+def _manager_tenure_frame(code: str) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "起始期": "2024-01-01",
+                "截止期": "至今",
+                "基金经理": f"经理{code[-1]}",
+                "任职期间": "2年",
+                "任职回报": "20.0%",
+            }
+        ]
+    )
+
+
+def _scale_history_rows(_code: str) -> list[dict]:
+    return [
+        {
+            "report_date": "2026-06-30",
+            "subscriptions_100m": 1.0,
+            "redemptions_100m": 2.0,
+            "total_shares_100m": 10.0,
+            "net_assets_100m_cny": 12.0,
+            "reported_share_change_pct": -9.09,
+        },
+        {
+            "report_date": "2026-03-31",
+            "subscriptions_100m": 1.5,
+            "redemptions_100m": 1.0,
+            "total_shares_100m": 11.0,
+            "net_assets_100m_cny": 13.0,
+            "reported_share_change_pct": 4.76,
+        },
+    ]
+
+
 class FundResearchTests(unittest.TestCase):
     def test_api_accepts_and_validates_fund_research_contract(self) -> None:
         request = validate_research_request(
@@ -114,6 +177,30 @@ class FundResearchTests(unittest.TestCase):
                     "returns_pct": {"year_1": 20, "year_3": 50, "month_3": 5, "month_6": 10},
                     "risk": {"max_drawdown_pct": -10, "annualized_volatility_pct": 15},
                     "fee_pct": 0.15,
+                    "benchmark_definition": "沪深300指数收益率×80%+中债指数收益率×20%",
+                    "benchmark_performance": [
+                        {
+                            "period": "近1年",
+                            "fund_return_pct": 20,
+                            "benchmark_return_pct": 8,
+                            "excess_return_pct": 12,
+                        }
+                    ],
+                    "manager_tenures": [
+                        {
+                            "manager": "经理 A",
+                            "start_date": "2024-01-01",
+                            "end_date": None,
+                            "current": True,
+                            "tenure_return_pct": 20,
+                        }
+                    ],
+                    "scale_change": {
+                        "latest_report_date": "2026-06-30",
+                        "latest_total_shares_100m": 10,
+                        "latest_net_assets_100m_cny": 12,
+                        "total_share_change_pct": -9.09,
+                    },
                     "top_holdings": [],
                     "data_gap": ["fund_holdings_missing"],
                 },
@@ -181,6 +268,41 @@ class FundResearchTests(unittest.TestCase):
                             artifact_types
                         )
                     )
+                    analysis_artifact = next(
+                        row
+                        for row in artifacts.json()["artifacts"]
+                        if row["artifact_type"] == "fund_analysis"
+                    )
+                    first_candidate = analysis_artifact["content"]["candidates"][0]
+                    self.assertEqual(
+                        analysis_artifact["content"]["methodology_version"],
+                        "uzi-3.9.2-fund-selection-v2",
+                    )
+                    self.assertEqual(first_candidate["benchmark_performance"][0]["excess_return_pct"], 12)
+                    self.assertTrue(first_candidate["manager_tenures"][0]["current"])
+                    self.assertEqual(first_candidate["scale_change"]["latest_total_shares_100m"], 10)
+
+                    replay = client.get(
+                        f"/api/v1/runs/{run_id}/replay",
+                        headers={"Authorization": "Bearer fund-test"},
+                    )
+                    self.assertEqual(replay.status_code, 200, replay.text)
+                    replay_types = {
+                        row["artifact_type"] for row in replay.json()["artifacts"]
+                    }
+                    self.assertIn("fund_analysis", replay_types)
+
+                    events = client.get(
+                        f"/api/v1/runs/{run_id}/events",
+                        headers={"Authorization": "Bearer fund-test"},
+                    )
+                    self.assertEqual(events.status_code, 200, events.text)
+                    self.assertTrue(
+                        any(
+                            row["event_type"] == "artifact_committed"
+                            for row in events.json()["events"]
+                        )
+                    )
 
     def test_fund_master_resolves_mutual_fund_before_bond_prefix_routing(self) -> None:
         master = FundSecurityMaster(catalog_loader=_catalog_frame)
@@ -219,6 +341,10 @@ class FundResearchTests(unittest.TestCase):
             exchange_rank_loader=lambda: pd.DataFrame(),
             nav_loader=_nav_frame,
             holdings_loader=_holdings_frame,
+            overview_loader=_overview_frame,
+            achievement_loader=_achievement_payload,
+            manager_tenure_loader=_manager_tenure_frame,
+            scale_history_loader=_scale_history_rows,
         )
 
         payload = skill.run(
@@ -235,6 +361,10 @@ class FundResearchTests(unittest.TestCase):
         self.assertEqual(first["top10_concentration_pct"], 17.7)
         self.assertGreater(first["risk"]["observation_count"], 2)
         self.assertNotIn("fund_holdings_missing", first["data_gap"])
+        self.assertIn("沪深300", first["benchmark_definition"])
+        self.assertEqual(first["benchmark_performance"][0]["excess_return_pct"], 25.0)
+        self.assertTrue(first["manager_tenures"][0]["current"])
+        self.assertEqual(first["scale_change"]["total_share_change_pct"], -9.090909)
 
     def test_fund_methodology_ranks_only_comparable_observed_evidence(self) -> None:
         skill = FundSnapshotSkill(
@@ -243,6 +373,10 @@ class FundResearchTests(unittest.TestCase):
             exchange_rank_loader=lambda: pd.DataFrame(),
             nav_loader=_nav_frame,
             holdings_loader=_holdings_frame,
+            overview_loader=_overview_frame,
+            achievement_loader=_achievement_payload,
+            manager_tenure_loader=_manager_tenure_frame,
+            scale_history_loader=_scale_history_rows,
         )
         snapshot = skill.run(
             query="选择混合型基金",
@@ -260,6 +394,8 @@ class FundResearchTests(unittest.TestCase):
         self.assertEqual(analysis["recommendations"][0]["fund_code"], expected_leader["fund_code"])
         self.assertGreaterEqual(analysis["recommendations"][0]["score_coverage"], 0.6)
         self.assertIn("缺失字段不补 0", analysis["selection_policy"]["non_imputation_rule"])
+        self.assertIn("benchmark_excess_1y", analysis["candidates"][0]["metrics"])
+        self.assertEqual(analysis["methodology_version"], "uzi-3.9.2-fund-selection-v2")
 
     def test_missing_fund_metrics_do_not_become_zero_or_a_recommendation(self) -> None:
         analysis = build_fund_analysis(

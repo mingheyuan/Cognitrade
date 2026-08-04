@@ -38,6 +38,19 @@ vi.mock('../CognitradeContext', () => ({
                   returns_pct: { year_1: 16.2 },
                   risk: { max_drawdown_pct: -9.4, annualized_volatility_pct: 12.1 },
                   top10_concentration_pct: 17.7,
+                  benchmark_definition: '沪深300指数收益率×80%+中债指数收益率×20%',
+                  benchmark_performance: [{
+                    period: '近1年', benchmark_return_pct: 8, excess_return_pct: 8.2,
+                  }],
+                  manager_tenures: [{
+                    manager: '张经理', start_date: '2024-01-01', current: true, tenure_return_pct: 20,
+                  }],
+                  scale_change: {
+                    latest_net_assets_100m_cny: 12,
+                    latest_total_shares_100m: 10,
+                    total_share_change_pct: -9.09,
+                    latest_net_flow_100m_shares: -1,
+                  },
                   holdings_period: '2026年2季度',
                   top_holdings: [{ code: '600519', name: '贵州茅台', weight_pct: 9.5 }],
                   data_gap: [],
@@ -67,6 +80,9 @@ describe('Funds', () => {
     expect(screen.getByText('易方达优质精选混合')).toBeInTheDocument()
     expect(screen.getByText('贵州茅台 +9.50%')).toBeInTheDocument()
     expect(screen.getByText('82.5')).toBeInTheDocument()
+    expect(screen.getByText(/沪深300指数收益率/)).toBeInTheDocument()
+    expect(screen.getByText('张经理')).toBeInTheDocument()
+    expect(screen.getByText(/总份额 10 亿份/)).toBeInTheDocument()
   })
 
   it('submits the dedicated fund intent and structured constraints', async () => {

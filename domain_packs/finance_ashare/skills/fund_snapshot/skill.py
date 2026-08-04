@@ -55,6 +55,10 @@ class FundSnapshotSkill:
         exchange_rank_loader: Callable[[], Any] | None = None,
         nav_loader: Callable[[str], Any] | None = None,
         holdings_loader: Callable[[str, str], Any] | None = None,
+        overview_loader: Callable[[str], Any] | None = None,
+        achievement_loader: Callable[[str], Any] | None = None,
+        manager_tenure_loader: Callable[[str], Any] | None = None,
+        scale_history_loader: Callable[[str], Any] | None = None,
     ) -> None:
         self.fund_master = fund_master or FundSecurityMaster()
         self.open_rank_loader = open_rank_loader or (
@@ -69,6 +73,10 @@ class FundSnapshotSkill:
         )
         self.nav_loader = nav_loader or self._load_nav
         self.holdings_loader = holdings_loader or self._load_holdings
+        self.overview_loader = overview_loader or self._load_overview
+        self.achievement_loader = achievement_loader or self._load_achievement
+        self.manager_tenure_loader = manager_tenure_loader or self._load_manager_tenure
+        self.scale_history_loader = scale_history_loader or self._load_scale_history
 
     def run(
         self,
@@ -179,6 +187,82 @@ class FundSnapshotSkill:
                 row.update({"top_holdings": [], "holdings_period": None, "top10_concentration_pct": None})
                 row_errors.append("fund_holdings_unavailable")
                 errors.append(self._error(f"holdings:{code}", exc))
+            try:
+                overview = self._normalize_overview(self.overview_loader(code))
+                row["fund_overview"] = overview
+                row["benchmark_definition"] = overview.get("benchmark_definition")
+                if not overview:
+                    row_errors.append("fund_overview_missing")
+                else:
+                    fund_source_refs.append(
+                        {
+                            "type": "fund_overview",
+                            "provider": "danjuan_via_akshare",
+                            "id": f"akshare.fund_individual_basic_info_xq:{code}",
+                        }
+                    )
+                if not row.get("benchmark_definition"):
+                    row_errors.append("benchmark_definition_missing")
+            except Exception as exc:
+                row.update({"fund_overview": {}, "benchmark_definition": None})
+                row_errors.extend(["fund_overview_unavailable", "benchmark_definition_missing"])
+                errors.append(self._error(f"overview:{code}", exc))
+            try:
+                performance = self._normalize_achievement(self.achievement_loader(code))
+                row["benchmark_performance"] = performance
+                if not performance:
+                    row_errors.append("benchmark_performance_missing")
+                else:
+                    fund_source_refs.append(
+                        {
+                            "type": "fund_benchmark_performance",
+                            "provider": "danjuan_public_http",
+                            "id": f"danjuan.fund_achievement:{code}",
+                        }
+                    )
+            except Exception as exc:
+                row["benchmark_performance"] = []
+                row_errors.append("benchmark_performance_unavailable")
+                errors.append(self._error(f"benchmark:{code}", exc))
+            try:
+                manager_tenures = self._normalize_manager_tenures(
+                    self.manager_tenure_loader(code)
+                )
+                row["manager_tenures"] = manager_tenures
+                if not manager_tenures:
+                    row_errors.append("manager_tenure_history_missing")
+                else:
+                    fund_source_refs.append(
+                        {
+                            "type": "fund_manager_tenure",
+                            "provider": "eastmoney",
+                            "id": f"eastmoney.fund_manager_tenure:{code}",
+                        }
+                    )
+            except Exception as exc:
+                row["manager_tenures"] = []
+                row_errors.append("manager_tenure_history_unavailable")
+                errors.append(self._error(f"manager_tenure:{code}", exc))
+            try:
+                scale_history = self._normalize_scale_history(
+                    self.scale_history_loader(code)
+                )
+                row["scale_history"] = scale_history
+                row["scale_change"] = self._scale_change(scale_history)
+                if not scale_history:
+                    row_errors.append("fund_scale_history_missing")
+                else:
+                    fund_source_refs.append(
+                        {
+                            "type": "fund_scale_history",
+                            "provider": "eastmoney",
+                            "id": f"eastmoney.fund_scale_history:{code}",
+                        }
+                    )
+            except Exception as exc:
+                row.update({"scale_history": [], "scale_change": {}})
+                row_errors.append("fund_scale_history_unavailable")
+                errors.append(self._error(f"scale_history:{code}", exc))
             row["data_gap"] = list(dict.fromkeys([*list(row.get("data_gap") or []), *row_errors]))
             row["quality_status"] = "degraded" if row["data_gap"] else "available"
             enriched.append(row)
@@ -384,6 +468,245 @@ class FundSnapshotSkill:
                 for index, frame in enumerate(frames)
             ]
 
+    @staticmethod
+    def _load_overview(code: str):
+        return call_with_retry(
+            lambda: ak.fund_individual_basic_info_xq(symbol=code, timeout=15),
+            retries=2,
+            delay_seconds=0.25,
+        )
+
+    @staticmethod
+    def _load_achievement(code: str) -> dict[str, Any]:
+        response = requests.get(
+            f"https://danjuanfunds.com/djapi/fundx/base/fund/achievement/{code}",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; Cognitrade/1.0)"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        return dict(data) if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _load_manager_tenure(code: str):
+        response = requests.get(
+            f"https://fundf10.eastmoney.com/jjjl_{code}.html",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; Cognitrade/1.0)"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        frames = pd.read_html(StringIO(response.text))
+        return next(
+            (
+                frame
+                for frame in frames
+                if {"起始期", "截止期", "基金经理", "任职期间", "任职回报"}.issubset(
+                    {str(column) for column in frame.columns}
+                )
+            ),
+            pd.DataFrame(),
+        )
+
+    @staticmethod
+    def _load_scale_history(code: str) -> list[dict[str, Any]]:
+        response = requests.get(
+            "https://fundf10.eastmoney.com/FundArchivesDatas.aspx",
+            params={"type": "gmbd", "mode": "0", "code": code, "rt": "0.1"},
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; Cognitrade/1.0)",
+                "Referer": f"https://fundf10.eastmoney.com/gmbd_{code}.html",
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        text = response.text
+        start = text.find("{")
+        if start < 0:
+            return []
+        payload = demjson.decode(text[start:-1])
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        return [dict(row) for row in rows] if isinstance(rows, list) else []
+
+    @classmethod
+    def _normalize_overview(cls, payload: Any) -> dict[str, Any]:
+        rows = cls._rows(payload)
+        values: dict[str, Any] = {}
+        if rows and {"item", "value"}.issubset(rows[0]):
+            values = {
+                str(row.get("item") or "").strip(): normalize_value(row.get("value"))
+                for row in rows
+                if str(row.get("item") or "").strip()
+            }
+        elif rows:
+            values = {str(key): normalize_value(value) for key, value in rows[0].items()}
+        if not values:
+            return {}
+        normalized = {
+            "fund_company": cls._first(values, ("基金公司", "管理人")),
+            "fund_manager": cls._first(values, ("基金经理",)),
+            "inception_date": cls._date_value(cls._first(values, ("成立时间", "成立日期"))),
+            "latest_scale": normalize_value(cls._first(values, ("最新规模", "基金规模"))),
+            "custodian": cls._first(values, ("托管银行", "托管人")),
+            "investment_objective": cls._first(values, ("投资目标",)),
+            "investment_strategy": cls._first(values, ("投资策略",)),
+            "benchmark_definition": cls._first(values, ("业绩比较基准",)),
+        }
+        return normalized if any(
+            value is not None and value != "" for value in normalized.values()
+        ) else {}
+
+    @classmethod
+    def _normalize_achievement(cls, payload: Any) -> list[dict[str, Any]]:
+        raw_rows: list[dict[str, Any]] = []
+        if isinstance(payload, dict):
+            for group, label in (
+                ("stage_performance_list", "stage"),
+                ("annual_performance_list", "annual"),
+            ):
+                for item in list(payload.get(group) or []):
+                    if isinstance(item, dict):
+                        raw_rows.append({**item, "period_group": label})
+        else:
+            raw_rows = cls._rows(payload)
+        output: list[dict[str, Any]] = []
+        for raw in raw_rows:
+            period = str(
+                cls._first(raw, ("period_time", "周期", "period")) or ""
+            ).strip()
+            fund_return = cls._percent_value(
+                cls._first(raw, ("self_nav", "本产品区间收益", "fund_return_pct"))
+            )
+            benchmark_return = cls._percent_value(
+                cls._first(raw, ("standard_index_nav", "基准区间收益", "benchmark_return_pct"))
+            )
+            if not period or (fund_return is None and benchmark_return is None):
+                continue
+            output.append(
+                {
+                    "period": period,
+                    "period_group": raw.get("period_group") or raw.get("业绩类型"),
+                    "fund_return_pct": fund_return,
+                    "benchmark_return_pct": benchmark_return,
+                    "excess_return_pct": (
+                        round(fund_return - benchmark_return, 6)
+                        if fund_return is not None and benchmark_return is not None
+                        else None
+                    ),
+                    "fund_max_drawdown_pct": cls._percent_value(
+                        cls._first(raw, ("self_max_draw_down", "本产品最大回撤"))
+                    ),
+                    "benchmark_max_drawdown_pct": cls._percent_value(
+                        cls._first(raw, ("standard_index_max_draw_down", "基准最大回撤"))
+                    ),
+                    "peer_rank": cls._first(raw, ("self_nav_rank", "周期收益同类排名")),
+                }
+            )
+        return output
+
+    @classmethod
+    def _normalize_manager_tenures(cls, payload: Any) -> list[dict[str, Any]]:
+        output: list[dict[str, Any]] = []
+        for raw in cls._rows(payload):
+            manager = str(cls._first(raw, ("基金经理", "manager")) or "").strip()
+            start_date = cls._date_value(cls._first(raw, ("起始期", "起始时间", "start_date")))
+            end_value = cls._first(raw, ("截止期", "截止时间", "end_date"))
+            end_text = str(end_value or "").strip()
+            if not manager or not start_date:
+                continue
+            output.append(
+                {
+                    "manager": manager,
+                    "managers": [item for item in manager.split() if item],
+                    "start_date": start_date,
+                    "end_date": None if end_text in {"", "至今"} else cls._date_value(end_value),
+                    "current": end_text in {"", "至今"},
+                    "tenure_text": cls._first(raw, ("任职期间", "任职天数", "tenure")),
+                    "tenure_return_pct": cls._percent_value(
+                        cls._first(raw, ("任职回报", "tenure_return_pct"))
+                    ),
+                }
+            )
+        output.sort(key=lambda row: str(row.get("start_date") or ""), reverse=True)
+        return output
+
+    @classmethod
+    def _normalize_scale_history(cls, payload: Any) -> list[dict[str, Any]]:
+        output: list[dict[str, Any]] = []
+        for raw in cls._rows(payload):
+            report_date = cls._date_value(
+                cls._first(raw, ("FSRQ", "日期", "截止日期", "report_date"))
+            )
+            if not report_date:
+                continue
+            subscriptions = cls._amount_100m(
+                raw, normalized_key="subscriptions_100m", raw_key="QJSG"
+            )
+            redemptions = cls._amount_100m(
+                raw, normalized_key="redemptions_100m", raw_key="QJSH"
+            )
+            output.append(
+                {
+                    "report_date": report_date,
+                    "subscriptions_100m_shares": subscriptions,
+                    "redemptions_100m_shares": redemptions,
+                    "net_flow_100m_shares": (
+                        round(subscriptions - redemptions, 6)
+                        if subscriptions is not None and redemptions is not None
+                        else None
+                    ),
+                    "total_shares_100m": cls._amount_100m(
+                        raw, normalized_key="total_shares_100m", raw_key="QMZFE"
+                    ),
+                    "net_assets_100m_cny": cls._amount_100m(
+                        raw, normalized_key="net_assets_100m_cny", raw_key="QMJZC"
+                    ),
+                    "reported_share_change_pct": cls._percent_value(
+                        cls._first(raw, ("ZFEBDL", "份额变动率", "reported_share_change_pct"))
+                    ),
+                }
+            )
+        output.sort(key=lambda row: str(row["report_date"]), reverse=True)
+        return output[:20]
+
+    @staticmethod
+    def _scale_change(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        if not rows:
+            return {}
+        latest = rows[0]
+        previous = rows[1] if len(rows) > 1 else None
+        share_change = None
+        asset_change = None
+        if previous:
+            latest_shares = coerce_numeric(latest.get("total_shares_100m"))
+            previous_shares = coerce_numeric(previous.get("total_shares_100m"))
+            latest_assets = coerce_numeric(latest.get("net_assets_100m_cny"))
+            previous_assets = coerce_numeric(previous.get("net_assets_100m_cny"))
+            if latest_shares is not None and previous_shares not in {None, 0}:
+                share_change = (latest_shares / previous_shares - 1) * 100
+            if latest_assets is not None and previous_assets not in {None, 0}:
+                asset_change = (latest_assets / previous_assets - 1) * 100
+        return {
+            "latest_report_date": latest.get("report_date"),
+            "previous_report_date": previous.get("report_date") if previous else None,
+            "latest_total_shares_100m": latest.get("total_shares_100m"),
+            "latest_net_assets_100m_cny": latest.get("net_assets_100m_cny"),
+            "latest_net_flow_100m_shares": latest.get("net_flow_100m_shares"),
+            "total_share_change_pct": round(share_change, 6) if share_change is not None else None,
+            "net_asset_change_pct": round(asset_change, 6) if asset_change is not None else None,
+            "status": "available" if previous else "data_gap",
+        }
+
+    @classmethod
+    def _amount_100m(
+        cls, row: dict[str, Any], *, normalized_key: str, raw_key: str
+    ) -> float | None:
+        normalized = cls._numeric(row.get(normalized_key))
+        if normalized is not None:
+            return normalized
+        raw = cls._numeric(row.get(raw_key))
+        return round(raw / 100_000_000, 8) if raw is not None else None
+
     @classmethod
     def _normalize_holdings(cls, payload: Any) -> tuple[list[dict[str, Any]], str | None]:
         period: str | None = None
@@ -499,7 +822,7 @@ class FundSnapshotSkill:
 
     @staticmethod
     def _error(stage: str, exc: Exception) -> dict[str, str]:
-        return {"stage": stage, "error_type": exc.__class__.__name__, "message": str(exc)[:240]}
+        return {"stage": stage, "error_type": exc.__class__.__name__}
 
     @classmethod
     def _unique_codes(cls, values: list[str]) -> list[str]:

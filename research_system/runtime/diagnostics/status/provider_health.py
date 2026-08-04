@@ -16,10 +16,10 @@ class ProviderHealthService:
         self.network_profile = NetworkProfile(timeout_seconds=settings.provider_probe_timeout_seconds)
 
     def build_report(self) -> dict[str, Any]:
-        market_dims = ("market", "fundamental", "notice", "sector", "lhb", "capital_flow", "sentiment", "events", "policy", "contests")
+        market_dims = ("market", "fundamental", "notice", "sector", "lhb", "capital_flow", "sentiment", "events", "policy", "contests", "fund")
         provider_rows = []
         for dim in market_dims:
-            market = "cn_sector" if dim in {"sector", "policy"} else "cn_equity"
+            market = "cn_sector" if dim in {"sector", "policy"} else "cn" if dim == "fund" else "cn_equity"
             chain = self.providers.get_provider_chain(dim, market)
             configured = [
                 provider

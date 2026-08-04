@@ -18,6 +18,9 @@ DRY_RUN=0
 REQUIRE_OPENAI=0
 BUILD_RETRIES="${COGNITRADE_DEPLOY_BUILD_RETRIES:-2}"
 LOG_TARGET="all"
+PROVIDER_SMOKE_SYMBOL="${COGNITRADE_PROVIDER_SMOKE_SYMBOL:-600519}"
+PROVIDER_SMOKE_SECTOR="${COGNITRADE_PROVIDER_SMOKE_SECTOR:-}"
+PROVIDER_SMOKE_DIMENSIONS="${COGNITRADE_PROVIDER_SMOKE_DIMENSIONS:-}"
 DOCKER_BIN="${COGNITRADE_DOCKER_BIN:-docker}"
 DOCKER_COMMAND=()
 
@@ -35,6 +38,7 @@ Usage:
   ./scripts/deploy.sh stop [options]           Stop API + frontend web without removing them
   ./scripts/deploy.sh down [options]           Remove containers/network; keep workspace data
   ./scripts/deploy.sh status [options]         Show container and health status
+  ./scripts/deploy.sh provider-smoke [options] Run explicit UZI real-provider checks
   ./scripts/deploy.sh logs [api|web|all]        Follow deployment logs
   ./scripts/deploy.sh token [options]          Print the generated browser Bearer token
 
@@ -62,6 +66,7 @@ Examples:
   ./scripts/deploy.sh start                    # Start both from existing images
   ./scripts/deploy.sh deploy --pull --web-host 0.0.0.0 --web-port 8080
   ./scripts/deploy.sh token
+  COGNITRADE_PROVIDER_SMOKE_SECTOR=白酒 ./scripts/deploy.sh provider-smoke
   ./scripts/deploy.sh logs api
   ./scripts/deploy.sh down
 EOF
@@ -190,7 +195,7 @@ while (( $# )); do
 done
 
 case "$COMMAND" in
-    deploy|install|init|check|build|migrate|start|restart|stop|down|status|logs|token) ;;
+    deploy|install|init|check|build|migrate|start|restart|stop|down|status|provider-smoke|logs|token) ;;
     *) fail "unknown command: $COMMAND" ;;
 esac
 
@@ -631,6 +636,23 @@ case "$COMMAND" in
         ensure_docker 0
         validate_environment
         compose ps
+        ;;
+    provider-smoke)
+        ensure_docker 0
+        validate_environment
+        check_compose_configuration
+        smoke_arguments=(
+            run --rm --no-deps api
+            python -m research_system.runtime.diagnostics.status.uzi_provider_smoke
+            --symbol "$PROVIDER_SMOKE_SYMBOL"
+        )
+        if [[ -n "$PROVIDER_SMOKE_SECTOR" ]]; then
+            smoke_arguments+=(--sector "$PROVIDER_SMOKE_SECTOR")
+        fi
+        if [[ -n "$PROVIDER_SMOKE_DIMENSIONS" ]]; then
+            smoke_arguments+=(--dimensions "$PROVIDER_SMOKE_DIMENSIONS")
+        fi
+        run_compose "${smoke_arguments[@]}"
         ;;
     logs)
         ensure_docker 0

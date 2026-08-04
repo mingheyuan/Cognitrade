@@ -149,7 +149,7 @@ tier1_extension:
 
 fund_extension:
   intent: fund_research
-  status: implemented_v1
+  status: implemented_v2
   capabilities:
     - finance.fund.snapshot.collect
     - finance.fund.analyze
@@ -160,10 +160,27 @@ fund_extension:
     - eastmoney_fund_ranking_via_akshare
     - eastmoney_nav_via_akshare
     - eastmoney_fund_archives_holdings
+    - danjuan_public_fund_overview_and_benchmark
+    - eastmoney_fund_manager_tenure
+    - eastmoney_fund_scale_and_share_history
   selection_gate:
     minimum_comparable_sample: 2
     minimum_score_coverage: 0.6
     missing_metric_imputation: forbidden
+
+provider_smoke:
+  status: implemented_v1
+  command: python -m research_system.runtime.diagnostics.status.uzi_provider_smoke
+  fetcher_count: 22
+  execution: serial
+  contract:
+    real_provider_only: true
+    missing_observation: data_gap
+    available_lineage_required: true
+    raw_observation_output: forbidden
+    raw_exception_output: forbidden
+    sensitive_source_default: disabled
+  acceptance: tests.test_uzi_provider_smoke
 
 panel:
   registry: domain_packs/finance_ashare/subagents/uzi_panel_registry.py
