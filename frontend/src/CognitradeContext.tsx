@@ -129,7 +129,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
       const status = await client.getSystemStatus()
       setSystemStatus(status)
       const [runResult, overviewResult, screeningResult, methodologyResult] = await Promise.allSettled([
-        client.listRuns(50),
+        client.listAllRuns(),
         client.getDashboard('finance_ashare', 'overview'),
         client.getDashboard('finance_ashare', 'screening'),
         client.getDashboard('finance_ashare', 'methodology'),
@@ -170,7 +170,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
               if (eventId) streamCursors.current[runId] = eventId
               setLiveEvents((current) => {
                 if (eventId && current.some((item) => item.event_id === eventId)) return current
-                return [...current, event].slice(-120)
+                return [...current, event]
               })
               const eventMessage = String(event.message || '')
               const isFinalMessageEvent = ['assistant_message_delta', 'assistant_message_ready'].includes(String(event.event_type || ''))
@@ -188,7 +188,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
               if (isTerminal) {
                 terminalEventSeen = true
                 void loadRun(runId, true)
-                void client.listRuns(50).then(setRuns).catch(() => undefined)
+                void client.listAllRuns().then(setRuns).catch(() => undefined)
               }
             },
             controller.signal,
@@ -262,7 +262,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
     if (!selectedRunId || !selectedNeedsDelivery) return
     const timer = window.setInterval(() => {
       void loadRun(selectedRunId, true)
-      void client.listRuns(50).then(setRuns).catch(() => undefined)
+      void client.listAllRuns().then(setRuns).catch(() => undefined)
     }, 2000)
     return () => window.clearInterval(timer)
   }, [client, loadRun, selectedNeedsDelivery, selectedRunId])

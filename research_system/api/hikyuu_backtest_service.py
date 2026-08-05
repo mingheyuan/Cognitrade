@@ -234,12 +234,20 @@ class HikyuuBacktestService:
             )
             connection.commit()
 
-    def list_results(self, *, limit: int = 20) -> list[dict[str, Any]]:
+    def list_results(self, *, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
         normalized_limit = min(max(int(limit), 1), 100)
+        normalized_offset = max(int(offset), 0)
+        rows = self._result_summaries()
+        return rows[normalized_offset:normalized_offset + normalized_limit]
+
+    def count_results(self) -> int:
+        return len(self._result_summaries())
+
+    def _result_summaries(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         with self._lock:
             paths = sorted(self.result_root.glob("*.json"), reverse=True)
-            for path in paths[:normalized_limit]:
+            for path in paths:
                 try:
                     payload = json.loads(path.read_text(encoding="utf-8"))
                 except Exception:

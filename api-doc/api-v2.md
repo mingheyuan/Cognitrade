@@ -379,10 +379,11 @@ Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格�
 
 ### `GET /api/v2/finance/paper/orders`
 
-`limit` 范围为 1–200，默认 50。返回当前活动账户的倒序成交记录：
+`limit` 范围为 1–200，默认 50；`offset` 从 0 开始，默认 0。返回当前活动账户的
+倒序成交记录及完整记录总数，调用方可以逐页读取而不丢失历史委托：
 
 ```json
-{"orders": []}
+{"orders": [], "total_count": 0, "limit": 50, "offset": 0}
 ```
 
 ### `GET /api/v2/finance/paper/engine`
@@ -435,7 +436,8 @@ K 线至少为 `slow_period + 5` 根。结果包含：
 <workspace_root>/backtests/<backtest_id>.json
 ```
 
-`GET /api/v2/finance/backtests` 返回摘要列表；`GET
+`GET /api/v2/finance/backtests` 返回摘要列表，支持 `limit=1..100` 与从 0 开始的
+`offset`，响应同时包含 `total_count`、`limit`、`offset`；`GET
 /api/v2/finance/backtests/{backtest_id}` 返回完整可回放结果。
 
 ## 前端配置

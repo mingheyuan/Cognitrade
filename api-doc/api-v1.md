@@ -87,9 +87,13 @@ The response identifies the canonical protocol and graph state:
 The installed `finance_ashare` Pack accepts these intents through the same
 endpoint: `stock_check`, `stock_compare`, `stock_screen`, `fund_research`,
 `portfolio_research`, `sector_research`, `review_thesis`, and
-`distill_kol_logic`. When `intent` is
-omitted, Pack Task Intake resolves it from the query or returns a structured
+`distill_kol_logic`. When `intent` is omitted, Pack Task Intake resolves it
+from the query or returns a structured
 clarification instead of silently defaulting to stock analysis.
+
+`GET /api/v1/runs` 返回倒序运行历史，支持 `limit=1..100`（默认 20）、从 0
+开始的 `offset`，以及可选 `status` 过滤。客户端应逐页读取直到返回数量少于
+`limit`，从而完整载入历史运行。
 
 ### Fund research
 

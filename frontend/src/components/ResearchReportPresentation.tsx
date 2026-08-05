@@ -11,6 +11,7 @@ import {
   TrendingDown,
   TrendingUp,
 } from 'lucide-react'
+import { businessFieldLabel } from '../artifacts/labels'
 import { asNumber, asRecord, asString, asStringList } from '../live-data'
 import type { ResearchReport } from '../research-contracts'
 
@@ -402,7 +403,7 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
                     <strong>{verdictLabel(statusText(methodRecord.status))}</strong>
                   </div>
                   <p>{asString(methodRecord.summary, '未返回模型摘要。')}</p>
-                  {Object.keys(assumptions).length > 0 && <small className="research-presentation__method-card__meta">假设：{Object.entries(assumptions).map(([key, value]) => `${key}=${Array.isArray(value) ? `[${value.join(', ')}]` : String(value)}`).join(' · ')}</small>}
+                  {Object.keys(assumptions).length > 0 && <small className="research-presentation__method-card__meta">假设：{Object.entries(assumptions).map(([key, value]) => `${businessFieldLabel(key)}=${Array.isArray(value) ? value.join('、') : String(value)}`).join(' · ')}</small>}
                   {sensitivity.length > 0 && (
                     <div className="research-presentation__sensitivity-grid" aria-label="估值敏感性矩阵">
                       {sensitivity.map((cell, cellIndex) => <span key={cellIndex}>{numberText(cell.fair_value, 0)}</span>)}

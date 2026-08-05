@@ -153,15 +153,18 @@ export function ArtifactArchive({ artifacts }: ArtifactArchiveProps) {
   const [query, setQuery] = useState('')
   const normalized = useMemo(() => artifacts.map(asArtifact).filter((artifact) => isFinanceArtifactType(String(artifact.artifact_type || ''))), [artifacts])
   const active = normalized.filter((artifact) => !['superseded', 'rejected'].includes(String(artifact.status || 'active')))
-  const filtered = active.filter((artifact) => {
+  const historical = normalized.filter((artifact) => ['superseded', 'rejected'].includes(String(artifact.status || 'active')))
+  const matchesQuery = (artifact: ArtifactRecordView) => {
     const artifactType = String(artifact.artifact_type || '') as FinanceArtifactType
     const haystack = `${artifactType} ${financeArtifactTitle(artifactType)}`.toLowerCase()
     return !query.trim() || haystack.includes(query.trim().toLowerCase())
-  })
+  }
+  const filtered = active.filter(matchesQuery)
+  const filteredHistorical = historical.filter(matchesQuery)
   const availableCount = active.filter((artifact) => ['available', 'active'].includes(qualityStatus(artifact))).length
   const degradedCount = active.filter((artifact) => !['available', 'active'].includes(qualityStatus(artifact))).length
 
-  if (!active.length) return null
+  if (!normalized.length) return null
   return (
     <section className="artifact-archive" aria-label="完整分析档案">
       <header className="artifact-archive-header">
@@ -173,11 +176,12 @@ export function ArtifactArchive({ artifacts }: ArtifactArchiveProps) {
         <div className="artifact-archive-stats">
           <span><CheckCircle2 size={13} />{availableCount} 项可用</span>
           <span className={degradedCount ? 'is-warning' : ''}><AlertCircle size={13} />{degradedCount} 项需关注</span>
+          <span><Database size={13} />{historical.length} 项历史版本</span>
         </div>
       </header>
       <div className="artifact-archive-toolbar">
         <label><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索分析产物" /></label>
-        <span>{filtered.length} / {active.length} 项业务 Artifact</span>
+        <span>{filtered.length + filteredHistorical.length} / {normalized.length} 项业务 Artifact</span>
       </div>
       <div className="artifact-archive-groups">
         {GROUPS.map((group) => {
@@ -195,9 +199,17 @@ export function ArtifactArchive({ artifacts }: ArtifactArchiveProps) {
             </section>
           )
         })}
-        {!filtered.length && <div className="artifact-archive-empty"><FileSearch size={18} />没有匹配的业务 Artifact。</div>}
+        {filteredHistorical.length > 0 && (
+          <section className="artifact-archive-group artifact-archive-group--historical">
+            <header><h3>历史与已拒绝版本</h3><span>{filteredHistorical.length} 项</span></header>
+            <div>{filteredHistorical.map((artifact, index) => {
+              const artifactType = String(artifact.artifact_type) as FinanceArtifactType
+              return <ArtifactCard key={artifact.artifact_id || `${artifactType}-history-${index}`} artifact={artifact} artifactType={artifactType} index={index} />
+            })}</div>
+          </section>
+        )}
+        {!filtered.length && !filteredHistorical.length && <div className="artifact-archive-empty"><FileSearch size={18} />没有匹配的业务 Artifact。</div>}
       </div>
     </section>
   )
 }
-

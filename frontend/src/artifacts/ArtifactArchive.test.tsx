@@ -82,4 +82,21 @@ describe('Finance Artifact renderer coverage', () => {
       result.unmount()
     }
   })
+
+  it('keeps superseded and rejected artifact versions available for audit', () => {
+    render(<ArtifactArchive artifacts={[
+      {
+        artifact_id: 'old-report', artifact_type: 'research_report', status: 'superseded',
+        content: { conclusion: '历史版本结论必须保留' },
+      },
+      {
+        artifact_id: 'rejected-report', artifact_type: 'research_report', status: 'rejected',
+        content: { conclusion: '被拒绝版本也可审计' },
+      },
+    ]} />)
+
+    expect(screen.getByText('历史与已拒绝版本')).toBeInTheDocument()
+    expect(screen.getByText('历史版本结论必须保留')).toBeInTheDocument()
+    expect(screen.getByText('被拒绝版本也可审计')).toBeInTheDocument()
+  })
 })

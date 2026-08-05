@@ -90,7 +90,7 @@ export function RunInspector({ selectedEvidence, onSelectEvidence }: RunInspecto
         <div className="run-meta-grid turn-context-grid">
           <span><GitBranch size={13} /><small>MODE</small><strong>{executionMode}</strong></span>
           <span><Bot size={13} /><small>TASK</small><strong>{taskType}</strong></span>
-          <span><Database size={13} /><small>TURN</small><strong title={asString(turn.turn_id)}>{asString(turn.turn_id, '—').slice(0, 12)}</strong></span>
+          <span><Database size={13} /><small>TURN</small><strong title={asString(turn.turn_id)}>{asString(turn.turn_id, '—')}</strong></span>
           <span><ShieldCheck size={13} /><small>SELECTED</small><strong title={selectionReason}>{selectionReason || 'default'}</strong></span>
         </div>
 

@@ -91,6 +91,20 @@ class ApiV1RunsTests(unittest.TestCase):
             "http://127.0.0.1:4173",
         )
 
+    def test_run_history_supports_offset_without_changing_array_contract(self) -> None:
+        self.run_service.history = lambda: [
+            {"run_id": f"run-{index}", "status": "completed"}
+            for index in range(5)
+        ]
+
+        response = self.client.get(
+            "/api/v1/runs?limit=2&offset=2",
+            headers=auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([row["run_id"] for row in response.json()], ["run-2", "run-3"])
+
     def test_startup_requires_token_unless_local_override_is_explicit(self) -> None:
         app = create_app(
             settings=self.settings,

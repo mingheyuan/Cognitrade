@@ -271,7 +271,7 @@ const FIELD_LABELS: Record<string, string> = {
   holdings: '持仓',
   groups: '分组归因',
   benchmark: '基准',
-  total_return_pct: '组合总收益率',
+  total_return_pct: '总收益率',
   observed_contribution_pct: '已观测收益贡献',
   observed_weight_coverage: '已观测权重覆盖率',
   drift_table: '权重漂移',
@@ -470,6 +470,50 @@ const FIELD_LABELS: Record<string, string> = {
   after_top3_weight: '调整后前三大权重',
   portfolio_value: '组合总市值',
   suggested_value_change: '建议市值调整',
+  task_selection: '任务选择依据',
+  reason_codes: '选择原因',
+  selected_task_type: '选定任务类型',
+  execution_mode: '执行模式',
+  tool_call_count: 'Tool 调用总数',
+  nodes: '执行节点数',
+  subagents: '子 Agent 数',
+  completed_nodes: '已完成节点数',
+  failed_nodes: '失败节点数',
+  artifacts: 'Artifact 数量',
+  gates: '质量门禁数',
+  tool_calls: 'Tool 调用数',
+  tokens: 'Token 用量',
+  duration_seconds: '运行时长（秒）',
+  node_status_counts: '节点状态分布',
+  event_type_counts: '事件类型分布',
+  graph_event_counts: '执行图事件分布',
+  degrade_reason_counts: '降级原因分布',
+  provider_unavailable: '数据源不可用',
+  step_counts: '步骤计数',
+  status_counts: '状态分布',
+  event_counts: '事件计数',
+  distinct_event_types: '事件类型数量',
+  total: '总数',
+  completed: '已完成',
+  pending: '等待执行',
+  failed: '失败',
+  running: '运行中',
+  dataset_id: '数据集编号',
+  endpoint: '数据端点',
+  frequency: '数据频率',
+  commission_rate: '佣金率',
+  minimum_commission: '最低佣金',
+  stamp_duty_rate: '印花税率',
+  transfer_fee_rate: '过户费率',
+  fast_period: '短周期',
+  slow_period: '长周期',
+  trade_size: '每次交易数量',
+  initial_cash: '初始资金',
+  final_equity: '期末权益',
+  annualized_return_pct: '年化收益率',
+  closed_trade_count: '已平仓交易数',
+  winning_trade_rate_pct: '盈利交易比例',
+  profit_loss_ratio: '平均盈亏比',
 }
 
 const FIELD_WORDS: Record<string, string> = {
@@ -486,6 +530,9 @@ const FIELD_WORDS: Record<string, string> = {
   expense: '费用', expenses: '费用', fee: '费用', management: '管理', research: '研发', development: '开发', tax: '税费',
   rank: '排名', score: '评分', period: '期间', return: '收益', benchmark: '基准', holdings: '持仓', holding: '持仓', fund: '基金',
   dimension: '维度', available: '可用', missing: '缺失', derived: '推导', raw: '原始', quality: '质量', risk: '风险', flag: '标记',
+  graph: '执行图', node: '节点', event: '事件', started: '开始', completed: '完成', failed: '失败', finished: '结束', ready: '就绪',
+  assistant: '助手', message: '消息', agent: '智能体', tool: '工具', call: '调用', requested: '请求', committed: '已提交', artifact: '产物',
+  progress: '进度', frontier: '前沿', run: '运行', usage: '用量', duration: '时长', seconds: '秒', cached: '缓存', input: '输入', output: '输出',
 }
 
 const VALUE_LABELS: Record<string, string> = {
@@ -536,6 +583,7 @@ export function businessValueLabel(value: string): string {
 
 export function isSensitiveBusinessKey(key: string): boolean {
   const normalized = key.trim().toLowerCase()
+  if (['tokens', 'token_count', 'input_tokens', 'output_tokens', 'cached_tokens'].includes(normalized)) return false
   return SENSITIVE_PARTS.some((part) => normalized.includes(part))
 }
 

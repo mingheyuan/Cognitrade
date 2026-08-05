@@ -39,6 +39,7 @@ import { ArtifactArchive } from '../artifacts/ArtifactArchive'
 import { BusinessDataView } from '../artifacts/BusinessDataView'
 import { IntentDeliveryDossier } from '../artifacts/IntentDeliveryDossier'
 import { MethodDeliveryDossier } from '../artifacts/MethodDeliveryDossier'
+import { RunGovernanceDossier } from '../artifacts/RunGovernanceDossier'
 import { ResearchComposer } from './ResearchComposer'
 import { ResearchReportPresentation } from './ResearchReportPresentation'
 
@@ -557,6 +558,8 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
           </article>
           )
         )}
+
+        {selectedRun && <RunGovernanceDossier detail={selectedRun} />}
 
         {selectedRun && !isClarification && !isActiveStatus(status) && (
           <ArtifactArchive artifacts={selectedRun.replay.artifacts || []} />

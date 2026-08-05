@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { CognitradeApiClient, CognitradeApiError } from '../api-client'
+import { BusinessDataView } from '../artifacts/BusinessDataView'
 import { useCognitrade } from '../CognitradeContext'
 import type {
   BacktestResult,
@@ -41,10 +42,10 @@ export function Backtesting() {
     try {
       const [enginePayload, historyPayload] = await Promise.all([
         client.getBacktestEngine(),
-        client.listBacktests(12),
+        loadAllBacktests(client),
       ])
       setEngine(enginePayload)
-      setHistory(historyPayload.results)
+      setHistory(historyPayload)
     } catch (loadError) {
       setError(apiErrorMessage(loadError))
     } finally {
@@ -77,8 +78,7 @@ export function Backtesting() {
       })
       setResult(payload)
       setSymbol(payload.symbol)
-      const historyPayload = await client.listBacktests(12)
-      setHistory(historyPayload.results)
+      setHistory(await loadAllBacktests(client))
     } catch (runError) {
       setError(apiErrorMessage(runError))
     } finally {
@@ -134,6 +134,7 @@ export function Backtesting() {
           <strong>独立结果文件 · 不触碰模拟账户</strong>
         </div>
       </section>
+      {engine && <BacktestEngineDisclosure engine={engine} />}
 
       <div className="backtest-workspace">
         <form className="backtest-config-card" onSubmit={runBacktest}>
@@ -181,28 +182,48 @@ export function Backtesting() {
           ))}
           {!history.length && !loading && <div className="backtest-history-empty">尚无已保存的回测结果</div>}
         </div>
+        {history.length > 0 && <footer className="backtest-history-footer">已载入全部 {history.length} 条持久化回测记录</footer>}
       </section>
     </main>
   )
 }
 
-function BacktestResultPanel({ result }: { result: BacktestResult }) {
+export function BacktestEngineDisclosure({ engine }: { engine: QuantEngineStatus }) {
+  return (
+    <section className="backtest-engine-disclosure" aria-label="完整回测引擎能力">
+      <header><div><span className="section-kicker">ENGINE CAPABILITIES</span><h2>回测引擎能力</h2></div><span className={engine.available ? 'is-ready' : 'is-missing'}>{engine.available ? '可用' : '不可用'}</span></header>
+      <dl><div><dt>引擎</dt><dd>{engine.engine}</dd></div><div><dt>版本</dt><dd>{engine.version || '未提供'}</dd></div><div><dt>运行模式</dt><dd>{engine.mode === 'isolated_external_kdata' ? '隔离进程 · 外部 K 线输入' : engine.mode}</dd></div><div><dt>数据输入</dt><dd>{engine.data_source || '未提供'}</dd></div></dl>
+      <div className="backtest-engine-strategies"><h3>可用策略</h3>{engine.strategies?.length ? <ul>{engine.strategies.map((strategy) => <li key={strategy.id}><strong>{strategy.name}</strong><small>{strategy.id}</small><p>{strategy.description}</p></li>)}</ul> : <p>后端未声明可用策略。</p>}</div>
+      {engine.load_error && <p className="paper-engine-warning"><AlertCircle size={13} />回测依赖未完整加载，请检查服务端量化依赖。</p>}
+    </section>
+  )
+}
+
+export function BacktestResultPanel({ result }: { result: BacktestResult }) {
   const positive = result.metrics.total_return_pct >= 0
   return (
     <>
       <header className="backtest-result-heading">
-        <div><span className="section-kicker">{result.symbol} · {result.engine.name.toUpperCase()}</span><h2>{result.name} 回测结果</h2><p>{result.period.start} 至 {result.period.end} · {result.period.bar_count} 根日 K</p></div>
+        <div><span className="section-kicker">{result.symbol} · {result.engine.name.toUpperCase()} {result.engine.version}</span><h2>{result.name} 回测结果</h2><p>{result.period.start} 至 {result.period.end} · {result.period.bar_count} 根 {frequencyLabel(result.period.frequency)}</p><small className="backtest-result-id">{result.backtest_id} · {formatDateTime(result.created_at)}</small></div>
         <span className={`backtest-return-badge ${positive ? 'is-positive' : 'is-negative'}`}>{formatPercent(result.metrics.total_return_pct)}</span>
       </header>
       <div className="backtest-metrics-grid">
+        <ResultMetric icon={<Database size={16} />} label="初始资金" value={formatMoney(result.metrics.initial_cash)} />
         <ResultMetric icon={<TrendingUp size={16} />} label="期末权益" value={formatMoney(result.metrics.final_equity)} />
+        <ResultMetric icon={<TrendingUp size={16} />} label="累计收益" value={formatPercent(result.metrics.total_return_pct)} tone={result.metrics.total_return_pct >= 0 ? 'up' : 'down'} />
         <ResultMetric icon={<Activity size={16} />} label="年化收益" value={formatPercent(result.metrics.annualized_return_pct)} tone={result.metrics.annualized_return_pct >= 0 ? 'up' : 'down'} />
         <ResultMetric icon={<TrendingDown size={16} />} label="最大回撤" value={formatPercent(result.metrics.max_drawdown_pct)} tone="down" />
         <ResultMetric icon={<Gauge size={16} />} label="已平仓交易" value={`${result.metrics.closed_trade_count} 笔`} />
+        <ResultMetric icon={<Gauge size={16} />} label="盈利交易比例" value={formatPercent(result.metrics.winning_trade_rate_pct)} />
+        <ResultMetric icon={<Gauge size={16} />} label="平均盈亏比" value={formatRatio(result.metrics.profit_loss_ratio)} />
       </div>
       <EquityCurve points={result.equity_curve} initialCash={result.metrics.initial_cash} />
+      <section className="backtest-contract-grid" aria-label="完整回测配置与数据说明">
+        <article><h3>策略与费用参数</h3><dl><div><dt>策略</dt><dd>{result.strategy.name}（{result.strategy.id}）</dd></div><div><dt>短周期</dt><dd>{String(result.parameters.fast_period)}</dd></div><div><dt>长周期</dt><dd>{String(result.parameters.slow_period)}</dd></div><div><dt>每次交易数量</dt><dd>{Number(result.parameters.trade_size || 0).toLocaleString()} 股</dd></div><div><dt>佣金率</dt><dd>{formatRate(result.parameters.commission_rate)}</dd></div><div><dt>最低佣金</dt><dd>{formatMoney(Number(result.parameters.minimum_commission || 0))}</dd></div><div><dt>印花税率</dt><dd>{formatRate(result.parameters.stamp_duty_rate)}</dd></div><div><dt>过户费率</dt><dd>{formatRate(result.parameters.transfer_fee_rate)}</dd></div></dl></article>
+        <article><h3>数据与运行范围</h3><dl><div><dt>数据质量</dt><dd>{qualityLabel(result.data_quality_status)}</dd></div><div><dt>数据频率</dt><dd>{frequencyLabel(result.period.frequency)}</dd></div><div><dt>K 线数量</dt><dd>{result.period.bar_count.toLocaleString()} 根</dd></div><div><dt>开始日期</dt><dd>{result.period.start}</dd></div><div><dt>结束日期</dt><dd>{result.period.end}</dd></div><div><dt>回测引擎</dt><dd>{result.engine.name} {result.engine.version}</dd></div></dl>{result.data_source && <div className="backtest-source-disclosure"><h4>行情来源</h4><BusinessDataView value={result.data_source} fieldKey="source" path="backtest.data_source" compact /></div>}</article>
+      </section>
       <div className="backtest-trade-table-wrap">
-        <h3>成交记录</h3>
+        <h3>全部成交记录 <small>{result.trades.length} 笔</small></h3>
         <table className="backtest-trade-table">
           <thead><tr><th>日期</th><th>方向</th><th>价格</th><th>数量</th><th>费用</th><th>成交后现金</th></tr></thead>
           <tbody>
@@ -222,6 +243,21 @@ function BacktestResultPanel({ result }: { result: BacktestResult }) {
       </div>
     </>
   )
+}
+
+async function loadAllBacktests(client: CognitradeApiClient): Promise<BacktestSummary[]> {
+  const pageSize = 100
+  const rows: BacktestSummary[] = []
+  let offset = 0
+  let total = Number.POSITIVE_INFINITY
+  while (offset < total) {
+    const page = await client.listBacktests(pageSize, offset)
+    total = page.total_count
+    if (!page.results.length) break
+    rows.push(...page.results)
+    offset += page.results.length
+  }
+  return Array.from(new Map(rows.map((item) => [item.backtest_id, item])).values())
 }
 
 function ResultMetric({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: string; tone?: 'up' | 'down' }) {
@@ -267,6 +303,28 @@ function formatMoney(value: number): string {
 
 function formatPercent(value: number): string {
   return `${value > 0 ? '+' : ''}${Number(value || 0).toFixed(2)}%`
+}
+
+function formatRate(value: unknown): string {
+  const rate = Number(value)
+  return Number.isFinite(rate) ? `${(rate * 100).toFixed(3)}%` : '未提供'
+}
+
+function formatRatio(value: number): string {
+  return Number.isFinite(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 4 }) : '—'
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function frequencyLabel(value: string): string {
+  return ({ DAY: '日 K', WEEK: '周 K', MONTH: '月 K' } as Record<string, string>)[value] || value
+}
+
+function qualityLabel(value?: string): string {
+  return ({ available: '数据可用', degraded: '部分数据降级', data_gap: '数据不足' } as Record<string, string>)[String(value || '')] || value || '未提供'
 }
 
 function apiErrorMessage(error: unknown): string {

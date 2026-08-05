@@ -137,6 +137,7 @@ async def paper_portfolio(
 @router.get("/paper/orders")
 async def paper_orders(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
     principal: ApiPrincipal = Depends(require_principal),
     service: PaperTradingService = Depends(get_paper_trading),
 ) -> dict:
@@ -146,8 +147,14 @@ async def paper_orders(
         tenant_id=tenant_id,
         user_id=user_id,
         limit=limit,
+        offset=offset,
     )
-    return {"orders": orders}
+    total_count = await run_in_threadpool(
+        service.count_orders,
+        tenant_id=tenant_id,
+        user_id=user_id,
+    )
+    return {"orders": orders, "total_count": total_count, "limit": limit, "offset": offset}
 
 
 @router.post("/paper/orders", status_code=status.HTTP_201_CREATED)
@@ -221,10 +228,12 @@ async def backtest_engine(
 @router.get("/backtests")
 async def list_backtests(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
     service: HikyuuBacktestService = Depends(get_backtesting),
 ) -> dict:
-    results = await run_in_threadpool(service.list_results, limit=limit)
-    return {"results": results}
+    results = await run_in_threadpool(service.list_results, limit=limit, offset=offset)
+    total_count = await run_in_threadpool(service.count_results)
+    return {"results": results, "total_count": total_count, "limit": limit, "offset": offset}
 
 
 @router.post("/backtests", status_code=status.HTTP_201_CREATED)
