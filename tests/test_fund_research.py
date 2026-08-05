@@ -16,7 +16,7 @@ from domain_packs.finance_ashare.skills.uzi_source_snapshot.skill import (
     ValuationSnapshotSkill,
 )
 from domain_packs.finance_ashare.subagents.fund_methodology import build_fund_analysis
-from domain_packs.finance_ashare.subagents.runtime import collect_fund_snapshot
+from domain_packs.finance_ashare.subagents.runtime import collect_fund_snapshot, compose_fund_report
 from domain_packs.finance_ashare.subagents.uzi_methodology import build_features
 from domain_packs.finance_ashare.subagents.uzi_panel_rules import evaluate_investor
 from domain_packs.finance_ashare.tools.fund_master import FundResolution, FundSecurityMaster
@@ -176,6 +176,7 @@ class FundResearchTests(unittest.TestCase):
         repository_root = Path(__file__).resolve().parents[1]
         payload = {
             "query": "比较基金",
+            "analysis_mode": "comparison",
             "fund_codes": ["110011", "005827"],
             "fund_category": "混合型",
             "investment_cycle": "long_term",
@@ -287,7 +288,7 @@ class FundResearchTests(unittest.TestCase):
                     first_candidate = analysis_artifact["content"]["candidates"][0]
                     self.assertEqual(
                         analysis_artifact["content"]["methodology_version"],
-                        "uzi-3.9.2-fund-selection-v3",
+                        "uzi-3.9.2-fund-selection-v4",
                     )
                     self.assertEqual(first_candidate["benchmark_performance"][0]["excess_return_pct"], 12)
                     self.assertTrue(first_candidate["manager_tenures"][0]["current"])
@@ -366,6 +367,7 @@ class FundResearchTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["fund_category"], "混合型")
+        self.assertEqual(payload["analysis_mode"], "comparison")
         self.assertEqual(len(payload["funds"]), 3)
         first = payload["funds"][0]
         self.assertEqual(first["holdings_period"], "2026年2季度")
@@ -406,7 +408,8 @@ class FundResearchTests(unittest.TestCase):
         self.assertGreaterEqual(analysis["recommendations"][0]["score_coverage"], 0.6)
         self.assertIn("缺失字段不补 0", analysis["selection_policy"]["non_imputation_rule"])
         self.assertIn("benchmark_excess_1y", analysis["candidates"][0]["metrics"])
-        self.assertEqual(analysis["methodology_version"], "uzi-3.9.2-fund-selection-v3")
+        self.assertEqual(analysis["analysis_mode"], "comparison")
+        self.assertEqual(analysis["methodology_version"], "uzi-3.9.2-fund-selection-v4")
 
     def test_fund_without_three_year_return_uses_complete_since_inception_history(self) -> None:
         ranking = _ranking_frame().iloc[[0]].copy()
@@ -444,10 +447,29 @@ class FundResearchTests(unittest.TestCase):
         candidate = analysis["candidates"][0]
 
         self.assertEqual(len(fund["nav_history"]), 800)
+        self.assertEqual(snapshot["analysis_mode"], "single_fund")
+        self.assertEqual(analysis["analysis_mode"], "single_fund")
+        self.assertEqual(analysis["quality_status"], "available")
         self.assertEqual(fund["risk"]["period_start"], "2024-01-01")
         self.assertIn("return_3y_annualized", candidate["metrics"])
         self.assertNotIn("return_3y_annualized", candidate["data_gap"])
+        self.assertNotIn("comparable_fund_sample_too_small", candidate["data_gap"])
+        self.assertEqual(candidate["score_coverage"], 1.0)
+        self.assertIsNone(candidate["score"])
         self.assertAlmostEqual(candidate["metrics"]["return_3y_annualized"], 20.3637, places=4)
+        report = compose_fund_report(
+            SimpleNamespace(
+                require_artifact=lambda _artifact_type: SimpleNamespace(
+                    content=analysis,
+                    source_refs=[],
+                    artifact_id="fund-analysis",
+                    confidence=1.0,
+                )
+            )
+        )
+        self.assertIn("单基金分析", report.content["conclusion"])
+        self.assertIn("本次不执行横向排名", report.content["conclusion"])
+        self.assertNotIn("数据缺口", report.content["conclusion"])
 
     def test_missing_fund_metrics_do_not_become_zero_or_a_recommendation(self) -> None:
         analysis = build_fund_analysis(
@@ -471,9 +493,11 @@ class FundResearchTests(unittest.TestCase):
 
         self.assertEqual(analysis["recommendations"], [])
         candidate = analysis["candidates"][0]
+        self.assertEqual(analysis["analysis_mode"], "single_fund")
         self.assertIsNone(candidate["score"])
         self.assertNotIn("return_1y", candidate["metrics"])
-        self.assertIn("no_fund_met_selection_evidence_gate", analysis["data_gap"])
+        self.assertNotIn("no_fund_met_selection_evidence_gate", analysis["data_gap"])
+        self.assertIn("fund_analysis_evidence_coverage_below_60pct", candidate["data_gap"])
 
     def test_fund_intent_plans_dedicated_agent_os_chain(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -537,6 +561,7 @@ class FundResearchTests(unittest.TestCase):
                 status="completed",
                 output={
                     "query": arguments["query"],
+                    "analysis_mode": "single_fund",
                     "fund_codes": ["110011"],
                     "fund_category": "混合型",
                     "funds": [],

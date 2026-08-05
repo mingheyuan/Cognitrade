@@ -135,12 +135,17 @@ modes. Category mode omits `fund_codes`; explicit-code mode sends
 fund type, so a disabled or silently ignored category cannot mislead users.
 
 The graph produces `fund_snapshot`, `fund_analysis`, and `research_report`
-Artifacts. Ranking requires at least two comparable funds and at least 60%
-observed scoring-field coverage. Missing NAV, ranking, fee, or disclosed
-holdings fields remain `data_gap`; the service does not insert simulated or
-neutral values. Fund methodology v2 also records the declared performance
+Artifacts. One explicitly supplied fund uses `analysis_mode: "single_fund"`:
+it is assessed independently, does not require a comparable sample, and does
+not emit a score or rank. Multiple explicit codes and category selection use
+`analysis_mode: "comparison"`; ranking then requires at least two comparable
+funds and at least 60% observed scoring-field coverage. Missing NAV, ranking,
+fee, or disclosed holdings fields remain `data_gap`; the service does not
+insert simulated or neutral values. Fund methodology v4 also records the declared performance
 benchmark, fund-versus-benchmark period returns, manager tenure segments, and
-single-fund scale/share history. The 1-year benchmark excess return is an
+single-fund scale/share history. When a complete trailing-three-year return is
+unavailable, the long-term annualized-return component uses the real
+since-inception return and complete observed NAV interval. The 1-year benchmark excess return is an
 optional scoring component; when it is unavailable, its weight reduces
 coverage rather than becoming zero. Manager tenure and scale changes remain
 descriptive evidence and do not receive an automatic positive/negative score.

@@ -6,7 +6,7 @@ import math
 from typing import Any
 
 
-FUND_METHODOLOGY_VERSION = "uzi-3.9.2-fund-selection-v3"
+FUND_METHODOLOGY_VERSION = "uzi-3.9.2-fund-selection-v4"
 
 _COMPONENTS: tuple[tuple[str, float, bool], ...] = (
     ("return_1y", 0.20, True),
@@ -20,9 +20,12 @@ _COMPONENTS: tuple[tuple[str, float, bool], ...] = (
 
 
 def build_fund_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
-    """Rank comparable funds only from observed performance and NAV evidence."""
+    """Analyze one fund absolutely or rank comparable funds from observed evidence."""
 
     funds = [dict(row) for row in snapshot.get("funds") or [] if isinstance(row, dict)]
+    analysis_mode = str(snapshot.get("analysis_mode") or "").strip()
+    if analysis_mode not in {"single_fund", "comparison"}:
+        analysis_mode = "single_fund" if len(funds) == 1 else "comparison"
     candidates = [_candidate_metrics(row) for row in funds]
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for candidate in candidates:
@@ -40,6 +43,36 @@ def build_fund_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
             for component, _weight, _higher_is_better in _COMPONENTS
         }
         for row in rows:
+            if analysis_mode == "single_fund":
+                observed_weight = sum(
+                    weight
+                    for component, weight, _higher_is_better in _COMPONENTS
+                    if row["metrics"].get(component) is not None
+                )
+                coverage = round(observed_weight / sum(item[1] for item in _COMPONENTS), 4)
+                gaps = list(row.get("data_gap") or [])
+                if coverage < 0.6:
+                    gaps.append("fund_analysis_evidence_coverage_below_60pct")
+                evaluated.append(
+                    {
+                        **row,
+                        "comparison_group": group_name,
+                        "score": None,
+                        "score_coverage": coverage,
+                        "score_components": [],
+                        "selection_eligible": False,
+                        "rank": None,
+                        "data_gap": list(dict.fromkeys(gaps)),
+                        "quality_status": (
+                            "available"
+                            if row.get("metrics") and coverage >= 0.6 and not gaps
+                            else "degraded"
+                            if row.get("metrics")
+                            else "data_gap"
+                        ),
+                    }
+                )
+                continue
             score_parts: list[dict[str, Any]] = []
             observed_weight = 0.0
             weighted_score = 0.0
@@ -86,17 +119,18 @@ def build_fund_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
                 }
             )
 
-    for group_name in groups:
-        group_rows = [row for row in evaluated if row["comparison_group"] == group_name]
-        ranked = sorted(
-            [row for row in group_rows if row["selection_eligible"]],
-            key=lambda row: float(row["score"]),
-            reverse=True,
-        )
-        for rank, row in enumerate(ranked, start=1):
-            row["rank"] = rank
-        for row in group_rows:
-            row.setdefault("rank", None)
+    if analysis_mode == "comparison":
+        for group_name in groups:
+            group_rows = [row for row in evaluated if row["comparison_group"] == group_name]
+            ranked = sorted(
+                [row for row in group_rows if row["selection_eligible"]],
+                key=lambda row: float(row["score"]),
+                reverse=True,
+            )
+            for rank, row in enumerate(ranked, start=1):
+                row["rank"] = rank
+            for row in group_rows:
+                row.setdefault("rank", None)
 
     evaluated.sort(
         key=lambda row: (
@@ -105,41 +139,62 @@ def build_fund_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
             str(row.get("fund_code") or ""),
         )
     )
-    recommendations = [
-        {
-            "fund_code": row["fund_code"],
-            "fund_name": row["fund_name"],
-            "fund_type": row.get("fund_type"),
-            "comparison_group": row["comparison_group"],
-            "rank": row["rank"],
-            "score": row["score"],
-            "score_coverage": row["score_coverage"],
-            "reason": _selection_reason(row),
-            "risk": _risk_summary(row),
-        }
-        for row in evaluated
-        if row.get("selection_eligible") and int(row.get("rank") or 9999) <= 3
-    ]
-    if not recommendations:
+    recommendations = (
+        [
+            {
+                "fund_code": row["fund_code"],
+                "fund_name": row["fund_name"],
+                "fund_type": row.get("fund_type"),
+                "comparison_group": row["comparison_group"],
+                "rank": row["rank"],
+                "score": row["score"],
+                "score_coverage": row["score_coverage"],
+                "reason": _selection_reason(row),
+                "risk": _risk_summary(row),
+            }
+            for row in evaluated
+            if row.get("selection_eligible") and int(row.get("rank") or 9999) <= 3
+        ]
+        if analysis_mode == "comparison"
+        else []
+    )
+    if analysis_mode == "comparison" and not recommendations:
         analysis_gaps.append("no_fund_met_selection_evidence_gate")
+    if analysis_mode == "single_fund" and not evaluated:
+        analysis_gaps.append("no_fund_available_for_analysis")
 
     candidate_gaps = any(row.get("data_gap") for row in evaluated)
-    quality_status = (
-        "available"
-        if recommendations and not analysis_gaps and not candidate_gaps
-        else "degraded"
-        if evaluated
-        else "data_gap"
-    )
+    if analysis_mode == "single_fund":
+        quality_status = (
+            "available"
+            if evaluated and not analysis_gaps and not candidate_gaps
+            else "degraded"
+            if evaluated
+            else "data_gap"
+        )
+    else:
+        quality_status = (
+            "available"
+            if recommendations and not analysis_gaps and not candidate_gaps
+            else "degraded"
+            if evaluated
+            else "data_gap"
+        )
     return {
         "methodology_version": FUND_METHODOLOGY_VERSION,
+        "analysis_mode": analysis_mode,
         "fund_category": snapshot.get("fund_category"),
         "investment_cycle": snapshot.get("investment_cycle"),
         "candidate_count": len(evaluated),
         "candidates": evaluated,
         "recommendations": recommendations,
         "selection_policy": {
-            "description": "同类基金横向比较；长期年化收益优先使用近三年真实收益，基金历史不足三年时使用成立以来真实收益按实际观测期年化。",
+            "description": (
+                "单只基金独立评估，不要求可比样本、不生成横向排名；长期年化收益优先使用近三年真实收益，历史不足三年时使用成立以来真实收益。"
+                if analysis_mode == "single_fund"
+                else "同类基金横向比较；长期年化收益优先使用近三年真实收益，基金历史不足三年时使用成立以来真实收益按实际观测期年化。"
+            ),
+            "comparison_required": analysis_mode == "comparison",
             "minimum_score_coverage": 0.6,
             "minimum_comparable_sample": 2,
             "components": [

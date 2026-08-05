@@ -981,6 +981,7 @@ export type UziDimensionCoverageContent = {
 
 export type FundSnapshotContent = {
   "query": string;
+  "analysis_mode": "single_fund" | "comparison";
   "fund_codes": Array<string>;
   "fund_category": string;
   "investment_cycle"?: string;
@@ -1092,6 +1093,7 @@ export type FundSnapshotContent = {
 
 export type FundAnalysisContent = {
   "methodology_version": string;
+  "analysis_mode": "single_fund" | "comparison";
   "fund_category"?: string | null;
   "investment_cycle"?: string | null;
   "candidate_count": number;
@@ -1207,6 +1209,7 @@ export type FundAnalysisContent = {
   }>;
   "selection_policy": {
     "description": string;
+    "comparison_required": boolean;
     "minimum_score_coverage": number;
     "minimum_comparable_sample": number;
     "components": Array<{
@@ -2420,6 +2423,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
   ],
   "fund_snapshot": [
     "query",
+    "analysis_mode",
     "fund_codes",
     "fund_category",
     "investment_cycle",
@@ -2519,6 +2523,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
   ],
   "fund_analysis": [
     "methodology_version",
+    "analysis_mode",
     "fund_category",
     "investment_cycle",
     "candidate_count",
@@ -2623,6 +2628,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "recommendations[].risk",
     "selection_policy",
     "selection_policy.description",
+    "selection_policy.comparison_required",
     "selection_policy.minimum_score_coverage",
     "selection_policy.minimum_comparable_sample",
     "selection_policy.components",

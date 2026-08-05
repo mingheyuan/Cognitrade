@@ -89,6 +89,7 @@ class FundSnapshotSkill:
     ) -> dict[str, Any]:
         category = self.normalize_category(fund_category)
         requested_codes = self._unique_codes(fund_codes or [])
+        analysis_mode = "single_fund" if len(requested_codes) == 1 else "comparison"
         limit = max(1, min(int(candidate_pool_size), 20))
         errors: list[dict[str, str]] = []
 
@@ -288,6 +289,7 @@ class FundSnapshotSkill:
         )
         return {
             "query": query,
+            "analysis_mode": analysis_mode,
             "fund_codes": [str(row.get("fund_code") or "") for row in enriched],
             "fund_category": category,
             "investment_cycle": investment_cycle,

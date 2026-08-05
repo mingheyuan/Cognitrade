@@ -63,7 +63,9 @@ export function Funds({ onOpenRun }: FundsProps) {
       .filter(Boolean)
     const effectiveCategory = selectionMode === 'codes' ? '全部' : category
     const effectiveCandidatePoolSize = fundCodes.length || candidatePoolSize
-    const query = fundCodes.length
+    const query = fundCodes.length === 1
+      ? `分析基金 ${fundCodes[0]}，按${cycleLabel(cycle)}评估风险收益、基准表现和前十大持仓。`
+      : fundCodes.length > 1
       ? `比较并分析基金 ${fundCodes.join('、')}，按${cycleLabel(cycle)}评估风险收益和前十大持仓。`
       : `从${category}基金中选择风险收益更均衡的候选，按${cycleLabel(cycle)}评估。`
     const response = await createRun(query, 'fund_research', {
@@ -114,7 +116,7 @@ export function Funds({ onOpenRun }: FundsProps) {
             <label>
               <span>基金代码（逗号分隔，最多 20 只）</span>
               <input aria-label="基金代码" value={codes} onChange={(event) => setCodes(event.target.value)} placeholder="例如 110011, 005827" required />
-              <small className="fund-field-help">逐只读取真实基金类型并分组评估，不使用类别筛选。</small>
+              <small className="fund-field-help">一只基金执行独立分析；填写多只时才按真实基金类型分组比较。</small>
             </label>
           )}
           <div className="fund-form-grid">
@@ -135,7 +137,7 @@ export function Funds({ onOpenRun }: FundsProps) {
             {submitting ? <RefreshCw size={15} className="is-spinning" /> : <Play size={15} />}
             {submitting ? 'Agent OS 正在采集' : selectionMode === 'category' ? '开始真实选基' : '开始基金分析'}
           </button>
-          <p className="fund-config-note"><ShieldAlert size={14} />不同大类基金不会混在一起硬排名；单只基金只能评估，不能伪造横向名次。</p>
+          <p className="fund-config-note"><ShieldAlert size={14} />单只基金独立评估且不要求对照组；只有多基金或按类别选基时才生成横向排名。</p>
         </form>
 
         <section className="fund-result-shell">

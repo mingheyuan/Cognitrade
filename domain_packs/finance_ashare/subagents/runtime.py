@@ -248,12 +248,43 @@ def analyze_funds(context):
 def compose_fund_report(context):
     analysis = context.require_artifact("fund_analysis")
     content = dict(analysis.content or {})
+    analysis_mode = str(content.get("analysis_mode") or "comparison")
+    candidates = [
+        dict(row)
+        for row in content.get("candidates") or []
+        if isinstance(row, dict)
+    ]
     recommendations = [
         dict(row)
         for row in content.get("recommendations") or []
         if isinstance(row, dict)
     ]
-    if recommendations:
+    if analysis_mode == "single_fund" and candidates:
+        candidate = candidates[0]
+        metrics = dict(candidate.get("metrics") or {})
+        returns = dict(candidate.get("returns_pct") or {})
+        annualized_label = (
+            "近三年年化收益"
+            if _number(returns.get("year_3")) is not None
+            else "成立以来年化收益"
+        )
+        observed = []
+        for label, key in (
+            ("近一年收益", "return_1y"),
+            (annualized_label, "return_3y_annualized"),
+            ("近一年相对基准", "benchmark_excess_1y"),
+            ("样本期最大回撤", "max_drawdown"),
+            ("年化波动", "volatility"),
+        ):
+            value = _number(metrics.get(key))
+            if value is not None:
+                observed.append(f"{label} {value:+.2f}%")
+        metric_summary = "，".join(observed) or "已采集字段不足以形成风险收益摘要"
+        conclusion = (
+            f"已完成{candidate.get('fund_name')}（{candidate.get('fund_code')}）的单基金分析："
+            f"{metric_summary}。本次不执行横向排名。"
+        )
+    elif recommendations:
         leaders = "、".join(
             f"{row.get('fund_name')}（{row.get('fund_code')}，{float(row.get('score') or 0):.1f}分）"
             for row in recommendations[:3]
@@ -266,10 +297,21 @@ def compose_fund_report(context):
         for row in content.get("provider_errors") or []
         if isinstance(row, dict)
     ]
+    candidate_gaps = [
+        str(gap)
+        for candidate in candidates
+        for gap in candidate.get("data_gap") or []
+        if str(gap).strip()
+    ]
     risks = [
         *list(content.get("data_gap") or []),
+        *candidate_gaps,
         *provider_errors,
-        "历史收益不代表未来表现；基金比较只在同类样本内有效。",
+        (
+            "历史收益不代表未来表现；本次为单基金独立分析，不包含同类排名。"
+            if analysis_mode == "single_fund"
+            else "历史收益不代表未来表现；基金比较只在同类样本内有效。"
+        ),
     ]
     evidence = [
         {
@@ -289,8 +331,7 @@ def compose_fund_report(context):
             "scale_change": row.get("scale_change"),
             "data_gap": row.get("data_gap"),
         }
-        for row in content.get("candidates") or []
-        if isinstance(row, dict)
+        for row in candidates
     ]
     return ArtifactDraft(
         artifact_type="research_report",
@@ -299,7 +340,11 @@ def compose_fund_report(context):
             "evidence": evidence,
             "risk": list(dict.fromkeys(str(item) for item in risks if str(item).strip())),
             "follow_up": [
-                "补齐缺失的最新持仓或净值历史后重新运行。",
+                *(
+                    ["补齐已标记的真实数据缺口后重新运行。"]
+                    if content.get("data_gap") or candidate_gaps or provider_errors
+                    else []
+                ),
                 "结合自身风险承受能力、持有期限和申赎规则做最终决策。",
             ],
             "fund_analysis": content,

@@ -1,9 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["methodology_version", "candidate_count", "candidates", "recommendations", "selection_policy", "quality_status", "data_gap", "generated_at"],
+  "required": ["methodology_version", "analysis_mode", "candidate_count", "candidates", "recommendations", "selection_policy", "quality_status", "data_gap", "generated_at"],
   "properties": {
     "methodology_version": {"type": "string"},
+    "analysis_mode": {"enum": ["single_fund", "comparison"]},
     "fund_category": {"type": ["string", "null"]},
     "investment_cycle": {"type": ["string", "null"]},
     "candidate_count": {"type": "integer", "minimum": 0},
@@ -191,9 +192,10 @@
     },
     "selection_policy": {
       "type": "object",
-      "required": ["description", "minimum_score_coverage", "minimum_comparable_sample", "components", "non_imputation_rule"],
+      "required": ["description", "comparison_required", "minimum_score_coverage", "minimum_comparable_sample", "components", "non_imputation_rule"],
       "properties": {
         "description": {"type": "string"},
+        "comparison_required": {"type": "boolean"},
         "minimum_score_coverage": {"type": "number", "minimum": 0, "maximum": 1},
         "minimum_comparable_sample": {"type": "integer", "minimum": 1},
         "components": {

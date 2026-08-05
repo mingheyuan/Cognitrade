@@ -22,6 +22,7 @@ vi.mock('../CognitradeContext', () => ({
           {
             artifact_type: 'fund_snapshot',
             content: {
+              analysis_mode: 'comparison',
               quality_status: 'available',
               fund_category: '混合型',
               candidate_pool_size: 1,
@@ -40,6 +41,7 @@ vi.mock('../CognitradeContext', () => ({
           {
             artifact_type: 'fund_analysis',
             content: {
+              analysis_mode: 'comparison',
               quality_status: 'available',
               fund_category: '混合型',
               data_gap: [],
@@ -142,6 +144,25 @@ describe('Funds', () => {
         fund_codes: ['110011', '005827'],
         fund_category: '全部',
         candidate_pool_size: 2,
+      }),
+    )
+  })
+
+  it('treats one explicit fund as an independent analysis instead of a comparison', async () => {
+    render(<Funds onOpenRun={mocks.openRun} />)
+    fireEvent.click(screen.getByRole('button', { name: '指定基金分析' }))
+    fireEvent.change(screen.getByPlaceholderText('例如 110011, 005827'), {
+      target: { value: '020464' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '开始基金分析' }))
+
+    await waitFor(() => expect(mocks.createRun).toHaveBeenCalledTimes(1))
+    expect(mocks.createRun).toHaveBeenCalledWith(
+      expect.stringMatching(/^分析基金 020464/),
+      'fund_research',
+      expect.objectContaining({
+        fund_codes: ['020464'],
+        candidate_pool_size: 1,
       }),
     )
   })

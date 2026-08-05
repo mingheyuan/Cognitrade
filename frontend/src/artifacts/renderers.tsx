@@ -111,11 +111,11 @@ export function UziDimensionCoverageArtifactRenderer({ content }: ArtifactRender
 }
 
 export function FundSnapshotArtifactRenderer({ content }: ArtifactRendererProps) {
-  return <ArtifactData content={content} priority={['query', 'fund_category', 'investment_cycle', 'candidate_pool_size', 'fund_codes', 'funds', 'quality_status', 'data_gap', 'provider_errors', 'retrieved_at']} />
+  return <ArtifactData content={content} priority={['query', 'analysis_mode', 'fund_category', 'investment_cycle', 'candidate_pool_size', 'fund_codes', 'funds', 'quality_status', 'data_gap', 'provider_errors', 'retrieved_at']} />
 }
 
 export function FundAnalysisArtifactRenderer({ content }: ArtifactRendererProps) {
-  return <ArtifactData content={content} priority={['fund_category', 'investment_cycle', 'candidate_count', 'recommendations', 'candidates', 'selection_policy', 'quality_status', 'data_gap', 'provider_errors', 'methodology_version', 'generated_at']} />
+  return <ArtifactData content={content} priority={['analysis_mode', 'fund_category', 'investment_cycle', 'candidate_count', 'recommendations', 'candidates', 'selection_policy', 'quality_status', 'data_gap', 'provider_errors', 'methodology_version', 'generated_at']} />
 }
 
 export function AiReadinessArtifactRenderer({ content }: ArtifactRendererProps) {
@@ -197,4 +197,3 @@ export function UnitEconomicsArtifactRenderer({ content }: ArtifactRendererProps
 export function ValueCreationPlanArtifactRenderer({ content }: ArtifactRendererProps) {
   return <ArtifactData content={content} priority={METHOD_PRIORITY} />
 }
-

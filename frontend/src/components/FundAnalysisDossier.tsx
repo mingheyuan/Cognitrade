@@ -154,10 +154,13 @@ function FundTrendChart({
 export function FundAnalysisDossier({ artifacts }: FundAnalysisDossierProps) {
   const analysis = artifactContent(artifacts, 'fund_analysis')
   const snapshot = artifactContent(artifacts, 'fund_snapshot')
+  const analysisMode = String(analysis.analysis_mode || snapshot.analysis_mode || 'comparison')
+  const isSingleFund = analysisMode === 'single_fund'
   const snapshotFunds = new Map(records(snapshot.funds).map((row) => [String(row.fund_code || ''), row]))
-  const candidates = records(analysis.candidates).map((row) => ({
+  const candidates: RecordValue[] = records(analysis.candidates).map((row): RecordValue => ({
     ...snapshotFunds.get(String(row.fund_code || '')),
     ...row,
+    analysis_mode: analysisMode,
   }))
   const recommendations = records(analysis.recommendations)
   const policy = asRecord(analysis.selection_policy)
@@ -180,14 +183,16 @@ export function FundAnalysisDossier({ artifacts }: FundAnalysisDossierProps) {
 
       <div className="fund-dossier-summary">
         <article><Database size={16} /><span>采集候选</span><strong>{numberText(snapshot.candidate_pool_size ?? candidates.length, 0)}</strong><small>{String(snapshot.fund_category || analysis.fund_category || '未分类')}</small></article>
-        <article><ShieldCheck size={16} /><span>证据达标</span><strong>{candidates.filter((row) => row.selection_eligible === true).length}</strong><small>按真实字段覆盖计算</small></article>
-        <article><CheckCircle2 size={16} /><span>优先候选</span><strong>{recommendations.length}</strong><small>只来自可比样本</small></article>
+        <article><ShieldCheck size={16} /><span>{isSingleFund ? '分析完成' : '证据达标'}</span><strong>{isSingleFund ? candidates.filter((row) => row.quality_status !== 'data_gap').length : candidates.filter((row) => row.selection_eligible === true).length}</strong><small>按真实字段覆盖计算</small></article>
+        <article><CheckCircle2 size={16} /><span>{isSingleFund ? '分析对象' : '优先候选'}</span><strong>{isSingleFund ? candidates.length : recommendations.length}</strong><small>{isSingleFund ? '不执行横向排名' : '只来自可比样本'}</small></article>
         <article><AlertCircle size={16} /><span>运行级缺口</span><strong>{gaps.length}</strong><small>{errors.length} 个数据源异常</small></article>
       </div>
 
       <section className="fund-recommendation-board">
-        <header><div><CheckCircle2 size={16} /><h3>选择结论</h3></div><span>{recommendations.length} 项</span></header>
-        {recommendations.length ? (
+        <header><div><CheckCircle2 size={16} /><h3>{isSingleFund ? '分析口径' : '选择结论'}</h3></div><span>{isSingleFund ? '独立评估' : `${recommendations.length} 项`}</span></header>
+        {isSingleFund ? (
+          <div className="fund-dossier-empty"><ShieldCheck size={18} />本次为单只基金独立分析，数据完整度与风险收益结论不依赖同类对照组，也不生成横向名次。</div>
+        ) : recommendations.length ? (
           <div>{recommendations.map((row) => (
             <article key={String(row.fund_code)}>
               <span>#{String(row.rank || '—')}</span>
@@ -208,7 +213,7 @@ export function FundAnalysisDossier({ artifacts }: FundAnalysisDossierProps) {
         <section>
           <header><Scale size={15} /><h3>选择规则</h3></header>
           <p>{String(policy.description || '后端未返回选择规则说明')}</p>
-          <div className="fund-policy-metrics"><span>最低证据覆盖<strong>{percent((numberValue(policy.minimum_score_coverage) || 0) * 100, false)}</strong></span><span>最小可比样本<strong>{numberText(policy.minimum_comparable_sample, 0)}</strong></span></div>
+          <div className="fund-policy-metrics"><span>最低证据覆盖<strong>{percent((numberValue(policy.minimum_score_coverage) || 0) * 100, false)}</strong></span><span>{isSingleFund ? '横向比较' : '最小可比样本'}<strong>{isSingleFund ? '不要求' : numberText(policy.minimum_comparable_sample, 0)}</strong></span></div>
           <BusinessDataView value={policy.components || []} fieldKey="components" path="fund_analysis.selection_policy.components" compact />
           <small>{String(policy.non_imputation_rule || '缺失数据不补值。')}</small>
         </section>
@@ -234,13 +239,14 @@ function FundCandidateDossier({ candidate, defaultOpen }: { candidate: RecordVal
   const managers = records(candidate.manager_tenures)
   const holdings = records(candidate.top_holdings)
   const gaps = Array.isArray(candidate.data_gap) ? candidate.data_gap.map(String) : []
+  const isSingleFund = String(candidate.analysis_mode || '') === 'single_fund'
   const usesSinceInceptionReturn = numberValue(returns.year_3) == null
   return (
     <details className={`fund-candidate-dossier ${candidate.selection_eligible ? 'is-eligible' : ''}`} open={defaultOpen}>
       <summary>
-        <span className="fund-rank">{candidate.rank ? `#${candidate.rank}` : '—'}</span>
+        <span className="fund-rank">{isSingleFund ? '分析' : candidate.rank ? `#${candidate.rank}` : '—'}</span>
         <span><strong>{String(candidate.fund_name || candidate.fund_code)}</strong><small>{String(candidate.fund_code || '—')} · {String(candidate.fund_type || '类型未返回')}</small></span>
-        <span><small>综合分</small><strong>{numberText(candidate.score, 1)}</strong></span>
+        <span><small>{isSingleFund ? '分析状态' : '综合分'}</small><strong>{isSingleFund ? candidate.quality_status === 'data_gap' ? '证据不足' : '已完成' : numberText(candidate.score, 1)}</strong></span>
         <span><small>证据覆盖</small><strong>{percent((numberValue(candidate.score_coverage) || 0) * 100, false)}</strong></span>
         <span className={`quality-pill quality-pill--${String(candidate.quality_status || 'data_gap')}`}>{qualityLabel(candidate.quality_status)}</span>
         <ChevronDown size={16} />
@@ -294,8 +300,14 @@ function FundCandidateDossier({ candidate, defaultOpen }: { candidate: RecordVal
         ]} />
 
         <section className="fund-score-section">
-          <header><BarChart3 size={15} /><h4>评分拆解</h4><span>{scoreComponents.length} 个已观测维度</span></header>
-          {scoreComponents.length ? <div>{scoreComponents.map((row) => (
+          <header><BarChart3 size={15} /><h4>{isSingleFund ? '核心分析指标' : '评分拆解'}</h4><span>{isSingleFund ? Object.keys(asRecord(candidate.metrics)).length : scoreComponents.length} 个已观测维度</span></header>
+          {isSingleFund ? <div>{Object.entries(asRecord(candidate.metrics)).map(([key, value]) => (
+            <article key={key}>
+              <span>{key === 'return_3y_annualized' && usesSinceInceptionReturn ? '成立以来年化收益' : SCORE_LABELS[key] || key}</span>
+              <strong>{percent(value)}</strong>
+              <small>{key === 'return_3y_annualized' && usesSinceInceptionReturn ? `${String(risk.period_start || '成立')} 至 ${String(risk.period_end || '最新')}` : '真实观测值，不参与横向排名'}</small>
+            </article>
+          ))}</div> : scoreComponents.length ? <div>{scoreComponents.map((row) => (
             <article key={String(row.component)}>
               <span>{String(row.component) === 'return_3y_annualized' && usesSinceInceptionReturn ? '成立以来年化收益' : SCORE_LABELS[String(row.component)] || String(row.component)}</span>
               <strong>{numberText(row.value, 2)}</strong>

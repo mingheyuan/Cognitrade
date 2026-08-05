@@ -3,6 +3,7 @@ const FIELD_LABELS: Record<string, string> = {
   symbols: '股票代码',
   fund_codes: '基金代码',
   fund_category: '基金类别',
+  analysis_mode: '分析模式',
   investment_cycle: '研究周期',
   candidate_pool_size: '候选池规模',
   portfolio_holdings: '组合持仓',
@@ -109,6 +110,7 @@ const FIELD_LABELS: Record<string, string> = {
   methodology: '方法论',
   methodology_version: '方法论版本',
   selection_policy: '选择规则',
+  comparison_required: '是否要求横向比较',
   selection_eligible: '是否通过证据门槛',
   comparison_group: '比较分组',
   rank: '排名',
@@ -553,6 +555,8 @@ const VALUE_LABELS: Record<string, string> = {
   long_term: '长期',
   mid_term: '中期',
   short_term: '短期',
+  single_fund: '单只基金独立分析',
+  comparison: '多基金比较选基',
 }
 
 const SENSITIVE_PARTS = [
@@ -607,6 +611,8 @@ export function dataGapLabel(value: string): string {
     no_fund_met_selection_evidence_gate: '没有基金通过选择证据门槛',
     comparable_fund_sample_too_small: '同类可比基金样本不足',
     fund_score_evidence_coverage_below_60pct: '基金评分证据覆盖率不足 60%',
+    fund_analysis_evidence_coverage_below_60pct: '单基金分析证据覆盖率不足 60%',
+    no_fund_available_for_analysis: '没有可用于独立分析的基金数据',
     revenue_missing: '营业收入缺失',
     financial_baseline_missing: '财务基线缺失',
     benchmark_return_missing: '基准收益缺失',
