@@ -1,0 +1,31 @@
+api-doc/api-v1.md
+  s_a6a8a3a6f43b3c::t_6da285ea5a3a8f 94-97,132-136
+frontend/src/components/Funds.test.tsx
+  s_a6a8a3a6f43b3c::t_369d5af9447428 110,112-131,135,144
+frontend/src/components/Funds.tsx
+  s_a6a8a3a6f43b3c::t_90e0198c0901d1 15-16,28,60,64-65,71,73,99-119,129,132,136,177-180
+frontend/src/styles.css
+  s_a6a8a3a6f43b3c::t_e71df0b97b08c0 9090-9121,9133-9138,9163-9184
+research_system/api/validation.py
+  s_a6a8a3a6f43b3c::t_60d7579ad2579f 96,106,123,130,140,142-143,150,258-259
+tests/test_fund_research.py
+  s_a6a8a3a6f43b3c::t_a8aed56c07a8eb 150,155,166-174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "c56b8b17114b363f0d9a84db33dea3449fa9209d",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
