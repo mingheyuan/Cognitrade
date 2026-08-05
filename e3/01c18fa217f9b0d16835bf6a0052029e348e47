@@ -1,0 +1,49 @@
+api-doc/api-v1.md
+  s_a6a8a3a6f43b3c::t_77270ffc6d08d4 138-144,146-148
+domain_packs/finance_ashare/artifact_schemas/fund_analysis.json
+  s_a6a8a3a6f43b3c::t_210f98dcf6654f 4,7,195,198
+domain_packs/finance_ashare/artifact_schemas/fund_snapshot.json
+  s_a6a8a3a6f43b3c::t_4b3404ee8aa852 4,7
+domain_packs/finance_ashare/domain.yaml
+  s_a6a8a3a6f43b3c::t_ca0f215958f669 311,326
+domain_packs/finance_ashare/skills/fund_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_ba7e6d790b85ee 92,292
+domain_packs/finance_ashare/subagents/fund_methodology.py
+  s_a6a8a3a6f43b3c::t_a0307fee61b8df 9,23,26-28,46-75,122-133,142-161,163-164,167-182,185,192-197
+domain_packs/finance_ashare/subagents/runtime.py
+  s_a6a8a3a6f43b3c::t_3a39a6d2cb6b8c 251-256,262-287,300-305,308,310-314,334,343-347
+frontend/src/artifacts/finance-artifact-renderers.json
+  s_a6a8a3a6f43b3c::t_e69c4c0f3d40cb 26-27
+frontend/src/artifacts/generated/finance-artifact-contracts.ts
+  s_a6a8a3a6f43b3c::t_147f6b13e3c4ae 984,1096,1212,2426,2526,2631
+frontend/src/artifacts/labels.ts
+  s_a6a8a3a6f43b3c::t_1cfa07fe626499 6,113,558-559,614-615
+frontend/src/artifacts/renderers.tsx
+  s_a6a8a3a6f43b3c::t_38f402f5b804a0 114,118
+frontend/src/components/FundAnalysisDossier.tsx
+  s_a6a8a3a6f43b3c::t_91749a8139a2f6 157-158,160,163,186-187,192-195,216,242,247,249,303-310
+frontend/src/components/Funds.test.tsx
+  s_a6a8a3a6f43b3c::t_802302b72f189f 25,44,150-168
+frontend/src/components/Funds.tsx
+  s_a6a8a3a6f43b3c::t_55dc4b09317028 66-68,119,140
+tests/test_fund_research.py
+  s_a6a8a3a6f43b3c::t_f123c60e56276d 19,179,291,370,411-412,450-452,456-458,460-472,496,499-500,564
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "e301c18fa217f9b0d16835bf6a0052029e348e47",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
