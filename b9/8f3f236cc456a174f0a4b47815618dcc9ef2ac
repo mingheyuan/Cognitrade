@@ -1,0 +1,25 @@
+frontend/src/artifacts/MethodDeliveryDossier.test.tsx
+  s_a6a8a3a6f43b3c::t_1f3d8316321fc4 1-38
+frontend/src/components/ResearchReportPresentation.tsx
+  s_a6a8a3a6f43b3c::t_467cdad780969c 119,141,183,230,234,272,363,369,375,405,408,411-412
+frontend/src/components/UziMethods.tsx
+  s_a6a8a3a6f43b3c::t_b3a566aa0350d8 18,233,310,335
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "b98f3f236cc456a174f0a4b47815618dcc9ef2ac",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
