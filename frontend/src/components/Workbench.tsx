@@ -36,6 +36,8 @@ import {
   statusLabel,
 } from '../live-data'
 import type { ResearchIntent } from '../research-contracts'
+import { ArtifactArchive } from '../artifacts/ArtifactArchive'
+import { BusinessDataView } from '../artifacts/BusinessDataView'
 import { ResearchComposer } from './ResearchComposer'
 import { ResearchReportPresentation } from './ResearchReportPresentation'
 
@@ -712,12 +714,8 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
 
               {Object.keys(scorecard).length > 0 && (
                 <section className="report-section">
-                  <div className="report-section-heading"><div><span className="section-index">08</span><div><h3>结构化评分卡</h3><p>原样展示后端 scorecard 字段</p></div></div></div>
-                  <div className="live-key-value-grid">
-                    {Object.entries(scorecard).slice(0, 12).map(([key, value]) => (
-                      <div key={key}><span>{key}</span><strong>{typeof value === 'object' ? JSON.stringify(value) : String(value)}</strong></div>
-                    ))}
-                  </div>
+                  <div className="report-section-heading"><div><span className="section-index">08</span><div><h3>结构化评分卡</h3><p>使用中文业务字段完整展示，不渲染原始 JSON。</p></div></div></div>
+                  <BusinessDataView value={scorecard} fieldKey="scorecard" path="research_report.scorecard" />
                 </section>
               )}
 
@@ -732,6 +730,10 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
             </div>
           </article>
           )
+        )}
+
+        {selectedRun && !isClarification && !isActiveStatus(status) && (
+          <ArtifactArchive artifacts={selectedRun.replay.artifacts || []} />
         )}
 
         {selectedRun && !isClarification && !isActiveStatus(status) && activityFeed}

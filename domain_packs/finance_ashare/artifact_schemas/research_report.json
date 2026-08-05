@@ -1,12 +1,94 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["conclusion", "evidence", "risk", "follow_up"],
+  "required": [
+    "conclusion",
+    "evidence",
+    "risk",
+    "follow_up"
+  ],
   "properties": {
-    "conclusion": {"type": "string"},
-    "assessment": {"type": "object"},
-    "evidence": {"type": "array"},
-    "risk": {"type": "array"},
-    "follow_up": {"type": "array"}
-  }
+    "conclusion": {
+      "type": "string"
+    },
+    "assessment": {
+      "type": ["object", "null"]
+    },
+    "evidence": {
+      "type": "array"
+    },
+    "risk": {
+      "type": "array"
+    },
+    "follow_up": {
+      "type": "array"
+    },
+    "methodologies": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "scorecard": {
+      "type": ["object", "null"]
+    },
+    "screening_scorecard": {
+      "type": ["object", "null"]
+    },
+    "uzi_profile": {
+      "type": "object"
+    },
+    "valuation_model": {
+      "type": "object"
+    },
+    "investor_panel_review": {
+      "type": "object"
+    },
+    "risk_scan": {
+      "type": "object"
+    },
+    "institutional_analysis": {
+      "type": ["object", "null"]
+    },
+    "research_workflow": {
+      "type": ["object", "null"]
+    },
+    "deep_analysis": {
+      "type": ["object", "null"]
+    },
+    "uzi_dimension_coverage": {
+      "type": ["object", "null"]
+    },
+    "presentation_artifact_type": {
+      "type": "string"
+    },
+    "fund_analysis": {
+      "type": "object"
+    },
+    "quality_status": {
+      "type": ["string", "null"]
+    },
+    "delivery_type": {
+      "type": "string"
+    },
+    "candidates": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "screening": {
+      "type": "object"
+    },
+    "sector_analysis": {
+      "type": "object"
+    },
+    "sector_heatmap": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "thesis_review": {
+      "type": "object"
+    },
+    "review_summary": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
 }

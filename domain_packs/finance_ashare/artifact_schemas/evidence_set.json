@@ -1,1 +1,24 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["items","query"],"properties":{"items":{"type":"array"},"query":{"type":["string","null"]}}}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "items",
+    "query"
+  ],
+  "properties": {
+    "items": {
+      "type": "array"
+    },
+    "symbols": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "query": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

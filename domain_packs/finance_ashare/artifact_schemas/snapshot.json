@@ -2,25 +2,94 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Finance Pack Snapshot",
   "type": "object",
-  "required": ["snapshot_type", "scope", "quality_status", "facts"],
+  "required": [
+    "snapshot_type",
+    "scope",
+    "quality_status",
+    "facts"
+  ],
   "properties": {
-    "snapshot_type": {"type": "string", "minLength": 1},
-    "scope": {"type": "string", "enum": ["symbol", "sector", "universe"]},
-    "symbol": {"type": ["string", "null"]},
-    "sector": {"type": ["string", "null"]},
-    "query": {"type": ["string", "null"]},
-    "snapshot_date": {"type": ["string", "null"]},
-    "data_period": {"type": ["string", "null"]},
-    "retrieved_at": {"type": ["string", "null"]},
+    "snapshot_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "type": "string",
+      "enum": [
+        "symbol",
+        "sector",
+        "universe"
+      ]
+    },
+    "symbol": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sector": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "query": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "snapshot_date": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "data_period": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "retrieved_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "quality_status": {
       "type": "string",
-      "enum": ["available", "degraded", "data_gap", "assumption_only"]
+      "enum": [
+        "available",
+        "degraded",
+        "data_gap",
+        "assumption_only"
+      ]
     },
-    "missing_fields": {"type": "array", "items": {"type": "string"}},
-    "degrade_reasons": {"type": "array", "items": {"type": "string"}},
-    "facts": {"type": "object"},
-    "source": {"type": "object"},
-    "source_refs": {"type": "array", "items": {"type": "object"}}
+    "missing_fields": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "degrade_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "facts": {
+      "type": "object"
+    },
+    "source": {
+      "type": "object"
+    },
+    "source_refs": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
   },
-  "additionalProperties": true
+  "additionalProperties": false
 }

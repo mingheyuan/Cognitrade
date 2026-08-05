@@ -1,19 +1,72 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["methodology_version", "method", "quality_status", "data_gap", "assumption_flags", "generated_at"],
+  "required": [
+    "methodology_version",
+    "method",
+    "quality_status",
+    "data_gap",
+    "assumption_flags",
+    "generated_at"
+  ],
   "properties": {
-    "methodology_version": {"type": "string"},
-    "method": {"const": "holding_rebalance"},
-    "target_mode": {"type": "string"},
-    "drift_threshold_pp": {"type": "number", "minimum": 0},
-    "drift_table": {"type": "array", "items": {"type": "object"}},
-    "trades": {"type": "array", "items": {"type": "object"}},
-    "concentration": {"type": "object"},
-    "estimated_cost": {"type": ["number", "null"]},
-    "quality_status": {"enum": ["available", "degraded", "data_gap", "assumption_only"]},
-    "data_gap": {"type": "array", "items": {"type": "string"}},
-    "assumption_flags": {"type": "array", "items": {"type": "string"}},
-    "generated_at": {"type": "string"}
-  }
+    "methodology_version": {
+      "type": "string"
+    },
+    "method": {
+      "const": "holding_rebalance"
+    },
+    "target_mode": {
+      "type": "string"
+    },
+    "drift_threshold_pp": {
+      "type": "number",
+      "minimum": 0
+    },
+    "drift_table": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "trades": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "concentration": {
+      "type": "object"
+    },
+    "estimated_cost": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "quality_status": {
+      "enum": [
+        "available",
+        "degraded",
+        "data_gap",
+        "assumption_only"
+      ]
+    },
+    "data_gap": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "assumption_flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "generated_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
 }

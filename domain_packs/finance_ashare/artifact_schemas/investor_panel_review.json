@@ -1,17 +1,86 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["methodology_version", "profile", "scope", "panel_version", "votes", "distribution", "disagreement", "confidence", "risk_flags"],
+  "required": [
+    "methodology_version",
+    "profile",
+    "scope",
+    "panel_version",
+    "votes",
+    "distribution",
+    "disagreement",
+    "confidence",
+    "risk_flags"
+  ],
   "properties": {
-    "methodology_version": {"type": "string"},
-    "profile": {"type": "string"},
-    "scope": {"type": "string"},
-    "panel_version": {"type": "string"},
-    "votes": {"type": "array", "items": {"type": "object"}},
-    "distribution": {"type": "object"},
-    "average_score": {"type": ["number", "null"]},
-    "disagreement": {"type": "object"},
-    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-    "risk_flags": {"type": "array", "items": {"type": "string"}}
-  }
+    "methodology_version": {
+      "type": "string"
+    },
+    "profile": {
+      "type": "string"
+    },
+    "scope": {
+      "type": "string"
+    },
+    "panel_version": {
+      "type": "string"
+    },
+    "source_commit": {
+      "type": "string"
+    },
+    "registered_seat_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "rule_mode": {
+      "type": "string"
+    },
+    "votes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "distribution": {
+      "type": "object"
+    },
+    "average_score": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "evaluated_rule_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "skipped_rule_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "quality_status": {
+      "type": "string"
+    },
+    "data_gap": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "disagreement": {
+      "type": "object"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "risk_flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
 }

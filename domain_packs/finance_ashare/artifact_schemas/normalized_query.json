@@ -1,1 +1,51 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["query","symbols"],"properties":{"query":{"type":"string"},"symbols":{"type":"array"}}}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "query",
+    "symbols"
+  ],
+  "properties": {
+    "query": {
+      "type": "string"
+    },
+    "symbols": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "fund_codes": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "fund_category": {
+      "type": ["string", "null"]
+    },
+    "portfolio_holdings": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "benchmark_return": {
+      "type": ["number", "null"]
+    },
+    "rebalance_targets": {
+      "type": ["object", "null"]
+    },
+    "drift_threshold": {
+      "type": ["number", "null"]
+    },
+    "fee_model": {
+      "type": ["object", "null"]
+    },
+    "asset_class_targets": {
+      "type": ["object", "null"]
+    },
+    "requested_methods": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "method_assumptions": {
+      "type": ["object", "null"]
+    }
+  },
+  "additionalProperties": false
+}

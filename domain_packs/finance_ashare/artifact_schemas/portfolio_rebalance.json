@@ -1,1 +1,50 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["methodology_version","method","quality_status","data_gap","assumption_flags","generated_at"],"properties":{"methodology_version":{"type":"string"},"method":{"const":"portfolio_rebalance"},"asset_classes":{"type":"array","items":{"type":"object"}},"quality_status":{"enum":["available","degraded","assumption_only","data_gap"]},"data_gap":{"type":"array","items":{"type":"string"}},"assumption_flags":{"type":"array","items":{"type":"string"}},"generated_at":{"type":"string"}}}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "methodology_version",
+    "method",
+    "quality_status",
+    "data_gap",
+    "assumption_flags",
+    "generated_at"
+  ],
+  "properties": {
+    "methodology_version": {
+      "type": "string"
+    },
+    "method": {
+      "const": "portfolio_rebalance"
+    },
+    "asset_classes": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "quality_status": {
+      "enum": [
+        "available",
+        "degraded",
+        "assumption_only",
+        "data_gap"
+      ]
+    },
+    "data_gap": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "assumption_flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "generated_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

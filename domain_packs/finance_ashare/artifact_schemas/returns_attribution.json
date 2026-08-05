@@ -1,19 +1,69 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["methodology_version", "method", "quality_status", "data_gap", "assumption_flags", "generated_at"],
+  "required": [
+    "methodology_version",
+    "method",
+    "quality_status",
+    "data_gap",
+    "assumption_flags",
+    "generated_at"
+  ],
   "properties": {
-    "methodology_version": {"type": "string"},
-    "method": {"const": "returns_attribution"},
-    "holdings": {"type": "array", "items": {"type": "object"}},
-    "observed_weight_coverage": {"type": "number", "minimum": 0, "maximum": 1},
-    "observed_contribution_pct": {"type": "number"},
-    "total_return_pct": {"type": ["number", "null"]},
-    "groups": {"type": "object"},
-    "benchmark": {"type": "object"},
-    "quality_status": {"enum": ["available", "degraded", "data_gap"]},
-    "data_gap": {"type": "array", "items": {"type": "string"}},
-    "assumption_flags": {"type": "array", "items": {"type": "string"}},
-    "generated_at": {"type": "string"}
-  }
+    "methodology_version": {
+      "type": "string"
+    },
+    "method": {
+      "const": "returns_attribution"
+    },
+    "holdings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "observed_weight_coverage": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "observed_contribution_pct": {
+      "type": "number"
+    },
+    "total_return_pct": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "groups": {
+      "type": "object"
+    },
+    "benchmark": {
+      "type": "object"
+    },
+    "quality_status": {
+      "enum": [
+        "available",
+        "degraded",
+        "data_gap"
+      ]
+    },
+    "data_gap": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "assumption_flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "generated_at": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
 }

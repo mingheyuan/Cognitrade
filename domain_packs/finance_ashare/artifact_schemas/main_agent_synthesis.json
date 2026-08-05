@@ -2,16 +2,33 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Main Agent Research Synthesis",
   "type": "object",
-  "required": ["conclusion", "assistant_message", "source_artifact_id"],
+  "required": [
+    "conclusion",
+    "assistant_message",
+    "source_artifact_id"
+  ],
   "properties": {
-    "conclusion": {"type": "string", "minLength": 1},
-    "assistant_message": {"type": "string", "minLength": 1},
+    "conclusion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "assistant_message": {
+      "type": "string",
+      "minLength": 1
+    },
     "follow_up": {
       "type": "array",
-      "items": {"type": "string"}
+      "items": {
+        "type": "string"
+      }
     },
-    "source_artifact_id": {"type": "string", "minLength": 1},
-    "model_generated": {"type": "boolean"}
+    "source_artifact_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_generated": {
+      "type": "boolean"
+    }
   },
-  "additionalProperties": true
+  "additionalProperties": false
 }
