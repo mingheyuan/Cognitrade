@@ -1,0 +1,43 @@
+domain_packs/finance_ashare/artifact_schemas/fund_analysis.json
+  s_a6a8a3a6f43b3c::t_facc45608f3363 4,6-9,14,16-35,37-81,85-97,103-114,120-131,135-170,176-189,193-214,216-217,221-227,230
+domain_packs/finance_ashare/artifact_schemas/fund_snapshot.json
+  s_a6a8a3a6f43b3c::t_22c1fb4b3a4fcc 4,6-10,15,17-37,39-63,65-98,102-114,120-131,137-148,152-168,171-172,176-182,185
+frontend/src/artifacts/finance-artifact-renderers.json
+  s_a6a8a3a6f43b3c::t_bfbcaa747bf901 26-27
+frontend/src/artifacts/generated/finance-artifact-contracts.ts
+  s_a6a8a3a6f43b3c::t_83dfbad86ebd5d 357-409,411-450,454-457,467-511,513-574,576-586,589-592,1149-1187,1189-1196,1199-1206,1208-1214,1216-1222,1224-1233,1237-1238,1247-1287,1290-1297,1299-1305,1307-1313,1315-1334,1336-1344,1346-1353,1357-1358
+frontend/src/artifacts/labels.ts
+  s_a6a8a3a6f43b3c::t_afaf6d91ffa027 246-352,386-394
+frontend/src/components/FundAnalysisDossier.tsx
+  s_a6a8a3a6f43b3c::t_0e5df1b49028c4 1-333
+frontend/src/components/Funds.test.tsx
+  s_a6a8a3a6f43b3c::t_211f88fc9ff328 22-39,98-100,102-107
+frontend/src/components/Funds.tsx
+  s_a6a8a3a6f43b3c::t_8fcfb16b6a2d63 9,40-41,43-46,51-52,138-139
+frontend/src/components/MarketData.test.tsx
+  s_a6a8a3a6f43b3c::t_dad4992f7328b2 1-73
+frontend/src/components/MarketData.tsx
+  s_a6a8a3a6f43b3c::t_29884c317fed22 15,38,187-191,214-218,225,236,261-262,276-280,299-333,338-344,383-384,477,482-483,495-498,515,520,522-523
+frontend/src/styles/finance-components.css
+  s_a6a8a3a6f43b3c::t_74408eef72eff0 606-1372
+tests/test_finance_artifact_ui_contracts.py
+  s_a6a8a3a6f43b3c::t_68a41755fa30ae 92-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "7f3d47a5f41b4f3fee6d670a33f8d0c7bc8b5fd9",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
