@@ -136,59 +136,588 @@ export type FinancialAnalysisContent = {
 }
 
 export type ScreeningResultContent = {
-  "screened_candidates": Array<unknown>;
-  "watchlist_candidates": Array<unknown>;
-  "enrichment_targets": Array<unknown>;
-  "scorecard": Record<string, unknown>;
-  "screening_notes": Array<unknown>;
-  "methodology"?: Record<string, unknown>;
+  "screened_candidates": Array<{
+    "symbol": string;
+    "name": string;
+    "latest_price": number | null;
+    "latest_pct_change": number | null;
+    "latest_amount": number | null;
+    "notice_count": number;
+    "has_financial_abstract": boolean;
+    "sector": string;
+    "score": number;
+    "score_breakdown": {
+      "liquidity": number;
+      "momentum": number;
+      "fundamental": number;
+      "notice": number;
+      "enrichment_coverage": number;
+      "evidence_penalty": number;
+    };
+    "missing_evidence": Array<string>;
+    "degraded_sources": Array<string>;
+    "deep_checked": boolean;
+    "enrichment_requested": boolean;
+    "evidence_snapshot_types": Array<string>;
+    "why_it_made_the_list": string;
+    "main_risk": string;
+    "methodology": {
+      "screen_style": string;
+      "criteria": Array<{
+        "id": string;
+        "label": string;
+        "status"?: string;
+        "source_field"?: string | null;
+      }>;
+      "evaluated_criterion_count": number;
+      "passed_criterion_count": number;
+      "pass_rate": number | null;
+      "data_gaps": Array<string>;
+    };
+    "rank": number;
+    "candidate_tier": "core" | "watchlist";
+  }>;
+  "watchlist_candidates": Array<{
+    "symbol": string;
+    "name": string;
+    "latest_price": number | null;
+    "latest_pct_change": number | null;
+    "latest_amount": number | null;
+    "notice_count": number;
+    "has_financial_abstract": boolean;
+    "sector": string;
+    "score": number;
+    "score_breakdown": {
+      "liquidity": number;
+      "momentum": number;
+      "fundamental": number;
+      "notice": number;
+      "enrichment_coverage": number;
+      "evidence_penalty": number;
+    };
+    "missing_evidence": Array<string>;
+    "degraded_sources": Array<string>;
+    "deep_checked": boolean;
+    "enrichment_requested": boolean;
+    "evidence_snapshot_types": Array<string>;
+    "why_it_made_the_list": string;
+    "main_risk": string;
+    "methodology": {
+      "screen_style": string;
+      "criteria": Array<{
+        "id": string;
+        "label": string;
+        "status"?: string;
+        "source_field"?: string | null;
+      }>;
+      "evaluated_criterion_count": number;
+      "passed_criterion_count": number;
+      "pass_rate": number | null;
+      "data_gaps": Array<string>;
+    };
+    "rank": number;
+    "candidate_tier": "core" | "watchlist";
+  }>;
+  "enrichment_targets": Array<string>;
+  "scorecard": {
+    "investment_cycle": string;
+    "investment_cycle_assumption": string;
+    "candidate_count": number;
+    "eligible_candidate_count": number;
+    "top_candidate_count": number;
+    "watchlist_candidate_count": number;
+    "deep_checked_count": number;
+    "watchlist_deep_checked_count": number;
+    "enrichment_target_count": number;
+    "candidate_universe_source": string | null;
+    "requested_snapshot_types": Array<string>;
+    "collected_snapshot_types": Array<string>;
+    "preferred_methodology": string;
+    "screening_strategy": {
+      "methodology_source": string;
+      "investment_cycle": string;
+      "screen_style": string;
+    };
+    "summary": string;
+  };
+  "screening_notes": Array<string>;
+  "methodology": {
+    "screen_style": string;
+    "requested_screen_style": string;
+    "criteria": Array<{
+      "id": string;
+      "label": string;
+      "status"?: string;
+      "source_field"?: string | null;
+    }>;
+  };
 }
 
 export type SectorAnalysisContent = {
   "sector": string | null;
   "theme": string | null;
-  "findings": Array<unknown>;
-  "related_snapshots": Array<unknown>;
-  "risks": Array<unknown>;
+  "findings": Array<{
+    "snapshot_type": string;
+    "scope"?: string;
+    "symbol"?: string | null;
+    "sector"?: string | null;
+    "theme"?: string | null;
+    "query"?: string | null;
+    "snapshot_date"?: string | null;
+    "data_period"?: string | null;
+    "retrieved_at"?: string | null;
+    "created_at"?: string | null;
+    "quality_status"?: string;
+    "facts": Record<string, unknown>;
+    "source"?: {
+      "skill"?: string;
+      "vendor"?: string;
+      "from_cache"?: boolean;
+      "provider_id"?: string | null;
+      "source_id"?: string | null;
+      "chain_position"?: number | null;
+      "dim"?: string | null;
+    };
+    "primary_source"?: unknown;
+    "fallback_sources"?: Array<{
+      "skill"?: string;
+      "vendor"?: string;
+      "from_cache"?: boolean;
+      "provider_id"?: string | null;
+      "source_id"?: string | null;
+      "chain_position"?: number | null;
+      "dim"?: string | null;
+    }>;
+    "field_sources"?: Record<string, unknown>;
+    "fallback_applied"?: boolean;
+    "missing_fields"?: Array<string>;
+    "source_confidence"?: string;
+    "source_trace"?: Array<Record<string, unknown>>;
+    "source_refs"?: Array<{
+      "type"?: string;
+      "provider"?: string;
+      "id"?: string;
+    }>;
+    "degraded"?: boolean;
+    "degrade_reason"?: string | null;
+    "degrade_reasons"?: Array<string>;
+  }>;
+  "related_snapshots": Array<{
+    "snapshot_type": string;
+    "scope"?: string;
+    "symbol"?: string | null;
+    "sector"?: string | null;
+    "theme"?: string | null;
+    "query"?: string | null;
+    "snapshot_date"?: string | null;
+    "data_period"?: string | null;
+    "retrieved_at"?: string | null;
+    "created_at"?: string | null;
+    "quality_status"?: string;
+    "facts": Record<string, unknown>;
+    "source"?: {
+      "skill"?: string;
+      "vendor"?: string;
+      "from_cache"?: boolean;
+      "provider_id"?: string | null;
+      "source_id"?: string | null;
+      "chain_position"?: number | null;
+      "dim"?: string | null;
+    };
+    "primary_source"?: unknown;
+    "fallback_sources"?: Array<{
+      "skill"?: string;
+      "vendor"?: string;
+      "from_cache"?: boolean;
+      "provider_id"?: string | null;
+      "source_id"?: string | null;
+      "chain_position"?: number | null;
+      "dim"?: string | null;
+    }>;
+    "field_sources"?: Record<string, unknown>;
+    "fallback_applied"?: boolean;
+    "missing_fields"?: Array<string>;
+    "source_confidence"?: string;
+    "source_trace"?: Array<Record<string, unknown>>;
+    "source_refs"?: Array<{
+      "type"?: string;
+      "provider"?: string;
+      "id"?: string;
+    }>;
+    "degraded"?: boolean;
+    "degrade_reason"?: string | null;
+    "degrade_reasons"?: Array<string>;
+  }>;
+  "risks": Array<string>;
   "source_count": number;
-  "analysis_notes": Array<unknown>;
-  "sector_heatmap"?: Array<unknown>;
-  "constituents"?: Array<unknown>;
-  "breadth"?: Record<string, unknown>;
-  "relative_strength"?: Record<string, unknown>;
-  "signal_scorecard"?: Record<string, unknown>;
-  "catalysts"?: Record<string, unknown>;
-  "policy_snapshots"?: Array<unknown>;
+  "analysis_notes": Array<string>;
+  "sector_heatmap": Array<{
+    "name": string;
+    "symbol"?: string;
+    "score": number;
+    "raw_value"?: number | null;
+    "score_basis": string;
+    "source_count": number;
+    "related_snapshot_count"?: number;
+    "theme": string | null;
+  }>;
+  "constituents": Array<Record<string, unknown>>;
+  "breadth": {
+    "sample_size"?: number;
+    "up_count"?: number;
+    "down_count"?: number;
+    "flat_count"?: number;
+    "up_ratio"?: number | null;
+    "down_ratio"?: number | null;
+    "median_pct_change"?: number | null;
+    "mean_pct_change"?: number | null;
+    "average_turnover_rate"?: number | null;
+    "top3_average_pct_change"?: number | null;
+    "bottom3_average_pct_change"?: number | null;
+    "best_constituents"?: Array<{
+      "code"?: string | null;
+      "name"?: string | null;
+      "pct_change"?: number | null;
+      "turnover_rate"?: number | null;
+    }>;
+    "worst_constituents"?: Array<{
+      "code"?: string | null;
+      "name"?: string | null;
+      "pct_change"?: number | null;
+      "turnover_rate"?: number | null;
+    }>;
+  };
+  "relative_strength": {
+    "latest_excess_pct_change"?: number | null;
+    "recent_relative_strength"?: Array<{
+      "date": string;
+      "sector_pct_change": number;
+      "benchmark_pct_change": number;
+      "excess_pct_change": number;
+    }>;
+  };
+  "signal_scorecard": {
+    "theme"?: string;
+    "market_tone"?: string;
+    "benchmark_view"?: string;
+    "turnover_state"?: string;
+    "breadth_state"?: string;
+    "policy_signal_strength"?: string;
+    "regulatory_signal_strength"?: string;
+    "sample_signal_strength"?: string;
+    "setup_label"?: string;
+    "headline_counts"?: {
+      "theme_news"?: number;
+      "policy_signals"?: number;
+      "regulatory_signals"?: number;
+      "catalyst_samples"?: number;
+    };
+    "breadth"?: {
+      "sample_size"?: number;
+      "up_count"?: number;
+      "down_count"?: number;
+      "flat_count"?: number;
+      "up_ratio"?: number | null;
+      "down_ratio"?: number | null;
+      "median_pct_change"?: number | null;
+      "mean_pct_change"?: number | null;
+      "average_turnover_rate"?: number | null;
+      "top3_average_pct_change"?: number | null;
+      "bottom3_average_pct_change"?: number | null;
+      "best_constituents"?: Array<{
+        "code"?: string | null;
+        "name"?: string | null;
+        "pct_change"?: number | null;
+        "turnover_rate"?: number | null;
+      }>;
+      "worst_constituents"?: Array<{
+        "code"?: string | null;
+        "name"?: string | null;
+        "pct_change"?: number | null;
+        "turnover_rate"?: number | null;
+      }>;
+    };
+    "summary"?: string;
+  };
+  "catalysts": {
+    "theme_news": Array<Record<string, unknown>>;
+    "policy_signals": Array<Record<string, unknown>>;
+    "regulatory_signals": Array<Record<string, unknown>>;
+    "samples": Array<Record<string, unknown>>;
+  };
+  "policy_snapshots": Array<{
+    "snapshot_type": string;
+    "scope"?: string;
+    "symbol"?: string | null;
+    "sector"?: string | null;
+    "theme"?: string | null;
+    "query"?: string | null;
+    "snapshot_date"?: string | null;
+    "data_period"?: string | null;
+    "retrieved_at"?: string | null;
+    "created_at"?: string | null;
+    "quality_status"?: string;
+    "facts": Record<string, unknown>;
+    "source"?: {
+      "skill"?: string;
+      "vendor"?: string;
+      "from_cache"?: boolean;
+      "provider_id"?: string | null;
+      "source_id"?: string | null;
+      "chain_position"?: number | null;
+      "dim"?: string | null;
+    };
+    "primary_source"?: unknown;
+    "fallback_sources"?: Array<{
+      "skill"?: string;
+      "vendor"?: string;
+      "from_cache"?: boolean;
+      "provider_id"?: string | null;
+      "source_id"?: string | null;
+      "chain_position"?: number | null;
+      "dim"?: string | null;
+    }>;
+    "field_sources"?: Record<string, unknown>;
+    "fallback_applied"?: boolean;
+    "missing_fields"?: Array<string>;
+    "source_confidence"?: string;
+    "source_trace"?: Array<Record<string, unknown>>;
+    "source_refs"?: Array<{
+      "type"?: string;
+      "provider"?: string;
+      "id"?: string;
+    }>;
+    "degraded"?: boolean;
+    "degrade_reason"?: string | null;
+    "degrade_reasons"?: Array<string>;
+  }>;
 }
 
 export type ThesisReviewContent = {
   "verdict": string;
   "overall_verdict": string;
-  "findings": Array<unknown>;
-  "strengths": Array<unknown>;
+  "findings": Array<{
+    "claim"?: string;
+    "artifact_id"?: string;
+    "artifact_type"?: string;
+    "summary"?: string;
+    "verdict"?: string;
+    "evidence_index"?: number;
+    "snapshot_type"?: string;
+    "scope"?: string;
+    "symbol"?: string | null;
+    "sector"?: string | null;
+    "theme"?: string | null;
+    "query"?: string | null;
+    "snapshot_date"?: string | null;
+    "data_period"?: string | null;
+    "retrieved_at"?: string | null;
+    "created_at"?: string | null;
+    "quality_status"?: string;
+    "facts"?: Record<string, unknown>;
+    "source"?: {
+      "skill"?: string;
+      "vendor"?: string;
+      "from_cache"?: boolean;
+      "provider_id"?: string | null;
+      "source_id"?: string | null;
+      "chain_position"?: number | null;
+      "dim"?: string | null;
+    };
+    "primary_source"?: unknown;
+    "fallback_sources"?: Array<{
+      "skill"?: string;
+      "vendor"?: string;
+      "from_cache"?: boolean;
+      "provider_id"?: string | null;
+      "source_id"?: string | null;
+      "chain_position"?: number | null;
+      "dim"?: string | null;
+    }>;
+    "field_sources"?: Record<string, unknown>;
+    "fallback_applied"?: boolean;
+    "missing_fields"?: Array<string>;
+    "source_confidence"?: string;
+    "source_trace"?: Array<Record<string, unknown>>;
+    "source_refs"?: Array<{
+      "type"?: string;
+      "provider"?: string;
+      "id"?: string;
+    }>;
+    "degraded"?: boolean;
+    "degrade_reason"?: string | null;
+    "degrade_reasons"?: Array<string>;
+  }>;
+  "strengths": Array<{
+    "claim"?: string;
+    "artifact_id"?: string;
+    "artifact_type"?: string;
+    "summary"?: string;
+    "verdict"?: string;
+    "evidence_index"?: number;
+    "snapshot_type"?: string;
+    "scope"?: string;
+    "symbol"?: string | null;
+    "sector"?: string | null;
+    "theme"?: string | null;
+    "query"?: string | null;
+    "snapshot_date"?: string | null;
+    "data_period"?: string | null;
+    "retrieved_at"?: string | null;
+    "created_at"?: string | null;
+    "quality_status"?: string;
+    "facts"?: Record<string, unknown>;
+    "source"?: {
+      "skill"?: string;
+      "vendor"?: string;
+      "from_cache"?: boolean;
+      "provider_id"?: string | null;
+      "source_id"?: string | null;
+      "chain_position"?: number | null;
+      "dim"?: string | null;
+    };
+    "primary_source"?: unknown;
+    "fallback_sources"?: Array<{
+      "skill"?: string;
+      "vendor"?: string;
+      "from_cache"?: boolean;
+      "provider_id"?: string | null;
+      "source_id"?: string | null;
+      "chain_position"?: number | null;
+      "dim"?: string | null;
+    }>;
+    "field_sources"?: Record<string, unknown>;
+    "fallback_applied"?: boolean;
+    "missing_fields"?: Array<string>;
+    "source_confidence"?: string;
+    "source_trace"?: Array<Record<string, unknown>>;
+    "source_refs"?: Array<{
+      "type"?: string;
+      "provider"?: string;
+      "id"?: string;
+    }>;
+    "degraded"?: boolean;
+    "degrade_reason"?: string | null;
+    "degrade_reasons"?: Array<string>;
+  }>;
   "weaknesses": Array<unknown>;
-  "follow_up": Array<unknown>;
-  "review_target_run_id"?: string | null;
-  "review_target_artifact_ids"?: Array<unknown>;
-  "review_target_found"?: boolean;
-  "target_thesis"?: Array<unknown>;
-  "evidence_comparison"?: Record<string, unknown>;
+  "follow_up": Array<string>;
+  "review_target_run_id": string | null;
+  "review_target_artifact_ids": Array<string>;
+  "review_target_found": boolean;
+  "target_thesis": Array<{
+    "claim"?: string;
+    "artifact_id"?: string;
+    "artifact_type"?: string;
+    "summary"?: string;
+    "verdict"?: string;
+    "evidence_index"?: number;
+    "snapshot_type"?: string;
+    "scope"?: string;
+    "symbol"?: string | null;
+    "sector"?: string | null;
+    "theme"?: string | null;
+    "query"?: string | null;
+    "snapshot_date"?: string | null;
+    "data_period"?: string | null;
+    "retrieved_at"?: string | null;
+    "created_at"?: string | null;
+    "quality_status"?: string;
+    "facts"?: Record<string, unknown>;
+    "source"?: {
+      "skill"?: string;
+      "vendor"?: string;
+      "from_cache"?: boolean;
+      "provider_id"?: string | null;
+      "source_id"?: string | null;
+      "chain_position"?: number | null;
+      "dim"?: string | null;
+    };
+    "primary_source"?: unknown;
+    "fallback_sources"?: Array<{
+      "skill"?: string;
+      "vendor"?: string;
+      "from_cache"?: boolean;
+      "provider_id"?: string | null;
+      "source_id"?: string | null;
+      "chain_position"?: number | null;
+      "dim"?: string | null;
+    }>;
+    "field_sources"?: Record<string, unknown>;
+    "fallback_applied"?: boolean;
+    "missing_fields"?: Array<string>;
+    "source_confidence"?: string;
+    "source_trace"?: Array<Record<string, unknown>>;
+    "source_refs"?: Array<{
+      "type"?: string;
+      "provider"?: string;
+      "id"?: string;
+    }>;
+    "degraded"?: boolean;
+    "degrade_reason"?: string | null;
+    "degrade_reasons"?: Array<string>;
+  }>;
+  "evidence_comparison": {
+    "target_artifact_count": number;
+    "fresh_evidence_count": number;
+    "fresh_snapshot_types": Array<string>;
+    "fresh_symbols": Array<string>;
+  };
 }
 
 export type SourceRecordSetContent = {
-  "query"?: string;
-  "records": Array<Record<string, unknown>>;
+  "query": string;
+  "records": Array<{
+    "record_id": string;
+    "text": string;
+    "author": string | null;
+    "published_at": string | null;
+    "tags": Array<string>;
+    "dimensions": Array<string>;
+  }>;
 }
 
 export type DistillationResultContent = {
-  "dimensions": Array<Record<string, unknown>>;
-  "summary": Record<string, unknown>;
+  "dimensions": Array<{
+    "dimension_name": string;
+    "category": string;
+    "claim": string;
+    "source_record_ids": Array<string>;
+    "confidence": number;
+    "attribution": string | null;
+  }>;
+  "summary": {
+    "source_record_count": number;
+    "dimension_count": number;
+    "major_risks": Array<string>;
+    "method": string;
+  };
 }
 
 export type DistillationReviewContent = {
   "verdict": string;
-  "findings": Array<unknown>;
-  "distillation": Record<string, unknown>;
+  "findings": Array<{
+    "finding_type": string;
+    "severity": string;
+    "dimension_name": string | null;
+    "reason": string;
+  }>;
+  "distillation": {
+    "dimensions": Array<{
+      "dimension_name": string;
+      "category": string;
+      "claim": string;
+      "source_record_ids": Array<string>;
+      "confidence": number;
+      "attribution": string | null;
+    }>;
+    "summary": {
+      "source_record_count": number;
+      "dimension_count": number;
+      "major_risks": Array<string>;
+      "method": string;
+    };
+  };
 }
 
 export type ResearchReportContent = {
@@ -946,53 +1475,526 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
   ],
   "screening_result": [
     "screened_candidates",
+    "screened_candidates[].symbol",
+    "screened_candidates[].name",
+    "screened_candidates[].latest_price",
+    "screened_candidates[].latest_pct_change",
+    "screened_candidates[].latest_amount",
+    "screened_candidates[].notice_count",
+    "screened_candidates[].has_financial_abstract",
+    "screened_candidates[].sector",
+    "screened_candidates[].score",
+    "screened_candidates[].score_breakdown",
+    "screened_candidates[].score_breakdown.liquidity",
+    "screened_candidates[].score_breakdown.momentum",
+    "screened_candidates[].score_breakdown.fundamental",
+    "screened_candidates[].score_breakdown.notice",
+    "screened_candidates[].score_breakdown.enrichment_coverage",
+    "screened_candidates[].score_breakdown.evidence_penalty",
+    "screened_candidates[].missing_evidence",
+    "screened_candidates[].degraded_sources",
+    "screened_candidates[].deep_checked",
+    "screened_candidates[].enrichment_requested",
+    "screened_candidates[].evidence_snapshot_types",
+    "screened_candidates[].why_it_made_the_list",
+    "screened_candidates[].main_risk",
+    "screened_candidates[].methodology",
+    "screened_candidates[].methodology.screen_style",
+    "screened_candidates[].methodology.criteria",
+    "screened_candidates[].methodology.criteria[].id",
+    "screened_candidates[].methodology.criteria[].label",
+    "screened_candidates[].methodology.criteria[].status",
+    "screened_candidates[].methodology.criteria[].source_field",
+    "screened_candidates[].methodology.evaluated_criterion_count",
+    "screened_candidates[].methodology.passed_criterion_count",
+    "screened_candidates[].methodology.pass_rate",
+    "screened_candidates[].methodology.data_gaps",
+    "screened_candidates[].rank",
+    "screened_candidates[].candidate_tier",
     "watchlist_candidates",
+    "watchlist_candidates[].symbol",
+    "watchlist_candidates[].name",
+    "watchlist_candidates[].latest_price",
+    "watchlist_candidates[].latest_pct_change",
+    "watchlist_candidates[].latest_amount",
+    "watchlist_candidates[].notice_count",
+    "watchlist_candidates[].has_financial_abstract",
+    "watchlist_candidates[].sector",
+    "watchlist_candidates[].score",
+    "watchlist_candidates[].score_breakdown",
+    "watchlist_candidates[].score_breakdown.liquidity",
+    "watchlist_candidates[].score_breakdown.momentum",
+    "watchlist_candidates[].score_breakdown.fundamental",
+    "watchlist_candidates[].score_breakdown.notice",
+    "watchlist_candidates[].score_breakdown.enrichment_coverage",
+    "watchlist_candidates[].score_breakdown.evidence_penalty",
+    "watchlist_candidates[].missing_evidence",
+    "watchlist_candidates[].degraded_sources",
+    "watchlist_candidates[].deep_checked",
+    "watchlist_candidates[].enrichment_requested",
+    "watchlist_candidates[].evidence_snapshot_types",
+    "watchlist_candidates[].why_it_made_the_list",
+    "watchlist_candidates[].main_risk",
+    "watchlist_candidates[].methodology",
+    "watchlist_candidates[].methodology.screen_style",
+    "watchlist_candidates[].methodology.criteria",
+    "watchlist_candidates[].methodology.criteria[].id",
+    "watchlist_candidates[].methodology.criteria[].label",
+    "watchlist_candidates[].methodology.criteria[].status",
+    "watchlist_candidates[].methodology.criteria[].source_field",
+    "watchlist_candidates[].methodology.evaluated_criterion_count",
+    "watchlist_candidates[].methodology.passed_criterion_count",
+    "watchlist_candidates[].methodology.pass_rate",
+    "watchlist_candidates[].methodology.data_gaps",
+    "watchlist_candidates[].rank",
+    "watchlist_candidates[].candidate_tier",
     "enrichment_targets",
     "scorecard",
+    "scorecard.investment_cycle",
+    "scorecard.investment_cycle_assumption",
+    "scorecard.candidate_count",
+    "scorecard.eligible_candidate_count",
+    "scorecard.top_candidate_count",
+    "scorecard.watchlist_candidate_count",
+    "scorecard.deep_checked_count",
+    "scorecard.watchlist_deep_checked_count",
+    "scorecard.enrichment_target_count",
+    "scorecard.candidate_universe_source",
+    "scorecard.requested_snapshot_types",
+    "scorecard.collected_snapshot_types",
+    "scorecard.preferred_methodology",
+    "scorecard.screening_strategy",
+    "scorecard.screening_strategy.methodology_source",
+    "scorecard.screening_strategy.investment_cycle",
+    "scorecard.screening_strategy.screen_style",
+    "scorecard.summary",
     "screening_notes",
     "methodology",
+    "methodology.screen_style",
+    "methodology.requested_screen_style",
+    "methodology.criteria",
+    "methodology.criteria[].id",
+    "methodology.criteria[].label",
+    "methodology.criteria[].status",
+    "methodology.criteria[].source_field",
   ],
   "sector_analysis": [
     "sector",
     "theme",
     "findings",
+    "findings[].snapshot_type",
+    "findings[].scope",
+    "findings[].symbol",
+    "findings[].sector",
+    "findings[].theme",
+    "findings[].query",
+    "findings[].snapshot_date",
+    "findings[].data_period",
+    "findings[].retrieved_at",
+    "findings[].created_at",
+    "findings[].quality_status",
+    "findings[].facts",
+    "findings[].source",
+    "findings[].source.skill",
+    "findings[].source.vendor",
+    "findings[].source.from_cache",
+    "findings[].source.provider_id",
+    "findings[].source.source_id",
+    "findings[].source.chain_position",
+    "findings[].source.dim",
+    "findings[].primary_source",
+    "findings[].fallback_sources",
+    "findings[].fallback_sources[].skill",
+    "findings[].fallback_sources[].vendor",
+    "findings[].fallback_sources[].from_cache",
+    "findings[].fallback_sources[].provider_id",
+    "findings[].fallback_sources[].source_id",
+    "findings[].fallback_sources[].chain_position",
+    "findings[].fallback_sources[].dim",
+    "findings[].field_sources",
+    "findings[].fallback_applied",
+    "findings[].missing_fields",
+    "findings[].source_confidence",
+    "findings[].source_trace",
+    "findings[].source_refs",
+    "findings[].source_refs[].type",
+    "findings[].source_refs[].provider",
+    "findings[].source_refs[].id",
+    "findings[].degraded",
+    "findings[].degrade_reason",
+    "findings[].degrade_reasons",
     "related_snapshots",
+    "related_snapshots[].snapshot_type",
+    "related_snapshots[].scope",
+    "related_snapshots[].symbol",
+    "related_snapshots[].sector",
+    "related_snapshots[].theme",
+    "related_snapshots[].query",
+    "related_snapshots[].snapshot_date",
+    "related_snapshots[].data_period",
+    "related_snapshots[].retrieved_at",
+    "related_snapshots[].created_at",
+    "related_snapshots[].quality_status",
+    "related_snapshots[].facts",
+    "related_snapshots[].source",
+    "related_snapshots[].source.skill",
+    "related_snapshots[].source.vendor",
+    "related_snapshots[].source.from_cache",
+    "related_snapshots[].source.provider_id",
+    "related_snapshots[].source.source_id",
+    "related_snapshots[].source.chain_position",
+    "related_snapshots[].source.dim",
+    "related_snapshots[].primary_source",
+    "related_snapshots[].fallback_sources",
+    "related_snapshots[].fallback_sources[].skill",
+    "related_snapshots[].fallback_sources[].vendor",
+    "related_snapshots[].fallback_sources[].from_cache",
+    "related_snapshots[].fallback_sources[].provider_id",
+    "related_snapshots[].fallback_sources[].source_id",
+    "related_snapshots[].fallback_sources[].chain_position",
+    "related_snapshots[].fallback_sources[].dim",
+    "related_snapshots[].field_sources",
+    "related_snapshots[].fallback_applied",
+    "related_snapshots[].missing_fields",
+    "related_snapshots[].source_confidence",
+    "related_snapshots[].source_trace",
+    "related_snapshots[].source_refs",
+    "related_snapshots[].source_refs[].type",
+    "related_snapshots[].source_refs[].provider",
+    "related_snapshots[].source_refs[].id",
+    "related_snapshots[].degraded",
+    "related_snapshots[].degrade_reason",
+    "related_snapshots[].degrade_reasons",
     "risks",
     "source_count",
     "analysis_notes",
     "sector_heatmap",
+    "sector_heatmap[].name",
+    "sector_heatmap[].symbol",
+    "sector_heatmap[].score",
+    "sector_heatmap[].raw_value",
+    "sector_heatmap[].score_basis",
+    "sector_heatmap[].source_count",
+    "sector_heatmap[].related_snapshot_count",
+    "sector_heatmap[].theme",
     "constituents",
     "breadth",
+    "breadth.sample_size",
+    "breadth.up_count",
+    "breadth.down_count",
+    "breadth.flat_count",
+    "breadth.up_ratio",
+    "breadth.down_ratio",
+    "breadth.median_pct_change",
+    "breadth.mean_pct_change",
+    "breadth.average_turnover_rate",
+    "breadth.top3_average_pct_change",
+    "breadth.bottom3_average_pct_change",
+    "breadth.best_constituents",
+    "breadth.best_constituents[].code",
+    "breadth.best_constituents[].name",
+    "breadth.best_constituents[].pct_change",
+    "breadth.best_constituents[].turnover_rate",
+    "breadth.worst_constituents",
+    "breadth.worst_constituents[].code",
+    "breadth.worst_constituents[].name",
+    "breadth.worst_constituents[].pct_change",
+    "breadth.worst_constituents[].turnover_rate",
     "relative_strength",
+    "relative_strength.latest_excess_pct_change",
+    "relative_strength.recent_relative_strength",
+    "relative_strength.recent_relative_strength[].date",
+    "relative_strength.recent_relative_strength[].sector_pct_change",
+    "relative_strength.recent_relative_strength[].benchmark_pct_change",
+    "relative_strength.recent_relative_strength[].excess_pct_change",
     "signal_scorecard",
+    "signal_scorecard.theme",
+    "signal_scorecard.market_tone",
+    "signal_scorecard.benchmark_view",
+    "signal_scorecard.turnover_state",
+    "signal_scorecard.breadth_state",
+    "signal_scorecard.policy_signal_strength",
+    "signal_scorecard.regulatory_signal_strength",
+    "signal_scorecard.sample_signal_strength",
+    "signal_scorecard.setup_label",
+    "signal_scorecard.headline_counts",
+    "signal_scorecard.headline_counts.theme_news",
+    "signal_scorecard.headline_counts.policy_signals",
+    "signal_scorecard.headline_counts.regulatory_signals",
+    "signal_scorecard.headline_counts.catalyst_samples",
+    "signal_scorecard.breadth",
+    "signal_scorecard.breadth.sample_size",
+    "signal_scorecard.breadth.up_count",
+    "signal_scorecard.breadth.down_count",
+    "signal_scorecard.breadth.flat_count",
+    "signal_scorecard.breadth.up_ratio",
+    "signal_scorecard.breadth.down_ratio",
+    "signal_scorecard.breadth.median_pct_change",
+    "signal_scorecard.breadth.mean_pct_change",
+    "signal_scorecard.breadth.average_turnover_rate",
+    "signal_scorecard.breadth.top3_average_pct_change",
+    "signal_scorecard.breadth.bottom3_average_pct_change",
+    "signal_scorecard.breadth.best_constituents",
+    "signal_scorecard.breadth.best_constituents[].code",
+    "signal_scorecard.breadth.best_constituents[].name",
+    "signal_scorecard.breadth.best_constituents[].pct_change",
+    "signal_scorecard.breadth.best_constituents[].turnover_rate",
+    "signal_scorecard.breadth.worst_constituents",
+    "signal_scorecard.breadth.worst_constituents[].code",
+    "signal_scorecard.breadth.worst_constituents[].name",
+    "signal_scorecard.breadth.worst_constituents[].pct_change",
+    "signal_scorecard.breadth.worst_constituents[].turnover_rate",
+    "signal_scorecard.summary",
     "catalysts",
+    "catalysts.theme_news",
+    "catalysts.policy_signals",
+    "catalysts.regulatory_signals",
+    "catalysts.samples",
     "policy_snapshots",
+    "policy_snapshots[].snapshot_type",
+    "policy_snapshots[].scope",
+    "policy_snapshots[].symbol",
+    "policy_snapshots[].sector",
+    "policy_snapshots[].theme",
+    "policy_snapshots[].query",
+    "policy_snapshots[].snapshot_date",
+    "policy_snapshots[].data_period",
+    "policy_snapshots[].retrieved_at",
+    "policy_snapshots[].created_at",
+    "policy_snapshots[].quality_status",
+    "policy_snapshots[].facts",
+    "policy_snapshots[].source",
+    "policy_snapshots[].source.skill",
+    "policy_snapshots[].source.vendor",
+    "policy_snapshots[].source.from_cache",
+    "policy_snapshots[].source.provider_id",
+    "policy_snapshots[].source.source_id",
+    "policy_snapshots[].source.chain_position",
+    "policy_snapshots[].source.dim",
+    "policy_snapshots[].primary_source",
+    "policy_snapshots[].fallback_sources",
+    "policy_snapshots[].fallback_sources[].skill",
+    "policy_snapshots[].fallback_sources[].vendor",
+    "policy_snapshots[].fallback_sources[].from_cache",
+    "policy_snapshots[].fallback_sources[].provider_id",
+    "policy_snapshots[].fallback_sources[].source_id",
+    "policy_snapshots[].fallback_sources[].chain_position",
+    "policy_snapshots[].fallback_sources[].dim",
+    "policy_snapshots[].field_sources",
+    "policy_snapshots[].fallback_applied",
+    "policy_snapshots[].missing_fields",
+    "policy_snapshots[].source_confidence",
+    "policy_snapshots[].source_trace",
+    "policy_snapshots[].source_refs",
+    "policy_snapshots[].source_refs[].type",
+    "policy_snapshots[].source_refs[].provider",
+    "policy_snapshots[].source_refs[].id",
+    "policy_snapshots[].degraded",
+    "policy_snapshots[].degrade_reason",
+    "policy_snapshots[].degrade_reasons",
   ],
   "thesis_review": [
     "verdict",
     "overall_verdict",
     "findings",
+    "findings[].claim",
+    "findings[].artifact_id",
+    "findings[].artifact_type",
+    "findings[].summary",
+    "findings[].verdict",
+    "findings[].evidence_index",
+    "findings[].snapshot_type",
+    "findings[].scope",
+    "findings[].symbol",
+    "findings[].sector",
+    "findings[].theme",
+    "findings[].query",
+    "findings[].snapshot_date",
+    "findings[].data_period",
+    "findings[].retrieved_at",
+    "findings[].created_at",
+    "findings[].quality_status",
+    "findings[].facts",
+    "findings[].source",
+    "findings[].source.skill",
+    "findings[].source.vendor",
+    "findings[].source.from_cache",
+    "findings[].source.provider_id",
+    "findings[].source.source_id",
+    "findings[].source.chain_position",
+    "findings[].source.dim",
+    "findings[].primary_source",
+    "findings[].fallback_sources",
+    "findings[].fallback_sources[].skill",
+    "findings[].fallback_sources[].vendor",
+    "findings[].fallback_sources[].from_cache",
+    "findings[].fallback_sources[].provider_id",
+    "findings[].fallback_sources[].source_id",
+    "findings[].fallback_sources[].chain_position",
+    "findings[].fallback_sources[].dim",
+    "findings[].field_sources",
+    "findings[].fallback_applied",
+    "findings[].missing_fields",
+    "findings[].source_confidence",
+    "findings[].source_trace",
+    "findings[].source_refs",
+    "findings[].source_refs[].type",
+    "findings[].source_refs[].provider",
+    "findings[].source_refs[].id",
+    "findings[].degraded",
+    "findings[].degrade_reason",
+    "findings[].degrade_reasons",
     "strengths",
+    "strengths[].claim",
+    "strengths[].artifact_id",
+    "strengths[].artifact_type",
+    "strengths[].summary",
+    "strengths[].verdict",
+    "strengths[].evidence_index",
+    "strengths[].snapshot_type",
+    "strengths[].scope",
+    "strengths[].symbol",
+    "strengths[].sector",
+    "strengths[].theme",
+    "strengths[].query",
+    "strengths[].snapshot_date",
+    "strengths[].data_period",
+    "strengths[].retrieved_at",
+    "strengths[].created_at",
+    "strengths[].quality_status",
+    "strengths[].facts",
+    "strengths[].source",
+    "strengths[].source.skill",
+    "strengths[].source.vendor",
+    "strengths[].source.from_cache",
+    "strengths[].source.provider_id",
+    "strengths[].source.source_id",
+    "strengths[].source.chain_position",
+    "strengths[].source.dim",
+    "strengths[].primary_source",
+    "strengths[].fallback_sources",
+    "strengths[].fallback_sources[].skill",
+    "strengths[].fallback_sources[].vendor",
+    "strengths[].fallback_sources[].from_cache",
+    "strengths[].fallback_sources[].provider_id",
+    "strengths[].fallback_sources[].source_id",
+    "strengths[].fallback_sources[].chain_position",
+    "strengths[].fallback_sources[].dim",
+    "strengths[].field_sources",
+    "strengths[].fallback_applied",
+    "strengths[].missing_fields",
+    "strengths[].source_confidence",
+    "strengths[].source_trace",
+    "strengths[].source_refs",
+    "strengths[].source_refs[].type",
+    "strengths[].source_refs[].provider",
+    "strengths[].source_refs[].id",
+    "strengths[].degraded",
+    "strengths[].degrade_reason",
+    "strengths[].degrade_reasons",
     "weaknesses",
     "follow_up",
     "review_target_run_id",
     "review_target_artifact_ids",
     "review_target_found",
     "target_thesis",
+    "target_thesis[].claim",
+    "target_thesis[].artifact_id",
+    "target_thesis[].artifact_type",
+    "target_thesis[].summary",
+    "target_thesis[].verdict",
+    "target_thesis[].evidence_index",
+    "target_thesis[].snapshot_type",
+    "target_thesis[].scope",
+    "target_thesis[].symbol",
+    "target_thesis[].sector",
+    "target_thesis[].theme",
+    "target_thesis[].query",
+    "target_thesis[].snapshot_date",
+    "target_thesis[].data_period",
+    "target_thesis[].retrieved_at",
+    "target_thesis[].created_at",
+    "target_thesis[].quality_status",
+    "target_thesis[].facts",
+    "target_thesis[].source",
+    "target_thesis[].source.skill",
+    "target_thesis[].source.vendor",
+    "target_thesis[].source.from_cache",
+    "target_thesis[].source.provider_id",
+    "target_thesis[].source.source_id",
+    "target_thesis[].source.chain_position",
+    "target_thesis[].source.dim",
+    "target_thesis[].primary_source",
+    "target_thesis[].fallback_sources",
+    "target_thesis[].fallback_sources[].skill",
+    "target_thesis[].fallback_sources[].vendor",
+    "target_thesis[].fallback_sources[].from_cache",
+    "target_thesis[].fallback_sources[].provider_id",
+    "target_thesis[].fallback_sources[].source_id",
+    "target_thesis[].fallback_sources[].chain_position",
+    "target_thesis[].fallback_sources[].dim",
+    "target_thesis[].field_sources",
+    "target_thesis[].fallback_applied",
+    "target_thesis[].missing_fields",
+    "target_thesis[].source_confidence",
+    "target_thesis[].source_trace",
+    "target_thesis[].source_refs",
+    "target_thesis[].source_refs[].type",
+    "target_thesis[].source_refs[].provider",
+    "target_thesis[].source_refs[].id",
+    "target_thesis[].degraded",
+    "target_thesis[].degrade_reason",
+    "target_thesis[].degrade_reasons",
     "evidence_comparison",
+    "evidence_comparison.target_artifact_count",
+    "evidence_comparison.fresh_evidence_count",
+    "evidence_comparison.fresh_snapshot_types",
+    "evidence_comparison.fresh_symbols",
   ],
   "source_record_set": [
     "query",
     "records",
+    "records[].record_id",
+    "records[].text",
+    "records[].author",
+    "records[].published_at",
+    "records[].tags",
+    "records[].dimensions",
   ],
   "distillation_result": [
     "dimensions",
+    "dimensions[].dimension_name",
+    "dimensions[].category",
+    "dimensions[].claim",
+    "dimensions[].source_record_ids",
+    "dimensions[].confidence",
+    "dimensions[].attribution",
     "summary",
+    "summary.source_record_count",
+    "summary.dimension_count",
+    "summary.major_risks",
+    "summary.method",
   ],
   "distillation_review": [
     "verdict",
     "findings",
+    "findings[].finding_type",
+    "findings[].severity",
+    "findings[].dimension_name",
+    "findings[].reason",
     "distillation",
+    "distillation.dimensions",
+    "distillation.dimensions[].dimension_name",
+    "distillation.dimensions[].category",
+    "distillation.dimensions[].claim",
+    "distillation.dimensions[].source_record_ids",
+    "distillation.dimensions[].confidence",
+    "distillation.dimensions[].attribution",
+    "distillation.summary",
+    "distillation.summary.source_record_count",
+    "distillation.summary.dimension_count",
+    "distillation.summary.major_risks",
+    "distillation.summary.method",
   ],
   "research_report": [
     "conclusion",

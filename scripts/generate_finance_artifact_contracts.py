@@ -60,23 +60,39 @@ def _load_schema(artifact_type: str) -> dict[str, Any]:
     return value
 
 
-def _field_paths(schema: dict[str, Any], prefix: str = "") -> list[str]:
+def _resolve_local_ref(schema: dict[str, Any], root: dict[str, Any]) -> dict[str, Any]:
+    reference = schema.get("$ref")
+    if not isinstance(reference, str) or not reference.startswith("#/"):
+        return schema
+    current: Any = root
+    for part in reference.removeprefix("#/").split("/"):
+        if not isinstance(current, dict) or part not in current:
+            raise RuntimeError(f"Unresolvable local schema reference: {reference}")
+        current = current[part]
+    if not isinstance(current, dict):
+        raise RuntimeError(f"Local schema reference is not an object: {reference}")
+    return {**current, **{key: value for key, value in schema.items() if key != "$ref"}}
+
+
+def _field_paths(schema: dict[str, Any], prefix: str = "", *, root: dict[str, Any] | None = None) -> list[str]:
+    root = root or schema
+    schema = _resolve_local_ref(schema, root)
     paths: list[str] = []
     properties = schema.get("properties")
     if not isinstance(properties, dict):
         return paths
     for name, raw_child in properties.items():
-        child = raw_child if isinstance(raw_child, dict) else {}
+        child = _resolve_local_ref(raw_child, root) if isinstance(raw_child, dict) else {}
         path = f"{prefix}.{name}" if prefix else name
         paths.append(path)
         child_type = child.get("type")
         types = set(child_type if isinstance(child_type, list) else [child_type])
         if "object" in types or isinstance(child.get("properties"), dict):
-            paths.extend(_field_paths(child, path))
+            paths.extend(_field_paths(child, path, root=root))
         if "array" in types or "items" in child:
             item = child.get("items")
             if isinstance(item, dict):
-                paths.extend(_field_paths(item, f"{path}[]"))
+                paths.extend(_field_paths(item, f"{path}[]", root=root))
     return paths
 
 
@@ -94,7 +110,9 @@ def _typescript_literal(value: Any) -> str:
     return "unknown"
 
 
-def _typescript_type(schema: dict[str, Any], *, indent: int = 0) -> str:
+def _typescript_type(schema: dict[str, Any], *, indent: int = 0, root: dict[str, Any] | None = None) -> str:
+    root = root or schema
+    schema = _resolve_local_ref(schema, root)
     if "const" in schema:
         return _typescript_literal(schema["const"])
     enum = schema.get("enum")
@@ -104,7 +122,7 @@ def _typescript_type(schema: dict[str, Any], *, indent: int = 0) -> str:
     raw_type = schema.get("type")
     if isinstance(raw_type, list):
         variants = [
-            _typescript_type({**schema, "type": item}, indent=indent)
+            _typescript_type({**schema, "type": item}, indent=indent, root=root)
             for item in raw_type
         ]
         return " | ".join(dict.fromkeys(variants))
@@ -118,7 +136,7 @@ def _typescript_type(schema: dict[str, Any], *, indent: int = 0) -> str:
         return "null"
     if raw_type == "array" or "items" in schema:
         item = schema.get("items")
-        item_type = _typescript_type(item, indent=indent) if isinstance(item, dict) else "unknown"
+        item_type = _typescript_type(item, indent=indent, root=root) if isinstance(item, dict) else "unknown"
         return f"Array<{item_type}>"
     if raw_type == "object" or isinstance(schema.get("properties"), dict):
         properties = schema.get("properties")
@@ -133,7 +151,7 @@ def _typescript_type(schema: dict[str, Any], *, indent: int = 0) -> str:
             optional = "" if name in required else "?"
             rows.append(
                 f"{child_padding}{json.dumps(name, ensure_ascii=False)}{optional}: "
-                f"{_typescript_type(child, indent=indent + 2)}"
+                f"{_typescript_type(child, indent=indent + 2, root=root)}"
             )
         return "{\n" + ";\n".join(rows) + f";\n{padding}}}"
     return "unknown"
@@ -167,7 +185,7 @@ def generate() -> str:
     for artifact_type in artifact_types:
         lines.extend(
             [
-                f"export type {_type_name(artifact_type)} = {_typescript_type(schemas[artifact_type])}",
+                f"export type {_type_name(artifact_type)} = {_typescript_type(schemas[artifact_type], root=schemas[artifact_type])}",
                 "",
             ]
         )
@@ -185,7 +203,7 @@ def generate() -> str:
     )
     for artifact_type in artifact_types:
         lines.append(f"  {json.dumps(artifact_type)}: [")
-        for field in _field_paths(schemas[artifact_type]):
+        for field in _field_paths(schemas[artifact_type], root=schemas[artifact_type]):
             lines.append(f"    {json.dumps(field)},")
         lines.append("  ],")
     lines.extend(

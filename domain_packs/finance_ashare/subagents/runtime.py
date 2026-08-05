@@ -2655,14 +2655,16 @@ def collect_distillation_sources(context):
         text = str(row.get("text") or row.get("content") or row.get("body") or "").strip()
         if not text:
             continue
+        author = str(row.get("author") or row.get("user_name") or "").strip() or None
+        published_at = str(row.get("published_at") or row.get("created_at") or "").strip() or None
         records.append(
             {
                 "record_id": record_id,
                 "text": text,
-                "author": row.get("author") or row.get("user_name"),
-                "published_at": row.get("published_at") or row.get("created_at"),
-                "tags": list(row.get("tags") or []),
-                "dimensions": list(row.get("dimensions") or []),
+                "author": author,
+                "published_at": published_at,
+                "tags": _unique_strings(row.get("tags") or []),
+                "dimensions": _unique_strings(row.get("dimensions") or []),
             }
         )
         source_refs.append({"type": "source_record", "id": record_id})

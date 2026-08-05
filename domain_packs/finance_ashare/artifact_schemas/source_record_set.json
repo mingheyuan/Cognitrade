@@ -1,16 +1,23 @@
 {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": [
-    "records"
-  ],
+  "required": ["query", "records"],
   "properties": {
-    "query": {
-      "type": "string"
-    },
+    "query": {"type": "string"},
     "records": {
       "type": "array",
       "items": {
-        "type": "object"
+        "type": "object",
+        "required": ["record_id", "text", "author", "published_at", "tags", "dimensions"],
+        "properties": {
+          "record_id": {"type": "string"},
+          "text": {"type": "string"},
+          "author": {"type": ["string", "null"]},
+          "published_at": {"type": ["string", "null"]},
+          "tags": {"type": "array", "items": {"type": "string"}},
+          "dimensions": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
       }
     }
   },

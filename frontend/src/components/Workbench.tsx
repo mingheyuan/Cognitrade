@@ -22,7 +22,6 @@ import {
   asString,
   activityFromEvents,
   assistantMessageFromDetail,
-  candidatesFromReport,
   evidenceFromReport,
   formatDate,
   hasFinalDelivery,
@@ -38,6 +37,7 @@ import {
 import type { ResearchIntent } from '../research-contracts'
 import { ArtifactArchive } from '../artifacts/ArtifactArchive'
 import { BusinessDataView } from '../artifacts/BusinessDataView'
+import { IntentDeliveryDossier } from '../artifacts/IntentDeliveryDossier'
 import { ResearchComposer } from './ResearchComposer'
 import { ResearchReportPresentation } from './ResearchReportPresentation'
 
@@ -233,10 +233,6 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
   const dimensionCoverage = asRecord(report.uzi_dimension_coverage)
   const presentation = asRecord(report.presentation)
   const radar = Array.isArray(presentation.radar) ? presentation.radar.map(asRecord) : []
-  const specialistCandidates = candidatesFromReport(report)
-  const sectorAnalysis = asRecord(report.sector_analysis)
-  const sectorHeatmap = Array.isArray(report.sector_heatmap) ? report.sector_heatmap.map(asRecord) : []
-  const thesisReview = asRecord(report.thesis_review)
   const artifactBackedReport = asString(report.protocol) === 'agent_os' && Array.isArray(report.final_artifact_ids)
   const updatedAt = selectedRun?.events.events.at(-1)?.created_at
   const snapshot = asRecord(selectedRun?.replay.snapshot)
@@ -548,41 +544,7 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
                 </div>
               </section>
 
-              {(specialistCandidates.length > 0 || sectorHeatmap.length > 0 || Object.keys(thesisReview).length > 0) && (
-                <section className="report-section">
-                  <div className="report-section-heading"><div><span className="section-index">05</span><div><h3>专属交付</h3><p>直接读取对应 intent 的专业 Artifact，不使用通用报告占位。</p></div></div></div>
-                  <div className="live-key-value-grid">
-                    {specialistCandidates.slice(0, 8).map((candidate) => (
-                      <div key={`candidate-${candidate.code}`}>
-                        <span>候选 {candidate.rank} · {candidate.code}</span>
-                        <strong>{candidate.name} · {candidate.score === null ? '未评分' : candidate.score.toFixed(3)}</strong>
-                        <small>{candidate.reason}</small>
-                      </div>
-                    ))}
-                    {sectorHeatmap.slice(0, 8).map((raw, index) => (
-                      <div key={`sector-${asString(raw.symbol || raw.name, String(index))}`}>
-                        <span>{asString(raw.name, '板块信号')} · {asString(raw.score_basis, 'source_metric')}</span>
-                        <strong>{asNumber(raw.score)?.toFixed(2) ?? '—'}</strong>
-                        <small>原始值 {asString(raw.raw_value, '未提供')}</small>
-                      </div>
-                    ))}
-                    {Object.keys(thesisReview).length > 0 && (
-                      <div>
-                        <span>Thesis Review · {asString(thesisReview.review_target_run_id, '未指定历史运行')}</span>
-                        <strong>{asString(thesisReview.overall_verdict || thesisReview.verdict, 'inconclusive')}</strong>
-                        <small>{thesisReview.review_target_found ? '已读取目标运行 ArtifactBoard' : '未读取到目标运行产物'}</small>
-                      </div>
-                    )}
-                    {Object.keys(sectorAnalysis).length > 0 && (
-                      <div>
-                        <span>板块证据覆盖</span>
-                        <strong>{asString(sectorAnalysis.sector, '未命名板块')} · {asNumber(sectorAnalysis.source_count) ?? 0} 个来源</strong>
-                        <small>{Array.isArray(sectorAnalysis.policy_snapshots) && sectorAnalysis.policy_snapshots.length ? '已采集政策快照' : '政策快照不可用或未请求'}</small>
-                      </div>
-                    )}
-                  </div>
-                </section>
-              )}
+              <IntentDeliveryDossier artifacts={selectedRun.replay.artifacts || []} />
 
               {methodologies.length > 0 && (
                 <section className="report-section">

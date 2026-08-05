@@ -1,19 +1,36 @@
 {
-  "type": "object",
-  "required": [
-    "dimensions",
-    "summary"
-  ],
-  "properties": {
-    "dimensions": {
-      "type": "array",
-      "items": {
-        "type": "object"
-      }
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "dimension": {
+      "type": "object",
+      "required": ["dimension_name", "category", "claim", "source_record_ids", "confidence", "attribution"],
+      "properties": {
+        "dimension_name": {"type": "string"},
+        "category": {"type": "string"},
+        "claim": {"type": "string"},
+        "source_record_ids": {"type": "array", "items": {"type": "string"}},
+        "confidence": {"type": "number"},
+        "attribution": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
     },
     "summary": {
-      "type": "object"
+      "type": "object",
+      "required": ["source_record_count", "dimension_count", "major_risks", "method"],
+      "properties": {
+        "source_record_count": {"type": "integer"},
+        "dimension_count": {"type": "integer"},
+        "major_risks": {"type": "array", "items": {"type": "string"}},
+        "method": {"type": "string"}
+      },
+      "additionalProperties": false
     }
+  },
+  "type": "object",
+  "required": ["dimensions", "summary"],
+  "properties": {
+    "dimensions": {"type": "array", "items": {"$ref": "#/$defs/dimension"}},
+    "summary": {"$ref": "#/$defs/summary"}
   },
   "additionalProperties": false
 }

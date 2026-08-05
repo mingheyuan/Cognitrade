@@ -1370,3 +1370,181 @@
     flex: 1;
   }
 }
+
+.intent-delivery-dossier {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.intent-dossier {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .08);
+}
+
+.intent-dossier-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px 16px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(120deg, color-mix(in srgb, var(--mint) 4%, transparent), transparent 54%);
+}
+
+.intent-dossier-header > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.intent-dossier-header h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 18px;
+}
+
+.intent-dossier-header p {
+  max-width: 720px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.intent-dossier-audit {
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+  min-width: 160px;
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.intent-dossier-audit span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--mint);
+}
+
+.intent-dossier-audit strong {
+  overflow: hidden;
+  max-width: 230px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.intent-dossier-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border);
+}
+
+.intent-dossier-kpis > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 13px 16px;
+  border-right: 1px solid var(--border);
+}
+
+.intent-dossier-kpis > span:last-child {
+  border-right: 0;
+}
+
+.intent-dossier-kpis small {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.intent-dossier-kpis strong {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.intent-dossier-section {
+  margin: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-soft) 80%, transparent);
+}
+
+.intent-dossier-section > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--mint);
+}
+
+.intent-dossier-section > header h4 {
+  flex: 1;
+  margin: 0;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.intent-dossier-section > header span {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.intent-dossier-section > .artifact-structured-view,
+.intent-dossier-section > .artifact-table-wrap,
+.intent-dossier-section > .artifact-record-list,
+.intent-dossier-section > .artifact-value-list,
+.intent-dossier-section > .artifact-empty-value {
+  margin: 11px;
+}
+
+.intent-dossier-section--audit > header {
+  color: var(--gold);
+}
+
+.intent-dossier--thesis .intent-dossier-kpis strong,
+.intent-dossier--distillation .intent-dossier-kpis strong {
+  font-family: inherit;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .intent-dossier-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .intent-dossier-kpis > span:nth-child(2) {
+    border-right: 0;
+  }
+
+  .intent-dossier-kpis > span:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 620px) {
+  .intent-dossier-header {
+    flex-direction: column;
+  }
+
+  .intent-dossier-audit {
+    justify-items: start;
+    width: 100%;
+  }
+
+  .intent-dossier-section {
+    margin: 10px;
+  }
+}
