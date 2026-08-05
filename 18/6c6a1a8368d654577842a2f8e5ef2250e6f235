@@ -1,0 +1,53 @@
+domain_packs/finance_ashare/artifact_schemas/distillation_result.json
+  s_a6a8a3a6f43b3c::t_2fa6e931b3f565 2-15,18-26,29-34
+domain_packs/finance_ashare/artifact_schemas/distillation_review.json
+  s_a6a8a3a6f43b3c::t_f528a3ea008e3a 2-28,30,32,34-45,48-54
+domain_packs/finance_ashare/artifact_schemas/screening_result.json
+  s_a6a8a3a6f43b3c::t_884e31b4d8765e 3-13,15-26,28-78,80-114,116,118-125
+domain_packs/finance_ashare/artifact_schemas/sector_analysis.json
+  s_a6a8a3a6f43b3c::t_fe7ba4ec3ade4e 3-15,17-57,59-61,63-71,74-122,124-125,127-145,148-172,175-183,185
+domain_packs/finance_ashare/artifact_schemas/source_record_set.json
+  s_a6a8a3a6f43b3c::t_1ca1b037feb3e7 2,4,6,10-20
+domain_packs/finance_ashare/artifact_schemas/thesis_review.json
+  s_a6a8a3a6f43b3c::t_7c374db3fe50d3 3-64,67-68,71-74,76-77,79-83,85-93
+domain_packs/finance_ashare/subagents/runtime.py
+  s_a6a8a3a6f43b3c::t_bc5a3a60ccea9f 2658-2659,2664-2667
+frontend/src/artifacts/IntentDeliveryDossier.test.tsx
+  s_a6a8a3a6f43b3c::t_84233f57d51e4e 1-83
+frontend/src/artifacts/IntentDeliveryDossier.tsx
+  s_a6a8a3a6f43b3c::t_3acc47ccf1cda9 1-258
+frontend/src/artifacts/finance-artifact-renderers.json
+  s_a6a8a3a6f43b3c::t_2ce43b7ac54ea4 10-15
+frontend/src/artifacts/generated/finance-artifact-contracts.ts
+  s_a6a8a3a6f43b3c::t_658b55685097ad 139-253,259-351,353-493,499-602,604-665,669-677,681-694,699-720,1478-1513,1515-1550,1553-1570,1573-1579,1585-1625,1627-1667,1672-1679,1682-1702,1704-1709,1711-1747,1749-1752,1754-1794,1800-1846,1848-1894,1901-1947,1949-1952,1957-1962,1966-1971,1973-1976,1981-1984,1986-1997
+frontend/src/artifacts/labels.ts
+  s_a6a8a3a6f43b3c::t_d86c5cc4b12679 70-108,217-223,234-243,245-251
+frontend/src/components/Screening.tsx
+  s_a6a8a3a6f43b3c::t_021bcae9cabb28 14,26,103-107
+frontend/src/components/Workbench.tsx
+  s_a6a8a3a6f43b3c::t_b0396a0f490b1d 40,547
+frontend/src/styles/finance-components.css
+  s_a6a8a3a6f43b3c::t_d54283eccd9da2 1373-1550
+scripts/generate_finance_artifact_contracts.py
+  s_a6a8a3a6f43b3c::t_11c1eedec83f14 63-79,85,91,95,113-115,125,139,154,188,206
+tests/test_finance_artifact_ui_contracts.py
+  s_a6a8a3a6f43b3c::t_61b9458d64e820 25-37,43,46,49,54,123-155
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "186c6a1a8368d654577842a2f8e5ef2250e6f235",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
