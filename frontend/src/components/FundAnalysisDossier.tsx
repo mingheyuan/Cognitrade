@@ -45,7 +45,7 @@ const RETURN_FIELDS = [
 
 const SCORE_LABELS: Record<string, string> = {
   return_1y: '近一年收益',
-  return_3y_annualized: '近三年年化收益',
+  return_3y_annualized: '长期年化收益',
   benchmark_excess_1y: '近一年超额收益',
   max_drawdown: '最大回撤',
   volatility: '年化波动',
@@ -234,6 +234,7 @@ function FundCandidateDossier({ candidate, defaultOpen }: { candidate: RecordVal
   const managers = records(candidate.manager_tenures)
   const holdings = records(candidate.top_holdings)
   const gaps = Array.isArray(candidate.data_gap) ? candidate.data_gap.map(String) : []
+  const usesSinceInceptionReturn = numberValue(returns.year_3) == null
   return (
     <details className={`fund-candidate-dossier ${candidate.selection_eligible ? 'is-eligible' : ''}`} open={defaultOpen}>
       <summary>
@@ -296,10 +297,10 @@ function FundCandidateDossier({ candidate, defaultOpen }: { candidate: RecordVal
           <header><BarChart3 size={15} /><h4>评分拆解</h4><span>{scoreComponents.length} 个已观测维度</span></header>
           {scoreComponents.length ? <div>{scoreComponents.map((row) => (
             <article key={String(row.component)}>
-              <span>{SCORE_LABELS[String(row.component)] || String(row.component)}</span>
+              <span>{String(row.component) === 'return_3y_annualized' && usesSinceInceptionReturn ? '成立以来年化收益' : SCORE_LABELS[String(row.component)] || String(row.component)}</span>
               <strong>{numberText(row.value, 2)}</strong>
               <div><i style={{ width: `${Math.max(0, Math.min(100, numberValue(row.percentile) || 0))}%` }} /></div>
-              <small>同类百分位 {numberText(row.percentile, 1)} · 权重 {percent((numberValue(row.weight) || 0) * 100, false)}</small>
+              <small>同类百分位 {numberText(row.percentile, 1)} · 权重 {percent((numberValue(row.weight) || 0) * 100, false)}{String(row.component) === 'return_3y_annualized' && usesSinceInceptionReturn ? ` · ${String(risk.period_start || '成立')} 至 ${String(risk.period_end || '最新')}` : ''}</small>
             </article>
           ))}</div> : <p>没有足够可比数据形成评分拆解。</p>}
         </section>

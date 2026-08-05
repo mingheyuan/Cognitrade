@@ -6,7 +6,7 @@ import math
 from typing import Any
 
 
-FUND_METHODOLOGY_VERSION = "uzi-3.9.2-fund-selection-v2"
+FUND_METHODOLOGY_VERSION = "uzi-3.9.2-fund-selection-v3"
 
 _COMPONENTS: tuple[tuple[str, float, bool], ...] = (
     ("return_1y", 0.20, True),
@@ -139,7 +139,7 @@ def build_fund_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
         "candidates": evaluated,
         "recommendations": recommendations,
         "selection_policy": {
-            "description": "同类基金横向比较；仅使用真实收益、benchmark 超额收益、净值回撤、波动率和费率字段。",
+            "description": "同类基金横向比较；长期年化收益优先使用近三年真实收益，基金历史不足三年时使用成立以来真实收益按实际观测期年化。",
             "minimum_score_coverage": 0.6,
             "minimum_comparable_sample": 2,
             "components": [
@@ -150,7 +150,7 @@ def build_fund_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
                 }
                 for component, weight, higher in _COMPONENTS
             ],
-            "non_imputation_rule": "缺失字段不补 0、不补中性值，只降低覆盖率并记录 data_gap。",
+            "non_imputation_rule": "缺失字段不补 0、不补中性值；成立以来年化仅使用完整真实净值区间及真实累计收益，不构造历史。",
         },
         "quality_status": quality_status,
         "data_gap": list(dict.fromkeys(analysis_gaps)),
@@ -162,10 +162,7 @@ def build_fund_analysis(snapshot: dict[str, Any]) -> dict[str, Any]:
 def _candidate_metrics(row: dict[str, Any]) -> dict[str, Any]:
     returns = dict(row.get("returns_pct") or {})
     risk = dict(row.get("risk") or {})
-    return_3y = _number(returns.get("year_3"))
-    annualized_3y = None
-    if return_3y is not None and return_3y > -100:
-        annualized_3y = ((1.0 + return_3y / 100.0) ** (1.0 / 3.0) - 1.0) * 100.0
+    annualized_return = _long_term_annualized_return(returns, risk)
     observed_returns = [
         _number(returns.get(key))
         for key in ("month_3", "month_6", "year_1", "year_2", "year_3")
@@ -186,7 +183,10 @@ def _candidate_metrics(row: dict[str, Any]) -> dict[str, Any]:
     )
     metrics = {
         "return_1y": _number(returns.get("year_1")),
-        "return_3y_annualized": round(annualized_3y, 4) if annualized_3y is not None else None,
+        # Keep the established artifact field for contract continuity.  The UI
+        # distinguishes the normal three-year basis from the since-inception
+        # fallback by checking whether returns_pct.year_3 is present.
+        "return_3y_annualized": annualized_return,
         "benchmark_excess_1y": _number(benchmark_1y.get("excess_return_pct")),
         # A less-negative drawdown is better, so the raw value can use the normal higher-is-better rank.
         "max_drawdown": _number(risk.get("max_drawdown_pct")),
@@ -216,6 +216,43 @@ def _candidate_metrics(row: dict[str, Any]) -> dict[str, Any]:
         "scale_change": dict(row.get("scale_change") or {}),
         "data_gap": list(dict.fromkeys(data_gap)),
     }
+
+
+def _long_term_annualized_return(
+    returns: dict[str, Any],
+    risk: dict[str, Any],
+) -> float | None:
+    trailing_three_year = _number(returns.get("year_3"))
+    if trailing_three_year is not None and trailing_three_year > -100:
+        value = ((1.0 + trailing_three_year / 100.0) ** (1.0 / 3.0) - 1.0) * 100.0
+        return round(value, 4)
+
+    period_start = _date_value(risk.get("period_start"))
+    period_end = _date_value(risk.get("period_end"))
+    if period_start is None or period_end is None or period_end <= period_start:
+        return None
+    observation_years = (period_end - period_start).days / 365.2425
+    if observation_years <= 0:
+        return None
+
+    # Prefer the provider's true since-inception total return because it can
+    # include distributions that are not represented by unit NAV alone.  The
+    # complete NAV interval supplies the real observation length.  If the
+    # ranking source omits that field too, fall back to the observed NAV return.
+    period_return = _number(returns.get("since_inception"))
+    if period_return is None:
+        period_return = _number(risk.get("period_return_pct"))
+    if period_return is None or period_return <= -100:
+        return None
+    value = ((1.0 + period_return / 100.0) ** (1.0 / observation_years) - 1.0) * 100.0
+    return round(value, 4)
+
+
+def _date_value(value: Any):
+    try:
+        return datetime.fromisoformat(str(value)).date()
+    except (TypeError, ValueError):
+        return None
 
 
 def _comparison_group(row: dict[str, Any]) -> str:

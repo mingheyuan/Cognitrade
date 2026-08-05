@@ -138,7 +138,7 @@ const FIELD_LABELS: Record<string, string> = {
   fee_pct: '费率',
   metrics: '分析指标',
   return_1y: '近一年收益率',
-  return_3y_annualized: '近三年年化收益率',
+  return_3y_annualized: '长期年化收益率（三年优先，成立以来兜底）',
   benchmark_excess_1y: '近一年超额收益',
   max_drawdown: '最大回撤',
   volatility: '年化波动率',

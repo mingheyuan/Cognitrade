@@ -152,7 +152,18 @@ class FundSnapshotSkill:
             row = dict(candidate)
             row_errors: list[str] = []
             try:
-                nav_rows = self._normalize_nav(self.nav_loader(code))
+                # The ranking feed exposes a real trailing-three-year return when
+                # the fund has enough history.  Younger funds do not have that
+                # field, so retain their complete observed NAV history for the
+                # since-inception annualized-return fallback instead of applying
+                # the normal three-year observation cap.
+                has_three_year_return = self._numeric(
+                    dict(row.get("returns_pct") or {}).get("year_3")
+                ) is not None
+                nav_rows = self._normalize_nav(
+                    self.nav_loader(code),
+                    max_rows=756 if has_three_year_return else None,
+                )
                 row["nav_history"] = nav_rows
                 row["risk"] = self._risk_metrics(nav_rows)
                 if not nav_rows:
@@ -421,7 +432,7 @@ class FundSnapshotSkill:
     @staticmethod
     def _load_nav(code: str):
         return call_with_retry(
-            lambda: ak.fund_open_fund_info_em(symbol=code, indicator="单位净值走势", period="近3年"),
+            lambda: ak.fund_open_fund_info_em(symbol=code, indicator="单位净值走势", period="成立来"),
             retries=2,
             delay_seconds=0.25,
         )
@@ -745,7 +756,12 @@ class FundSnapshotSkill:
         return normalized, period
 
     @classmethod
-    def _normalize_nav(cls, payload: Any) -> list[dict[str, Any]]:
+    def _normalize_nav(
+        cls,
+        payload: Any,
+        *,
+        max_rows: int | None = 756,
+    ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for raw in cls._rows(payload):
             nav = cls._numeric(cls._first(raw, ("单位净值", "净值", "close", "nav")))
@@ -754,7 +770,7 @@ class FundSnapshotSkill:
                 continue
             rows.append({"date": nav_date, "nav": nav})
         rows.sort(key=lambda row: str(row["date"]))
-        return rows[-756:]
+        return rows[-max_rows:] if max_rows is not None else rows
 
     @staticmethod
     def _risk_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:

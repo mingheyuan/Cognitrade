@@ -287,7 +287,7 @@ class FundResearchTests(unittest.TestCase):
                     first_candidate = analysis_artifact["content"]["candidates"][0]
                     self.assertEqual(
                         analysis_artifact["content"]["methodology_version"],
-                        "uzi-3.9.2-fund-selection-v2",
+                        "uzi-3.9.2-fund-selection-v3",
                     )
                     self.assertEqual(first_candidate["benchmark_performance"][0]["excess_return_pct"], 12)
                     self.assertTrue(first_candidate["manager_tenures"][0]["current"])
@@ -406,7 +406,48 @@ class FundResearchTests(unittest.TestCase):
         self.assertGreaterEqual(analysis["recommendations"][0]["score_coverage"], 0.6)
         self.assertIn("缺失字段不补 0", analysis["selection_policy"]["non_imputation_rule"])
         self.assertIn("benchmark_excess_1y", analysis["candidates"][0]["metrics"])
-        self.assertEqual(analysis["methodology_version"], "uzi-3.9.2-fund-selection-v2")
+        self.assertEqual(analysis["methodology_version"], "uzi-3.9.2-fund-selection-v3")
+
+    def test_fund_without_three_year_return_uses_complete_since_inception_history(self) -> None:
+        ranking = _ranking_frame().iloc[[0]].copy()
+        ranking = ranking.drop(columns=["近3年"])
+        ranking.loc[:, "成立来"] = 50.0
+        nav = pd.DataFrame(
+            [
+                {
+                    "净值日期": date(2024, 1, 1) + timedelta(days=index),
+                    "单位净值": 1.0 + index / 2_000,
+                }
+                for index in range(800)
+            ]
+        )
+        skill = FundSnapshotSkill(
+            fund_master=FundSecurityMaster(catalog_loader=_catalog_frame),
+            open_rank_loader=lambda _category: ranking,
+            exchange_rank_loader=lambda: pd.DataFrame(),
+            nav_loader=lambda _code: nav,
+            holdings_loader=_holdings_frame,
+            overview_loader=_overview_frame,
+            achievement_loader=_achievement_payload,
+            manager_tenure_loader=_manager_tenure_frame,
+            scale_history_loader=_scale_history_rows,
+        )
+
+        snapshot = skill.run(
+            query="分析成立不足三年的基金",
+            fund_codes=["110011"],
+            candidate_pool_size=1,
+            investment_cycle="long_term",
+        )
+        fund = snapshot["funds"][0]
+        analysis = build_fund_analysis(snapshot)
+        candidate = analysis["candidates"][0]
+
+        self.assertEqual(len(fund["nav_history"]), 800)
+        self.assertEqual(fund["risk"]["period_start"], "2024-01-01")
+        self.assertIn("return_3y_annualized", candidate["metrics"])
+        self.assertNotIn("return_3y_annualized", candidate["data_gap"])
+        self.assertAlmostEqual(candidate["metrics"]["return_3y_annualized"], 20.3637, places=4)
 
     def test_missing_fund_metrics_do_not_become_zero_or_a_recommendation(self) -> None:
         analysis = build_fund_analysis(
