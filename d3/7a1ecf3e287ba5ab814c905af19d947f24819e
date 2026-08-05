@@ -1,0 +1,29 @@
+frontend/src/artifacts/ArtifactArchive.tsx
+  s_a6a8a3a6f43b3c::t_7c5662046db09e 156-157,161-163,167,179,184,202-211
+frontend/src/components/RunInspector.tsx
+  s_a6a8a3a6f43b3c::t_1895c9233dcba4 93
+research_system/api/hikyuu_backtest_service.py
+  s_a6a8a3a6f43b3c::t_679ee083e7d8bc 237,239-246,250
+research_system/api/paper_trading_service.py
+  s_a6a8a3a6f43b3c::t_39649333067db8 481,484,488-489,493-501
+research_system/api/routes/finance.py
+  s_a6a8a3a6f43b3c::t_f21da3c396c443 140,150,152-157,231,234-236
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "d37a1ecf3e287ba5ab814c905af19d947f24819e",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
