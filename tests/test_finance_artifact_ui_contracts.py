@@ -89,6 +89,25 @@ class FinanceArtifactUiContractTests(unittest.TestCase):
                 self.assertTrue(schema.get("properties"))
                 self.assertIs(schema.get("additionalProperties"), False)
 
+    def test_fund_artifact_nested_objects_reject_undeclared_fields(self) -> None:
+        def assert_closed(node: dict, path: str) -> None:
+            if node.get("type") == "object" or isinstance(node.get("properties"), dict):
+                self.assertIs(
+                    node.get("additionalProperties"),
+                    False,
+                    msg=f"open nested fund contract: {path}",
+                )
+                for name, child in (node.get("properties") or {}).items():
+                    if isinstance(child, dict):
+                        assert_closed(child, f"{path}.{name}")
+            item = node.get("items")
+            if isinstance(item, dict):
+                assert_closed(item, f"{path}[]")
+
+        for artifact_type in ("fund_snapshot", "fund_analysis"):
+            with self.subTest(artifact_type=artifact_type):
+                assert_closed(self.schemas[artifact_type], artifact_type)
+
     def test_generated_frontend_contract_is_current(self) -> None:
         result = subprocess.run(
             [

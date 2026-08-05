@@ -1,41 +1,15 @@
 import {
-  AlertCircle,
-  BarChart3,
-  CheckCircle2,
   Database,
-  Layers3,
   Play,
   RefreshCw,
   ShieldAlert,
-  TrendingDown,
-  TrendingUp,
 } from 'lucide-react'
 import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { useCognitrade } from '../CognitradeContext'
+import { FundAnalysisDossier } from './FundAnalysisDossier'
 
 type FundsProps = {
   onOpenRun: (runId: string) => void
-}
-
-type FundCandidate = {
-  fund_code?: string
-  fund_name?: string
-  fund_type?: string
-  rank?: number | null
-  score?: number | null
-  score_coverage?: number
-  selection_eligible?: boolean
-  returns_pct?: Record<string, number>
-  risk?: Record<string, number | string | null>
-  fee_pct?: number | null
-  top10_concentration_pct?: number | null
-  holdings_period?: string | null
-  top_holdings?: Array<Record<string, unknown>>
-  benchmark_definition?: string | null
-  benchmark_performance?: Array<Record<string, unknown>>
-  manager_tenures?: Array<Record<string, unknown>>
-  scale_change?: Record<string, unknown>
-  data_gap?: string[]
 }
 
 export function Funds({ onOpenRun }: FundsProps) {
@@ -63,21 +37,19 @@ export function Funds({ onOpenRun }: FundsProps) {
     selectRun(latestFundRun.run_id)
   }, [latestFundRun?.run_id, selectRun, selectedRecord?.intent])
 
-  const analysis = useMemo(() => {
-    const artifacts = Array.isArray(selectedRun?.replay?.artifacts)
+  const artifacts = useMemo(
+    () => (Array.isArray(selectedRun?.replay?.artifacts)
       ? selectedRun.replay.artifacts
-      : []
+      : []),
+    [selectedRun],
+  )
+  const analysis = useMemo(() => {
     const artifact = [...artifacts].reverse().find((row) => (
       asRecord(row).artifact_type === 'fund_analysis'
     ))
     return asRecord(asRecord(artifact).content)
-  }, [selectedRun])
-  const candidates = (Array.isArray(analysis.candidates) ? analysis.candidates : [])
-    .map((row) => asRecord(row) as FundCandidate)
-  const recommendations = Array.isArray(analysis.recommendations)
-    ? analysis.recommendations.map((row) => asRecord(row))
-    : []
-  const dataGaps = Array.isArray(analysis.data_gap) ? analysis.data_gap.map(String) : []
+  }, [artifacts])
+  const hasFundArtifacts = artifacts.some((row) => ['fund_snapshot', 'fund_analysis'].includes(String(asRecord(row).artifact_type || '')))
   const sourceRunId = selectedRecord?.intent === 'fund_research' ? selectedRunId : latestFundRun?.run_id
 
   const submit = async (event: FormEvent) => {
@@ -163,20 +135,8 @@ export function Funds({ onOpenRun }: FundsProps) {
 
           {selectedRunLoading ? (
             <div className="fund-empty"><RefreshCw size={22} className="is-spinning" /><strong>正在读取 ArtifactBoard</strong></div>
-          ) : candidates.length ? (
-            <>
-              <div className="fund-summary-grid">
-                <article><Layers3 size={17} /><span>同类候选</span><strong>{candidates.length}</strong><small>{String(analysis.fund_category || category)}</small></article>
-                <article><CheckCircle2 size={17} /><span>通过证据门槛</span><strong>{candidates.filter((row) => row.selection_eligible).length}</strong><small>覆盖率至少 60%</small></article>
-                <article><BarChart3 size={17} /><span>优先候选</span><strong>{recommendations.length}</strong><small>仅从可比较样本产生</small></article>
-                <article><AlertCircle size={17} /><span>运行级缺口</span><strong>{dataGaps.length}</strong><small>不以零值代替</small></article>
-              </div>
-              <div className="fund-candidate-list">
-                {candidates.map((candidate) => (
-                  <FundCandidateCard key={candidate.fund_code} candidate={candidate} />
-                ))}
-              </div>
-            </>
+          ) : hasFundArtifacts ? (
+            <FundAnalysisDossier artifacts={artifacts} />
           ) : (
             <div className="fund-empty">
               <Database size={24} />
@@ -190,90 +150,8 @@ export function Funds({ onOpenRun }: FundsProps) {
   )
 }
 
-function FundCandidateCard({ candidate }: { candidate: FundCandidate }) {
-  const oneYear = numberValue(candidate.returns_pct?.year_1)
-  const drawdown = numberValue(candidate.risk?.max_drawdown_pct)
-  const volatility = numberValue(candidate.risk?.annualized_volatility_pct)
-  const holdings = Array.isArray(candidate.top_holdings) ? candidate.top_holdings.slice(0, 5) : []
-  const benchmark = (Array.isArray(candidate.benchmark_performance) ? candidate.benchmark_performance : [])
-    .map(asRecord)
-    .find((row) => String(row.period || '').replaceAll(' ', '') === '近1年')
-  const currentManager = (Array.isArray(candidate.manager_tenures) ? candidate.manager_tenures : [])
-    .map(asRecord)
-    .find((row) => row.current === true)
-  const scale = asRecord(candidate.scale_change)
-  return (
-    <article className={`fund-candidate-card ${candidate.selection_eligible ? 'is-eligible' : ''}`}>
-      <header>
-        <span className="fund-rank">{candidate.rank ? `#${candidate.rank}` : '—'}</span>
-        <div><strong>{candidate.fund_name || candidate.fund_code}</strong><small>{candidate.fund_code} · {candidate.fund_type || '类型待补充'}</small></div>
-        <div className="fund-score"><span>综合分</span><strong>{candidate.score == null ? '—' : Number(candidate.score).toFixed(1)}</strong><small>覆盖 {Math.round(Number(candidate.score_coverage || 0) * 100)}%</small></div>
-      </header>
-      <div className="fund-metric-row">
-        <Metric icon={<TrendingUp size={14} />} label="近 1 年" value={percent(oneYear)} tone={oneYear == null ? undefined : oneYear >= 0 ? 'up' : 'down'} />
-        <Metric icon={<TrendingDown size={14} />} label="最大回撤" value={percent(drawdown)} tone="down" />
-        <Metric icon={<BarChart3 size={14} />} label="年化波动" value={percent(volatility)} />
-        <Metric icon={<Layers3 size={14} />} label="前十大集中度" value={percent(numberValue(candidate.top10_concentration_pct))} />
-      </div>
-      <div className="fund-context-grid">
-        <article>
-          <span>业绩比较基准</span>
-          <strong>{percent(numberValue(benchmark?.benchmark_return_pct))} / 超额 {percent(numberValue(benchmark?.excess_return_pct))}</strong>
-          <small>{candidate.benchmark_definition || '基准定义缺失'}</small>
-        </article>
-        <article>
-          <span>当前基金经理</span>
-          <strong>{String(currentManager?.manager || '任期数据缺失')}</strong>
-          <small>{currentManager ? `${String(currentManager.start_date || '—')} 起 · 任期回报 ${percent(numberValue(currentManager.tenure_return_pct))}` : '未取得真实任职分段'}</small>
-        </article>
-        <article>
-          <span>最新规模与份额</span>
-          <strong>{numberText(scale.latest_net_assets_100m_cny)} 亿元</strong>
-          <small>总份额 {numberText(scale.latest_total_shares_100m)} 亿份 · 环比 {percent(numberValue(scale.total_share_change_pct))} · 净流 {numberText(scale.latest_net_flow_100m_shares)} 亿份</small>
-        </article>
-      </div>
-      <div className="fund-holdings-row">
-        <span>{candidate.holdings_period || '持仓期次缺失'}</span>
-        <div>{holdings.map((row, index) => <em key={`${String(row.code || '')}-${index}`}>{String(row.name || row.code || '未知持仓')} {percent(numberValue(row.weight_pct))}</em>)}</div>
-      </div>
-      {candidate.data_gap?.length ? <footer><AlertCircle size={13} />{candidate.data_gap.length} 项数据缺口：{candidate.data_gap.slice(0, 3).map(fundGapLabel).join('、')}</footer> : null}
-    </article>
-  )
-}
-
-function Metric({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: string; tone?: 'up' | 'down' }) {
-  return <div><span>{icon}{label}</span><strong className={tone ? `number-${tone}` : ''}>{value}</strong></div>
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
-}
-
-function numberValue(value: unknown): number | null {
-  const number = Number(value)
-  return value == null || value === '' || !Number.isFinite(number) ? null : number
-}
-
-function percent(value: number | null): string {
-  return value == null ? '—' : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
-}
-
-function numberText(value: unknown): string {
-  const number = numberValue(value)
-  return number == null ? '—' : number.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
-}
-
-function fundGapLabel(value: string): string {
-  return ({
-    fund_ranking_missing: '基金排行缺失', nav_history_missing: '净值历史缺失',
-    nav_history_unavailable: '净值服务暂不可用', fund_holdings_missing: '披露持仓缺失',
-    fund_holdings_unavailable: '披露持仓服务暂不可用', fund_overview_missing: '基金概况缺失',
-    fund_overview_unavailable: '基金概况服务暂不可用', benchmark_definition_missing: '比较基准定义缺失',
-    benchmark_performance_missing: '基准业绩缺失', benchmark_performance_unavailable: '基准业绩服务暂不可用',
-    manager_tenure_history_missing: '经理任职分段缺失', manager_tenure_history_unavailable: '经理任职服务暂不可用',
-    fund_scale_history_missing: '规模与份额历史缺失', fund_scale_history_unavailable: '规模与份额服务暂不可用',
-    benchmark_excess_1y: '近一年超额收益缺失',
-  } as Record<string, string>)[value] || value.replaceAll('_', ' ')
 }
 
 function cycleLabel(value: string): string {

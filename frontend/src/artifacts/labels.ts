@@ -243,6 +243,113 @@ const FIELD_LABELS: Record<string, string> = {
   assistant_message: '最终回答',
   source_artifact_id: '来源 Artifact',
   model_generated: '是否由模型生成',
+  normalized_symbol: '市场代码',
+  code: '代码',
+  type: '类型',
+  keyword: '关键词',
+  publish_time: '发布时间',
+  time: '时间',
+  open: '开盘价',
+  high: '最高价',
+  low: '最低价',
+  close: '收盘价',
+  pre_close: '前收盘价',
+  latest_price: '最新价',
+  pct_change: '涨跌幅',
+  change: '涨跌额',
+  volume: '成交量',
+  amount: '成交额',
+  turnover: '换手率',
+  adjust: '复权方式',
+  bar_count: '交易日数量',
+  latest_bar: '最新交易日',
+  bars: '历史行情',
+  pe_ttm: '市盈率（TTM）',
+  pe_static: '静态市盈率',
+  pb: '市净率',
+  peg: '市盈增长比',
+  pcf: '市现率',
+  ps: '市销率',
+  market_cap: '总市值',
+  float_market_cap: '流通市值',
+  total_shares: '总股本',
+  float_shares: '流通股本',
+  valuation_date: '估值日期',
+  spot: '实时行情',
+  market_overview: '行情概览',
+  market_hist: '行情历史',
+  history: '历史序列',
+  availability: '数据状态',
+  degrade_reason: '降级原因',
+  provider_id: '数据提供方',
+  vendor: '数据供应商',
+  source_id: '来源标识',
+  from_cache: '是否使用缓存',
+  source_confidence: '来源置信度',
+  url: '详情链接',
+  link: '详情链接',
+  industry: '所属行业',
+  concept: '所属概念',
+  category: '分类',
+  description: '说明',
+  content: '内容',
+  main_net_inflow: '主力净流入',
+  net_inflow: '净流入',
+  buy_amount: '买入金额',
+  sell_amount: '卖出金额',
+  buy_ratio: '买入占比',
+  sell_ratio: '卖出占比',
+  basic_eps: '基本每股收益',
+  diluted_eps: '稀释每股收益',
+  assets_debt_ratio: '资产负债率',
+  business_cycle: '营业周期',
+  calc_per_net_assets: '每股净资产',
+  operating_income_total: '营业总收入',
+  parent_holder_net_profit: '归母净利润',
+  sale_gross_margin: '销售毛利率',
+  sale_net_interest_ratio: '销售净利率',
+  current_ratio: '流动比率',
+  quick_ratio: '速动比率',
+  conservative_quick_ratio: '保守速动比率',
+  equity_ratio: '股东权益比率',
+  accounts_payable: '应付账款',
+  accounts_receivable: '应收账款',
+  accrued_wages: '应付职工薪酬',
+  assets_total: '资产总额',
+  capital_reserve: '资本公积',
+  act_cash_flow_net: '经营活动现金流净额',
+  act_cash_inflow_total: '经营活动现金流入合计',
+  act_cash_outflow_total: '经营活动现金流出合计',
+  cash_net_addition: '现金净增加额',
+  financing_cash_flow_net: '筹资活动现金流净额',
+  invest_cash_flow_net: '投资活动现金流净额',
+  common_profit_total: '综合收益总额',
+  net_profit: '净利润',
+  profit_total: '利润总额',
+  operating_profit: '营业利润',
+  operating_income: '营业收入',
+  raw_dimension_count: '原始数据维度数',
+  derived_dimension_count: '推导维度数',
+  total_dimension_count: '维度总数',
+  derived_available_count: '可用推导维度数',
+  derived_missing_count: '缺失推导维度数',
+  method_input_contract: '方法输入契约',
+}
+
+const FIELD_WORDS: Record<string, string> = {
+  latest: '最新', recent: '近期', main: '主力', net: '净额', inflow: '流入', outflow: '流出', flow: '资金流', hot: '热度', news: '新闻',
+  buy: '买入', sell: '卖出', price: '价格', avg: '平均', average: '平均', max: '最高', min: '最低', current: '当前', previous: '前期',
+  company: '公司', stock: '股票', security: '证券', market: '市场', financial: '财务', revenue: '营收', profit: '利润', cash: '现金', debt: '负债',
+  date: '日期', time: '时间', year: '年度', quarter: '季度', rate: '比率', ratio: '占比', amount: '金额', volume: '数量', total: '合计', count: '数量',
+  status: '状态', source: '来源', provider: '提供方', data: '数据', detail: '明细', info: '资料', metric: '指标', value: '数值',
+  basic: '基本', diluted: '稀释', eps: '每股收益', assets: '资产', asset: '资产', equity: '权益', business: '营业', cycle: '周期',
+  operating: '经营', activity: '活动', income: '收入', cost: '成本', parent: '归属母公司', holder: '股东', yoy: '同比', growth: '增长',
+  inventory: '存货', days: '天数', receive: '应收', accounts: '账款', sale: '销售', gross: '毛利', margin: '率', interest: '利息',
+  payable: '应付', receivable: '应收', accrued: '应计', wages: '职工薪酬', reserve: '准备金', borrow: '借款', borrowing: '借款',
+  long: '长期', term: '期', short: '短期', other: '其他', capital: '资本', invest: '投资', financing: '筹资', addition: '增加额',
+  expense: '费用', expenses: '费用', fee: '费用', management: '管理', research: '研发', development: '开发', tax: '税费',
+  rank: '排名', score: '评分', period: '期间', return: '收益', benchmark: '基准', holdings: '持仓', holding: '持仓', fund: '基金',
+  dimension: '维度', available: '可用', missing: '缺失', derived: '推导', raw: '原始', quality: '质量', risk: '风险', flag: '标记',
 }
 
 const VALUE_LABELS: Record<string, string> = {
@@ -276,15 +383,15 @@ export function businessFieldLabel(key: string): string {
   if (!normalized) return '未命名字段'
   if (FIELD_LABELS[normalized]) return FIELD_LABELS[normalized]
   if (Array.from(normalized).some((character) => (character.codePointAt(0) || 0) > 127)) return normalized
-  return normalized
-    .replaceAll('_pct', '（%）')
-    .replaceAll('_ratio', '比率')
-    .replaceAll('_count', '数量')
-    .replaceAll('_', ' ')
-    .replace(/\bapi\b/gi, 'API')
-    .replace(/\bid\b/gi, '编号')
-    .replace(/\byoy\b/gi, '同比')
-    .replace(/\bnav\b/gi, '净值')
+  const suffix = normalized.endsWith('_pct') ? '（%）' : ''
+  const words = normalized
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .replace(/_pct$/, '')
+    .split(/[_\s.-]+/)
+    .filter(Boolean)
+  const translated = words.map((word) => ({ api: 'API', id: '编号', nav: '净值', ...FIELD_WORDS })[word] || '').filter(Boolean)
+  return translated.length ? `${translated.join('')}${suffix}` : '扩展业务指标'
 }
 
 export function businessValueLabel(value: string): string {

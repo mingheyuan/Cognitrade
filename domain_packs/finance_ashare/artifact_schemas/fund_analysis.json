@@ -1,102 +1,233 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": [
-    "methodology_version",
-    "candidate_count",
-    "candidates",
-    "recommendations",
-    "selection_policy",
-    "quality_status",
-    "data_gap",
-    "generated_at"
-  ],
+  "required": ["methodology_version", "candidate_count", "candidates", "recommendations", "selection_policy", "quality_status", "data_gap", "generated_at"],
   "properties": {
-    "methodology_version": {
-      "type": "string"
-    },
-    "fund_category": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "investment_cycle": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "candidate_count": {
-      "type": "integer",
-      "minimum": 0
-    },
+    "methodology_version": {"type": "string"},
+    "fund_category": {"type": ["string", "null"]},
+    "investment_cycle": {"type": ["string", "null"]},
+    "candidate_count": {"type": "integer", "minimum": 0},
     "candidates": {
       "type": "array",
       "items": {
         "type": "object",
+        "required": ["fund_code", "fund_name", "returns_pct", "risk", "metrics", "score_coverage", "score_components", "selection_eligible", "data_gap", "quality_status"],
         "properties": {
-          "benchmark_definition": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "fund_code": {"type": "string"},
+          "fund_name": {"type": "string"},
+          "fund_type": {"type": ["string", "null"]},
+          "as_of": {"type": ["string", "null"]},
+          "unit_nav": {"type": ["number", "null"]},
+          "returns_pct": {
+            "type": "object",
+            "properties": {
+              "daily": {"type": "number"},
+              "week_1": {"type": "number"},
+              "month_1": {"type": "number"},
+              "month_3": {"type": "number"},
+              "month_6": {"type": "number"},
+              "year_1": {"type": "number"},
+              "year_2": {"type": "number"},
+              "year_3": {"type": "number"},
+              "year_to_date": {"type": "number"},
+              "since_inception": {"type": "number"}
+            },
+            "additionalProperties": false
           },
+          "risk": {
+            "type": "object",
+            "properties": {
+              "observation_count": {"type": "integer", "minimum": 0},
+              "max_drawdown_pct": {"type": "number"},
+              "annualized_volatility_pct": {"type": ["number", "null"]},
+              "period_return_pct": {"type": "number"},
+              "period_start": {"type": "string"},
+              "period_end": {"type": "string"}
+            },
+            "additionalProperties": false
+          },
+          "fee_pct": {"type": ["number", "null"]},
+          "metrics": {
+            "type": "object",
+            "properties": {
+              "return_1y": {"type": "number"},
+              "return_3y_annualized": {"type": "number"},
+              "benchmark_excess_1y": {"type": "number"},
+              "max_drawdown": {"type": "number"},
+              "volatility": {"type": "number"},
+              "fee": {"type": "number"},
+              "return_consistency": {"type": "number"}
+            },
+            "additionalProperties": false
+          },
+          "top_holdings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["rank", "code", "name"],
+              "properties": {
+                "rank": {"type": "integer", "minimum": 1},
+                "code": {"type": "string"},
+                "name": {"type": "string"},
+                "weight_pct": {"type": ["number", "null"]},
+                "shares_10k": {"type": ["number", "null"]},
+                "market_value_10k": {"type": ["number", "null"]}
+              },
+              "additionalProperties": false
+            }
+          },
+          "holdings_period": {"type": ["string", "null"]},
+          "top10_concentration_pct": {"type": ["number", "null"]},
+          "benchmark_definition": {"type": ["string", "null"]},
           "benchmark_performance": {
             "type": "array",
             "items": {
-              "type": "object"
+              "type": "object",
+              "required": ["period"],
+              "properties": {
+                "period": {"type": "string"},
+                "period_group": {"type": ["string", "null"]},
+                "fund_return_pct": {"type": ["number", "null"]},
+                "benchmark_return_pct": {"type": ["number", "null"]},
+                "excess_return_pct": {"type": ["number", "null"]},
+                "fund_max_drawdown_pct": {"type": ["number", "null"]},
+                "benchmark_max_drawdown_pct": {"type": ["number", "null"]},
+                "peer_rank": {}
+              },
+              "additionalProperties": false
             }
           },
           "manager_tenures": {
             "type": "array",
             "items": {
-              "type": "object"
+              "type": "object",
+              "required": ["manager", "start_date", "current"],
+              "properties": {
+                "manager": {"type": "string"},
+                "managers": {"type": "array", "items": {"type": "string"}},
+                "start_date": {"type": "string"},
+                "end_date": {"type": ["string", "null"]},
+                "current": {"type": "boolean"},
+                "tenure_text": {},
+                "tenure_return_pct": {"type": ["number", "null"]}
+              },
+              "additionalProperties": false
             }
           },
           "scale_history": {
             "type": "array",
             "items": {
-              "type": "object"
+              "type": "object",
+              "required": ["report_date"],
+              "properties": {
+                "report_date": {"type": "string"},
+                "subscriptions_100m_shares": {"type": ["number", "null"]},
+                "redemptions_100m_shares": {"type": ["number", "null"]},
+                "net_flow_100m_shares": {"type": ["number", "null"]},
+                "total_shares_100m": {"type": ["number", "null"]},
+                "net_assets_100m_cny": {"type": ["number", "null"]},
+                "reported_share_change_pct": {"type": ["number", "null"]}
+              },
+              "additionalProperties": false
             }
           },
           "scale_change": {
-            "type": "object"
-          }
-        }
+            "type": "object",
+            "properties": {
+              "latest_report_date": {"type": ["string", "null"]},
+              "previous_report_date": {"type": ["string", "null"]},
+              "latest_total_shares_100m": {"type": ["number", "null"]},
+              "latest_net_assets_100m_cny": {"type": ["number", "null"]},
+              "latest_net_flow_100m_shares": {"type": ["number", "null"]},
+              "total_share_change_pct": {"type": ["number", "null"]},
+              "net_asset_change_pct": {"type": ["number", "null"]},
+              "status": {"type": "string"}
+            },
+            "additionalProperties": false
+          },
+          "comparison_group": {"type": "string"},
+          "score": {"type": ["number", "null"]},
+          "score_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+          "score_components": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["component", "value", "weight", "percentile"],
+              "properties": {
+                "component": {"type": "string"},
+                "value": {"type": "number"},
+                "weight": {"type": "number"},
+                "percentile": {"type": "number"}
+              },
+              "additionalProperties": false
+            }
+          },
+          "selection_eligible": {"type": "boolean"},
+          "rank": {"type": ["integer", "null"], "minimum": 1},
+          "data_gap": {"type": "array", "items": {"type": "string"}},
+          "quality_status": {"enum": ["available", "degraded", "data_gap"]}
+        },
+        "additionalProperties": false
       }
     },
     "recommendations": {
       "type": "array",
       "items": {
-        "type": "object"
+        "type": "object",
+        "required": ["fund_code", "fund_name", "comparison_group", "rank", "score", "score_coverage", "reason", "risk"],
+        "properties": {
+          "fund_code": {"type": "string"},
+          "fund_name": {"type": "string"},
+          "fund_type": {"type": ["string", "null"]},
+          "comparison_group": {"type": "string"},
+          "rank": {"type": "integer", "minimum": 1},
+          "score": {"type": "number"},
+          "score_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+          "reason": {"type": "string"},
+          "risk": {"type": "string"}
+        },
+        "additionalProperties": false
       }
     },
     "selection_policy": {
-      "type": "object"
+      "type": "object",
+      "required": ["description", "minimum_score_coverage", "minimum_comparable_sample", "components", "non_imputation_rule"],
+      "properties": {
+        "description": {"type": "string"},
+        "minimum_score_coverage": {"type": "number", "minimum": 0, "maximum": 1},
+        "minimum_comparable_sample": {"type": "integer", "minimum": 1},
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "weight", "direction"],
+            "properties": {
+              "id": {"type": "string"},
+              "weight": {"type": "number"},
+              "direction": {"enum": ["higher", "lower"]}
+            },
+            "additionalProperties": false
+          }
+        },
+        "non_imputation_rule": {"type": "string"}
+      },
+      "additionalProperties": false
     },
-    "quality_status": {
-      "enum": [
-        "available",
-        "degraded",
-        "data_gap"
-      ]
-    },
-    "data_gap": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
+    "quality_status": {"enum": ["available", "degraded", "data_gap"]},
+    "data_gap": {"type": "array", "items": {"type": "string"}},
     "provider_errors": {
       "type": "array",
       "items": {
-        "type": "object"
+        "type": "object",
+        "required": ["stage", "error_type"],
+        "properties": {
+          "stage": {"type": "string"},
+          "error_type": {"type": "string"}
+        },
+        "additionalProperties": false
       }
     },
-    "generated_at": {
-      "type": "string"
-    }
+    "generated_at": {"type": "string"}
   },
   "additionalProperties": false
 }

@@ -12,6 +12,7 @@ import {
   TrendingUp,
 } from 'lucide-react'
 import { type Dispatch, type FormEvent, type ReactNode, type SetStateAction, useMemo, useState } from 'react'
+import { BusinessDataView } from '../artifacts/BusinessDataView'
 import { CognitradeApiClient, CognitradeApiError } from '../api-client'
 import { useCognitrade } from '../CognitradeContext'
 import type { JsonRecord, MarketDataResponse } from '../finance-contracts'
@@ -34,7 +35,7 @@ type KlineBar = {
   turnover: number | null
 }
 
-type KlineRange = 20 | 60 | 120 | 'all'
+type KlineRange = 20 | 60 | 120 | 250 | 750 | 'all'
 
 export interface MarketDataViewState {
   query: string
@@ -183,6 +184,11 @@ function MarketDataContent({ data, onRefresh }: { data: MarketDataResponse; onRe
           <Metric label="流通市值" value={formatCompact(first(overview, 'float_market_cap'), '元')} />
           <Metric label="估值日期" value={formatValue(first(overview, 'valuation_date'))} />
         </div>
+        <RecordPanel title="行情与估值补充字段" value={remainingFields(overview, [
+          'latest_price', 'pct_change', 'amount', 'pe_ttm', 'pe_static', 'pb', 'peg', 'pcf', 'ps',
+          'market_cap', 'float_market_cap', 'valuation_date', 'spot',
+        ])} wide hideWhenEmpty />
+        <RecordPanel title="行情历史摘要" value={data.sections.market.history_summary} wide />
       </DataSection>
 
       <DataSection icon={<BarChart3 size={18} />} kicker="HISTORICAL KLINE" title="历史 K 线 · 日线" quality={data.quality.kline}>
@@ -205,12 +211,18 @@ function MarketDataContent({ data, onRefresh }: { data: MarketDataResponse; onRe
             <RecordPanel title="同行比较" value={fundamental.bank_peer_comparison} wide />
           </div>
         )}
+        <RecordPanel title="基本面补充字段" value={remainingFields(fundamental, [
+          'info', 'financial_abstract_new', 'financial_abstract', 'financial_benefit_new',
+          'financial_debt_new', 'financial_cash_new', 'financial_analysis', 'banking_metrics',
+          'bank_peer_comparison',
+        ])} wide hideWhenEmpty />
       </DataSection>
 
       <DataSection icon={<Activity size={18} />} kicker="CAPITAL FLOW" title="资金流与主力排名" quality={data.quality.capital_flow}>
         <RecordPanel title="最新资金流" value={flow.latest_flow} wide />
         <RecordPanel title="最近资金流" value={flow.recent_flows} wide />
         <RecordPanel title="主力资金排名" value={flow.main_flow_rank} wide />
+        <RecordPanel title="资金流补充字段" value={remainingFields(flow, ['latest_flow', 'recent_flows', 'main_flow_rank'])} wide hideWhenEmpty />
       </DataSection>
 
       <DataSection icon={<TrendingUp size={18} />} kicker="MARKET SIGNALS" title="市场热度与新闻" quality={data.quality.sentiment}>
@@ -221,6 +233,7 @@ function MarketDataContent({ data, onRefresh }: { data: MarketDataResponse; onRe
           </article>
         </div>
         <RecordPanel title="新闻样本" value={sentiment.news_samples} wide />
+        <RecordPanel title="市场热度补充字段" value={remainingFields(sentiment, ['hot_rank_detail', 'hot_rank_latest', 'hot_keywords', 'news_samples'])} wide hideWhenEmpty />
       </DataSection>
 
       <DataSection icon={<Newspaper size={18} />} kicker="DISCLOSURES & EVENTS" title="公司事件与公告">
@@ -245,6 +258,8 @@ function MarketDataContent({ data, onRefresh }: { data: MarketDataResponse; onRe
           </div>
         </div>
         <RecordPanel title="最近 30 天公告" value={notices.recent_notices} wide />
+        <RecordPanel title="公告补充字段" value={remainingFields(notices, ['notice_count', 'window_start', 'window_end', 'recent_notices'])} wide hideWhenEmpty />
+        <RecordPanel title="事件补充字段" value={remainingFields(events, ['event_keywords', 'event_notices'])} wide hideWhenEmpty />
       </DataSection>
 
       <DataSection icon={<Landmark size={18} />} kicker="DRAGON & TIGER LIST" title="龙虎榜" quality={data.quality.lhb}>
@@ -258,6 +273,11 @@ function MarketDataContent({ data, onRefresh }: { data: MarketDataResponse; onRe
           <RecordPanel title="卖出席位" value={lhb.sell_detail} />
         </div>
         <RecordPanel title="统计记录" value={lhb.lhb_statistics} wide />
+        <RecordPanel title="龙虎榜补充字段" value={remainingFields(lhb, ['latest_lhb_date', 'buy_top_total', 'sell_top_total', 'buy_detail', 'sell_detail', 'lhb_statistics'])} wide hideWhenEmpty />
+      </DataSection>
+
+      <DataSection icon={<Database size={18} />} kicker="SOURCE COVERAGE" title="数据来源与完整性" quality={data.quality_status}>
+        <SourceCoverage quality={data.quality} sources={data.sources} retrievedAt={data.retrieved_at} />
       </DataSection>
     </div>
   )
@@ -276,8 +296,50 @@ function DataSection({ icon, kicker, title, quality, children }: { icon: ReactNo
   )
 }
 
+const SOURCE_LABELS: Record<string, string> = {
+  market: '实时行情与估值',
+  kline: '历史 K 线',
+  fundamental: '基本面与财务',
+  capital_flow: '资金流',
+  sentiment: '市场热度与新闻',
+  notice: '公司公告',
+  events: '公司事件',
+  lhb: '龙虎榜',
+}
+
+function SourceCoverage({ quality, sources, retrievedAt }: { quality: Record<string, string>; sources: Record<string, JsonRecord>; retrievedAt: string }) {
+  return (
+    <div className="source-coverage-list">
+      {Object.keys(SOURCE_LABELS).map((sourceType) => {
+        const source = sources[sourceType] || {}
+        const state = quality[sourceType] || 'data_gap'
+        return (
+          <details key={sourceType} className="source-coverage-row">
+            <summary>
+              <span className={`source-coverage-dot is-${state}`} />
+              <span><strong>{SOURCE_LABELS[sourceType]}</strong><small>{String(source.provider_id || source.vendor || '来源未返回')}</small></span>
+              <span className={`quality-pill quality-pill--${state}`}>{qualityLabel(state)}</span>
+            </summary>
+            <div>
+              {Object.keys(source).length ? <BusinessDataView value={source} path={`market_sources.${sourceType}`} compact /> : <p className="data-empty">后端未返回该分区的来源元数据。</p>}
+            </div>
+          </details>
+        )
+      })}
+      <footer><Clock3 size={12} />本页数据汇总时间：{formatDateTime(retrievedAt)}</footer>
+    </div>
+  )
+}
+
 function Metric({ label, value, tone }: { label: string; value: string; tone?: 'up' | 'down' }) {
   return <div className={`finance-metric ${tone ? `finance-metric--${tone}` : ''}`}><span>{label}</span><strong>{value}</strong></div>
+}
+
+function remainingFields(value: unknown, consumed: string[]): JsonRecord {
+  const record = asRecord(value)
+  if (!record) return {}
+  const omitted = new Set(consumed)
+  return Object.fromEntries(Object.entries(record).filter(([key]) => !omitted.has(key)))
 }
 
 function KlineHistory({ kline, fallbackBar }: { kline: JsonRecord; fallbackBar: JsonRecord }) {
@@ -318,6 +380,8 @@ function KlineHistory({ kline, fallbackBar }: { kline: JsonRecord; fallbackBar: 
     { value: 20, label: '20 日' },
     { value: 60, label: '60 日' },
     { value: 120, label: '120 日' },
+    { value: 250, label: '近 1 年' },
+    { value: 750, label: '近 3 年' },
     { value: 'all', label: '全部' },
   ]
 
@@ -410,22 +474,13 @@ function KlineHistory({ kline, fallbackBar }: { kline: JsonRecord; fallbackBar: 
         <div><span>成交额</span><strong>{formatCompact(selected.amount, '元')}</strong></div>
       </div>
 
-      {hasHistory && (
-        <details className="kline-detail-table">
-          <summary>查看完整历史明细 <span>{allBars.length} 个交易日</span></summary>
-          <div className="finance-table-scroll">
-            <table className="finance-table">
-              <thead><tr><th>交易日期</th><th>开盘价</th><th>最高价</th><th>最低价</th><th>收盘价</th><th>成交量</th><th>成交额</th><th>换手率</th></tr></thead>
-              <tbody>{allBars.map((bar) => <tr key={bar.date}><td>{formatDate(bar.date)}</td><td>{formatPrice(bar.open)}</td><td>{formatPrice(bar.high)}</td><td>{formatPrice(bar.low)}</td><td>{formatPrice(bar.close)}</td><td>{formatCompact(bar.volume, '股')}</td><td>{formatCompact(bar.amount, '元')}</td><td>{formatTurnover(bar.turnover)}</td></tr>)}</tbody>
-            </table>
-          </div>
-        </details>
-      )}
+      {hasHistory && <p className="kline-history-note">历史序列已全部进入上方趋势图；为避免用大表淹没研究页面，这里不重复铺开逐日原始明细。</p>}
     </div>
   )
 }
 
-function RecordPanel({ title, value, wide = false }: { title: string; value: unknown; wide?: boolean }) {
+function RecordPanel({ title, value, wide = false, hideWhenEmpty = false }: { title: string; value: unknown; wide?: boolean; hideWhenEmpty?: boolean }) {
+  if (hideWhenEmpty && !dataUnavailableMessage(value) && !hasData(value)) return null
   return <article className={`record-panel ${wide ? 'record-panel--wide' : ''}`}><h3>{title}</h3><RecordTable value={value} /></article>
 }
 
@@ -437,6 +492,10 @@ function RecordTable({ value, limit = 12 }: { value: unknown; limit?: number }) 
   }
   const records = normalizeRecords(value)
   if (!records.length) return <p className="data-empty">数据源暂未返回可展示记录</p>
+  const hasNestedValue = records.some((row) => Object.values(row).some((item) => item != null && typeof item === 'object'))
+  if (hasNestedValue) {
+    return <BusinessDataView value={value} path="market_data" compact />
+  }
   if (records.length === 1) {
     const entries = Object.entries(records[0])
     const visibleEntries = expanded ? entries : entries.slice(0, limit)
@@ -453,13 +512,15 @@ function RecordTable({ value, limit = 12 }: { value: unknown; limit?: number }) 
 
 function TagList({ title, value }: { title: string; value: unknown }) {
   const tags = Array.isArray(value) ? value : []
-  return <div className="tag-list"><h3>{title}</h3><div>{tags.length ? tags.slice(0, 16).map((tag, index) => <span key={`${tagLabel(tag)}-${index}`}>{tagLabel(tag)}</span>) : <p className="data-empty">暂无关键词</p>}</div></div>
+  return <div className="tag-list"><h3>{title}</h3><div>{tags.length ? tags.map((tag, index) => <span key={`${tagLabel(tag)}-${index}`}>{tagLabel(tag)}</span>) : <p className="data-empty">暂无关键词</p>}</div></div>
 }
 
 function Timeline({ value }: { value: unknown }) {
   const records = normalizeRecords(value)
+  const [expanded, setExpanded] = useState(false)
   if (!records.length) return <p className="data-empty">最近 30 天未返回已分类事件</p>
-  return <ol className="event-timeline">{records.slice(0, 12).map((event, index) => <li key={`${index}-${formatValue(first(event, '公告日期', '公告时间', 'date', '时间'))}`}><span /><div><time>{formatDate(first(event, '公告日期', '公告时间', 'date', '时间'))}</time><strong>{formatValue(first(event, '公告标题', 'title', '名称'))}</strong><small>{formatValue(first(event, '事件类型', 'type', 'keyword', '关键词'))}</small></div></li>)}</ol>
+  const visible = expanded ? records : records.slice(0, 12)
+  return <><ol className="event-timeline">{visible.map((event, index) => <li key={`${index}-${formatValue(first(event, '公告日期', '公告时间', 'date', '时间'))}`}><span /><div><time>{formatDate(first(event, '公告日期', '公告时间', 'date', '时间'))}</time><strong>{formatValue(first(event, '公告标题', 'title', '名称'))}</strong><small>{formatValue(first(event, '事件类型', 'type', 'keyword', '关键词'))}</small></div></li>)}</ol>{records.length > 12 && <button className="record-table-more" type="button" onClick={() => setExpanded((current) => !current)}>{expanded ? '收起事件' : `查看全部 ${records.length} 条事件`}</button>}</>
 }
 
 function MarketDataSkeleton() {

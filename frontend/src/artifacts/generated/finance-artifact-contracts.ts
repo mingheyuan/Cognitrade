@@ -354,16 +354,107 @@ export type FundSnapshotContent = {
   "investment_cycle"?: string;
   "candidate_pool_size"?: number;
   "funds": Array<{
-    "fund_overview"?: Record<string, unknown>;
+    "fund_code": string;
+    "fund_name": string;
+    "fund_type"?: string | null;
+    "as_of"?: string | null;
+    "unit_nav"?: number | null;
+    "accumulated_nav"?: number | null;
+    "returns_pct": {
+      "daily"?: number;
+      "week_1"?: number;
+      "month_1"?: number;
+      "month_3"?: number;
+      "month_6"?: number;
+      "year_1"?: number;
+      "year_2"?: number;
+      "year_3"?: number;
+      "year_to_date"?: number;
+      "since_inception"?: number;
+    };
+    "fee_pct"?: number | null;
+    "ranking_source"?: string | null;
+    "nav_history"?: Array<{
+      "date": string;
+      "nav": number;
+    }>;
+    "risk"?: {
+      "observation_count"?: number;
+      "max_drawdown_pct"?: number;
+      "annualized_volatility_pct"?: number | null;
+      "period_return_pct"?: number;
+      "period_start"?: string;
+      "period_end"?: string;
+    };
+    "top_holdings"?: Array<{
+      "rank": number;
+      "code": string;
+      "name": string;
+      "weight_pct"?: number | null;
+      "shares_10k"?: number | null;
+      "market_value_10k"?: number | null;
+    }>;
+    "holdings_period"?: string | null;
+    "top10_concentration_pct"?: number | null;
+    "holdings_source"?: string;
+    "fund_overview"?: {
+      "fund_company"?: unknown;
+      "fund_manager"?: unknown;
+      "inception_date"?: string | null;
+      "latest_scale"?: unknown;
+      "custodian"?: unknown;
+      "investment_objective"?: unknown;
+      "investment_strategy"?: unknown;
+      "benchmark_definition"?: unknown;
+    };
     "benchmark_definition"?: string | null;
-    "benchmark_performance"?: Array<Record<string, unknown>>;
-    "manager_tenures"?: Array<Record<string, unknown>>;
-    "scale_history"?: Array<Record<string, unknown>>;
-    "scale_change"?: Record<string, unknown>;
+    "benchmark_performance"?: Array<{
+      "period": string;
+      "period_group"?: string | null;
+      "fund_return_pct"?: number | null;
+      "benchmark_return_pct"?: number | null;
+      "excess_return_pct"?: number | null;
+      "fund_max_drawdown_pct"?: number | null;
+      "benchmark_max_drawdown_pct"?: number | null;
+      "peer_rank"?: unknown;
+    }>;
+    "manager_tenures"?: Array<{
+      "manager": string;
+      "managers"?: Array<string>;
+      "start_date": string;
+      "end_date"?: string | null;
+      "current": boolean;
+      "tenure_text"?: unknown;
+      "tenure_return_pct"?: number | null;
+    }>;
+    "scale_history"?: Array<{
+      "report_date": string;
+      "subscriptions_100m_shares"?: number | null;
+      "redemptions_100m_shares"?: number | null;
+      "net_flow_100m_shares"?: number | null;
+      "total_shares_100m"?: number | null;
+      "net_assets_100m_cny"?: number | null;
+      "reported_share_change_pct"?: number | null;
+    }>;
+    "scale_change"?: {
+      "latest_report_date"?: string | null;
+      "previous_report_date"?: string | null;
+      "latest_total_shares_100m"?: number | null;
+      "latest_net_assets_100m_cny"?: number | null;
+      "latest_net_flow_100m_shares"?: number | null;
+      "total_share_change_pct"?: number | null;
+      "net_asset_change_pct"?: number | null;
+      "status"?: string;
+    };
+    "data_gap": Array<string>;
+    "quality_status"?: "available" | "degraded" | "data_gap";
   }>;
   "quality_status": "available" | "degraded" | "data_gap";
   "data_gap": Array<string>;
-  "provider_errors"?: Array<Record<string, unknown>>;
+  "provider_errors"?: Array<{
+    "stage": string;
+    "error_type": string;
+  }>;
   "retrieved_at": string;
 }
 
@@ -373,17 +464,132 @@ export type FundAnalysisContent = {
   "investment_cycle"?: string | null;
   "candidate_count": number;
   "candidates": Array<{
+    "fund_code": string;
+    "fund_name": string;
+    "fund_type"?: string | null;
+    "as_of"?: string | null;
+    "unit_nav"?: number | null;
+    "returns_pct": {
+      "daily"?: number;
+      "week_1"?: number;
+      "month_1"?: number;
+      "month_3"?: number;
+      "month_6"?: number;
+      "year_1"?: number;
+      "year_2"?: number;
+      "year_3"?: number;
+      "year_to_date"?: number;
+      "since_inception"?: number;
+    };
+    "risk": {
+      "observation_count"?: number;
+      "max_drawdown_pct"?: number;
+      "annualized_volatility_pct"?: number | null;
+      "period_return_pct"?: number;
+      "period_start"?: string;
+      "period_end"?: string;
+    };
+    "fee_pct"?: number | null;
+    "metrics": {
+      "return_1y"?: number;
+      "return_3y_annualized"?: number;
+      "benchmark_excess_1y"?: number;
+      "max_drawdown"?: number;
+      "volatility"?: number;
+      "fee"?: number;
+      "return_consistency"?: number;
+    };
+    "top_holdings"?: Array<{
+      "rank": number;
+      "code": string;
+      "name": string;
+      "weight_pct"?: number | null;
+      "shares_10k"?: number | null;
+      "market_value_10k"?: number | null;
+    }>;
+    "holdings_period"?: string | null;
+    "top10_concentration_pct"?: number | null;
     "benchmark_definition"?: string | null;
-    "benchmark_performance"?: Array<Record<string, unknown>>;
-    "manager_tenures"?: Array<Record<string, unknown>>;
-    "scale_history"?: Array<Record<string, unknown>>;
-    "scale_change"?: Record<string, unknown>;
+    "benchmark_performance"?: Array<{
+      "period": string;
+      "period_group"?: string | null;
+      "fund_return_pct"?: number | null;
+      "benchmark_return_pct"?: number | null;
+      "excess_return_pct"?: number | null;
+      "fund_max_drawdown_pct"?: number | null;
+      "benchmark_max_drawdown_pct"?: number | null;
+      "peer_rank"?: unknown;
+    }>;
+    "manager_tenures"?: Array<{
+      "manager": string;
+      "managers"?: Array<string>;
+      "start_date": string;
+      "end_date"?: string | null;
+      "current": boolean;
+      "tenure_text"?: unknown;
+      "tenure_return_pct"?: number | null;
+    }>;
+    "scale_history"?: Array<{
+      "report_date": string;
+      "subscriptions_100m_shares"?: number | null;
+      "redemptions_100m_shares"?: number | null;
+      "net_flow_100m_shares"?: number | null;
+      "total_shares_100m"?: number | null;
+      "net_assets_100m_cny"?: number | null;
+      "reported_share_change_pct"?: number | null;
+    }>;
+    "scale_change"?: {
+      "latest_report_date"?: string | null;
+      "previous_report_date"?: string | null;
+      "latest_total_shares_100m"?: number | null;
+      "latest_net_assets_100m_cny"?: number | null;
+      "latest_net_flow_100m_shares"?: number | null;
+      "total_share_change_pct"?: number | null;
+      "net_asset_change_pct"?: number | null;
+      "status"?: string;
+    };
+    "comparison_group"?: string;
+    "score"?: number | null;
+    "score_coverage": number;
+    "score_components": Array<{
+      "component": string;
+      "value": number;
+      "weight": number;
+      "percentile": number;
+    }>;
+    "selection_eligible": boolean;
+    "rank"?: number | null;
+    "data_gap": Array<string>;
+    "quality_status": "available" | "degraded" | "data_gap";
   }>;
-  "recommendations": Array<Record<string, unknown>>;
-  "selection_policy": Record<string, unknown>;
+  "recommendations": Array<{
+    "fund_code": string;
+    "fund_name": string;
+    "fund_type"?: string | null;
+    "comparison_group": string;
+    "rank": number;
+    "score": number;
+    "score_coverage": number;
+    "reason": string;
+    "risk": string;
+  }>;
+  "selection_policy": {
+    "description": string;
+    "minimum_score_coverage": number;
+    "minimum_comparable_sample": number;
+    "components": Array<{
+      "id": string;
+      "weight": number;
+      "direction": "higher" | "lower";
+    }>;
+    "non_imputation_rule": string;
+  };
   "quality_status": "available" | "degraded" | "data_gap";
   "data_gap": Array<string>;
-  "provider_errors"?: Array<Record<string, unknown>>;
+  "provider_errors"?: Array<{
+    "stage": string;
+    "error_type": string;
+  }>;
   "generated_at": string;
 }
 
@@ -940,15 +1146,96 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "investment_cycle",
     "candidate_pool_size",
     "funds",
+    "funds[].fund_code",
+    "funds[].fund_name",
+    "funds[].fund_type",
+    "funds[].as_of",
+    "funds[].unit_nav",
+    "funds[].accumulated_nav",
+    "funds[].returns_pct",
+    "funds[].returns_pct.daily",
+    "funds[].returns_pct.week_1",
+    "funds[].returns_pct.month_1",
+    "funds[].returns_pct.month_3",
+    "funds[].returns_pct.month_6",
+    "funds[].returns_pct.year_1",
+    "funds[].returns_pct.year_2",
+    "funds[].returns_pct.year_3",
+    "funds[].returns_pct.year_to_date",
+    "funds[].returns_pct.since_inception",
+    "funds[].fee_pct",
+    "funds[].ranking_source",
+    "funds[].nav_history",
+    "funds[].nav_history[].date",
+    "funds[].nav_history[].nav",
+    "funds[].risk",
+    "funds[].risk.observation_count",
+    "funds[].risk.max_drawdown_pct",
+    "funds[].risk.annualized_volatility_pct",
+    "funds[].risk.period_return_pct",
+    "funds[].risk.period_start",
+    "funds[].risk.period_end",
+    "funds[].top_holdings",
+    "funds[].top_holdings[].rank",
+    "funds[].top_holdings[].code",
+    "funds[].top_holdings[].name",
+    "funds[].top_holdings[].weight_pct",
+    "funds[].top_holdings[].shares_10k",
+    "funds[].top_holdings[].market_value_10k",
+    "funds[].holdings_period",
+    "funds[].top10_concentration_pct",
+    "funds[].holdings_source",
     "funds[].fund_overview",
+    "funds[].fund_overview.fund_company",
+    "funds[].fund_overview.fund_manager",
+    "funds[].fund_overview.inception_date",
+    "funds[].fund_overview.latest_scale",
+    "funds[].fund_overview.custodian",
+    "funds[].fund_overview.investment_objective",
+    "funds[].fund_overview.investment_strategy",
+    "funds[].fund_overview.benchmark_definition",
     "funds[].benchmark_definition",
     "funds[].benchmark_performance",
+    "funds[].benchmark_performance[].period",
+    "funds[].benchmark_performance[].period_group",
+    "funds[].benchmark_performance[].fund_return_pct",
+    "funds[].benchmark_performance[].benchmark_return_pct",
+    "funds[].benchmark_performance[].excess_return_pct",
+    "funds[].benchmark_performance[].fund_max_drawdown_pct",
+    "funds[].benchmark_performance[].benchmark_max_drawdown_pct",
+    "funds[].benchmark_performance[].peer_rank",
     "funds[].manager_tenures",
+    "funds[].manager_tenures[].manager",
+    "funds[].manager_tenures[].managers",
+    "funds[].manager_tenures[].start_date",
+    "funds[].manager_tenures[].end_date",
+    "funds[].manager_tenures[].current",
+    "funds[].manager_tenures[].tenure_text",
+    "funds[].manager_tenures[].tenure_return_pct",
     "funds[].scale_history",
+    "funds[].scale_history[].report_date",
+    "funds[].scale_history[].subscriptions_100m_shares",
+    "funds[].scale_history[].redemptions_100m_shares",
+    "funds[].scale_history[].net_flow_100m_shares",
+    "funds[].scale_history[].total_shares_100m",
+    "funds[].scale_history[].net_assets_100m_cny",
+    "funds[].scale_history[].reported_share_change_pct",
     "funds[].scale_change",
+    "funds[].scale_change.latest_report_date",
+    "funds[].scale_change.previous_report_date",
+    "funds[].scale_change.latest_total_shares_100m",
+    "funds[].scale_change.latest_net_assets_100m_cny",
+    "funds[].scale_change.latest_net_flow_100m_shares",
+    "funds[].scale_change.total_share_change_pct",
+    "funds[].scale_change.net_asset_change_pct",
+    "funds[].scale_change.status",
+    "funds[].data_gap",
+    "funds[].quality_status",
     "quality_status",
     "data_gap",
     "provider_errors",
+    "provider_errors[].stage",
+    "provider_errors[].error_type",
     "retrieved_at",
   ],
   "fund_analysis": [
@@ -957,16 +1244,118 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "investment_cycle",
     "candidate_count",
     "candidates",
+    "candidates[].fund_code",
+    "candidates[].fund_name",
+    "candidates[].fund_type",
+    "candidates[].as_of",
+    "candidates[].unit_nav",
+    "candidates[].returns_pct",
+    "candidates[].returns_pct.daily",
+    "candidates[].returns_pct.week_1",
+    "candidates[].returns_pct.month_1",
+    "candidates[].returns_pct.month_3",
+    "candidates[].returns_pct.month_6",
+    "candidates[].returns_pct.year_1",
+    "candidates[].returns_pct.year_2",
+    "candidates[].returns_pct.year_3",
+    "candidates[].returns_pct.year_to_date",
+    "candidates[].returns_pct.since_inception",
+    "candidates[].risk",
+    "candidates[].risk.observation_count",
+    "candidates[].risk.max_drawdown_pct",
+    "candidates[].risk.annualized_volatility_pct",
+    "candidates[].risk.period_return_pct",
+    "candidates[].risk.period_start",
+    "candidates[].risk.period_end",
+    "candidates[].fee_pct",
+    "candidates[].metrics",
+    "candidates[].metrics.return_1y",
+    "candidates[].metrics.return_3y_annualized",
+    "candidates[].metrics.benchmark_excess_1y",
+    "candidates[].metrics.max_drawdown",
+    "candidates[].metrics.volatility",
+    "candidates[].metrics.fee",
+    "candidates[].metrics.return_consistency",
+    "candidates[].top_holdings",
+    "candidates[].top_holdings[].rank",
+    "candidates[].top_holdings[].code",
+    "candidates[].top_holdings[].name",
+    "candidates[].top_holdings[].weight_pct",
+    "candidates[].top_holdings[].shares_10k",
+    "candidates[].top_holdings[].market_value_10k",
+    "candidates[].holdings_period",
+    "candidates[].top10_concentration_pct",
     "candidates[].benchmark_definition",
     "candidates[].benchmark_performance",
+    "candidates[].benchmark_performance[].period",
+    "candidates[].benchmark_performance[].period_group",
+    "candidates[].benchmark_performance[].fund_return_pct",
+    "candidates[].benchmark_performance[].benchmark_return_pct",
+    "candidates[].benchmark_performance[].excess_return_pct",
+    "candidates[].benchmark_performance[].fund_max_drawdown_pct",
+    "candidates[].benchmark_performance[].benchmark_max_drawdown_pct",
+    "candidates[].benchmark_performance[].peer_rank",
     "candidates[].manager_tenures",
+    "candidates[].manager_tenures[].manager",
+    "candidates[].manager_tenures[].managers",
+    "candidates[].manager_tenures[].start_date",
+    "candidates[].manager_tenures[].end_date",
+    "candidates[].manager_tenures[].current",
+    "candidates[].manager_tenures[].tenure_text",
+    "candidates[].manager_tenures[].tenure_return_pct",
     "candidates[].scale_history",
+    "candidates[].scale_history[].report_date",
+    "candidates[].scale_history[].subscriptions_100m_shares",
+    "candidates[].scale_history[].redemptions_100m_shares",
+    "candidates[].scale_history[].net_flow_100m_shares",
+    "candidates[].scale_history[].total_shares_100m",
+    "candidates[].scale_history[].net_assets_100m_cny",
+    "candidates[].scale_history[].reported_share_change_pct",
     "candidates[].scale_change",
+    "candidates[].scale_change.latest_report_date",
+    "candidates[].scale_change.previous_report_date",
+    "candidates[].scale_change.latest_total_shares_100m",
+    "candidates[].scale_change.latest_net_assets_100m_cny",
+    "candidates[].scale_change.latest_net_flow_100m_shares",
+    "candidates[].scale_change.total_share_change_pct",
+    "candidates[].scale_change.net_asset_change_pct",
+    "candidates[].scale_change.status",
+    "candidates[].comparison_group",
+    "candidates[].score",
+    "candidates[].score_coverage",
+    "candidates[].score_components",
+    "candidates[].score_components[].component",
+    "candidates[].score_components[].value",
+    "candidates[].score_components[].weight",
+    "candidates[].score_components[].percentile",
+    "candidates[].selection_eligible",
+    "candidates[].rank",
+    "candidates[].data_gap",
+    "candidates[].quality_status",
     "recommendations",
+    "recommendations[].fund_code",
+    "recommendations[].fund_name",
+    "recommendations[].fund_type",
+    "recommendations[].comparison_group",
+    "recommendations[].rank",
+    "recommendations[].score",
+    "recommendations[].score_coverage",
+    "recommendations[].reason",
+    "recommendations[].risk",
     "selection_policy",
+    "selection_policy.description",
+    "selection_policy.minimum_score_coverage",
+    "selection_policy.minimum_comparable_sample",
+    "selection_policy.components",
+    "selection_policy.components[].id",
+    "selection_policy.components[].weight",
+    "selection_policy.components[].direction",
+    "selection_policy.non_imputation_rule",
     "quality_status",
     "data_gap",
     "provider_errors",
+    "provider_errors[].stage",
+    "provider_errors[].error_type",
     "generated_at",
   ],
   "ai_readiness": [

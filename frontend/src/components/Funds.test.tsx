@@ -20,6 +20,24 @@ vi.mock('../CognitradeContext', () => ({
       replay: {
         artifacts: [
           {
+            artifact_type: 'fund_snapshot',
+            content: {
+              quality_status: 'available',
+              fund_category: '混合型',
+              candidate_pool_size: 1,
+              data_gap: [],
+              provider_errors: [],
+              funds: [{
+                fund_code: '110011',
+                fund_name: '易方达优质精选混合',
+                accumulated_nav: 5.23,
+                nav_history: [{ date: '2025-01-01', nav: 1 }, { date: '2026-01-01', nav: 1.2 }],
+                fund_overview: { fund_company: '易方达基金', custodian: '中国银行' },
+                data_gap: [],
+              }],
+            },
+          },
+          {
             artifact_type: 'fund_analysis',
             content: {
               quality_status: 'available',
@@ -77,12 +95,16 @@ describe('Funds', () => {
     render(<Funds onOpenRun={mocks.openRun} />)
 
     expect(screen.getByText('基金研究与选择')).toBeInTheDocument()
-    expect(screen.getByText('易方达优质精选混合')).toBeInTheDocument()
-    expect(screen.getByText('贵州茅台 +9.50%')).toBeInTheDocument()
-    expect(screen.getByText('82.5')).toBeInTheDocument()
+    expect(screen.getAllByText('易方达优质精选混合').length).toBeGreaterThan(0)
+    expect(screen.getByText('贵州茅台')).toBeInTheDocument()
+    expect(screen.getAllByText('82.5').length).toBeGreaterThan(0)
     expect(screen.getByText(/沪深300指数收益率/)).toBeInTheDocument()
-    expect(screen.getByText('张经理')).toBeInTheDocument()
-    expect(screen.getByText(/总份额 10 亿份/)).toBeInTheDocument()
+    expect(screen.getByText(/张经理/)).toBeInTheDocument()
+    expect(screen.getByText('最新总份额')).toBeInTheDocument()
+    expect(screen.getByText('10 亿份')).toBeInTheDocument()
+    expect(screen.getByText('完整披露持仓')).toBeInTheDocument()
+    expect(screen.getByText('单位净值完整趋势')).toBeInTheDocument()
+    expect(screen.getByText('易方达基金')).toBeInTheDocument()
   })
 
   it('submits the dedicated fund intent and structured constraints', async () => {
