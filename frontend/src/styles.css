@@ -9087,6 +9087,38 @@ select:focus-visible {
   font-size: 20px;
 }
 
+.fund-selection-mode {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--panel-soft) 78%, transparent);
+}
+
+.fund-selection-mode button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  transition: background .16s ease, color .16s ease, box-shadow .16s ease;
+}
+
+.fund-selection-mode button:hover {
+  color: var(--text-muted);
+}
+
+.fund-selection-mode button.is-active {
+  background: color-mix(in srgb, var(--mint) 13%, var(--panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mint) 38%, transparent);
+  color: var(--mint);
+}
+
 .fund-config-card label {
   display: grid;
   gap: 7px;
@@ -9096,6 +9128,12 @@ select:focus-visible {
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 700;
+}
+
+.fund-field-help {
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .fund-config-card input,
@@ -9120,6 +9158,28 @@ select:focus-visible {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+
+.fund-code-count {
+  display: grid;
+  min-height: 66px;
+  align-content: center;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-soft);
+}
+
+.fund-code-count span,
+.fund-code-count small {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.fund-code-count strong {
+  color: var(--mint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 17px;
 }
 
 .fund-run-button {

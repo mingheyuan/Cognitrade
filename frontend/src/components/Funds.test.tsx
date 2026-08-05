@@ -107,12 +107,32 @@ describe('Funds', () => {
     expect(screen.getByText('易方达基金')).toBeInTheDocument()
   })
 
-  it('submits the dedicated fund intent and structured constraints', async () => {
+  it('lets the user select a category and omits empty fund codes', async () => {
     render(<Funds onOpenRun={mocks.openRun} />)
+    fireEvent.change(screen.getByLabelText('基金类别'), { target: { value: '债券型' } })
+    expect(screen.getByLabelText('基金类别')).toHaveValue('债券型')
+    fireEvent.click(screen.getByRole('button', { name: '开始真实选基' }))
+
+    await waitFor(() => expect(mocks.createRun).toHaveBeenCalledTimes(1))
+    expect(mocks.createRun).toHaveBeenCalledWith(
+      expect.stringContaining('从债券型基金中选择'),
+      'fund_research',
+      expect.objectContaining({ fund_category: '债券型', candidate_pool_size: 8 }),
+    )
+    expect(mocks.createRun).toHaveBeenCalledWith(
+      expect.any(String),
+      'fund_research',
+      expect.not.objectContaining({ fund_codes: expect.anything() }),
+    )
+  })
+
+  it('submits explicit fund codes through the dedicated analysis mode', async () => {
+    render(<Funds onOpenRun={mocks.openRun} />)
+    fireEvent.click(screen.getByRole('button', { name: '指定基金分析' }))
     fireEvent.change(screen.getByPlaceholderText('例如 110011, 005827'), {
       target: { value: '110011, 005827' },
     })
-    fireEvent.click(screen.getByRole('button', { name: '开始真实选基' }))
+    fireEvent.click(screen.getByRole('button', { name: '开始基金分析' }))
 
     await waitFor(() => expect(mocks.createRun).toHaveBeenCalledTimes(1))
     expect(mocks.createRun).toHaveBeenCalledWith(
@@ -121,7 +141,7 @@ describe('Funds', () => {
       expect.objectContaining({
         fund_codes: ['110011', '005827'],
         fund_category: '全部',
-        candidate_pool_size: 8,
+        candidate_pool_size: 2,
       }),
     )
   })

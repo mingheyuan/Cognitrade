@@ -147,10 +147,12 @@ class FundResearchTests(unittest.TestCase):
                     "fund_category": "混合型",
                     "candidate_pool_size": 8,
                     "investment_cycle": "long_term",
+                    "background": True,
                 },
             )
         )
         self.assertEqual(request.intent, "fund_research")
+        self.assertTrue(request.constraints["background"])
 
         with self.assertRaises(ApiError):
             validate_research_request(
@@ -158,6 +160,15 @@ class FundResearchTests(unittest.TestCase):
                     intent="fund_research",
                     user_query="比较基金",
                     constraints={"fund_codes": ["not-a-code"]},
+                )
+            )
+
+        with self.assertRaises(ApiError):
+            validate_research_request(
+                RequestEnvelope(
+                    intent="fund_research",
+                    user_query="比较基金",
+                    constraints={"fund_category": "混合型", "background": "yes"},
                 )
             )
 

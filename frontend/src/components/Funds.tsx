@@ -12,6 +12,8 @@ type FundsProps = {
   onOpenRun: (runId: string) => void
 }
 
+type FundSelectionMode = 'category' | 'codes'
+
 export function Funds({ onOpenRun }: FundsProps) {
   const {
     createRun,
@@ -23,6 +25,7 @@ export function Funds({ onOpenRun }: FundsProps) {
     submitting,
   } = useCognitrade()
   const [category, setCategory] = useState('混合型')
+  const [selectionMode, setSelectionMode] = useState<FundSelectionMode>('category')
   const [cycle, setCycle] = useState('long_term')
   const [codes, setCodes] = useState('')
   const [candidatePoolSize, setCandidatePoolSize] = useState(8)
@@ -54,19 +57,20 @@ export function Funds({ onOpenRun }: FundsProps) {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    const fundCodes = codes
+    const fundCodes = (selectionMode === 'codes' ? codes : '')
       .split(/[\s,，、]+/)
       .map((value) => value.trim())
       .filter(Boolean)
-    const effectiveCategory = fundCodes.length ? '全部' : category
+    const effectiveCategory = selectionMode === 'codes' ? '全部' : category
+    const effectiveCandidatePoolSize = fundCodes.length || candidatePoolSize
     const query = fundCodes.length
       ? `比较并分析基金 ${fundCodes.join('、')}，按${cycleLabel(cycle)}评估风险收益和前十大持仓。`
       : `从${category}基金中选择风险收益更均衡的候选，按${cycleLabel(cycle)}评估。`
     const response = await createRun(query, 'fund_research', {
       fund_category: effectiveCategory,
-      fund_codes: fundCodes,
+      ...(fundCodes.length ? { fund_codes: fundCodes } : {}),
       investment_cycle: cycle,
-      candidate_pool_size: candidatePoolSize,
+      candidate_pool_size: effectiveCandidatePoolSize,
     })
     if (response.run_id) selectRun(response.run_id)
   }
@@ -92,18 +96,27 @@ export function Funds({ onOpenRun }: FundsProps) {
             <div><span className="section-kicker">SELECTION SCOPE</span><h2>创建选基任务</h2></div>
             <span className="quality-pill quality-pill--available">真实数据</span>
           </header>
-          <label>
-            <span>基金类别（指定代码时按真实类型分组）</span>
-            <select value={category} disabled={Boolean(codes.trim())} onChange={(event) => setCategory(event.target.value)}>
-              <option>股票型</option><option>混合型</option><option>债券型</option>
-              <option>指数型</option><option>ETF</option><option>LOF</option>
-              <option>QDII</option><option>FOF</option>
-            </select>
-          </label>
-          <label>
-            <span>指定基金代码（可选，逗号分隔）</span>
-            <input value={codes} onChange={(event) => setCodes(event.target.value)} placeholder="例如 110011, 005827" />
-          </label>
+          <div className="fund-selection-mode" role="group" aria-label="基金研究方式">
+            <button type="button" className={selectionMode === 'category' ? 'is-active' : ''} onClick={() => setSelectionMode('category')}>按类别选基</button>
+            <button type="button" className={selectionMode === 'codes' ? 'is-active' : ''} onClick={() => setSelectionMode('codes')}>指定基金分析</button>
+          </div>
+          {selectionMode === 'category' ? (
+            <label>
+              <span>基金类别</span>
+              <select aria-label="基金类别" value={category} onChange={(event) => setCategory(event.target.value)}>
+                <option>股票型</option><option>混合型</option><option>债券型</option>
+                <option>指数型</option><option>ETF</option><option>LOF</option>
+                <option>QDII</option><option>FOF</option>
+              </select>
+              <small className="fund-field-help">按所选类别建立真实候选池，不会混排其他大类基金。</small>
+            </label>
+          ) : (
+            <label>
+              <span>基金代码（逗号分隔，最多 20 只）</span>
+              <input aria-label="基金代码" value={codes} onChange={(event) => setCodes(event.target.value)} placeholder="例如 110011, 005827" required />
+              <small className="fund-field-help">逐只读取真实基金类型并分组评估，不使用类别筛选。</small>
+            </label>
+          )}
           <div className="fund-form-grid">
             <label>
               <span>研究周期</span>
@@ -113,14 +126,14 @@ export function Funds({ onOpenRun }: FundsProps) {
                 <option value="long_term">长期</option>
               </select>
             </label>
-            <label>
+            {selectionMode === 'category' ? <label>
               <span>候选池规模</span>
               <input type="number" min="2" max="20" value={candidatePoolSize} onChange={(event) => setCandidatePoolSize(Number(event.target.value))} />
-            </label>
+            </label> : <div className="fund-code-count"><span>本次分析数量</span><strong>{parseFundCodes(codes).length || '—'}</strong><small>最多 20 只</small></div>}
           </div>
           <button className="primary-button fund-run-button" type="submit" disabled={submitting}>
             {submitting ? <RefreshCw size={15} className="is-spinning" /> : <Play size={15} />}
-            {submitting ? 'Agent OS 正在采集' : '开始真实选基'}
+            {submitting ? 'Agent OS 正在采集' : selectionMode === 'category' ? '开始真实选基' : '开始基金分析'}
           </button>
           <p className="fund-config-note"><ShieldAlert size={14} />不同大类基金不会混在一起硬排名；单只基金只能评估，不能伪造横向名次。</p>
         </form>
@@ -160,4 +173,8 @@ function cycleLabel(value: string): string {
 
 function qualityLabel(value: string): string {
   return value === 'available' ? '证据可用' : value === 'degraded' ? '部分可用' : '等待数据'
+}
+
+function parseFundCodes(value: string): string[] {
+  return value.split(/[\s,，、]+/).map((code) => code.trim()).filter(Boolean)
 }

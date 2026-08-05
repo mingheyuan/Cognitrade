@@ -93,7 +93,7 @@ _RESEARCH_METHODS = frozenset(
 _SCREEN_STYLES = frozenset({"value", "growth", "quality", "gulp", "short"})
 _RESEARCH_PROFILES = frozenset({"quick", "lite", "medium", "deep"})
 
-_PLANNING_FIELDS = {"planning_context_hints"}
+_COMMON_REQUEST_FIELDS = {"planning_context_hints", "background"}
 _STOCK_FIELDS = {
     "symbol",
     "snapshot_types",
@@ -103,7 +103,7 @@ _STOCK_FIELDS = {
     "requested_methods",
     "model_updates",
     "method_assumptions",
-    *_PLANNING_FIELDS,
+    *_COMMON_REQUEST_FIELDS,
 }
 _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
     "stock_check": set(_STOCK_FIELDS),
@@ -120,14 +120,14 @@ _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
         "watchlist_min_score",
         "enrichment_top_n",
         "skip_enrichment",
-        *_PLANNING_FIELDS,
+        *_COMMON_REQUEST_FIELDS,
     },
     "fund_research": {
         "fund_codes",
         "fund_category",
         "candidate_pool_size",
         "investment_cycle",
-        *_PLANNING_FIELDS,
+        *_COMMON_REQUEST_FIELDS,
     },
     "portfolio_research": {
         "portfolio_holdings",
@@ -137,17 +137,17 @@ _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
         "fee_model",
         "asset_class_targets",
         "requested_methods",
-        *_PLANNING_FIELDS,
+        *_COMMON_REQUEST_FIELDS,
     },
-    "sector_research": {"sector_query", "include_policy_snapshot", *_PLANNING_FIELDS},
-    "distill_kol_logic": set(),
+    "sector_research": {"sector_query", "include_policy_snapshot", *_COMMON_REQUEST_FIELDS},
+    "distill_kol_logic": set(_COMMON_REQUEST_FIELDS),
     "review_thesis": {
         "review_target_run_id",
         "snapshot_types",
         "allow_partial_snapshot_types",
         "include_policy_snapshot",
         "investment_cycle",
-        *_PLANNING_FIELDS,
+        *_COMMON_REQUEST_FIELDS,
     },
 }
 def safe_identifier(value: str, *, field_name: str) -> str:
@@ -255,6 +255,8 @@ def _validate_common_constraints(
 
     if "planning_context_hints" in constraints and not isinstance(constraints["planning_context_hints"], dict):
         _invalid_constraint("planning_context_hints", "must be an object")
+    if "background" in constraints and not isinstance(constraints["background"], bool):
+        _invalid_constraint("background", "must be a boolean")
 
     if "investment_cycle" in constraints:
         _require_enum(constraints["investment_cycle"], field_name="investment_cycle", allowed=_INVESTMENT_CYCLES)
