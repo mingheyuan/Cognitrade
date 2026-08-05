@@ -56,7 +56,7 @@ describe('UziMethods', () => {
 
     expect(screen.getByText('专项研究与组合方法')).toBeInTheDocument()
     expect(screen.getByText('60.0%')).toBeInTheDocument()
-    expect(screen.getByText('贵州茅台')).toBeInTheDocument()
+    expect(screen.getAllByText('贵州茅台').length).toBeGreaterThan(0)
     expect(screen.getByText('1 项数据缺口')).toBeInTheDocument()
   })
 

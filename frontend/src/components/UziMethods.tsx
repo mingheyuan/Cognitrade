@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { type FormEvent, type ReactNode, useMemo, useState } from 'react'
 import { useCognitrade } from '../CognitradeContext'
+import { MethodDeliveryDossier } from '../artifacts/MethodDeliveryDossier'
 
 type UziMethodsProps = {
   onOpenRun: (runId: string) => void
@@ -229,6 +230,7 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
           {result ? <Tier1Result artifact={result} /> : <div className="uzi-empty"><Gauge size={24} /><strong>暂无专项 Artifact</strong><p>运行上方方法后，这里会展示结构化证据、覆盖率、贡献或漂移，不直接展示原始 JSON。</p></div>}
         </section>
       </div>
+      <MethodDeliveryDossier artifacts={selectedRun?.replay.artifacts || []} />
     </main>
   )
 }
@@ -305,7 +307,7 @@ function Tier1Result({ artifact }: { artifact: Record<string, unknown> }) {
   }
   if (type !== 'holding_rebalance') {
     const methodResult = asRecord((Array.isArray(content.results) ? content.results : [])[0])
-    const rows = flattenDisplay({ observed: methodResult.observed, derived: methodResult.derived, methodology: methodResult.methodology }).slice(0, 18)
+    const rows = flattenDisplay({ observed: methodResult.observed, derived: methodResult.derived, methodology: methodResult.methodology })
     const methodLabel = stockMethods.find((item) => item.id === content.method)?.label || String(content.method || type)
     return <div className="uzi-result-body"><ResultHeadline label={methodLabel} value={String(methodResult.symbol || '证据结果')} detail="只展示结构化字段；缺失数据不会由默认值补齐" /><div className="uzi-mini-table uzi-method-result-table"><div><strong>数据项</strong><strong>值</strong><strong>来源类型</strong></div>{rows.map((row, index) => <div key={`${row.label}-${index}`}><span>{fieldLabel(row.label)}</span><span>{row.value}</span><span>{row.group}</span></div>)}</div><GapList gaps={gaps} /></div>
   }
@@ -330,7 +332,7 @@ function ResultHeadline({ label, value, detail }: { label: string; value: string
 }
 
 function GapList({ gaps }: { gaps: string[] }) {
-  return gaps.length ? <div className="uzi-gap-list"><AlertCircle size={14} /><span>{gaps.length} 项数据缺口</span><p>{gaps.slice(0, 5).map(gapLabel).join('、')}</p></div> : <div className="uzi-no-gap"><CheckCircle2 size={14} />当前方法所需观测完整</div>
+  return gaps.length ? <div className="uzi-gap-list"><AlertCircle size={14} /><span>{gaps.length} 项数据缺口</span><p>{gaps.map(gapLabel).join('、')}</p></div> : <div className="uzi-no-gap"><CheckCircle2 size={14} />当前方法所需观测完整</div>
 }
 
 function updateHolding(setter: React.Dispatch<React.SetStateAction<HoldingDraft[]>>, index: number, field: keyof HoldingDraft, value: string) {

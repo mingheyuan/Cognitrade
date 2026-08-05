@@ -1,63 +1,23 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": [
-    "methodology_version",
-    "profile",
-    "symbol",
-    "risk_level",
-    "signals",
-    "signals_hit_count",
-    "recommendation",
-    "confidence",
-    "risk_flags"
-  ],
+  "required": ["methodology_version", "profile", "symbol", "risk_level", "signals", "signals_hit_count", "recommendation", "confidence", "risk_flags"],
   "properties": {
-    "methodology_version": {
-      "type": "string"
-    },
-    "profile": {
-      "type": "string"
-    },
-    "symbol": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "risk_level": {
-      "type": "string"
-    },
+    "methodology_version": {"type": "string"}, "profile": {"type": "string"}, "symbol": {"type": ["string", "null"]}, "risk_level": {"type": "string"},
     "signals": {
       "type": "array",
       "items": {
-        "type": "object"
+        "type": "object", "required": ["signal_id", "status", "severity", "finding", "evidence_refs"],
+        "properties": {
+          "signal_id": {"type": "string"}, "status": {"type": "string"}, "severity": {"type": "string"}, "finding": {"type": "string"},
+          "evidence_refs": {"type": "array", "items": {"type": "object", "required": ["type", "id"], "properties": {"type": {"type": "string"}, "id": {"type": "string"}, "provider": {"type": ["string", "null"]}}, "additionalProperties": false}}
+        },
+        "additionalProperties": false
       }
     },
-    "signals_hit_count": {
-      "type": "integer",
-      "minimum": 0
-    },
-    "recommendation": {
-      "type": "string"
-    },
-    "method_input_contract": {
-      "type": "object"
-    },
-    "quality_status": {
-      "type": "string"
-    },
-    "confidence": {
-      "type": "number",
-      "minimum": 0,
-      "maximum": 1
-    },
-    "risk_flags": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    }
+    "signals_hit_count": {"type": "integer", "minimum": 0}, "recommendation": {"type": "string"},
+    "method_input_contract": {"type": "object", "x-business-extensible": true}, "quality_status": {"type": "string"},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1}, "risk_flags": {"type": "array", "items": {"type": "string"}}
   },
   "additionalProperties": false
 }

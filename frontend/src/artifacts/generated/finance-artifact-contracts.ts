@@ -760,7 +760,44 @@ export type MainAgentSynthesisContent = {
 export type ValuationModelContent = {
   "methodology_version": string;
   "profile": string;
-  "models": Array<Record<string, unknown>>;
+  "models": Array<{
+    "model": string;
+    "methodology_version": string;
+    "symbol": string;
+    "status": string;
+    "fair_value": number | null;
+    "market_price": number | null;
+    "margin_of_safety": number | null;
+    "assumptions": {
+      "wacc"?: number;
+      "terminal_growth"?: number;
+      "stage_one_growth"?: number;
+      "stage_two_growth"?: number;
+      "forecast_years"?: number;
+      "risk_free_rate"?: number;
+      "equity_risk_premium"?: number;
+      "beta"?: number;
+      "tax_rate"?: number;
+      "target_debt_ratio"?: number;
+      "cost_of_equity"?: number;
+      "after_tax_cost_of_debt"?: number;
+      "total_debt_yi"?: number | null;
+      "cash_yi"?: number | null;
+    };
+    "sensitivity": Array<{
+      "wacc": number;
+      "terminal_growth": number;
+      "fair_value": number | null;
+    }>;
+    "verdict": string;
+    "confidence": number;
+    "warnings": Array<string>;
+    "data_gap": Array<string>;
+    "assumption_flags": Array<string>;
+    "field_sources": Record<string, unknown>;
+    "methodology_log": Array<string>;
+    "comps": unknown;
+  }>;
   "primary_symbol": string | null;
   "methodologies": Array<string>;
   "dimensions"?: Record<string, unknown>;
@@ -776,14 +813,70 @@ export type InvestorPanelReviewContent = {
   "source_commit"?: string;
   "registered_seat_count"?: number;
   "rule_mode"?: string;
-  "votes": Array<Record<string, unknown>>;
-  "distribution": Record<string, unknown>;
+  "votes": Array<{
+    "symbol": string;
+    "investor_id": string;
+    "perspective_id": string;
+    "perspective_label": string;
+    "school": string;
+    "required_dimensions": Array<string>;
+    "signal": string;
+    "score": number;
+    "confidence": number;
+    "reasoning": string;
+    "headline": string;
+    "pass_rules": Array<{
+      "rule_id": string;
+      "name": string;
+      "weight": number;
+      "msg": string;
+      "missing_fields"?: Array<string>;
+    }>;
+    "fail_rules": Array<{
+      "rule_id": string;
+      "name": string;
+      "weight": number;
+      "msg": string;
+      "missing_fields"?: Array<string>;
+    }>;
+    "skipped_rules": Array<{
+      "rule_id": string;
+      "name": string;
+      "weight": number;
+      "msg": string;
+      "missing_fields"?: Array<string>;
+    }>;
+    "data_gap_rules": Array<string>;
+    "pass_count": number;
+    "fail_count": number;
+    "skipped_count": number;
+    "weight_pass": number;
+    "weight_total": number;
+    "rule_engine_version": string;
+    "checks": Array<{
+      "dimension": string;
+      "status": string;
+      "feature_names": Array<string>;
+    }>;
+    "is_methodology_perspective": boolean;
+    "is_real_person_advice": boolean;
+    "rule_mode": string;
+  }>;
+  "distribution": {
+    "bullish"?: number;
+    "bearish"?: number;
+    "neutral"?: number;
+    "insufficient_evidence"?: number;
+  };
   "average_score"?: number | null;
   "evaluated_rule_count"?: number;
   "skipped_rule_count"?: number;
   "quality_status"?: string;
   "data_gap"?: Array<string>;
-  "disagreement": Record<string, unknown>;
+  "disagreement": {
+    "exists": boolean;
+    "summary": string;
+  };
   "confidence": number;
   "risk_flags": Array<string>;
 }
@@ -793,7 +886,17 @@ export type RiskScanContent = {
   "profile": string;
   "symbol": string | null;
   "risk_level": string;
-  "signals": Array<Record<string, unknown>>;
+  "signals": Array<{
+    "signal_id": string;
+    "status": string;
+    "severity": string;
+    "finding": string;
+    "evidence_refs": Array<{
+      "type": string;
+      "id": string;
+      "provider"?: string | null;
+    }>;
+  }>;
   "signals_hit_count": number;
   "recommendation": string;
   "method_input_contract"?: Record<string, unknown>;
@@ -869,7 +972,7 @@ export type UziDimensionCoverageContent = {
   "missing_count"?: number;
   "derived_available_count"?: number;
   "derived_missing_count"?: number;
-  "data_gap"?: Array<unknown>;
+  "data_gap"?: Array<string>;
   "confidence": number;
   "risk_flags": Array<string>;
   "quality_status"?: string;
@@ -1156,12 +1259,51 @@ export type ModelUpdateContent = {
 export type ReturnsAttributionContent = {
   "methodology_version": string;
   "method": "returns_attribution";
-  "holdings"?: Array<Record<string, unknown>>;
+  "holdings"?: Array<{
+    "ticker"?: string;
+    "symbol"?: string;
+    "name"?: string;
+    "weight"?: number;
+    "normalized_weight"?: number;
+    "return_pct"?: number | null;
+    "contribution_pct"?: number | null;
+    "status"?: string;
+    "industry"?: string;
+    "market"?: string;
+    "asset_class"?: string;
+    "value"?: number;
+    "market_value"?: number;
+    "quantity"?: number;
+    "price"?: number;
+  }>;
   "observed_weight_coverage"?: number;
   "observed_contribution_pct"?: number;
   "total_return_pct"?: number | null;
-  "groups"?: Record<string, unknown>;
-  "benchmark"?: Record<string, unknown>;
+  "groups"?: {
+    "industry"?: Array<{
+      "industry"?: string;
+      "market"?: string;
+      "weight"?: number;
+      "observed_weight"?: number;
+      "contribution_pct"?: number;
+      "missing_tickers"?: Array<string>;
+      "status"?: string;
+    }>;
+    "market"?: Array<{
+      "industry"?: string;
+      "market"?: string;
+      "weight"?: number;
+      "observed_weight"?: number;
+      "contribution_pct"?: number;
+      "missing_tickers"?: Array<string>;
+      "status"?: string;
+    }>;
+  };
+  "benchmark"?: {
+    "benchmark_return_pct": number | null;
+    "excess_return_pct": number | null;
+    "status": string;
+  };
   "quality_status": "available" | "degraded" | "data_gap";
   "data_gap": Array<string>;
   "assumption_flags": Array<string>;
@@ -1173,9 +1315,42 @@ export type HoldingRebalanceContent = {
   "method": "holding_rebalance";
   "target_mode"?: string;
   "drift_threshold_pp"?: number;
-  "drift_table"?: Array<Record<string, unknown>>;
-  "trades"?: Array<Record<string, unknown>>;
-  "concentration"?: Record<string, unknown>;
+  "drift_table"?: Array<{
+    "ticker"?: string;
+    "symbol"?: string;
+    "name"?: string;
+    "weight"?: number;
+    "normalized_weight"?: number;
+    "target_weight"?: number;
+    "drift_pp"?: number;
+    "breached"?: boolean;
+    "action"?: string;
+    "trade_amount"?: number | null;
+    "estimated_shares"?: number | null;
+    "estimated_cost"?: number | null;
+    "return_pct"?: number;
+    "industry"?: string;
+    "market"?: string;
+    "asset_class"?: string;
+    "value"?: number;
+    "market_value"?: number;
+    "quantity"?: number;
+    "price"?: number;
+  }>;
+  "trades"?: Array<{
+    "ticker": string;
+    "action": string;
+    "trade_amount": number | null;
+    "estimated_shares": number | null;
+    "estimated_cost": number | null;
+    "drift_pp": number;
+  }>;
+  "concentration"?: {
+    "before_hhi": number;
+    "after_hhi": number;
+    "before_top3_weight": number;
+    "after_top3_weight": number;
+  };
   "estimated_cost"?: number | null;
   "quality_status": "available" | "degraded" | "data_gap" | "assumption_only";
   "data_gap": Array<string>;
@@ -1186,7 +1361,18 @@ export type HoldingRebalanceContent = {
 export type PortfolioRebalanceContent = {
   "methodology_version": string;
   "method": "portfolio_rebalance";
-  "asset_classes"?: Array<Record<string, unknown>>;
+  "target_mode"?: string;
+  "drift_threshold_pp"?: number;
+  "asset_classes"?: Array<{
+    "asset_class": string;
+    "current_weight": number;
+    "target_weight": number;
+    "drift_pp": number;
+    "breached": boolean;
+    "action": string;
+    "suggested_value_change": number | null;
+  }>;
+  "portfolio_value"?: number | null;
   "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
   "data_gap": Array<string>;
   "assumption_flags": Array<string>;
@@ -2035,6 +2221,40 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "methodology_version",
     "profile",
     "models",
+    "models[].model",
+    "models[].methodology_version",
+    "models[].symbol",
+    "models[].status",
+    "models[].fair_value",
+    "models[].market_price",
+    "models[].margin_of_safety",
+    "models[].assumptions",
+    "models[].assumptions.wacc",
+    "models[].assumptions.terminal_growth",
+    "models[].assumptions.stage_one_growth",
+    "models[].assumptions.stage_two_growth",
+    "models[].assumptions.forecast_years",
+    "models[].assumptions.risk_free_rate",
+    "models[].assumptions.equity_risk_premium",
+    "models[].assumptions.beta",
+    "models[].assumptions.tax_rate",
+    "models[].assumptions.target_debt_ratio",
+    "models[].assumptions.cost_of_equity",
+    "models[].assumptions.after_tax_cost_of_debt",
+    "models[].assumptions.total_debt_yi",
+    "models[].assumptions.cash_yi",
+    "models[].sensitivity",
+    "models[].sensitivity[].wacc",
+    "models[].sensitivity[].terminal_growth",
+    "models[].sensitivity[].fair_value",
+    "models[].verdict",
+    "models[].confidence",
+    "models[].warnings",
+    "models[].data_gap",
+    "models[].assumption_flags",
+    "models[].field_sources",
+    "models[].methodology_log",
+    "models[].comps",
     "primary_symbol",
     "methodologies",
     "dimensions",
@@ -2050,13 +2270,62 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "registered_seat_count",
     "rule_mode",
     "votes",
+    "votes[].symbol",
+    "votes[].investor_id",
+    "votes[].perspective_id",
+    "votes[].perspective_label",
+    "votes[].school",
+    "votes[].required_dimensions",
+    "votes[].signal",
+    "votes[].score",
+    "votes[].confidence",
+    "votes[].reasoning",
+    "votes[].headline",
+    "votes[].pass_rules",
+    "votes[].pass_rules[].rule_id",
+    "votes[].pass_rules[].name",
+    "votes[].pass_rules[].weight",
+    "votes[].pass_rules[].msg",
+    "votes[].pass_rules[].missing_fields",
+    "votes[].fail_rules",
+    "votes[].fail_rules[].rule_id",
+    "votes[].fail_rules[].name",
+    "votes[].fail_rules[].weight",
+    "votes[].fail_rules[].msg",
+    "votes[].fail_rules[].missing_fields",
+    "votes[].skipped_rules",
+    "votes[].skipped_rules[].rule_id",
+    "votes[].skipped_rules[].name",
+    "votes[].skipped_rules[].weight",
+    "votes[].skipped_rules[].msg",
+    "votes[].skipped_rules[].missing_fields",
+    "votes[].data_gap_rules",
+    "votes[].pass_count",
+    "votes[].fail_count",
+    "votes[].skipped_count",
+    "votes[].weight_pass",
+    "votes[].weight_total",
+    "votes[].rule_engine_version",
+    "votes[].checks",
+    "votes[].checks[].dimension",
+    "votes[].checks[].status",
+    "votes[].checks[].feature_names",
+    "votes[].is_methodology_perspective",
+    "votes[].is_real_person_advice",
+    "votes[].rule_mode",
     "distribution",
+    "distribution.bullish",
+    "distribution.bearish",
+    "distribution.neutral",
+    "distribution.insufficient_evidence",
     "average_score",
     "evaluated_rule_count",
     "skipped_rule_count",
     "quality_status",
     "data_gap",
     "disagreement",
+    "disagreement.exists",
+    "disagreement.summary",
     "confidence",
     "risk_flags",
   ],
@@ -2066,6 +2335,14 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "symbol",
     "risk_level",
     "signals",
+    "signals[].signal_id",
+    "signals[].status",
+    "signals[].severity",
+    "signals[].finding",
+    "signals[].evidence_refs",
+    "signals[].evidence_refs[].type",
+    "signals[].evidence_refs[].id",
+    "signals[].evidence_refs[].provider",
     "signals_hit_count",
     "recommendation",
     "method_input_contract",
@@ -2392,11 +2669,45 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "methodology_version",
     "method",
     "holdings",
+    "holdings[].ticker",
+    "holdings[].symbol",
+    "holdings[].name",
+    "holdings[].weight",
+    "holdings[].normalized_weight",
+    "holdings[].return_pct",
+    "holdings[].contribution_pct",
+    "holdings[].status",
+    "holdings[].industry",
+    "holdings[].market",
+    "holdings[].asset_class",
+    "holdings[].value",
+    "holdings[].market_value",
+    "holdings[].quantity",
+    "holdings[].price",
     "observed_weight_coverage",
     "observed_contribution_pct",
     "total_return_pct",
     "groups",
+    "groups.industry",
+    "groups.industry[].industry",
+    "groups.industry[].market",
+    "groups.industry[].weight",
+    "groups.industry[].observed_weight",
+    "groups.industry[].contribution_pct",
+    "groups.industry[].missing_tickers",
+    "groups.industry[].status",
+    "groups.market",
+    "groups.market[].industry",
+    "groups.market[].market",
+    "groups.market[].weight",
+    "groups.market[].observed_weight",
+    "groups.market[].contribution_pct",
+    "groups.market[].missing_tickers",
+    "groups.market[].status",
     "benchmark",
+    "benchmark.benchmark_return_pct",
+    "benchmark.excess_return_pct",
+    "benchmark.status",
     "quality_status",
     "data_gap",
     "assumption_flags",
@@ -2408,8 +2719,38 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "target_mode",
     "drift_threshold_pp",
     "drift_table",
+    "drift_table[].ticker",
+    "drift_table[].symbol",
+    "drift_table[].name",
+    "drift_table[].weight",
+    "drift_table[].normalized_weight",
+    "drift_table[].target_weight",
+    "drift_table[].drift_pp",
+    "drift_table[].breached",
+    "drift_table[].action",
+    "drift_table[].trade_amount",
+    "drift_table[].estimated_shares",
+    "drift_table[].estimated_cost",
+    "drift_table[].return_pct",
+    "drift_table[].industry",
+    "drift_table[].market",
+    "drift_table[].asset_class",
+    "drift_table[].value",
+    "drift_table[].market_value",
+    "drift_table[].quantity",
+    "drift_table[].price",
     "trades",
+    "trades[].ticker",
+    "trades[].action",
+    "trades[].trade_amount",
+    "trades[].estimated_shares",
+    "trades[].estimated_cost",
+    "trades[].drift_pp",
     "concentration",
+    "concentration.before_hhi",
+    "concentration.after_hhi",
+    "concentration.before_top3_weight",
+    "concentration.after_top3_weight",
     "estimated_cost",
     "quality_status",
     "data_gap",
@@ -2419,7 +2760,17 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
   "portfolio_rebalance": [
     "methodology_version",
     "method",
+    "target_mode",
+    "drift_threshold_pp",
     "asset_classes",
+    "asset_classes[].asset_class",
+    "asset_classes[].current_weight",
+    "asset_classes[].target_weight",
+    "asset_classes[].drift_pp",
+    "asset_classes[].breached",
+    "asset_classes[].action",
+    "asset_classes[].suggested_value_change",
+    "portfolio_value",
     "quality_status",
     "data_gap",
     "assumption_flags",
