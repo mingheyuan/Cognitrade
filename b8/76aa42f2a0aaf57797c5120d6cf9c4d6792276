@@ -1,0 +1,29 @@
+domain_packs/finance_ashare/skills/fund_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_9208ce9b51fe24 155-166,435,759-764,773
+domain_packs/finance_ashare/subagents/fund_methodology.py
+  s_a6a8a3a6f43b3c::t_b5573d8e8d2ef4 9,142,153,165,186-189,221-257
+frontend/src/artifacts/labels.ts
+  s_a6a8a3a6f43b3c::t_248b427d2377c5 141
+frontend/src/components/FundAnalysisDossier.tsx
+  s_a6a8a3a6f43b3c::t_26af944168fbbb 48,237,300,303
+tests/test_fund_research.py
+  s_a6a8a3a6f43b3c::t_be3638f6ea0790 290,409-450
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "b876aa42f2a0aaf57797c5120d6cf9c4d6792276",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
