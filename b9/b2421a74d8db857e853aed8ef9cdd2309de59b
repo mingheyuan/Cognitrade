@@ -1,0 +1,91 @@
+domain_packs/finance_ashare/artifact_schemas/accretion_dilution.json
+  s_a6a8a3a6f43b3c::t_38fc17ce2fff37 1-55
+domain_packs/finance_ashare/artifact_schemas/ai_readiness.json
+  s_a6a8a3a6f43b3c::t_f2266c843de39d 4-12,14-49
+domain_packs/finance_ashare/artifact_schemas/catalyst_calendar.json
+  s_a6a8a3a6f43b3c::t_0f00cb97f057d2 1-55
+domain_packs/finance_ashare/artifact_schemas/dd_checklist.json
+  s_a6a8a3a6f43b3c::t_f6a5b4262cf16e 1-55
+domain_packs/finance_ashare/artifact_schemas/deep_analysis.json
+  s_a6a8a3a6f43b3c::t_fd7e0bbc8638a4 4-10,12-36
+domain_packs/finance_ashare/artifact_schemas/distillation_result.json
+  s_a6a8a3a6f43b3c::t_f2fc45adeb9a48 1-19
+domain_packs/finance_ashare/artifact_schemas/distillation_review.json
+  s_a6a8a3a6f43b3c::t_1eebf7cfa74902 1-20
+domain_packs/finance_ashare/artifact_schemas/earnings_preview.json
+  s_a6a8a3a6f43b3c::t_253c9bd9e6449c 4-12,14-50
+domain_packs/finance_ashare/artifact_schemas/earnings_review.json
+  s_a6a8a3a6f43b3c::t_0e1261d2aa5121 1-55
+domain_packs/finance_ashare/artifact_schemas/financial_analysis.json
+  s_a6a8a3a6f43b3c::t_d74628c09016e0 4-9,11-24
+domain_packs/finance_ashare/artifact_schemas/fund_analysis.json
+  s_a6a8a3a6f43b3c::t_cc2a3edd6952f0 4-13,15-33,39-65,69-101
+domain_packs/finance_ashare/artifact_schemas/holding_rebalance.json
+  s_a6a8a3a6f43b3c::t_a3f9ca818ab187 4-11,13-71
+domain_packs/finance_ashare/artifact_schemas/ic_memo.json
+  s_a6a8a3a6f43b3c::t_c4b9557f4d12b5 1-55
+domain_packs/finance_ashare/artifact_schemas/initiation_report.json
+  s_a6a8a3a6f43b3c::t_a1b3dc9303ef4f 1-55
+domain_packs/finance_ashare/artifact_schemas/institutional_analysis.json
+  s_a6a8a3a6f43b3c::t_df31e17c46f3dd 4-10,12-39
+domain_packs/finance_ashare/artifact_schemas/main_agent_synthesis.json
+  s_a6a8a3a6f43b3c::t_9fca69608779a7 5-9,11-18,21-27,29-31,33
+domain_packs/finance_ashare/artifact_schemas/model_update.json
+  s_a6a8a3a6f43b3c::t_8bfb5deb724955 4-13,15-57
+domain_packs/finance_ashare/artifact_schemas/morning_note.json
+  s_a6a8a3a6f43b3c::t_3eb38cd81ec3f8 1-55
+domain_packs/finance_ashare/artifact_schemas/normalized_query.json
+  s_a6a8a3a6f43b3c::t_1ed55fa7c344db 1-51
+domain_packs/finance_ashare/artifact_schemas/porter_bcg.json
+  s_a6a8a3a6f43b3c::t_50188f71c9ff20 1-55
+domain_packs/finance_ashare/artifact_schemas/portfolio_rebalance.json
+  s_a6a8a3a6f43b3c::t_44a87ec8ffdcf3 1-50
+domain_packs/finance_ashare/artifact_schemas/quick_lbo.json
+  s_a6a8a3a6f43b3c::t_4939ed31523da7 1-55
+domain_packs/finance_ashare/artifact_schemas/report_presentation.json
+  s_a6a8a3a6f43b3c::t_6596f278815b97 4-23,25-105
+domain_packs/finance_ashare/artifact_schemas/research_workflow.json
+  s_a6a8a3a6f43b3c::t_dee5280a939d3b 4-10,12-36
+domain_packs/finance_ashare/artifact_schemas/returns_attribution.json
+  s_a6a8a3a6f43b3c::t_98d44df4056b3f 4-11,13-68
+domain_packs/finance_ashare/artifact_schemas/screening_result.json
+  s_a6a8a3a6f43b3c::t_31732c3b9a53d2 4-10,12-31
+domain_packs/finance_ashare/artifact_schemas/sector_analysis.json
+  s_a6a8a3a6f43b3c::t_c7b803ce1a5ae5 4-12,14-63
+domain_packs/finance_ashare/artifact_schemas/segmental_model.json
+  s_a6a8a3a6f43b3c::t_6ce3923a3657b2 1-55
+domain_packs/finance_ashare/artifact_schemas/snapshot.json
+  s_a6a8a3a6f43b3c::t_bf2ccf5761be1c 5-10,12-59,62-85,87-92,94
+domain_packs/finance_ashare/artifact_schemas/source_record_set.json
+  s_a6a8a3a6f43b3c::t_268cf4e52570c8 1-18
+domain_packs/finance_ashare/artifact_schemas/thesis_review.json
+  s_a6a8a3a6f43b3c::t_0604559e637bfc 4-11,13-50
+domain_packs/finance_ashare/artifact_schemas/thesis_tracker.json
+  s_a6a8a3a6f43b3c::t_19ab29e0cd8424 1-55
+domain_packs/finance_ashare/artifact_schemas/three_statement_model.json
+  s_a6a8a3a6f43b3c::t_334d7ddf357ce1 1-55
+domain_packs/finance_ashare/artifact_schemas/unit_economics.json
+  s_a6a8a3a6f43b3c::t_bec7b4bc1d49fc 1-55
+domain_packs/finance_ashare/artifact_schemas/user_request.json
+  s_a6a8a3a6f43b3c::t_620f7bbe7fb6ff 1-27
+domain_packs/finance_ashare/artifact_schemas/value_creation_plan.json
+  s_a6a8a3a6f43b3c::t_fcad2e7e7d9ce8 1-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "b9b2421a74d8db857e853aed8ef9cdd2309de59b",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
