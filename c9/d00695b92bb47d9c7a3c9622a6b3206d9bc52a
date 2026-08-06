@@ -1,0 +1,45 @@
+api-doc/api-v1.md
+  s_a6a8a3a6f43b3c::t_7f39cddf935cfb 144-151
+domain_packs/finance_ashare/artifact_schemas/fund_analysis.json
+  s_a6a8a3a6f43b3c::t_0c52116ec35ab6 82-121,274-287
+domain_packs/finance_ashare/artifact_schemas/fund_snapshot.json
+  s_a6a8a3a6f43b3c::t_79bd93d18fce16 85-123,227-240
+domain_packs/finance_ashare/skills/fund_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_9e3d4e9fb064a3 7,59,78,189-193,195-206,209,214-229,231,445-453,459-461,463-581,633-645,922-985
+domain_packs/finance_ashare/subagents/fund_methodology.py
+  s_a6a8a3a6f43b3c::t_025c43d192c3bb 254-266,280-286
+domain_packs/finance_ashare/subagents/runtime.py
+  s_a6a8a3a6f43b3c::t_59ec9112ca8f60 328-333
+frontend/src/artifacts/finance-artifact-renderers.json
+  s_a6a8a3a6f43b3c::t_a6b607e998a0ca 26-27
+frontend/src/artifacts/generated/finance-artifact-contracts.ts
+  s_a6a8a3a6f43b3c::t_c6212816e5199d 1033-1067,1181-1216,2542-2571,2673-2703
+frontend/src/artifacts/labels.ts
+  s_a6a8a3a6f43b3c::t_3da735f869f0e6 185-196,614-618
+frontend/src/components/FundAnalysisDossier.tsx
+  s_a6a8a3a6f43b3c::t_59b171ff2a4b53 83-90,249-254,347-367
+frontend/src/components/Funds.test.tsx
+  s_a6a8a3a6f43b3c::t_798bc7134d1737 76-87,119-122
+frontend/src/styles/finance-components.css
+  s_a6a8a3a6f43b3c::t_3501cdff6dd549 1903-1997,2240,2245-2248
+tests/test_fund_research.py
+  s_a6a8a3a6f43b3c::t_2fac756664fe88 76-91,372,392-395,403-431,439,484
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "c9d00695b92bb47d9c7a3c9622a6b3206d9bc52a",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
