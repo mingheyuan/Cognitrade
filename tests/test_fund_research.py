@@ -400,11 +400,36 @@ class FundResearchTests(unittest.TestCase):
         self.assertTrue(first["manager_tenures"][0]["current"])
         self.assertEqual(first["scale_change"]["total_share_change_pct"], -9.090909)
 
-    def test_feeder_fund_holdings_are_split_without_inventing_target_etf(self) -> None:
+    def test_feeder_fund_holdings_are_resolved_and_looked_through_from_disclosures(self) -> None:
+        def holdings_loader(code: str, _year: str):
+            if code == "561980":
+                return pd.DataFrame(
+                    [
+                        {
+                            "序号": 1,
+                            "股票代码": "688012",
+                            "股票名称": "中微公司",
+                            "占净值 比例": 15.02,
+                            "持股数 （万股）": 239.96,
+                            "持仓市值 （万元）": 112420.46,
+                            "季度": "2026年2季度",
+                        }
+                    ]
+                )
+            return pd.DataFrame(
+                [
+                    {
+                        "序号": 1,
+                        "股票代码": "688012",
+                        "股票名称": "中微公司",
+                        "占净值 比例": 0.0,
+                        "季度": "2026年2季度",
+                    }
+                ]
+            )
+
         skill = FundSnapshotSkill(
-            holdings_loader=lambda _code, _year: pd.DataFrame(
-                [{"序号": 1, "股票代码": "688012", "股票名称": "中微公司", "季度": "2026年2季度"}]
-            ),
+            holdings_loader=holdings_loader,
             asset_holdings_loader=lambda _code, _report_date: {
                 "source": "2026-06-30",
                 "chart_list": [
@@ -418,16 +443,32 @@ class FundResearchTests(unittest.TestCase):
                     {"code": "019827", "name": "26国债01", "percent": 0.7},
                 ],
             },
+            target_fund_loader=lambda _code: {
+                "code": "561980",
+                "name": "招商中证半导体产业交易型开放式指数证券投资基金",
+                "weight_pct": 92.22,
+                "market_value_10k": 272647.19685,
+                "report_date": "2026-06-30",
+                "report_id": "AN202607211827188365",
+                "source_ref": "https://pdf.dfcfw.com/pdf/H2_AN202607211827188365_1.pdf",
+            },
         )
 
         payload = skill._latest_holdings("020464", is_fund_of_funds=True)
 
         self.assertEqual(len(payload["top_holdings"]), 1)
         self.assertEqual(len(payload["bond_holdings"]), 2)
-        self.assertEqual(payload["asset_allocation"][-1]["weight_pct"], 96.8)
-        self.assertEqual(payload["holdings_coverage"]["target_fund"], "unavailable")
-        self.assertEqual(payload["target_fund_holdings"], [])
-        self.assertEqual(payload["lookthrough_holdings"], [])
+        self.assertEqual(payload["asset_allocation"][0]["weight_pct"], 92.22)
+        self.assertEqual(payload["asset_allocation"][-1]["weight_pct"], 4.58)
+        self.assertEqual(payload["holdings_coverage"]["target_fund"], "available")
+        self.assertEqual(payload["holdings_coverage"]["lookthrough"], "available")
+        self.assertEqual(payload["target_fund_holdings"][0]["code"], "561980")
+        self.assertEqual(payload["target_fund_holdings"][0]["weight_pct"], 92.22)
+        self.assertEqual(payload["lookthrough_holdings"][0]["weight_pct"], 15.02)
+        self.assertEqual(payload["lookthrough_holdings"][0]["market_value_10k"], 112420.46)
+        self.assertEqual(payload["lookthrough_holdings"][0]["effective_weight_pct"], 13.851444)
+        self.assertEqual(payload["target_fund_period"], "2026-06-30")
+        self.assertEqual(payload["lookthrough_period"], "2026年2季度")
 
     def test_fund_methodology_ranks_only_comparable_observed_evidence(self) -> None:
         skill = FundSnapshotSkill(

@@ -144,11 +144,17 @@ fee, or disclosed holdings fields remain `data_gap`; the service does not
 insert simulated or neutral values. Holdings evidence is split into asset
 allocation, direct equities, direct bonds, target-fund/ETF positions, and
 look-through positions. A feeder fund's directly held shares are never labeled
-as its complete portfolio. When the public structure source groups the target
-ETF under `other` without returning its identity or exact weight,
-`target_fund_holdings` and `lookthrough_holdings` stay empty and the corresponding
-coverage fields are `unavailable`; no ETF identity or constituent weight is
-inferred from the fund name. Fund methodology v4 also records the declared performance
+as its complete portfolio. For feeder funds, the service reads the latest
+official periodic report to resolve the target fund code, name, fair value, NAV
+weight, report date, and source URL. It then loads the target ETF's latest
+disclosed top-ten securities and reports both the ETF-level weight and the
+feeder fund's effective exposure (target-fund weight multiplied by constituent
+weight). The target position is split out of the structure provider's `other`
+bucket; any residual stays labeled as other assets. If either disclosure layer
+is unavailable, its coverage field remains `unavailable`; the service never
+infers an ETF identity or constituent weight from the fund name. Look-through
+rows are explicitly a top-ten periodic disclosure, not a complete real-time
+portfolio. Fund methodology v4 also records the declared performance
 benchmark, fund-versus-benchmark period returns, manager tenure segments, and
 single-fund scale/share history. When a complete trailing-three-year return is
 unavailable, the long-term annualized-return component uses the real

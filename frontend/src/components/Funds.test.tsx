@@ -79,11 +79,14 @@ vi.mock('../CognitradeContext', () => ({
                     { asset_type: 'bond', label: '债券', weight_pct: 10 },
                   ],
                   bond_holdings: [{ code: '019785', name: '25国债13', weight_pct: 1.65 }],
-                  target_fund_holdings: [],
-                  lookthrough_holdings: [],
+                  target_fund_period: '2026-06-30',
+                  target_fund_source_ref: 'https://pdf.dfcfw.com/example.pdf',
+                  target_fund_holdings: [{ code: '561980', name: '招商中证半导体产业 ETF', weight_pct: 92.22, market_value_10k: 272647.2 }],
+                  lookthrough_period: '2026年2季度',
+                  lookthrough_holdings: [{ code: '688012', name: '中微公司', weight_pct: 15.02, effective_weight_pct: 13.851444, market_value_10k: 112420.46 }],
                   holdings_coverage: {
                     asset_allocation: 'available', direct_equity: 'available', bond: 'available',
-                    target_fund: 'not_applicable', lookthrough: 'not_applicable', is_fund_of_funds: false,
+                    target_fund: 'available', lookthrough: 'available', is_fund_of_funds: true,
                   },
                   data_gap: [],
                 },
@@ -120,6 +123,10 @@ describe('Funds', () => {
     expect(screen.getByText('直接股票持仓')).toBeInTheDocument()
     expect(screen.getByText('债券持仓')).toBeInTheDocument()
     expect(screen.getByText('25国债13')).toBeInTheDocument()
+    expect(screen.getByText('目标 ETF 前十大穿透持仓')).toBeInTheDocument()
+    expect(screen.getByText('招商中证半导体产业 ETF')).toBeInTheDocument()
+    expect(screen.getByText('13.85%')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '查看官方报告' })).toHaveAttribute('href', 'https://pdf.dfcfw.com/example.pdf')
     expect(screen.getByText('单位净值完整趋势')).toBeInTheDocument()
     expect(screen.getByText('易方达基金')).toBeInTheDocument()
   })

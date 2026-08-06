@@ -1042,6 +1042,12 @@ export type FundSnapshotContent = {
       "name": string;
       "security_type": string;
       "weight_pct"?: number | null;
+      "shares_10k"?: number | null;
+      "market_value_10k"?: number | null;
+      "effective_weight_pct"?: number | null;
+      "report_date"?: string | null;
+      "report_id"?: string | null;
+      "source_ref"?: string | null;
     }>;
     "target_fund_holdings"?: Array<{
       "rank": number;
@@ -1049,14 +1055,29 @@ export type FundSnapshotContent = {
       "name": string;
       "security_type": string;
       "weight_pct"?: number | null;
+      "shares_10k"?: number | null;
+      "market_value_10k"?: number | null;
+      "effective_weight_pct"?: number | null;
+      "report_date"?: string | null;
+      "report_id"?: string | null;
+      "source_ref"?: string | null;
     }>;
+    "target_fund_period"?: string | null;
+    "target_fund_source_ref"?: string | null;
     "lookthrough_holdings"?: Array<{
       "rank": number;
       "code": string;
       "name": string;
       "security_type": string;
       "weight_pct"?: number | null;
+      "shares_10k"?: number | null;
+      "market_value_10k"?: number | null;
+      "effective_weight_pct"?: number | null;
+      "report_date"?: string | null;
+      "report_id"?: string | null;
+      "source_ref"?: string | null;
     }>;
+    "lookthrough_period"?: string | null;
     "holdings_coverage"?: {
       "asset_allocation": "available" | "unavailable" | "not_applicable";
       "direct_equity": "available" | "unavailable" | "not_applicable";
@@ -1191,6 +1212,12 @@ export type FundAnalysisContent = {
       "name": string;
       "security_type": string;
       "weight_pct"?: number | null;
+      "shares_10k"?: number | null;
+      "market_value_10k"?: number | null;
+      "effective_weight_pct"?: number | null;
+      "report_date"?: string | null;
+      "report_id"?: string | null;
+      "source_ref"?: string | null;
     }>;
     "target_fund_holdings"?: Array<{
       "rank": number;
@@ -1198,14 +1225,29 @@ export type FundAnalysisContent = {
       "name": string;
       "security_type": string;
       "weight_pct"?: number | null;
+      "shares_10k"?: number | null;
+      "market_value_10k"?: number | null;
+      "effective_weight_pct"?: number | null;
+      "report_date"?: string | null;
+      "report_id"?: string | null;
+      "source_ref"?: string | null;
     }>;
+    "target_fund_period"?: string | null;
+    "target_fund_source_ref"?: string | null;
     "lookthrough_holdings"?: Array<{
       "rank": number;
       "code": string;
       "name": string;
       "security_type": string;
       "weight_pct"?: number | null;
+      "shares_10k"?: number | null;
+      "market_value_10k"?: number | null;
+      "effective_weight_pct"?: number | null;
+      "report_date"?: string | null;
+      "report_id"?: string | null;
+      "source_ref"?: string | null;
     }>;
+    "lookthrough_period"?: string | null;
     "holdings_coverage"?: {
       "asset_allocation": "available" | "unavailable" | "not_applicable";
       "direct_equity": "available" | "unavailable" | "not_applicable";
@@ -2550,18 +2592,39 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "funds[].bond_holdings[].name",
     "funds[].bond_holdings[].security_type",
     "funds[].bond_holdings[].weight_pct",
+    "funds[].bond_holdings[].shares_10k",
+    "funds[].bond_holdings[].market_value_10k",
+    "funds[].bond_holdings[].effective_weight_pct",
+    "funds[].bond_holdings[].report_date",
+    "funds[].bond_holdings[].report_id",
+    "funds[].bond_holdings[].source_ref",
     "funds[].target_fund_holdings",
     "funds[].target_fund_holdings[].rank",
     "funds[].target_fund_holdings[].code",
     "funds[].target_fund_holdings[].name",
     "funds[].target_fund_holdings[].security_type",
     "funds[].target_fund_holdings[].weight_pct",
+    "funds[].target_fund_holdings[].shares_10k",
+    "funds[].target_fund_holdings[].market_value_10k",
+    "funds[].target_fund_holdings[].effective_weight_pct",
+    "funds[].target_fund_holdings[].report_date",
+    "funds[].target_fund_holdings[].report_id",
+    "funds[].target_fund_holdings[].source_ref",
+    "funds[].target_fund_period",
+    "funds[].target_fund_source_ref",
     "funds[].lookthrough_holdings",
     "funds[].lookthrough_holdings[].rank",
     "funds[].lookthrough_holdings[].code",
     "funds[].lookthrough_holdings[].name",
     "funds[].lookthrough_holdings[].security_type",
     "funds[].lookthrough_holdings[].weight_pct",
+    "funds[].lookthrough_holdings[].shares_10k",
+    "funds[].lookthrough_holdings[].market_value_10k",
+    "funds[].lookthrough_holdings[].effective_weight_pct",
+    "funds[].lookthrough_holdings[].report_date",
+    "funds[].lookthrough_holdings[].report_id",
+    "funds[].lookthrough_holdings[].source_ref",
+    "funds[].lookthrough_period",
     "funds[].holdings_coverage",
     "funds[].holdings_coverage.asset_allocation",
     "funds[].holdings_coverage.direct_equity",
@@ -2682,18 +2745,39 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "candidates[].bond_holdings[].name",
     "candidates[].bond_holdings[].security_type",
     "candidates[].bond_holdings[].weight_pct",
+    "candidates[].bond_holdings[].shares_10k",
+    "candidates[].bond_holdings[].market_value_10k",
+    "candidates[].bond_holdings[].effective_weight_pct",
+    "candidates[].bond_holdings[].report_date",
+    "candidates[].bond_holdings[].report_id",
+    "candidates[].bond_holdings[].source_ref",
     "candidates[].target_fund_holdings",
     "candidates[].target_fund_holdings[].rank",
     "candidates[].target_fund_holdings[].code",
     "candidates[].target_fund_holdings[].name",
     "candidates[].target_fund_holdings[].security_type",
     "candidates[].target_fund_holdings[].weight_pct",
+    "candidates[].target_fund_holdings[].shares_10k",
+    "candidates[].target_fund_holdings[].market_value_10k",
+    "candidates[].target_fund_holdings[].effective_weight_pct",
+    "candidates[].target_fund_holdings[].report_date",
+    "candidates[].target_fund_holdings[].report_id",
+    "candidates[].target_fund_holdings[].source_ref",
+    "candidates[].target_fund_period",
+    "candidates[].target_fund_source_ref",
     "candidates[].lookthrough_holdings",
     "candidates[].lookthrough_holdings[].rank",
     "candidates[].lookthrough_holdings[].code",
     "candidates[].lookthrough_holdings[].name",
     "candidates[].lookthrough_holdings[].security_type",
     "candidates[].lookthrough_holdings[].weight_pct",
+    "candidates[].lookthrough_holdings[].shares_10k",
+    "candidates[].lookthrough_holdings[].market_value_10k",
+    "candidates[].lookthrough_holdings[].effective_weight_pct",
+    "candidates[].lookthrough_holdings[].report_date",
+    "candidates[].lookthrough_holdings[].report_id",
+    "candidates[].lookthrough_holdings[].source_ref",
+    "candidates[].lookthrough_period",
     "candidates[].holdings_coverage",
     "candidates[].holdings_coverage.asset_allocation",
     "candidates[].holdings_coverage.direct_equity",
