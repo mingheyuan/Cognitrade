@@ -74,6 +74,16 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
             "events": env_values.get("COGNITRADE_PROVIDERS_EVENTS", ""),
             "policy": env_values.get("COGNITRADE_PROVIDERS_POLICY", ""),
         },
+        "sensitive_sources_enabled": env_values.get(
+            "COGNITRADE_SENSITIVE_SOURCES_ENABLED", "false"
+        ).strip().lower()
+        in {"1", "true", "yes", "on"},
+        "sensitive_source_allowlist": [
+            item.strip().lower()
+            for item in env_values.get("COGNITRADE_SENSITIVE_SOURCE_ALLOWLIST", "").split(",")
+            if item.strip()
+        ],
+        "xueqiu_cookie": env_values.get("COGNITRADE_XUEQIU_COOKIE") or None,
         "default_timezone": env_values.get("DEFAULT_TIMEZONE", "Asia/Shanghai"),
         "paper_trading_enforce_market_hours": env_values.get(
             "COGNITRADE_PAPER_ENFORCE_MARKET_HOURS", "true"

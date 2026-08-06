@@ -1,0 +1,31 @@
+{
+  "source_commit": "fce996c33e70eddce8e375f53cd252b549eb3d7c",
+  "adapted_methodology_version": "3.9.2-adapted-tier1-v1",
+  "quality_invariants": {
+    "missing_ai_source": "data_gap",
+    "earnings_scenario": "assumption_only",
+    "model_update_requires_explicit_input": true,
+    "missing_holding_return_is_zero": false,
+    "implicit_fee_model_allowed": false,
+    "equal_weight_target": "assumption_only"
+  },
+  "returns_attribution_case": {
+    "holdings": [
+      {"ticker": "600519", "weight": 0.6, "return_pct": 10},
+      {"ticker": "300750", "weight": 0.4}
+    ],
+    "expected": {
+      "observed_weight_coverage": 0.6,
+      "observed_contribution_pct": 6.0,
+      "total_return_pct": null
+    }
+  },
+  "rebalance_case": {
+    "holdings": [
+      {"ticker": "600519", "weight": 0.7},
+      {"ticker": "300750", "weight": 0.3}
+    ],
+    "targets": {"600519": 0.5, "300750": 0.5},
+    "expected": {"estimated_cost": null}
+  }
+}

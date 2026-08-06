@@ -13,6 +13,8 @@ const intentLabels = {
   stock_check: '个股体检',
   stock_compare: '多股比较',
   stock_screen: '股票筛选',
+  fund_research: '基金研究',
+  portfolio_research: '组合研究',
   sector_research: '行业研究',
 }
 
@@ -102,7 +104,7 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
               event.currentTarget.form?.requestSubmit()
             }
           }}
-          placeholder="输入股票、板块或研究问题，例如：比较三家银行的盈利质量与估值…"
+          placeholder="输入股票、基金、板块或研究问题，例如：从混合型基金中筛选风险收益更均衡的候选…"
           aria-label="研究问题"
         />
         <button

@@ -84,6 +84,178 @@ The response identifies the canonical protocol and graph state:
 }
 ```
 
+The installed `finance_ashare` Pack accepts these intents through the same
+endpoint: `stock_check`, `stock_compare`, `stock_screen`, `fund_research`,
+`portfolio_research`, `sector_research`, `review_thesis`, and
+`distill_kol_logic`. When `intent` is omitted, Pack Task Intake resolves it
+from the query or returns a structured
+clarification instead of silently defaulting to stock analysis.
+
+All declared intents accept the common boolean constraint `background`. When
+`true`, the API reserves the run immediately and executes it asynchronously;
+it is a transport/execution option rather than a Finance Pack business filter.
+
+`GET /api/v1/runs` 返回倒序运行历史，支持 `limit=1..100`（默认 20）、从 0
+开始的 `offset`，以及可选 `status` 过滤。客户端应逐页读取直到返回数量少于
+`limit`，从而完整载入历史运行。
+
+### Fund research
+
+`fund_research` uses the Agent OS fund chain and real public-fund evidence; it
+does not add a finance-specific HTTP endpoint.
+
+```http
+POST /api/v1/runs
+Content-Type: application/json
+
+{
+  "intent": "fund_research",
+  "user_query": "比较 110011 和 005827，按长期持有评估",
+  "constraints": {
+    "fund_codes": ["110011", "005827"],
+    "fund_category": "混合型",
+    "candidate_pool_size": 8,
+    "investment_cycle": "long_term"
+  }
+}
+```
+
+Fund constraints:
+
+| Field | Type | Constraint |
+| --- | --- | --- |
+| `fund_codes` | string array | one to 20 unique six-digit codes |
+| `fund_category` | string | `全部`, `股票型`, `混合型`, `债券型`, `指数型`, `ETF`, `LOF`, `QDII`, or `FOF` |
+| `candidate_pool_size` | integer | 1–20; the Web UI uses a minimum of 2 for comparison |
+| `investment_cycle` | string | `short_term`, `mid_term`, or `long_term` |
+
+The Web UI exposes category selection and explicit-code analysis as separate
+modes. Category mode omits `fund_codes`; explicit-code mode sends
+`fund_category: "全部"` and evaluates every supplied code using its observed
+fund type, so a disabled or silently ignored category cannot mislead users.
+
+The graph produces `fund_snapshot`, `fund_analysis`, and `research_report`
+Artifacts. One explicitly supplied fund uses `analysis_mode: "single_fund"`:
+it is assessed independently, does not require a comparable sample, and does
+not emit a score or rank. Multiple explicit codes and category selection use
+`analysis_mode: "comparison"`; ranking then requires at least two comparable
+funds and at least 60% observed scoring-field coverage. Missing NAV, ranking,
+fee, or disclosed holdings fields remain `data_gap`; the service does not
+insert simulated or neutral values. Holdings evidence is split into asset
+allocation, direct equities, direct bonds, target-fund/ETF positions, and
+look-through positions. A feeder fund's directly held shares are never labeled
+as its complete portfolio. When the public structure source groups the target
+ETF under `other` without returning its identity or exact weight,
+`target_fund_holdings` and `lookthrough_holdings` stay empty and the corresponding
+coverage fields are `unavailable`; no ETF identity or constituent weight is
+inferred from the fund name. Fund methodology v4 also records the declared performance
+benchmark, fund-versus-benchmark period returns, manager tenure segments, and
+single-fund scale/share history. When a complete trailing-three-year return is
+unavailable, the long-term annualized-return component uses the real
+since-inception return and complete observed NAV interval. The 1-year benchmark excess return is an
+optional scoring component; when it is unavailable, its weight reduces
+coverage rather than becoming zero. Manager tenure and scale changes remain
+descriptive evidence and do not receive an automatic positive/negative score.
+Provider errors contain only the failed stage and error class; raw upstream
+exception text is not exposed in Artifacts or the Web UI.
+
+### UZI Tier-1 and portfolio research
+
+Stock intents accept Pack-declared `requested_methods`. UZI-specific values are:
+
+- Tier-1: `ai_readiness`, `earnings_preview`, `model_update`;
+- modeling: `three_statement`, `quick_lbo`, `accretion_dilution`, `segmental`;
+- workflow: `initiation_report`, `earnings_review`, `catalyst_calendar`,
+  `thesis_tracker`, `morning_note`;
+- decision support: `ic_memo`, `porter_bcg`, `dd_checklist`,
+  `unit_economics`, `value_creation_plan`.
+
+Each value selects an independent Pack capability and Artifact rather than the
+old aggregate UZI runtime. `model_update` requires a non-empty `model_updates`
+object. `three_statement`, `quick_lbo`, `accretion_dilution`, and
+`value_creation_plan` require a corresponding `method_assumptions` entry for
+calculation; omitted values produce `data_gap` and are never default-filled.
+The assumption object is an exact contract: unknown or missing fields are
+rejected. Growth rates use decimal ratios (`0.08` means 8%); LBO debt paydown
+must be between `0` and `1`, holding years must be a positive integer, and
+entry/exit multiples must be positive. Three-statement growth values must be
+greater than `-1`, while capex/revenue must be non-negative. Invalid inputs are
+rejected at API validation and are never coerced into a plausible scenario.
+
+```json
+{
+  "intent": "stock_check",
+  "user_query": "为 300750 建立快速 LBO",
+  "constraints": {
+    "symbol": "300750",
+    "requested_methods": ["quick_lbo"],
+    "method_assumptions": {
+      "quick_lbo": {
+        "entry_multiple": 8,
+        "debt_multiple": 4,
+        "exit_multiple": 8,
+        "annual_ebitda_growth": 0.08,
+        "annual_debt_paydown_pct": 0.10,
+        "hold_years": 5
+      }
+    }
+  }
+}
+```
+
+`portfolio_research` produces `returns_attribution` and `holding_rebalance`
+Artifacts from explicit holdings. When `requested_methods` contains
+`portfolio_rebalance`, every holding must provide `asset_class` and
+`asset_class_targets` must exactly cover those classes; the additional output
+is `portfolio_rebalance`.
+
+```http
+POST /api/v1/runs
+Content-Type: application/json
+
+{
+  "intent": "portfolio_research",
+  "user_query": "对持仓做收益归因和再平衡",
+  "constraints": {
+    "portfolio_holdings": [
+      {"ticker": "600519", "weight": 60, "return_pct": 8, "value": 600000, "market": "A", "price": 1500},
+      {"ticker": "300750", "weight": 40, "return_pct": -2, "value": 400000, "market": "A", "price": 200}
+    ],
+    "benchmark_return": 3,
+    "rebalance_targets": {"600519": 50, "300750": 50},
+    "drift_threshold": 5,
+    "fee_model": {
+      "A": {"commission_rate": 0.00025, "buy_stamp_rate": 0, "sell_stamp_rate": 0.0005}
+    }
+  }
+}
+```
+
+`weight` values are normalized but must be explicit and have a positive total.
+If a holding lacks `return_pct`, its contribution remains null, observed-weight
+coverage is reduced, and no complete portfolio return or excess return is
+reported. `rebalance_targets` must cover every holding when supplied. Without
+targets, equal weight is an explicit `assumption_only` policy. Without a
+request-supplied `fee_model`, the service does not estimate transaction cost.
+Strategic asset-allocation targets never fall back to a balanced or equal-weight
+portfolio: missing classifications or targets produce `data_gap`.
+
+### Sensitive authenticated source policy
+
+Authenticated sources are disabled by default. The Xueqiu contest/cube source
+becomes eligible only when all three runtime settings are configured:
+
+```dotenv
+COGNITRADE_SENSITIVE_SOURCES_ENABLED=true
+COGNITRADE_SENSITIVE_SOURCE_ALLOWLIST=xueqiu
+COGNITRADE_XUEQIU_COOKIE=<runtime secret>
+```
+
+The Cookie is read only from the environment and must not be submitted in an
+API request or committed to the repository. If any gate is missing, the
+`contests` snapshot returns a sanitized `data_gap`; no mock standings or
+holdings are generated.
+
 | Method | Path | Canonical source |
 | --- | --- | --- |
 | `POST` | `/runs` | `AgentOSRunService` → canonical TurnRunner |

@@ -145,6 +145,21 @@ export type PaperOrderInput = {
   limit_price?: number
 }
 
+export type PaperOrderPage = {
+  orders: PaperOrder[]
+  total_count: number
+  limit: number
+  offset: number
+}
+
+export type PaperMatchResult = {
+  matched: PaperOrder[]
+  unchanged_order_ids: string[]
+  errors: Array<{ order_id: string; error: string }>
+  matched_count: number
+  pending_count: number
+}
+
 export type QuantEngineStatus = {
   engine: string
   available: boolean
@@ -168,6 +183,17 @@ export type BacktestRequest = {
   refresh?: boolean
 }
 
+export type BacktestParameters = {
+  initial_cash: number
+  fast_period: number
+  slow_period: number
+  trade_size: number
+  commission_rate: number
+  minimum_commission: number
+  stamp_duty_rate: number
+  transfer_fee_rate: number
+}
+
 export type BacktestResult = {
   backtest_id: string
   created_at: string
@@ -175,7 +201,7 @@ export type BacktestResult = {
   symbol: string
   name: string
   strategy: { id: string; name: string }
-  parameters: BacktestRequest & Record<string, number | string | boolean | undefined>
+  parameters: BacktestParameters
   period: { start: string; end: string; bar_count: number; frequency: string }
   metrics: {
     initial_cash: number
@@ -204,3 +230,10 @@ export type BacktestSummary = Pick<
   BacktestResult,
   'backtest_id' | 'created_at' | 'symbol' | 'name' | 'strategy' | 'parameters' | 'period' | 'metrics'
 >
+
+export type BacktestSummaryPage = {
+  results: BacktestSummary[]
+  total_count: number
+  limit: number
+  offset: number
+}

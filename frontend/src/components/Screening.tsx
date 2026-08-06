@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useCognitrade } from '../CognitradeContext'
+import { IntentDeliveryDossier } from '../artifacts/IntentDeliveryDossier'
 import { asNumber, asRecord, asString, dashboardCandidates, dashboardValue } from '../live-data'
 import type { ResearchIntent } from '../research-contracts'
 
@@ -22,7 +23,7 @@ type ScreeningProps = {
 const tierLabel = (tier: string) => tier === 'core' ? '核心池' : tier === 'watchlist' ? '观察池' : tier
 
 export function Screening({ onSubmit, onOpenRun }: ScreeningProps) {
-  const { screeningDashboard, submitting } = useCognitrade()
+  const { screeningDashboard, screeningRun, submitting } = useCognitrade()
   const [tier, setTier] = useState('all')
   const [query, setQuery] = useState('')
   const allCandidates = useMemo(() => dashboardCandidates(screeningDashboard), [screeningDashboard])
@@ -99,6 +100,11 @@ export function Screening({ onSubmit, onOpenRun }: ScreeningProps) {
         {!candidates.length && <div className="live-empty-state"><Sparkles size={20} /><strong>暂无真实筛选候选</strong><p>创建 stock_screen 任务后，这里会读取带来源的 ArtifactBoard 结果。</p></div>}
         <footer className="table-footer"><span><Info size={13} />缺失字段会明确保留，不会用演示值或中性值补齐。</span><span>显示 {candidates.length} / {allCandidates.length} 个真实候选</span></footer>
       </section>
+
+      <IntentDeliveryDossier
+        artifacts={screeningRun?.replay.artifacts || []}
+        includeTypes={['screening_result']}
+      />
     </main>
   )
 }

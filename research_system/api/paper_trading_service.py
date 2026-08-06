@@ -478,15 +478,26 @@ class PaperTradingService:
         tenant_id: str,
         user_id: str,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         normalized_limit = min(max(int(limit), 1), 200)
+        normalized_offset = max(int(offset), 0)
         with self._lock, self._connection() as connection:
             account = self._active_account(connection, tenant_id=tenant_id, user_id=user_id)
             rows = connection.execute(
-                "SELECT * FROM paper_orders WHERE account_id = ? ORDER BY created_at DESC LIMIT ?",
-                (account["account_id"], normalized_limit),
+                "SELECT * FROM paper_orders WHERE account_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (account["account_id"], normalized_limit, normalized_offset),
             ).fetchall()
             return [self._order_payload(row) for row in rows]
+
+    def count_orders(self, *, tenant_id: str, user_id: str) -> int:
+        with self._lock, self._connection() as connection:
+            account = self._active_account(connection, tenant_id=tenant_id, user_id=user_id)
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM paper_orders WHERE account_id = ?",
+                (account["account_id"],),
+            ).fetchone()
+            return int(row["count"])
 
     def engine_status(self) -> dict[str, Any]:
         return self.matcher.status()

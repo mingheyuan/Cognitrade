@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
@@ -250,6 +251,14 @@ class ApiV2FinanceTests(unittest.TestCase):
         self.assertEqual(portfolio.status_code, 200, portfolio.text)
         self.assertEqual(portfolio.json()["positions"], [])
         self.assertEqual(len(order_history.json()["orders"]), 2)
+        second_page = self.client.get(
+            "/api/v2/finance/paper/orders?limit=1&offset=1",
+            headers=auth_headers(),
+        ).json()
+        self.assertEqual(second_page["total_count"], 2)
+        self.assertEqual(second_page["limit"], 1)
+        self.assertEqual(second_page["offset"], 1)
+        self.assertEqual(len(second_page["orders"]), 1)
 
     def test_reset_archives_account_and_starts_a_new_generation(self) -> None:
         first = self.client.get("/api/v2/finance/paper/account", headers=auth_headers()).json()
@@ -387,6 +396,36 @@ class ApiV2FinanceTests(unittest.TestCase):
         self.assertTrue(engine.json()["available"])
         self.assertEqual(response.status_code, 422, response.text)
         self.assertEqual(response.json()["error"]["code"], "insufficient_kline_history")
+
+    def test_backtest_history_is_paginated_without_hiding_total_count(self) -> None:
+        result_root = self.settings.workspace_root / "backtests"
+        result_root.mkdir(parents=True, exist_ok=True)
+        for index in range(3):
+            backtest_id = f"01J0000000000000000000000{index}"
+            (result_root / f"{backtest_id}.json").write_text(
+                json.dumps({
+                    "backtest_id": backtest_id,
+                    "created_at": f"2026-08-0{index + 1}T00:00:00Z",
+                    "symbol": "600519",
+                    "name": "贵州茅台",
+                    "strategy": {"id": "ma_cross", "name": "双均线交叉"},
+                    "parameters": {"fast_period": 5, "slow_period": 20},
+                    "period": {"start": "2020-01-01", "end": "2026-08-01", "bar_count": 1000, "frequency": "DAY"},
+                    "metrics": {"total_return_pct": index},
+                }, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+        response = self.client.get(
+            "/api/v2/finance/backtests?limit=1&offset=1",
+            headers=auth_headers(),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["total_count"], 3)
+        self.assertEqual(payload["limit"], 1)
+        self.assertEqual(payload["offset"], 1)
+        self.assertEqual(len(payload["results"]), 1)
 
 
 if __name__ == "__main__":

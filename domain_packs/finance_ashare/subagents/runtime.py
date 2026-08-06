@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshot_bundle, collect_snapshots
+from domain_packs.finance_ashare.subagents.fund_methodology import build_fund_analysis
 from domain_packs.finance_ashare.subagents.uzi_methodology import (
     build_delivery_conclusion,
     build_panel_review,
@@ -16,6 +17,18 @@ from domain_packs.finance_ashare.subagents.uzi_advanced_methodology import (
     build_dimension_coverage,
     build_institutional_analysis,
     build_research_workflow,
+)
+from domain_packs.finance_ashare.subagents.uzi_tier1_methodology import (
+    build_ai_readiness,
+    build_earnings_preview,
+    build_holding_rebalance,
+    build_model_update,
+    build_portfolio_rebalance,
+    build_returns_attribution,
+)
+from domain_packs.finance_ashare.subagents.uzi_method_products import (
+    METHOD_ARTIFACT_TYPES,
+    build_method_product,
 )
 from research_system.adapters.vendors.akshare_utils import coerce_numeric
 from research_system.services.methodologies import (
@@ -87,14 +100,267 @@ def normalize_query(context):
     request = context.require_artifact("user_request")
     query = str(request.content.get("query") or request.content.get("text") or "").strip()
     symbols = _unique_strings(request.content.get("symbols") or [])
+    inputs = dict(context.node.inputs or {})
+    fund_codes = _unique_strings(
+        request.content.get("fund_codes")
+        or inputs.get("fund_codes")
+        or inputs.get("funds")
+        or []
+    )
     for symbol in _STOCK_CODE_PATTERN.findall(query):
-        if symbol not in symbols:
+        if symbol not in fund_codes and symbol not in symbols:
             symbols.append(symbol)
     return ArtifactDraft(
         artifact_type="normalized_query",
-        content={"query": query, "symbols": symbols},
+        content={
+            "query": query,
+            "symbols": symbols,
+            "fund_codes": fund_codes,
+            "fund_category": str(
+                request.content.get("fund_category")
+                or inputs.get("fund_category")
+                or ""
+            ).strip()
+            or None,
+            "portfolio_holdings": list(
+                request.content.get("portfolio_holdings")
+                or inputs.get("portfolio_holdings")
+                or []
+            ),
+            "benchmark_return": (
+                request.content.get("benchmark_return")
+                if request.content.get("benchmark_return") is not None
+                else inputs.get("benchmark_return")
+            ),
+            "rebalance_targets": dict(
+                request.content.get("rebalance_targets")
+                or inputs.get("rebalance_targets")
+                or {}
+            ) or None,
+            "drift_threshold": (
+                request.content.get("drift_threshold")
+                if request.content.get("drift_threshold") is not None
+                else inputs.get("drift_threshold", 5.0)
+            ),
+            "fee_model": dict(
+                request.content.get("fee_model")
+                or inputs.get("fee_model")
+                or {}
+            ) or None,
+            "asset_class_targets": dict(
+                request.content.get("asset_class_targets")
+                or inputs.get("asset_class_targets")
+                or {}
+            ) or None,
+            "requested_methods": _unique_strings(
+                request.content.get("requested_methods")
+                or inputs.get("requested_methods")
+                or []
+            ),
+            "method_assumptions": dict(
+                request.content.get("method_assumptions")
+                or inputs.get("method_assumptions")
+                or {}
+            ) or None,
+        },
+        source_refs=list(request.source_refs),
         parent_artifact_ids=[request.artifact_id],
         confidence=1.0,
+    )
+
+
+def collect_fund_snapshot(context):
+    query_artifact = context.require_artifact("normalized_query")
+    inputs = dict(context.node.inputs or {})
+    arguments = {
+        "query": str(query_artifact.content.get("query") or ""),
+        "fund_codes": _unique_strings(
+            query_artifact.content.get("fund_codes")
+            or inputs.get("fund_codes")
+            or []
+        ),
+        "fund_category": str(
+            query_artifact.content.get("fund_category")
+            or inputs.get("fund_category")
+            or ""
+        ).strip()
+        or None,
+        "candidate_pool_size": int(inputs.get("candidate_pool_size") or 8),
+        "investment_cycle": str(inputs.get("investment_cycle") or "mid_term"),
+    }
+    call_tool = getattr(context, "call_tool", None)
+    if callable(call_tool):
+        tool_result = call_tool("fund_data_provider", arguments)
+        if tool_result.status != "completed":
+            raise RuntimeError(tool_result.error or "fund_data_provider failed")
+        payload = dict(tool_result.output or {})
+        governed_source_refs = list(tool_result.source_refs or [])
+    else:
+        # Direct Pack unit tests can use a minimal execution context. Production
+        # Graph execution always invokes the governed Pack tool above.
+        from domain_packs.finance_ashare.skills.fund_snapshot.skill import FundSnapshotSkill
+
+        payload = FundSnapshotSkill().run(**arguments)
+        governed_source_refs = []
+    source_refs = [
+        dict(row)
+        for row in payload.pop("source_refs", [])
+        if isinstance(row, dict)
+    ]
+    source_refs = governed_source_refs or source_refs
+    quality_status = str(payload.get("quality_status") or "data_gap")
+    return ArtifactDraft(
+        artifact_type="fund_snapshot",
+        content=payload,
+        source_refs=source_refs,
+        parent_artifact_ids=[query_artifact.artifact_id],
+        confidence=0.8 if quality_status == "available" else 0.45 if payload.get("funds") else 0.0,
+        risk_flags=list(payload.get("data_gap") or []),
+        metadata={"quality_status": quality_status},
+    )
+
+
+def analyze_funds(context):
+    snapshot = context.require_artifact("fund_snapshot")
+    content = build_fund_analysis(dict(snapshot.content or {}))
+    quality_status = str(content.get("quality_status") or "data_gap")
+    candidates = list(content.get("candidates") or [])
+    coverage = [
+        float(row.get("score_coverage") or 0.0)
+        for row in candidates
+        if isinstance(row, dict)
+    ]
+    confidence = round(sum(coverage) / len(coverage), 4) if coverage else 0.0
+    return ArtifactDraft(
+        artifact_type="fund_analysis",
+        content=content,
+        source_refs=list(snapshot.source_refs),
+        parent_artifact_ids=[snapshot.artifact_id],
+        confidence=confidence,
+        risk_flags=list(content.get("data_gap") or []),
+        metadata={
+            "quality_status": quality_status,
+            "methodology_version": content.get("methodology_version"),
+        },
+    )
+
+
+def compose_fund_report(context):
+    analysis = context.require_artifact("fund_analysis")
+    content = dict(analysis.content or {})
+    analysis_mode = str(content.get("analysis_mode") or "comparison")
+    candidates = [
+        dict(row)
+        for row in content.get("candidates") or []
+        if isinstance(row, dict)
+    ]
+    recommendations = [
+        dict(row)
+        for row in content.get("recommendations") or []
+        if isinstance(row, dict)
+    ]
+    if analysis_mode == "single_fund" and candidates:
+        candidate = candidates[0]
+        metrics = dict(candidate.get("metrics") or {})
+        returns = dict(candidate.get("returns_pct") or {})
+        annualized_label = (
+            "近三年年化收益"
+            if _number(returns.get("year_3")) is not None
+            else "成立以来年化收益"
+        )
+        observed = []
+        for label, key in (
+            ("近一年收益", "return_1y"),
+            (annualized_label, "return_3y_annualized"),
+            ("近一年相对基准", "benchmark_excess_1y"),
+            ("样本期最大回撤", "max_drawdown"),
+            ("年化波动", "volatility"),
+        ):
+            value = _number(metrics.get(key))
+            if value is not None:
+                observed.append(f"{label} {value:+.2f}%")
+        metric_summary = "，".join(observed) or "已采集字段不足以形成风险收益摘要"
+        conclusion = (
+            f"已完成{candidate.get('fund_name')}（{candidate.get('fund_code')}）的单基金分析："
+            f"{metric_summary}。本次不执行横向排名。"
+        )
+    elif recommendations:
+        leaders = "、".join(
+            f"{row.get('fund_name')}（{row.get('fund_code')}，{float(row.get('score') or 0):.1f}分）"
+            for row in recommendations[:3]
+        )
+        conclusion = f"基于同类真实收益、benchmark 超额收益与风险数据，当前证据门槛内的优先候选为：{leaders}。"
+    else:
+        conclusion = "当前真实数据不足以形成可审计的基金优先候选，结果保留为数据缺口。"
+    provider_errors = [
+        f"{row.get('stage')}: {row.get('error_type')}"
+        for row in content.get("provider_errors") or []
+        if isinstance(row, dict)
+    ]
+    candidate_gaps = [
+        str(gap)
+        for candidate in candidates
+        for gap in candidate.get("data_gap") or []
+        if str(gap).strip()
+    ]
+    risks = [
+        *list(content.get("data_gap") or []),
+        *candidate_gaps,
+        *provider_errors,
+        (
+            "历史收益不代表未来表现；本次为单基金独立分析，不包含同类排名。"
+            if analysis_mode == "single_fund"
+            else "历史收益不代表未来表现；基金比较只在同类样本内有效。"
+        ),
+    ]
+    evidence = [
+        {
+            "fund_code": row.get("fund_code"),
+            "fund_name": row.get("fund_name"),
+            "comparison_group": row.get("comparison_group"),
+            "rank": row.get("rank"),
+            "score": row.get("score"),
+            "score_coverage": row.get("score_coverage"),
+            "returns_pct": row.get("returns_pct"),
+            "risk": row.get("risk"),
+            "holdings_period": row.get("holdings_period"),
+            "top10_concentration_pct": row.get("top10_concentration_pct"),
+            "asset_allocation": row.get("asset_allocation"),
+            "asset_allocation_period": row.get("asset_allocation_period"),
+            "bond_holdings": row.get("bond_holdings"),
+            "target_fund_holdings": row.get("target_fund_holdings"),
+            "lookthrough_holdings": row.get("lookthrough_holdings"),
+            "holdings_coverage": row.get("holdings_coverage"),
+            "benchmark_definition": row.get("benchmark_definition"),
+            "benchmark_performance": row.get("benchmark_performance"),
+            "manager_tenures": row.get("manager_tenures"),
+            "scale_change": row.get("scale_change"),
+            "data_gap": row.get("data_gap"),
+        }
+        for row in candidates
+    ]
+    return ArtifactDraft(
+        artifact_type="research_report",
+        content={
+            "conclusion": conclusion,
+            "evidence": evidence,
+            "risk": list(dict.fromkeys(str(item) for item in risks if str(item).strip())),
+            "follow_up": [
+                *(
+                    ["补齐已标记的真实数据缺口后重新运行。"]
+                    if content.get("data_gap") or candidate_gaps or provider_errors
+                    else []
+                ),
+                "结合自身风险承受能力、持有期限和申赎规则做最终决策。",
+            ],
+            "fund_analysis": content,
+            "quality_status": content.get("quality_status"),
+        },
+        source_refs=list(analysis.source_refs),
+        parent_artifact_ids=[analysis.artifact_id],
+        confidence=analysis.confidence,
+        risk_flags=list(dict.fromkeys(str(item) for item in risks if str(item).strip())),
+        metadata={"quality_status": content.get("quality_status")},
     )
 
 
@@ -730,6 +996,241 @@ def evaluate_uzi_dimension_coverage(context):
         risk_flags=list(content.get("risk_flags") or []),
         metadata={"profile": profile, "methodology_version": content["methodology_version"], "source_commit": profile.get("source_commit")},
     )
+
+
+def evaluate_uzi_ai_readiness(context):
+    rows, symbols, _, source_refs, parent_ids = _snapshot_context(context)
+    content = build_ai_readiness(rows, symbols)
+    return _tier1_snapshot_artifact(
+        artifact_type="ai_readiness",
+        content=content,
+        source_refs=source_refs,
+        parent_ids=parent_ids,
+    )
+
+
+def evaluate_uzi_earnings_preview(context):
+    rows, symbols, _, source_refs, parent_ids = _snapshot_context(context)
+    content = build_earnings_preview(rows, symbols)
+    return _tier1_snapshot_artifact(
+        artifact_type="earnings_preview",
+        content=content,
+        source_refs=source_refs,
+        parent_ids=parent_ids,
+    )
+
+
+def evaluate_uzi_model_update(context):
+    rows, symbols, _, source_refs, parent_ids = _snapshot_context(context)
+    valuation = (context.artifacts("valuation_model") or [None])[-1]
+    inputs = dict(context.node.inputs or {})
+    content = build_model_update(
+        rows,
+        symbols,
+        inputs.get("model_updates") if isinstance(inputs.get("model_updates"), dict) else None,
+        valuation.content if valuation is not None else None,
+    )
+    if valuation is not None:
+        parent_ids.append(valuation.artifact_id)
+        source_refs = _unique_source_refs([*source_refs, *valuation.source_refs])
+    return _tier1_snapshot_artifact(
+        artifact_type="model_update",
+        content=content,
+        source_refs=source_refs,
+        parent_ids=parent_ids,
+    )
+
+
+def _evaluate_uzi_method_product(context, method_id: str) -> ArtifactDraft:
+    rows, symbols, _, source_refs, parent_ids = _snapshot_context(context)
+    inputs = dict(context.node.inputs or {})
+    valuation = (context.artifacts("valuation_model") or [None])[-1]
+    risk = (context.artifacts("risk_scan") or [None])[-1]
+    content = build_method_product(
+        method_id,
+        rows,
+        symbols,
+        inputs,
+        valuation.content if valuation is not None else None,
+        risk.content if risk is not None else None,
+    )
+    for artifact in (valuation, risk):
+        if artifact is not None:
+            parent_ids.append(artifact.artifact_id)
+            source_refs = _unique_source_refs([*source_refs, *artifact.source_refs])
+    return _tier1_snapshot_artifact(
+        artifact_type=METHOD_ARTIFACT_TYPES[method_id],
+        content=content,
+        source_refs=source_refs,
+        parent_ids=list(dict.fromkeys(parent_ids)),
+    )
+
+
+def evaluate_uzi_three_statement(context):
+    return _evaluate_uzi_method_product(context, "three_statement")
+
+
+def evaluate_uzi_quick_lbo(context):
+    return _evaluate_uzi_method_product(context, "quick_lbo")
+
+
+def evaluate_uzi_accretion_dilution(context):
+    return _evaluate_uzi_method_product(context, "accretion_dilution")
+
+
+def evaluate_uzi_segmental(context):
+    return _evaluate_uzi_method_product(context, "segmental")
+
+
+def evaluate_uzi_initiation_report(context):
+    return _evaluate_uzi_method_product(context, "initiation_report")
+
+
+def evaluate_uzi_earnings_review(context):
+    return _evaluate_uzi_method_product(context, "earnings_review")
+
+
+def evaluate_uzi_catalyst_calendar(context):
+    return _evaluate_uzi_method_product(context, "catalyst_calendar")
+
+
+def evaluate_uzi_thesis_tracker(context):
+    return _evaluate_uzi_method_product(context, "thesis_tracker")
+
+
+def evaluate_uzi_morning_note(context):
+    return _evaluate_uzi_method_product(context, "morning_note")
+
+
+def evaluate_uzi_ic_memo(context):
+    return _evaluate_uzi_method_product(context, "ic_memo")
+
+
+def evaluate_uzi_porter_bcg(context):
+    return _evaluate_uzi_method_product(context, "porter_bcg")
+
+
+def evaluate_uzi_dd_checklist(context):
+    return _evaluate_uzi_method_product(context, "dd_checklist")
+
+
+def evaluate_uzi_unit_economics(context):
+    return _evaluate_uzi_method_product(context, "unit_economics")
+
+
+def evaluate_uzi_value_creation_plan(context):
+    return _evaluate_uzi_method_product(context, "value_creation_plan")
+
+
+def evaluate_uzi_returns_attribution(context):
+    query = context.require_artifact("normalized_query")
+    inputs = dict(context.node.inputs or {})
+    holdings = list(
+        query.content.get("portfolio_holdings")
+        or inputs.get("portfolio_holdings")
+        or []
+    )
+    benchmark_return = (
+        query.content.get("benchmark_return")
+        if query.content.get("benchmark_return") is not None
+        else inputs.get("benchmark_return")
+    )
+    content = build_returns_attribution(holdings, benchmark_return)
+    return _tier1_request_artifact(
+        artifact_type="returns_attribution",
+        content=content,
+        query=query,
+    )
+
+
+def evaluate_uzi_holding_rebalance(context):
+    query = context.require_artifact("normalized_query")
+    inputs = dict(context.node.inputs or {})
+    holdings = list(
+        query.content.get("portfolio_holdings")
+        or inputs.get("portfolio_holdings")
+        or []
+    )
+    targets = query.content.get("rebalance_targets") or inputs.get("rebalance_targets")
+    fee_model = query.content.get("fee_model") or inputs.get("fee_model")
+    drift_threshold = (
+        query.content.get("drift_threshold")
+        if query.content.get("drift_threshold") is not None
+        else inputs.get("drift_threshold", 5.0)
+    )
+    content = build_holding_rebalance(
+        holdings,
+        targets if isinstance(targets, dict) else None,
+        drift_threshold,
+        fee_model if isinstance(fee_model, dict) else None,
+    )
+    return _tier1_request_artifact(
+        artifact_type="holding_rebalance",
+        content=content,
+        query=query,
+    )
+
+
+def evaluate_uzi_portfolio_rebalance(context):
+    query = context.require_artifact("normalized_query")
+    inputs = dict(context.node.inputs or {})
+    holdings = list(
+        query.content.get("portfolio_holdings")
+        or inputs.get("portfolio_holdings")
+        or []
+    )
+    targets = query.content.get("asset_class_targets") or inputs.get("asset_class_targets")
+    drift_threshold = (
+        query.content.get("drift_threshold")
+        if query.content.get("drift_threshold") is not None
+        else inputs.get("drift_threshold", 5.0)
+    )
+    content = build_portfolio_rebalance(
+        holdings,
+        targets if isinstance(targets, dict) else None,
+        drift_threshold,
+    )
+    return _tier1_request_artifact(
+        artifact_type="portfolio_rebalance",
+        content=content,
+        query=query,
+    )
+
+
+def _tier1_snapshot_artifact(
+    *,
+    artifact_type: str,
+    content: dict,
+    source_refs: list[dict],
+    parent_ids: list[str],
+) -> ArtifactDraft:
+    quality = str(content.get("quality_status") or "data_gap")
+    gaps = list(content.get("data_gap") or [])
+    assumptions = list(content.get("assumption_flags") or [])
+    confidence = 0.0 if quality == "data_gap" else 0.55 if quality in {"degraded", "assumption_only"} else 0.82
+    return ArtifactDraft(
+        artifact_type=artifact_type,
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=confidence,
+        risk_flags=list(dict.fromkeys([*gaps, *assumptions])),
+        metadata={
+            "quality_status": quality,
+            "methodology_version": content.get("methodology_version"),
+        },
+    )
+
+
+def _tier1_request_artifact(*, artifact_type: str, content: dict, query) -> ArtifactDraft:
+    return _tier1_snapshot_artifact(
+        artifact_type=artifact_type,
+        content=content,
+        source_refs=list(query.source_refs),
+        parent_ids=[query.artifact_id],
+    )
+
+
 def compose_uzi_report(context):
     evidence = context.require_artifact("evidence_set")
     valuation = context.require_artifact("valuation_model")
@@ -881,7 +1382,7 @@ def compose_uzi_report(context):
                 ]
             )
         ),
-        metadata={"profile": profile, "methodology_version": "3.9.1-adapted", "source_commit": profile.get("source_commit")},
+        metadata={"profile": profile, "methodology_version": "3.9.2-adapted", "source_commit": profile.get("source_commit")},
     )
     presentation_content = build_presentation(
         report_content,
@@ -905,7 +1406,7 @@ def compose_uzi_report(context):
         parent_artifact_ids=parents,
         confidence=report.confidence,
         risk_flags=list(report.risk_flags),
-        metadata={"profile": profile, "methodology_version": "3.9.1-adapted", "source_commit": profile.get("source_commit")},
+        metadata={"profile": profile, "methodology_version": "3.9.2-adapted", "source_commit": profile.get("source_commit")},
     )
     return [report, presentation]
 
@@ -1420,9 +1921,38 @@ def _number(value: object) -> float | None:
 
 
 def _requested_snapshot_types(*, inputs: dict, sector: str | None) -> list[str]:
+    requested_methods = _unique_strings(inputs.get("requested_methods") or [])
+    method_snapshot_types: dict[str, tuple[str, ...]] = {
+        "ai_readiness": ("market", "chain", "industry", "events", "research", "moat"),
+        "earnings_preview": ("market", "fundamental", "research", "events", "kline"),
+        "model_update": ("market", "fundamental", "valuation", "peers"),
+        "three_statement": ("fundamental",),
+        "quick_lbo": ("fundamental",),
+        "lbo": ("fundamental",),
+        "accretion_dilution": ("fundamental",),
+        "ma_accretion": ("fundamental",),
+        "segmental": ("fundamental",),
+        "initiation_report": ("market", "fundamental", "chain", "industry", "events", "valuation"),
+        "earnings_review": ("fundamental", "research"),
+        "catalyst_calendar": ("events",),
+        "thesis_tracker": ("market", "fundamental", "valuation"),
+        "morning_note": ("market", "capital_flow", "sentiment", "events"),
+        "ic_memo": ("market", "fundamental", "chain", "industry", "events", "valuation", "governance", "trap"),
+        "porter_bcg": ("moat", "industry", "peers", "chain"),
+        "dd_checklist": ("fundamental", "valuation", "industry", "peers", "chain", "governance", "notice", "policy", "sentiment", "events", "trap"),
+        "unit_economics": ("fundamental",),
+        "value_creation_plan": ("fundamental",),
+    }
+    method_required = _unique_strings(
+        [
+            snapshot_type
+            for method in requested_methods
+            for snapshot_type in method_snapshot_types.get(method, ())
+        ]
+    )
     explicit = inputs.get("snapshot_types")
     if isinstance(explicit, list) and explicit:
-        return _unique_strings(explicit)
+        return _unique_strings([*explicit, *method_required])
     intent = str(inputs.get("intent") or "").strip()
     if intent == "sector_research":
         return [
@@ -1431,8 +1961,11 @@ def _requested_snapshot_types(*, inputs: dict, sector: str | None) -> list[str]:
         ]
     if intent == "stock_screen":
         return ["sector", "market", "fundamental", "notice"] if sector else ["market", "fundamental", "notice"]
-    return list(select_profile(inputs).get("snapshot_types") or [
-        "market", "fundamental", "notice", "capital_flow", "sentiment", "events", "lhb"
+    return _unique_strings([
+        *(select_profile(inputs).get("snapshot_types") or [
+            "market", "fundamental", "notice", "capital_flow", "sentiment", "events", "lhb"
+        ]),
+        *method_required,
     ])
 
 
@@ -2173,14 +2706,16 @@ def collect_distillation_sources(context):
         text = str(row.get("text") or row.get("content") or row.get("body") or "").strip()
         if not text:
             continue
+        author = str(row.get("author") or row.get("user_name") or "").strip() or None
+        published_at = str(row.get("published_at") or row.get("created_at") or "").strip() or None
         records.append(
             {
                 "record_id": record_id,
                 "text": text,
-                "author": row.get("author") or row.get("user_name"),
-                "published_at": row.get("published_at") or row.get("created_at"),
-                "tags": list(row.get("tags") or []),
-                "dimensions": list(row.get("dimensions") or []),
+                "author": author,
+                "published_at": published_at,
+                "tags": _unique_strings(row.get("tags") or []),
+                "dimensions": _unique_strings(row.get("dimensions") or []),
             }
         )
         source_refs.append({"type": "source_record", "id": record_id})

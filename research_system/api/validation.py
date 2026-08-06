@@ -14,6 +14,8 @@ SUPPORTED_RESEARCH_INTENTS = frozenset(
         "stock_check",
         "stock_compare",
         "stock_screen",
+        "fund_research",
+        "portfolio_research",
         "sector_research",
         "distill_kol_logic",
         "review_thesis",
@@ -22,15 +24,18 @@ SUPPORTED_RESEARCH_INTENTS = frozenset(
 
 _IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _INVESTMENT_CYCLES = frozenset({"short_term", "mid_term", "long_term"})
+_FUND_CATEGORIES = frozenset({"全部", "股票型", "混合型", "债券型", "指数型", "ETF", "LOF", "QDII", "FOF"})
 _STOCK_SNAPSHOT_TYPES = frozenset(
     {
         "market",
         "fundamental",
         "notice",
+        "sector",
         "lhb",
         "capital_flow",
         "sentiment",
         "events",
+        "policy",
         "kline",
         "macro",
         "peers",
@@ -44,6 +49,8 @@ _STOCK_SNAPSHOT_TYPES = frozenset(
         "moat",
         "trap",
         "contests",
+        "fund_holders",
+        "similar_stocks",
     }
 )
 _METHODOLOGIES = frozenset(
@@ -53,8 +60,26 @@ _METHODOLOGIES = frozenset(
         "cashflow_resilience",
         "three_statement",
         "lbo",
+        "quick_lbo",
         "ma_accretion",
+        "accretion_dilution",
         "segmental",
+        "initiation_report",
+        "earnings_review",
+        "catalyst_calendar",
+        "thesis_tracker",
+        "morning_note",
+        "ic_memo",
+        "porter_bcg",
+        "dd_checklist",
+        "unit_economics",
+        "value_creation_plan",
+        "portfolio_rebalance",
+        "ai_readiness",
+        "earnings_preview",
+        "model_update",
+        "returns_attribution",
+        "holding_rebalance",
     }
 )
 _RESEARCH_METHODS = frozenset(
@@ -68,7 +93,7 @@ _RESEARCH_METHODS = frozenset(
 _SCREEN_STYLES = frozenset({"value", "growth", "quality", "gulp", "short"})
 _RESEARCH_PROFILES = frozenset({"quick", "lite", "medium", "deep"})
 
-_PLANNING_FIELDS = {"planning_context_hints"}
+_COMMON_REQUEST_FIELDS = {"planning_context_hints", "background"}
 _STOCK_FIELDS = {
     "symbol",
     "snapshot_types",
@@ -76,7 +101,9 @@ _STOCK_FIELDS = {
     "investment_cycle",
     "research_profile",
     "requested_methods",
-    *_PLANNING_FIELDS,
+    "model_updates",
+    "method_assumptions",
+    *_COMMON_REQUEST_FIELDS,
 }
 _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
     "stock_check": set(_STOCK_FIELDS),
@@ -93,17 +120,34 @@ _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
         "watchlist_min_score",
         "enrichment_top_n",
         "skip_enrichment",
-        *_PLANNING_FIELDS,
+        *_COMMON_REQUEST_FIELDS,
     },
-    "sector_research": {"sector_query", "include_policy_snapshot", *_PLANNING_FIELDS},
-    "distill_kol_logic": set(),
+    "fund_research": {
+        "fund_codes",
+        "fund_category",
+        "candidate_pool_size",
+        "investment_cycle",
+        *_COMMON_REQUEST_FIELDS,
+    },
+    "portfolio_research": {
+        "portfolio_holdings",
+        "benchmark_return",
+        "rebalance_targets",
+        "drift_threshold",
+        "fee_model",
+        "asset_class_targets",
+        "requested_methods",
+        *_COMMON_REQUEST_FIELDS,
+    },
+    "sector_research": {"sector_query", "include_policy_snapshot", *_COMMON_REQUEST_FIELDS},
+    "distill_kol_logic": set(_COMMON_REQUEST_FIELDS),
     "review_thesis": {
         "review_target_run_id",
         "snapshot_types",
         "allow_partial_snapshot_types",
         "include_policy_snapshot",
         "investment_cycle",
-        *_PLANNING_FIELDS,
+        *_COMMON_REQUEST_FIELDS,
     },
 }
 def safe_identifier(value: str, *, field_name: str) -> str:
@@ -192,6 +236,10 @@ def validate_research_request(
         _validate_stock_compare_constraints(constraints)
     elif intent == "stock_screen":
         _validate_stock_screen_constraints(constraints)
+    elif intent == "fund_research":
+        _validate_fund_research_constraints(constraints)
+    elif intent == "portfolio_research":
+        _validate_portfolio_research_constraints(constraints)
     return request.model_copy(update={"intent": intent, "user_query": query, "constraints": constraints})
 
 
@@ -207,6 +255,8 @@ def _validate_common_constraints(
 
     if "planning_context_hints" in constraints and not isinstance(constraints["planning_context_hints"], dict):
         _invalid_constraint("planning_context_hints", "must be an object")
+    if "background" in constraints and not isinstance(constraints["background"], bool):
+        _invalid_constraint("background", "must be a boolean")
 
     if "investment_cycle" in constraints:
         _require_enum(constraints["investment_cycle"], field_name="investment_cycle", allowed=_INVESTMENT_CYCLES)
@@ -256,6 +306,10 @@ def _validate_common_constraints(
             _invalid_constraint("snapshot_types", f"contains unsupported values: {', '.join(unsupported)}")
         if len(snapshots) != len(set(snapshots)):
             _invalid_constraint("snapshot_types", "must not contain duplicate values")
+    if "model_updates" in constraints:
+        _validate_model_updates(constraints["model_updates"])
+    if "method_assumptions" in constraints:
+        _validate_method_assumptions(constraints["method_assumptions"])
 
     for field_name in (
         "allow_partial_snapshot_types",
@@ -328,6 +382,335 @@ def _validate_stock_screen_constraints(constraints: dict[str, Any]) -> None:
         value = int(constraints.get(field_name, default))
         if value > candidate_pool_size:
             _invalid_constraint(field_name, "must not exceed candidate_pool_size")
+
+
+def _validate_fund_research_constraints(constraints: dict[str, Any]) -> None:
+    if "fund_category" in constraints:
+        _require_enum(
+            constraints["fund_category"],
+            field_name="fund_category",
+            allowed=_FUND_CATEGORIES,
+        )
+    if "fund_codes" in constraints:
+        codes = _require_string_list(
+            constraints["fund_codes"],
+            field_name="fund_codes",
+            min_items=1,
+            max_items=20,
+        )
+        if len(codes) != len(set(codes)):
+            _invalid_constraint("fund_codes", "must not contain duplicate values")
+        invalid = [code for code in codes if not re.fullmatch(r"\d{6}", code)]
+        if invalid:
+            _invalid_constraint("fund_codes", "must contain six-digit fund codes")
+    if int(constraints.get("candidate_pool_size", 8)) > 20:
+        _invalid_constraint("candidate_pool_size", "must not exceed 20 for fund research")
+
+
+def _validate_model_updates(value: Any) -> None:
+    if not isinstance(value, dict) or not value:
+        _invalid_constraint("model_updates", "must be a non-empty object")
+    allowed = {
+        "rev_growth",
+        "gross_margin",
+        "net_margin",
+        "capex_pct",
+        "stage1_growth",
+        "terminal_g",
+        "beta",
+        "target_pe",
+        "target_price",
+    }
+    unknown = sorted(str(key) for key in value if str(key) not in allowed)
+    if unknown:
+        _invalid_constraint("model_updates", f"contains unsupported values: {', '.join(unknown)}")
+    for key, item in value.items():
+        _require_finite_number(item, field_name=f"model_updates.{key}")
+
+
+def _validate_portfolio_research_constraints(constraints: dict[str, Any]) -> None:
+    holdings = constraints.get("portfolio_holdings")
+    if not isinstance(holdings, list) or not holdings:
+        _invalid_constraint("portfolio_holdings", "must be a non-empty array")
+    if len(holdings) > 100:
+        _invalid_constraint("portfolio_holdings", "must contain at most 100 items")
+    tickers: list[str] = []
+    total_weight = 0.0
+    for index, holding in enumerate(holdings):
+        if not isinstance(holding, dict):
+            _invalid_constraint("portfolio_holdings", f"item {index} must be an object")
+        ticker = _require_non_empty_string(
+            holding.get("ticker") or holding.get("symbol"),
+            field_name=f"portfolio_holdings.{index}.ticker",
+        )
+        tickers.append(ticker)
+        weight = _require_finite_number(
+            holding.get("weight"),
+            field_name=f"portfolio_holdings.{index}.weight",
+        )
+        if weight < 0:
+            _invalid_constraint(f"portfolio_holdings.{index}.weight", "must be non-negative")
+        total_weight += weight
+        for field_name in ("return_pct", "value", "market_value", "quantity", "price"):
+            if holding.get(field_name) is None:
+                continue
+            number = _require_finite_number(
+                holding[field_name],
+                field_name=f"portfolio_holdings.{index}.{field_name}",
+            )
+            if field_name in {"value", "market_value", "quantity", "price"} and number < 0:
+                _invalid_constraint(f"portfolio_holdings.{index}.{field_name}", "must be non-negative")
+        for field_name in ("name", "industry", "market", "asset_class"):
+            if holding.get(field_name) is not None:
+                _require_non_empty_string(
+                    holding[field_name],
+                    field_name=f"portfolio_holdings.{index}.{field_name}",
+                )
+    if len(tickers) != len(set(tickers)):
+        _invalid_constraint("portfolio_holdings", "must not contain duplicate tickers")
+    if total_weight <= 0:
+        _invalid_constraint("portfolio_holdings", "weight total must be positive")
+
+    if "benchmark_return" in constraints:
+        _require_finite_number(constraints["benchmark_return"], field_name="benchmark_return")
+    if "drift_threshold" in constraints:
+        threshold = _require_finite_number(constraints["drift_threshold"], field_name="drift_threshold")
+        if threshold < 0 or threshold > 100:
+            _invalid_constraint("drift_threshold", "must be between 0 and 100")
+
+    if "rebalance_targets" in constraints:
+        targets = constraints["rebalance_targets"]
+        if not isinstance(targets, dict) or not targets:
+            _invalid_constraint("rebalance_targets", "must be a non-empty object")
+        if set(map(str, targets)) != set(tickers):
+            _invalid_constraint("rebalance_targets", "must contain exactly one target for each holding")
+        total_target = 0.0
+        for ticker, target in targets.items():
+            number = _require_finite_number(target, field_name=f"rebalance_targets.{ticker}")
+            if number < 0:
+                _invalid_constraint(f"rebalance_targets.{ticker}", "must be non-negative")
+            total_target += number
+        if total_target <= 0:
+            _invalid_constraint("rebalance_targets", "target total must be positive")
+
+    if "fee_model" in constraints:
+        fee_model = constraints["fee_model"]
+        if not isinstance(fee_model, dict) or not fee_model:
+            _invalid_constraint("fee_model", "must be a non-empty object")
+        for market, raw_spec in fee_model.items():
+            if not isinstance(raw_spec, dict) or not raw_spec:
+                _invalid_constraint(f"fee_model.{market}", "must be a non-empty object")
+            unknown = sorted(
+                str(key)
+                for key in raw_spec
+                if str(key) not in {"commission_rate", "buy_stamp_rate", "sell_stamp_rate"}
+            )
+            if unknown:
+                _invalid_constraint(f"fee_model.{market}", f"contains unsupported fields: {', '.join(unknown)}")
+            for key, rate in raw_spec.items():
+                number = _require_finite_number(rate, field_name=f"fee_model.{market}.{key}")
+                if number < 0 or number > 1:
+                    _invalid_constraint(f"fee_model.{market}.{key}", "must be between 0 and 1")
+
+    if "asset_class_targets" in constraints:
+        targets = constraints["asset_class_targets"]
+        if not isinstance(targets, dict) or not targets:
+            _invalid_constraint("asset_class_targets", "must be a non-empty object")
+        classes = {
+            str(holding.get("asset_class") or "").strip()
+            for holding in holdings
+            if str(holding.get("asset_class") or "").strip()
+        }
+        if len(classes) != len({str(key).strip() for key in targets}):
+            _invalid_constraint("asset_class_targets", "must contain exactly one target for each observed asset class")
+        if set(map(str, targets)) != classes:
+            _invalid_constraint("asset_class_targets", "must match the asset_class values in portfolio_holdings")
+        total_target = 0.0
+        for asset_class, target in targets.items():
+            number = _require_finite_number(target, field_name=f"asset_class_targets.{asset_class}")
+            if number < 0:
+                _invalid_constraint(f"asset_class_targets.{asset_class}", "must be non-negative")
+            total_target += number
+        if total_target <= 0:
+            _invalid_constraint("asset_class_targets", "target total must be positive")
+
+
+def _validate_method_assumptions(value: Any) -> None:
+    if not isinstance(value, dict) or not value:
+        _invalid_constraint("method_assumptions", "must be a non-empty object")
+    allowed_methods = {
+        "three_statement",
+        "quick_lbo",
+        "accretion_dilution",
+        "value_creation_plan",
+    }
+    unknown = sorted(str(key) for key in value if str(key) not in allowed_methods)
+    if unknown:
+        _invalid_constraint("method_assumptions", f"contains unsupported methods: {', '.join(unknown)}")
+
+    def visit(item: Any, path: str) -> None:
+        if item is None or isinstance(item, str):
+            return
+        if isinstance(item, bool):
+            _invalid_constraint(path, "must not contain boolean values")
+        if isinstance(item, (int, float)):
+            _require_finite_number(item, field_name=path)
+            return
+        if isinstance(item, list):
+            if not item:
+                _invalid_constraint(path, "must not contain an empty array")
+            for index, nested in enumerate(item):
+                visit(nested, f"{path}.{index}")
+            return
+        if isinstance(item, dict):
+            if not item:
+                _invalid_constraint(path, "must not contain an empty object")
+            for key, nested in item.items():
+                if not str(key).strip():
+                    _invalid_constraint(path, "must not contain an empty key")
+                visit(nested, f"{path}.{key}")
+            return
+        _invalid_constraint(path, "contains an unsupported value type")
+
+    for method, assumptions in value.items():
+        if not isinstance(assumptions, dict) or not assumptions:
+            _invalid_constraint(f"method_assumptions.{method}", "must be a non-empty object")
+        visit(assumptions, f"method_assumptions.{method}")
+        _validate_method_assumption_contract(str(method), assumptions)
+
+
+def _validate_method_assumption_contract(method: str, assumptions: dict[str, Any]) -> None:
+    required_keys = {
+        "three_statement": {
+            "revenue_growth_path", "capex_to_revenue",
+            "working_capital_to_incremental_revenue",
+        },
+        "quick_lbo": {
+            "entry_multiple", "debt_multiple", "exit_multiple",
+            "annual_ebitda_growth", "annual_debt_paydown_pct", "hold_years",
+        },
+        "accretion_dilution": {
+            "target_net_income", "new_shares", "after_tax_synergies",
+            "after_tax_financing_cost",
+        },
+        "value_creation_plan": {"levers"},
+    }[method]
+    actual_keys = {str(key) for key in assumptions}
+    missing = sorted(required_keys - actual_keys)
+    unknown = sorted(actual_keys - required_keys)
+    if missing:
+        _invalid_constraint(
+            f"method_assumptions.{method}",
+            f"missing required fields: {', '.join(missing)}",
+        )
+    if unknown:
+        _invalid_constraint(
+            f"method_assumptions.{method}",
+            f"contains unsupported fields: {', '.join(unknown)}",
+        )
+
+    if method == "three_statement":
+        growth_path = assumptions["revenue_growth_path"]
+        if not isinstance(growth_path, list) or not growth_path:
+            _invalid_constraint(
+                "method_assumptions.three_statement.revenue_growth_path",
+                "must be a non-empty array of finite numbers",
+            )
+        if len(growth_path) > 20:
+            _invalid_constraint(
+                "method_assumptions.three_statement.revenue_growth_path",
+                "must contain at most 20 periods",
+            )
+        for index, item in enumerate(growth_path):
+            growth = _require_finite_number(
+                item,
+                field_name=f"method_assumptions.three_statement.revenue_growth_path.{index}",
+            )
+            if growth <= -1:
+                _invalid_constraint(
+                    f"method_assumptions.three_statement.revenue_growth_path.{index}",
+                    "must be greater than -1",
+                )
+        capex = _require_finite_number(
+            assumptions["capex_to_revenue"],
+            field_name="method_assumptions.three_statement.capex_to_revenue",
+        )
+        if capex < 0:
+            _invalid_constraint(
+                "method_assumptions.three_statement.capex_to_revenue",
+                "must be non-negative",
+            )
+        _require_finite_number(
+            assumptions["working_capital_to_incremental_revenue"],
+            field_name="method_assumptions.three_statement.working_capital_to_incremental_revenue",
+        )
+        return
+
+    if method == "quick_lbo":
+        numbers = {
+            key: _require_finite_number(
+                assumptions[key], field_name=f"method_assumptions.quick_lbo.{key}"
+            )
+            for key in required_keys
+        }
+        if numbers["entry_multiple"] <= 0 or numbers["exit_multiple"] <= 0:
+            _invalid_constraint(
+                "method_assumptions.quick_lbo",
+                "entry_multiple and exit_multiple must be positive",
+            )
+        if numbers["debt_multiple"] < 0:
+            _invalid_constraint(
+                "method_assumptions.quick_lbo.debt_multiple", "must be non-negative"
+            )
+        if numbers["annual_ebitda_growth"] <= -1:
+            _invalid_constraint(
+                "method_assumptions.quick_lbo.annual_ebitda_growth",
+                "must be greater than -1",
+            )
+        if not 0 <= numbers["annual_debt_paydown_pct"] <= 1:
+            _invalid_constraint(
+                "method_assumptions.quick_lbo.annual_debt_paydown_pct",
+                "must be between 0 and 1",
+            )
+        hold_years = numbers["hold_years"]
+        if hold_years <= 0 or hold_years != int(hold_years):
+            _invalid_constraint(
+                "method_assumptions.quick_lbo.hold_years",
+                "must be a positive integer",
+            )
+        return
+
+    if method == "accretion_dilution":
+        numbers = {
+            key: _require_finite_number(
+                assumptions[key], field_name=f"method_assumptions.accretion_dilution.{key}"
+            )
+            for key in required_keys
+        }
+        if numbers["new_shares"] < 0:
+            _invalid_constraint(
+                "method_assumptions.accretion_dilution.new_shares",
+                "must be non-negative",
+            )
+        if numbers["after_tax_financing_cost"] < 0:
+            _invalid_constraint(
+                "method_assumptions.accretion_dilution.after_tax_financing_cost",
+                "must be non-negative",
+            )
+        return
+
+    levers = assumptions["levers"]
+    if not isinstance(levers, list) or not levers:
+        _invalid_constraint(
+            "method_assumptions.value_creation_plan.levers",
+            "must be a non-empty array",
+        )
+    for index, lever in enumerate(levers):
+        path = f"method_assumptions.value_creation_plan.levers.{index}"
+        if not isinstance(lever, dict) or set(lever) != {"name", "ebitda_impact"}:
+            _invalid_constraint(path, "must contain exactly name and ebitda_impact")
+        _require_non_empty_string(lever["name"], field_name=f"{path}.name")
+        _require_finite_number(lever["ebitda_impact"], field_name=f"{path}.ebitda_impact")
 
 
 def _require_non_empty_string(value: Any, *, field_name: str) -> str:

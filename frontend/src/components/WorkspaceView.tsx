@@ -11,6 +11,8 @@ const MarketData = lazy(() => import('./MarketData').then((module) => ({ default
 const PaperTrading = lazy(() => import('./PaperTrading').then((module) => ({ default: module.PaperTrading })))
 const Backtesting = lazy(() => import('./Backtesting').then((module) => ({ default: module.Backtesting })))
 const Screening = lazy(() => import('./Screening').then((module) => ({ default: module.Screening })))
+const Funds = lazy(() => import('./Funds').then((module) => ({ default: module.Funds })))
+const UziMethods = lazy(() => import('./UziMethods').then((module) => ({ default: module.UziMethods })))
 const Methodology = lazy(() => import('./Methodology').then((module) => ({ default: module.Methodology })))
 const Runs = lazy(() => import('./Runs').then((module) => ({ default: module.Runs })))
 
@@ -50,6 +52,8 @@ export function WorkspaceView({
   if (activeView === 'paper') return <PaperTrading onOpenMarketData={() => navigate('market')} />
   if (activeView === 'backtest') return <Backtesting />
   if (activeView === 'screening') return <Screening onSubmit={onResearch} onOpenRun={onOpenRun} />
+  if (activeView === 'funds') return <Funds onOpenRun={onOpenRun} />
+  if (activeView === 'uzi') return <UziMethods onOpenRun={onOpenRun} />
   if (activeView === 'methodology') return <Methodology />
   return <Runs onOpenRun={onOpenRun} onResearch={onResearch} />
 }

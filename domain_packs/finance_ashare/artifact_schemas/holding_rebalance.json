@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "drift": {
+      "type": "object", "x-business-extensible": true,
+      "properties": {
+        "ticker": {"type": "string"}, "symbol": {"type": "string"}, "name": {"type": "string"},
+        "weight": {"type": "number"}, "normalized_weight": {"type": "number"}, "target_weight": {"type": "number"},
+        "drift_pp": {"type": "number"}, "breached": {"type": "boolean"}, "action": {"type": "string"},
+        "trade_amount": {"type": ["number", "null"]}, "estimated_shares": {"type": ["integer", "null"]},
+        "estimated_cost": {"type": ["number", "null"]}, "return_pct": {"type": "number"},
+        "industry": {"type": "string"}, "market": {"type": "string"}, "asset_class": {"type": "string"},
+        "value": {"type": "number"}, "market_value": {"type": "number"}, "quantity": {"type": "number"}, "price": {"type": "number"}
+      }
+    }
+  },
+  "type": "object",
+  "required": ["methodology_version", "method", "quality_status", "data_gap", "assumption_flags", "generated_at"],
+  "properties": {
+    "methodology_version": {"type": "string"}, "method": {"const": "holding_rebalance"},
+    "target_mode": {"type": "string"}, "drift_threshold_pp": {"type": "number", "minimum": 0},
+    "drift_table": {"type": "array", "items": {"$ref": "#/$defs/drift"}},
+    "trades": {
+      "type": "array", "items": {"type": "object", "required": ["ticker", "action", "trade_amount", "estimated_shares", "estimated_cost", "drift_pp"], "properties": {"ticker": {"type": "string"}, "action": {"type": "string"}, "trade_amount": {"type": ["number", "null"]}, "estimated_shares": {"type": ["integer", "null"]}, "estimated_cost": {"type": ["number", "null"]}, "drift_pp": {"type": "number"}}, "additionalProperties": false}
+    },
+    "concentration": {"type": "object", "required": ["before_hhi", "after_hhi", "before_top3_weight", "after_top3_weight"], "properties": {"before_hhi": {"type": "number"}, "after_hhi": {"type": "number"}, "before_top3_weight": {"type": "number"}, "after_top3_weight": {"type": "number"}}, "additionalProperties": false},
+    "estimated_cost": {"type": ["number", "null"]},
+    "quality_status": {"enum": ["available", "degraded", "data_gap", "assumption_only"]},
+    "data_gap": {"type": "array", "items": {"type": "string"}}, "assumption_flags": {"type": "array", "items": {"type": "string"}}, "generated_at": {"type": "string"}
+  },
+  "additionalProperties": false
+}

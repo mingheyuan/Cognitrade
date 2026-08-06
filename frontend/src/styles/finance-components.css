@@ -97,6 +97,348 @@
   background: rgba(240, 120, 120, .05);
 }
 
+.paper-ledger-contract,
+.paper-order-record,
+.backtest-contract-grid > article,
+.run-governance-dossier {
+  border: 1px solid var(--border);
+  background: rgba(11, 22, 19, .86);
+}
+
+.paper-ledger-contract {
+  margin-bottom: 16px;
+  border-radius: 11px;
+  overflow: hidden;
+}
+
+.paper-ledger-contract > header,
+.run-governance-dossier__header,
+.run-governance-section > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.paper-ledger-contract > header {
+  min-height: 68px;
+  padding: 14px 17px;
+  border-bottom: 1px solid var(--border);
+}
+
+.paper-ledger-contract h2,
+.paper-ledger-contract h3,
+.run-governance-dossier h2,
+.run-governance-dossier h3,
+.run-governance-dossier h4 {
+  margin: 0;
+  color: var(--text-soft);
+}
+
+.paper-ledger-contract h2 {
+  margin-top: 3px;
+  font-size: 15px;
+}
+
+.paper-ledger-contract > header small,
+.backtest-history-footer {
+  color: var(--muted-dim);
+  font-size: 9px;
+}
+
+.paper-ledger-contract__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.paper-ledger-contract__grid > article {
+  min-width: 0;
+  padding: 16px 17px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.paper-ledger-contract__grid > article:nth-child(2n) {
+  border-right: 0;
+}
+
+.paper-ledger-contract__grid > article:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.paper-ledger-contract__grid h3,
+.backtest-contract-grid h3 {
+  margin-bottom: 12px;
+  font-size: 11px;
+}
+
+.paper-ledger-contract dl,
+.paper-order-audit dl,
+.backtest-contract-grid dl,
+.run-governance-step dl,
+.run-governance-identity > dl {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.paper-ledger-contract dl > div,
+.paper-order-audit dl > div,
+.backtest-contract-grid dl > div,
+.run-governance-step dl > div,
+.run-governance-identity > dl > div {
+  display: grid;
+  grid-template-columns: minmax(90px, .45fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(141, 174, 162, .09);
+}
+
+.paper-ledger-contract dt,
+.paper-order-audit dt,
+.backtest-contract-grid dt,
+.run-governance-step dt,
+.run-governance-identity dt {
+  color: var(--muted-dim);
+  font-size: 8px;
+}
+
+.paper-ledger-contract dd,
+.paper-order-audit dd,
+.backtest-contract-grid dd,
+.run-governance-step dd,
+.run-governance-identity dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-soft);
+  font-size: 9px;
+  text-align: right;
+}
+
+.paper-engine-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 12px 0 0;
+  color: var(--warning);
+  font-size: 8px;
+  line-height: 1.55;
+}
+
+.paper-engine-strategies,
+.paper-quote-source {
+  margin-top: 13px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border);
+}
+
+.paper-engine-strategies h4,
+.paper-quote-source h4 {
+  margin: 0 0 8px;
+  color: var(--text-soft);
+  font-size: 9px;
+}
+
+.paper-engine-strategies ul,
+.paper-match-disclosure ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.paper-engine-strategies li,
+.paper-match-disclosure li {
+  display: grid;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.paper-engine-strategies li strong,
+.paper-match-disclosure li strong {
+  color: var(--text-soft);
+  font-size: 9px;
+}
+
+.paper-quote-audit {
+  margin-inline: 17px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(4, 12, 10, .45);
+}
+
+.paper-quote-audit > summary {
+  padding: 9px 11px;
+  color: var(--mint);
+  cursor: pointer;
+  font-size: 8px;
+  list-style-position: inside;
+}
+
+.paper-quote-audit > dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+  margin: 0;
+  padding: 3px 11px 11px;
+  border-top: 1px solid var(--border);
+}
+
+.paper-quote-audit > dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(141, 174, 162, .09);
+}
+
+.paper-quote-audit dt,
+.paper-quote-audit dd {
+  margin: 0;
+  font-size: 8px;
+}
+
+.paper-quote-audit dt {
+  color: var(--muted-dim);
+}
+
+.paper-quote-audit dd {
+  color: var(--text-soft);
+  text-align: right;
+}
+
+.paper-quote-source {
+  margin: 0 11px 11px;
+}
+
+.paper-match-disclosure {
+  margin-bottom: 16px;
+  border: 1px solid rgba(125, 226, 189, .2);
+  border-radius: 10px;
+  background: rgba(125, 226, 189, .035);
+  overflow: hidden;
+}
+
+.paper-match-disclosure > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.paper-match-disclosure > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.paper-match-disclosure > header strong {
+  color: var(--text-soft);
+  font-size: 10px;
+}
+
+.paper-match-disclosure > header small,
+.paper-match-disclosure p,
+.paper-match-disclosure li span {
+  margin: 0;
+  color: var(--muted-dim);
+  font-size: 8px;
+}
+
+.paper-match-disclosure > header button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.paper-match-disclosure__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.paper-match-disclosure__grid > article {
+  min-width: 0;
+  padding: 13px 14px;
+  border-right: 1px solid var(--border);
+}
+
+.paper-match-disclosure__grid > article:last-child {
+  border-right: 0;
+}
+
+.paper-match-disclosure h4 {
+  margin: 0 0 9px;
+  color: var(--text-soft);
+  font-size: 9px;
+}
+
+.paper-order-ledger {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.paper-order-record {
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.paper-order-record__summary {
+  display: grid;
+  grid-template-columns: auto minmax(150px, 1fr) minmax(100px, .55fr) minmax(110px, .65fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+}
+
+.paper-order-record__summary > div,
+.paper-order-record__summary > span:not(.order-side-label, .paper-order-status) {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.paper-order-record__summary strong {
+  color: var(--text-soft);
+  font-size: 10px;
+}
+
+.paper-order-record__summary small {
+  overflow: hidden;
+  color: var(--muted-dim);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paper-order-audit {
+  border-top: 1px solid var(--border);
+}
+
+.paper-order-audit > summary {
+  padding: 9px 14px;
+  color: var(--mint);
+  cursor: pointer;
+  font-size: 8px;
+  list-style-position: inside;
+}
+
+.paper-order-audit dl {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 24px;
+  padding: 5px 14px 14px;
+}
+
 .backtest-hero {
   grid-template-columns: minmax(0, 1fr) auto;
 }
@@ -111,6 +453,117 @@
   border-radius: 11px;
   background: rgba(11, 22, 19, 0.86);
   overflow: hidden;
+}
+
+.backtest-engine-disclosure {
+  display: grid;
+  grid-template-columns: minmax(240px, .6fr) minmax(0, 1fr);
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: rgba(11, 22, 19, .86);
+  overflow: hidden;
+}
+
+.backtest-engine-disclosure > header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 17px;
+  border-bottom: 1px solid var(--border);
+}
+
+.backtest-engine-disclosure h2,
+.backtest-engine-disclosure h3 {
+  margin: 2px 0 0;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.backtest-engine-disclosure > header > span {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.backtest-engine-disclosure > header > span.is-ready {
+  border-color: rgba(125, 226, 189, .25);
+  color: var(--mint);
+}
+
+.backtest-engine-disclosure > dl {
+  display: grid;
+  align-content: start;
+  gap: 0;
+  margin: 0;
+  padding: 13px 17px;
+  border-right: 1px solid var(--border);
+}
+
+.backtest-engine-disclosure > dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(141, 174, 162, .09);
+}
+
+.backtest-engine-disclosure dt,
+.backtest-engine-disclosure dd {
+  margin: 0;
+  font-size: 8px;
+}
+
+.backtest-engine-disclosure dt {
+  color: var(--muted-dim);
+}
+
+.backtest-engine-disclosure dd {
+  color: var(--text-soft);
+  text-align: right;
+}
+
+.backtest-engine-strategies {
+  min-width: 0;
+  padding: 13px 17px;
+}
+
+.backtest-engine-strategies h3 {
+  margin-bottom: 10px;
+  font-size: 10px;
+}
+
+.backtest-engine-strategies ul {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.backtest-engine-strategies li {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.backtest-engine-strategies strong {
+  color: var(--text-soft);
+  font-size: 9px;
+}
+
+.backtest-engine-strategies small,
+.backtest-engine-strategies p {
+  margin: 0;
+  color: var(--muted-dim);
+  font-size: 8px;
+  line-height: 1.5;
 }
 
 .backtest-engine-strip > div {
@@ -314,6 +767,16 @@
   font-size: 9px;
 }
 
+.backtest-result-id {
+  display: block;
+  max-width: 560px;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  color: var(--muted-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+}
+
 .backtest-return-badge {
   padding: 9px 12px;
   border: 1px solid var(--border);
@@ -352,6 +815,14 @@
 
 .backtest-result-metric:last-child {
   border-right: 0;
+}
+
+.backtest-result-metric:nth-child(4n) {
+  border-right: 0;
+}
+
+.backtest-result-metric:nth-child(n + 5) {
+  border-top: 1px solid var(--border);
 }
 
 .backtest-result-metric > span {
@@ -429,6 +900,38 @@
 .backtest-trade-table-wrap {
   padding: 16px 18px 18px;
   overflow-x: auto;
+}
+
+.backtest-contract-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.backtest-contract-grid > article {
+  min-width: 0;
+  padding: 14px;
+  border-radius: 9px;
+}
+
+.backtest-source-disclosure {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.backtest-source-disclosure h4 {
+  margin: 0 0 9px;
+  color: var(--text-soft);
+  font-size: 10px;
+}
+
+.backtest-trade-table-wrap h3 small {
+  color: var(--muted-dim);
+  font-size: 8px;
+  font-weight: 500;
 }
 
 .backtest-trade-table-wrap h3 {
@@ -529,6 +1032,228 @@
   font-size: 8px;
 }
 
+.backtest-history-footer {
+  padding: 10px 17px;
+  border-top: 1px solid var(--border);
+  text-align: right;
+}
+
+/* Complete run governance dossier */
+.run-governance-dossier {
+  display: grid;
+  gap: 0;
+  margin: 18px 0;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.run-governance-dossier__header {
+  padding: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.run-governance-dossier__header > div {
+  display: grid;
+  gap: 5px;
+}
+
+.run-governance-dossier__header h2 {
+  font-size: 18px;
+}
+
+.run-governance-dossier__header p {
+  max-width: 720px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.run-governance-dossier__header > span,
+.run-governance-section > header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--mint);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.run-governance-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border);
+}
+
+.run-governance-overview article {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+  border-right: 1px solid var(--border);
+}
+
+.run-governance-overview article:last-child {
+  border-right: 0;
+}
+
+.run-governance-overview svg {
+  flex: 0 0 auto;
+  color: var(--mint);
+}
+
+.run-governance-overview span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.run-governance-overview small {
+  color: var(--muted-dim);
+  font-size: 8px;
+}
+
+.run-governance-overview strong {
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-governance-identity {
+  display: grid;
+  grid-template-columns: minmax(280px, .8fr) repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.run-governance-identity > dl,
+.run-governance-notes,
+.run-governance-selection,
+.run-governance-metrics > article {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(4, 12, 10, .38);
+}
+
+.run-governance-notes h3,
+.run-governance-selection h3 {
+  margin-bottom: 10px;
+  font-size: 10px;
+}
+
+.run-governance-notes ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 16px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.run-governance-section {
+  padding: 17px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.run-governance-section:last-child {
+  border-bottom: 0;
+}
+
+.run-governance-section > header {
+  margin-bottom: 12px;
+}
+
+.run-governance-section > header h3 {
+  margin-top: 3px;
+  font-size: 13px;
+}
+
+.run-governance-steps {
+  display: grid;
+  gap: 8px;
+}
+
+.run-governance-step {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(4, 12, 10, .38);
+  overflow: hidden;
+}
+
+.run-governance-step > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 11px 13px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.run-governance-step > summary > span:nth-child(2) {
+  display: grid;
+  gap: 3px;
+}
+
+.run-governance-step > summary strong {
+  color: var(--text-soft);
+  font-size: 10px;
+}
+
+.run-governance-step > summary small {
+  color: var(--muted-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+}
+
+.run-governance-step__index {
+  color: var(--mint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+}
+
+.run-governance-step__status {
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.run-governance-step__status.is-completed {
+  border-color: rgba(125, 226, 189, .24);
+  color: var(--mint);
+}
+
+.run-governance-step dl {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 22px;
+  padding: 4px 13px 13px;
+  border-top: 1px solid var(--border);
+}
+
+.run-governance-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.run-governance-metrics h4 {
+  margin-bottom: 10px;
+  font-size: 10px;
+}
+
+.artifact-archive-group--historical {
+  opacity: .88;
+}
+
 .backtest-history-empty {
   grid-column: 1 / -1;
   padding: 28px;
@@ -536,6 +1261,41 @@
 }
 
 @media (max-width: 1120px) {
+  .paper-ledger-contract__grid,
+  .run-governance-identity {
+    grid-template-columns: 1fr;
+  }
+
+  .paper-ledger-contract__grid > article {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .paper-ledger-contract__grid > article:nth-last-child(-n + 2) {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .paper-ledger-contract__grid > article:last-child {
+    border-bottom: 0;
+  }
+
+  .backtest-engine-disclosure {
+    grid-template-columns: 1fr;
+  }
+
+  .backtest-engine-disclosure > dl {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .paper-order-record__summary {
+    grid-template-columns: auto minmax(150px, 1fr) minmax(100px, .7fr) auto auto;
+  }
+
+  .paper-order-record__summary > span:nth-of-type(3) {
+    display: none;
+  }
+
   .backtest-engine-strip {
     grid-template-columns: auto repeat(2, minmax(0, 1fr));
   }
@@ -564,6 +1324,35 @@
 }
 
 @media (max-width: 720px) {
+  .paper-order-record__summary,
+  .paper-order-audit dl,
+  .paper-quote-audit > dl,
+  .paper-match-disclosure__grid,
+  .backtest-contract-grid,
+  .run-governance-overview,
+  .run-governance-metrics,
+  .run-governance-step dl {
+    grid-template-columns: 1fr;
+  }
+
+  .paper-order-record__summary {
+    align-items: start;
+  }
+
+  .paper-match-disclosure__grid > article {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .paper-order-record__summary > span:nth-of-type(3) {
+    display: grid;
+  }
+
+  .run-governance-overview article {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
   .backtest-hero,
   .backtest-engine-strip,
   .backtest-config-card {
@@ -601,5 +1390,1305 @@
 
   .backtest-history-list > button {
     border-right: 0;
+  }
+}
+
+/* Complete fund analysis dossier */
+.fund-dossier {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.fund-dossier-header,
+.fund-dossier-header > div:first-child,
+.fund-dossier-meta {
+  display: flex;
+}
+
+.fund-dossier-header {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.fund-dossier-header > div:first-child,
+.fund-dossier-meta {
+  flex-direction: column;
+  gap: 5px;
+}
+
+.fund-dossier-header h2,
+.fund-dossier-header p {
+  margin: 0;
+}
+
+.fund-dossier-header h2 {
+  color: var(--text);
+  font-size: 19px;
+}
+
+.fund-dossier-header p,
+.fund-dossier-meta small {
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.fund-dossier-meta {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.fund-dossier-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.fund-dossier-summary article {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  min-width: 0;
+  padding: 13px;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel-soft) 90%, transparent);
+}
+
+.fund-dossier-summary article:last-child {
+  border-right: 0;
+}
+
+.fund-dossier-summary svg {
+  grid-row: 1 / 4;
+  color: var(--mint);
+  margin-top: 2px;
+}
+
+.fund-dossier-summary span,
+.fund-dossier-summary small,
+.fund-candidate-dossier summary small {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.fund-dossier-summary strong {
+  color: var(--text);
+  font-size: 18px;
+}
+
+.fund-recommendation-board,
+.fund-audit-grid > section,
+.fund-score-section,
+.fund-detail-grid > section,
+.fund-holdings-section,
+.fund-objective-section,
+.fund-gap-section {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-soft) 84%, transparent);
+}
+
+.fund-recommendation-board > header,
+.fund-score-section > header,
+.fund-detail-grid > section > header,
+.fund-holdings-section > header,
+.fund-gap-section > header,
+.fund-audit-grid > section > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 42px;
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fund-recommendation-board > header > div,
+.fund-score-section > header,
+.fund-detail-grid > section > header,
+.fund-holdings-section > header,
+.fund-gap-section > header,
+.fund-audit-grid > section > header {
+  color: var(--mint);
+}
+
+.fund-recommendation-board h3,
+.fund-score-section h4,
+.fund-detail-grid h4,
+.fund-holdings-section h4,
+.fund-gap-section h4,
+.fund-audit-grid h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.fund-recommendation-board > header > div,
+.fund-score-section > header,
+.fund-detail-grid > section > header,
+.fund-holdings-section > header,
+.fund-gap-section > header,
+.fund-audit-grid > section > header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.fund-recommendation-board > header > span,
+.fund-score-section > header > span,
+.fund-detail-grid > section > header > span,
+.fund-holdings-section > header > span,
+.fund-gap-section > header > span {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.fund-recommendation-board > div {
+  display: grid;
+  gap: 0;
+}
+
+.fund-recommendation-board article {
+  display: grid;
+  grid-template-columns: auto minmax(120px, .7fr) auto minmax(180px, 1.2fr) minmax(180px, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fund-recommendation-board article:last-child {
+  border-bottom: 0;
+}
+
+.fund-recommendation-board article > span {
+  color: var(--gold);
+  font-weight: 800;
+}
+
+.fund-recommendation-board article > div {
+  display: grid;
+  gap: 3px;
+}
+
+.fund-recommendation-board article > div:nth-of-type(2) {
+  justify-items: end;
+}
+
+.fund-recommendation-board article strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.fund-recommendation-board article > div:nth-of-type(2) strong {
+  color: var(--gold);
+  font-size: 18px;
+}
+
+.fund-recommendation-board article small,
+.fund-recommendation-board article p {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.fund-recommendation-board article p.is-risk {
+  color: var(--gold);
+}
+
+.fund-dossier-empty,
+.fund-trend-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 72px;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.fund-candidate-dossiers {
+  display: grid;
+  gap: 10px;
+}
+
+.fund-candidate-dossier {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  overflow: hidden;
+}
+
+.fund-candidate-dossier.is-eligible {
+  border-color: color-mix(in srgb, var(--mint) 42%, var(--border));
+}
+
+.fund-candidate-dossier > summary {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: 13px;
+  padding: 13px 15px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.fund-candidate-dossier > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fund-candidate-dossier summary > span:not(.fund-rank):not(.quality-pill) {
+  display: grid;
+  gap: 3px;
+}
+
+.fund-candidate-dossier summary > span:nth-child(n + 3):not(.quality-pill) {
+  justify-items: end;
+}
+
+.fund-candidate-dossier summary strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.fund-candidate-dossier summary > span:nth-child(3) strong {
+  color: var(--gold);
+  font-size: 18px;
+}
+
+.fund-candidate-dossier summary > svg {
+  color: var(--text-faint);
+  transition: transform .2s ease;
+}
+
+.fund-candidate-dossier[open] summary > svg {
+  transform: rotate(180deg);
+}
+
+.fund-candidate-dossier-body {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.fund-return-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.fund-return-grid article {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.fund-return-grid article:nth-child(5n) {
+  border-right: 0;
+}
+
+.fund-return-grid article:nth-last-child(-n + 5) {
+  border-bottom: 0;
+}
+
+.fund-return-grid span,
+.fund-return-grid strong {
+  font-size: 10px;
+}
+
+.fund-return-grid span {
+  color: var(--text-faint);
+}
+
+.fund-core-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.fund-core-grid > section {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-soft) 82%, transparent);
+}
+
+.fund-core-grid header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 9px;
+  color: var(--mint);
+}
+
+.fund-core-grid h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.fund-core-grid dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0;
+}
+
+.fund-core-grid dl > div {
+  display: grid;
+  gap: 3px;
+}
+
+.fund-core-grid dt,
+.fund-core-grid dd {
+  margin: 0;
+  font-size: 9px;
+}
+
+.fund-core-grid dt {
+  color: var(--text-faint);
+}
+
+.fund-core-grid dd {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.fund-trend-panel {
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--panel-soft) 86%, transparent);
+  overflow: hidden;
+}
+
+.fund-trend-panel > header,
+.fund-trend-panel > header > div:first-child,
+.fund-trend-panel > footer,
+.fund-trend-ranges {
+  display: flex;
+  align-items: center;
+}
+
+.fund-trend-panel > header {
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fund-trend-panel > header > div:first-child {
+  gap: 7px;
+  color: var(--mint);
+}
+
+.fund-trend-panel > header strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.fund-trend-panel > header span,
+.fund-trend-panel > footer {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.fund-trend-ranges {
+  gap: 3px;
+}
+
+.fund-trend-ranges button {
+  padding: 4px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.fund-trend-ranges button.is-active {
+  border-color: color-mix(in srgb, var(--mint) 38%, var(--border));
+  background: color-mix(in srgb, var(--mint) 10%, transparent);
+  color: var(--mint);
+}
+
+.fund-trend-chart {
+  height: 244px;
+  padding: 6px 5px 0;
+}
+
+.fund-trend-panel > footer {
+  justify-content: space-between;
+  padding: 7px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.fund-score-section > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 11px;
+}
+
+.fund-score-section article {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) auto;
+  gap: 5px 10px;
+  align-items: center;
+}
+
+.fund-score-section article > span,
+.fund-score-section article > strong,
+.fund-score-section article > small {
+  font-size: 9px;
+}
+
+.fund-score-section article > span,
+.fund-score-section article > small {
+  color: var(--text-faint);
+}
+
+.fund-score-section article > strong {
+  color: var(--text);
+}
+
+.fund-score-section article > div {
+  grid-column: 1 / -1;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border) 70%, transparent);
+  overflow: hidden;
+}
+
+.fund-score-section article i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--mint);
+}
+
+.fund-score-section > p,
+.fund-detail-grid p,
+.fund-holdings-section > p,
+.fund-audit-grid p {
+  margin: 0;
+  padding: 14px;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.fund-detail-grid,
+.fund-audit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.fund-detail-grid .finance-table-scroll,
+.fund-holdings-section .finance-table-scroll {
+  max-height: 310px;
+}
+
+.fund-allocation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  padding: 11px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fund-allocation-grid article {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--panel-soft) 74%, transparent);
+}
+
+.fund-allocation-grid span,
+.fund-allocation-grid strong {
+  font-size: 10px;
+}
+
+.fund-allocation-grid span {
+  color: var(--text-faint);
+}
+
+.fund-allocation-grid strong {
+  color: var(--text);
+}
+
+.fund-holdings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.fund-holdings-grid > article {
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.fund-holdings-grid > article:nth-child(2n) {
+  border-right: 0;
+}
+
+.fund-holdings-grid > article > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fund-holdings-grid > article > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.fund-holdings-grid > article > header strong,
+.fund-holdings-grid > article > header small,
+.fund-holdings-grid > article > header > span,
+.fund-holdings-grid > article > p,
+.fund-holdings-section > footer {
+  font-size: 9px;
+}
+
+.fund-holdings-grid > article > header strong {
+  color: var(--text);
+}
+
+.fund-holdings-grid > article > header small,
+.fund-holdings-grid > article > p,
+.fund-holdings-section > footer {
+  color: var(--text-faint);
+}
+
+.fund-holdings-grid > article > header > span {
+  flex: 0 0 auto;
+  color: var(--mint);
+}
+
+.fund-holdings-grid > article > p {
+  min-height: 64px;
+  margin: 0;
+  padding: 13px;
+  line-height: 1.65;
+}
+
+.fund-holdings-section > footer {
+  padding: 9px 12px;
+  line-height: 1.55;
+}
+
+.fund-detail-grid > section > small,
+.fund-audit-grid > section > small {
+  display: block;
+  padding: 9px 12px;
+  color: var(--text-faint);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.fund-objective-section {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+}
+
+.fund-objective-section > div {
+  min-width: 0;
+  padding: 12px;
+}
+
+.fund-objective-section > div:first-child {
+  border-right: 1px solid var(--border);
+}
+
+.fund-objective-section strong {
+  color: var(--text);
+  font-size: 10px;
+}
+
+.fund-objective-section p {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.65;
+}
+
+.fund-gap-section ul,
+.fund-audit-grid ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 11px;
+  list-style: none;
+}
+
+.fund-gap-section li,
+.fund-audit-grid li {
+  padding: 5px 7px;
+  border: 1px solid color-mix(in srgb, var(--gold) 25%, var(--border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--gold) 6%, transparent);
+  color: var(--gold);
+  font-size: 9px;
+}
+
+.fund-audit-grid > section {
+  overflow: hidden;
+}
+
+.fund-audit-grid > section > p {
+  padding-bottom: 7px;
+  color: var(--text-muted);
+}
+
+.fund-policy-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0 12px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.fund-policy-metrics span {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.fund-policy-metrics span:first-child {
+  border-right: 1px solid var(--border);
+}
+
+.fund-policy-metrics strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.fund-audit-grid .artifact-structured-view {
+  padding: 0 11px 9px;
+}
+
+.kline-history-note {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-soft) 84%, transparent);
+  color: var(--text-faint);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.source-coverage-list {
+  display: grid;
+  gap: 7px;
+}
+
+.source-coverage-row {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-soft) 84%, transparent);
+  overflow: hidden;
+}
+
+.source-coverage-row > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 9px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.source-coverage-row > summary::-webkit-details-marker {
+  display: none;
+}
+
+.source-coverage-row > summary > span:nth-child(2) {
+  display: grid;
+  gap: 3px;
+}
+
+.source-coverage-row > summary strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.source-coverage-row > summary small {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.source-coverage-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gold);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--gold) 10%, transparent);
+}
+
+.source-coverage-dot.is-available {
+  background: var(--mint);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--mint) 10%, transparent);
+}
+
+.source-coverage-row > div {
+  padding: 11px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.source-coverage-list > footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 3px 0;
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+@media (max-width: 1240px) {
+  .fund-dossier-summary,
+  .fund-return-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .fund-dossier-summary article:nth-child(2),
+  .fund-return-grid article:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .fund-dossier-summary article:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .fund-return-grid article:nth-child(5n) {
+    border-right: 1px solid var(--border);
+  }
+
+  .fund-return-grid article:nth-last-child(-n + 5) {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .fund-return-grid article:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+
+  .fund-core-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .fund-recommendation-board article {
+    grid-template-columns: auto minmax(120px, 1fr) auto;
+  }
+
+  .fund-recommendation-board article p {
+    grid-column: 2 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .fund-dossier {
+    padding: 12px;
+  }
+
+  .fund-dossier-header,
+  .fund-trend-panel > header {
+    flex-direction: column;
+  }
+
+  .fund-dossier-meta {
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .fund-candidate-dossier > summary {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .fund-candidate-dossier summary > span:nth-child(3),
+  .fund-candidate-dossier summary > span:nth-child(4),
+  .fund-candidate-dossier summary > span:nth-child(5) {
+    display: none;
+  }
+
+  .fund-detail-grid,
+  .fund-audit-grid,
+  .fund-objective-section,
+  .fund-holdings-grid,
+  .fund-score-section > div {
+    grid-template-columns: 1fr;
+  }
+
+  .fund-holdings-grid > article {
+    border-right: 0;
+  }
+
+  .fund-objective-section > div:first-child {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .fund-trend-ranges {
+    width: 100%;
+  }
+
+  .fund-trend-ranges button {
+    flex: 1;
+  }
+}
+
+.intent-delivery-dossier {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.intent-dossier {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .08);
+}
+
+.intent-dossier-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px 16px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(120deg, color-mix(in srgb, var(--mint) 4%, transparent), transparent 54%);
+}
+
+.intent-dossier-header > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.intent-dossier-header h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 18px;
+}
+
+.intent-dossier-header p {
+  max-width: 720px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.intent-dossier-audit {
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+  min-width: 160px;
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.intent-dossier-audit span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--mint);
+}
+
+.intent-dossier-audit strong {
+  overflow: hidden;
+  max-width: 230px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.intent-dossier-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border);
+}
+
+.intent-dossier-kpis > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 13px 16px;
+  border-right: 1px solid var(--border);
+}
+
+.intent-dossier-kpis > span:last-child {
+  border-right: 0;
+}
+
+.intent-dossier-kpis small {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.intent-dossier-kpis strong {
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.intent-dossier-section {
+  margin: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-soft) 80%, transparent);
+}
+
+.intent-dossier-section > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--mint);
+}
+
+.intent-dossier-section > header h4 {
+  flex: 1;
+  margin: 0;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.intent-dossier-section > header span {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.intent-dossier-section > .artifact-structured-view,
+.intent-dossier-section > .artifact-table-wrap,
+.intent-dossier-section > .artifact-record-list,
+.intent-dossier-section > .artifact-value-list,
+.intent-dossier-section > .artifact-empty-value {
+  margin: 11px;
+}
+
+.intent-dossier-section--audit > header {
+  color: var(--gold);
+}
+
+.intent-dossier--thesis .intent-dossier-kpis strong,
+.intent-dossier--distillation .intent-dossier-kpis strong {
+  font-family: inherit;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .intent-dossier-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .intent-dossier-kpis > span:nth-child(2) {
+    border-right: 0;
+  }
+
+  .intent-dossier-kpis > span:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 620px) {
+  .intent-dossier-header {
+    flex-direction: column;
+  }
+
+  .intent-dossier-audit {
+    justify-items: start;
+    width: 100%;
+  }
+
+  .intent-dossier-section {
+    margin: 10px;
+  }
+}
+
+.method-delivery-dossier {
+  display: grid;
+  gap: 14px;
+  margin: 16px 0;
+}
+
+.method-delivery-dossier__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--purple) 7%, var(--panel)), var(--panel));
+}
+
+.method-delivery-dossier__header > div {
+  display: grid;
+  gap: 5px;
+}
+
+.method-delivery-dossier__header h2,
+.method-delivery-dossier__header p {
+  margin: 0;
+}
+
+.method-delivery-dossier__header h2 {
+  color: var(--text);
+  font-size: 19px;
+}
+
+.method-delivery-dossier__header p {
+  max-width: 720px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.method-delivery-dossier__header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--purple) 32%, var(--border));
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.method-delivery-group {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+.method-delivery-group > header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.method-delivery-group > header > span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid color-mix(in srgb, var(--mint) 24%, var(--border));
+  border-radius: 9px;
+  color: var(--mint);
+  background: color-mix(in srgb, var(--mint) 7%, transparent);
+}
+
+.method-delivery-group > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.method-delivery-group h3,
+.method-delivery-group p {
+  margin: 0;
+}
+
+.method-delivery-group h3 {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.method-delivery-group p,
+.method-delivery-group > header > strong {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.method-delivery-group > div {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.method-delivery-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-soft) 84%, transparent);
+}
+
+.method-delivery-card > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  padding: 9px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.method-delivery-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.method-delivery-card__icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--purple);
+  background: color-mix(in srgb, var(--purple) 12%, transparent);
+}
+
+.method-delivery-card > summary > span:nth-child(2) {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.method-delivery-card > summary strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.method-delivery-card > summary small,
+.method-delivery-card__count {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.method-delivery-card__body {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.method-delivery-card__audit {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.method-delivery-card__audit > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-right: 1px solid var(--border);
+}
+
+.method-delivery-card__audit > span:last-child {
+  border-right: 0;
+}
+
+.method-delivery-card__audit small {
+  color: var(--text-faint);
+  font-size: 8px;
+}
+
+.method-delivery-card__audit strong {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.method-delivery-card__provenance {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.method-delivery-card__provenance > section {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.method-delivery-card__provenance header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--mint);
+}
+
+.method-delivery-card__provenance h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 10px;
+}
+
+.method-delivery-card__provenance .artifact-structured-view,
+.method-delivery-card__provenance .artifact-value-list,
+.method-delivery-card__provenance .artifact-record-list {
+  margin: 8px;
+}
+
+@media (max-width: 760px) {
+  .method-delivery-dossier__header {
+    flex-direction: column;
+  }
+
+  .method-delivery-card > summary {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .method-delivery-card__count {
+    display: none;
+  }
+
+  .method-delivery-card__audit,
+  .method-delivery-card__provenance {
+    grid-template-columns: 1fr;
+  }
+
+  .method-delivery-card__audit > span {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .method-delivery-card__audit > span:last-child {
+    border-bottom: 0;
   }
 }

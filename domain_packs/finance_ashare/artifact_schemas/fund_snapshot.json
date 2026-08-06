@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["query", "analysis_mode", "fund_codes", "fund_category", "funds", "quality_status", "data_gap", "retrieved_at"],
+  "properties": {
+    "query": {"type": "string"},
+    "analysis_mode": {"enum": ["single_fund", "comparison"]},
+    "fund_codes": {"type": "array", "items": {"type": "string"}},
+    "fund_category": {"type": "string"},
+    "investment_cycle": {"type": "string"},
+    "candidate_pool_size": {"type": "integer", "minimum": 1, "maximum": 20},
+    "funds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["fund_code", "fund_name", "returns_pct", "data_gap"],
+        "properties": {
+          "fund_code": {"type": "string"},
+          "fund_name": {"type": "string"},
+          "fund_type": {"type": ["string", "null"]},
+          "as_of": {"type": ["string", "null"]},
+          "unit_nav": {"type": ["number", "null"]},
+          "accumulated_nav": {"type": ["number", "null"]},
+          "returns_pct": {
+            "type": "object",
+            "properties": {
+              "daily": {"type": "number"},
+              "week_1": {"type": "number"},
+              "month_1": {"type": "number"},
+              "month_3": {"type": "number"},
+              "month_6": {"type": "number"},
+              "year_1": {"type": "number"},
+              "year_2": {"type": "number"},
+              "year_3": {"type": "number"},
+              "year_to_date": {"type": "number"},
+              "since_inception": {"type": "number"}
+            },
+            "additionalProperties": false
+          },
+          "fee_pct": {"type": ["number", "null"]},
+          "ranking_source": {"type": ["string", "null"]},
+          "nav_history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["date", "nav"],
+              "properties": {
+                "date": {"type": "string"},
+                "nav": {"type": "number"}
+              },
+              "additionalProperties": false
+            }
+          },
+          "risk": {
+            "type": "object",
+            "properties": {
+              "observation_count": {"type": "integer", "minimum": 0},
+              "max_drawdown_pct": {"type": "number"},
+              "annualized_volatility_pct": {"type": ["number", "null"]},
+              "period_return_pct": {"type": "number"},
+              "period_start": {"type": "string"},
+              "period_end": {"type": "string"}
+            },
+            "additionalProperties": false
+          },
+          "top_holdings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["rank", "code", "name"],
+              "properties": {
+                "rank": {"type": "integer", "minimum": 1},
+                "code": {"type": "string"},
+                "name": {"type": "string"},
+                "weight_pct": {"type": ["number", "null"]},
+                "shares_10k": {"type": ["number", "null"]},
+                "market_value_10k": {"type": ["number", "null"]}
+              },
+              "additionalProperties": false
+            }
+          },
+          "holdings_period": {"type": ["string", "null"]},
+          "top10_concentration_pct": {"type": ["number", "null"]},
+          "holdings_source": {"type": "string"},
+          "asset_allocation": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["asset_type", "label", "weight_pct"],
+              "properties": {
+                "asset_type": {"type": "string"},
+                "label": {"type": "string"},
+                "weight_pct": {"type": "number"}
+              },
+              "additionalProperties": false
+            }
+          },
+          "asset_allocation_period": {"type": ["string", "null"]},
+          "bond_holdings": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/disclosedSecurityHolding"}
+          },
+          "target_fund_holdings": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/disclosedSecurityHolding"}
+          },
+          "lookthrough_holdings": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/disclosedSecurityHolding"}
+          },
+          "holdings_coverage": {
+            "type": "object",
+            "required": ["asset_allocation", "direct_equity", "bond", "target_fund", "lookthrough", "is_fund_of_funds"],
+            "properties": {
+              "asset_allocation": {"enum": ["available", "unavailable", "not_applicable"]},
+              "direct_equity": {"enum": ["available", "unavailable", "not_applicable"]},
+              "bond": {"enum": ["available", "unavailable", "not_applicable"]},
+              "target_fund": {"enum": ["available", "unavailable", "not_applicable"]},
+              "lookthrough": {"enum": ["available", "unavailable", "not_applicable"]},
+              "is_fund_of_funds": {"type": "boolean"}
+            },
+            "additionalProperties": false
+          },
+          "fund_overview": {
+            "type": "object",
+            "properties": {
+              "fund_company": {},
+              "fund_manager": {},
+              "inception_date": {"type": ["string", "null"]},
+              "latest_scale": {},
+              "custodian": {},
+              "investment_objective": {},
+              "investment_strategy": {},
+              "benchmark_definition": {}
+            },
+            "additionalProperties": false
+          },
+          "benchmark_definition": {"type": ["string", "null"]},
+          "benchmark_performance": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["period"],
+              "properties": {
+                "period": {"type": "string"},
+                "period_group": {"type": ["string", "null"]},
+                "fund_return_pct": {"type": ["number", "null"]},
+                "benchmark_return_pct": {"type": ["number", "null"]},
+                "excess_return_pct": {"type": ["number", "null"]},
+                "fund_max_drawdown_pct": {"type": ["number", "null"]},
+                "benchmark_max_drawdown_pct": {"type": ["number", "null"]},
+                "peer_rank": {}
+              },
+              "additionalProperties": false
+            }
+          },
+          "manager_tenures": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["manager", "start_date", "current"],
+              "properties": {
+                "manager": {"type": "string"},
+                "managers": {"type": "array", "items": {"type": "string"}},
+                "start_date": {"type": "string"},
+                "end_date": {"type": ["string", "null"]},
+                "current": {"type": "boolean"},
+                "tenure_text": {},
+                "tenure_return_pct": {"type": ["number", "null"]}
+              },
+              "additionalProperties": false
+            }
+          },
+          "scale_history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["report_date"],
+              "properties": {
+                "report_date": {"type": "string"},
+                "subscriptions_100m_shares": {"type": ["number", "null"]},
+                "redemptions_100m_shares": {"type": ["number", "null"]},
+                "net_flow_100m_shares": {"type": ["number", "null"]},
+                "total_shares_100m": {"type": ["number", "null"]},
+                "net_assets_100m_cny": {"type": ["number", "null"]},
+                "reported_share_change_pct": {"type": ["number", "null"]}
+              },
+              "additionalProperties": false
+            }
+          },
+          "scale_change": {
+            "type": "object",
+            "properties": {
+              "latest_report_date": {"type": ["string", "null"]},
+              "previous_report_date": {"type": ["string", "null"]},
+              "latest_total_shares_100m": {"type": ["number", "null"]},
+              "latest_net_assets_100m_cny": {"type": ["number", "null"]},
+              "latest_net_flow_100m_shares": {"type": ["number", "null"]},
+              "total_share_change_pct": {"type": ["number", "null"]},
+              "net_asset_change_pct": {"type": ["number", "null"]},
+              "status": {"type": "string"}
+            },
+            "additionalProperties": false
+          },
+          "data_gap": {"type": "array", "items": {"type": "string"}},
+          "quality_status": {"enum": ["available", "degraded", "data_gap"]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "quality_status": {"enum": ["available", "degraded", "data_gap"]},
+    "data_gap": {"type": "array", "items": {"type": "string"}},
+    "provider_errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["stage", "error_type"],
+        "properties": {
+          "stage": {"type": "string"},
+          "error_type": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "retrieved_at": {"type": "string"}
+  },
+  "$defs": {
+    "disclosedSecurityHolding": {
+      "type": "object",
+      "required": ["rank", "code", "name", "security_type"],
+      "properties": {
+        "rank": {"type": "integer", "minimum": 1},
+        "code": {"type": "string"},
+        "name": {"type": "string"},
+        "security_type": {"type": "string"},
+        "weight_pct": {"type": ["number", "null"]}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

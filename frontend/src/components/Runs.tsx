@@ -94,7 +94,7 @@ export function Runs({ onOpenRun, onResearch }: RunsProps) {
       ) : <section className="active-run-card active-run-card--empty"><CheckCircle2 size={20} /><div><h2>当前没有活动运行</h2><p>后端历史中没有 received/running/waiting 状态。</p></div></section>}
 
       <section className="runs-stat-grid">
-        <article><span>已加载运行</span><strong>{items.length}</strong><small>GET /runs?limit=50</small></article>
+        <article><span>已加载运行</span><strong>{items.length}</strong><small>已逐页载入全部运行</small></article>
         <article><span>已完成</span><strong>{completed}</strong><small>{items.length ? `${((completed / items.length) * 100).toFixed(1)}%` : '—'} 完成率</small></article>
         <article><span>运行中</span><strong>{items.filter((run) => isActiveStatus(run.status)).length}</strong><small>自动每 2 秒刷新详情</small></article>
         <article><span>失败 / 超时</span><strong>{failed}</strong><small>保留原始领域状态</small></article>

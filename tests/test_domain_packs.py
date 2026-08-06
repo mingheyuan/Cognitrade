@@ -71,6 +71,7 @@ class DomainPackTests(unittest.TestCase):
             {
                 "market_snapshot_skill",
                 "fundamental_snapshot_skill",
+                "fund_snapshot_skill",
                 "notice_snapshot_skill",
                 "sector_snapshot_skill",
                 "lhb_snapshot_skill",

@@ -1,13 +1,129 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "criterion": {
+      "type": "object",
+      "required": ["id", "label"],
+      "properties": {
+        "id": {"type": "string"},
+        "label": {"type": "string"},
+        "status": {"type": "string"},
+        "source_field": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "candidate_methodology": {
+      "type": "object",
+      "required": ["screen_style", "criteria", "evaluated_criterion_count", "passed_criterion_count", "pass_rate", "data_gaps"],
+      "properties": {
+        "screen_style": {"type": "string"},
+        "criteria": {"type": "array", "items": {"$ref": "#/$defs/criterion"}},
+        "evaluated_criterion_count": {"type": "integer"},
+        "passed_criterion_count": {"type": "integer"},
+        "pass_rate": {"type": ["number", "null"]},
+        "data_gaps": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "candidate": {
+      "type": "object",
+      "required": [
+        "symbol", "name", "latest_price", "latest_pct_change", "latest_amount", "notice_count",
+        "has_financial_abstract", "sector", "score", "score_breakdown", "missing_evidence",
+        "degraded_sources", "deep_checked", "enrichment_requested", "evidence_snapshot_types",
+        "why_it_made_the_list", "main_risk", "methodology", "rank", "candidate_tier"
+      ],
+      "properties": {
+        "symbol": {"type": "string"},
+        "name": {"type": "string"},
+        "latest_price": {"type": ["number", "null"]},
+        "latest_pct_change": {"type": ["number", "null"]},
+        "latest_amount": {"type": ["number", "null"]},
+        "notice_count": {"type": "integer"},
+        "has_financial_abstract": {"type": "boolean"},
+        "sector": {"type": "string"},
+        "score": {"type": "number"},
+        "score_breakdown": {
+          "type": "object",
+          "required": ["liquidity", "momentum", "fundamental", "notice", "enrichment_coverage", "evidence_penalty"],
+          "properties": {
+            "liquidity": {"type": "number"},
+            "momentum": {"type": "number"},
+            "fundamental": {"type": "number"},
+            "notice": {"type": "number"},
+            "enrichment_coverage": {"type": "number"},
+            "evidence_penalty": {"type": "number"}
+          },
+          "additionalProperties": false
+        },
+        "missing_evidence": {"type": "array", "items": {"type": "string"}},
+        "degraded_sources": {"type": "array", "items": {"type": "string"}},
+        "deep_checked": {"type": "boolean"},
+        "enrichment_requested": {"type": "boolean"},
+        "evidence_snapshot_types": {"type": "array", "items": {"type": "string"}},
+        "why_it_made_the_list": {"type": "string"},
+        "main_risk": {"type": "string"},
+        "methodology": {"$ref": "#/$defs/candidate_methodology"},
+        "rank": {"type": "integer"},
+        "candidate_tier": {"type": "string", "enum": ["core", "watchlist"]}
+      },
+      "additionalProperties": false
+    }
+  },
   "type": "object",
-  "required": ["screened_candidates", "watchlist_candidates", "enrichment_targets", "scorecard", "screening_notes"],
+  "required": ["screened_candidates", "watchlist_candidates", "enrichment_targets", "scorecard", "screening_notes", "methodology"],
   "properties": {
-    "screened_candidates": {"type": "array"},
-    "watchlist_candidates": {"type": "array"},
-    "enrichment_targets": {"type": "array"},
-    "scorecard": {"type": "object"},
-    "screening_notes": {"type": "array"},
-    "methodology": {"type": "object"}
-  }
+    "screened_candidates": {"type": "array", "items": {"$ref": "#/$defs/candidate"}},
+    "watchlist_candidates": {"type": "array", "items": {"$ref": "#/$defs/candidate"}},
+    "enrichment_targets": {"type": "array", "items": {"type": "string"}},
+    "scorecard": {
+      "type": "object",
+      "required": [
+        "investment_cycle", "investment_cycle_assumption", "candidate_count", "eligible_candidate_count",
+        "top_candidate_count", "watchlist_candidate_count", "deep_checked_count",
+        "watchlist_deep_checked_count", "enrichment_target_count", "candidate_universe_source",
+        "requested_snapshot_types", "collected_snapshot_types", "preferred_methodology",
+        "screening_strategy", "summary"
+      ],
+      "properties": {
+        "investment_cycle": {"type": "string"},
+        "investment_cycle_assumption": {"type": "string"},
+        "candidate_count": {"type": "integer"},
+        "eligible_candidate_count": {"type": "integer"},
+        "top_candidate_count": {"type": "integer"},
+        "watchlist_candidate_count": {"type": "integer"},
+        "deep_checked_count": {"type": "integer"},
+        "watchlist_deep_checked_count": {"type": "integer"},
+        "enrichment_target_count": {"type": "integer"},
+        "candidate_universe_source": {"type": ["string", "null"]},
+        "requested_snapshot_types": {"type": "array", "items": {"type": "string"}},
+        "collected_snapshot_types": {"type": "array", "items": {"type": "string"}},
+        "preferred_methodology": {"type": "string"},
+        "screening_strategy": {
+          "type": "object",
+          "required": ["methodology_source", "investment_cycle", "screen_style"],
+          "properties": {
+            "methodology_source": {"type": "string"},
+            "investment_cycle": {"type": "string"},
+            "screen_style": {"type": "string"}
+          },
+          "additionalProperties": false
+        },
+        "summary": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "screening_notes": {"type": "array", "items": {"type": "string"}},
+    "methodology": {
+      "type": "object",
+      "required": ["screen_style", "requested_screen_style", "criteria"],
+      "properties": {
+        "screen_style": {"type": "string"},
+        "requested_screen_style": {"type": "string"},
+        "criteria": {"type": "array", "items": {"$ref": "#/$defs/criterion"}}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
 }

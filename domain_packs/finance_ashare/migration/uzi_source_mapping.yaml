@@ -1,25 +1,27 @@
 schema_version: "2"
 source:
   repository: https://github.com/wbh604/UZI-Skill
-  local_reference: D:\Cognitrade\_tmp_uzi_skill
-  commit: 775c76101e8890492d21c2e2827692456fcddb58
-  methodology_version: 3.9.1
+  audit_reference: pinned_commit_only_not_required_at_runtime
+  commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
+  methodology_version: 3.9.2
   version_file: .claude-plugin/plugin.json
-  version_file_sha256: 3D7BDA4C6E82A7B6038A839FC92F767A8A946423D12B635C1451C92AA7ED5532
+  version_file_sha256: 073F688721698FC4BAD5A2E5E0B93FB95661BA6DB2067DB548D8132A67D99B70
   license: MIT
   license_file: LICENSE
-  license_sha256: 28D4522719947F92BCA76070FEC569FF5CFD5FB2D11B9AE0E517C6FCBB5D4DF9
+  license_sha256: 78BEBB5232741327C31B0DA4F5BBD570DC59AB3C3230582A4D1B4650238A7D58
   replay_fixtures:
     - tests/fixtures/uzi_source_snapshot_replay.json
     - tests/fixtures/uzi_finance_snapshot_replay.json
     - tests/fixtures/uzi_methodology_baseline.json
+    - tests/fixtures/uzi_tier1_baseline.json
   replay_fixture_sha256:
-    tests/fixtures/uzi_source_snapshot_replay.json: F40C763A44D1661F4B29F9D03FE128587812D5F9F1CAF76E48E9873F76D908B2
-    tests/fixtures/uzi_finance_snapshot_replay.json: 37C80DEC0EE4171794DFEAD614DA06290670DB3BC2996F821BF1608A0D29B091
-    tests/fixtures/uzi_methodology_baseline.json: 147C235E64B4B8277035F60233D392C6418F28D528DDEBE46D27F02D39F54164
+    tests/fixtures/uzi_source_snapshot_replay.json: E4352EA11CBF0469D331F6DACFF333441C9CD269EBE3EBA479A2691F0A727F9A
+    tests/fixtures/uzi_finance_snapshot_replay.json: E81ABE9C4AABB39BE79D73561D51760BAA16EA72D52CA876B386A23E97428735
+    tests/fixtures/uzi_methodology_baseline.json: E7C3CACBF80178DA5583099EFC550A2AD8BFF41FFAD34A37A6D2396E268D2D89
+    tests/fixtures/uzi_tier1_baseline.json: 898C1E49E70FAE206C72E90471C4A81286C844E8D8A7F27D419442E872B8AC2B
 
 source_defaults: &source_defaults
-  source_commit: 775c76101e8890492d21c2e2827692456fcddb58
+  source_commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
   target_artifact_type: snapshot
   quality_policy:
     provider_error: data_gap
@@ -185,10 +187,15 @@ fetchers:
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_contests.py
     target_skill: uzi_contests_snapshot_skill
-    provider: finance_pack.contests
+    provider: xueqiu.authenticated_http
     field_mapping: {snapshot_type: contests, facts: facts.contests}
-    migration_status: pack_native_with_provider_gap
-    result_equivalence: not_equivalent
+    migration_status: pack_native
+    result_equivalence: semantic
+    sensitive_source_policy:
+      global_switch: COGNITRADE_SENSITIVE_SOURCES_ENABLED
+      allowlist: COGNITRADE_SENSITIVE_SOURCE_ALLOWLIST
+      credential: COGNITRADE_XUEQIU_COOKIE
+      default: disabled
   - source_id: fund_holders
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_fund_holders.py
@@ -213,15 +220,15 @@ profiles:
     methodology_capabilities: [finance.uzi.valuation.evaluate, finance.uzi.panel.review, finance.uzi.risk.scan]
   medium:
     source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests]
-    panel_seats: 51
+    panel_seats: 66
   deep:
     source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests]
-    panel_seats: 51
+    panel_seats: 66
 
 panel:
   source_path: domain_packs/finance_ashare/subagents/uzi_panel_registry.py
-  source_commit: 775c76101e8890492d21c2e2827692456fcddb58
-  registry_version: 3.9.1-adapted
+  source_commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
+  registry_version: 3.9.2-adapted
   provider: finance_pack.panel_registry
   target_artifact_type: investor_panel_review
   field_mapping: {id: id, name: name, group: group, fields: fields}
@@ -232,11 +239,11 @@ panel:
   migration_status: pack_native
   result_equivalence: not_equivalent
   baseline_fixture: tests/fixtures/uzi_source_snapshot_replay.json
-  profile_seats: {lite: 10, medium: 51, deep: 51}
+  profile_seats: {lite: 10, medium: 66, deep: 66}
   member_ids: [buffett, graham, fisher, munger, templeton, klarman, lynch, oneill, thiel, wood, andreessen, gurley, naval, gerstner, chamath, soros, dalio, marks, druck, robertson, burry, chanos, livermore, minervini, darvas, gann, duan, zhangkun, zhushaoxing, xiezhiyu, fengliu, dengxiaofeng, zhang_lei, zhang_mz, sun_ge, zhao_lg, fs_wyj, yangjia, chen_xq, hu_jl, fang_xx, zuoshou, xiao_ey, jiao_yy, mao_lb, xiao_xian, lasa, chengdu, sunan, ningbo_st, liuyi_zl, liu_sh, gu_bl, bj_cj, wang_zr, xin_dd, ghzw, simons, thorp, shaw, asness, jensen_huang, musk, altman, saylor, serenity]
 
 derived_defaults: &derived_defaults
-  source_commit: 775c76101e8890492d21c2e2827692456fcddb58
+  source_commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
   provider: finance_pack.artifact_board
   quality_policy:
     missing_inputs: data_gap
@@ -291,40 +298,154 @@ derived_methods:
     baseline_fixture: tests/fixtures/uzi_source_snapshot_replay.json
   - source_id: three_statement
     <<: *derived_defaults
-    source_path: domain_packs/finance_ashare/subagents/uzi_advanced_methodology.py
-    target_capability: finance.uzi.institutional.evaluate
-    target_artifact_type: institutional_analysis
-    field_mapping: {fundamental: facts.financial_abstract}
-    migration_status: pack_native_with_provider_gap
-    result_equivalence: not_equivalent
+    source_path: skills/deep-analysis/scripts/lib/fin_models.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_method_products.py
+    target_capability: finance.uzi.method.three_statement
+    target_artifact_type: three_statement_model
+    field_mapping: {fundamental: facts.financial_abstract, assumptions: request.method_assumptions.three_statement}
+    migration_status: pack_native
+    result_equivalence: semantic
     baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
   - source_id: lbo
     <<: *derived_defaults
-    source_path: domain_packs/finance_ashare/subagents/uzi_advanced_methodology.py
-    target_capability: finance.uzi.institutional.evaluate
-    target_artifact_type: institutional_analysis
-    field_mapping: {fundamental: facts.financial_abstract.ebitda}
-    migration_status: pack_native_with_provider_gap
-    result_equivalence: not_equivalent
+    source_path: skills/deep-analysis/scripts/lib/fin_models.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_method_products.py
+    target_capability: finance.uzi.method.quick_lbo
+    target_artifact_type: quick_lbo
+    field_mapping: {fundamental: facts.financial_abstract.ebitda, assumptions: request.method_assumptions.quick_lbo}
+    migration_status: pack_native
+    result_equivalence: semantic
     baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
   - source_id: ma_accretion
     <<: *derived_defaults
-    source_path: domain_packs/finance_ashare/subagents/uzi_advanced_methodology.py
-    target_capability: finance.uzi.institutional.evaluate
-    target_artifact_type: institutional_analysis
-    field_mapping: {fundamental: facts.financial_abstract.eps}
-    migration_status: pack_native_with_provider_gap
-    result_equivalence: not_equivalent
+    source_path: skills/deep-analysis/scripts/lib/fin_models.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_method_products.py
+    target_capability: finance.uzi.method.accretion_dilution
+    target_artifact_type: accretion_dilution
+    field_mapping: {fundamental: facts.financial_abstract, assumptions: request.method_assumptions.accretion_dilution}
+    migration_status: pack_native
+    result_equivalence: semantic
     baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
   - source_id: segmental
     <<: *derived_defaults
-    source_path: domain_packs/finance_ashare/subagents/uzi_advanced_methodology.py
-    target_capability: finance.uzi.institutional.evaluate
-    target_artifact_type: institutional_analysis
+    source_path: skills/deep-analysis/scripts/lib/segmental_model.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_method_products.py
+    target_capability: finance.uzi.method.segmental
+    target_artifact_type: segmental_model
     field_mapping: {fundamental: facts.financial_abstract.segments}
-    migration_status: pack_native_with_provider_gap
-    result_equivalence: not_equivalent
+    migration_status: pack_native
+    result_equivalence: semantic
     baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: initiation_report
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/research_workflow.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_method_products.py
+    target_capability: finance.uzi.method.initiation_report
+    target_artifact_type: initiation_report
+    field_mapping: {snapshots: artifact_board.snapshot_refs, valuation: artifact_board.valuation_model}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: earnings_review
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/research_workflow.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_method_products.py
+    target_capability: finance.uzi.method.earnings_review
+    target_artifact_type: earnings_review
+    field_mapping: {fundamental: facts.financial_abstract, consensus: facts.research}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: catalyst_calendar
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/research_workflow.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_method_products.py
+    target_capability: finance.uzi.method.catalyst_calendar
+    target_artifact_type: catalyst_calendar
+    field_mapping: {events: facts.events}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: thesis_tracker
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/research_workflow.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_method_products.py
+    target_capability: finance.uzi.method.thesis_tracker
+    target_artifact_type: thesis_tracker
+    field_mapping: {market: facts.market_overview, fundamental: facts.financial_abstract, valuation: artifact_board.valuation_model}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: morning_note
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/research_workflow.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_method_products.py
+    target_capability: finance.uzi.method.morning_note
+    target_artifact_type: morning_note
+    field_mapping: {market: facts.market_overview, capital_flow: facts, sentiment: facts, events: facts}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: ic_memo
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/deep_analysis_methods.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_method_products.py
+    target_capability: finance.uzi.method.ic_memo
+    target_artifact_type: ic_memo
+    field_mapping: {snapshots: artifact_board.snapshot_refs, valuation: artifact_board.valuation_model, risk: artifact_board.risk_scan}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: porter_bcg
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/deep_analysis_methods.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_method_products.py
+    target_capability: finance.uzi.method.porter_bcg
+    target_artifact_type: porter_bcg
+    field_mapping: {moat: facts, industry: facts, peers: facts, chain: facts}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: dd_checklist
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/deep_analysis_methods.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_method_products.py
+    target_capability: finance.uzi.method.dd_checklist
+    target_artifact_type: dd_checklist
+    field_mapping: {snapshots: artifact_board.snapshot_refs}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: unit_economics
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/deep_analysis_methods.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_method_products.py
+    target_capability: finance.uzi.method.unit_economics
+    target_artifact_type: unit_economics
+    field_mapping: {fundamental: facts.financial_abstract}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: value_creation_plan
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/deep_analysis_methods.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_method_products.py
+    target_capability: finance.uzi.method.value_creation_plan
+    target_artifact_type: value_creation_plan
+    field_mapping: {fundamental: facts.financial_abstract, levers: request.method_assumptions.value_creation_plan}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: portfolio_rebalance
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/deep_analysis_methods.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py
+    target_capability: finance.uzi.portfolio.rebalance
+    target_artifact_type: portfolio_rebalance
+    field_mapping: {holdings: request.portfolio_holdings, targets: request.asset_class_targets}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_tier1_baseline.json
   - source_id: workflow
     <<: *derived_defaults
     source_path: domain_packs/finance_ashare/subagents/uzi_advanced_methodology.py
@@ -361,3 +482,53 @@ derived_methods:
     migration_status: pack_native
     result_equivalence: not_equivalent
     baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
+  - source_id: ai_readiness
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/tier1/ai_readiness.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py
+    target_capability: finance.uzi.tier1.ai_readiness
+    target_artifact_type: ai_readiness
+    field_mapping: {chain: facts, industry: facts, events: facts, moat: facts}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_tier1_baseline.json
+  - source_id: earnings_preview
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/tier1/earnings_preview.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py
+    target_capability: finance.uzi.tier1.earnings_preview
+    target_artifact_type: earnings_preview
+    field_mapping: {fundamental: facts.financial_abstract, research: facts, events: facts}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_tier1_baseline.json
+  - source_id: model_update
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/tier1/model_update.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py
+    target_capability: finance.uzi.tier1.model_update
+    target_artifact_type: model_update
+    field_mapping: {updates: request.model_updates, baseline: facts.financial_abstract, valuation: artifact_board.valuation_model}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_tier1_baseline.json
+  - source_id: returns_attribution
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/tier1/returns_attrib.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py
+    target_capability: finance.uzi.tier1.returns_attribution
+    target_artifact_type: returns_attribution
+    field_mapping: {holdings: request.portfolio_holdings, benchmark: request.benchmark_return}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_tier1_baseline.json
+  - source_id: holding_rebalance
+    <<: *derived_defaults
+    source_path: skills/deep-analysis/scripts/lib/tier1/rebalance.py
+    target_source_path: domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py
+    target_capability: finance.uzi.tier1.holding_rebalance
+    target_artifact_type: holding_rebalance
+    field_mapping: {holdings: request.portfolio_holdings, targets: request.rebalance_targets, fees: request.fee_model}
+    migration_status: pack_native
+    result_equivalence: semantic
+    baseline_fixture: tests/fixtures/uzi_tier1_baseline.json

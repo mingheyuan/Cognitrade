@@ -1,18 +1,97 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "snapshot_source": {
+      "type": "object",
+      "properties": {
+        "skill": {"type": "string"},
+        "vendor": {"type": "string"},
+        "from_cache": {"type": "boolean"},
+        "provider_id": {"type": ["string", "null"]},
+        "source_id": {"type": ["string", "null"]},
+        "chain_position": {"type": ["integer", "null"]},
+        "dim": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "finding": {
+      "type": "object",
+      "properties": {
+        "claim": {"type": "string"},
+        "artifact_id": {"type": "string"},
+        "artifact_type": {"type": "string"},
+        "summary": {"type": "string"},
+        "verdict": {"type": "string"},
+        "evidence_index": {"type": "integer"},
+        "snapshot_type": {"type": "string"},
+        "scope": {"type": "string"},
+        "symbol": {"type": ["string", "null"]},
+        "sector": {"type": ["string", "null"]},
+        "theme": {"type": ["string", "null"]},
+        "query": {"type": ["string", "null"]},
+        "snapshot_date": {"type": ["string", "null"]},
+        "data_period": {"type": ["string", "null"]},
+        "retrieved_at": {"type": ["string", "null"]},
+        "created_at": {"type": ["string", "null"]},
+        "quality_status": {"type": "string"},
+        "facts": {"type": "object", "x-business-extensible": true},
+        "source": {"$ref": "#/$defs/snapshot_source"},
+        "primary_source": {"anyOf": [{"$ref": "#/$defs/snapshot_source"}, {"type": "null"}]},
+        "fallback_sources": {"type": "array", "items": {"$ref": "#/$defs/snapshot_source"}},
+        "field_sources": {"type": "object", "additionalProperties": {"type": "string"}, "x-business-extensible": true},
+        "fallback_applied": {"type": "boolean"},
+        "missing_fields": {"type": "array", "items": {"type": "string"}},
+        "source_confidence": {"type": "string"},
+        "source_trace": {"type": "array", "items": {"type": "object", "x-business-extensible": true}},
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {"type": "string"},
+              "provider": {"type": "string"},
+              "id": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "degraded": {"type": "boolean"},
+        "degrade_reason": {"type": ["string", "null"]},
+        "degrade_reasons": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    }
+  },
   "type": "object",
-  "required": ["verdict", "overall_verdict", "findings", "strengths", "weaknesses", "follow_up"],
+  "required": [
+    "verdict", "overall_verdict", "findings", "strengths", "weaknesses", "follow_up",
+    "review_target_run_id", "review_target_artifact_ids", "review_target_found", "target_thesis", "evidence_comparison"
+  ],
   "properties": {
     "verdict": {"type": "string"},
     "overall_verdict": {"type": "string"},
-    "findings": {"type": "array"},
-    "strengths": {"type": "array"},
-    "weaknesses": {"type": "array"},
-    "follow_up": {"type": "array"},
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "strengths": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "weaknesses": {
+      "type": "array",
+      "items": {"anyOf": [{"type": "string"}, {"$ref": "#/$defs/finding"}]}
+    },
+    "follow_up": {"type": "array", "items": {"type": "string"}},
     "review_target_run_id": {"type": ["string", "null"]},
-    "review_target_artifact_ids": {"type": "array"},
+    "review_target_artifact_ids": {"type": "array", "items": {"type": "string"}},
     "review_target_found": {"type": "boolean"},
-    "target_thesis": {"type": "array"},
-    "evidence_comparison": {"type": "object"}
-  }
+    "target_thesis": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "evidence_comparison": {
+      "type": "object",
+      "required": ["target_artifact_count", "fresh_evidence_count", "fresh_snapshot_types", "fresh_symbols"],
+      "properties": {
+        "target_artifact_count": {"type": "integer"},
+        "fresh_evidence_count": {"type": "integer"},
+        "fresh_snapshot_types": {"type": "array", "items": {"type": "string"}},
+        "fresh_symbols": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
 }

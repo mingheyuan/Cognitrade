@@ -255,13 +255,24 @@ function eventId(event: RunEvent, index: number): string {
   return asString(event.event_id) || `${event.created_at || ''}:${event.event_type || ''}:${event.node_id || ''}:${index}`
 }
 
+function safeOperationalMessage(value: unknown): string {
+  const message = asString(value)
+  if (!message) return ''
+  if (/(traceback|stack trace|internalservererror|llmprovidererror|remote.?disconnected|connection aborted|socket|econn|errno|httpx|requests\.|urllib|ssl|tcp)/i.test(message)) {
+    const status = message.match(/(?:error code|status(?: code)?)\D{0,8}(\d{3})/i)?.[1]
+    return `模型或外部数据服务暂时不可用${status ? `（HTTP ${status}）` : ''}，详细诊断已保留在服务端日志中。`
+  }
+  return message
+}
+
 function eventSummary(event: RunEvent): string {
   const eventType = asString(event.event_type)
   const turn = asNumber(event.turn)
   const toolName = asString(event.tool_name || event.tool)
   const status = asString(event.status)
   const decision = asRecord(event.decision)
-  const reason = asString(event.message || event.reason || decision.reason)
+  const reason = safeOperationalMessage(event.message || event.reason || decision.reason)
+  const error = safeOperationalMessage(event.error)
   if (eventType === 'assistant_message_ready') return 'Main Agent 已生成最终交付产物。'
   if (eventType === 'assistant_message_status' && asString(event.delivery_status) === 'synthesis_unavailable') {
     return '研究产物已保存，但 Main Agent 最终答复暂不可用。'
@@ -282,6 +293,14 @@ function eventSummary(event: RunEvent): string {
       asString(event.output_summary),
     ].filter(Boolean).join(' ')
   }
+  if (eventType === 'main_agent_model_turn_failed') {
+    return `Main Agent 第 ${turn ?? '?'} 轮模型调用失败${error || reason ? `：${error || reason}` : '。'}`
+  }
+  if (eventType === 'main_agent_failed') return `Main Agent 失败${error || reason ? `：${error || reason}` : '。'}`
+  if (eventType === 'graph_node_failed') return `Subagent ${asString(event.node_id, 'node')} 失败${error || reason ? `：${error || reason}` : '。'}`
+  if (eventType === 'tool_call_rejected' || eventType === 'tool_call_failed') {
+    return `Tool ${toolName || 'call'} ${status || '失败'}${error || reason ? `：${error || reason}` : '。'}`
+  }
   if (reason) return reason
   if (eventType === 'main_agent_started' || eventType === 'main_agent_resumed') {
     return `Main Agent 已${eventType === 'main_agent_resumed' ? '恢复' : '启动'}，当前模式：${asString(event.mode, 'core')}。`
@@ -297,9 +316,6 @@ function eventSummary(event: RunEvent): string {
   if (eventType === 'tool_call_completed') {
     return `Tool ${toolName || 'call'} 已完成${asString(event.output_summary) ? `：${asString(event.output_summary)}` : '。'}`
   }
-  if (eventType === 'tool_call_rejected' || eventType === 'tool_call_failed') {
-    return `Tool ${toolName || 'call'} ${status || '失败'}${asString(event.error) ? `：${asString(event.error)}` : '。'}`
-  }
   if (eventType === 'plan_decision') {
     return `PlanAgent ${asString(decision.action, '继续执行')}：${asString(decision.reason, '已更新执行前沿。')}`
   }
@@ -313,12 +329,7 @@ function eventSummary(event: RunEvent): string {
   }
   if (eventType === 'graph_node_started') return `Subagent ${asString(event.node_id, 'node')} 已开始。`
   if (eventType === 'graph_node_completed') return `Subagent ${asString(event.node_id, 'node')} 已完成。`
-  if (eventType === 'graph_node_failed') return `Subagent ${asString(event.node_id, 'node')} 失败${asString(event.error) ? `：${asString(event.error)}` : '。'}`
   if (eventType === 'main_agent_completed') return 'Main Agent 已完成请求。'
-  if (eventType === 'main_agent_model_turn_failed') {
-    return `Main Agent 第 ${turn ?? '?'} 轮模型调用失败${asString(event.error) ? `：${asString(event.error)}` : '。'}`
-  }
-  if (eventType === 'main_agent_failed') return `Main Agent 失败${asString(event.error) ? `：${asString(event.error)}` : '。'}`
   if (eventType === 'graph_run_finished') return `ExecutionGraph 已完成，状态：${asString(event.status, 'unknown')}。`
   return eventType ? `运行事件：${eventType.replaceAll('_', ' ')}` : ''
 }
@@ -434,11 +445,7 @@ export function activityFromEvents(events: RunEvent[]): AgentActivityItem[] {
       createdAt: asString(event.created_at),
     })
   })
-  if (rows.length <= 100) return rows
-  const planningIds = new Set(
-    rows.filter((row) => row.kind === 'main_agent' || row.kind === 'planner').map((row) => row.id),
-  )
-  return rows.filter((row, index) => planningIds.has(row.id) || index >= rows.length - 80)
+  return rows
 }
 
 export function progressFromEvents(events: RunEvent[]): AgentProgressItem[] {

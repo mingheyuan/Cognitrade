@@ -114,10 +114,10 @@ class UziFinancePackTests(unittest.TestCase):
                 "16_lhb", "17_sentiment", "18_trap", "19_contests", "fund_holders", "similar_stocks",
             },
         )
-        self.assertEqual(mapping["source"]["commit"], "775c76101e8890492d21c2e2827692456fcddb58")
+        self.assertEqual(mapping["source"]["commit"], "fce996c33e70eddce8e375f53cd252b549eb3d7c")
         self.assertEqual(mapping["profiles"]["lite"]["panel_seats"], 10)
-        self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 51)
-        self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 51)
+        self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 66)
+        self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 66)
         self.assertEqual(len(mapping["panel"]["member_ids"]), 66)
         required_mapping_fields = {
             "source_commit",
@@ -298,9 +298,9 @@ class UziFinancePackTests(unittest.TestCase):
             select_profile({"research_profile": "medium"}),
         )
 
-        self.assertEqual(coverage["dimension_count"], 20)
+        self.assertEqual(coverage["dimension_count"], 22)
         self.assertEqual(coverage["derived_dimension_count"], 3)
-        self.assertEqual(coverage["total_dimension_count"], 23)
+        self.assertEqual(coverage["total_dimension_count"], 25)
         rows = {row["dimension_id"]: row for row in coverage["coverage"]["600000"]}
         self.assertEqual(rows["10_valuation"]["status"], "data_gap")
         self.assertEqual(rows["11_governance"]["status"], "data_gap")
@@ -351,7 +351,10 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertEqual(features["total_assets_yi"], 200.0)
         self.assertEqual(features["total_liabilities_yi"], 80.0)
         self.assertEqual(features["cash_yi"], 30.0)
-        self.assertEqual(valuation["status"], "available")
+        self.assertEqual(valuation["status"], "assumption_only")
+        self.assertIn("fcf_approximated_from_revenue_margin", valuation["assumption_flags"])
+        self.assertEqual(features["operating_cash_flow_yi"], 15.0)
+        self.assertIsNone(features["fcf_latest_yi"])
         self.assertNotIn("total_assets_missing", valuation["warnings"])
 
     def test_report_presentation_exposes_bento_dashboard_sections(self) -> None:
@@ -426,7 +429,7 @@ class UziFinancePackTests(unittest.TestCase):
             (Path(__file__).resolve().parents[1] / "domain_packs" / "finance_ashare" / "artifact_schemas" / "report_presentation.json").read_text(encoding="utf-8")
         )
         jsonschema.validate(presentation, schema)
-        self.assertEqual(len(presentation["deep_scan"]), 23)
+        self.assertEqual(len(presentation["deep_scan"]), 25)
         self.assertEqual(len(presentation["panel_insights"]), panel["registered_seat_count"])
         self.assertTrue(presentation["great_divide"]["rounds"])
         self.assertTrue(presentation["institutional_modeling"][0]["methods"])
@@ -595,7 +598,7 @@ class UziFinancePackTests(unittest.TestCase):
             )
         )
         capabilities = {node.capability for node in graph.nodes if node.capability}
-        self.assertIn("finance.uzi.institutional.evaluate", capabilities)
+        self.assertIn("finance.uzi.method.quick_lbo", capabilities)
         self.assertNotIn("finance.uzi.panel.review", capabilities)
         self.assertIn("capability_selections", graph.metadata)
 
@@ -685,9 +688,9 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertTrue(all(vote["is_methodology_perspective"] for vote in panel["votes"]))
         medium_panel = build_panel_review(rows, ["600000"], select_profile({"research_profile": "medium"}))
         deep_panel = build_panel_review(rows, ["600000"], select_profile({"research_profile": "deep"}))
-        self.assertEqual(len(medium_panel["votes"]), 51)
-        self.assertEqual(len(deep_panel["votes"]), 51)
-        self.assertEqual(medium_panel["registered_seat_count"], 51)
+        self.assertEqual(len(medium_panel["votes"]), 66)
+        self.assertEqual(len(deep_panel["votes"]), 66)
+        self.assertEqual(medium_panel["registered_seat_count"], 66)
         self.assertEqual(len(risk["signals"]), 8)
         self.assertIn("external_search_not_claimed", risk["risk_flags"])
 
@@ -794,7 +797,7 @@ class UziFinancePackTests(unittest.TestCase):
                 self.assertEqual(presentation["content"]["profile"], "lite")
                 self.assertTrue(presentation["content"]["source_artifact_ids"])
 
-    def test_medium_agent_os_run_commits_advanced_uzi_artifacts(self) -> None:
+    def test_medium_agent_os_run_uses_independent_safe_default_artifacts(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -828,12 +831,16 @@ class UziFinancePackTests(unittest.TestCase):
                 types = {row["artifact_type"] for row in artifacts.json()["artifacts"]}
                 self.assertTrue(
                     {
-                        "institutional_analysis",
-                        "research_workflow",
+                        "valuation_model",
+                        "investor_panel_review",
+                        "risk_scan",
                         "uzi_dimension_coverage",
                         "research_report",
                         "report_presentation",
                     }.issubset(types)
+                )
+                self.assertTrue(
+                    {"institutional_analysis", "research_workflow", "deep_analysis"}.isdisjoint(types)
                 )
 
 

@@ -1,16 +1,31 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "coverage_item": {
+      "type": "object",
+      "required": ["dimension_id", "label", "source_type", "layer", "status", "source_refs", "data_gap"],
+      "properties": {
+        "dimension_id": {"type": "string"}, "label": {"type": "string"}, "source_type": {"type": "string"},
+        "layer": {"type": "string"}, "status": {"type": "string"},
+        "source_refs": {"type": "array", "items": {"type": "object", "x-business-extensible": true}},
+        "data_gap": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    }
+  },
   "type": "object",
   "required": ["methodology_version", "profile", "dimension_count", "coverage", "confidence", "risk_flags"],
   "properties": {
-    "methodology_version": {"type": "string"},
-    "profile": {"type": "string"},
-    "dimension_count": {"type": "integer", "minimum": 1},
-    "coverage": {"type": "object"},
-    "available_count": {"type": "integer", "minimum": 0},
-    "missing_count": {"type": "integer", "minimum": 0},
-    "data_gap": {"type": "array"},
+    "methodology_version": {"type": "string"}, "profile": {"type": "string"},
+    "dimension_count": {"type": "integer", "minimum": 1}, "raw_dimension_count": {"type": "integer", "minimum": 0},
+    "derived_dimension_count": {"type": "integer", "minimum": 0}, "total_dimension_count": {"type": "integer", "minimum": 0},
+    "coverage": {"type": "object", "additionalProperties": {"type": "array", "items": {"$ref": "#/$defs/coverage_item"}}, "x-business-extensible": true},
+    "available_count": {"type": "integer", "minimum": 0}, "missing_count": {"type": "integer", "minimum": 0},
+    "derived_available_count": {"type": "integer", "minimum": 0}, "derived_missing_count": {"type": "integer", "minimum": 0},
+    "data_gap": {"type": "array", "items": {"type": "string"}},
     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-    "risk_flags": {"type": "array", "items": {"type": "string"}}
-  }
+    "risk_flags": {"type": "array", "items": {"type": "string"}},
+    "quality_status": {"type": "string"}, "method_input_contract": {"type": "object", "x-business-extensible": true}
+  },
+  "additionalProperties": false
 }

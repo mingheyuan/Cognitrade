@@ -1,14 +1,40 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["methodology_version", "profile", "results", "confidence", "risk_flags"],
+  "required": [
+    "methodology_version",
+    "profile",
+    "results",
+    "confidence",
+    "risk_flags"
+  ],
   "properties": {
-    "methodology_version": {"type": "string"},
-    "profile": {"type": "string"},
-    "methods": {"type": "array"},
-    "results": {"type": "array"},
-    "data_gap": {"type": "array"},
-    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-    "risk_flags": {"type": "array", "items": {"type": "string"}}
-  }
+    "methodology_version": {
+      "type": "string"
+    },
+    "profile": {
+      "type": "string"
+    },
+    "methods": {
+      "type": "array"
+    },
+    "results": {
+      "type": "array"
+    },
+    "data_gap": {
+      "type": "array"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "risk_flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
 }

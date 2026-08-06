@@ -605,7 +605,24 @@ class AgentOS:
         )
         input_payload = dict(request.slots.get("user_request") or {})
         input_payload.setdefault("query", request.user_query)
-        for key in ("symbols", "sector", "source_records", "snapshots", "source_refs"):
+        for key in (
+            "symbols",
+            "fund_codes",
+            "fund_category",
+            "portfolio_holdings",
+            "benchmark_return",
+            "rebalance_targets",
+            "asset_class_targets",
+            "drift_threshold",
+            "fee_model",
+            "requested_methods",
+            "model_updates",
+            "method_assumptions",
+            "sector",
+            "source_records",
+            "snapshots",
+            "source_refs",
+        ):
             if key in request.slots and key not in input_payload:
                 input_payload[key] = request.slots[key]
         write_json(

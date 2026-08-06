@@ -11,6 +11,7 @@ import {
   TrendingDown,
   TrendingUp,
 } from 'lucide-react'
+import { businessFieldLabel } from '../artifacts/labels'
 import { asNumber, asRecord, asString, asStringList } from '../live-data'
 import type { ResearchReport } from '../research-contracts'
 
@@ -116,7 +117,7 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
   const workflow = asRecord(advanced.research_workflow)
   const deep = asRecord(advanced.deep_analysis)
   const dimensions = Array.isArray(presentation.radar)
-    ? presentation.radar.map(asRecord).slice(0, 12)
+    ? presentation.radar.map(asRecord)
     : []
   const deepScan = Array.isArray(presentation.deep_scan)
     ? presentation.deep_scan.map(asRecord)
@@ -138,9 +139,7 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
     : Array.isArray(dashboard.metrics)
       ? dashboard.metrics
       : []
-  const metrics = metricValues
-    .map((metric) => asRecord(metric))
-    .slice(0, 6)
+  const metrics = metricValues.map((metric) => asRecord(metric))
   const votes = Array.isArray(panel.votes) ? panel.votes.map(asRecord) : []
   const riskValues = Array.isArray(presentation.risk_list) && presentation.risk_list.length
     ? presentation.risk_list
@@ -182,7 +181,7 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
             </span>
           </div>
           <div className="research-presentation__chip-row">
-            {metrics.slice(0, 3).map((metric, index) => (
+            {metrics.map((metric, index) => (
               <span key={asString(metric.key, String(index))}>
                 <b>{asString(metric.label, '指标')}</b>{numberText(metric.value)}{asString(metric.unit)}
               </span>
@@ -229,11 +228,11 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
         <div className="research-presentation__signal-grid">
           <article>
             <span><AlertTriangle size={14} /> 关键风险</span>
-            <p>{risks.slice(0, 2).map((risk, index) => `${index + 1}. ${asString(risk.finding || risk.recommendation, '未返回风险说明')}`).join(' ') || '后端未返回风险清单。'}</p>
+            <p>{risks.map((risk, index) => `${index + 1}. ${asString(risk.finding || risk.recommendation, '未返回风险说明')}`).join(' ') || '后端未返回风险清单。'}</p>
           </article>
           <article>
             <span><Sparkles size={14} /> 催化剂与事件</span>
-            <p>{catalysts.length ? catalysts.slice(0, 3).map((event) => asString(event.title, '未命名事件')).join(' · ') : '暂无已结构化的催化剂日历。'}</p>
+            <p>{catalysts.length ? catalysts.map((event) => asString(event.title, '未命名事件')).join(' · ') : '暂无已结构化的催化剂日历。'}</p>
           </article>
         </div>
       </section>
@@ -271,7 +270,7 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
         </div>
         {votes.length ? (
           <div className="research-presentation__vote-grid">
-            {votes.slice(0, 10).map((vote, index) => {
+            {votes.map((vote, index) => {
               const signal = asString(vote.signal, 'neutral')
               const voteScore = asNumber(vote.score)
               return (
@@ -362,19 +361,19 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
             label="机构估值模型"
             status={statusText(institutional.status)}
             summary={asString(institutional.summary, '机构模型尚未返回摘要')}
-            detail={asStringList(institutional.data_gap).slice(0, 3).join(' · ') || '方法输出已写入 ArtifactBoard'}
+            detail={asStringList(institutional.data_gap).join(' · ') || '方法输出已写入 ArtifactBoard'}
           />
           <AdvancedSummary
             label="研究工作流"
             status={statusText(workflow.status)}
             summary={asString(workflow.summary, '工作流尚未返回摘要')}
-            detail={asStringList(workflow.risk_flags).slice(0, 3).join(' · ') || '覆盖业绩、催化剂和 Thesis'}
+            detail={asStringList(workflow.risk_flags).join(' · ') || '覆盖业绩、催化剂和 Thesis'}
           />
           <AdvancedSummary
             label="Deep 交叉检验"
             status={statusText(deep.status)}
             summary={asString(deep.summary, 'Deep 分析尚未返回摘要')}
-            detail={asStringList(deep.risk_flags).slice(0, 3).join(' · ') || '不生成未验证的仓位建议'}
+            detail={asStringList(deep.risk_flags).join(' · ') || '不生成未验证的仓位建议'}
           />
           <article className="research-presentation-advanced-card research-presentation-advanced-card--valuation">
             <div className="research-presentation-advanced-card__topline"><span><LineChart size={13} />估值参考</span><span>{verdictLabel(statusText(primaryModel.status || verdict))}</span></div>
@@ -404,14 +403,14 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
                     <strong>{verdictLabel(statusText(methodRecord.status))}</strong>
                   </div>
                   <p>{asString(methodRecord.summary, '未返回模型摘要。')}</p>
-                  {Object.keys(assumptions).length > 0 && <small className="research-presentation__method-card__meta">假设：{Object.entries(assumptions).slice(0, 5).map(([key, value]) => `${key}=${Array.isArray(value) ? `[${value.slice(0, 3).join(', ')}${value.length > 3 ? ', …' : ''}]` : String(value)}`).join(' · ')}</small>}
+                  {Object.keys(assumptions).length > 0 && <small className="research-presentation__method-card__meta">假设：{Object.entries(assumptions).map(([key, value]) => `${businessFieldLabel(key)}=${Array.isArray(value) ? value.join('、') : String(value)}`).join(' · ')}</small>}
                   {sensitivity.length > 0 && (
                     <div className="research-presentation__sensitivity-grid" aria-label="估值敏感性矩阵">
-                      {sensitivity.slice(0, 25).map((cell, cellIndex) => <span key={cellIndex}>{numberText(cell.fair_value, 0)}</span>)}
+                      {sensitivity.map((cell, cellIndex) => <span key={cellIndex}>{numberText(cell.fair_value, 0)}</span>)}
                     </div>
                   )}
-                  {asStringList(methodRecord.methodology_log).length > 0 && <small className="research-presentation__method-card__log">{asStringList(methodRecord.methodology_log).slice(0, 2).join(' · ')}</small>}
-                  {asStringList(methodRecord.data_gap).length > 0 && <small className="research-presentation__method-card__gap">缺口：{asStringList(methodRecord.data_gap).slice(0, 3).join(' · ')}</small>}
+                  {asStringList(methodRecord.methodology_log).length > 0 && <small className="research-presentation__method-card__log">{asStringList(methodRecord.methodology_log).join(' · ')}</small>}
+                  {asStringList(methodRecord.data_gap).length > 0 && <small className="research-presentation__method-card__gap">缺口：{asStringList(methodRecord.data_gap).join(' · ')}</small>}
                 </article>
               )
             }))}

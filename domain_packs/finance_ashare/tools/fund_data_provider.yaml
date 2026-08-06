@@ -1,0 +1,28 @@
+name: fund_data_provider
+version: "1"
+side_effect_level: read_only
+description: Collect real Chinese public-fund catalog, ranking, NAV, disclosed holdings, benchmark, manager-tenure and scale/share evidence.
+input_schema:
+  type: object
+  required: [query]
+  properties:
+    query: {type: string}
+    fund_codes: {type: array, items: {type: string}}
+    fund_category: {type: [string, "null"]}
+    candidate_pool_size: {type: integer, minimum: 1, maximum: 20}
+    investment_cycle: {type: string, enum: [short_term, mid_term, long_term]}
+output_schema:
+  type: object
+  required: [fund_codes, funds, quality_status, data_gap, source_refs]
+  properties:
+    fund_codes: {type: array, items: {type: string}}
+    funds: {type: array, items: {type: object}}
+    quality_status: {type: string, enum: [available, degraded, data_gap]}
+    data_gap: {type: array, items: {type: string}}
+    source_refs: {type: array, items: {type: object}}
+permissions: [finance:data:read]
+parallel_safe: false
+max_concurrency: 2
+timeout_seconds: 300
+max_retries: 1
+implementation: tools.fund_data_provider:invoke

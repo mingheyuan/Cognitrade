@@ -8,6 +8,8 @@ const VIEW_PATHS: Record<ViewId, string> = {
   paper: '/paper-trading',
   backtest: '/backtesting',
   screening: '/screening',
+  funds: '/funds',
+  uzi: '/uzi-methods',
   methodology: '/methodology',
   runs: '/runs',
 }

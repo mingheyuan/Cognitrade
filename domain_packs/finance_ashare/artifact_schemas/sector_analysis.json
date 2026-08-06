@@ -1,21 +1,188 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "snapshot_source": {
+      "type": "object",
+      "properties": {
+        "skill": {"type": "string"},
+        "vendor": {"type": "string"},
+        "from_cache": {"type": "boolean"},
+        "provider_id": {"type": ["string", "null"]},
+        "source_id": {"type": ["string", "null"]},
+        "chain_position": {"type": ["integer", "null"]},
+        "dim": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "snapshot": {
+      "type": "object",
+      "required": ["snapshot_type", "facts"],
+      "properties": {
+        "snapshot_type": {"type": "string"},
+        "scope": {"type": "string"},
+        "symbol": {"type": ["string", "null"]},
+        "sector": {"type": ["string", "null"]},
+        "theme": {"type": ["string", "null"]},
+        "query": {"type": ["string", "null"]},
+        "snapshot_date": {"type": ["string", "null"]},
+        "data_period": {"type": ["string", "null"]},
+        "retrieved_at": {"type": ["string", "null"]},
+        "created_at": {"type": ["string", "null"]},
+        "quality_status": {"type": "string"},
+        "facts": {"type": "object", "x-business-extensible": true},
+        "source": {"$ref": "#/$defs/snapshot_source"},
+        "primary_source": {"anyOf": [{"$ref": "#/$defs/snapshot_source"}, {"type": "null"}]},
+        "fallback_sources": {"type": "array", "items": {"$ref": "#/$defs/snapshot_source"}},
+        "field_sources": {"type": "object", "additionalProperties": {"type": "string"}, "x-business-extensible": true},
+        "fallback_applied": {"type": "boolean"},
+        "missing_fields": {"type": "array", "items": {"type": "string"}},
+        "source_confidence": {"type": "string"},
+        "source_trace": {"type": "array", "items": {"type": "object", "x-business-extensible": true}},
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {"type": "string"},
+              "provider": {"type": "string"},
+              "id": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "degraded": {"type": "boolean"},
+        "degrade_reason": {"type": ["string", "null"]},
+        "degrade_reasons": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "constituent": {
+      "type": "object",
+      "x-business-extensible": true
+    },
+    "breadth_constituent": {
+      "type": "object",
+      "properties": {
+        "code": {"type": ["string", "null"]},
+        "name": {"type": ["string", "null"]},
+        "pct_change": {"type": ["number", "null"]},
+        "turnover_rate": {"type": ["number", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "breadth": {
+      "type": "object",
+      "properties": {
+        "sample_size": {"type": "integer"},
+        "up_count": {"type": "integer"},
+        "down_count": {"type": "integer"},
+        "flat_count": {"type": "integer"},
+        "up_ratio": {"type": ["number", "null"]},
+        "down_ratio": {"type": ["number", "null"]},
+        "median_pct_change": {"type": ["number", "null"]},
+        "mean_pct_change": {"type": ["number", "null"]},
+        "average_turnover_rate": {"type": ["number", "null"]},
+        "top3_average_pct_change": {"type": ["number", "null"]},
+        "bottom3_average_pct_change": {"type": ["number", "null"]},
+        "best_constituents": {"type": "array", "items": {"$ref": "#/$defs/breadth_constituent"}},
+        "worst_constituents": {"type": "array", "items": {"$ref": "#/$defs/breadth_constituent"}}
+      },
+      "additionalProperties": false
+    }
+  },
   "type": "object",
-  "required": ["sector", "theme", "findings", "related_snapshots", "risks", "source_count", "analysis_notes"],
+  "required": [
+    "sector", "theme", "findings", "related_snapshots", "risks", "source_count", "analysis_notes",
+    "sector_heatmap", "constituents", "breadth", "relative_strength", "signal_scorecard", "catalysts", "policy_snapshots"
+  ],
   "properties": {
     "sector": {"type": ["string", "null"]},
     "theme": {"type": ["string", "null"]},
-    "findings": {"type": "array"},
-    "related_snapshots": {"type": "array"},
-    "risks": {"type": "array"},
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/snapshot"}},
+    "related_snapshots": {"type": "array", "items": {"$ref": "#/$defs/snapshot"}},
+    "risks": {"type": "array", "items": {"type": "string"}},
     "source_count": {"type": "integer"},
-    "analysis_notes": {"type": "array"},
-    "sector_heatmap": {"type": "array"},
-    "constituents": {"type": "array"},
-    "breadth": {"type": "object"},
-    "relative_strength": {"type": "object"},
-    "signal_scorecard": {"type": "object"},
-    "catalysts": {"type": "object"},
-    "policy_snapshots": {"type": "array"}
-  }
+    "analysis_notes": {"type": "array", "items": {"type": "string"}},
+    "sector_heatmap": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "score", "score_basis", "source_count", "theme"],
+        "properties": {
+          "name": {"type": "string"},
+          "symbol": {"type": "string"},
+          "score": {"type": "number"},
+          "raw_value": {"type": ["number", "null"]},
+          "score_basis": {"type": "string"},
+          "source_count": {"type": "integer"},
+          "related_snapshot_count": {"type": "integer"},
+          "theme": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "constituents": {"type": "array", "items": {"$ref": "#/$defs/constituent"}},
+    "breadth": {"$ref": "#/$defs/breadth"},
+    "relative_strength": {
+      "type": "object",
+      "properties": {
+        "latest_excess_pct_change": {"type": ["number", "null"]},
+        "recent_relative_strength": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["date", "sector_pct_change", "benchmark_pct_change", "excess_pct_change"],
+            "properties": {
+              "date": {"type": "string"},
+              "sector_pct_change": {"type": "number"},
+              "benchmark_pct_change": {"type": "number"},
+              "excess_pct_change": {"type": "number"}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "signal_scorecard": {
+      "type": "object",
+      "properties": {
+        "theme": {"type": "string"},
+        "market_tone": {"type": "string"},
+        "benchmark_view": {"type": "string"},
+        "turnover_state": {"type": "string"},
+        "breadth_state": {"type": "string"},
+        "policy_signal_strength": {"type": "string"},
+        "regulatory_signal_strength": {"type": "string"},
+        "sample_signal_strength": {"type": "string"},
+        "setup_label": {"type": "string"},
+        "headline_counts": {
+          "type": "object",
+          "properties": {
+            "theme_news": {"type": "integer"},
+            "policy_signals": {"type": "integer"},
+            "regulatory_signals": {"type": "integer"},
+            "catalyst_samples": {"type": "integer"}
+          },
+          "additionalProperties": false
+        },
+        "breadth": {"$ref": "#/$defs/breadth"},
+        "summary": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "catalysts": {
+      "type": "object",
+      "required": ["theme_news", "policy_signals", "regulatory_signals", "samples"],
+      "properties": {
+        "theme_news": {"type": "array", "items": {"type": "object", "x-business-extensible": true}},
+        "policy_signals": {"type": "array", "items": {"type": "object", "x-business-extensible": true}},
+        "regulatory_signals": {"type": "array", "items": {"type": "object", "x-business-extensible": true}},
+        "samples": {"type": "array", "items": {"type": "object", "x-business-extensible": true}}
+      },
+      "additionalProperties": false
+    },
+    "policy_snapshots": {"type": "array", "items": {"$ref": "#/$defs/snapshot"}}
+  },
+  "additionalProperties": false
 }

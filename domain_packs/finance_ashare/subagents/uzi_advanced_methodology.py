@@ -37,6 +37,8 @@ UZI_SOURCE_DIMENSIONS: tuple[tuple[str, str, str], ...] = (
     ("17_sentiment", "舆情", "sentiment"),
     ("18_trap", "风险信号", "trap"),
     ("19_contests", "组合与比赛", "contests"),
+    ("fund_holders", "基金持仓", "fund_holders"),
+    ("similar_stocks", "相似股票", "similar_stocks"),
 )
 
 # These are derived Pack products, not additional UZI external dimensions.

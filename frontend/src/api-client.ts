@@ -14,11 +14,13 @@ import type {
 import type {
   BacktestRequest,
   BacktestResult,
-  BacktestSummary,
+  BacktestSummaryPage,
   MarketDataResponse,
   MarketQuote,
   PaperAccount,
   PaperOrder,
+  PaperMatchResult,
+  PaperOrderPage,
   PaperOrderInput,
   PaperPortfolio,
   QuantEngineStatus,
@@ -91,8 +93,21 @@ export class CognitradeApiClient {
     return this.request('/system/status')
   }
 
-  listRuns(limit = 50): Promise<RunHistoryRecord[]> {
-    return this.request(`/runs?limit=${limit}`)
+  listRuns(limit = 50, offset = 0): Promise<RunHistoryRecord[]> {
+    return this.request(`/runs?limit=${limit}&offset=${offset}`)
+  }
+
+  async listAllRuns(): Promise<RunHistoryRecord[]> {
+    const pageSize = 100
+    const rows: RunHistoryRecord[] = []
+    let offset = 0
+    while (true) {
+      const page = await this.listRuns(pageSize, offset)
+      rows.push(...page)
+      if (page.length < pageSize) break
+      offset += page.length
+    }
+    return Array.from(new Map(rows.map((run) => [run.run_id, run])).values())
   }
 
   createRun(payload: ResearchRequest): Promise<ResearchResponse> {
@@ -227,8 +242,8 @@ export class CognitradeApiClient {
     return this.financeRequest('/finance/paper/portfolio')
   }
 
-  listPaperOrders(limit = 50): Promise<{ orders: PaperOrder[] }> {
-    return this.financeRequest(`/finance/paper/orders?limit=${limit}`)
+  listPaperOrders(limit = 50, offset = 0): Promise<PaperOrderPage> {
+    return this.financeRequest(`/finance/paper/orders?limit=${limit}&offset=${offset}`)
   }
 
   placePaperOrder(order: PaperOrderInput): Promise<PaperOrder> {
@@ -242,13 +257,7 @@ export class CognitradeApiClient {
     return this.financeRequest('/finance/paper/engine')
   }
 
-  matchPaperOrders(refresh = true): Promise<{
-    matched: PaperOrder[]
-    unchanged_order_ids: string[]
-    errors: Array<{ order_id: string; error: string }>
-    matched_count: number
-    pending_count: number
-  }> {
+  matchPaperOrders(refresh = true): Promise<PaperMatchResult> {
     return this.financeRequest(`/finance/paper/orders/match?refresh=${refresh}`, {
       method: 'POST',
     })
@@ -264,8 +273,8 @@ export class CognitradeApiClient {
     return this.financeRequest('/finance/backtests/engine')
   }
 
-  listBacktests(limit = 20): Promise<{ results: BacktestSummary[] }> {
-    return this.financeRequest(`/finance/backtests?limit=${limit}`)
+  listBacktests(limit = 20, offset = 0): Promise<BacktestSummaryPage> {
+    return this.financeRequest(`/finance/backtests?limit=${limit}&offset=${offset}`)
   }
 
   runBacktest(request: BacktestRequest): Promise<BacktestResult> {

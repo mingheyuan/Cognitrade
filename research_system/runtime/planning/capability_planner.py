@@ -634,7 +634,7 @@ class CapabilityPlanner:
                 for artifact_type in required_outputs
                 if artifact_type not in {"research_report", "report_presentation"}
             ]
-        if use_profile_defaults:
+        if use_profile_defaults or explicit_method_or_output_request:
             for artifact_type in selected_outputs:
                 if artifact_type not in required_outputs:
                     required_outputs.append(artifact_type)

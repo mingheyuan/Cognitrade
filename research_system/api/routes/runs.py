@@ -147,6 +147,7 @@ async def create_run(
 @router.get("/runs")
 async def list_runs(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
     status: RunStatusFilter | None = None,
     run_service=Depends(get_run_service),
     principal: ApiPrincipal = Depends(require_principal),
@@ -157,7 +158,7 @@ async def list_runs(
     )
     if status is not None:
         rows = [row for row in rows if str(row.get("status") or "") == status]
-    return rows[:limit]
+    return rows[offset:offset + limit]
 
 
 @router.get("/runs/{run_id}")

@@ -22,7 +22,6 @@ import {
   asString,
   activityFromEvents,
   assistantMessageFromDetail,
-  candidatesFromReport,
   evidenceFromReport,
   formatDate,
   hasFinalDelivery,
@@ -36,6 +35,11 @@ import {
   statusLabel,
 } from '../live-data'
 import type { ResearchIntent } from '../research-contracts'
+import { ArtifactArchive } from '../artifacts/ArtifactArchive'
+import { BusinessDataView } from '../artifacts/BusinessDataView'
+import { IntentDeliveryDossier } from '../artifacts/IntentDeliveryDossier'
+import { MethodDeliveryDossier } from '../artifacts/MethodDeliveryDossier'
+import { RunGovernanceDossier } from '../artifacts/RunGovernanceDossier'
 import { ResearchComposer } from './ResearchComposer'
 import { ResearchReportPresentation } from './ResearchReportPresentation'
 
@@ -94,25 +98,6 @@ function localizeSignal(value: string): string {
     'insufficient_peer_signal': '同行样本不足，无法形成有效相对估值',
     resilient: '现金流韧性良好',
     comfortable: '债务承受能力良好',
-  }
-  return labels[value] || value
-}
-
-function localizeUziStatus(value: string): string {
-  const labels: Record<string, string> = {
-    below_proxy_value: '代理价值高于当前价格',
-    above_proxy_value: '代理价值低于当前价格',
-    near_proxy_value: '代理价值接近当前价格',
-    data_gap: '数据不足',
-    bullish: '偏多',
-    bearish: '偏空',
-    neutral: '中性',
-    insufficient_evidence: '证据不足',
-    low_observed: '暂未观察到明显信号',
-    attention: '需要关注',
-    high: '高风险信号',
-    matched: '命中',
-    not_observed: '未观察到',
   }
   return labels[value] || value
 }
@@ -216,25 +201,6 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
   const conclusion = asString(report.conclusion)
   const scorecard = asRecord(report.scorecard || report.screening_scorecard)
   const methodologies = Array.isArray(report.methodologies) ? report.methodologies.map(asRecord) : []
-  const valuationModel = asRecord(report.valuation_model)
-  const valuationModels = Array.isArray(valuationModel.models) ? valuationModel.models.map(asRecord) : []
-  const panelReview = asRecord(report.investor_panel_review)
-  const panelVotes = Array.isArray(panelReview.votes) ? panelReview.votes.map(asRecord) : []
-  const riskScan = asRecord(report.risk_scan)
-  const riskSignals = Array.isArray(riskScan.signals) ? riskScan.signals.map(asRecord) : []
-  const institutionalAnalysis = asRecord(report.institutional_analysis)
-  const institutionalResults = Array.isArray(institutionalAnalysis.results) ? institutionalAnalysis.results.map(asRecord) : []
-  const researchWorkflow = asRecord(report.research_workflow)
-  const workflowResults = Array.isArray(researchWorkflow.results) ? researchWorkflow.results.map(asRecord) : []
-  const deepAnalysis = asRecord(report.deep_analysis)
-  const deepResults = Array.isArray(deepAnalysis.results) ? deepAnalysis.results.map(asRecord) : []
-  const dimensionCoverage = asRecord(report.uzi_dimension_coverage)
-  const presentation = asRecord(report.presentation)
-  const radar = Array.isArray(presentation.radar) ? presentation.radar.map(asRecord) : []
-  const specialistCandidates = candidatesFromReport(report)
-  const sectorAnalysis = asRecord(report.sector_analysis)
-  const sectorHeatmap = Array.isArray(report.sector_heatmap) ? report.sector_heatmap.map(asRecord) : []
-  const thesisReview = asRecord(report.thesis_review)
   const artifactBackedReport = asString(report.protocol) === 'agent_os' && Array.isArray(report.final_artifact_ids)
   const updatedAt = selectedRun?.events.events.at(-1)?.created_at
   const snapshot = asRecord(selectedRun?.replay.snapshot)
@@ -546,41 +512,7 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
                 </div>
               </section>
 
-              {(specialistCandidates.length > 0 || sectorHeatmap.length > 0 || Object.keys(thesisReview).length > 0) && (
-                <section className="report-section">
-                  <div className="report-section-heading"><div><span className="section-index">05</span><div><h3>专属交付</h3><p>直接读取对应 intent 的专业 Artifact，不使用通用报告占位。</p></div></div></div>
-                  <div className="live-key-value-grid">
-                    {specialistCandidates.slice(0, 8).map((candidate) => (
-                      <div key={`candidate-${candidate.code}`}>
-                        <span>候选 {candidate.rank} · {candidate.code}</span>
-                        <strong>{candidate.name} · {candidate.score === null ? '未评分' : candidate.score.toFixed(3)}</strong>
-                        <small>{candidate.reason}</small>
-                      </div>
-                    ))}
-                    {sectorHeatmap.slice(0, 8).map((raw, index) => (
-                      <div key={`sector-${asString(raw.symbol || raw.name, String(index))}`}>
-                        <span>{asString(raw.name, '板块信号')} · {asString(raw.score_basis, 'source_metric')}</span>
-                        <strong>{asNumber(raw.score)?.toFixed(2) ?? '—'}</strong>
-                        <small>原始值 {asString(raw.raw_value, '未提供')}</small>
-                      </div>
-                    ))}
-                    {Object.keys(thesisReview).length > 0 && (
-                      <div>
-                        <span>Thesis Review · {asString(thesisReview.review_target_run_id, '未指定历史运行')}</span>
-                        <strong>{asString(thesisReview.overall_verdict || thesisReview.verdict, 'inconclusive')}</strong>
-                        <small>{thesisReview.review_target_found ? '已读取目标运行 ArtifactBoard' : '未读取到目标运行产物'}</small>
-                      </div>
-                    )}
-                    {Object.keys(sectorAnalysis).length > 0 && (
-                      <div>
-                        <span>板块证据覆盖</span>
-                        <strong>{asString(sectorAnalysis.sector, '未命名板块')} · {asNumber(sectorAnalysis.source_count) ?? 0} 个来源</strong>
-                        <small>{Array.isArray(sectorAnalysis.policy_snapshots) && sectorAnalysis.policy_snapshots.length ? '已采集政策快照' : '政策快照不可用或未请求'}</small>
-                      </div>
-                    )}
-                  </div>
-                </section>
-              )}
+              <IntentDeliveryDossier artifacts={selectedRun.replay.artifacts || []} />
 
               {methodologies.length > 0 && (
                 <section className="report-section">
@@ -589,7 +521,7 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
                     <table className="report-table">
                       <thead><tr><th>标的</th><th>方法</th><th>主要信号</th><th>核心数值</th><th>置信度</th><th>警告</th></tr></thead>
                       <tbody>
-                    {methodologies.slice(0, 12).map((methodology, index) => (
+                    {methodologies.map((methodology, index) => (
                       <tr key={`${asString(methodology.methodology_type, 'method')}-${asString(methodology.target_symbol, String(index))}`}>
                         <td>{asString(methodology.target_symbol, '—')}</td>
                         <td>{localizeMethodology(asString(methodology.methodology_type, 'methodology'))}</td>
@@ -605,119 +537,12 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
                 </section>
               )}
 
-              {(valuationModels.length > 0 || panelVotes.length > 0 || riskSignals.length > 0 || radar.length > 0 || institutionalResults.length > 0 || workflowResults.length > 0 || deepResults.length > 0 || Object.keys(presentation).length > 0) && (
-                <section className="report-section uzi-presentation-section">
-                  <div className="report-section-heading"><div><span className="section-index">07</span><div><h3>UZI 方法论视图</h3><p>来自 Finance Pack 的 DCF、方法论视角和风险扫描 Artifact。</p></div></div></div>
-                  {valuationModels.length > 0 && (
-                    <div className="report-table-wrap">
-                      <table className="report-table">
-                        <thead><tr><th>标的</th><th>方法</th><th>代理价值</th><th>当前价格</th><th>安全边际</th><th>判断</th></tr></thead>
-                        <tbody>
-                          {valuationModels.map((model, index) => (
-                            <tr key={asString(model.symbol, String(index)) + '-uzi-dcf'}>
-                              <td>{asString(model.symbol, '—')}</td>
-                              <td>DCF</td>
-                              <td>{asNumber(model.fair_value)?.toFixed(2) ?? '—'}</td>
-                              <td>{asNumber(model.market_price)?.toFixed(2) ?? '—'}</td>
-                              <td>{asNumber(model.margin_of_safety) !== null ? String((asNumber(model.margin_of_safety)! * 100).toFixed(1)) + '%' : '—'}</td>
-                              <td><strong>{localizeUziStatus(asString(model.verdict, 'data_gap'))}</strong></td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                  {panelVotes.length > 0 && (
-                    <div className="live-key-value-grid">
-                      {panelVotes.slice(0, 10).map((vote, index) => (
-                        <div key={asString(vote.perspective_id, String(index)) + '-panel'}>
-                          <span>{asString(vote.perspective_label, '方法论视角')}</span>
-                          <strong>{localizeUziStatus(asString(vote.signal, 'insufficient_evidence'))} · {asNumber(vote.score)?.toFixed(0) ?? '—'}</strong>
-                          <small>{asString(vote.reasoning, '未返回解释')}</small>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {radar.length > 0 && (
-                    <div className="live-key-value-grid">
-                      {radar.map((dimension, index) => (
-                        <div key={asString(dimension.dimension_id, String(index)) + '-radar'}>
-                          <span>{asString(dimension.label, '研究维度')}</span>
-                          <strong>{asNumber(dimension.score)?.toFixed(1) ?? '—'} · {localizeUziStatus(asString(dimension.status, 'data_gap'))}</strong>
-                          <small>{Array.isArray(dimension.evidence) && dimension.evidence.length ? dimension.evidence.join('、') : (Array.isArray(dimension.data_gap) ? dimension.data_gap.join('、') : '暂无可验证输入')}</small>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {riskSignals.length > 0 && (
-                    <div className="thesis-columns">
-                      <article className="argument-card argument-card--bear">
-                        <div className="argument-title"><span><AlertTriangle size={15} /></span><div><strong>八信号风险扫描</strong><small>{localizeUziStatus(asString(riskScan.risk_level, 'data_gap'))}</small></div></div>
-                        <ul>
-                          {riskSignals.map((signal, index) => (
-                            <li key={asString(signal.signal_id, String(index)) + '-risk'}><span>{String(index + 1).padStart(2, '0')}</span><p>{asString(signal.finding, '未返回风险说明')} · {localizeUziStatus(asString(signal.status, 'data_gap'))}</p></li>
-                          ))}
-                        </ul>
-                      </article>
-                    </div>
-                  )}
-                  {(institutionalResults.length > 0 || workflowResults.length > 0 || deepResults.length > 0 || Object.keys(dimensionCoverage).length > 0) && (
-                    <div className="live-key-value-grid">
-                      {Object.keys(dimensionCoverage).length > 0 && (
-                        <div>
-                           <span>UZI 原始维度覆盖</span>
-                           <strong>{asNumber(dimensionCoverage.available_count) ?? 0} / {asNumber(dimensionCoverage.raw_dimension_count) ?? asNumber(dimensionCoverage.dimension_count) ?? 20} 项可用</strong>
-                           <small>{asNumber(dimensionCoverage.missing_count) ?? 0} 项保留为数据缺口；派生方法 {asNumber(dimensionCoverage.derived_available_count) ?? 0}/{asNumber(dimensionCoverage.derived_dimension_count) ?? 3}</small>
-                        </div>
-                      )}
-                      {institutionalResults.slice(0, 6).map((result, index) => {
-                        const methods = asRecord(result.methods)
-                        const availableMethods = Object.entries(methods)
-                          .filter(([, value]) => asString(asRecord(value).status) !== 'data_gap')
-                          .map(([name]) => name)
-                        return (
-                          <div key={`institutional-${asString(result.symbol, String(index))}`}>
-                            <span>{asString(result.symbol, '标的')} · 机构模型</span>
-                            <strong>{availableMethods.length ? availableMethods.join('、') : '数据不足'}</strong>
-                            <small>{asString(institutionalAnalysis.summary, '未返回机构模型摘要')}</small>
-                          </div>
-                        )
-                      })}
-                      {workflowResults.slice(0, 6).map((result, index) => {
-                        const coverage = asRecord(result.initiating_coverage)
-                        const thesis = asRecord(result.thesis_tracker)
-                        return (
-                          <div key={`workflow-${asString(result.symbol, String(index))}`}>
-                            <span>{asString(result.symbol, '标的')} · 研究工作流</span>
-                            <strong>{asString(coverage.rating, '待研究')} · 支撑柱 {asNumber(thesis.support_count) ?? 0}</strong>
-                            <small>{asString(researchWorkflow.summary, '未返回工作流摘要')}</small>
-                          </div>
-                        )
-                      })}
-                      {deepResults.slice(0, 6).map((result, index) => {
-                        const memo = asRecord(result.ic_memo)
-                        const checklist = asRecord(result.dd_checklist)
-                        return (
-                          <div key={`deep-${asString(result.symbol, String(index))}`}>
-                            <span>{asString(result.symbol, '标的')} · Deep 交叉检验</span>
-                            <strong>{asString(memo.recommendation, '待研究')} · DD {asNumber(checklist.completion_pct)?.toFixed(0) ?? '—'}%</strong>
-                            <small>{asString(deepAnalysis.summary, '未返回 Deep 摘要')}</small>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                </section>
-              )}
+              <MethodDeliveryDossier artifacts={selectedRun.replay.artifacts || []} />
 
               {Object.keys(scorecard).length > 0 && (
                 <section className="report-section">
-                  <div className="report-section-heading"><div><span className="section-index">08</span><div><h3>结构化评分卡</h3><p>原样展示后端 scorecard 字段</p></div></div></div>
-                  <div className="live-key-value-grid">
-                    {Object.entries(scorecard).slice(0, 12).map(([key, value]) => (
-                      <div key={key}><span>{key}</span><strong>{typeof value === 'object' ? JSON.stringify(value) : String(value)}</strong></div>
-                    ))}
-                  </div>
+                  <div className="report-section-heading"><div><span className="section-index">08</span><div><h3>结构化评分卡</h3><p>使用中文业务字段完整展示，不渲染原始 JSON。</p></div></div></div>
+                  <BusinessDataView value={scorecard} fieldKey="scorecard" path="research_report.scorecard" />
                 </section>
               )}
 
@@ -732,6 +557,12 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
             </div>
           </article>
           )
+        )}
+
+        {selectedRun && <RunGovernanceDossier detail={selectedRun} />}
+
+        {selectedRun && !isClarification && !isActiveStatus(status) && (
+          <ArtifactArchive artifacts={selectedRun.replay.artifacts || []} />
         )}
 
         {selectedRun && !isClarification && !isActiveStatus(status) && activityFeed}
