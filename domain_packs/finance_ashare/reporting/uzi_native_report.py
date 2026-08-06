@@ -148,15 +148,15 @@ def _list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
-def _text(value: Any, default: str = "—") -> str:
+def _text(value: Any, default: Any = "—") -> str:
     if value is None or value == "":
-        return default
+        return str(default)
     if isinstance(value, bool):
         return "是" if value else "否"
     return str(value)
 
 
-def _e(value: Any, default: str = "—") -> str:
+def _e(value: Any, default: Any = "—") -> str:
     return escape(_text(value, default), quote=True)
 
 
@@ -274,6 +274,25 @@ def _render_hero(presentation: dict[str, Any], report: dict[str, Any], run_id: s
     change_class = "up" if (change or 0) >= 0 else "down"
     score = _metric(hero.get("score"))
     data_gap = _list(presentation.get("data_gap"))
+    holding = _record(report.get("holding_context"))
+    holding_context = ""
+    if holding:
+        source_label = (
+            "目标 ETF 穿透持仓"
+            if holding.get("holding_source") == "target_etf_lookthrough"
+            else "基金直接披露持仓"
+        )
+        holding_context = (
+            '<aside class="holding-context">'
+            '<div><span>基金持仓来源</span>'
+            f'<strong>{_e(holding.get("fund_name"))}（{_e(holding.get("fund_code"))}）</strong></div>'
+            f'<div><span>披露排名</span><strong>#{_e(holding.get("holding_rank"))}</strong></div>'
+            f'<div><span>基金有效权重</span><strong>{_metric(holding.get("fund_weight_pct"), "%")}</strong></div>'
+            f'<div><span>披露日期</span><strong>{_e(holding.get("disclosure_date"), "未取得")}</strong></div>'
+            f'<div><span>持仓口径</span><strong>{_e(source_label)}</strong></div>'
+            f'<p>{_e(holding.get("disclaimer"), "基金定期披露持仓不代表当前仍持有该证券。")}</p>'
+            '</aside>'
+        )
     return f"""
     <section class="hero" id="section-hero">
       <div class="hero-watermark">O.o</div>
@@ -282,6 +301,7 @@ def _render_hero(presentation: dict[str, Any], report: dict[str, Any], run_id: s
         <div class="hero-title"><h1>{_e(name)}</h1><span>{_e(symbol)}</span></div>
         <p class="hero-sector">{_e(subject.get('sector'), '行业信息未取得')} · 截至 {_e(subject.get('as_of'), '本次运行')}</p>
         <p class="hero-conclusion">{_e(presentation.get('core_conclusion') or report.get('conclusion'), '当前证据不足，无法形成结论。')}</p>
+        {holding_context}
         <div class="hero-meta"><span>RUN {_e(run_id)}</span><span>PROFILE {_e(presentation.get('profile'), 'unknown')}</span><span>SOURCE {_e(_UZI_SOURCE_COMMIT[:8])}</span></div>
       </div>
       <div class="hero-terminal">

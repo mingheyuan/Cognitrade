@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "batch_id", "source_run_id", "source_artifact_id", "fund_code", "fund_name",
+    "profile", "status", "concurrency", "holding_source", "holdings", "counts",
+    "data_gap", "created_at", "updated_at"
+  ],
+  "properties": {
+    "batch_id": {"type": "string"},
+    "source_run_id": {"type": "string"},
+    "source_artifact_id": {"type": "string"},
+    "fund_code": {"type": "string"},
+    "fund_name": {"type": "string"},
+    "fund_type": {"type": ["string", "null"]},
+    "profile": {"enum": ["quick", "lite", "medium", "deep"]},
+    "status": {"enum": ["running", "completed", "completed_partial", "failed", "cancelled"]},
+    "concurrency": {"type": "integer", "minimum": 1, "maximum": 10},
+    "holding_source": {"enum": ["direct_equity_disclosure", "target_etf_lookthrough"]},
+    "is_fund_of_funds": {"type": "boolean"},
+    "disclosure_date": {"type": ["string", "null"]},
+    "disclosure_age_days": {"type": ["integer", "null"], "minimum": 0},
+    "stale_level": {"enum": ["current", "warning", "confirmation_required", "unknown"]},
+    "cancel_requested": {"type": "boolean"},
+    "holdings": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "required": [
+          "rank", "symbol", "name", "market", "supported", "status",
+          "holding_source", "attempt_run_ids", "report_available", "retry_count", "data_gap"
+        ],
+        "properties": {
+          "rank": {"type": "integer", "minimum": 1},
+          "symbol": {"type": "string"},
+          "name": {"type": "string"},
+          "market": {"type": "string"},
+          "supported": {"type": "boolean"},
+          "status": {"enum": ["queued", "running", "completed", "completed_partial", "failed", "cancelled", "unsupported"]},
+          "fund_weight_pct": {"type": ["number", "null"]},
+          "target_security_weight_pct": {"type": ["number", "null"]},
+          "holding_source": {"type": "string"},
+          "disclosure_date": {"type": ["string", "null"]},
+          "child_run_id": {"type": ["string", "null"]},
+          "attempt_run_ids": {"type": "array", "items": {"type": "string"}},
+          "report_available": {"type": "boolean"},
+          "retry_count": {"type": "integer", "minimum": 0},
+          "data_gap": {"type": "array", "items": {"type": "string"}},
+          "error": {"type": ["string", "null"]},
+          "started_at": {"type": ["string", "null"]},
+          "completed_at": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "counts": {
+      "type": "object",
+      "required": ["total", "supported", "queued", "running", "deliverable", "failed", "cancelled", "unsupported"],
+      "properties": {
+        "total": {"type": "integer", "minimum": 0},
+        "supported": {"type": "integer", "minimum": 0},
+        "queued": {"type": "integer", "minimum": 0},
+        "running": {"type": "integer", "minimum": 0},
+        "deliverable": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0},
+        "cancelled": {"type": "integer", "minimum": 0},
+        "unsupported": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "data_gap": {"type": "array", "items": {"type": "string"}},
+    "created_at": {"type": "string"},
+    "updated_at": {"type": "string"},
+    "completed_at": {"type": ["string", "null"]}
+  },
+  "additionalProperties": false
+}

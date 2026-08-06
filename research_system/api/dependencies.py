@@ -37,6 +37,7 @@ class ApiRuntimeState:
     config: ApiConfig
     agent_os: Any
     run_service: Any
+    fund_holding_reports: Any | None
     chat_service: Any
     event_source: Any
     finance_market_data: Any
@@ -66,6 +67,17 @@ def get_agent_os(request: Request):
 
 def get_run_service(request: Request):
     return get_api_runtime(request).run_service
+
+
+def get_fund_holding_reports(request: Request):
+    service = get_api_runtime(request).fund_holding_reports
+    if service is None:
+        raise ApiError(
+            status_code=503,
+            code="fund_holding_reports_unavailable",
+            message="Fund holding report orchestration is unavailable",
+        )
+    return service
 
 
 def get_chat_service(request: Request):
@@ -212,6 +224,7 @@ __all__ = [
     "get_chat_service",
     "get_backtesting",
     "get_event_source",
+    "get_fund_holding_reports",
     "get_mutation_lock",
     "get_repo_root",
     "get_settings",

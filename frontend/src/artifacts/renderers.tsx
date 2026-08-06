@@ -118,6 +118,10 @@ export function FundAnalysisArtifactRenderer({ content }: ArtifactRendererProps)
   return <ArtifactData content={content} priority={['analysis_mode', 'fund_category', 'investment_cycle', 'candidate_count', 'recommendations', 'candidates', 'selection_policy', 'quality_status', 'data_gap', 'provider_errors', 'methodology_version', 'generated_at']} />
 }
 
+export function FundHoldingReportBatchArtifactRenderer({ content }: ArtifactRendererProps) {
+  return <ArtifactData content={content} priority={['fund_name', 'fund_code', 'profile', 'status', 'counts', 'disclosure_date', 'stale_level', 'holding_source', 'holdings', 'data_gap', 'source_run_id', 'source_artifact_id']} />
+}
+
 export function AiReadinessArtifactRenderer({ content }: ArtifactRendererProps) {
   return <ArtifactData content={content} priority={['companies', ...METHOD_PRIORITY]} />
 }

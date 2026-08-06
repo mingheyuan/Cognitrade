@@ -22,7 +22,7 @@ from domain_packs.finance_ashare.subagents.uzi_methodology import (
     build_valuation_model,
     select_profile,
 )
-from domain_packs.finance_ashare.subagents.runtime import collect_snapshot
+from domain_packs.finance_ashare.subagents.runtime import collect_snapshot, compose_uzi_report
 from domain_packs.finance_ashare.subagents.uzi_advanced_methodology import (
     build_deep_analysis,
     build_dimension_coverage,
@@ -46,6 +46,90 @@ def _snapshots() -> list[dict]:
 
 
 class UziFinancePackTests(unittest.TestCase):
+    def test_main_agent_synthesis_contract_accepts_full_artifact_lineage(self) -> None:
+        schema = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "domain_packs"
+                / "finance_ashare"
+                / "artifact_schemas"
+                / "main_agent_synthesis.json"
+            ).read_text(encoding="utf-8")
+        )
+
+        jsonschema.validate(
+            {
+                "conclusion": "结构化结论",
+                "assistant_message": "面向用户的答复",
+                "follow_up": ["复核披露期"],
+                "source_artifact_id": "report-1",
+                "source_artifact_ids": ["report-1", "valuation-1", "risk-1"],
+                "model_generated": True,
+            },
+            schema,
+        )
+
+    def test_quick_report_composes_with_fund_context_without_optional_panel(self) -> None:
+        holding_context = {
+            "parent_batch_id": "batch-1",
+            "source_fund_run_id": "fund-run-1",
+            "source_fund_artifact_id": "fund-artifact-1",
+            "fund_code": "020464",
+            "fund_name": "测试股票基金",
+            "fund_type": "指数型-股票",
+            "holding_rank": 1,
+            "symbol": "688012",
+            "security_name": "中微公司",
+            "fund_weight_pct": 13.85,
+            "target_security_weight_pct": 15.02,
+            "holding_source": "target_etf_lookthrough",
+            "disclosure_date": "2026-06-30",
+            "disclosure_age_days": 37,
+            "stale_level": "current",
+            "disclaimer": "基金披露持仓不代表当前持仓。",
+        }
+
+        def artifact(artifact_id: str, content: dict) -> SimpleNamespace:
+            return SimpleNamespace(
+                artifact_id=artifact_id,
+                content=content,
+                source_refs=[{"type": "test", "id": artifact_id}],
+                confidence=0.8,
+                risk_flags=[],
+            )
+
+        evidence = artifact("evidence-1", {"items": []})
+        valuation = artifact("valuation-1", {"models": [], "dimensions": {}})
+        normalized = artifact(
+            "normalized-1",
+            {"query": "分析 688012", "symbols": ["688012"], "holding_context": holding_context},
+        )
+        rows = {
+            "normalized_query": [normalized],
+            "investor_panel_review": [],
+            "risk_scan": [],
+            "institutional_analysis": [],
+            "research_workflow": [],
+            "deep_analysis": [],
+            "uzi_dimension_coverage": [],
+        }
+        context = SimpleNamespace(
+            node=SimpleNamespace(inputs={"research_profile": "quick", "symbols": ["688012"]}),
+            require_artifact=lambda artifact_type: {
+                "normalized_query": normalized,
+                "evidence_set": evidence,
+                "valuation_model": valuation,
+            }[artifact_type],
+            artifacts=lambda artifact_type: rows.get(artifact_type, []),
+        )
+
+        report, presentation = compose_uzi_report(context)
+
+        self.assertEqual(report.content["holding_context"], holding_context)
+        self.assertEqual(report.content["investor_panel_review"]["scope"], "not_requested")
+        self.assertEqual(report.artifact_type, "research_report")
+        self.assertEqual(presentation.artifact_type, "report_presentation")
+
     def test_empty_provider_results_materialize_auditable_gap_snapshots(self) -> None:
         query = SimpleNamespace(
             artifact_id="normalized-query",

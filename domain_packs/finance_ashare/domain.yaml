@@ -1,5 +1,5 @@
 domain_id: finance_ashare
-version: 0.4.0
+version: 0.5.0
 description: A-share evidence-backed professional research pack.
 artifact_types:
   - artifact_type: user_request
@@ -26,6 +26,7 @@ artifact_types:
   - artifact_type: uzi_dimension_coverage
   - artifact_type: fund_snapshot
   - artifact_type: fund_analysis
+  - artifact_type: fund_holding_report_batch
   - artifact_type: ai_readiness
   - artifact_type: earnings_preview
   - artifact_type: model_update
@@ -827,6 +828,7 @@ capabilities:
     methodology_version: "3.9.2-adapted"
     implementation: subagents.runtime:compose_uzi_report
     consumes:
+      - artifact_type: normalized_query
       - artifact_type: evidence_set
       - artifact_type: valuation_model
       - artifact_type: investor_panel_review

@@ -20,7 +20,7 @@ FastAPI owns authentication, validation, CORS, error envelopes, request IDs,
 SSE transport, and mutation serialization. AgentOS owns planning, execution,
 artifacts, gates, replay, and long-term memory.
 
-There are 43 versioned operations. Proposal, dynamic subagent-discovery,
+There are 50 versioned operations. Proposal, dynamic subagent-discovery,
 ActionPlan, Supervisor, Handler, Blackboard, CLI, and unversioned business APIs
 are not part of the current runtime.
 
@@ -164,6 +164,71 @@ coverage rather than becoming zero. Manager tenure and scale changes remain
 descriptive evidence and do not receive an automatic positive/negative score.
 Provider errors contain only the failed stage and error class; raw upstream
 exception text is not exposed in Artifacts or the Web UI.
+
+### Fund top-holding stock report batches
+
+After a `fund_research` run has produced an active `fund_snapshot`, the Web UI
+can explicitly fan out one selected equity fund's disclosed holdings into up
+to ten independent A-share `stock_check` runs. This is a managed parent batch,
+not a second fund-data collection:
+
+- normal equity funds use the frozen `top_holdings` rows;
+- ETFs use their own disclosed equity holdings;
+- ETF feeder funds use only the frozen `lookthrough_holdings` rows and their
+  effective feeder-fund weights;
+- unsupported markets remain visible as `unsupported` and are not converted;
+- if an ETF target or look-through disclosure is absent, the batch reports the
+  gap and never guesses the holding;
+- every child report records fund code/name, disclosure date, holding rank,
+  effective fund weight, source Artifact and parent batch, without changing the
+  stock valuation or score.
+
+The batch has a dedicated worker pool controlled by
+`COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY` (default 5, allowed 1–10). It does
+not consume or alter the global Agent OS child-thread limit. Child runs are
+hidden from the top-level run history and appear under the parent batch. Each
+child is automatically attempted up to three times; manual retry creates a new
+child run and retains every previous run ID for audit.
+
+```http
+POST /api/v1/runs/{source_run_id}/holding-reports
+Content-Type: application/json
+
+{
+  "fund_code": "110011",
+  "profile": "lite",
+  "source_artifact_id": "01J...",
+  "confirm_stale": false,
+  "force": false
+}
+```
+
+`profile` is `quick`, `lite`, `medium`, or `deep`; the default is `lite` and
+all children in one batch use the same profile. An equivalent existing batch
+is returned unless `force: true` explicitly creates another historical batch.
+Disclosures 121–180 days old carry a warning. Disclosures older than 180 days
+return `409 stale_holdings_confirmation_required` until `confirm_stale: true`
+is supplied. A missing disclosure date does not block execution, but forces a
+documented partial result.
+
+| Method | Path | Meaning |
+| --- | --- | --- |
+| `POST` | `/runs/{source_run_id}/holding-reports` | Create or reuse a parent batch from a frozen `fund_snapshot` |
+| `GET` | `/runs/{source_run_id}/holding-report-batches?fund_code=110011` | List preserved batches for the source run, optionally filtered by fund |
+| `GET` | `/holding-report-batches/{batch_id}` | Read parent progress, child statuses, gaps and report availability |
+| `POST` | `/holding-report-batches/{batch_id}/cancel` | Best-effort cancel queued/running children; completed reports are retained |
+| `POST` | `/holding-report-batches/{batch_id}/retry` | Retry failed children; optional body `{"symbols":["600519"]}` |
+| `POST` | `/holding-report-batches/{batch_id}/continue` | Continue cancelled/failed children; optional symbol filter |
+| `GET` | `/holding-report-batches/{batch_id}/reports.zip` | Download successful and partial child PDFs plus an audit README |
+
+Parent status is `completed` only when every supported child completes without
+batch-level gaps. A mix of completed, partial, failed, cancelled, or unsupported
+items is `completed_partial`; zero successful execution results with all
+supported items failed is `failed`. A child `completed_partial` result that has
+both `research_report` and `report_presentation` is still deliverable and its
+PDF is included in the ZIP with its data gaps. The ZIP deliberately contains
+individual stock reports only; it does not synthesize a fund-level holdings
+HTML/PDF report.
 
 ### UZI Tier-1 and portfolio research
 

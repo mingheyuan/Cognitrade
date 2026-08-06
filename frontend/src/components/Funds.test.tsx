@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../CognitradeContext', () => ({
   useCognitrade: () => ({
     createRun: mocks.createRun,
+    settings: { baseUrl: 'http://127.0.0.1:8000/api/v1', token: '' },
     runs: [{ run_id: 'run-fund', intent: 'fund_research', status: 'completed' }],
     selectedRunId: 'run-fund',
     selectRun: mocks.selectRun,
@@ -50,7 +51,7 @@ vi.mock('../CognitradeContext', () => ({
                 {
                   fund_code: '110011',
                   fund_name: '易方达优质精选混合',
-                  fund_type: '混合型-偏股',
+                  fund_type: 'ETF联接',
                   rank: 1,
                   score: 82.5,
                   score_coverage: 0.85,
@@ -82,7 +83,7 @@ vi.mock('../CognitradeContext', () => ({
                   target_fund_period: '2026-06-30',
                   target_fund_source_ref: 'https://pdf.dfcfw.com/example.pdf',
                   target_fund_holdings: [{ code: '561980', name: '招商中证半导体产业 ETF', weight_pct: 92.22, market_value_10k: 272647.2 }],
-                  lookthrough_period: '2026年2季度',
+                  lookthrough_period: '2026年第二季度股票投资明细',
                   lookthrough_holdings: [{ code: '688012', name: '中微公司', weight_pct: 15.02, effective_weight_pct: 13.851444, market_value_10k: 112420.46 }],
                   holdings_coverage: {
                     asset_allocation: 'available', direct_equity: 'available', bond: 'available',
@@ -106,6 +107,22 @@ describe('Funds', () => {
     mocks.createRun.mockClear()
     mocks.selectRun.mockClear()
     mocks.openRun.mockClear()
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/holding-reports') && init?.method === 'POST') {
+        return new Response(JSON.stringify({
+          batch_id: 'batch-1', source_run_id: 'run-fund', source_artifact_id: 'artifact-fund',
+          fund_code: '110011', fund_name: '易方达优质精选混合', fund_type: 'ETF联接',
+          profile: 'lite', status: 'running', concurrency: 5,
+          holding_source: 'target_etf_lookthrough', is_fund_of_funds: true,
+          disclosure_date: null, disclosure_age_days: null, stale_level: 'unknown', cancel_requested: false,
+          holdings: [], counts: { total: 0, supported: 0, queued: 0, running: 0, deliverable: 0, failed: 0, cancelled: 0, unsupported: 0 },
+          data_gap: ['holding_disclosure_date_missing'], created_at: '2026-08-06T00:00:00Z',
+          updated_at: '2026-08-06T00:00:00Z', completed_at: null,
+        }), { status: 202, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }))
   })
 
   it('renders audited fund evidence instead of raw JSON', () => {
@@ -126,6 +143,9 @@ describe('Funds', () => {
     expect(screen.getByText('目标 ETF 前十大穿透持仓')).toBeInTheDocument()
     expect(screen.getByText('招商中证半导体产业 ETF')).toBeInTheDocument()
     expect(screen.getByText('13.85%')).toBeInTheDocument()
+    const disclosure = screen.getByText('持仓披露').closest('div')
+    expect(disclosure).toHaveTextContent('2026-06-30')
+    expect(disclosure).not.toHaveTextContent('日期未取得')
     expect(screen.getByRole('link', { name: '查看官方报告' })).toHaveAttribute('href', 'https://pdf.dfcfw.com/example.pdf')
     expect(screen.getByText('单位净值完整趋势')).toBeInTheDocument()
     expect(screen.getByText('易方达基金')).toBeInTheDocument()
@@ -187,5 +207,21 @@ describe('Funds', () => {
         candidate_pool_size: 1,
       }),
     )
+  })
+
+  it('starts a lite top-holding report batch from the frozen fund run', async () => {
+    render(<Funds onOpenRun={mocks.openRun} />)
+    fireEvent.click(screen.getByRole('button', { name: '生成 轻量持仓股票报告' }))
+
+    await waitFor(() => {
+      const calls = vi.mocked(fetch).mock.calls
+      expect(calls.some(([input, init]) => String(input).endsWith('/runs/run-fund/holding-reports') && init?.method === 'POST')).toBe(true)
+    })
+    const post = vi.mocked(fetch).mock.calls.find(([input, init]) => String(input).endsWith('/runs/run-fund/holding-reports') && init?.method === 'POST')
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual(expect.objectContaining({
+      fund_code: '110011',
+      profile: 'lite',
+      force: false,
+    }))
   })
 })

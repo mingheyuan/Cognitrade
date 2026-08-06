@@ -146,6 +146,44 @@ class UziNativeReportTests(unittest.TestCase):
             ("artifact-report", "artifact-presentation", "artifact-deep"),
         )
 
+    def test_renders_frozen_fund_holding_context_without_changing_stock_sections(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        artifacts[0]["content"]["holding_context"] = {
+            "parent_batch_id": "batch-1",
+            "source_fund_run_id": "fund-run-1",
+            "source_fund_artifact_id": "fund-artifact-1",
+            "fund_code": "020464",
+            "fund_name": "招商中证半导体产业ETF发起式联接A",
+            "fund_type": "指数型-股票",
+            "holding_rank": 1,
+            "symbol": "600519",
+            "security_name": "贵州茅台",
+            "fund_weight_pct": 13.851444,
+            "target_security_weight_pct": 15.02,
+            "holding_source": "target_etf_lookthrough",
+            "disclosure_date": "2026-06-30",
+            "disclosure_age_days": 37,
+            "stale_level": "current",
+            "disclaimer": "基金定期披露持仓不代表当前仍持有该证券。",
+        }
+
+        rendered = render_uzi_native_html(artifacts, run_id=RUN_ID)
+
+        self.assertIn("基金持仓来源", rendered.html)
+        self.assertIn("招商中证半导体产业ETF发起式联接A", rendered.html)
+        self.assertIn("目标 ETF 穿透持仓", rendered.html)
+        self.assertIn("13.85%", rendered.html)
+        self.assertIn("基金定期披露持仓不代表当前仍持有该证券", rendered.html)
+
+    def test_numeric_panel_fallback_is_escaped_as_text(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        artifacts[1]["content"]["panel"].pop("registered_seat_count")
+
+        rendered = render_uzi_native_html(artifacts, run_id=RUN_ID)
+
+        self.assertIn("注册席位", rendered.html)
+        self.assertIn("<strong>1</strong>", rendered.html)
+
     def test_rejects_non_uzi_runs_and_runs_without_research_report(self) -> None:
         with self.assertRaises(ReportArtifactMissingError):
             render_uzi_native_html([], run_id=RUN_ID)

@@ -26,6 +26,7 @@ export const FINANCE_ARTIFACT_TYPES = [
   "uzi_dimension_coverage",
   "fund_snapshot",
   "fund_analysis",
+  "fund_holding_report_batch",
   "ai_readiness",
   "earnings_preview",
   "model_update",
@@ -68,6 +69,24 @@ export type UserRequestContent = {
   "source_records"?: Array<Record<string, unknown>>;
   "snapshots"?: Array<Record<string, unknown>>;
   "source_refs"?: Array<Record<string, unknown>>;
+  "holding_context"?: {
+    "parent_batch_id": string;
+    "source_fund_run_id": string;
+    "source_fund_artifact_id": string;
+    "fund_code": string;
+    "fund_name": string;
+    "fund_type"?: string | null;
+    "holding_rank": number;
+    "symbol": string;
+    "security_name"?: string;
+    "fund_weight_pct"?: number | null;
+    "target_security_weight_pct"?: number | null;
+    "holding_source": "direct_equity_disclosure" | "target_etf_lookthrough";
+    "disclosure_date"?: string | null;
+    "disclosure_age_days"?: number | null;
+    "stale_level"?: "current" | "warning" | "confirmation_required" | "unknown";
+    "disclaimer"?: string;
+  } | null;
 }
 
 export type NormalizedQueryContent = {
@@ -83,6 +102,24 @@ export type NormalizedQueryContent = {
   "asset_class_targets"?: Record<string, unknown> | null;
   "requested_methods"?: Array<string>;
   "method_assumptions"?: Record<string, unknown> | null;
+  "holding_context"?: {
+    "parent_batch_id"?: string;
+    "source_fund_run_id"?: string;
+    "source_fund_artifact_id"?: string;
+    "fund_code"?: string;
+    "fund_name"?: string;
+    "fund_type"?: string | null;
+    "holding_rank"?: number;
+    "symbol"?: string;
+    "security_name"?: string;
+    "fund_weight_pct"?: number | null;
+    "target_security_weight_pct"?: number | null;
+    "holding_source"?: "direct_equity_disclosure" | "target_etf_lookthrough";
+    "disclosure_date"?: string | null;
+    "disclosure_age_days"?: number | null;
+    "stale_level"?: "current" | "warning" | "confirmation_required" | "unknown";
+    "disclaimer"?: string;
+  } | null;
 }
 
 export type StockSnapshotBundleContent = {
@@ -738,6 +775,24 @@ export type ResearchReportContent = {
   "deep_analysis"?: Record<string, unknown> | null;
   "uzi_dimension_coverage"?: Record<string, unknown> | null;
   "presentation_artifact_type"?: string;
+  "holding_context"?: {
+    "parent_batch_id": string;
+    "source_fund_run_id": string;
+    "source_fund_artifact_id": string;
+    "fund_code": string;
+    "fund_name": string;
+    "fund_type"?: string | null;
+    "holding_rank": number;
+    "symbol": string;
+    "security_name"?: string;
+    "fund_weight_pct"?: number | null;
+    "target_security_weight_pct"?: number | null;
+    "holding_source": "direct_equity_disclosure" | "target_etf_lookthrough";
+    "disclosure_date"?: string | null;
+    "disclosure_age_days"?: number | null;
+    "stale_level"?: "current" | "warning" | "confirmation_required" | "unknown";
+    "disclaimer"?: string;
+  } | null;
   "fund_analysis"?: Record<string, unknown>;
   "quality_status"?: string | null;
   "delivery_type"?: string;
@@ -754,6 +809,7 @@ export type MainAgentSynthesisContent = {
   "assistant_message": string;
   "follow_up"?: Array<string>;
   "source_artifact_id": string;
+  "source_artifact_ids"?: Array<string>;
   "model_generated"?: boolean;
 }
 
@@ -1342,6 +1398,58 @@ export type FundAnalysisContent = {
   "generated_at": string;
 }
 
+export type FundHoldingReportBatchContent = {
+  "batch_id": string;
+  "source_run_id": string;
+  "source_artifact_id": string;
+  "fund_code": string;
+  "fund_name": string;
+  "fund_type"?: string | null;
+  "profile": "quick" | "lite" | "medium" | "deep";
+  "status": "running" | "completed" | "completed_partial" | "failed" | "cancelled";
+  "concurrency": number;
+  "holding_source": "direct_equity_disclosure" | "target_etf_lookthrough";
+  "is_fund_of_funds"?: boolean;
+  "disclosure_date"?: string | null;
+  "disclosure_age_days"?: number | null;
+  "stale_level"?: "current" | "warning" | "confirmation_required" | "unknown";
+  "cancel_requested"?: boolean;
+  "holdings": Array<{
+    "rank": number;
+    "symbol": string;
+    "name": string;
+    "market": string;
+    "supported": boolean;
+    "status": "queued" | "running" | "completed" | "completed_partial" | "failed" | "cancelled" | "unsupported";
+    "fund_weight_pct"?: number | null;
+    "target_security_weight_pct"?: number | null;
+    "holding_source": string;
+    "disclosure_date"?: string | null;
+    "child_run_id"?: string | null;
+    "attempt_run_ids": Array<string>;
+    "report_available": boolean;
+    "retry_count": number;
+    "data_gap": Array<string>;
+    "error"?: string | null;
+    "started_at"?: string | null;
+    "completed_at"?: string | null;
+  }>;
+  "counts": {
+    "total": number;
+    "supported": number;
+    "queued": number;
+    "running": number;
+    "deliverable": number;
+    "failed": number;
+    "cancelled": number;
+    "unsupported": number;
+  };
+  "data_gap": Array<string>;
+  "created_at": string;
+  "updated_at": string;
+  "completed_at"?: string | null;
+}
+
 export type AiReadinessContent = {
   "methodology_version": string;
   "method": "ai_readiness";
@@ -1675,6 +1783,7 @@ export type FinanceArtifactContentMap = {
   "uzi_dimension_coverage": UziDimensionCoverageContent
   "fund_snapshot": FundSnapshotContent
   "fund_analysis": FundAnalysisContent
+  "fund_holding_report_batch": FundHoldingReportBatchContent
   "ai_readiness": AiReadinessContent
   "earnings_preview": EarningsPreviewContent
   "model_update": ModelUpdateContent
@@ -1716,6 +1825,23 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "source_records",
     "snapshots",
     "source_refs",
+    "holding_context",
+    "holding_context.parent_batch_id",
+    "holding_context.source_fund_run_id",
+    "holding_context.source_fund_artifact_id",
+    "holding_context.fund_code",
+    "holding_context.fund_name",
+    "holding_context.fund_type",
+    "holding_context.holding_rank",
+    "holding_context.symbol",
+    "holding_context.security_name",
+    "holding_context.fund_weight_pct",
+    "holding_context.target_security_weight_pct",
+    "holding_context.holding_source",
+    "holding_context.disclosure_date",
+    "holding_context.disclosure_age_days",
+    "holding_context.stale_level",
+    "holding_context.disclaimer",
   ],
   "normalized_query": [
     "query",
@@ -1730,6 +1856,23 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "asset_class_targets",
     "requested_methods",
     "method_assumptions",
+    "holding_context",
+    "holding_context.parent_batch_id",
+    "holding_context.source_fund_run_id",
+    "holding_context.source_fund_artifact_id",
+    "holding_context.fund_code",
+    "holding_context.fund_name",
+    "holding_context.fund_type",
+    "holding_context.holding_rank",
+    "holding_context.symbol",
+    "holding_context.security_name",
+    "holding_context.fund_weight_pct",
+    "holding_context.target_security_weight_pct",
+    "holding_context.holding_source",
+    "holding_context.disclosure_date",
+    "holding_context.disclosure_age_days",
+    "holding_context.stale_level",
+    "holding_context.disclaimer",
   ],
   "stock_snapshot_bundle": [
     "query",
@@ -2317,6 +2460,23 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "deep_analysis",
     "uzi_dimension_coverage",
     "presentation_artifact_type",
+    "holding_context",
+    "holding_context.parent_batch_id",
+    "holding_context.source_fund_run_id",
+    "holding_context.source_fund_artifact_id",
+    "holding_context.fund_code",
+    "holding_context.fund_name",
+    "holding_context.fund_type",
+    "holding_context.holding_rank",
+    "holding_context.symbol",
+    "holding_context.security_name",
+    "holding_context.fund_weight_pct",
+    "holding_context.target_security_weight_pct",
+    "holding_context.holding_source",
+    "holding_context.disclosure_date",
+    "holding_context.disclosure_age_days",
+    "holding_context.stale_level",
+    "holding_context.disclaimer",
     "fund_analysis",
     "quality_status",
     "delivery_type",
@@ -2332,6 +2492,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "assistant_message",
     "follow_up",
     "source_artifact_id",
+    "source_artifact_ids",
     "model_generated",
   ],
   "valuation_model": [
@@ -2860,6 +3021,55 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "provider_errors[].stage",
     "provider_errors[].error_type",
     "generated_at",
+  ],
+  "fund_holding_report_batch": [
+    "batch_id",
+    "source_run_id",
+    "source_artifact_id",
+    "fund_code",
+    "fund_name",
+    "fund_type",
+    "profile",
+    "status",
+    "concurrency",
+    "holding_source",
+    "is_fund_of_funds",
+    "disclosure_date",
+    "disclosure_age_days",
+    "stale_level",
+    "cancel_requested",
+    "holdings",
+    "holdings[].rank",
+    "holdings[].symbol",
+    "holdings[].name",
+    "holdings[].market",
+    "holdings[].supported",
+    "holdings[].status",
+    "holdings[].fund_weight_pct",
+    "holdings[].target_security_weight_pct",
+    "holdings[].holding_source",
+    "holdings[].disclosure_date",
+    "holdings[].child_run_id",
+    "holdings[].attempt_run_ids",
+    "holdings[].report_available",
+    "holdings[].retry_count",
+    "holdings[].data_gap",
+    "holdings[].error",
+    "holdings[].started_at",
+    "holdings[].completed_at",
+    "counts",
+    "counts.total",
+    "counts.supported",
+    "counts.queued",
+    "counts.running",
+    "counts.deliverable",
+    "counts.failed",
+    "counts.cancelled",
+    "counts.unsupported",
+    "data_gap",
+    "created_at",
+    "updated_at",
+    "completed_at",
   ],
   "ai_readiness": [
     "methodology_version",

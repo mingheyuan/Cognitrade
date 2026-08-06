@@ -622,6 +622,7 @@ class AgentOS:
             "source_records",
             "snapshots",
             "source_refs",
+            "holding_context",
         ):
             if key in request.slots and key not in input_payload:
                 input_payload[key] = request.slots[key]
