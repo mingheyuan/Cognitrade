@@ -1900,6 +1900,101 @@
   max-height: 310px;
 }
 
+.fund-allocation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  padding: 11px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fund-allocation-grid article {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--panel-soft) 74%, transparent);
+}
+
+.fund-allocation-grid span,
+.fund-allocation-grid strong {
+  font-size: 10px;
+}
+
+.fund-allocation-grid span {
+  color: var(--text-faint);
+}
+
+.fund-allocation-grid strong {
+  color: var(--text);
+}
+
+.fund-holdings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.fund-holdings-grid > article {
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.fund-holdings-grid > article:nth-child(2n) {
+  border-right: 0;
+}
+
+.fund-holdings-grid > article > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fund-holdings-grid > article > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.fund-holdings-grid > article > header strong,
+.fund-holdings-grid > article > header small,
+.fund-holdings-grid > article > header > span,
+.fund-holdings-grid > article > p,
+.fund-holdings-section > footer {
+  font-size: 9px;
+}
+
+.fund-holdings-grid > article > header strong {
+  color: var(--text);
+}
+
+.fund-holdings-grid > article > header small,
+.fund-holdings-grid > article > p,
+.fund-holdings-section > footer {
+  color: var(--text-faint);
+}
+
+.fund-holdings-grid > article > header > span {
+  flex: 0 0 auto;
+  color: var(--mint);
+}
+
+.fund-holdings-grid > article > p {
+  min-height: 64px;
+  margin: 0;
+  padding: 13px;
+  line-height: 1.65;
+}
+
+.fund-holdings-section > footer {
+  padding: 9px 12px;
+  line-height: 1.55;
+}
+
 .fund-detail-grid > section > small,
 .fund-audit-grid > section > small {
   display: block;
@@ -2142,8 +2237,13 @@
   .fund-detail-grid,
   .fund-audit-grid,
   .fund-objective-section,
+  .fund-holdings-grid,
   .fund-score-section > div {
     grid-template-columns: 1fr;
+  }
+
+  .fund-holdings-grid > article {
+    border-right: 0;
   }
 
   .fund-objective-section > div:first-child {

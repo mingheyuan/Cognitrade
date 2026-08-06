@@ -73,6 +73,18 @@ vi.mock('../CognitradeContext', () => ({
                   },
                   holdings_period: '2026年2季度',
                   top_holdings: [{ code: '600519', name: '贵州茅台', weight_pct: 9.5 }],
+                  asset_allocation_period: '2026-06-30',
+                  asset_allocation: [
+                    { asset_type: 'stock', label: '股票', weight_pct: 70 },
+                    { asset_type: 'bond', label: '债券', weight_pct: 10 },
+                  ],
+                  bond_holdings: [{ code: '019785', name: '25国债13', weight_pct: 1.65 }],
+                  target_fund_holdings: [],
+                  lookthrough_holdings: [],
+                  holdings_coverage: {
+                    asset_allocation: 'available', direct_equity: 'available', bond: 'available',
+                    target_fund: 'not_applicable', lookthrough: 'not_applicable', is_fund_of_funds: false,
+                  },
                   data_gap: [],
                 },
               ],
@@ -104,7 +116,10 @@ describe('Funds', () => {
     expect(screen.getByText(/张经理/)).toBeInTheDocument()
     expect(screen.getByText('最新总份额')).toBeInTheDocument()
     expect(screen.getByText('10 亿份')).toBeInTheDocument()
-    expect(screen.getByText('完整披露持仓')).toBeInTheDocument()
+    expect(screen.getByText('披露持仓结构')).toBeInTheDocument()
+    expect(screen.getByText('直接股票持仓')).toBeInTheDocument()
+    expect(screen.getByText('债券持仓')).toBeInTheDocument()
+    expect(screen.getByText('25国债13')).toBeInTheDocument()
     expect(screen.getByText('单位净值完整趋势')).toBeInTheDocument()
     expect(screen.getByText('易方达基金')).toBeInTheDocument()
   })

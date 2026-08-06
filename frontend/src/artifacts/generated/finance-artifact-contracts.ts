@@ -1030,6 +1030,41 @@ export type FundSnapshotContent = {
     "holdings_period"?: string | null;
     "top10_concentration_pct"?: number | null;
     "holdings_source"?: string;
+    "asset_allocation"?: Array<{
+      "asset_type": string;
+      "label": string;
+      "weight_pct": number;
+    }>;
+    "asset_allocation_period"?: string | null;
+    "bond_holdings"?: Array<{
+      "rank": number;
+      "code": string;
+      "name": string;
+      "security_type": string;
+      "weight_pct"?: number | null;
+    }>;
+    "target_fund_holdings"?: Array<{
+      "rank": number;
+      "code": string;
+      "name": string;
+      "security_type": string;
+      "weight_pct"?: number | null;
+    }>;
+    "lookthrough_holdings"?: Array<{
+      "rank": number;
+      "code": string;
+      "name": string;
+      "security_type": string;
+      "weight_pct"?: number | null;
+    }>;
+    "holdings_coverage"?: {
+      "asset_allocation": "available" | "unavailable" | "not_applicable";
+      "direct_equity": "available" | "unavailable" | "not_applicable";
+      "bond": "available" | "unavailable" | "not_applicable";
+      "target_fund": "available" | "unavailable" | "not_applicable";
+      "lookthrough": "available" | "unavailable" | "not_applicable";
+      "is_fund_of_funds": boolean;
+    };
     "fund_overview"?: {
       "fund_company"?: unknown;
       "fund_manager"?: unknown;
@@ -1143,6 +1178,42 @@ export type FundAnalysisContent = {
     }>;
     "holdings_period"?: string | null;
     "top10_concentration_pct"?: number | null;
+    "holdings_source"?: string | null;
+    "asset_allocation"?: Array<{
+      "asset_type": string;
+      "label": string;
+      "weight_pct": number;
+    }>;
+    "asset_allocation_period"?: string | null;
+    "bond_holdings"?: Array<{
+      "rank": number;
+      "code": string;
+      "name": string;
+      "security_type": string;
+      "weight_pct"?: number | null;
+    }>;
+    "target_fund_holdings"?: Array<{
+      "rank": number;
+      "code": string;
+      "name": string;
+      "security_type": string;
+      "weight_pct"?: number | null;
+    }>;
+    "lookthrough_holdings"?: Array<{
+      "rank": number;
+      "code": string;
+      "name": string;
+      "security_type": string;
+      "weight_pct"?: number | null;
+    }>;
+    "holdings_coverage"?: {
+      "asset_allocation": "available" | "unavailable" | "not_applicable";
+      "direct_equity": "available" | "unavailable" | "not_applicable";
+      "bond": "available" | "unavailable" | "not_applicable";
+      "target_fund": "available" | "unavailable" | "not_applicable";
+      "lookthrough": "available" | "unavailable" | "not_applicable";
+      "is_fund_of_funds": boolean;
+    };
     "benchmark_definition"?: string | null;
     "benchmark_performance"?: Array<{
       "period": string;
@@ -2468,6 +2539,36 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "funds[].holdings_period",
     "funds[].top10_concentration_pct",
     "funds[].holdings_source",
+    "funds[].asset_allocation",
+    "funds[].asset_allocation[].asset_type",
+    "funds[].asset_allocation[].label",
+    "funds[].asset_allocation[].weight_pct",
+    "funds[].asset_allocation_period",
+    "funds[].bond_holdings",
+    "funds[].bond_holdings[].rank",
+    "funds[].bond_holdings[].code",
+    "funds[].bond_holdings[].name",
+    "funds[].bond_holdings[].security_type",
+    "funds[].bond_holdings[].weight_pct",
+    "funds[].target_fund_holdings",
+    "funds[].target_fund_holdings[].rank",
+    "funds[].target_fund_holdings[].code",
+    "funds[].target_fund_holdings[].name",
+    "funds[].target_fund_holdings[].security_type",
+    "funds[].target_fund_holdings[].weight_pct",
+    "funds[].lookthrough_holdings",
+    "funds[].lookthrough_holdings[].rank",
+    "funds[].lookthrough_holdings[].code",
+    "funds[].lookthrough_holdings[].name",
+    "funds[].lookthrough_holdings[].security_type",
+    "funds[].lookthrough_holdings[].weight_pct",
+    "funds[].holdings_coverage",
+    "funds[].holdings_coverage.asset_allocation",
+    "funds[].holdings_coverage.direct_equity",
+    "funds[].holdings_coverage.bond",
+    "funds[].holdings_coverage.target_fund",
+    "funds[].holdings_coverage.lookthrough",
+    "funds[].holdings_coverage.is_fund_of_funds",
     "funds[].fund_overview",
     "funds[].fund_overview.fund_company",
     "funds[].fund_overview.fund_manager",
@@ -2569,6 +2670,37 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "candidates[].top_holdings[].market_value_10k",
     "candidates[].holdings_period",
     "candidates[].top10_concentration_pct",
+    "candidates[].holdings_source",
+    "candidates[].asset_allocation",
+    "candidates[].asset_allocation[].asset_type",
+    "candidates[].asset_allocation[].label",
+    "candidates[].asset_allocation[].weight_pct",
+    "candidates[].asset_allocation_period",
+    "candidates[].bond_holdings",
+    "candidates[].bond_holdings[].rank",
+    "candidates[].bond_holdings[].code",
+    "candidates[].bond_holdings[].name",
+    "candidates[].bond_holdings[].security_type",
+    "candidates[].bond_holdings[].weight_pct",
+    "candidates[].target_fund_holdings",
+    "candidates[].target_fund_holdings[].rank",
+    "candidates[].target_fund_holdings[].code",
+    "candidates[].target_fund_holdings[].name",
+    "candidates[].target_fund_holdings[].security_type",
+    "candidates[].target_fund_holdings[].weight_pct",
+    "candidates[].lookthrough_holdings",
+    "candidates[].lookthrough_holdings[].rank",
+    "candidates[].lookthrough_holdings[].code",
+    "candidates[].lookthrough_holdings[].name",
+    "candidates[].lookthrough_holdings[].security_type",
+    "candidates[].lookthrough_holdings[].weight_pct",
+    "candidates[].holdings_coverage",
+    "candidates[].holdings_coverage.asset_allocation",
+    "candidates[].holdings_coverage.direct_equity",
+    "candidates[].holdings_coverage.bond",
+    "candidates[].holdings_coverage.target_fund",
+    "candidates[].holdings_coverage.lookthrough",
+    "candidates[].holdings_coverage.is_fund_of_funds",
     "candidates[].benchmark_definition",
     "candidates[].benchmark_performance",
     "candidates[].benchmark_performance[].period",

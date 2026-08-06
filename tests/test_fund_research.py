@@ -73,6 +73,22 @@ def _holdings_frame(_code: str, _year: str) -> pd.DataFrame:
     )
 
 
+def _asset_holdings_payload(_code: str, _report_date: str) -> dict:
+    return {
+        "source": "2026-06-30",
+        "chart_list": [
+            {"type": "stock", "type_desc": "股票", "percent": 70.0},
+            {"type": "bond", "type_desc": "债券", "percent": 10.0},
+            {"type": "cash", "type_desc": "现金", "percent": 5.0},
+            {"type": "other", "type_desc": "其他", "percent": 15.0},
+        ],
+        "stock_list": [],
+        "bond_list": [
+            {"code": "019785", "name": "25国债13", "percent": 1.65},
+        ],
+    }
+
+
 def _overview_frame(code: str) -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -353,6 +369,7 @@ class FundResearchTests(unittest.TestCase):
             exchange_rank_loader=lambda: pd.DataFrame(),
             nav_loader=_nav_frame,
             holdings_loader=_holdings_frame,
+            asset_holdings_loader=_asset_holdings_payload,
             overview_loader=_overview_frame,
             achievement_loader=_achievement_payload,
             manager_tenure_loader=_manager_tenure_frame,
@@ -372,12 +389,45 @@ class FundResearchTests(unittest.TestCase):
         first = payload["funds"][0]
         self.assertEqual(first["holdings_period"], "2026年2季度")
         self.assertEqual(first["top10_concentration_pct"], 17.7)
+        self.assertEqual(first["asset_allocation_period"], "2026-06-30")
+        self.assertEqual(first["asset_allocation"][0]["label"], "股票")
+        self.assertEqual(first["bond_holdings"][0]["name"], "25国债13")
+        self.assertEqual(first["holdings_coverage"]["direct_equity"], "available")
         self.assertGreater(first["risk"]["observation_count"], 2)
         self.assertNotIn("fund_holdings_missing", first["data_gap"])
         self.assertIn("沪深300", first["benchmark_definition"])
         self.assertEqual(first["benchmark_performance"][0]["excess_return_pct"], 25.0)
         self.assertTrue(first["manager_tenures"][0]["current"])
         self.assertEqual(first["scale_change"]["total_share_change_pct"], -9.090909)
+
+    def test_feeder_fund_holdings_are_split_without_inventing_target_etf(self) -> None:
+        skill = FundSnapshotSkill(
+            holdings_loader=lambda _code, _year: pd.DataFrame(
+                [{"序号": 1, "股票代码": "688012", "股票名称": "中微公司", "季度": "2026年2季度"}]
+            ),
+            asset_holdings_loader=lambda _code, _report_date: {
+                "source": "2026-06-30",
+                "chart_list": [
+                    {"type": "bond", "type_desc": "债券", "percent": 3.29},
+                    {"type": "cash", "type_desc": "现金", "percent": 2.65},
+                    {"type": "other", "type_desc": "其他", "percent": 96.8},
+                ],
+                "stock_list": [],
+                "bond_list": [
+                    {"code": "019785", "name": "25国债13", "percent": 1.65},
+                    {"code": "019827", "name": "26国债01", "percent": 0.7},
+                ],
+            },
+        )
+
+        payload = skill._latest_holdings("020464", is_fund_of_funds=True)
+
+        self.assertEqual(len(payload["top_holdings"]), 1)
+        self.assertEqual(len(payload["bond_holdings"]), 2)
+        self.assertEqual(payload["asset_allocation"][-1]["weight_pct"], 96.8)
+        self.assertEqual(payload["holdings_coverage"]["target_fund"], "unavailable")
+        self.assertEqual(payload["target_fund_holdings"], [])
+        self.assertEqual(payload["lookthrough_holdings"], [])
 
     def test_fund_methodology_ranks_only_comparable_observed_evidence(self) -> None:
         skill = FundSnapshotSkill(
@@ -386,6 +436,7 @@ class FundResearchTests(unittest.TestCase):
             exchange_rank_loader=lambda: pd.DataFrame(),
             nav_loader=_nav_frame,
             holdings_loader=_holdings_frame,
+            asset_holdings_loader=_asset_holdings_payload,
             overview_loader=_overview_frame,
             achievement_loader=_achievement_payload,
             manager_tenure_loader=_manager_tenure_frame,
@@ -430,6 +481,7 @@ class FundResearchTests(unittest.TestCase):
             exchange_rank_loader=lambda: pd.DataFrame(),
             nav_loader=lambda _code: nav,
             holdings_loader=_holdings_frame,
+            asset_holdings_loader=_asset_holdings_payload,
             overview_loader=_overview_frame,
             achievement_loader=_achievement_payload,
             manager_tenure_loader=_manager_tenure_frame,

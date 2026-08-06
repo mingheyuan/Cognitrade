@@ -82,6 +82,45 @@
           "holdings_period": {"type": ["string", "null"]},
           "top10_concentration_pct": {"type": ["number", "null"]},
           "holdings_source": {"type": "string"},
+          "asset_allocation": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["asset_type", "label", "weight_pct"],
+              "properties": {
+                "asset_type": {"type": "string"},
+                "label": {"type": "string"},
+                "weight_pct": {"type": "number"}
+              },
+              "additionalProperties": false
+            }
+          },
+          "asset_allocation_period": {"type": ["string", "null"]},
+          "bond_holdings": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/disclosedSecurityHolding"}
+          },
+          "target_fund_holdings": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/disclosedSecurityHolding"}
+          },
+          "lookthrough_holdings": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/disclosedSecurityHolding"}
+          },
+          "holdings_coverage": {
+            "type": "object",
+            "required": ["asset_allocation", "direct_equity", "bond", "target_fund", "lookthrough", "is_fund_of_funds"],
+            "properties": {
+              "asset_allocation": {"enum": ["available", "unavailable", "not_applicable"]},
+              "direct_equity": {"enum": ["available", "unavailable", "not_applicable"]},
+              "bond": {"enum": ["available", "unavailable", "not_applicable"]},
+              "target_fund": {"enum": ["available", "unavailable", "not_applicable"]},
+              "lookthrough": {"enum": ["available", "unavailable", "not_applicable"]},
+              "is_fund_of_funds": {"type": "boolean"}
+            },
+            "additionalProperties": false
+          },
           "fund_overview": {
             "type": "object",
             "properties": {
@@ -184,6 +223,20 @@
       }
     },
     "retrieved_at": {"type": "string"}
+  },
+  "$defs": {
+    "disclosedSecurityHolding": {
+      "type": "object",
+      "required": ["rank", "code", "name", "security_type"],
+      "properties": {
+        "rank": {"type": "integer", "minimum": 1},
+        "code": {"type": "string"},
+        "name": {"type": "string"},
+        "security_type": {"type": "string"},
+        "weight_pct": {"type": ["number", "null"]}
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

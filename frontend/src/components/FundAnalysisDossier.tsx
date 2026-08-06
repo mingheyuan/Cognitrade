@@ -80,6 +80,14 @@ function percent(value: unknown, signed = true): string {
   return number == null ? '—' : `${signed && number > 0 ? '+' : ''}${number.toFixed(2)}%`
 }
 
+function disclosureStatus(value: unknown): string {
+  return ({
+    available: '已取得',
+    unavailable: '未取得',
+    not_applicable: '不适用',
+  } as Record<string, string>)[String(value || '')] || '状态未知'
+}
+
 function numberText(value: unknown, digits = 2): string {
   const number = numberValue(value)
   return number == null ? '—' : number.toLocaleString('zh-CN', { maximumFractionDigits: digits })
@@ -238,6 +246,12 @@ function FundCandidateDossier({ candidate, defaultOpen }: { candidate: RecordVal
   const performance = records(candidate.benchmark_performance)
   const managers = records(candidate.manager_tenures)
   const holdings = records(candidate.top_holdings)
+  const assetAllocation = records(candidate.asset_allocation)
+  const bondHoldings = records(candidate.bond_holdings)
+  const targetFundHoldings = records(candidate.target_fund_holdings)
+  const lookthroughHoldings = records(candidate.lookthrough_holdings)
+  const holdingsCoverage = asRecord(candidate.holdings_coverage)
+  const isFundOfFunds = holdingsCoverage.is_fund_of_funds === true
   const gaps = Array.isArray(candidate.data_gap) ? candidate.data_gap.map(String) : []
   const isSingleFund = String(candidate.analysis_mode || '') === 'single_fund'
   const usesSinceInceptionReturn = numberValue(returns.year_3) == null
@@ -330,8 +344,27 @@ function FundCandidateDossier({ candidate, defaultOpen }: { candidate: RecordVal
         </div>
 
         <section className="fund-holdings-section">
-          <header><ShieldCheck size={15} /><h4>完整披露持仓</h4><span>{String(candidate.holdings_period || '披露期未返回')} · {holdings.length} 项</span></header>
-          {holdings.length ? <div className="finance-table-scroll"><table className="finance-table"><thead><tr><th>序号</th><th>代码</th><th>名称</th><th>净值占比</th><th>持股数（万股）</th><th>市值（万元）</th></tr></thead><tbody>{holdings.map((row, index) => <tr key={`${String(row.code)}-${index}`}><td>{String(row.rank || index + 1)}</td><td>{String(row.code || '—')}</td><td>{String(row.name || '—')}</td><td>{percent(row.weight_pct, false)}</td><td>{numberText(row.shares_10k)}</td><td>{numberText(row.market_value_10k)}</td></tr>)}</tbody></table></div> : <p>本次运行未取得披露持仓。</p>}
+          <header><ShieldCheck size={15} /><h4>披露持仓结构</h4><span>{String(candidate.asset_allocation_period || candidate.holdings_period || '披露期未返回')}</span></header>
+          {assetAllocation.length ? <div className="fund-allocation-grid">{assetAllocation.map((row) => <article key={String(row.asset_type)}><span>{String(row.label || row.asset_type)}</span><strong>{percent(row.weight_pct, false)}</strong></article>)}</div> : <p>本次运行未取得资产配置比例。</p>}
+          <div className="fund-holdings-grid">
+            <article>
+              <header><div><strong>直接股票持仓</strong><small>基金自身直接持有，不含目标 ETF 穿透成分</small></div><span>{disclosureStatus(holdingsCoverage.direct_equity)} · {holdings.length} 项</span></header>
+              {holdings.length ? <div className="finance-table-scroll"><table className="finance-table"><thead><tr><th>序号</th><th>代码</th><th>名称</th><th>净值占比</th><th>持股数（万股）</th><th>市值（万元）</th></tr></thead><tbody>{holdings.map((row, index) => <tr key={`${String(row.code)}-${index}`}><td>{String(row.rank || index + 1)}</td><td>{String(row.code || '—')}</td><td>{String(row.name || '—')}</td><td>{percent(row.weight_pct, false)}</td><td>{numberText(row.shares_10k)}</td><td>{numberText(row.market_value_10k)}</td></tr>)}</tbody></table></div> : <p>{holdingsCoverage.direct_equity === 'not_applicable' ? '披露资产结构中没有直接股票配置。' : '未取得直接股票持仓明细。'}</p>}
+            </article>
+            <article>
+              <header><div><strong>债券持仓</strong><small>基金自身直接持有的已披露债券</small></div><span>{disclosureStatus(holdingsCoverage.bond)} · {bondHoldings.length} 项</span></header>
+              {bondHoldings.length ? <div className="finance-table-scroll"><table className="finance-table"><thead><tr><th>序号</th><th>代码</th><th>名称</th><th>净值占比</th></tr></thead><tbody>{bondHoldings.map((row, index) => <tr key={`${String(row.code)}-${index}`}><td>{String(row.rank || index + 1)}</td><td>{String(row.code || '—')}</td><td>{String(row.name || '—')}</td><td>{percent(row.weight_pct, false)}</td></tr>)}</tbody></table></div> : <p>{holdingsCoverage.bond === 'not_applicable' ? '披露资产结构中没有债券配置。' : '未取得债券持仓明细。'}</p>}
+            </article>
+            {isFundOfFunds && <article>
+              <header><div><strong>目标基金 / ETF</strong><small>联接基金或 FOF 的基金份额投资</small></div><span>{disclosureStatus(holdingsCoverage.target_fund)} · {targetFundHoldings.length} 项</span></header>
+              {targetFundHoldings.length ? <div className="finance-table-scroll"><table className="finance-table"><thead><tr><th>代码</th><th>名称</th><th>净值占比</th></tr></thead><tbody>{targetFundHoldings.map((row, index) => <tr key={`${String(row.code)}-${index}`}><td>{String(row.code || '—')}</td><td>{String(row.name || '—')}</td><td>{percent(row.weight_pct, false)}</td></tr>)}</tbody></table></div> : <p>公开结构源将目标基金份额归入“其他资产”，未返回目标基金名称与精确占比；系统未做推断。</p>}
+            </article>}
+            {isFundOfFunds && <article>
+              <header><div><strong>目标基金穿透持仓</strong><small>目标 ETF / 基金底层证券，仅在真实可追溯时展示</small></div><span>{disclosureStatus(holdingsCoverage.lookthrough)} · {lookthroughHoldings.length} 项</span></header>
+              {lookthroughHoldings.length ? <div className="finance-table-scroll"><table className="finance-table"><thead><tr><th>代码</th><th>名称</th><th>底层占比</th></tr></thead><tbody>{lookthroughHoldings.map((row, index) => <tr key={`${String(row.code)}-${index}`}><td>{String(row.code || '—')}</td><td>{String(row.name || '—')}</td><td>{percent(row.weight_pct, false)}</td></tr>)}</tbody></table></div> : <p>目标基金身份或持有份额未由当前公开接口披露，无法形成可审计的穿透持仓。</p>}
+            </article>}
+          </div>
+          <footer>资产配置与证券明细可能来自不同披露口径；“其他资产”不会被当作股票或目标 ETF 明细。</footer>
         </section>
 
         <section className="fund-objective-section">

@@ -141,7 +141,14 @@ not emit a score or rank. Multiple explicit codes and category selection use
 `analysis_mode: "comparison"`; ranking then requires at least two comparable
 funds and at least 60% observed scoring-field coverage. Missing NAV, ranking,
 fee, or disclosed holdings fields remain `data_gap`; the service does not
-insert simulated or neutral values. Fund methodology v4 also records the declared performance
+insert simulated or neutral values. Holdings evidence is split into asset
+allocation, direct equities, direct bonds, target-fund/ETF positions, and
+look-through positions. A feeder fund's directly held shares are never labeled
+as its complete portfolio. When the public structure source groups the target
+ETF under `other` without returning its identity or exact weight,
+`target_fund_holdings` and `lookthrough_holdings` stay empty and the corresponding
+coverage fields are `unavailable`; no ETF identity or constituent weight is
+inferred from the fund name. Fund methodology v4 also records the declared performance
 benchmark, fund-versus-benchmark period returns, manager tenure segments, and
 single-fund scale/share history. When a complete trailing-three-year return is
 unavailable, the long-term annualized-return component uses the real

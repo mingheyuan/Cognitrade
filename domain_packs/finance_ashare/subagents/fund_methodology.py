@@ -251,6 +251,19 @@ def _candidate_metrics(row: dict[str, Any]) -> dict[str, Any]:
     }
     data_gap = list(row.get("data_gap") or [])
     data_gap.extend(key for key, value in metrics.items() if value is None)
+    holdings_coverage = dict(row.get("holdings_coverage") or {})
+    if not holdings_coverage:
+        fund_text = f"{row.get('fund_name') or ''} {row.get('fund_type') or ''}".casefold()
+        is_fund_of_funds = "联接" in fund_text or "fof" in fund_text
+        target_status = "unavailable" if is_fund_of_funds else "not_applicable"
+        holdings_coverage = {
+            "asset_allocation": "unavailable",
+            "direct_equity": "available" if row.get("top_holdings") else "unavailable",
+            "bond": "unavailable",
+            "target_fund": target_status,
+            "lookthrough": target_status,
+            "is_fund_of_funds": is_fund_of_funds,
+        }
     return {
         "fund_code": str(row.get("fund_code") or ""),
         "fund_name": str(row.get("fund_name") or row.get("fund_code") or ""),
@@ -264,6 +277,13 @@ def _candidate_metrics(row: dict[str, Any]) -> dict[str, Any]:
         "top_holdings": list(row.get("top_holdings") or []),
         "holdings_period": row.get("holdings_period"),
         "top10_concentration_pct": row.get("top10_concentration_pct"),
+        "holdings_source": row.get("holdings_source"),
+        "asset_allocation": list(row.get("asset_allocation") or []),
+        "asset_allocation_period": row.get("asset_allocation_period"),
+        "bond_holdings": list(row.get("bond_holdings") or []),
+        "target_fund_holdings": list(row.get("target_fund_holdings") or []),
+        "lookthrough_holdings": list(row.get("lookthrough_holdings") or []),
+        "holdings_coverage": holdings_coverage,
         "benchmark_definition": row.get("benchmark_definition"),
         "benchmark_performance": list(row.get("benchmark_performance") or []),
         "manager_tenures": list(row.get("manager_tenures") or []),
