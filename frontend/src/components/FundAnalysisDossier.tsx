@@ -4,12 +4,18 @@ import {
   CheckCircle2,
   ChevronDown,
   Database,
+  Download,
+  ExternalLink,
+  FileText,
   LineChart as LineChartIcon,
+  LoaderCircle,
+  RefreshCw,
   Scale,
   ShieldCheck,
+  Square,
   Users,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   CartesianGrid,
   Legend,
@@ -22,9 +28,20 @@ import {
 } from 'recharts'
 import { BusinessDataView } from '../artifacts/BusinessDataView'
 import { dataGapLabel } from '../artifacts/labels'
+import {
+  CognitradeApiClient,
+  CognitradeApiError,
+  type FundHoldingReportBatch,
+  type HoldingReportProfile,
+  type RunReportExport,
+  type RunReportFormat,
+} from '../api-client'
 
 type FundAnalysisDossierProps = {
   artifacts: Array<Record<string, unknown>>
+  sourceRunId: string
+  client: CognitradeApiClient
+  onOpenRun: (runId: string) => void
 }
 
 type RecordValue = Record<string, unknown>
@@ -52,6 +69,13 @@ const SCORE_LABELS: Record<string, string> = {
   fee: '费率',
   return_consistency: '收益一致性',
 }
+
+const REPORT_PROFILES: Array<{ value: HoldingReportProfile; label: string; detail: string }> = [
+  { value: 'quick', label: '快速', detail: '核心行情、财务与风险结论' },
+  { value: 'lite', label: '轻量', detail: '默认档，补充估值与基础评审' },
+  { value: 'medium', label: '标准', detail: '更完整的方法论和证据覆盖' },
+  { value: 'deep', label: '深度', detail: '完整 UZI 能力，耗时最长' },
+]
 
 function asRecord(value: unknown): RecordValue {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -159,7 +183,7 @@ function FundTrendChart({
   )
 }
 
-export function FundAnalysisDossier({ artifacts }: FundAnalysisDossierProps) {
+export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun }: FundAnalysisDossierProps) {
   const analysis = artifactContent(artifacts, 'fund_analysis')
   const snapshot = artifactContent(artifacts, 'fund_snapshot')
   const analysisMode = String(analysis.analysis_mode || snapshot.analysis_mode || 'comparison')
@@ -177,6 +201,92 @@ export function FundAnalysisDossier({ artifacts }: FundAnalysisDossierProps) {
     ...(Array.isArray(snapshot.data_gap) ? snapshot.data_gap.map(String) : []),
     ...(Array.isArray(analysis.data_gap) ? analysis.data_gap.map(String) : []),
   ]))
+  const [holdingBatches, setHoldingBatches] = useState<FundHoldingReportBatch[]>([])
+  const [holdingAction, setHoldingAction] = useState('')
+  const [holdingError, setHoldingError] = useState('')
+
+  const refreshHoldingBatches = useCallback(async (quiet = false) => {
+    if (!sourceRunId) {
+      setHoldingBatches([])
+      return
+    }
+    try {
+      const rows = await client.listFundHoldingReportBatches(sourceRunId)
+      setHoldingBatches(rows)
+      if (!quiet) setHoldingError('')
+    } catch (error) {
+      if (!quiet) setHoldingError(reportErrorMessage(error))
+    }
+  }, [client, sourceRunId])
+
+  useEffect(() => {
+    queueMicrotask(() => void refreshHoldingBatches())
+  }, [refreshHoldingBatches])
+
+  const hasRunningBatch = holdingBatches.some((row) => row.status === 'running')
+  useEffect(() => {
+    if (!hasRunningBatch) return
+    const timer = window.setInterval(() => void refreshHoldingBatches(true), 2000)
+    return () => window.clearInterval(timer)
+  }, [hasRunningBatch, refreshHoldingBatches])
+
+  const runHoldingAction = useCallback(async (
+    key: string,
+    action: () => Promise<FundHoldingReportBatch>,
+  ) => {
+    setHoldingAction(key)
+    setHoldingError('')
+    try {
+      const batch = await action()
+      setHoldingBatches((current) => [
+        batch,
+        ...current.filter((row) => row.batch_id !== batch.batch_id),
+      ])
+    } catch (error) {
+      setHoldingError(reportErrorMessage(error))
+    } finally {
+      setHoldingAction('')
+    }
+  }, [])
+
+  const createHoldingBatch = useCallback((
+    fundCode: string,
+    profile: HoldingReportProfile,
+    confirmStale: boolean,
+    force: boolean,
+  ) => runHoldingAction(
+    `create:${fundCode}`,
+    () => client.createFundHoldingReports(sourceRunId, {
+      fund_code: fundCode,
+      profile,
+      confirm_stale: confirmStale,
+      force,
+    }),
+  ), [client, runHoldingAction, sourceRunId])
+
+  const mutateHoldingBatch = useCallback((
+    batchId: string,
+    action: 'cancel' | 'retry' | 'continue',
+  ) => runHoldingAction(`${action}:${batchId}`, () => {
+    if (action === 'cancel') return client.cancelFundHoldingReportBatch(batchId)
+    if (action === 'continue') return client.continueFundHoldingReportBatch(batchId)
+    return client.retryFundHoldingReportBatch(batchId)
+  }), [client, runHoldingAction])
+
+  const downloadHoldingExport = useCallback(async (
+    key: string,
+    load: () => Promise<RunReportExport>,
+  ) => {
+    setHoldingAction(key)
+    setHoldingError('')
+    try {
+      saveReportExport(await load())
+    } catch (error) {
+      setHoldingError(reportErrorMessage(error))
+    } finally {
+      setHoldingAction('')
+    }
+  }, [])
 
   if (!Object.keys(analysis).length && !Object.keys(snapshot).length) return null
   return (
@@ -213,8 +323,21 @@ export function FundAnalysisDossier({ artifacts }: FundAnalysisDossierProps) {
         ) : <div className="fund-dossier-empty"><AlertCircle size={18} />当前没有候选通过方法论的证据门槛。</div>}
       </section>
 
+      {holdingError && <div className="fund-holding-report-error" role="alert"><AlertCircle size={15} />{holdingError}</div>}
+
       <div className="fund-candidate-dossiers">
-        {candidates.map((candidate, index) => <FundCandidateDossier key={String(candidate.fund_code || index)} candidate={candidate} defaultOpen={index === 0} />)}
+        {candidates.map((candidate, index) => <FundCandidateDossier
+          key={String(candidate.fund_code || index)}
+          candidate={candidate}
+          defaultOpen={index === 0}
+          holdingBatches={holdingBatches.filter((row) => row.fund_code === String(candidate.fund_code || ''))}
+          holdingAction={holdingAction}
+          onCreateHoldingBatch={createHoldingBatch}
+          onMutateHoldingBatch={mutateHoldingBatch}
+          onDownloadZip={(batchId) => downloadHoldingExport(`zip:${batchId}`, () => client.getFundHoldingReportZip(batchId))}
+          onDownloadReport={(runId, format) => downloadHoldingExport(`${format}:${runId}`, () => client.getRunReport(runId, format))}
+          onOpenRun={onOpenRun}
+        />)}
       </div>
 
       <div className="fund-audit-grid">
@@ -235,7 +358,27 @@ export function FundAnalysisDossier({ artifacts }: FundAnalysisDossierProps) {
   )
 }
 
-function FundCandidateDossier({ candidate, defaultOpen }: { candidate: RecordValue; defaultOpen: boolean }) {
+function FundCandidateDossier({
+  candidate,
+  defaultOpen,
+  holdingBatches,
+  holdingAction,
+  onCreateHoldingBatch,
+  onMutateHoldingBatch,
+  onDownloadZip,
+  onDownloadReport,
+  onOpenRun,
+}: {
+  candidate: RecordValue
+  defaultOpen: boolean
+  holdingBatches: FundHoldingReportBatch[]
+  holdingAction: string
+  onCreateHoldingBatch: (fundCode: string, profile: HoldingReportProfile, confirmStale: boolean, force: boolean) => void
+  onMutateHoldingBatch: (batchId: string, action: 'cancel' | 'retry' | 'continue') => void
+  onDownloadZip: (batchId: string) => void
+  onDownloadReport: (runId: string, format: RunReportFormat) => void
+  onOpenRun: (runId: string) => void
+}) {
   const returns = asRecord(candidate.returns_pct)
   const risk = asRecord(candidate.risk)
   const overview = asRecord(candidate.fund_overview)
@@ -261,6 +404,21 @@ function FundCandidateDossier({ candidate, defaultOpen }: { candidate: RecordVal
   const gaps = Array.isArray(candidate.data_gap) ? candidate.data_gap.map(String) : []
   const isSingleFund = String(candidate.analysis_mode || '') === 'single_fund'
   const usesSinceInceptionReturn = numberValue(returns.year_3) == null
+  const [reportProfile, setReportProfile] = useState<HoldingReportProfile>('lite')
+  const [confirmStale, setConfirmStale] = useState(false)
+  const currentBatch = holdingBatches
+    .filter((row) => row.profile === reportProfile)
+    .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))[0]
+  const reportHoldings = isFundOfFunds ? lookthroughHoldings : holdings
+  const reportEligibility = holdingReportEligibility(candidate, reportHoldings)
+  const reportDisclosureDate = firstDisclosureDate(
+    isFundOfFunds ? candidate.lookthrough_period : candidate.holdings_period,
+    candidate.asset_allocation_period,
+    candidate.target_fund_period,
+  )
+  const disclosureAge = dateAgeDays(reportDisclosureDate)
+  const requiresConfirmation = disclosureAge != null && disclosureAge > 180
+  const warnsStale = disclosureAge != null && disclosureAge > 120
   return (
     <details className={`fund-candidate-dossier ${candidate.selection_eligible ? 'is-eligible' : ''}`} open={defaultOpen}>
       <summary>
@@ -373,6 +531,96 @@ function FundCandidateDossier({ candidate, defaultOpen }: { candidate: RecordVal
           <footer>资产配置合计 {percent(allocationTotal, false)}。各项按基金净资产计量时，负债会使资产比例合计超过 100%；目标 ETF 已从“其他”中拆出，证券穿透仅表示最新披露的前十大持仓，不代表完整组合。</footer>
         </section>
 
+        <section className="fund-holding-report-section">
+          <header>
+            <div>
+              <FileText size={16} />
+              <div><h4>前十大持仓股票报告</h4><small>从本次基金快照冻结持仓，最多 5 个股票研究并行执行；不重新猜测或抓取基金持仓。</small></div>
+            </div>
+            <span className={`quality-pill ${reportEligibility.eligible ? 'quality-pill--available' : 'quality-pill--data_gap'}`}>
+              {reportEligibility.eligible ? `${reportHoldings.length} 项可编排` : '当前不可编排'}
+            </span>
+          </header>
+
+          {!reportEligibility.eligible ? (
+            <div className="fund-holding-report-empty"><AlertCircle size={16} /><span>{reportEligibility.reason}</span></div>
+          ) : (
+            <>
+              <div className="fund-holding-report-config">
+                <label>
+                  <span>研究档位</span>
+                  <select value={reportProfile} onChange={(event) => setReportProfile(event.target.value as HoldingReportProfile)} disabled={currentBatch?.status === 'running'}>
+                    {REPORT_PROFILES.map((profile) => <option key={profile.value} value={profile.value}>{profile.label} · {profile.detail}</option>)}
+                  </select>
+                </label>
+                <div className={`fund-holding-disclosure ${warnsStale ? 'is-stale' : ''}`}>
+                  <span>持仓披露</span>
+                  <strong>{reportDisclosureDate || '日期未取得'}</strong>
+                  <small>{disclosureAge == null ? '无法判定新鲜度，将在报告中标记缺口' : `${disclosureAge} 天前${warnsStale ? ' · 请注意持仓可能已变化' : ''}`}</small>
+                </div>
+                {requiresConfirmation && <label className="fund-holding-confirm">
+                  <input type="checkbox" checked={confirmStale} onChange={(event) => setConfirmStale(event.target.checked)} />
+                  <span>我确认使用超过 180 天的历史披露持仓</span>
+                </label>}
+              </div>
+
+              {!currentBatch ? (
+                <button
+                  type="button"
+                  className="primary-button fund-holding-start"
+                  disabled={(requiresConfirmation && !confirmStale) || holdingAction === `create:${String(candidate.fund_code || '')}`}
+                  onClick={() => onCreateHoldingBatch(String(candidate.fund_code || ''), reportProfile, confirmStale, false)}
+                >
+                  {holdingAction === `create:${String(candidate.fund_code || '')}` ? <LoaderCircle size={15} className="is-spinning" /> : <FileText size={15} />}
+                  生成 {REPORT_PROFILES.find((row) => row.value === reportProfile)?.label}持仓股票报告
+                </button>
+              ) : (
+                <div className="fund-holding-batch">
+                  <div className="fund-holding-batch-summary">
+                    <div><span>批次状态</span><strong>{holdingBatchStatusLabel(currentBatch.status)}</strong><small>{currentBatch.batch_id}</small></div>
+                    <div><span>可交付</span><strong>{currentBatch.counts.deliverable} / {currentBatch.counts.supported}</strong><small>完成与部分完成均可导出</small></div>
+                    <div><span>执行中</span><strong>{currentBatch.counts.running + currentBatch.counts.queued}</strong><small>并发上限 {currentBatch.concurrency}</small></div>
+                    <div><span>失败 / 不支持</span><strong>{currentBatch.counts.failed} / {currentBatch.counts.unsupported}</strong><small>不支持项仍保留审计记录</small></div>
+                  </div>
+                  <div className="fund-holding-progress" aria-label={`持仓报告完成 ${currentBatch.counts.deliverable} / ${Math.max(1, currentBatch.counts.supported)}`}>
+                    <i style={{ width: `${Math.min(100, currentBatch.counts.deliverable / Math.max(1, currentBatch.counts.supported) * 100)}%` }} />
+                  </div>
+                  <div className="fund-holding-batch-actions">
+                    {currentBatch.status === 'running' && <button type="button" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'cancel')} disabled={holdingAction === `cancel:${currentBatch.batch_id}`}><Square size={13} />取消未完成任务</button>}
+                    {currentBatch.counts.failed > 0 && currentBatch.status !== 'running' && <button type="button" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'retry')} disabled={holdingAction === `retry:${currentBatch.batch_id}`}><RefreshCw size={13} />重试失败项</button>}
+                    {currentBatch.counts.cancelled > 0 && currentBatch.status !== 'running' && <button type="button" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'continue')} disabled={holdingAction === `continue:${currentBatch.batch_id}`}><RefreshCw size={13} />继续未完成项</button>}
+                    {currentBatch.counts.deliverable > 0 && <button type="button" onClick={() => onDownloadZip(currentBatch.batch_id)} disabled={holdingAction === `zip:${currentBatch.batch_id}`}><Download size={13} />下载 PDF 报告包</button>}
+                    {currentBatch.status !== 'running' && <button type="button" onClick={() => onCreateHoldingBatch(String(candidate.fund_code || ''), reportProfile, confirmStale, true)} disabled={requiresConfirmation && !confirmStale}><RefreshCw size={13} />重新生成</button>}
+                  </div>
+
+                  <div className="fund-holding-report-list">
+                    {currentBatch.holdings.map((item) => <article key={`${item.rank}-${item.symbol}`} className={`is-${item.status}`}>
+                      <div className="fund-holding-report-rank">{String(item.rank).padStart(2, '0')}</div>
+                      <div className="fund-holding-report-name"><strong>{item.name}</strong><small>{item.symbol} · {item.market} · 基金权重 {percent(item.fund_weight_pct, false)}</small></div>
+                      <span className="fund-holding-report-status">{holdingItemStatusLabel(item.status)}</span>
+                      <div className="fund-holding-report-actions">
+                        {item.child_run_id && <button type="button" title="打开完整证据链" onClick={() => onOpenRun(item.child_run_id || '')}><ExternalLink size={13} />证据</button>}
+                        {item.report_available && item.child_run_id && <>
+                          <button type="button" onClick={() => onDownloadReport(item.child_run_id || '', 'html')} disabled={holdingAction === `html:${item.child_run_id}`}><FileText size={13} />HTML</button>
+                          <button type="button" onClick={() => onDownloadReport(item.child_run_id || '', 'pdf')} disabled={holdingAction === `pdf:${item.child_run_id}`}><Download size={13} />PDF</button>
+                        </>}
+                      </div>
+                      {(item.data_gap.length > 0 || item.error) && <p>{item.error || item.data_gap.map(dataGapLabel).join('；')}</p>}
+                    </article>)}
+                  </div>
+
+                  {currentBatch.data_gap.length > 0 && <div className="fund-holding-batch-gaps"><AlertCircle size={14} /><span>{currentBatch.data_gap.map(dataGapLabel).join('；')}</span></div>}
+                </div>
+              )}
+
+              {holdingBatches.length > 1 && <details className="fund-holding-history">
+                <summary>历史报告批次（{holdingBatches.length}）<ChevronDown size={14} /></summary>
+                <div>{holdingBatches.map((batch) => <span key={batch.batch_id}><strong>{REPORT_PROFILES.find((row) => row.value === batch.profile)?.label}</strong>{holdingBatchStatusLabel(batch.status)} · {batch.counts.deliverable}/{batch.counts.supported} · {String(batch.created_at).slice(0, 16).replace('T', ' ')}</span>)}</div>
+              </details>}
+            </>
+          )}
+        </section>
+
         <section className="fund-objective-section">
           <div><strong>投资目标</strong><p>{String(overview.investment_objective || '未返回')}</p></div>
           <div><strong>投资策略</strong><p>{String(overview.investment_strategy || '未返回')}</p></div>
@@ -382,4 +630,88 @@ function FundCandidateDossier({ candidate, defaultOpen }: { candidate: RecordVal
       </div>
     </details>
   )
+}
+
+function holdingReportEligibility(candidate: RecordValue, reportHoldings: RecordValue[]): { eligible: boolean; reason: string } {
+  const identity = `${String(candidate.fund_name || '')} ${String(candidate.fund_type || '')}`.toLocaleLowerCase('zh-CN')
+  if (["债券", "货币", "商品", "黄金"].some((token) => identity.includes(token))) {
+    return { eligible: false, reason: '该基金不是股票权益类基金，本功能不会把非股票资产误送入个股研究。' }
+  }
+  const equityFocused = identity.includes('股票') || identity.includes('equity') || identity.includes('etf') || identity.includes('指数')
+  if (!equityFocused) {
+    return { eligible: false, reason: '当前基金类型未明确为股票、权益、指数或 ETF，暂不生成持仓股票报告。' }
+  }
+  if (!reportHoldings.length) {
+    return { eligible: false, reason: '本次冻结的基金快照没有可审计的股票持仓；系统不会推断或模拟持仓。' }
+  }
+  return { eligible: true, reason: '' }
+}
+
+function dateAgeDays(value: string): number | null {
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return null
+  return Math.max(0, Math.floor((Date.now() - timestamp) / 86_400_000))
+}
+
+function extractDisclosureDate(value: string): string {
+  const match = value.match(/(?<!\d)(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})(?:日)?(?!\d)/)
+  if (match) {
+    return `${match[1]}-${String(Number(match[2])).padStart(2, '0')}-${String(Number(match[3])).padStart(2, '0')}`
+  }
+  const quarter = value.match(/(?<!\d)(\d{4})\s*年?\s*(?:第\s*)?([1-4一二三四])\s*(?:季度|季)/i)
+    || value.match(/(?<!\d)(\d{4})\s*年?\s*[Qq]([1-4])(?!\d)/)
+  if (!quarter) return ''
+  const quarterNumber = ({ 一: 1, 二: 2, 三: 3, 四: 4 } as Record<string, number>)[quarter[2]] || Number(quarter[2])
+  const month = quarterNumber * 3
+  const lastDay = new Date(Date.UTC(Number(quarter[1]), month, 0)).getUTCDate()
+  return `${quarter[1]}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+}
+
+function firstDisclosureDate(...values: unknown[]): string {
+  for (const value of values) {
+    const parsed = extractDisclosureDate(String(value || ''))
+    if (parsed) return parsed
+  }
+  return ''
+}
+
+function holdingBatchStatusLabel(value: FundHoldingReportBatch['status']): string {
+  return ({
+    running: '执行中',
+    completed: '全部完成',
+    completed_partial: '部分完成',
+    failed: '执行失败',
+    cancelled: '已取消',
+  } as const)[value]
+}
+
+function holdingItemStatusLabel(value: FundHoldingReportBatch['holdings'][number]['status']): string {
+  return ({
+    queued: '排队中',
+    running: '研究中',
+    completed: '已完成',
+    completed_partial: '部分完成',
+    failed: '失败',
+    cancelled: '已取消',
+    unsupported: '市场不支持',
+  } as const)[value]
+}
+
+function reportErrorMessage(error: unknown): string {
+  if (error instanceof CognitradeApiError) {
+    if (error.code === 'stale_holdings_confirmation_required') return '持仓披露超过 180 天，请确认历史披露风险后再生成。'
+    return `${error.message}${error.requestId ? ` · request ${error.requestId}` : ''}`
+  }
+  return error instanceof Error ? error.message : String(error)
+}
+
+function saveReportExport(exported: RunReportExport): void {
+  const url = URL.createObjectURL(exported.blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = exported.filename
+  document.body.append(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }

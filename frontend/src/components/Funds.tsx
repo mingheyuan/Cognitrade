@@ -5,6 +5,7 @@ import {
   ShieldAlert,
 } from 'lucide-react'
 import { type FormEvent, useEffect, useMemo, useState } from 'react'
+import { CognitradeApiClient } from '../api-client'
 import { useCognitrade } from '../CognitradeContext'
 import { FundAnalysisDossier } from './FundAnalysisDossier'
 
@@ -17,6 +18,7 @@ type FundSelectionMode = 'category' | 'codes'
 export function Funds({ onOpenRun }: FundsProps) {
   const {
     createRun,
+    settings,
     runs,
     selectedRun,
     selectedRunId,
@@ -24,6 +26,7 @@ export function Funds({ onOpenRun }: FundsProps) {
     selectedRunLoading,
     submitting,
   } = useCognitrade()
+  const client = useMemo(() => new CognitradeApiClient(settings), [settings])
   const [category, setCategory] = useState('混合型')
   const [selectionMode, setSelectionMode] = useState<FundSelectionMode>('category')
   const [cycle, setCycle] = useState('long_term')
@@ -151,7 +154,12 @@ export function Funds({ onOpenRun }: FundsProps) {
           {selectedRunLoading ? (
             <div className="fund-empty"><RefreshCw size={22} className="is-spinning" /><strong>正在读取 ArtifactBoard</strong></div>
           ) : hasFundArtifacts ? (
-            <FundAnalysisDossier artifacts={artifacts} />
+            <FundAnalysisDossier
+              artifacts={artifacts}
+              sourceRunId={sourceRunId || ''}
+              client={client}
+              onOpenRun={onOpenRun}
+            />
           ) : (
             <div className="fund-empty">
               <Database size={24} />

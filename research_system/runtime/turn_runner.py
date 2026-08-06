@@ -1719,10 +1719,21 @@ class TurnRunner:
             )
             return outcome
         except Exception as exc:
+            error = f"{exc.__class__.__name__}: {exc}"
+            # A post-completion observer, lifecycle hook, or response-side
+            # persistence failure must not replace the original exception with
+            # an illegal terminal -> failed transition.  Preserve the durable
+            # terminal result (and its committed artifacts) while recording
+            # the post-processing error for diagnostics.
+            failure_status = (
+                context.turn.status
+                if context.turn.status in RUN_TERMINAL_STATUSES
+                else self._transition_status(context.turn.status, "failed")
+            )
             context.turn = context.turn.model_copy(
                 update={
-                    "status": self._transition_status(context.turn.status, "failed"),
-                    "error": f"{exc.__class__.__name__}: {exc}",
+                    "status": failure_status,
+                    "error": error,
                 }
             )
             self._persist_turn(context.turn)
@@ -1734,13 +1745,13 @@ class TurnRunner:
                     turn_id=context.turn.turn_id,
                     task_type=config.task_type,
                     status="failed",
-                    reason=f"{exc.__class__.__name__}: {exc}",
+                    reason=error,
                 )
             )
             self._emit(
                 context,
                 "turn_failed",
-                error=f"{exc.__class__.__name__}: {exc}",
+                error=error,
             )
             raise
         finally:

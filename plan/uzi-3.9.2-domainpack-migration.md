@@ -175,6 +175,7 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 - [x] 首次覆盖、财报、催化剂、thesis、DD、IC Memo 等转为独立 Artifact 交付链；
 - [x] 组合、对比、归因与两类再平衡接入 Agent OS 与现有 Web 边界；
 - [x] 不迁入 UZI CLI、缓存、HTML 服务或临时兼容入口；原生报告版式以 Pack-owned 模板迁入，并从 ArtifactBoard 导出 HTML/PDF。
+- [x] 股票权益基金可从冻结的 `fund_snapshot` 显式创建持仓股票报告父批次；普通基金使用直接披露、ETF 联接使用已审计穿透持仓，最多十个独立 `stock_check` 子运行按专用默认 5 并发执行。父批次保留重试、取消、续跑、历史版本与 PDF ZIP，子报告带基金来源上下文且不参与股票评分；基金级持仓综合 HTML/PDF 不在本阶段生成。
 
 ### Phase E：Provider 完整性与敏感源开关
 

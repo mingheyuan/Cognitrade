@@ -31,6 +31,7 @@ class AgentOSRunService:
         self._background_lock = RLock()
         self._worker_id = f"api-worker:{generate_ulid()}"
         self._chat_completion_callback = None
+        self._fund_holding_reports = None
         self._lease_seconds = max(
             float(getattr(agent_os.settings, "run_timeout_seconds", 300.0)) * 2.0,
             60.0,
@@ -40,6 +41,10 @@ class AgentOSRunService:
     def bind_chat_completion(self, callback) -> None:
         """Bind an optional transport callback for completed background runs."""
         self._chat_completion_callback = callback
+
+    def bind_fund_holding_reports(self, service) -> None:
+        """Bind the Pack-specific batch facade without changing Agent OS execution."""
+        self._fund_holding_reports = service
 
     def run(self, request: RequestEnvelope, *, run_id: str | None = None) -> ResponseEnvelope:
         if bool((request.constraints or {}).get("background")):
@@ -102,6 +107,12 @@ class AgentOSRunService:
             if not run_root.is_dir() or read_json(run_root / "response.json") is not None:
                 continue
             if read_json(run_root / "agent_os_pending.json") is None:
+                continue
+            request_payload = read_json(run_root / "request.json") or {}
+            constraints = request_payload.get("constraints") if isinstance(request_payload, dict) else None
+            if isinstance(constraints, dict) and constraints.get("fund_holding_report_child") is True:
+                # The dedicated holding-report coordinator owns recovery and its
+                # independent concurrency limit for these child Runs.
                 continue
             request_payload: dict[str, Any] = {}
             try:
@@ -334,6 +345,12 @@ class AgentOSRunService:
                 continue
             if not self._run_matches_scope(run_id, user_id=user_id, tenant_id=tenant_id):
                 continue
+            holding_reports = self._fund_holding_reports
+            if holding_reports is not None and holding_reports.is_hidden_child(run_id):
+                continue
+            if holding_reports is not None and holding_reports.is_batch(run_id):
+                rows.append(holding_reports.history_row(run_id))
+                continue
             try:
                 detail = self.agent_os.inspect_run(run_id)
             except (FileNotFoundError, KeyError, ValueError):
@@ -394,6 +411,14 @@ class AgentOSRunService:
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        holding_reports = self._fund_holding_reports
+        if holding_reports is not None and holding_reports.is_batch(run_id):
+            detail = holding_reports.run_detail(
+                run_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
+            return {**detail, "run_id": run_id, "events": self._execution_events(run_id)}
         detail = self.agent_os.inspect_run(run_id)
         if detail.get("mode") == "pending":
             return {
@@ -435,6 +460,13 @@ class AgentOSRunService:
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        holding_reports = self._fund_holding_reports
+        if holding_reports is not None and holding_reports.is_batch(run_id):
+            return holding_reports.run_detail(
+                run_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
         return self.agent_os.inspect_run(run_id)
 
     def artifacts(
@@ -447,6 +479,15 @@ class AgentOSRunService:
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        holding_reports = self._fund_holding_reports
+        if holding_reports is not None and holding_reports.is_batch(run_id):
+            return holding_reports.artifacts(
+                run_id,
+                artifact_type=artifact_type,
+                status=status,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
         detail = self.agent_os.inspect_run(run_id)
         artifacts = list(detail.get("artifacts") or [])
         if artifact_type:
@@ -478,6 +519,22 @@ class AgentOSRunService:
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        holding_reports = self._fund_holding_reports
+        if holding_reports is not None and holding_reports.is_batch(run_id):
+            state = holding_reports.detail(run_id, user_id=user_id, tenant_id=tenant_id)
+            events = self._execution_events(run_id)
+            return {
+                "run_id": run_id,
+                "mode": "fund_holding_batch",
+                "status": state["status"],
+                "turn": None,
+                "task_selection": {},
+                "events": events,
+                "event_counts": {
+                    "events": len(events),
+                    "distinct_event_types": len({str(event.get("event_type") or "") for event in events}),
+                },
+            }
         detail = self.agent_os.inspect_run(run_id)
         events = self._execution_events(run_id)
         turn = detail.get("turn") or {}
@@ -513,6 +570,9 @@ class AgentOSRunService:
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        holding_reports = self._fund_holding_reports
+        if holding_reports is not None and holding_reports.is_batch(run_id):
+            return holding_reports.trace(run_id, user_id=user_id, tenant_id=tenant_id)
         detail = self.agent_os.inspect_run(run_id)
         if detail.get("mode") == "pending":
             return {
@@ -560,6 +620,9 @@ class AgentOSRunService:
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        holding_reports = self._fund_holding_reports
+        if holding_reports is not None and holding_reports.is_batch(run_id):
+            return holding_reports.steps(run_id, user_id=user_id, tenant_id=tenant_id)
         detail = self.agent_os.inspect_run(run_id)
         if detail.get("mode") == "pending":
             return {
@@ -670,6 +733,9 @@ class AgentOSRunService:
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        holding_reports = self._fund_holding_reports
+        if holding_reports is not None and holding_reports.is_batch(run_id):
+            return holding_reports.metrics(run_id, user_id=user_id, tenant_id=tenant_id)
         detail = self.agent_os.inspect_run(run_id)
         event_counts = Counter(
             str(event.get("event_type") or "")
@@ -754,6 +820,17 @@ class AgentOSRunService:
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        holding_reports = self._fund_holding_reports
+        if holding_reports is not None and holding_reports.is_batch(run_id):
+            state = holding_reports.detail(run_id, user_id=user_id, tenant_id=tenant_id)
+            return {
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "mode": "fund_holding_batch",
+                "scope": "fund_holding_batch",
+                "scope_thread_ids": [thread_id],
+                "snapshot": state,
+            }
         detail = self.agent_os.inspect_run(run_id)
         if detail.get("mode") == "pending":
             request = detail.get("request") or {}
@@ -813,6 +890,11 @@ class AgentOSRunService:
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        holding_reports = self._fund_holding_reports
+        if holding_reports is not None and holding_reports.is_batch(run_id):
+            payload = holding_reports.metrics(run_id, user_id=user_id, tenant_id=tenant_id)
+            payload.update({"thread_id": thread_id, "scope": "fund_holding_batch"})
+            return payload
         detail = self.agent_os.inspect_run(run_id)
         if detail.get("mode") == "core":
             state = MainAgentState.model_validate(detail["snapshot"])
@@ -887,6 +969,22 @@ class AgentOSRunService:
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        holding_reports = self._fund_holding_reports
+        if holding_reports is not None and holding_reports.is_batch(run_id):
+            state = holding_reports.detail(run_id, user_id=user_id, tenant_id=tenant_id)
+            return {
+                "run_id": run_id,
+                "mode": "fund_holding_batch",
+                "status": state["status"],
+                "resumable": any(item["status"] in {"failed", "cancelled"} for item in state["holdings"]),
+                "resume_from": {
+                    "child_run_ids": [
+                        item.get("child_run_id")
+                        for item in state["holdings"]
+                        if item["status"] in {"failed", "cancelled"}
+                    ]
+                },
+            }
         detail = self.agent_os.inspect_run(run_id)
         if detail.get("mode") == "pending":
             return {
@@ -956,6 +1054,16 @@ class AgentOSRunService:
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        holding_reports = self._fund_holding_reports
+        if holding_reports is not None and holding_reports.is_batch(run_id):
+            state = holding_reports.cancel(run_id, user_id=user_id, tenant_id=tenant_id)
+            return {
+                "run_id": run_id,
+                "mode": "fund_holding_batch",
+                "status": state["status"],
+                "message": "Cancellation requested",
+                "cancellation_requested": True,
+            }
         cancelled = self.agent_os.cancel(run_id)
         detail = self.agent_os.inspect_run(run_id)
         if detail.get("mode") == "core":

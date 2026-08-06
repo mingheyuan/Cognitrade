@@ -5,6 +5,7 @@ import re
 from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshot_bundle, collect_snapshots
 from domain_packs.finance_ashare.subagents.fund_methodology import build_fund_analysis
 from domain_packs.finance_ashare.subagents.uzi_methodology import (
+    UZI_METHOD_VERSION,
     build_delivery_conclusion,
     build_panel_review,
     build_presentation,
@@ -160,6 +161,11 @@ def normalize_query(context):
             "method_assumptions": dict(
                 request.content.get("method_assumptions")
                 or inputs.get("method_assumptions")
+                or {}
+            ) or None,
+            "holding_context": dict(
+                request.content.get("holding_context")
+                or inputs.get("holding_context")
                 or {}
             ) or None,
         },
@@ -1235,6 +1241,7 @@ def _tier1_request_artifact(*, artifact_type: str, content: dict, query) -> Arti
 
 
 def compose_uzi_report(context):
+    normalized_query = context.require_artifact("normalized_query")
     evidence = context.require_artifact("evidence_set")
     valuation = context.require_artifact("valuation_model")
     panel = (context.artifacts("investor_panel_review") or [None])[-1]
@@ -1244,6 +1251,8 @@ def compose_uzi_report(context):
     deep = (context.artifacts("deep_analysis") or [None])[-1]
     dimension_coverage = (context.artifacts("uzi_dimension_coverage") or [None])[-1]
     inputs = dict(context.node.inputs or {})
+    normalized_content = dict(normalized_query.content or {})
+    holding_context = dict(normalized_content.get("holding_context") or {})
     profile = select_profile(inputs)
     evidence_items = list(evidence.content.get("items") or [])
     base_content = {
@@ -1307,6 +1316,7 @@ def compose_uzi_report(context):
             "deep_analysis": dict(deep.content) if deep is not None else None,
             "uzi_dimension_coverage": dict(dimension_coverage.content) if dimension_coverage is not None else None,
             "presentation_artifact_type": "report_presentation",
+            "holding_context": holding_context or None,
         }
     )
     report_content["conclusion"] = build_delivery_conclusion(
@@ -1339,7 +1349,19 @@ def compose_uzi_report(context):
             *(list(dimension_coverage.source_refs) if dimension_coverage is not None else []),
         ]
     )
+    if holding_context.get("source_fund_artifact_id"):
+        source_refs = _unique_source_refs(
+            [
+                *source_refs,
+                {
+                    "type": "fund_snapshot_artifact",
+                    "id": str(holding_context["source_fund_artifact_id"]),
+                    "locator": str(holding_context.get("source_fund_run_id") or ""),
+                },
+            ]
+        )
     parents = [
+        normalized_query.artifact_id,
         evidence.artifact_id,
         valuation.artifact_id,
         *( [panel.artifact_id] if panel is not None else [] ),

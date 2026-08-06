@@ -31,6 +31,7 @@ export const FINANCE_ARTIFACT_RENDERERS = {
   uzi_dimension_coverage: Renderers.UziDimensionCoverageArtifactRenderer,
   fund_snapshot: Renderers.FundSnapshotArtifactRenderer,
   fund_analysis: Renderers.FundAnalysisArtifactRenderer,
+  fund_holding_report_batch: Renderers.FundHoldingReportBatchArtifactRenderer,
   ai_readiness: Renderers.AiReadinessArtifactRenderer,
   earnings_preview: Renderers.EarningsPreviewArtifactRenderer,
   model_update: Renderers.ModelUpdateArtifactRenderer,
@@ -67,4 +68,3 @@ export function financeArtifactTitle(artifactType: FinanceArtifactType): string 
 export function financeArtifactRendererName(artifactType: FinanceArtifactType): string {
   return contractRows[artifactType].renderer
 }
-

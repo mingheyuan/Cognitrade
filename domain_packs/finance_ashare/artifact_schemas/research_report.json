@@ -60,6 +60,32 @@
     "presentation_artifact_type": {
       "type": "string"
     },
+    "holding_context": {
+      "type": ["object", "null"],
+      "required": [
+        "parent_batch_id", "source_fund_run_id", "source_fund_artifact_id",
+        "fund_code", "fund_name", "holding_rank", "symbol", "holding_source"
+      ],
+      "properties": {
+        "parent_batch_id": {"type": "string"},
+        "source_fund_run_id": {"type": "string"},
+        "source_fund_artifact_id": {"type": "string"},
+        "fund_code": {"type": "string"},
+        "fund_name": {"type": "string"},
+        "fund_type": {"type": ["string", "null"]},
+        "holding_rank": {"type": "integer", "minimum": 1},
+        "symbol": {"type": "string"},
+        "security_name": {"type": "string"},
+        "fund_weight_pct": {"type": ["number", "null"]},
+        "target_security_weight_pct": {"type": ["number", "null"]},
+        "holding_source": {"enum": ["direct_equity_disclosure", "target_etf_lookthrough"]},
+        "disclosure_date": {"type": ["string", "null"]},
+        "disclosure_age_days": {"type": ["integer", "null"], "minimum": 0},
+        "stale_level": {"enum": ["current", "warning", "confirmation_required", "unknown"]},
+        "disclaimer": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
     "fund_analysis": {
       "type": "object"
     },
