@@ -1,0 +1,109 @@
+.env.example
+  s_a6a8a3a6f43b3c::t_15e05b9c54b66f 9-10,24-39,46-48
+README.md
+  s_a6a8a3a6f43b3c::t_847c1fdf4fd592 44-47,69,113-124
+api-doc/api-v1.md
+  s_a6a8a3a6f43b3c::t_754c0b5fc65248 261-264
+api-doc/api-v2.md
+  s_a6a8a3a6f43b3c::t_5be181951593ab 12,204-209
+deploy/backend.Dockerfile
+  s_a6a8a3a6f43b3c::t_817f627ef95436 9-10,20-21,34
+domain_packs/finance_ashare/migration/uzi_3_9_2_capability_ledger.yaml
+  s_a6a8a3a6f43b3c::t_1b7bb3e35cf0f7 66-72,76-77,80-84,172,175-176
+domain_packs/finance_ashare/migration/uzi_source_mapping.yaml
+  s_a6a8a3a6f43b3c::t_e24c57273cd343 38,46,54,62,64,70,72,78,80,86,88,94,96,102,104,110,112,118,126,134,142,144,150,152,158,166,174,176,182,184,190,205,211,213
+domain_packs/finance_ashare/skills/capital_flow_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_cc71618c65fe9d 8-10,25-27,31-33,61-91
+domain_packs/finance_ashare/skills/events_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_e371e1ee954585 9-11,57-58,60-61,63-98
+domain_packs/finance_ashare/skills/fundamental_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_ff345868afc692 7,9,13,28-29,33-35,56,60,74
+domain_packs/finance_ashare/skills/lhb_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_1664924dc6cbf5 8-11,26-28,32-34,62-69,71-108
+domain_packs/finance_ashare/skills/market_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_f01c93151ca465 8-9,13,30,32-36,38-44,64-65,70,84
+domain_packs/finance_ashare/skills/policy_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_92f8ca7d35bf5c 8-10,51-52,54-55,57-93
+domain_packs/finance_ashare/skills/sentiment_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_1807e7b2da68d1 9-12,58-59,61-62,64-117
+domain_packs/finance_ashare/skills/uzi_source_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_44a77ea365fe2c 11,15-21,34-44,54-64,74,85,88-96,107,114-115,117-128,131-135,137-139,163,166,170-171,173,180-184,188-189,191-198,201-206,210-221,224-229,232,234,236-248,253-258,262-263,266-270,274-275,278-282,285,292-296,300-301,303-312,314-321,324,333,335-342,351,359,361-362,368,380-381,383-387,392-401,411-412,415,417-424,437-438,456,459-460,462-509,511-518,520-560,562-563,565,567-568,570-572,574-575,577-578,582-590,592-612,614-615,680,692
+domain_packs/finance_ashare/tools/security_master.py
+  s_a6a8a3a6f43b3c::t_dd0b9e79d51a78 16-20,89-100,326-332
+plan/uzi-3.9.2-domainpack-migration.md
+  s_a6a8a3a6f43b3c::t_411b17f9806aaf 26,181-185,187,213-214
+requirements.txt
+  s_a6a8a3a6f43b3c::t_dda4607f9a997b 3-4,11,23
+research_system/adapters/vendors/akshare_events_adapter.py
+  s_a6a8a3a6f43b3c::t_a8ebc659d66ff8 3,6,12-13,17,19,22-74
+research_system/adapters/vendors/akshare_fundamental_adapter.py
+  s_a6a8a3a6f43b3c::t_f949506663caa0 35,90,93,96-97,101,109
+research_system/adapters/vendors/akshare_sector_adapter.py
+  s_a6a8a3a6f43b3c::t_01be88bcf7cfec 5,7-8,17-20,58-85,239-241,243-246,248,250-304,306-307
+research_system/adapters/vendors/baostock_fundamental_adapter.py
+  s_a6a8a3a6f43b3c::t_73cfbe32e18f0e 1-76
+research_system/adapters/vendors/data_source_registry.py
+  s_a6a8a3a6f43b3c::t_d49da171a572bf 3,6-10,12-13,17,34-36,58-59,99-111,169,176,217-229,231-289
+research_system/adapters/vendors/direct_http_market_adapter.py
+  s_a6a8a3a6f43b3c::t_bdc2d8e14b5a81 1-260
+research_system/adapters/vendors/efinance_market_adapter.py
+  s_a6a8a3a6f43b3c::t_efe45b53ecd351 1-92
+research_system/adapters/vendors/market_router.py
+  s_a6a8a3a6f43b3c::t_5bb624c28c2060 4,18,46-65
+research_system/adapters/vendors/provider_registry.py
+  s_a6a8a3a6f43b3c::t_271a6869394718 4,11,23-24,69,76-77,79,84-86,91-92,120,131-132,141-176,185-186,197-198,201-222,293,298,301-322,325,330,333-344,347,352,355-382,385,390,393-411,421-439,450-591
+research_system/adapters/vendors/tushare_fundamental_adapter.py
+  s_a6a8a3a6f43b3c::t_7bf99d6106da10 21-46,48-50,53-66,75-83,86-87
+research_system/adapters/vendors/tushare_market_adapter.py
+  s_a6a8a3a6f43b3c::t_95352e5d52941b 1-102
+research_system/adapters/vendors/uzi_browser_adapter.py
+  s_a6a8a3a6f43b3c::t_f937da2f93d99f 1-114
+research_system/adapters/vendors/uzi_contest_adapter.py
+  s_a6a8a3a6f43b3c::t_c293ea1d9f76bb 1-184
+research_system/adapters/vendors/uzi_hottrend_adapter.py
+  s_a6a8a3a6f43b3c::t_7687e9b05b5dbc 1-87
+research_system/adapters/vendors/uzi_news_adapter.py
+  s_a6a8a3a6f43b3c::t_a50cce00f992b6 1-108
+research_system/adapters/vendors/yfinance_fundamental_adapter.py
+  s_a6a8a3a6f43b3c::t_2b67d9e8ccbd4e 1-74
+research_system/runtime/config/settings_env.py
+  s_a6a8a3a6f43b3c::t_427335eb9c5cfa 38,77-92,104-107
+research_system/runtime/diagnostics/status/provider_health.py
+  s_a6a8a3a6f43b3c::t_b29aabc8c15925 19-23,52-53,55-58,67-71
+research_system/runtime/platform/settings.py
+  s_a6a8a3a6f43b3c::t_017ce603da25e9 23,49
+tests/test_akshare_fundamental_adapter.py
+  s_a6a8a3a6f43b3c::t_e35a0a8deaf8c5 4,10-21
+tests/test_finance_provider_execution.py
+  s_a6a8a3a6f43b3c::t_e4064983bb6eda 52-55,58,76,80
+tests/test_provider_health.py
+  s_a6a8a3a6f43b3c::t_a7a49f3e8ce246 32-33,50
+tests/test_uzi_finance_pack.py
+  s_a6a8a3a6f43b3c::t_920646835186e2 809-812
+tests/test_uzi_method_products.py
+  s_a6a8a3a6f43b3c::t_69159ab7701a3a 413-425,434-445,450,452-460,468,471
+tests/test_uzi_source_parity.py
+  s_a6a8a3a6f43b3c::t_f754ca37bfb54b 1-152
+workspace/config/data_sources.yml
+  s_a6a8a3a6f43b3c::t_a5f41684c3150c 1-8,10-95
+workspace/config/provider_policy.yml
+  s_a6a8a3a6f43b3c::t_4adcb615d832c2 4,7,10,13,16,19,22,25,28-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "803751e69461fa809fde4609bdafc93f6f93f5ae",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
