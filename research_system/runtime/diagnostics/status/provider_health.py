@@ -16,7 +16,11 @@ class ProviderHealthService:
         self.network_profile = NetworkProfile(timeout_seconds=settings.provider_probe_timeout_seconds)
 
     def build_report(self) -> dict[str, Any]:
-        market_dims = ("market", "fundamental", "notice", "sector", "lhb", "capital_flow", "sentiment", "events", "policy", "contests", "fund")
+        market_dims = (
+            "market", "fundamental", "notice", "sector", "lhb", "capital_flow", "sentiment", "events",
+            "policy", "kline", "macro", "peers", "chain", "research", "industry", "materials", "futures",
+            "valuation", "governance", "moat", "trap", "contests", "fund_holders", "similar_stocks", "fund",
+        )
         provider_rows = []
         for dim in market_dims:
             market = "cn_sector" if dim in {"sector", "policy"} else "cn" if dim == "fund" else "cn_equity"
@@ -45,7 +49,13 @@ class ProviderHealthService:
                     "id": item.id,
                     "tier": item.tier,
                     "official": item.official,
+                    "name_cn": item.name_cn,
+                    "markets": list(item.markets),
                     "dims": list(item.dims),
+                    "access": item.access,
+                    "health": item.health,
+                    "upstream_dims": list(item.upstream_dims),
+                    "upstream": item.upstream,
                 }
                 for item in self.data_sources.list_all()
             ],
@@ -54,5 +64,10 @@ class ProviderHealthService:
                 "enabled": self.settings.sensitive_sources_enabled,
                 "allowlist": list(self.settings.sensitive_source_allowlist),
                 "xueqiu_cookie_configured": bool(self.settings.xueqiu_cookie),
+                "browser_sources_enabled": self.settings.browser_sources_enabled,
+            },
+            "credentials": {
+                "tushare_token_configured": bool(self.settings.tushare_token),
+                "mx_api_key_configured": bool(self.settings.mx_api_key),
             },
         }

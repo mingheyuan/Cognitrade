@@ -727,8 +727,17 @@ class FundResearchTests(unittest.TestCase):
         pe_frame = pd.DataFrame({"行业加权市盈率": [10.0, 20.0, 600.0, None]})
         with (
             patch(
-                "domain_packs.finance_ashare.skills.uzi_source_snapshot.skill.AkShareMarketAdapter.get_market_overview",
-                return_value={"valuation": {"PE(TTM)": 15.0}},
+                "domain_packs.finance_ashare.skills.uzi_source_snapshot.skill.MarketSnapshotSkill.run",
+                return_value={
+                    "facts": {"market_overview": {"valuation": {"PE(TTM)": 15.0}}},
+                    "source": {
+                        "vendor": "test",
+                        "provider_id": "test_market",
+                        "source_id": "test_market",
+                        "chain_position": 0,
+                    },
+                    "source_trace": [],
+                },
             ),
             patch.object(
                 skill,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 
 @dataclass(frozen=True)
@@ -14,7 +15,7 @@ class MarketRoute:
 
 class MarketRouter:
     def classify(self, *, symbol: str | None, query: str | None = None) -> MarketRoute:
-        normalized_symbol = (symbol or "").strip()
+        normalized_symbol = (symbol or "").strip().upper()
         if not normalized_symbol:
             return MarketRoute(
                 market="cn",
@@ -40,6 +41,26 @@ class MarketRouter:
                 security_type=security_type,
                 normalized_symbol=normalized_symbol,
                 route_hint=route_hint,
+            )
+
+        hk_match = re.fullmatch(r"(?:HK)?(\d{1,5})(?:\.HK)?", normalized_symbol)
+        if hk_match and (normalized_symbol.startswith("HK") or normalized_symbol.endswith(".HK") or len(normalized_symbol) < 6):
+            code = hk_match.group(1).zfill(5)
+            return MarketRoute(
+                market="hk_equity",
+                exchange="hkex",
+                security_type="stock",
+                normalized_symbol=f"{code}.HK",
+                route_hint="stock_snapshot",
+            )
+
+        if re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", normalized_symbol):
+            return MarketRoute(
+                market="us_equity",
+                exchange="us",
+                security_type="stock",
+                normalized_symbol=normalized_symbol,
+                route_hint="stock_snapshot",
             )
 
         lowered = (query or "").lower()

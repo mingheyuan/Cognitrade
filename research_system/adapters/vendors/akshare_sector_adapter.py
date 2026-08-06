@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from difflib import SequenceMatcher
+from copy import deepcopy
 import re
-from typing import Any
+from threading import Lock
+from typing import Any, ClassVar
 
 import akshare as ak
 
@@ -12,6 +14,10 @@ from research_system.adapters.vendors.akshare_utils import call_with_retry, norm
 
 class AkShareSectorAdapter:
     vendor_name = "akshare"
+    _candidate_cache: ClassVar[tuple[dict[str, Any], ...] | None] = None
+    _candidate_cache_lock: ClassVar[Lock] = Lock()
+    _snapshot_cache: ClassVar[dict[tuple[str, str, str], dict[str, Any]]] = {}
+    _snapshot_cache_lock: ClassVar[Lock] = Lock()
 
     def resolve_sector(self, *, query: str) -> dict[str, Any]:
         normalized_query = self._normalize_query(query)
@@ -49,20 +55,35 @@ class AkShareSectorAdapter:
         return best
 
     def get_sector_snapshot(self, *, query: str, sector_name: str, sector_type: str) -> dict[str, Any]:
-        em_error: str | None = None
-        try:
-            return self._get_sector_snapshot_em(query=query, sector_name=sector_name, sector_type=sector_type)
-        except Exception as exc:
-            em_error = str(exc)
+        cache_key = (date.today().isoformat(), sector_name, sector_type)
+        with self.__class__._snapshot_cache_lock:
+            cached = self.__class__._snapshot_cache.get(cache_key)
+            if cached is not None:
+                result = deepcopy(cached)
+                result["query"] = query
+                return result
 
-        try:
-            snapshot = self._get_sector_snapshot_ths(query=query, sector_name=sector_name, sector_type=sector_type)
-            snapshot["fallback_reason"] = em_error
+            em_error: str | None = None
+            try:
+                snapshot = self._get_sector_snapshot_em(
+                    query=query, sector_name=sector_name, sector_type=sector_type
+                )
+            except Exception as exc:
+                em_error = str(exc)
+                try:
+                    snapshot = self._get_sector_snapshot_ths(
+                        query=query, sector_name=sector_name, sector_type=sector_type
+                    )
+                    snapshot["fallback_reason"] = em_error
+                except Exception as fallback_exc:
+                    if em_error:
+                        raise ValueError(
+                            f"em_error={em_error}; ths_error={fallback_exc}"
+                        ) from fallback_exc
+                    raise
+
+            self.__class__._snapshot_cache[cache_key] = deepcopy(snapshot)
             return snapshot
-        except Exception as exc:
-            if em_error:
-                raise ValueError(f"em_error={em_error}; ths_error={exc}") from exc
-            raise
 
     def _get_sector_snapshot_em(self, *, query: str, sector_name: str, sector_type: str) -> dict[str, Any]:
         today = date.today()
@@ -215,49 +236,75 @@ class AkShareSectorAdapter:
         }
 
     def _load_sector_candidates(self) -> list[dict[str, Any]]:
-        candidates: dict[tuple[str, str], dict[str, Any]] = {}
+        cached = self.__class__._candidate_cache
+        if cached is not None:
+            return [dict(item) for item in cached]
 
-        concept_em_rows = call_with_retry(ak.stock_board_concept_name_em).to_dict("records")
-        for row in concept_em_rows:
-            self._add_candidate(
-                candidates,
-                sector_name=str(row.get("板块名称") or "").strip(),
-                sector_code=str(row.get("板块代码") or "").strip(),
-                sector_type="concept",
-                catalog_source="em",
-            )
+        with self.__class__._candidate_cache_lock:
+            cached = self.__class__._candidate_cache
+            if cached is not None:
+                return [dict(item) for item in cached]
 
-        industry_em_rows = call_with_retry(ak.stock_board_industry_name_em).to_dict("records")
-        for row in industry_em_rows:
-            self._add_candidate(
-                candidates,
-                sector_name=str(row.get("板块名称") or "").strip(),
-                sector_code=str(row.get("板块代码") or "").strip(),
-                sector_type="industry",
-                catalog_source="em",
-            )
+            candidates: dict[tuple[str, str], dict[str, Any]] = {}
 
-        concept_ths_rows = call_with_retry(ak.stock_board_concept_name_ths).to_dict("records")
-        for row in concept_ths_rows:
-            self._add_candidate(
-                candidates,
-                sector_name=str(row.get("name") or "").strip(),
-                sector_code=str(row.get("code") or "").strip(),
-                sector_type="concept",
-                catalog_source="ths",
-            )
+            try:
+                concept_em_rows = call_with_retry(ak.stock_board_concept_name_em).to_dict("records")
+            except Exception:
+                concept_em_rows = []
+            for row in concept_em_rows:
+                self._add_candidate(
+                    candidates,
+                    sector_name=str(row.get("板块名称") or "").strip(),
+                    sector_code=str(row.get("板块代码") or "").strip(),
+                    sector_type="concept",
+                    catalog_source="em",
+                )
 
-        industry_ths_rows = call_with_retry(ak.stock_board_industry_name_ths).to_dict("records")
-        for row in industry_ths_rows:
-            self._add_candidate(
-                candidates,
-                sector_name=str(row.get("name") or "").strip(),
-                sector_code=str(row.get("code") or "").strip(),
-                sector_type="industry",
-                catalog_source="ths",
-            )
+            try:
+                industry_em_rows = call_with_retry(ak.stock_board_industry_name_em).to_dict("records")
+            except Exception:
+                industry_em_rows = []
+            for row in industry_em_rows:
+                self._add_candidate(
+                    candidates,
+                    sector_name=str(row.get("板块名称") or "").strip(),
+                    sector_code=str(row.get("板块代码") or "").strip(),
+                    sector_type="industry",
+                    catalog_source="em",
+                )
 
-        return list(candidates.values())
+            # EM already supplies complete concept and industry catalogues in
+            # the normal path. THS is a true fallback; querying both on every
+            # dimension makes one slow mirror block otherwise usable data.
+            if not candidates:
+                try:
+                    concept_ths_rows = call_with_retry(ak.stock_board_concept_name_ths).to_dict("records")
+                except Exception:
+                    concept_ths_rows = []
+                for row in concept_ths_rows:
+                    self._add_candidate(
+                        candidates,
+                        sector_name=str(row.get("name") or "").strip(),
+                        sector_code=str(row.get("code") or "").strip(),
+                        sector_type="concept",
+                        catalog_source="ths",
+                    )
+
+                try:
+                    industry_ths_rows = call_with_retry(ak.stock_board_industry_name_ths).to_dict("records")
+                except Exception:
+                    industry_ths_rows = []
+                for row in industry_ths_rows:
+                    self._add_candidate(
+                        candidates,
+                        sector_name=str(row.get("name") or "").strip(),
+                        sector_code=str(row.get("code") or "").strip(),
+                        sector_type="industry",
+                        catalog_source="ths",
+                    )
+
+            self.__class__._candidate_cache = tuple(dict(item) for item in candidates.values())
+            return [dict(item) for item in self.__class__._candidate_cache]
 
     def _add_candidate(
         self,

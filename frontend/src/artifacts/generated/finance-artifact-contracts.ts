@@ -813,6 +813,7 @@ export type InvestorPanelReviewContent = {
   "source_commit"?: string;
   "registered_seat_count"?: number;
   "rule_mode"?: string;
+  "method_input_contract"?: Record<string, unknown>;
   "votes": Array<{
     "symbol": string;
     "investor_id": string;
@@ -2385,6 +2386,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "source_commit",
     "registered_seat_count",
     "rule_mode",
+    "method_input_contract",
     "votes",
     "votes[].symbol",
     "votes[].investor_id",

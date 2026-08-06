@@ -23,6 +23,7 @@
 | 上一版迁移提交 | `775c76101e8890492d21c2e2827692456fcddb58` / `3.9.1` |
 | 上游 3.9.2 差异 | 1 个提交、20 个文件、`+599/-216` |
 | 数据采集器 | 22 个 |
+| 数据源目录 | 70 个（ID、市场、维度、层级、访问方式与上游逐项一致） |
 | 专项命令 | 20 个 |
 | 投资者评审席位 | 66 个、9 个流派 |
 
@@ -177,9 +178,13 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 
 ### Phase E：Provider 完整性与敏感源开关
 
-- [x] 为 22 个维度逐个做真实 provider smoke；显式串行命令已实测 22/22 返回、来源契约通过，实测时 15 available / 6 data_gap / 1 sensitive-disabled；
-- [x] 公开 provider 全部具备失败降级与来源引用；smoke 输出仅保留标准缺口、错误类型和 source ref，不泄漏原始异常或原始观测；
+- [x] UZI 3.9.2 的 70 个来源登记逐项固化，测试锁定完整 ID 集；登记只表示候选来源，实际可用性由每次 `source_trace` 报告；
+- [x] 行情链补齐 AkShare、eFinance、TuShare、BaoStock 与 EastMoney/Sina/Tencent/Yahoo/Stooq 直连回退，并支持 A/H/US 路由；
+- [x] 财务链补齐 MX API、AkShare、TuShare、BaoStock 与 yfinance；TuShare 账号无接口权限时不会阻断零 Key 回退；
+- [x] 事件、舆情、政策、宏观、产业链、研报、行业、原材料、期货、治理、护城河、风险与比赛来源按 UZI 语义聚合，并输出逐源状态；
+- [x] 为 22 个维度提供显式串行 provider smoke；输出仅保留标准缺口、错误类型和 source ref，不泄漏原始异常或原始观测；
 - [x] 登录态源默认关闭，并要求总开关、来源 allowlist 和 Cookie 三项同时配置；
+- [x] Playwright 及 Chromium 纳入本地安装说明和后端部署镜像，但浏览器抓取仍受显式开关约束；
 - [x] 端到端验证 API、SSE、ArtifactBoard 与 Web 一致；基金 v2 字段已覆盖 API 运行、Artifact、Replay、事件和前端渲染测试。
 
 ## 8. 完成定义
@@ -205,3 +210,5 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 - UZI Tier‑1 与组合方法：`domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py`
 - UZI 规则：`domain_packs/finance_ashare/subagents/uzi_panel_rules.py`
 - 22 维真实源核验：`python -m research_system.runtime.diagnostics.status.uzi_provider_smoke --symbol 600519 --sector 白酒`
+- 70 源精确目录：`research_system/adapters/vendors/uzi_source_catalog.py`
+- 运行时来源与凭据健康：`research_system/runtime/diagnostics/status/provider_health.py`

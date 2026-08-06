@@ -4,10 +4,13 @@ from datetime import date
 from typing import Any
 
 from research_system.adapters.vendors.akshare_fundamental_adapter import AkShareFundamentalAdapter
+from research_system.adapters.vendors.baostock_fundamental_adapter import BaoStockFundamentalAdapter
 from research_system.adapters.vendors.market_router import MarketRouter
+from research_system.adapters.vendors.mx_api_adapter import MxApiAdapter
 from research_system.adapters.vendors.provider_execution import execute_provider_chain, failure_facts
 from research_system.adapters.vendors.provider_registry import ProviderSpec, VendorProviderRegistry
 from research_system.adapters.vendors.tushare_fundamental_adapter import TuShareFundamentalAdapter
+from research_system.adapters.vendors.yfinance_fundamental_adapter import YFinanceFundamentalAdapter
 from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
 
 
@@ -22,9 +25,14 @@ class FundamentalSnapshotSkill:
         self.provider_registry = provider_registry
         self.market_router = market_router or MarketRouter()
         self.adapters: dict[str, Any] = {"akshare_fundamental": AkShareFundamentalAdapter()}
+        if provider_registry and provider_registry.settings.mx_api_key:
+            self.adapters["mx_api_fundamental"] = MxApiAdapter(provider_registry.settings.mx_api_key)
         token = provider_registry.settings.tushare_token if provider_registry else None
         if token:
             self.adapters["tushare_fundamental"] = TuShareFundamentalAdapter(token)
+        self.adapters["baostock_fundamental"] = BaoStockFundamentalAdapter()
+        if provider_registry and provider_registry.get_provider_chain("fundamental", "hk_equity"):
+            self.adapters["yfinance_fundamental"] = YFinanceFundamentalAdapter()
 
     def run(self, *, query: str, symbol: str | None = None) -> dict[str, Any]:
         snapshot_date = date.today().isoformat()
@@ -45,10 +53,11 @@ class FundamentalSnapshotSkill:
                 degrade_reason="symbol_missing",
             ).model_dump(mode="json")
 
+        resolved_symbol = route.normalized_symbol or symbol
         execution = execute_provider_chain(
             providers=providers,
             loaders={
-                provider_id: (lambda current=adapter: current.get_fundamental_snapshot(symbol=symbol))
+                provider_id: (lambda current=adapter: current.get_fundamental_snapshot(symbol=resolved_symbol))
                 for provider_id, adapter in self.adapters.items()
             },
         )
@@ -62,7 +71,7 @@ class FundamentalSnapshotSkill:
         }
         return VerifiedSnapshot(
             snapshot_type="fundamental",
-            symbol=symbol,
+            symbol=resolved_symbol,
             query=query,
             snapshot_date=snapshot_date,
             facts=execution.facts,

@@ -35,7 +35,7 @@ fetchers:
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_basic.py
     target_skill: market_snapshot_skill
-    provider: akshare.market
+    provider: akshare+efinance+tushare+baostock+direct_http
     field_mapping: {snapshot_type: market, facts: facts.market_overview}
     migration_status: pack_native
     result_equivalence: not_equivalent
@@ -43,7 +43,7 @@ fetchers:
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_financials.py
     target_skill: fundamental_snapshot_skill
-    provider: akshare.fundamental
+    provider: mx_api+akshare+tushare+baostock+yfinance
     field_mapping: {snapshot_type: fundamental, facts: facts.financial_abstract}
     migration_status: pack_native
     result_equivalence: not_equivalent
@@ -51,7 +51,7 @@ fetchers:
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_kline.py
     target_skill: uzi_kline_snapshot_skill
-    provider: akshare.market_history
+    provider: akshare+efinance+tushare+baostock+direct_http
     field_mapping: {snapshot_type: kline, facts: facts.history}
     migration_status: pack_native
     result_equivalence: not_equivalent
@@ -59,63 +59,63 @@ fetchers:
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_macro.py
     target_skill: uzi_macro_snapshot_skill
-    provider: akshare.sector
+    provider: akshare+ddgs+jin10+eastmoney_news
     field_mapping: {snapshot_type: macro, facts: facts.benchmark}
-    migration_status: pack_native_with_provider_gap
+    migration_status: pack_native
     result_equivalence: not_equivalent
   - source_id: 4_peers
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_peers.py
     target_skill: uzi_peers_snapshot_skill
-    provider: akshare.fundamental+sector
+    provider: akshare.fundamental+sector+ddgs+iwencai+ths_f10
     field_mapping: {snapshot_type: peers, facts: facts.comparison}
-    migration_status: pack_native_with_provider_gap
+    migration_status: pack_native
     result_equivalence: not_equivalent
   - source_id: 5_chain
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_chain.py
     target_skill: uzi_chain_snapshot_skill
-    provider: akshare.sector
+    provider: akshare.sector+ddgs+iwencai+ths_f10
     field_mapping: {snapshot_type: chain, facts: facts.chain_snapshot}
-    migration_status: pack_native_with_provider_gap
+    migration_status: pack_native
     result_equivalence: not_equivalent
   - source_id: 6_research
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_research.py
     target_skill: uzi_research_snapshot_skill
-    provider: akshare.catalyst
+    provider: akshare.catalyst+ddgs+stockstar
     field_mapping: {snapshot_type: research, facts: facts.reports}
-    migration_status: pack_native_with_provider_gap
+    migration_status: pack_native
     result_equivalence: not_equivalent
   - source_id: 7_industry
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_industry.py
     target_skill: uzi_industry_snapshot_skill
-    provider: akshare.market+sector
+    provider: akshare.market+sector+ddgs+iwencai+legulegu
     field_mapping: {snapshot_type: industry, facts: facts.resolved_sector}
-    migration_status: pack_native_with_provider_gap
+    migration_status: pack_native
     result_equivalence: not_equivalent
   - source_id: 8_materials
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_materials.py
     target_skill: uzi_materials_snapshot_skill
-    provider: akshare.futures
+    provider: akshare.futures+ddgs+official_exchanges+qh99
     field_mapping: {snapshot_type: materials, facts: facts.contracts}
-    migration_status: pack_native_with_provider_gap
+    migration_status: pack_native
     result_equivalence: not_equivalent
   - source_id: 9_futures
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_futures.py
     target_skill: uzi_futures_snapshot_skill
-    provider: akshare.futures
+    provider: akshare.futures+ddgs+official_exchanges+qh99+cfachina
     field_mapping: {snapshot_type: futures, facts: facts.contracts}
-    migration_status: pack_native_with_provider_gap
+    migration_status: pack_native
     result_equivalence: not_equivalent
   - source_id: 10_valuation
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_valuation.py
     target_skill: uzi_valuation_snapshot_skill
-    provider: akshare.market
+    provider: market_chain+cninfo+legulegu
     field_mapping: {snapshot_type: valuation, facts: facts.valuation}
     migration_status: pack_native
     result_equivalence: not_equivalent
@@ -123,7 +123,7 @@ fetchers:
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_governance.py
     target_skill: uzi_governance_snapshot_skill
-    provider: akshare.fundamental
+    provider: fundamental_chain+cninfo+ths_f10+xueqiu_f10+ddgs
     field_mapping: {snapshot_type: governance, facts: facts.banking_metrics}
     migration_status: pack_native
     result_equivalence: not_equivalent
@@ -131,7 +131,7 @@ fetchers:
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_capital_flow.py
     target_skill: capital_flow_snapshot_skill
-    provider: akshare.capital_flow
+    provider: akshare.capital_flow+tushare.moneyflow
     field_mapping: {snapshot_type: capital_flow, facts: facts.capital_flow}
     migration_status: pack_native
     result_equivalence: not_equivalent
@@ -139,23 +139,23 @@ fetchers:
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_policy.py
     target_skill: policy_snapshot_skill
-    provider: akshare.catalyst
+    provider: akshare.catalyst+ddgs+jin10+eastmoney_news
     field_mapping: {snapshot_type: policy, facts: facts.policy_signals}
-    migration_status: pack_native_with_provider_gap
+    migration_status: pack_native
     result_equivalence: not_equivalent
   - source_id: 14_moat
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_moat.py
     target_skill: uzi_moat_snapshot_skill
-    provider: akshare.fundamental
+    provider: fundamental_chain+ddgs+ths_f10
     field_mapping: {snapshot_type: moat, facts: facts.financial_abstract}
-    migration_status: pack_native_with_provider_gap
+    migration_status: pack_native
     result_equivalence: not_equivalent
   - source_id: 15_events
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_events.py
     target_skill: events_snapshot_skill
-    provider: akshare.catalyst
+    provider: cninfo+jin10+eastmoney_news+ths_news+ddgs
     field_mapping: {snapshot_type: events, facts: facts.events}
     migration_status: pack_native
     result_equivalence: not_equivalent
@@ -163,7 +163,7 @@ fetchers:
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_lhb.py
     target_skill: lhb_snapshot_skill
-    provider: akshare.market
+    provider: akshare.lhb+tushare.top_list+yuncaijing
     field_mapping: {snapshot_type: lhb, facts: facts.lhb}
     migration_status: pack_native
     result_equivalence: not_equivalent
@@ -171,23 +171,23 @@ fetchers:
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_sentiment.py
     target_skill: sentiment_snapshot_skill
-    provider: akshare.catalyst
+    provider: akshare.sentiment+ddgs+hottrend+jin10+eastmoney_news+ths_news
     field_mapping: {snapshot_type: sentiment, facts: facts.sentiment}
-    migration_status: pack_native_with_provider_gap
+    migration_status: pack_native
     result_equivalence: not_equivalent
   - source_id: 18_trap
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_trap_signals.py
     target_skill: uzi_trap_snapshot_skill
-    provider: akshare.catalyst
+    provider: akshare.catalyst+ddgs+hottrend+multi_news
     field_mapping: {snapshot_type: trap, facts: facts.news}
-    migration_status: pack_native_with_provider_gap
+    migration_status: pack_native
     result_equivalence: semantic
   - source_id: 19_contests
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_contests.py
     target_skill: uzi_contests_snapshot_skill
-    provider: xueqiu.authenticated_http
+    provider: xueqiu.authenticated_http+taoguba+ths_simulator+dpswang
     field_mapping: {snapshot_type: contests, facts: facts.contests}
     migration_status: pack_native
     result_equivalence: semantic
@@ -202,15 +202,15 @@ fetchers:
     target_skill: uzi_fund_holders_snapshot_skill
     provider: akshare.fund_holders
     field_mapping: {snapshot_type: fund_holders, facts: facts.holders}
-    migration_status: pack_native_with_provider_gap
+    migration_status: pack_native
     result_equivalence: not_equivalent
   - source_id: similar_stocks
     <<: *source_defaults
     source_path: skills/deep-analysis/scripts/fetch_similar_stocks.py
     target_skill: uzi_similar_stocks_snapshot_skill
-    provider: akshare.sector
+    provider: akshare.sector+em_data
     field_mapping: {snapshot_type: similar_stocks, facts: facts.similar_stocks}
-    migration_status: pack_native_with_provider_gap
+    migration_status: pack_native
     result_equivalence: not_equivalent
 
 profiles:

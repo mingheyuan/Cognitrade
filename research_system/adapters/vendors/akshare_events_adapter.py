@@ -1,37 +1,77 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import datetime
 from typing import Any
 
-import akshare as ak
-
-from research_system.adapters.vendors.akshare_utils import call_with_retry, normalize_value
-
+import requests
 
 class AkShareEventsAdapter:
     vendor_name = "akshare"
 
     def get_events_snapshot(self, *, symbol: str) -> dict[str, Any]:
-        notices_df = call_with_retry(
-            lambda: ak.stock_zh_a_disclosure_report_cninfo(
-                symbol=symbol,
-                start_date=(date.today() - timedelta(days=30)).strftime("%Y%m%d"),
-                end_date=date.today().strftime("%Y%m%d"),
-            ),
-            retries=2,
-            delay_seconds=0.5,
-        )
-        if notices_df.empty:
+        rows = self._cninfo_direct(symbol=symbol, limit=30)
+        if not rows:
             raise ValueError(f"no event data returned for symbol {symbol}")
-        rows = [self._normalize_row(item) for item in notices_df.head(8).to_dict("records")]
         return {
             "symbol": symbol,
-            "event_notices": rows,
+            "event_notices": rows[:10],
             "event_keywords": self._extract_event_keywords(rows),
+            "source_id": "cninfo",
         }
 
-    def _normalize_row(self, row: dict[str, Any]) -> dict[str, Any]:
-        return {str(key): normalize_value(value) for key, value in row.items()}
+    def _cninfo_direct(self, *, symbol: str, limit: int) -> list[dict[str, Any]]:
+        code = str(symbol or "").strip().upper().removeprefix("SH").removeprefix("SZ").removeprefix("BJ")[-6:]
+        if not code.isdigit():
+            return []
+        if code.startswith(("000", "001", "002", "3")):
+            column = "szse"
+        elif code.startswith(("600", "601", "603", "605", "688", "689")):
+            column = "sse"
+        else:
+            column = "bse"
+        response = requests.post(
+            "http://www.cninfo.com.cn/new/hisAnnouncement/query",
+            data={
+                "pageNum": 1,
+                "pageSize": limit,
+                "column": column,
+                "tabName": "fulltext",
+                "plate": "",
+                "stock": code,
+                "searchkey": "",
+                "secid": "",
+                "category": "",
+                "trade": "",
+                "seDate": "",
+                "sortName": "",
+                "sortType": "",
+                "isHLtitle": "true",
+            },
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; Cognitrade/1.0)",
+                "Accept": "application/json",
+                "Origin": "http://www.cninfo.com.cn",
+                "Referer": "http://www.cninfo.com.cn/new/commonUrl/pageOfSearch?url=disclosure/list/search",
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        rows = []
+        for item in (response.json().get("announcements") or [])[:limit]:
+            timestamp = item.get("announcementTime") or 0
+            try:
+                published = datetime.fromtimestamp(timestamp / 1000).strftime("%Y-%m-%d") if timestamp else ""
+            except (TypeError, ValueError, OSError):
+                published = ""
+            path = str(item.get("adjunctUrl") or "")
+            rows.append(
+                {
+                    "公告时间": published,
+                    "公告标题": str(item.get("announcementTitle") or ""),
+                    "公告链接": f"http://static.cninfo.com.cn/{path.lstrip('/')}" if path else "",
+                }
+            )
+        return rows
 
     def _extract_event_keywords(self, rows: list[dict[str, Any]]) -> list[str]:
         keywords = ("业绩", "合同", "中标", "回购", "激励", "临床", "注册", "合作", "减持", "增持")

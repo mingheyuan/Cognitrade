@@ -258,9 +258,10 @@ COGNITRADE_XUEQIU_COOKIE=<runtime secret>
 ```
 
 The Cookie is read only from the environment and must not be submitted in an
-API request or committed to the repository. If any gate is missing, the
-`contests` snapshot returns a sanitized `data_gap`; no mock standings or
-holdings are generated.
+API request or committed to the repository. If any gate is missing, Xueqiu is
+recorded as a sanitized source gap while public Taoguba/THS/DPSWang evidence may
+still make the `contests` snapshot available. No mock standings or holdings are
+generated.
 
 | Method | Path | Canonical source |
 | --- | --- | --- |

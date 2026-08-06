@@ -410,9 +410,19 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             disabled = Settings.from_env(root)
-            disabled_result = ContestsSnapshotSkill(
-                provider_registry=VendorProviderRegistry(disabled)
-            ).run(query="查看实盘组合", symbol="600519")
+            with patch(
+                "research_system.adapters.vendors.uzi_contest_adapter.UziContestAdapter._taoguba",
+                return_value=[],
+            ), patch(
+                "research_system.adapters.vendors.uzi_contest_adapter.UziContestAdapter._ths",
+                return_value=[],
+            ), patch(
+                "research_system.adapters.vendors.uzi_contest_adapter.UziContestAdapter._dpswang",
+                return_value=[],
+            ):
+                disabled_result = ContestsSnapshotSkill(
+                    provider_registry=VendorProviderRegistry(disabled)
+                ).run(query="查看实盘组合", symbol="600519")
             root.joinpath(".env").write_text(
                 "COGNITRADE_SENSITIVE_SOURCES_ENABLED=true\n"
                 "COGNITRADE_SENSITIVE_SOURCE_ALLOWLIST=xueqiu\n"
@@ -420,31 +430,34 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             enabled = Settings.from_env(root)
-            response = Mock(
-                status_code=200,
-                json=Mock(
-                    return_value={
-                        "list": [
-                            {
-                                "name": "真实接口组合",
-                                "symbol": "ZH001",
-                                "owner": {"screen_name": "接口用户"},
-                                "total_gain": 61.2,
-                            }
-                        ]
-                    }
-                ),
-            )
             with patch(
-                "domain_packs.finance_ashare.skills.uzi_source_snapshot.skill.requests.get",
-                return_value=response,
-            ) as request:
+                "research_system.adapters.vendors.uzi_contest_adapter.UziContestAdapter._xueqiu_http",
+                return_value=[{"name": "真实接口组合", "symbol": "ZH001", "owner": "接口用户", "total_gain": 61.2}],
+            ), patch(
+                "research_system.adapters.vendors.uzi_contest_adapter.UziContestAdapter._taoguba",
+                return_value=[],
+            ), patch(
+                "research_system.adapters.vendors.uzi_contest_adapter.UziContestAdapter._ths",
+                return_value=[],
+            ), patch(
+                "research_system.adapters.vendors.uzi_contest_adapter.UziContestAdapter._dpswang",
+                return_value=[],
+            ):
                 enabled_result = ContestsSnapshotSkill(
                     provider_registry=VendorProviderRegistry(enabled)
                 ).run(query="查看实盘组合", symbol="600519")
             with patch(
-                "domain_packs.finance_ashare.skills.uzi_source_snapshot.skill.requests.get",
+                "research_system.adapters.vendors.uzi_contest_adapter.UziContestAdapter._xueqiu_http",
                 side_effect=RuntimeError("private upstream response"),
+            ), patch(
+                "research_system.adapters.vendors.uzi_contest_adapter.UziContestAdapter._taoguba",
+                return_value=[],
+            ), patch(
+                "research_system.adapters.vendors.uzi_contest_adapter.UziContestAdapter._ths",
+                return_value=[],
+            ), patch(
+                "research_system.adapters.vendors.uzi_contest_adapter.UziContestAdapter._dpswang",
+                return_value=[],
             ):
                 failed_result = ContestsSnapshotSkill(
                     provider_registry=VendorProviderRegistry(enabled)
@@ -452,11 +465,10 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
 
         self.assertIn("sensitive_source_disabled:xueqiu", disabled_result["facts"]["data_gap"])
         self.assertEqual(enabled_result["facts"]["xueqiu_cubes"][0]["name"], "真实接口组合")
-        self.assertEqual(enabled_result["source"]["provider_id"], "xueqiu_contests")
+        self.assertEqual(enabled_result["source"]["provider_id"], "uzi_contests_multi")
         self.assertNotIn("test-only", str(enabled_result))
-        self.assertEqual(request.call_args.kwargs["params"]["q"], "SH600519")
         self.assertNotIn("private upstream response", str(failed_result))
-        self.assertEqual(failed_result["facts"]["error_type"], "RuntimeError")
+        self.assertIn("sensitive_source_request_failed:xueqiu", failed_result["facts"]["data_gap"])
 
 
 if __name__ == "__main__":

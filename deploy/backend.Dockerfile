@@ -6,7 +6,8 @@ USER root
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 
@@ -16,7 +17,8 @@ RUN apt-get update \
 
 COPY requirements.txt ./requirements.txt
 RUN python -m pip install --upgrade pip \
-    && python -m pip install -r requirements.txt
+    && python -m pip install -r requirements.txt \
+    && python -m playwright install --with-deps chromium
 
 COPY research_system ./research_system
 COPY domain_packs ./domain_packs
@@ -29,7 +31,7 @@ RUN if ! getent group cognitrade >/dev/null; then groupadd --gid 10001 cognitrad
     && chmod 0755 /usr/local/bin/cognitrade-entrypoint \
     && mkdir -p workspace/runs workspace/chat_runs workspace/reports workspace/memory workspace/paper_trading workspace/backtests \
     && cp -a workspace_templates/. workspace/ \
-    && chown -R cognitrade:cognitrade workspace /home/cognitrade \
+    && chown -R cognitrade:cognitrade workspace /home/cognitrade /ms-playwright \
     && python -c "import research_system.api.app"
 
 USER 10001:10001

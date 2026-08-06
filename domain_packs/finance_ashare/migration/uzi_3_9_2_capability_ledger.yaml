@@ -63,25 +63,25 @@ fetchers:
   - {id: 0_basic, target: market_snapshot_skill, status: pack_native}
   - {id: 1_financials, target: fundamental_snapshot_skill, status: pack_native, delta_3_9_2: ocf_contract_aligned}
   - {id: 2_kline, target: uzi_kline_snapshot_skill, status: pack_native}
-  - {id: 3_macro, target: uzi_macro_snapshot_skill, status: pack_native_with_provider_gap}
-  - {id: 4_peers, target: uzi_peers_snapshot_skill, status: pack_native_with_provider_gap, delta_3_9_2: self_only_fallback_aligned}
-  - {id: 5_chain, target: uzi_chain_snapshot_skill, status: pack_native_with_provider_gap}
-  - {id: 6_research, target: uzi_research_snapshot_skill, status: pack_native_with_provider_gap}
-  - {id: 7_industry, target: uzi_industry_snapshot_skill, status: pack_native_with_provider_gap}
-  - {id: 8_materials, target: uzi_materials_snapshot_skill, status: pack_native_with_provider_gap}
-  - {id: 9_futures, target: uzi_futures_snapshot_skill, status: pack_native_with_provider_gap}
+  - {id: 3_macro, target: uzi_macro_snapshot_skill, status: pack_native}
+  - {id: 4_peers, target: uzi_peers_snapshot_skill, status: pack_native, delta_3_9_2: self_only_fallback_aligned}
+  - {id: 5_chain, target: uzi_chain_snapshot_skill, status: pack_native}
+  - {id: 6_research, target: uzi_research_snapshot_skill, status: pack_native}
+  - {id: 7_industry, target: uzi_industry_snapshot_skill, status: pack_native}
+  - {id: 8_materials, target: uzi_materials_snapshot_skill, status: pack_native}
+  - {id: 9_futures, target: uzi_futures_snapshot_skill, status: pack_native}
   - {id: 10_valuation, target: uzi_valuation_snapshot_skill, status: pack_native, delta_3_9_2: cninfo_market_weighted_pe_fallback_aligned}
   - {id: 11_governance, target: uzi_governance_snapshot_skill, status: pack_native}
   - {id: 12_capital_flow, target: capital_flow_snapshot_skill, status: pack_native}
-  - {id: 13_policy, target: policy_snapshot_skill, status: pack_native_with_provider_gap}
-  - {id: 14_moat, target: uzi_moat_snapshot_skill, status: pack_native_with_provider_gap}
+  - {id: 13_policy, target: policy_snapshot_skill, status: pack_native}
+  - {id: 14_moat, target: uzi_moat_snapshot_skill, status: pack_native}
   - {id: 15_events, target: events_snapshot_skill, status: pack_native}
   - {id: 16_lhb, target: lhb_snapshot_skill, status: pack_native}
-  - {id: 17_sentiment, target: sentiment_snapshot_skill, status: pack_native_with_provider_gap}
-  - {id: 18_trap, target: uzi_trap_snapshot_skill, status: pack_native_with_provider_gap}
-  - {id: 19_contests, target: uzi_contests_snapshot_skill, status: adapted, provider_policy: explicit_enable_and_allowlist_and_cookie}
-  - {id: fund_holders, target: uzi_fund_holders_snapshot_skill, status: pack_native_with_provider_gap}
-  - {id: similar_stocks, target: uzi_similar_stocks_snapshot_skill, status: pack_native_with_provider_gap}
+  - {id: 17_sentiment, target: sentiment_snapshot_skill, status: pack_native}
+  - {id: 18_trap, target: uzi_trap_snapshot_skill, status: pack_native}
+  - {id: 19_contests, target: uzi_contests_snapshot_skill, status: adapted, provider_policy: public_fallback_plus_explicit_xueqiu_enable_allowlist_cookie}
+  - {id: fund_holders, target: uzi_fund_holders_snapshot_skill, status: pack_native}
+  - {id: similar_stocks, target: uzi_similar_stocks_snapshot_skill, status: pack_native}
 
 commands:
   - {id: analyze-stock, target: stock_check+research_profile, status: adapted}
@@ -169,9 +169,11 @@ fund_extension:
     missing_metric_imputation: forbidden
 
 provider_smoke:
-  status: implemented_v1
+  status: implemented_v2
   command: python -m research_system.runtime.diagnostics.status.uzi_provider_smoke
   fetcher_count: 22
+  uzi_source_catalog_count: 70
+  source_catalog: research_system/adapters/vendors/uzi_source_catalog.py
   execution: serial
   contract:
     real_provider_only: true

@@ -41,7 +41,10 @@ COGNITRADE_PROVIDER_SMOKE_SECTOR=白酒 \
 ```
 
 可用 `COGNITRADE_PROVIDER_SMOKE_DIMENSIONS=market,kline,events` 只检查指定维度。
-雪球组合竞赛来源仍需同时显式开启敏感来源、加入 `xueqiu` allowlist 并配置 Cookie。
+来源目录与 UZI 3.9.2 固定提交逐项对齐，共 70 个候选来源；“已登记”不等于本次
+“已取到”，运行结果以各 Snapshot 的 `source_trace` 为准。雪球组合来源仍需同时显式
+开启敏感来源、加入 `xueqiu` allowlist 并配置 Cookie；淘股吧、同花顺模拟盘等公开比赛
+证据可以独立降级运行。
 全量检查固定串行执行，避免多个 AkShare 路径并发初始化其进程级 JavaScript 运行时。
 
 默认访问地址是 `http://127.0.0.1:8080`。浏览器 Token 可通过
@@ -63,6 +66,7 @@ COGNITRADE_PROVIDER_SMOKE_SECTOR=白酒 \
 ```bash
 python3.11 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+.venv/bin/python -m playwright install chromium
 COGNITRADE_API_ALLOW_UNAUTHENTICATED=true \
 COGNITRADE_API_HOST=127.0.0.1 \
 .venv/bin/python -m uvicorn research_system.api.app:app --host 127.0.0.1 --port 8000
@@ -105,6 +109,18 @@ OPENAI_DISABLE_RESPONSE_STORAGE=true
 没有模型 Key 时，系统仍可执行确定性 Pack 能力，但需要模型合成的最终答复可能以
 `completed_partial` 结束。`COGNITRADE_API_ALLOW_UNAUTHENTICATED=true` 只允许
 回环地址的隔离本地开发，生产部署脚本始终启用认证。
+
+可选真实数据源配置：
+
+```dotenv
+TUSHARE_TOKEN=<runtime-secret>
+MX_APIKEY=<runtime-secret>
+```
+
+TuShare 配置 Token 只表示客户端可以鉴权；具体 `daily`、`fina_indicator`、`moneyflow`、
+`top_list` 等接口仍取决于账号积分与权限。接口无权限时会记录脱敏的
+`provider_unavailable` 并继续 AkShare/eFinance/BaoStock/直连 HTTP 回退，不会生成假数据。
+密钥只放在被 Git 忽略的 `.env` 或部署密钥系统中。
 
 镜像源可覆盖：
 

@@ -13,6 +13,11 @@ from research_system.adapters.vendors.akshare_utils import call_with_retry, coer
 
 
 _CODE_PATTERN = re.compile(r"(?<!\d)(\d{6})(?!\d)")
+_HK_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])(?:HK(?P<prefix>\d{1,5})|(?P<suffix>\d{1,5})\.HK)(?![A-Za-z0-9])",
+    re.I,
+)
+_US_PATTERN = re.compile(r"(?<![A-Za-z0-9])(?:NYSE:|NASDAQ:)?([A-Z][A-Z0-9.\-]{0,9})(?![A-Za-z0-9])")
 _DEFAULT_ALIASES = {
     "贵州茅台": "600519",
     "茅台": "600519",
@@ -81,6 +86,18 @@ class AShareSecurityMaster:
         for symbol in _CODE_PATTERN.findall(query):
             self._append_symbol(symbols, symbol)
             matches.append({"symbol": symbol, "matched_text": symbol, "source": "query_code"})
+        for match in _HK_PATTERN.finditer(query):
+            code = match.group("prefix") or match.group("suffix") or ""
+            symbol = f"{code.zfill(5)}.HK"
+            self._append_symbol(symbols, symbol)
+            matches.append({"symbol": symbol, "matched_text": symbol, "source": "query_hk_code"})
+        for token in _US_PATTERN.findall(query):
+            if token in {"A", "AI", "API", "DCF", "ETF", "FUND", "HK", "HTTP", "JSON", "LBO", "PB", "PE", "ROE", "UZI", "USD"}:
+                continue
+            if token.startswith(("SH", "SZ", "BJ", "HK")) and token[2:].isdigit():
+                continue
+            self._append_symbol(symbols, token)
+            matches.append({"symbol": token, "matched_text": token, "source": "query_us_ticker"})
 
         normalized_query = self._normalize_name(query)
         for alias, symbol in sorted(self.aliases.items(), key=lambda item: len(item[0]), reverse=True):
@@ -306,7 +323,13 @@ class AShareSecurityMaster:
 
     @staticmethod
     def _normalize_symbol(value: object) -> str:
-        text = str(value or "").strip().lower()
+        text = str(value or "").strip().upper()
+        hk_match = re.fullmatch(r"(?:HK(?P<prefix>\d{1,5})|(?P<suffix>\d{1,5})\.HK)", text)
+        if hk_match:
+            return f"{(hk_match.group('prefix') or hk_match.group('suffix') or '').zfill(5)}.HK"
+        if re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", text):
+            return text
+        text = text.lower()
         match = _CODE_PATTERN.search(text)
         return match.group(1) if match else ""
 

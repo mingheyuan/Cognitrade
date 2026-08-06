@@ -20,6 +20,7 @@ class Settings(BaseModel):
     openai_api_key: str | None = None
     openai_base_url: str | None = None
     tushare_token: str | None = None
+    mx_api_key: str | None = None
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None
     qdrant_collection_name: str = "research_evidence"
@@ -45,6 +46,7 @@ class Settings(BaseModel):
     sensitive_sources_enabled: bool = False
     sensitive_source_allowlist: list[str] = Field(default_factory=list)
     xueqiu_cookie: str | None = None
+    browser_sources_enabled: bool = False
     default_timezone: str = "Asia/Shanghai"
     paper_trading_enforce_market_hours: bool = True
     log_level: str = "INFO"

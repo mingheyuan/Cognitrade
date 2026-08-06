@@ -16,7 +16,7 @@
     "research_report": {"title": "研究报告", "renderer": "ResearchReportArtifactRenderer", "schema_field_digest": "34a809ddf7e1b87f"},
     "main_agent_synthesis": {"title": "Main Agent 综合结论", "renderer": "MainAgentSynthesisArtifactRenderer", "schema_field_digest": "c2fe172018eab1bb"},
     "valuation_model": {"title": "估值模型", "renderer": "ValuationModelArtifactRenderer", "schema_field_digest": "a90972a6f8fcfffd"},
-    "investor_panel_review": {"title": "投资者评审团", "renderer": "InvestorPanelReviewArtifactRenderer", "schema_field_digest": "4a19cf43812657c9"},
+    "investor_panel_review": {"title": "投资者评审团", "renderer": "InvestorPanelReviewArtifactRenderer", "schema_field_digest": "b63a6f5b8e704abf"},
     "risk_scan": {"title": "风险扫描", "renderer": "RiskScanArtifactRenderer", "schema_field_digest": "06c53e57cde97158"},
     "report_presentation": {"title": "研究报告演示层", "renderer": "ReportPresentationArtifactRenderer", "schema_field_digest": "6feb7ad62f350313"},
     "institutional_analysis": {"title": "机构模型分析", "renderer": "InstitutionalAnalysisArtifactRenderer", "schema_field_digest": "cc5e71801f9aa6ef"},
