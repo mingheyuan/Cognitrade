@@ -1,45 +1,73 @@
 provider_chains:
   market:
     default_market: cn_equity
-    providers:
-      - akshare_market
-      - baostock_market
-      - efinance_market
+    providers: [akshare_market, efinance_market, tushare_market, baostock_market, direct_http_market]
   fundamental:
     default_market: cn_equity
-    providers:
-      - akshare_fundamental
-      - tushare_fundamental
-      - cninfo_fundamental
+    providers: [mx_api_fundamental, akshare_fundamental, tushare_fundamental, baostock_fundamental, yfinance_fundamental]
   notice:
     default_market: cn_equity
-    providers:
-      - cninfo_notice
-      - sse_notice
-      - szse_notice
-      - eastmoney_notice
+    providers: [cninfo_notice, sse_notice, szse_notice, eastmoney_notice]
   sector:
     default_market: cn_sector
-    providers:
-      - akshare_sector
-      - eastmoney_sector
+    providers: [akshare_sector, eastmoney_sector]
   lhb:
     default_market: cn_equity
-    providers:
-      - akshare_lhb
+    providers: [akshare_lhb, tushare_lhb, yuncaijing_lhb]
   capital_flow:
     default_market: cn_equity
-    providers:
-      - akshare_capital_flow
+    providers: [akshare_capital_flow, tushare_capital_flow]
   sentiment:
     default_market: cn_equity
-    providers:
-      - akshare_sentiment
+    providers: [akshare_sentiment, ddgs_sentiment, uzi_news_sentiment, hottrend_sentiment]
   events:
     default_market: cn_equity
-    providers:
-      - akshare_events
+    providers: [akshare_events, uzi_news_events, ddgs_events]
   policy:
     default_market: cn_sector
-    providers:
-      - akshare_policy
+    providers: [akshare_policy, ddgs_policy, uzi_news_policy]
+  kline:
+    default_market: cn_equity
+    providers: [uzi_kline_multi]
+  macro:
+    default_market: cn_equity
+    providers: [uzi_macro_multi]
+  peers:
+    default_market: cn_equity
+    providers: [uzi_peers_multi]
+  chain:
+    default_market: cn_equity
+    providers: [uzi_chain_multi]
+  research:
+    default_market: cn_equity
+    providers: [uzi_research_multi]
+  industry:
+    default_market: cn_equity
+    providers: [uzi_industry_multi]
+  materials:
+    default_market: cn_equity
+    providers: [uzi_materials_multi]
+  futures:
+    default_market: cn_equity
+    providers: [uzi_futures_multi]
+  valuation:
+    default_market: cn_equity
+    providers: [uzi_valuation_multi]
+  governance:
+    default_market: cn_equity
+    providers: [uzi_governance_multi]
+  moat:
+    default_market: cn_equity
+    providers: [uzi_moat_multi]
+  trap:
+    default_market: cn_equity
+    providers: [uzi_trap_multi]
+  contests:
+    default_market: cn_equity
+    providers: [uzi_contests_multi, xueqiu_contests]
+  fund_holders:
+    default_market: cn_equity
+    providers: [uzi_fund_holders]
+  similar_stocks:
+    default_market: cn_equity
+    providers: [uzi_similar_stocks]

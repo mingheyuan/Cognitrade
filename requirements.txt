@@ -1,11 +1,15 @@
 akshare>=1.16
 baostock>=0.8,<1
+ddgs>=9,<10
+efinance>=0.5,<1
 exchange-calendars>=4.11,<5
 fastapi==0.139.0
 httpx>=0.28,<1
 jsonschema>=4,<5
 openai>=1,<3
 pandas>=2
+playwright>=1.50,<2
+pypdf>=5,<7
 # Hikyuu currently accepts any pipdeptree release; 4.x has no Linux ARM wheel.
 pipdeptree==3.1.1
 pydantic>=2,<3
@@ -16,6 +20,7 @@ redis>=5,<8
 requests>=2.31,<3
 tushare>=1.4,<2
 uvicorn[standard]==0.50.2
+yfinance>=0.2.40,<1
 # 3.9.4 is the latest VeighNa release without an unavailable Linux ARM
 # PySide6 patch-level pin. PaperAccount's crossing contract is unchanged.
 vnpy==3.9.4

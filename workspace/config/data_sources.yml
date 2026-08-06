@@ -1,26 +1,95 @@
+catalog:
+  upstream: UZI-Skill
+  version: 3.9.2
+  commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
+  source_count: 70
+  metadata_registry: research_system/adapters/vendors/uzi_source_catalog.py
+  semantics: catalogue entries are candidates; every run reports actual availability in source_trace
+
 sources:
-  - id: akshare
-    name_cn: AkShare
-    tier: tier1
-    markets: [cn, cn_equity, cn_sector, cn_index]
-    dims: [market, fundamental, sector]
-  - id: cninfo
-    name_cn: 巨潮资讯
-    tier: tier3
-    markets: [cn, cn_equity]
-    dims: [notice, policy, events, fundamental]
-  - id: eastmoney
-    name_cn: 东方财富
-    tier: tier2
-    markets: [cn, cn_equity, cn_sector]
-    dims: [market, fundamental, notice, sector, capital_flow, lhb]
-  - id: baostock
-    name_cn: BaoStock
-    tier: tier1
-    markets: [cn, cn_equity, cn_index]
-    dims: [market]
-  - id: cninfo_events
-    name_cn: 巨潮资讯事件
-    tier: tier3
-    markets: [cn, cn_equity]
-    dims: [events]
+  - em_push2
+  - em_quote
+  - em_data
+  - xq_api
+  - tencent_qt
+  - sina_quote
+  - cninfo
+  - hkexnews
+  - aastocks
+  - cls
+  - yicai
+  - wallstreetcn
+  - cfi
+  - hexun
+  - 163money
+  - jrj
+  - investing
+  - mx_api
+  - akshare_lhb
+  - baostock
+  - yfinance
+  - ddgs
+  - yahoo_chart_v8
+  - tencent_hk_quote
+  - coingecko_simple_price
+  - coingecko_markets
+  - okx_spot_tickers
+  - kucoin_stats
+  - kraken_trades
+  - gemini_ticker
+  - coinlore_tickers
+  - geckoterminal_networks
+  - jin10_flash
+  - em_kuaixun
+  - em_stock_ann
+  - qh99_inventory
+  - cfachina
+  - ths_news_today
+  - iwencai
+  - ths_f10
+  - xueqiu_f10
+  - legulegu
+  - stockstar
+  - futu
+  - yuncaijing
+  - guba_em_list
+  - jisilu
+  - fx678
+  - cmc
+  - sse
+  - szse
+  - csrc
+  - gov_cn
+  - miit
+  - ndrc
+  - samr
+  - shfe
+  - dce
+  - czce
+  - 100ppi
+  - cnstock
+  - cs_cn
+  - stcn
+  - nbd
+  - pbc
+  - safe
+  - stats_gov
+  - chinamoney
+  - chinabond
+  - ine
+
+runtime_extensions:
+  - akshare
+  - direct_http
+  - efinance
+  - tushare
+  - eastmoney
+  - xueqiu
+  - danjuan_public
+  - cninfo_events
+  - hottrend
+
+sensitive_sources:
+  default: disabled
+  require_explicit_allowlist: true
+  sources: [xueqiu, xueqiu_f10, iwencai, ths_f10, legulegu, stockstar, futu, yuncaijing]

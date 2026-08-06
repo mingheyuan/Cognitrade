@@ -9,7 +9,7 @@ Frontend
   -> /api/v2/finance
     -> FinanceMarketDataService
       -> finance_ashare DomainPack snapshots
-      -> AkShare / CNInfo providers
+      -> UZI 3.9.2 provider chains (AkShare/eFinance/TuShare/BaoStock/direct HTTP/DDGS/browser)
     -> PaperTradingService
       -> VeighNa PaperAccount headless tick crossing
       -> server-side quote
@@ -200,6 +200,12 @@ GET /api/v2/finance/securities?query=茅台&limit=8
 `available`、`no_data`、`provider_unavailable`、`rate_limited`、`parse_failed`；
 Pack 质量 Gate 还可能标记 `degraded`、`data_gap` 或 `assumption_only`。数据源失败
 不会被静默替换成演示数据，也不会向客户端暴露上游连接异常原文。
+
+每个 Snapshot 同时携带 `source`、`primary_source`、`fallback_sources`、
+`field_sources` 与 `source_trace`。来源目录固定对齐 UZI 3.9.2 的 70 个 source ID，
+但目录项只是候选来源；客户端必须以本次 `source_trace[].status` 判断实际是否取到数据，
+不能把“存在于目录”解释成“数据可用”。Token/Cookie/API Key 只通过运行环境配置，任何
+响应都不会返回密钥值。
 
 K 线响应包含区间元数据、`bars` 历史序列与最后交易日记录。前端行情图和
 Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格。

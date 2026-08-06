@@ -4,9 +4,13 @@ import {
   CheckCircle2,
   CircleAlert,
   Database,
+  Download,
+  ExternalLink,
+  FileText,
   FileSearch,
   Lightbulb,
   ListChecks,
+  LoaderCircle,
   MessageSquareText,
   RefreshCw,
   ShieldAlert,
@@ -14,6 +18,7 @@ import {
   Target,
   UserRound,
 } from 'lucide-react'
+import { useState } from 'react'
 import { useCognitrade } from '../CognitradeContext'
 import { INTENT_LABELS } from '../data'
 import {
@@ -189,7 +194,10 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
     liveProgress,
     liveAnswer,
     liveEvents,
+    exportRunReport,
   } = useCognitrade()
+  const [exportingReport, setExportingReport] = useState<'' | 'html' | 'pdf'>('')
+  const [reportExportError, setReportExportError] = useState('')
   const report = reportFromDetail(selectedRun)
   const evidences = evidenceFromReport(report)
   const risks = reportRisks(report).map(localizeReportText)
@@ -202,6 +210,11 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
   const scorecard = asRecord(report.scorecard || report.screening_scorecard)
   const methodologies = Array.isArray(report.methodologies) ? report.methodologies.map(asRecord) : []
   const artifactBackedReport = asString(report.protocol) === 'agent_os' && Array.isArray(report.final_artifact_ids)
+  const hasUziReport = Object.keys(asRecord(report.uzi_profile)).length > 0
+    || Boolean(selectedRun?.replay.artifacts?.some((artifact) => (
+      artifact.artifact_type === 'report_presentation'
+      && asString(asRecord(artifact.content).theme).startsWith('uzi_')
+    )))
   const updatedAt = selectedRun?.events.events.at(-1)?.created_at
   const snapshot = asRecord(selectedRun?.replay.snapshot)
   const isConversation = intent === 'core.conversation.answer' || asString(snapshot.request_kind) === 'conversation'
@@ -218,6 +231,32 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
   const degradedEvidenceCount = Array.isArray(report.evidence)
     ? report.evidence.filter((item) => Boolean(asRecord(asRecord(item).metadata).degraded)).length
     : 0
+
+  const handleReportExport = async (format: 'html' | 'pdf') => {
+    if (!selectedRunId || exportingReport) return
+    setExportingReport(format)
+    setReportExportError('')
+    try {
+      const exported = await exportRunReport(selectedRunId, format)
+      const objectUrl = URL.createObjectURL(exported.blob)
+      const anchor = document.createElement('a')
+      anchor.href = objectUrl
+      anchor.rel = 'noopener noreferrer'
+      if (format === 'html') {
+        anchor.target = '_blank'
+      } else {
+        anchor.download = exported.filename
+      }
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
+    } catch (error) {
+      setReportExportError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setExportingReport('')
+    }
+  }
   const reportHasDegradedEvidence = Boolean(report.degraded) || degradedEvidenceCount > 0
   const hasMainAgentSynthesis = report.synthesis_available === true
   const synthesisUnavailable = report.synthesis_unavailable === true
@@ -415,6 +454,29 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
                     <small>{statusLabel(status)}</small>
                   </div>
                   <p>{assistantMessage}</p>
+                </section>
+              )}
+
+              {hasUziReport && (
+                <section className="uzi-report-export" aria-label="UZI 原生报告导出">
+                  <div className="uzi-report-export__identity">
+                    <span><FileText size={16} /></span>
+                    <div>
+                      <strong>UZI 原生报告</strong>
+                      <small>同一 ArtifactBoard 数据生成 HTML 与 PDF，不调用旧 UZI 运行时。</small>
+                    </div>
+                  </div>
+                  <div className="uzi-report-export__actions">
+                    <button type="button" onClick={() => void handleReportExport('html')} disabled={Boolean(exportingReport)}>
+                      {exportingReport === 'html' ? <LoaderCircle className="is-spinning" size={15} /> : <ExternalLink size={15} />}
+                      {exportingReport === 'html' ? '正在生成' : '打开 HTML'}
+                    </button>
+                    <button type="button" onClick={() => void handleReportExport('pdf')} disabled={Boolean(exportingReport)}>
+                      {exportingReport === 'pdf' ? <LoaderCircle className="is-spinning" size={15} /> : <Download size={15} />}
+                      {exportingReport === 'pdf' ? '正在生成' : '下载 PDF'}
+                    </button>
+                  </div>
+                  {reportExportError && <p role="alert">{reportExportError}</p>}
                 </section>
               )}
 

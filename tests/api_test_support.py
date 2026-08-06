@@ -118,6 +118,7 @@ class FakeRunService:
                 {"run_id": RERUN_ID, "status": "failed", "intent": "stock_compare"},
             ],
             "replay": {"run_id": RUN_ID, "request": {}, "events": []},
+            "artifacts": {"run_id": RUN_ID, "artifacts": []},
             "events": {"run_id": RUN_ID, "events": [], "event_counts": {"events": 0}},
             "trace": {"run_id": RUN_ID, "subagent_trace": [], "dynamic_trace": []},
             "steps": {"run_id": RUN_ID, "steps": [], "step_counts": 0},
@@ -165,6 +166,20 @@ class FakeRunService:
 
     def replay(self, run_id: str) -> dict[str, Any]:
         return self._call("replay", run_id)
+
+    def artifacts(
+        self,
+        run_id: str,
+        *,
+        artifact_type: str | None = None,
+        status: str | None = "active",
+    ) -> dict[str, Any]:
+        return self._call(
+            "artifacts",
+            run_id,
+            artifact_type=artifact_type,
+            status=status,
+        )
 
     def events(self, run_id: str) -> dict[str, Any]:
         return self._call("events", run_id)

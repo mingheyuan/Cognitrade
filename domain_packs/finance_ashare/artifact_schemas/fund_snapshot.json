@@ -104,10 +104,13 @@
             "type": "array",
             "items": {"$ref": "#/$defs/disclosedSecurityHolding"}
           },
+          "target_fund_period": {"type": ["string", "null"]},
+          "target_fund_source_ref": {"type": ["string", "null"]},
           "lookthrough_holdings": {
             "type": "array",
             "items": {"$ref": "#/$defs/disclosedSecurityHolding"}
           },
+          "lookthrough_period": {"type": ["string", "null"]},
           "holdings_coverage": {
             "type": "object",
             "required": ["asset_allocation", "direct_equity", "bond", "target_fund", "lookthrough", "is_fund_of_funds"],
@@ -233,7 +236,13 @@
         "code": {"type": "string"},
         "name": {"type": "string"},
         "security_type": {"type": "string"},
-        "weight_pct": {"type": ["number", "null"]}
+        "weight_pct": {"type": ["number", "null"]},
+        "shares_10k": {"type": ["number", "null"]},
+        "market_value_10k": {"type": ["number", "null"]},
+        "effective_weight_pct": {"type": ["number", "null"]},
+        "report_date": {"type": ["string", "null"]},
+        "report_id": {"type": ["string", "null"]},
+        "source_ref": {"type": ["string", "null"]}
       },
       "additionalProperties": false
     }

@@ -5,6 +5,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -24,6 +25,7 @@ from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.schemas.protocol import RequestEnvelope
+from test_uzi_native_report import sample_uzi_artifacts
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -225,6 +227,50 @@ class ApiV1RunsTests(unittest.TestCase):
             [{"run_id": RERUN_ID, "status": "failed", "intent": "stock_compare"}],
         )
         self.assertEqual(len(self.run_service.calls_for("history")), 1)
+
+    def test_uzi_report_export_reads_artifact_board_and_returns_html_or_pdf(self) -> None:
+        self.run_service.outputs["artifacts"] = {
+            "run_id": RUN_ID,
+            "artifacts": sample_uzi_artifacts(),
+        }
+
+        html_response = self.client.get(
+            f"/api/v1/runs/{RUN_ID}/report?format=html",
+            headers=auth_headers(),
+        )
+
+        self.assertEqual(html_response.status_code, 200, html_response.text)
+        self.assertTrue(html_response.headers["content-type"].startswith("text/html"))
+        self.assertIn("UZI RESEARCH TERMINAL", html_response.text)
+        self.assertIn("uzi-report-600519", html_response.headers["content-disposition"])
+        self.assertEqual(html_response.headers["x-cognitrade-source-artifact-count"], "3")
+        self.assertIn("default-src 'none'", html_response.headers["content-security-policy"])
+
+        with patch(
+            "research_system.api.routes.runs.render_uzi_native_pdf",
+            return_value=b"%PDF-1.7\nunit-test",
+        ):
+            pdf_response = self.client.get(
+                f"/api/v1/runs/{RUN_ID}/report?format=pdf",
+                headers=auth_headers(),
+            )
+
+        self.assertEqual(pdf_response.status_code, 200, pdf_response.text)
+        self.assertEqual(pdf_response.content, b"%PDF-1.7\nunit-test")
+        self.assertTrue(pdf_response.headers["content-type"].startswith("application/pdf"))
+        self.assertIn("attachment", pdf_response.headers["content-disposition"])
+        calls = self.run_service.calls_for("artifacts")
+        self.assertEqual(calls[-1].args, (RUN_ID,))
+        self.assertEqual(calls[-1].kwargs, {"artifact_type": None, "status": "active"})
+
+    def test_uzi_report_export_rejects_runs_without_uzi_artifacts(self) -> None:
+        response = self.client.get(
+            f"/api/v1/runs/{RUN_ID}/report",
+            headers=auth_headers(),
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["error"]["code"], "uzi_report_unavailable")
 
     def test_observability_routes_forward_identifiers_without_rewriting_payloads(self) -> None:
         cases = (

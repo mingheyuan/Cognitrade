@@ -29,8 +29,8 @@ class ProviderHealthTests(unittest.TestCase):
         self.assertFalse(rows["notice"]["has_fallback"])
         self.assertGreaterEqual(rows["notice"]["configured_provider_count"], 2)
         self.assertIn("sse_notice", rows["notice"]["disabled_provider_ids"])
-        self.assertEqual(rows["contests"]["provider_count"], 0)
-        self.assertEqual(rows["contests"]["configured_provider_count"], 1)
+        self.assertEqual(rows["contests"]["provider_count"], 1)
+        self.assertEqual(rows["contests"]["configured_provider_count"], 2)
         self.assertEqual(rows["fund"]["provider_count"], 2)
         self.assertEqual(rows["fund"]["configured_provider_count"], 2)
         self.assertFalse(payload["sensitive_sources"]["enabled"])
@@ -47,7 +47,7 @@ class ProviderHealthTests(unittest.TestCase):
             settings = Settings.from_env(root)
             chain = VendorProviderRegistry(settings).get_provider_chain("contests", "cn_equity")
 
-        self.assertEqual([provider.provider_id for provider in chain], ["xueqiu_contests"])
+        self.assertEqual([provider.provider_id for provider in chain], ["uzi_contests_multi", "xueqiu_contests"])
 
     def test_doctor_checks_include_provider_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

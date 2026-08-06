@@ -5,9 +5,12 @@ from typing import Any
 
 from research_system.adapters.vendors.akshare_market_adapter import AkShareMarketAdapter
 from research_system.adapters.vendors.baostock_market_adapter import BaoStockMarketAdapter
+from research_system.adapters.vendors.direct_http_market_adapter import DirectHttpMarketAdapter
+from research_system.adapters.vendors.efinance_market_adapter import EFinanceMarketAdapter
 from research_system.adapters.vendors.market_router import MarketRouter
 from research_system.adapters.vendors.provider_execution import execute_provider_chain, failure_facts
 from research_system.adapters.vendors.provider_registry import ProviderSpec, VendorProviderRegistry
+from research_system.adapters.vendors.tushare_market_adapter import TuShareMarketAdapter
 from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
 
 
@@ -24,9 +27,21 @@ class MarketSnapshotSkill:
         self.adapters = {
             "akshare_market": AkShareMarketAdapter(),
             "baostock_market": BaoStockMarketAdapter(),
+            "direct_http_market": DirectHttpMarketAdapter(),
         }
+        if provider_registry is not None:
+            if provider_registry.get("efinance_market") in provider_registry.get_provider_chain("market", "cn_equity"):
+                self.adapters["efinance_market"] = EFinanceMarketAdapter()
+            if provider_registry.settings.tushare_token:
+                self.adapters["tushare_market"] = TuShareMarketAdapter(provider_registry.settings.tushare_token)
 
-    def run(self, *, query: str, symbol: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        *,
+        query: str,
+        symbol: str | None = None,
+        history_days: int = 30,
+    ) -> dict[str, Any]:
         today = date.today()
         snapshot_date = today.isoformat()
         route = self.market_router.classify(symbol=symbol, query=query)
@@ -46,12 +61,13 @@ class MarketSnapshotSkill:
                 degrade_reason="symbol_missing",
             ).model_dump(mode="json")
 
-        start_date = (today - timedelta(days=30)).strftime("%Y%m%d")
+        resolved_symbol = route.normalized_symbol or symbol
+        start_date = (today - timedelta(days=max(1, history_days))).strftime("%Y%m%d")
         end_date = today.strftime("%Y%m%d")
         execution = execute_provider_chain(
             providers=providers,
             loaders={
-                provider_id: self._market_loader(adapter, symbol, start_date, end_date)
+                provider_id: self._market_loader(adapter, resolved_symbol, start_date, end_date)
                 for provider_id, adapter in self.adapters.items()
             },
         )
@@ -65,7 +81,7 @@ class MarketSnapshotSkill:
         }
         return VerifiedSnapshot(
             snapshot_type="market",
-            symbol=symbol,
+            symbol=resolved_symbol,
             query=query,
             snapshot_date=snapshot_date,
             facts=execution.facts,

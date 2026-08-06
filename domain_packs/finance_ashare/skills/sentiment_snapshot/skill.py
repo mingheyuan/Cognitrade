@@ -6,7 +6,10 @@ from typing import Any
 from research_system.adapters.vendors.akshare_sentiment_adapter import AkShareSentimentAdapter
 from research_system.adapters.vendors.market_router import MarketRouter
 from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
-from research_system.adapters.vendors.provider_execution import classify_provider_exception, failure_facts
+from research_system.adapters.vendors.provider_execution import failure_facts
+from research_system.adapters.vendors.uzi_hottrend_adapter import UziHotTrendAdapter
+from research_system.adapters.vendors.uzi_news_adapter import UziNewsAdapter
+from research_system.adapters.vendors.uzi_web_search_adapter import UziWebSearchAdapter
 from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
 
 
@@ -52,52 +55,63 @@ class SentimentSnapshotSkill:
                 degraded=True,
                 degrade_reason="symbol_missing",
             ).model_dump(mode="json")
+        facts: dict[str, Any] = {}
+        trace: list[dict[str, Any]] = []
         try:
-            facts = self.adapter.get_sentiment_snapshot(symbol=symbol)
-            primary_source = SnapshotSource(
-                skill=self.skill_name,
-                vendor=self.adapter.vendor_name,
-                from_cache=False,
-                provider_id="akshare_sentiment",
-                source_id="akshare",
-                chain_position=0,
-                dim="sentiment",
-            )
-            return VerifiedSnapshot(
-                snapshot_type="sentiment",
-                symbol=symbol,
-                query=query,
-                snapshot_date=snapshot_date,
-                facts=facts,
-                source=primary_source,
-                primary_source=primary_source,
-                source_confidence=(
-                    self.provider_registry.source_confidence(provider_chain[0])
-                    if self.provider_registry and provider_chain
-                    else "medium"
-                ),
-                source_trace=provider_trace,
-            ).model_dump(mode="json")
+            facts.update(self.adapter.get_sentiment_snapshot(symbol=symbol))
+            trace.append({"provider_id": "akshare_sentiment", "source_id": "em_data", "status": "available"})
         except Exception as exc:
-            failure = classify_provider_exception(exc)
-            primary_source = SnapshotSource(
-                skill=self.skill_name,
-                vendor=self.adapter.vendor_name,
-                from_cache=False,
-                provider_id="akshare_sentiment",
-                source_id="akshare",
-                chain_position=0,
-                dim="sentiment",
-            )
-            return VerifiedSnapshot(
-                snapshot_type="sentiment",
-                symbol=symbol,
-                query=query,
-                snapshot_date=snapshot_date,
-                facts=failure_facts(failure),
-                source=primary_source,
-                primary_source=primary_source,
-                source_trace=provider_trace + [{"provider_id": "akshare_sentiment", "status": f"error:{exc.__class__.__name__}"}],
-                degraded=True,
-                degrade_reason=failure,
-            ).model_dump(mode="json")
+            trace.append({"provider_id": "akshare_sentiment", "source_id": "em_data", "status": "provider_unavailable", "error_type": exc.__class__.__name__})
+
+        try:
+            web = UziWebSearchAdapter().search(query=f"{query} 股票 舆情 雪球 股吧 大V", dimension="sentiment", max_results=10)
+            facts["platform_snippets"] = web.get("results") or []
+            trace.extend(list(web.get("source_trace") or [{"provider_id": "ddgs_sentiment", "source_id": "ddgs", "status": "available", "count": web.get("result_count", 0)}]))
+        except Exception as exc:
+            trace.append({"provider_id": "ddgs_sentiment", "source_id": "ddgs", "status": "provider_unavailable", "error_type": exc.__class__.__name__})
+
+        try:
+            hot = UziHotTrendAdapter().get_mentions(name=query, extra_keywords=[symbol])
+            facts["hot_trend_mentions"] = hot
+            trace.extend(list(hot.get("source_trace") or []))
+        except Exception as exc:
+            trace.append({"provider_id": "hottrend_sentiment", "source_id": "hottrend", "status": "provider_unavailable", "error_type": exc.__class__.__name__})
+
+        try:
+            news = UziNewsAdapter().get_news(symbol=symbol, name=query, limit=15)
+            facts["news_multi_source"] = news.get("sources") or {}
+            trace.extend(list(news.get("source_trace") or []))
+        except Exception as exc:
+            trace.append({"provider_id": "uzi_news_sentiment", "source_id": "uzi_news_http", "status": "provider_unavailable", "error_type": exc.__class__.__name__})
+
+        available = bool(
+            facts.get("hot_rank_latest")
+            or facts.get("hot_rank_detail")
+            or facts.get("hot_keywords")
+            or facts.get("news_samples")
+            or facts.get("platform_snippets")
+            or (facts.get("hot_trend_mentions") or {}).get("total_hits")
+            or any((facts.get("news_multi_source") or {}).values())
+        )
+        primary_source = SnapshotSource(
+            skill=self.skill_name,
+            vendor="uzi_sentiment",
+            from_cache=False,
+            provider_id="uzi_sentiment_multi",
+            source_id=next((str(row.get("source_id")) for row in trace if row.get("status") == "available"), "ddgs"),
+            chain_position=0,
+            dim="sentiment",
+        )
+        return VerifiedSnapshot(
+            snapshot_type="sentiment",
+            symbol=symbol,
+            query=query,
+            snapshot_date=snapshot_date,
+            facts={**facts, "availability": "available" if available else "data_gap", "data_gap": [] if available else ["sentiment_sources_empty"]},
+            source=primary_source,
+            primary_source=primary_source,
+            source_confidence="medium" if available else "low",
+            source_trace=trace,
+            degraded=not available,
+            degrade_reason=None if available else "no_data",
+        ).model_dump(mode="json")

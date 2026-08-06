@@ -400,11 +400,36 @@ class FundResearchTests(unittest.TestCase):
         self.assertTrue(first["manager_tenures"][0]["current"])
         self.assertEqual(first["scale_change"]["total_share_change_pct"], -9.090909)
 
-    def test_feeder_fund_holdings_are_split_without_inventing_target_etf(self) -> None:
+    def test_feeder_fund_holdings_are_resolved_and_looked_through_from_disclosures(self) -> None:
+        def holdings_loader(code: str, _year: str):
+            if code == "561980":
+                return pd.DataFrame(
+                    [
+                        {
+                            "序号": 1,
+                            "股票代码": "688012",
+                            "股票名称": "中微公司",
+                            "占净值 比例": 15.02,
+                            "持股数 （万股）": 239.96,
+                            "持仓市值 （万元）": 112420.46,
+                            "季度": "2026年2季度",
+                        }
+                    ]
+                )
+            return pd.DataFrame(
+                [
+                    {
+                        "序号": 1,
+                        "股票代码": "688012",
+                        "股票名称": "中微公司",
+                        "占净值 比例": 0.0,
+                        "季度": "2026年2季度",
+                    }
+                ]
+            )
+
         skill = FundSnapshotSkill(
-            holdings_loader=lambda _code, _year: pd.DataFrame(
-                [{"序号": 1, "股票代码": "688012", "股票名称": "中微公司", "季度": "2026年2季度"}]
-            ),
+            holdings_loader=holdings_loader,
             asset_holdings_loader=lambda _code, _report_date: {
                 "source": "2026-06-30",
                 "chart_list": [
@@ -418,16 +443,84 @@ class FundResearchTests(unittest.TestCase):
                     {"code": "019827", "name": "26国债01", "percent": 0.7},
                 ],
             },
+            target_fund_loader=lambda _code: {
+                "code": "561980",
+                "name": "招商中证半导体产业交易型开放式指数证券投资基金",
+                "weight_pct": 92.22,
+                "market_value_10k": 272647.19685,
+                "report_date": "2026-06-30",
+                "report_id": "AN202607211827188365",
+                "source_ref": "https://pdf.dfcfw.com/pdf/H2_AN202607211827188365_1.pdf",
+            },
         )
 
         payload = skill._latest_holdings("020464", is_fund_of_funds=True)
 
         self.assertEqual(len(payload["top_holdings"]), 1)
         self.assertEqual(len(payload["bond_holdings"]), 2)
-        self.assertEqual(payload["asset_allocation"][-1]["weight_pct"], 96.8)
-        self.assertEqual(payload["holdings_coverage"]["target_fund"], "unavailable")
-        self.assertEqual(payload["target_fund_holdings"], [])
-        self.assertEqual(payload["lookthrough_holdings"], [])
+        self.assertEqual(payload["asset_allocation"][0]["weight_pct"], 92.22)
+        self.assertEqual(payload["asset_allocation"][-1]["weight_pct"], 4.58)
+        self.assertEqual(payload["holdings_coverage"]["target_fund"], "available")
+        self.assertEqual(payload["holdings_coverage"]["lookthrough"], "available")
+        self.assertEqual(payload["target_fund_holdings"][0]["code"], "561980")
+        self.assertEqual(payload["target_fund_holdings"][0]["weight_pct"], 92.22)
+        self.assertEqual(payload["lookthrough_holdings"][0]["weight_pct"], 15.02)
+        self.assertEqual(payload["lookthrough_holdings"][0]["market_value_10k"], 112420.46)
+        self.assertEqual(payload["lookthrough_holdings"][0]["effective_weight_pct"], 13.851444)
+        self.assertEqual(payload["target_fund_period"], "2026-06-30")
+        self.assertEqual(payload["lookthrough_period"], "2026年2季度")
+
+    def test_target_fund_report_parser_uses_disclosure_labels_not_fixed_section_numbers(self) -> None:
+        target = FundSnapshotSkill._parse_target_fund_report(
+            """
+            本报告期自 2026 年 4 月 1 日起至 6 月 30 日止。
+            3.4.7 目标基金 基本情况
+            基金名称 招商中证半导体产业交易型开放式指数证券投资基金
+            基金主代码 561980
+            3.4.8 目标基金产品说明
+            8.6 期末投资目标基金明细
+            序号 基金名称 基金类型 运作方式 管理人 公允价值（元） 占基金资产净值比例（%）
+            1 招商中证半导体产业 ETF ETF 交易型开放式 招商基金管理有限公司
+            2,726,471,968.50 92.22
+            8.7 报告期末按行业分类的股票投资组合
+            """,
+            report_id="AN202607211827188365",
+            source_ref="https://pdf.dfcfw.com/pdf/H2_AN202607211827188365_1.pdf",
+        )
+
+        self.assertEqual(target["code"], "561980")
+        self.assertEqual(target["weight_pct"], 92.22)
+        self.assertEqual(target["market_value_10k"], 272647.19685)
+        self.assertEqual(target["report_date"], "2026-06-30")
+
+    def test_holdings_normalizer_selects_latest_disclosed_quarter(self) -> None:
+        rows, period = FundSnapshotSkill._normalize_holdings(
+            pd.DataFrame(
+                [
+                    {
+                        "序号": 1,
+                        "股票代码": "688012",
+                        "股票名称": "中微公司",
+                        "占净值 比例": 15.80,
+                        "持仓市值 （万元）": 51706.89,
+                        "季度": "2026年1季度股票投资明细",
+                    },
+                    {
+                        "序号": 1,
+                        "股票代码": "688012",
+                        "股票名称": "中微公司",
+                        "占净值 比例": 15.02,
+                        "持仓市值 （万元）": 112420.46,
+                        "季度": "2026年2季度股票投资明细",
+                    },
+                ]
+            )
+        )
+
+        self.assertEqual(period, "2026年2季度股票投资明细")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["weight_pct"], 15.02)
+        self.assertEqual(rows[0]["market_value_10k"], 112420.46)
 
     def test_fund_methodology_ranks_only_comparable_observed_evidence(self) -> None:
         skill = FundSnapshotSkill(
@@ -686,8 +779,17 @@ class FundResearchTests(unittest.TestCase):
         pe_frame = pd.DataFrame({"行业加权市盈率": [10.0, 20.0, 600.0, None]})
         with (
             patch(
-                "domain_packs.finance_ashare.skills.uzi_source_snapshot.skill.AkShareMarketAdapter.get_market_overview",
-                return_value={"valuation": {"PE(TTM)": 15.0}},
+                "domain_packs.finance_ashare.skills.uzi_source_snapshot.skill.MarketSnapshotSkill.run",
+                return_value={
+                    "facts": {"market_overview": {"valuation": {"PE(TTM)": 15.0}}},
+                    "source": {
+                        "vendor": "test",
+                        "provider_id": "test_market",
+                        "source_id": "test_market",
+                        "chain_position": 0,
+                    },
+                    "source_trace": [],
+                },
             ),
             patch.object(
                 skill,

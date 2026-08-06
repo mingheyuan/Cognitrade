@@ -20,7 +20,7 @@ FastAPI owns authentication, validation, CORS, error envelopes, request IDs,
 SSE transport, and mutation serialization. AgentOS owns planning, execution,
 artifacts, gates, replay, and long-term memory.
 
-There are 42 versioned operations. Proposal, dynamic subagent-discovery,
+There are 43 versioned operations. Proposal, dynamic subagent-discovery,
 ActionPlan, Supervisor, Handler, Blackboard, CLI, and unversioned business APIs
 are not part of the current runtime.
 
@@ -144,11 +144,17 @@ fee, or disclosed holdings fields remain `data_gap`; the service does not
 insert simulated or neutral values. Holdings evidence is split into asset
 allocation, direct equities, direct bonds, target-fund/ETF positions, and
 look-through positions. A feeder fund's directly held shares are never labeled
-as its complete portfolio. When the public structure source groups the target
-ETF under `other` without returning its identity or exact weight,
-`target_fund_holdings` and `lookthrough_holdings` stay empty and the corresponding
-coverage fields are `unavailable`; no ETF identity or constituent weight is
-inferred from the fund name. Fund methodology v4 also records the declared performance
+as its complete portfolio. For feeder funds, the service reads the latest
+official periodic report to resolve the target fund code, name, fair value, NAV
+weight, report date, and source URL. It then loads the target ETF's latest
+disclosed top-ten securities and reports both the ETF-level weight and the
+feeder fund's effective exposure (target-fund weight multiplied by constituent
+weight). The target position is split out of the structure provider's `other`
+bucket; any residual stays labeled as other assets. If either disclosure layer
+is unavailable, its coverage field remains `unavailable`; the service never
+infers an ETF identity or constituent weight from the fund name. Look-through
+rows are explicitly a top-ten periodic disclosure, not a complete real-time
+portfolio. Fund methodology v4 also records the declared performance
 benchmark, fund-versus-benchmark period returns, manager tenure segments, and
 single-fund scale/share history. When a complete trailing-three-year return is
 unavailable, the long-term annualized-return component uses the real
@@ -240,6 +246,33 @@ request-supplied `fee_model`, the service does not estimate transaction cost.
 Strategic asset-allocation targets never fall back to a balanced or equal-weight
 portfolio: missing classifications or targets produce `data_gap`.
 
+### UZI native report export
+
+Completed UZI stock runs expose a Pack-owned native-style report derived only
+from immutable ArtifactBoard records. The renderer uses `report_presentation`
+as the visual contract and `research_report` plus the independent UZI method
+Artifacts as the audit source. It never invokes the old UZI CLI, cache,
+report server, or an upstream checkout.
+
+```http
+GET /api/v1/runs/{run_id}/report?format=html
+Accept: text/html
+Authorization: Bearer <COGNITRADE_API_TOKEN>
+```
+
+```http
+GET /api/v1/runs/{run_id}/report?format=pdf
+Accept: application/pdf
+Authorization: Bearer <COGNITRADE_API_TOKEN>
+```
+
+`format` is exactly `html` or `pdf`. HTML is self-contained and escapes every
+Artifact value before insertion. PDF is rendered from that same HTML by the
+deployment's bundled Chromium, so HTML and PDF cannot silently diverge. A run
+without an active UZI `research_report` returns `409 uzi_report_unavailable`;
+missing Chromium returns `503 uzi_pdf_renderer_unavailable`. Neither failure
+falls back to a simulated report.
+
 ### Sensitive authenticated source policy
 
 Authenticated sources are disabled by default. The Xueqiu contest/cube source
@@ -252,9 +285,10 @@ COGNITRADE_XUEQIU_COOKIE=<runtime secret>
 ```
 
 The Cookie is read only from the environment and must not be submitted in an
-API request or committed to the repository. If any gate is missing, the
-`contests` snapshot returns a sanitized `data_gap`; no mock standings or
-holdings are generated.
+API request or committed to the repository. If any gate is missing, Xueqiu is
+recorded as a sanitized source gap while public Taoguba/THS/DPSWang evidence may
+still make the `contests` snapshot available. No mock standings or holdings are
+generated.
 
 | Method | Path | Canonical source |
 | --- | --- | --- |
@@ -262,6 +296,7 @@ holdings are generated.
 | `GET` | `/runs` | canonical Run history |
 | `GET` | `/runs/{run_id}` | complete run detail projection |
 | `GET` | `/runs/{run_id}/artifacts` | active ArtifactBoard records |
+| `GET` | `/runs/{run_id}/report?format=html|pdf` | Pack-owned UZI HTML/PDF report derived from active ArtifactBoard records |
 | `GET` | `/runs/{run_id}/replay` | snapshot, artifacts, and events |
 | `GET` | `/runs/{run_id}/events` | `execution_events.jsonl` |
 | `GET` | `/runs/{run_id}/events/stream` | canonical SSE stream |

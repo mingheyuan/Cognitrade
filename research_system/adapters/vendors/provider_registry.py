@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib.util import find_spec
 from typing import Any, Literal
 
 from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
 from research_system.runtime.platform.settings import Settings
 
 
-ProviderAccess = Literal["sdk", "http", "browser", "official_disclosure"]
+ProviderAccess = Literal["sdk", "http", "browser", "official_disclosure", "search", "api"]
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,8 @@ class ProviderSpec:
     dims: tuple[str, ...]
     access: ProviderAccess
     requires_key: bool = False
+    dependency: str | None = None
+    priority: int = 100
     enabled: bool = True
     notes: str = ""
 
@@ -63,23 +66,30 @@ class VendorProviderRegistry:
             and normalized_dim in provider.dims
             and (normalized_market in provider.markets or "cn" in provider.markets and normalized_market.startswith("cn_"))
         ]
-        return rows
+        return sorted(rows, key=lambda provider: provider.priority)
 
     def source_confidence(self, provider: ProviderSpec | None) -> str:
         source = self.data_sources.get(provider.source_id) if provider else None
         return source.stability if source is not None else "low"
 
     def _credentials_available(self, provider: ProviderSpec) -> bool:
+        if provider.dependency and find_spec(provider.dependency) is None:
+            return False
         if provider.access == "browser":
-            return (
+            permitted = (
                 self.settings.sensitive_sources_enabled
                 and provider.source_id.lower() in self.settings.sensitive_source_allowlist
                 and (provider.source_id != "xueqiu" or bool(self.settings.xueqiu_cookie))
+            )
+            return permitted and (
+                provider.provider_id == "xueqiu_contests" or self.settings.browser_sources_enabled
             )
         if not provider.requires_key:
             return True
         if provider.provider_id.startswith("tushare_"):
             return bool(self.settings.tushare_token)
+        if provider.provider_id.startswith("mx_api_"):
+            return bool(self.settings.mx_api_key)
         return False
 
     def describe_dim(self, dim: str, market: str) -> dict[str, Any]:
@@ -107,6 +117,7 @@ class VendorProviderRegistry:
                 markets=("cn", "cn_equity", "cn_index"),
                 dims=("market",),
                 access="sdk",
+                priority=10,
                 notes="Primary market snapshot provider.",
             ),
             ProviderSpec(
@@ -117,6 +128,8 @@ class VendorProviderRegistry:
                 dims=("market",),
                 access="sdk",
                 notes="Fallback market snapshot provider.",
+                dependency="baostock",
+                priority=40,
             ),
             ProviderSpec(
                 provider_id="efinance_market",
@@ -125,8 +138,42 @@ class VendorProviderRegistry:
                 markets=("cn", "cn_equity"),
                 dims=("market",),
                 access="sdk",
-                enabled=False,
-                notes="Reserved until the eFinance adapter is installed.",
+                dependency="efinance",
+                priority=20,
+                notes="Zero-key A/H/US market fallback aligned with UZI 3.9.2.",
+            ),
+            ProviderSpec(
+                provider_id="tushare_market",
+                source_id="tushare",
+                vendor_name="tushare",
+                markets=("cn", "cn_equity", "cn_index"),
+                dims=("market",),
+                access="http",
+                requires_key=True,
+                dependency="tushare",
+                priority=30,
+                notes="Keyed A-share market fallback.",
+            ),
+            ProviderSpec(
+                provider_id="direct_http_market",
+                source_id="direct_http",
+                vendor_name="direct_http",
+                markets=("cn", "cn_equity", "cn_index", "hk_equity", "us_equity"),
+                dims=("market",),
+                access="http",
+                priority=50,
+                notes="EastMoney/Sina/Tencent/Yahoo/Stooq direct HTTP fallback chain.",
+            ),
+            ProviderSpec(
+                provider_id="mx_api_fundamental",
+                source_id="mx_api",
+                vendor_name="mx_api",
+                markets=("cn", "cn_equity", "hk_equity", "us_equity"),
+                dims=("fundamental",),
+                access="api",
+                requires_key=True,
+                priority=5,
+                notes="Authenticated EastMoney MX NLP snapshot provider.",
             ),
             ProviderSpec(
                 provider_id="akshare_fundamental",
@@ -135,6 +182,8 @@ class VendorProviderRegistry:
                 markets=("cn", "cn_equity"),
                 dims=("fundamental",),
                 access="sdk",
+                dependency="akshare",
+                priority=10,
                 notes="Primary fundamental snapshot provider.",
             ),
             ProviderSpec(
@@ -145,7 +194,31 @@ class VendorProviderRegistry:
                 dims=("fundamental",),
                 access="http",
                 requires_key=True,
+                dependency="tushare",
+                priority=20,
                 notes="Keyed fallback for fundamentals.",
+            ),
+            ProviderSpec(
+                provider_id="baostock_fundamental",
+                source_id="baostock",
+                vendor_name="baostock",
+                markets=("cn", "cn_equity"),
+                dims=("fundamental",),
+                access="sdk",
+                dependency="baostock",
+                priority=30,
+                notes="Zero-key quarterly statement and ratio fallback.",
+            ),
+            ProviderSpec(
+                provider_id="yfinance_fundamental",
+                source_id="yfinance",
+                vendor_name="yfinance",
+                markets=("hk_equity", "us_equity"),
+                dims=("fundamental",),
+                access="sdk",
+                dependency="yfinance",
+                priority=10,
+                notes="HK/US financial statement provider.",
             ),
             ProviderSpec(
                 provider_id="cninfo_fundamental",
@@ -217,39 +290,124 @@ class VendorProviderRegistry:
             ),
             ProviderSpec(
                 provider_id="akshare_lhb",
-                source_id="akshare",
+                source_id="akshare_lhb",
                 vendor_name="akshare",
                 markets=("cn", "cn_equity"),
                 dims=("lhb",),
                 access="sdk",
+                priority=10,
                 notes="Primary lhb snapshot provider.",
             ),
             ProviderSpec(
+                provider_id="tushare_lhb",
+                source_id="tushare",
+                vendor_name="tushare",
+                markets=("cn", "cn_equity"),
+                dims=("lhb",),
+                access="api",
+                requires_key=True,
+                dependency="tushare",
+                priority=20,
+                notes="TuShare top_list/top_inst LHB fallback; account points and interface permission apply.",
+            ),
+            ProviderSpec(
+                provider_id="yuncaijing_lhb",
+                source_id="yuncaijing",
+                vendor_name="playwright",
+                markets=("cn", "cn_equity"),
+                dims=("lhb",),
+                access="browser",
+                priority=30,
+                notes="Explicitly enabled Playwright LHB evidence fallback.",
+            ),
+            ProviderSpec(
                 provider_id="akshare_capital_flow",
-                source_id="akshare",
+                source_id="em_data",
                 vendor_name="akshare",
                 markets=("cn", "cn_equity"),
                 dims=("capital_flow",),
                 access="sdk",
+                priority=10,
                 notes="Primary capital flow snapshot provider.",
             ),
             ProviderSpec(
+                provider_id="tushare_capital_flow",
+                source_id="tushare",
+                vendor_name="tushare",
+                markets=("cn", "cn_equity"),
+                dims=("capital_flow",),
+                access="api",
+                requires_key=True,
+                dependency="tushare",
+                priority=20,
+                notes="TuShare moneyflow fallback; account points and interface permission apply.",
+            ),
+            ProviderSpec(
                 provider_id="akshare_sentiment",
-                source_id="akshare",
+                source_id="em_data",
                 vendor_name="akshare",
                 markets=("cn", "cn_equity"),
                 dims=("sentiment",),
                 access="sdk",
+                priority=10,
                 notes="Primary sentiment snapshot provider.",
             ),
             ProviderSpec(
+                provider_id="ddgs_sentiment",
+                source_id="ddgs",
+                vendor_name="ddgs",
+                markets=("cn", "cn_equity", "hk_equity", "us_equity"),
+                dims=("sentiment",),
+                access="search",
+                dependency="ddgs",
+                priority=20,
+            ),
+            ProviderSpec(
+                provider_id="uzi_news_sentiment",
+                source_id="jin10_flash",
+                vendor_name="uzi_news_http",
+                markets=("cn", "cn_equity", "hk_equity", "us_equity"),
+                dims=("sentiment",),
+                access="http",
+                priority=30,
+            ),
+            ProviderSpec(
+                provider_id="hottrend_sentiment",
+                source_id="hottrend",
+                vendor_name="hottrend",
+                markets=("cn", "cn_equity", "hk_equity", "us_equity"),
+                dims=("sentiment",),
+                access="http",
+                priority=40,
+            ),
+            ProviderSpec(
                 provider_id="akshare_events",
-                source_id="cninfo_events",
+                source_id="cninfo",
                 vendor_name="akshare",
                 markets=("cn", "cn_equity"),
                 dims=("events",),
                 access="sdk",
+                priority=10,
                 notes="Primary event snapshot provider built on cninfo disclosures.",
+            ),
+            ProviderSpec(
+                provider_id="uzi_news_events",
+                source_id="jin10_flash",
+                vendor_name="uzi_news_http",
+                markets=("cn", "cn_equity", "hk_equity", "us_equity"),
+                dims=("events",),
+                access="http",
+                priority=20,
+            ),
+            ProviderSpec(
+                provider_id="ddgs_events",
+                source_id="ddgs",
+                vendor_name="ddgs",
+                markets=("cn", "cn_equity", "hk_equity", "us_equity"),
+                dims=("events",),
+                access="search",
+                dependency="ddgs",
+                priority=30,
             ),
             ProviderSpec(
                 provider_id="akshare_policy",
@@ -261,6 +419,25 @@ class VendorProviderRegistry:
                 notes="Primary policy snapshot provider derived from catalyst signals.",
             ),
             ProviderSpec(
+                provider_id="ddgs_policy",
+                source_id="ddgs",
+                vendor_name="ddgs",
+                markets=("cn", "cn_sector", "hk_equity", "us_equity"),
+                dims=("policy",),
+                access="search",
+                dependency="ddgs",
+                priority=20,
+            ),
+            ProviderSpec(
+                provider_id="uzi_news_policy",
+                source_id="jin10_flash",
+                vendor_name="uzi_news_http",
+                markets=("cn", "cn_sector", "hk_equity", "us_equity"),
+                dims=("policy",),
+                access="http",
+                priority=30,
+            ),
+            ProviderSpec(
                 provider_id="xueqiu_contests",
                 source_id="xueqiu",
                 vendor_name="xueqiu",
@@ -269,6 +446,148 @@ class VendorProviderRegistry:
                 access="browser",
                 requires_key=True,
                 notes="Authenticated Xueqiu cube source; disabled unless the global sensitive-source switch, xueqiu allowlist entry and cookie are all configured.",
+            ),
+            ProviderSpec(
+                provider_id="uzi_kline_multi",
+                source_id="em_push2",
+                vendor_name="uzi_market_chain",
+                markets=("cn", "cn_equity", "hk_equity", "us_equity"),
+                dims=("kline",),
+                access="http",
+                priority=10,
+                notes="Same executable market fallback chain as market snapshots, requested with a one-year window.",
+            ),
+            ProviderSpec(
+                provider_id="uzi_macro_multi",
+                source_id="ddgs",
+                vendor_name="uzi_macro",
+                markets=("cn", "cn_equity", "hk_equity", "us_equity"),
+                dims=("macro",),
+                access="search",
+                dependency="ddgs",
+                priority=10,
+            ),
+            ProviderSpec(
+                provider_id="uzi_peers_multi",
+                source_id="em_data",
+                vendor_name="uzi_peers",
+                markets=("cn", "cn_equity"),
+                dims=("peers",),
+                access="sdk",
+                priority=10,
+            ),
+            ProviderSpec(
+                provider_id="uzi_chain_multi",
+                source_id="em_data",
+                vendor_name="uzi_chain",
+                markets=("cn", "cn_equity"),
+                dims=("chain",),
+                access="sdk",
+                priority=10,
+            ),
+            ProviderSpec(
+                provider_id="uzi_research_multi",
+                source_id="em_data",
+                vendor_name="uzi_research",
+                markets=("cn", "cn_equity"),
+                dims=("research",),
+                access="sdk",
+                priority=10,
+            ),
+            ProviderSpec(
+                provider_id="uzi_industry_multi",
+                source_id="em_data",
+                vendor_name="uzi_industry",
+                markets=("cn", "cn_equity"),
+                dims=("industry",),
+                access="sdk",
+                priority=10,
+            ),
+            ProviderSpec(
+                provider_id="uzi_materials_multi",
+                source_id="ddgs",
+                vendor_name="uzi_materials",
+                markets=("cn", "cn_equity"),
+                dims=("materials",),
+                access="search",
+                dependency="ddgs",
+                priority=10,
+            ),
+            ProviderSpec(
+                provider_id="uzi_futures_multi",
+                source_id="ddgs",
+                vendor_name="uzi_futures",
+                markets=("cn", "cn_equity"),
+                dims=("futures",),
+                access="search",
+                dependency="ddgs",
+                priority=10,
+            ),
+            ProviderSpec(
+                provider_id="uzi_valuation_multi",
+                source_id="em_push2",
+                vendor_name="uzi_valuation",
+                markets=("cn", "cn_equity", "hk_equity", "us_equity"),
+                dims=("valuation",),
+                access="http",
+                priority=10,
+            ),
+            ProviderSpec(
+                provider_id="uzi_governance_multi",
+                source_id="cninfo",
+                vendor_name="uzi_governance",
+                markets=("cn", "cn_equity", "hk_equity", "us_equity"),
+                dims=("governance",),
+                access="http",
+                priority=10,
+            ),
+            ProviderSpec(
+                provider_id="uzi_moat_multi",
+                source_id="ddgs",
+                vendor_name="uzi_moat",
+                markets=("cn", "cn_equity", "hk_equity", "us_equity"),
+                dims=("moat",),
+                access="search",
+                dependency="ddgs",
+                priority=10,
+            ),
+            ProviderSpec(
+                provider_id="uzi_trap_multi",
+                source_id="ddgs",
+                vendor_name="uzi_trap",
+                markets=("cn", "cn_equity", "hk_equity", "us_equity"),
+                dims=("trap",),
+                access="search",
+                dependency="ddgs",
+                priority=10,
+            ),
+            ProviderSpec(
+                provider_id="uzi_contests_multi",
+                source_id="guba_em_list",
+                vendor_name="uzi_contests",
+                markets=("cn", "cn_equity", "hk_equity", "us_equity"),
+                dims=("contests",),
+                access="http",
+                priority=20,
+                notes="Public contest evidence chain; authenticated Xueqiu is separately policy-gated.",
+            ),
+            ProviderSpec(
+                provider_id="uzi_fund_holders",
+                source_id="em_data",
+                vendor_name="akshare",
+                markets=("cn", "cn_equity"),
+                dims=("fund_holders",),
+                access="sdk",
+                priority=10,
+            ),
+            ProviderSpec(
+                provider_id="uzi_similar_stocks",
+                source_id="em_data",
+                vendor_name="akshare",
+                markets=("cn", "cn_equity"),
+                dims=("similar_stocks",),
+                access="sdk",
+                priority=10,
             ),
             ProviderSpec(
                 provider_id="eastmoney_fund",

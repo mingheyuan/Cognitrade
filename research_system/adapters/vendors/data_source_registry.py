@@ -1,13 +1,20 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
+from research_system.adapters.vendors.uzi_source_catalog import (
+    UZI_SOURCE_ROWS,
+    mapped_dimensions,
+    mapped_markets,
+)
 
-SourceAccess = Literal["sdk", "http", "browser", "official_disclosure"]
+
+SourceAccess = Literal["sdk", "http", "browser", "official_disclosure", "search", "api"]
 SourceTier = Literal["tier1", "tier2", "tier3"]
 SourceStability = Literal["high", "medium", "low"]
 LatencyLevel = Literal["low", "medium", "high"]
+SourceHealth = Literal["known_good", "flaky", "blocked_often", "needs_browser", "unknown"]
 
 
 @dataclass(frozen=True)
@@ -24,6 +31,9 @@ class DataSource:
     stability: SourceStability = "medium"
     latency_level: LatencyLevel = "medium"
     notes: str = ""
+    upstream_dims: tuple[str, ...] = ()
+    health: SourceHealth = "unknown"
+    upstream: str | None = None
 
 
 class DataSourceRegistry:
@@ -45,7 +55,8 @@ class DataSourceRegistry:
         return rows
 
     def _default_sources(self) -> list[DataSource]:
-        return [
+        sources = self._uzi_sources()
+        local_sources = [
             DataSource(
                 id="akshare",
                 name_cn="AkShare",
@@ -84,6 +95,19 @@ class DataSourceRegistry:
                 stability="medium",
                 latency_level="medium",
                 notes="Useful fallback for quotes, notice mirrors, sector breadth, and flow dimensions.",
+            ),
+            DataSource(
+                id="direct_http",
+                name_cn="UZI 直连 HTTP 行情链",
+                base_url="https://push2his.eastmoney.com",
+                markets=("cn", "cn_equity", "cn_index", "hk_equity", "us_equity"),
+                dims=("market", "kline"),
+                tier="tier1",
+                official=False,
+                access="http",
+                stability="medium",
+                latency_level="low",
+                notes="Runtime aggregate for EastMoney, Sina, Tencent, Yahoo Chart v8 and Stooq.",
             ),
             DataSource(
                 id="baostock",
@@ -142,14 +166,14 @@ class DataSourceRegistry:
                 name_cn="TuShare",
                 base_url="https://tushare.pro",
                 markets=("cn", "cn_equity"),
-                dims=("fundamental", "market"),
+                dims=("fundamental", "market", "capital_flow", "lhb"),
                 tier="tier2",
                 official=False,
                 access="http",
                 requires_key=True,
                 stability="medium",
                 latency_level="medium",
-                notes="Optional keyed fallback for fundamental datasets.",
+                notes="Optional keyed fallback for market, fundamentals, money flow and LHB datasets.",
             ),
             DataSource(
                 id="xueqiu",
@@ -190,4 +214,76 @@ class DataSourceRegistry:
                 latency_level="medium",
                 notes="Disclosure-backed event source for earnings, contracts, and milestone notices.",
             ),
+            DataSource(
+                id="hottrend",
+                name_cn="六平台公开热榜",
+                base_url="https://top.baidu.com",
+                markets=("cn", "cn_equity", "hk_equity", "us_equity"),
+                dims=("sentiment", "trap"),
+                tier="tier2",
+                official=False,
+                access="http",
+                stability="low",
+                latency_level="medium",
+                notes="Runtime aggregate for Weibo, Zhihu, Baidu, Douyin, Toutiao and Bilibili public hot lists.",
+            ),
         ]
+        by_id = {source.id: source for source in sources}
+        for local in local_sources:
+            upstream = by_id.get(local.id)
+            if upstream is None:
+                by_id[local.id] = local
+                continue
+            by_id[local.id] = replace(
+                upstream,
+                markets=tuple(dict.fromkeys((*upstream.markets, *local.markets))),
+                dims=tuple(dict.fromkeys((*upstream.dims, *local.dims))),
+                requires_key=upstream.requires_key or local.requires_key,
+                notes=f"{upstream.notes} {local.notes}".strip(),
+            )
+        return list(by_id.values())
+
+    @staticmethod
+    def _uzi_sources() -> list[DataSource]:
+        tier_map: dict[int, SourceTier] = {1: "tier1", 2: "tier2", 3: "tier3"}
+        access_map: dict[str, SourceAccess] = {
+            "http": "http",
+            "akshare": "sdk",
+            "mx_api": "api",
+            "playwright": "browser",
+            "ddgs": "search",
+        }
+        stability_map: dict[str, SourceStability] = {
+            "known_good": "high",
+            "flaky": "low",
+            "blocked_often": "low",
+            "needs_browser": "medium",
+        }
+        official_ids = {
+            "cninfo", "hkexnews", "sse", "szse", "csrc", "gov_cn", "miit", "ndrc", "samr",
+            "shfe", "dce", "czce", "cfachina", "pbc", "safe", "stats_gov", "chinamoney",
+            "chinabond", "ine",
+        }
+        rows: list[DataSource] = []
+        for source_id, name_cn, base_url, markets, dims, tier, access, health in UZI_SOURCE_ROWS:
+            upstream_dims = tuple(str(item) for item in dims)
+            rows.append(
+                DataSource(
+                    id=str(source_id),
+                    name_cn=str(name_cn),
+                    base_url=str(base_url),
+                    markets=mapped_markets(tuple(str(item) for item in markets)),
+                    dims=mapped_dimensions(upstream_dims),
+                    tier=tier_map[int(tier)],
+                    official=str(source_id) in official_ids,
+                    access=access_map[str(access)],
+                    requires_key=str(source_id) == "mx_api",
+                    stability=stability_map.get(str(health), "medium"),
+                    latency_level="high" if str(access) == "playwright" else "medium",
+                    notes="UZI-Skill 3.9.2 source registry parity entry; availability is verified per run.",
+                    upstream_dims=upstream_dims,
+                    health=str(health),
+                    upstream="UZI-Skill@fce996c33e70eddce8e375f53cd252b549eb3d7c",
+                )
+            )
+        return rows

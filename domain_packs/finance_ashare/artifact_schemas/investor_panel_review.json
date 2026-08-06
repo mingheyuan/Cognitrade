@@ -35,6 +35,7 @@
   "properties": {
     "methodology_version": {"type": "string"}, "profile": {"type": "string"}, "scope": {"type": "string"}, "panel_version": {"type": "string"},
     "source_commit": {"type": "string"}, "registered_seat_count": {"type": "integer", "minimum": 0}, "rule_mode": {"type": "string"},
+    "method_input_contract": {"type": "object", "x-business-extensible": true},
     "votes": {"type": "array", "items": {"$ref": "#/$defs/vote"}},
     "distribution": {"type": "object", "properties": {"bullish": {"type": "integer"}, "bearish": {"type": "integer"}, "neutral": {"type": "integer"}, "insufficient_evidence": {"type": "integer"}}, "additionalProperties": false},
     "average_score": {"type": ["number", "null"]}, "evaluated_rule_count": {"type": "integer", "minimum": 0}, "skipped_rule_count": {"type": "integer", "minimum": 0},

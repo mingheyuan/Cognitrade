@@ -34,6 +34,7 @@ EXPECTED_API_V1_OPERATIONS = {
     ("GET", "/api/v1/runs"),
     ("GET", "/api/v1/runs/{run_id}"),
     ("GET", "/api/v1/runs/{run_id}/artifacts"),
+    ("GET", "/api/v1/runs/{run_id}/report"),
     ("GET", "/api/v1/runs/{run_id}/replay"),
     ("GET", "/api/v1/runs/{run_id}/events"),
     ("GET", "/api/v1/runs/{run_id}/events/stream"),
@@ -283,9 +284,9 @@ class ApiV1SseOpenApiTests(unittest.TestCase):
             and method.lower() in {"get", "post", "patch", "put", "delete"}
         }
 
-        self.assertEqual(len(EXPECTED_API_V1_OPERATIONS), 42)
+        self.assertEqual(len(EXPECTED_API_V1_OPERATIONS), 43)
         self.assertEqual(actual_operations, EXPECTED_API_V1_OPERATIONS)
-        self.assertEqual(len(actual_operations), 42)
+        self.assertEqual(len(actual_operations), 43)
         bearer = schema["components"]["securitySchemes"]["BearerAuth"]
         self.assertEqual(bearer["type"], "http")
         self.assertEqual(bearer["scheme"], "bearer")

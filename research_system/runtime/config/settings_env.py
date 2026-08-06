@@ -35,6 +35,7 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "openai_api_key": env_values.get("OPENAI_API_KEY"),
         "openai_base_url": env_values.get("OPENAI_BASE_URL"),
         "tushare_token": env_values.get("TUSHARE_TOKEN"),
+        "mx_api_key": env_values.get("MX_APIKEY"),
         "qdrant_url": env_values.get("QDRANT_URL"),
         "qdrant_api_key": env_values.get("QDRANT_API_KEY"),
         "qdrant_collection_name": env_values.get("QDRANT_COLLECTION_NAME", "research_evidence"),
@@ -73,6 +74,22 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
             "lhb": env_values.get("COGNITRADE_PROVIDERS_LHB", ""),
             "events": env_values.get("COGNITRADE_PROVIDERS_EVENTS", ""),
             "policy": env_values.get("COGNITRADE_PROVIDERS_POLICY", ""),
+            "kline": env_values.get("COGNITRADE_PROVIDERS_KLINE", ""),
+            "macro": env_values.get("COGNITRADE_PROVIDERS_MACRO", ""),
+            "peers": env_values.get("COGNITRADE_PROVIDERS_PEERS", ""),
+            "chain": env_values.get("COGNITRADE_PROVIDERS_CHAIN", ""),
+            "research": env_values.get("COGNITRADE_PROVIDERS_RESEARCH", ""),
+            "industry": env_values.get("COGNITRADE_PROVIDERS_INDUSTRY", ""),
+            "materials": env_values.get("COGNITRADE_PROVIDERS_MATERIALS", ""),
+            "futures": env_values.get("COGNITRADE_PROVIDERS_FUTURES", ""),
+            "valuation": env_values.get("COGNITRADE_PROVIDERS_VALUATION", ""),
+            "governance": env_values.get("COGNITRADE_PROVIDERS_GOVERNANCE", ""),
+            "moat": env_values.get("COGNITRADE_PROVIDERS_MOAT", ""),
+            "trap": env_values.get("COGNITRADE_PROVIDERS_TRAP", ""),
+            "contests": env_values.get("COGNITRADE_PROVIDERS_CONTESTS", ""),
+            "fund_holders": env_values.get("COGNITRADE_PROVIDERS_FUND_HOLDERS", ""),
+            "similar_stocks": env_values.get("COGNITRADE_PROVIDERS_SIMILAR_STOCKS", ""),
+            "fund": env_values.get("COGNITRADE_PROVIDERS_FUND", ""),
         },
         "sensitive_sources_enabled": env_values.get(
             "COGNITRADE_SENSITIVE_SOURCES_ENABLED", "false"
@@ -84,6 +101,10 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
             if item.strip()
         ],
         "xueqiu_cookie": env_values.get("COGNITRADE_XUEQIU_COOKIE") or None,
+        "browser_sources_enabled": env_values.get(
+            "COGNITRADE_BROWSER_SOURCES_ENABLED", "false"
+        ).strip().lower()
+        in {"1", "true", "yes", "on"},
         "default_timezone": env_values.get("DEFAULT_TIMEZONE", "Asia/Shanghai"),
         "paper_trading_enforce_market_hours": env_values.get(
             "COGNITRADE_PAPER_ENFORCE_MARKET_HOURS", "true"

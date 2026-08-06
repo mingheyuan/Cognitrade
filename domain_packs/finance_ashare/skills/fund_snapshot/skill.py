@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, date, datetime
-from io import StringIO
+from io import BytesIO, StringIO
 import math
+from pathlib import Path
 import re
 import statistics
 from typing import Any
@@ -13,6 +14,7 @@ import pandas as pd
 import requests
 from akshare.utils import demjson
 from bs4 import BeautifulSoup
+from pypdf import PdfReader
 
 from domain_packs.finance_ashare.tools.fund_master import FundSecurityMaster
 from research_system.adapters.vendors.akshare_utils import call_with_retry, coerce_numeric, normalize_value
@@ -57,6 +59,7 @@ class FundSnapshotSkill:
         nav_loader: Callable[[str], Any] | None = None,
         holdings_loader: Callable[[str, str], Any] | None = None,
         asset_holdings_loader: Callable[[str, str], Any] | None = None,
+        target_fund_loader: Callable[[str], Any] | None = None,
         overview_loader: Callable[[str], Any] | None = None,
         achievement_loader: Callable[[str], Any] | None = None,
         manager_tenure_loader: Callable[[str], Any] | None = None,
@@ -76,6 +79,7 @@ class FundSnapshotSkill:
         self.nav_loader = nav_loader or self._load_nav
         self.holdings_loader = holdings_loader or self._load_holdings
         self.asset_holdings_loader = asset_holdings_loader or self._load_asset_holdings
+        self.target_fund_loader = target_fund_loader or self._load_target_fund_disclosure
         self.overview_loader = overview_loader or self._load_overview
         self.achievement_loader = achievement_loader or self._load_achievement
         self.manager_tenure_loader = manager_tenure_loader or self._load_manager_tenure
@@ -225,6 +229,23 @@ class FundSnapshotSkill:
                             "type": "fund_bond_holdings",
                             "provider": "danjuan_public_http",
                             "id": f"danjuan.fund_asset_percent:{code}:{row.get('asset_allocation_period') or 'latest'}",
+                        }
+                    )
+                if row.get("target_fund_holdings") and row.get("target_fund_source_ref"):
+                    fund_source_refs.append(
+                        {
+                            "type": "fund_target_disclosure",
+                            "provider": "eastmoney_official_report",
+                            "id": str(row["target_fund_source_ref"]),
+                        }
+                    )
+                if row.get("lookthrough_holdings"):
+                    target_code = str(row["target_fund_holdings"][0].get("code") or "")
+                    fund_source_refs.append(
+                        {
+                            "type": "fund_target_etf_holdings",
+                            "provider": "eastmoney",
+                            "id": f"eastmoney.fund_archives:{target_code}:{row.get('lookthrough_period') or 'latest'}",
                         }
                     )
             except Exception as exc:
@@ -448,19 +469,7 @@ class FundSnapshotSkill:
         *,
         is_fund_of_funds: bool,
     ) -> dict[str, Any]:
-        provider_errors: list[dict[str, str]] = []
-        direct_equities: list[dict[str, Any]] = []
-        direct_period: str | None = None
-        for year in (str(date.today().year), str(date.today().year - 1), str(date.today().year - 2)):
-            try:
-                payload = self.holdings_loader(code, year)
-                rows, period = self._normalize_holdings(payload)
-                if rows:
-                    direct_equities = rows[:10]
-                    direct_period = period
-                    break
-            except Exception as exc:
-                provider_errors.append(self._error(f"direct_equity_holdings:{code}:{year}", exc))
+        direct_equities, direct_period, provider_errors = self._latest_direct_equity_holdings(code)
 
         asset_allocation: list[dict[str, Any]] = []
         asset_period: str | None = None
@@ -506,7 +515,50 @@ class FundSnapshotSkill:
             if bond_weight == 0
             else "unavailable"
         )
+        target_fund_holdings: list[dict[str, Any]] = []
+        lookthrough_holdings: list[dict[str, Any]] = []
+        target_fund_period: str | None = None
+        target_fund_source_ref: str | None = None
+        lookthrough_period: str | None = None
         target_status = "unavailable" if is_fund_of_funds else "not_applicable"
+        lookthrough_status = target_status
+        if is_fund_of_funds:
+            try:
+                target = self._normalize_target_fund(self.target_fund_loader(code))
+                if target:
+                    target_fund_holdings = [target]
+                    target_status = "available"
+                    target_fund_period = target.get("report_date")
+                    target_fund_source_ref = target.get("source_ref")
+                    target_code = str(target.get("code") or "")
+                    rows, period, target_errors = self._latest_direct_equity_holdings(target_code)
+                    provider_errors.extend(target_errors)
+                    lookthrough_holdings = [
+                        {
+                            **row,
+                            "security_type": "equity",
+                            "effective_weight_pct": (
+                                round(
+                                    float(target["weight_pct"])
+                                    * float(row["weight_pct"])
+                                    / 100.0,
+                                    6,
+                                )
+                                if target.get("weight_pct") is not None
+                                and row.get("weight_pct") is not None
+                                else None
+                            ),
+                        }
+                        for row in rows[:10]
+                    ]
+                    lookthrough_period = period
+                    lookthrough_status = "available" if lookthrough_holdings else "unavailable"
+                    asset_allocation = self._split_target_fund_allocation(
+                        asset_allocation,
+                        target,
+                    )
+            except Exception as exc:
+                provider_errors.append(self._error(f"target_fund_disclosure:{code}", exc))
         return {
             "top_holdings": direct_equities,
             "holdings_period": direct_period or asset_period,
@@ -515,21 +567,62 @@ class FundSnapshotSkill:
             "asset_allocation": asset_allocation,
             "asset_allocation_period": asset_period,
             "bond_holdings": bond_holdings,
-            # Public structure endpoints group the target fund/ETF into "other"
-            # and do not return its identity or weight.  Keep these arrays empty
-            # instead of inferring a holding from the fund name.
-            "target_fund_holdings": [],
-            "lookthrough_holdings": [],
+            "target_fund_holdings": target_fund_holdings,
+            "target_fund_period": target_fund_period,
+            "target_fund_source_ref": target_fund_source_ref,
+            "lookthrough_holdings": lookthrough_holdings,
+            "lookthrough_period": lookthrough_period,
             "holdings_coverage": {
                 "asset_allocation": "available" if asset_allocation else "unavailable",
                 "direct_equity": direct_status,
                 "bond": bond_status,
                 "target_fund": target_status,
-                "lookthrough": target_status,
+                "lookthrough": lookthrough_status,
                 "is_fund_of_funds": is_fund_of_funds,
             },
             "_provider_errors": provider_errors,
         }
+
+    def _latest_direct_equity_holdings(
+        self,
+        code: str,
+    ) -> tuple[list[dict[str, Any]], str | None, list[dict[str, str]]]:
+        errors: list[dict[str, str]] = []
+        for year in (str(date.today().year), str(date.today().year - 1), str(date.today().year - 2)):
+            try:
+                payload = self.holdings_loader(code, year)
+                rows, period = self._normalize_holdings(payload)
+                if rows:
+                    return rows[:10], period, errors
+            except Exception as exc:
+                errors.append(self._error(f"direct_equity_holdings:{code}:{year}", exc))
+        return [], None, errors
+
+    @classmethod
+    def _split_target_fund_allocation(
+        cls,
+        rows: list[dict[str, Any]],
+        target: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        weight = cls._numeric(target.get("weight_pct"))
+        if weight is None:
+            return rows
+        output: list[dict[str, Any]] = [
+            {
+                "asset_type": "fund",
+                "label": "目标 ETF",
+                "weight_pct": weight,
+            }
+        ]
+        for row in rows:
+            item = dict(row)
+            if item.get("asset_type") == "other":
+                other_weight = cls._numeric(item.get("weight_pct"))
+                if other_weight is not None and other_weight >= weight:
+                    item["label"] = "其他资产（扣除目标 ETF）"
+                    item["weight_pct"] = round(other_weight - weight, 6)
+            output.append(item)
+        return output
 
     @staticmethod
     def _empty_holdings(*, is_fund_of_funds: bool) -> dict[str, Any]:
@@ -543,7 +636,10 @@ class FundSnapshotSkill:
             "asset_allocation_period": None,
             "bond_holdings": [],
             "target_fund_holdings": [],
+            "target_fund_period": None,
+            "target_fund_source_ref": None,
             "lookthrough_holdings": [],
+            "lookthrough_period": None,
             "holdings_coverage": {
                 "asset_allocation": "unavailable",
                 "direct_equity": "unavailable",
@@ -642,6 +738,150 @@ class FundSnapshotSkill:
         payload = response.json()
         data = payload.get("data") if isinstance(payload, dict) else None
         return dict(data) if isinstance(data, dict) else {}
+
+    @classmethod
+    def _load_target_fund_disclosure(cls, code: str) -> dict[str, Any]:
+        announcements = call_with_retry(
+            lambda: ak.fund_announcement_report_em(symbol=code),
+            retries=2,
+            delay_seconds=0.25,
+        )
+        rows = cls._rows(announcements)
+        reports = [
+            row
+            for row in rows
+            if str(row.get("报告ID") or "").strip()
+            and "报告" in str(row.get("公告标题") or "")
+        ]
+        reports.sort(
+            key=lambda row: str(row.get("公告日期") or ""),
+            reverse=True,
+        )
+        for report in reports[:8]:
+            report_id = str(report.get("报告ID") or "").strip()
+            source_ref = f"https://pdf.dfcfw.com/pdf/H2_{report_id}_1.pdf"
+            pdf_bytes = cls._download_report_pdf(source_ref)
+            reader = PdfReader(BytesIO(pdf_bytes), strict=False)
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            target = cls._parse_target_fund_report(
+                text,
+                report_id=report_id,
+                source_ref=source_ref,
+            )
+            if target:
+                return target
+        return {}
+
+    @staticmethod
+    def _download_report_pdf(source_ref: str) -> bytes:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; Cognitrade/1.0)",
+            "Referer": "https://fundf10.eastmoney.com/",
+        }
+        response = requests.get(source_ref, headers=headers, timeout=30)
+        response.raise_for_status()
+        if response.content.startswith(b"%PDF"):
+            return response.content
+
+        # EastMoney may return an EO_Bot JavaScript challenge instead of the
+        # public report. Chromium completes that challenge and exposes the
+        # resulting file as a download; no account, cookie, or private API is
+        # involved.
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                context = browser.new_context(
+                    accept_downloads=True,
+                    user_agent=(
+                        "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 "
+                        "Chrome/151 Safari/537.36"
+                    ),
+                    extra_http_headers={"Referer": "https://fundf10.eastmoney.com/"},
+                )
+                page = context.new_page()
+                with page.expect_download(timeout=45_000) as pending:
+                    try:
+                        page.goto(source_ref, wait_until="domcontentloaded", timeout=45_000)
+                    except PlaywrightError as exc:
+                        if "Download is starting" not in str(exc):
+                            raise
+                download = pending.value
+                if download.failure():
+                    raise ValueError("EastMoney report download failed")
+                download_path = download.path()
+                if download_path is None:
+                    raise ValueError("EastMoney report download path is unavailable")
+                pdf_bytes = Path(download_path).read_bytes()
+            finally:
+                browser.close()
+        if not pdf_bytes.startswith(b"%PDF"):
+            raise ValueError("EastMoney report response is not a PDF")
+        return pdf_bytes
+
+    @classmethod
+    def _parse_target_fund_report(
+        cls,
+        text: str,
+        *,
+        report_id: str,
+        source_ref: str,
+    ) -> dict[str, Any]:
+        compact = re.sub(r"\s+", " ", text)
+        identity_match = re.search(
+            r"目标基金\s*基本情况(?P<body>.*?)(?=目标基金\s*产品说明|\d+\.\d+\.\d+\s|$)",
+            compact,
+        )
+        holding_match = re.search(
+            r"期末投资目标基金明细(?P<body>.*?)(?=\d+\.\d+\s+报告期末|报告期末按行业分类|$)",
+            compact,
+        )
+        identity_section = identity_match.group("body") if identity_match else ""
+        holding_section = holding_match.group("body") if holding_match else ""
+        code_match = re.search(r"基金主代码\s*(\d{6})", identity_section)
+        name_match = re.search(r"基金名称\s+(.+?)\s+基金主代码", identity_section)
+        holding_values = re.findall(
+            r"([0-9][0-9,]*\.\d{2})\s+([0-9]{1,3}(?:\.\d+)?)",
+            holding_section,
+        )
+        if not code_match or not name_match or not holding_values:
+            return {}
+        market_value, weight = holding_values[-1]
+        report_period_match = re.search(
+            r"本报告期自\s*(20\d{2})\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日"
+            r"\s*起至\s*(?:20\d{2}\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日",
+            compact[:4000],
+        )
+        report_date_match = report_period_match or re.search(
+            r"(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日",
+            compact[:4000],
+        )
+        report_date = None
+        if report_date_match:
+            report_date = (
+                f"{int(report_date_match.group(1)):04d}-"
+                f"{int(report_date_match.group(2)):02d}-"
+                f"{int(report_date_match.group(3)):02d}"
+            )
+        return {
+            "code": code_match.group(1),
+            "name": re.sub(r"\s+", "", name_match.group(1)),
+            "weight_pct": cls._percent_value(weight),
+            "market_value_10k": round(float(market_value.replace(",", "")) / 10_000, 6),
+            "report_date": report_date,
+            "report_id": report_id,
+            "source_ref": source_ref,
+        }
+
+    @staticmethod
+    def _report_section(text: str, start_marker: str, end_marker: str) -> str:
+        start = text.find(start_marker)
+        if start < 0:
+            return ""
+        end = text.find(end_marker, start + len(start_marker))
+        return text[start : end if end >= 0 else len(text)]
 
     @staticmethod
     def _load_overview(code: str):
@@ -892,7 +1132,17 @@ class FundSnapshotSkill:
             raw_rows = cls._rows(payload)
             periods = [str(row.get("季度") or "").strip() for row in raw_rows if row.get("季度")]
             if periods:
-                period = periods[0]
+                def period_key(value: str) -> tuple[int, int, str]:
+                    quarter = re.search(r"(20\d{2}).*?([1-4])季度", value)
+                    if quarter:
+                        return int(quarter.group(1)), int(quarter.group(2)), value
+                    calendar_date = re.search(r"(20\d{2})[-年](\d{1,2})", value)
+                    if calendar_date:
+                        month = int(calendar_date.group(2))
+                        return int(calendar_date.group(1)), max(1, min((month - 1) // 3 + 1, 4)), value
+                    return 0, 0, value
+
+                period = max(dict.fromkeys(periods), key=period_key)
                 raw_rows = [row for row in raw_rows if str(row.get("季度") or "").strip() == period]
         normalized: list[dict[str, Any]] = []
         for index, row in enumerate(raw_rows, start=1):
@@ -906,18 +1156,56 @@ class FundSnapshotSkill:
                     "code": code,
                     "name": name,
                     "weight_pct": cls._percent_value(
-                        cls._first(row, ("占净值比例", "比例", "weight", "weight_pct"))
+                        cls._first(
+                            row,
+                            (
+                                "占净值比例",
+                                "占净值 比例",
+                                "占净值比例（%）",
+                                "占净值比例(%)",
+                                "比例",
+                                "weight",
+                                "weight_pct",
+                            ),
+                        )
                     ),
                     "shares_10k": cls._numeric(
                         cls._first(row, ("持股数", "持股数 （万股）", "持股数（万股）"))
                     ),
                     "market_value_10k": cls._numeric(
-                        cls._first(row, ("持仓市值", "持仓市值 （万元人民币）", "持仓市值（万元）"))
+                        cls._first(
+                            row,
+                            (
+                                "持仓市值",
+                                "持仓市值 （万元人民币）",
+                                "持仓市值 （万元）",
+                                "持仓市值（万元）",
+                            ),
+                        )
                     ),
                 }
             )
         normalized.sort(key=lambda row: int(row["rank"]))
         return normalized, period
+
+    @classmethod
+    def _normalize_target_fund(cls, payload: Any) -> dict[str, Any]:
+        row = dict(payload) if isinstance(payload, dict) else {}
+        code = FundSecurityMaster.normalize_code(row.get("code"))
+        name = str(row.get("name") or "").strip()
+        if not code or not name:
+            return {}
+        return {
+            "rank": 1,
+            "code": code,
+            "name": name,
+            "security_type": "fund",
+            "weight_pct": cls._percent_value(row.get("weight_pct")),
+            "market_value_10k": cls._numeric(row.get("market_value_10k")),
+            "report_date": cls._date_value(row.get("report_date")),
+            "report_id": str(row.get("report_id") or "").strip() or None,
+            "source_ref": str(row.get("source_ref") or "").strip() or None,
+        }
 
     @classmethod
     def _normalize_asset_holdings(

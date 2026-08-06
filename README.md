@@ -11,6 +11,7 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 - 模拟交易：VeighNa PaperAccount 到价撮合，服务端现金/持仓账本、限价挂单、资金冻结、撤单、费用、T+1 和幂等订单。
 - 策略回测：独立 Hikyuu 回测实验室，使用 Finance Pack 历史 K 线运行双均线策略并持久化资产曲线、绩效和成交记录。
 - DomainPack：`finance_ashare` 与 `legal_contract` 通过声明式能力、工具、Gate 和报告合同接入。
+- UZI 报告：研究工作台可从 ArtifactBoard 直接打开原生风格 HTML 或下载同源 PDF，不依赖旧 UZI CLI、缓存和报告服务。
 - 治理：Bearer 鉴权、作用域隔离、高风险审批、质量 Gate、来源引用和分层记忆。
 
 ## 快速部署
@@ -41,7 +42,10 @@ COGNITRADE_PROVIDER_SMOKE_SECTOR=白酒 \
 ```
 
 可用 `COGNITRADE_PROVIDER_SMOKE_DIMENSIONS=market,kline,events` 只检查指定维度。
-雪球组合竞赛来源仍需同时显式开启敏感来源、加入 `xueqiu` allowlist 并配置 Cookie。
+来源目录与 UZI 3.9.2 固定提交逐项对齐，共 70 个候选来源；“已登记”不等于本次
+“已取到”，运行结果以各 Snapshot 的 `source_trace` 为准。雪球组合来源仍需同时显式
+开启敏感来源、加入 `xueqiu` allowlist 并配置 Cookie；淘股吧、同花顺模拟盘等公开比赛
+证据可以独立降级运行。
 全量检查固定串行执行，避免多个 AkShare 路径并发初始化其进程级 JavaScript 运行时。
 
 默认访问地址是 `http://127.0.0.1:8080`。浏览器 Token 可通过
@@ -63,6 +67,7 @@ COGNITRADE_PROVIDER_SMOKE_SECTOR=白酒 \
 ```bash
 python3.11 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+.venv/bin/python -m playwright install chromium
 COGNITRADE_API_ALLOW_UNAUTHENTICATED=true \
 COGNITRADE_API_HOST=127.0.0.1 \
 .venv/bin/python -m uvicorn research_system.api.app:app --host 127.0.0.1 --port 8000
@@ -105,6 +110,18 @@ OPENAI_DISABLE_RESPONSE_STORAGE=true
 没有模型 Key 时，系统仍可执行确定性 Pack 能力，但需要模型合成的最终答复可能以
 `completed_partial` 结束。`COGNITRADE_API_ALLOW_UNAUTHENTICATED=true` 只允许
 回环地址的隔离本地开发，生产部署脚本始终启用认证。
+
+可选真实数据源配置：
+
+```dotenv
+TUSHARE_TOKEN=<runtime-secret>
+MX_APIKEY=<runtime-secret>
+```
+
+TuShare 配置 Token 只表示客户端可以鉴权；具体 `daily`、`fina_indicator`、`moneyflow`、
+`top_list` 等接口仍取决于账号积分与权限。接口无权限时会记录脱敏的
+`provider_unavailable` 并继续 AkShare/eFinance/BaoStock/直连 HTTP 回退，不会生成假数据。
+密钥只放在被 Git 忽略的 `.env` 或部署密钥系统中。
 
 镜像源可覆盖：
 

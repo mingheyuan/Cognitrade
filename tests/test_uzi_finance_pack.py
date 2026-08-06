@@ -806,6 +806,10 @@ class UziFinancePackTests(unittest.TestCase):
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
+                    # The test validates graph/artifact materialization rather
+                    # than an external model response. Keep it deterministic
+                    # even when the developer machine has a real API key.
+                    "openai_api_key": None,
                 }
             )
             with TestClient(

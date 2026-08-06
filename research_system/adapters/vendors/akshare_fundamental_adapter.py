@@ -7,7 +7,6 @@ import pandas as pd
 import requests
 
 from research_system.adapters.vendors.akshare_utils import call_with_retry, coerce_numeric, normalize_ashare_symbol, normalize_value
-from research_system.adapters.vendors.provider_execution import classify_provider_exception, failure_facts
 
 
 class AkShareFundamentalAdapter:
@@ -33,7 +32,7 @@ class AkShareFundamentalAdapter:
             latest = abstract_df.iloc[-1].to_dict()
             abstract_payload = {str(k): normalize_value(v) for k, v in latest.items()}
 
-        info_payload = self._try_get_individual_info(symbol)
+        info_payload, info_gap = self._try_get_individual_info(symbol)
         analysis_payload = self._latest_record(analysis_df)
         abstract_new_payload = self._latest_metric_values(abstract_new_df)
         benefit_new_payload = self._latest_metric_values(benefit_new_df)
@@ -88,17 +87,18 @@ class AkShareFundamentalAdapter:
             "financial_cash_new": cash_new_payload,
             "banking_metrics": banking_metrics,
             "bank_peer_comparison": dict(bank_peer_comparison.get("comparison") or {}),
+            "data_gap": [info_gap] if info_gap else [],
         }
 
-    def _try_get_individual_info(self, symbol: str) -> dict[str, Any]:
+    def _try_get_individual_info(self, symbol: str) -> tuple[dict[str, Any], str | None]:
         try:
             info_df = call_with_retry(lambda: ak.stock_individual_info_em(symbol=symbol), retries=2, delay_seconds=0.5)
-        except Exception as exc:
-            return failure_facts(classify_provider_exception(exc))
+        except Exception:
+            return {}, "individual_info_unavailable"
 
         info_payload: dict[str, Any] = {}
         if info_df.empty:
-            return info_payload
+            return info_payload, "individual_info_missing"
 
         item_column = "item" if "item" in info_df.columns else info_df.columns[0]
         value_column = "value" if "value" in info_df.columns else info_df.columns[-1]
@@ -106,7 +106,7 @@ class AkShareFundamentalAdapter:
             key = str(row[item_column])
             value = row[value_column]
             info_payload[key] = normalize_value(value)
-        return info_payload
+        return info_payload, None
 
     def _try_get_analysis_indicator(self, symbol: str):
         try:

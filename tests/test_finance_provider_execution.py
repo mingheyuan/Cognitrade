@@ -50,8 +50,12 @@ class FinanceProviderExecutionTests(unittest.TestCase):
         self.assertEqual(snapshot["source"]["provider_id"], "baostock_market")
         self.assertTrue(snapshot["fallback_applied"])
         self.assertEqual(
+            [row["provider_id"] for row in snapshot["source_trace"]],
+            ["akshare_market", "efinance_market", "baostock_market"],
+        )
+        self.assertEqual(
             [row["status"] for row in snapshot["source_trace"]],
-            ["provider_unavailable", "available"],
+            ["provider_unavailable", "provider_unavailable", "available"],
         )
         self.assertNotIn("secret transport detail", str(snapshot))
 
@@ -69,11 +73,11 @@ class FinanceProviderExecutionTests(unittest.TestCase):
 
         self.assertEqual(
             [item.provider_id for item in registry.get_provider_chain("market", "cn_equity")],
-            ["baostock_market"],
+            ["efinance_market", "baostock_market"],
         )
         self.assertEqual(
             [item.provider_id for item in registry.get_provider_chain("fundamental", "cn_equity")],
-            ["akshare_fundamental"],
+            ["akshare_fundamental", "baostock_fundamental"],
         )
 
     def test_failure_taxonomy_distinguishes_no_data_rate_limit_and_parse_failure(self) -> None:

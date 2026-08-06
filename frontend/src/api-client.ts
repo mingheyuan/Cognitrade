@@ -38,6 +38,13 @@ export type ApiConnectionSettings = {
   token: string
 }
 
+export type RunReportFormat = 'html' | 'pdf'
+
+export type RunReportExport = {
+  blob: Blob
+  filename: string
+}
+
 export type ChatThreadRecord = {
   thread_id: string
   [key: string]: unknown
@@ -138,6 +145,14 @@ export class CognitradeApiClient {
 
   getReplay(runId: string): Promise<RunReplayPayload> {
     return this.request(`/runs/${encodeURIComponent(runId)}/replay`)
+  }
+
+  getRunReport(runId: string, format: RunReportFormat): Promise<RunReportExport> {
+    return this.requestBlob(
+      `/runs/${encodeURIComponent(runId)}/report?format=${encodeURIComponent(format)}`,
+      format === 'pdf' ? 'application/pdf' : 'text/html',
+      `uzi-report-${runId}.${format}`,
+    )
   }
 
   getEvents(runId: string): Promise<RunEventsPayload> {
@@ -301,6 +316,36 @@ export class CognitradeApiClient {
   private financeRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
     const financeBase = this.settings.baseUrl.replace(/\/api\/v1$/, '/api/v2')
     return this.request(path, init, financeBase)
+  }
+
+  private async requestBlob(path: string, accept: string, fallbackFilename: string): Promise<RunReportExport> {
+    const headers = new Headers({ Accept: accept })
+    if (this.settings.token) headers.set('Authorization', `Bearer ${this.settings.token}`)
+    let response: Response
+    try {
+      response = await fetch(`${this.settings.baseUrl}${path}`, { headers })
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new CognitradeApiError(`无法连接 Cognitrade API：${reason}`, 0, 'network_error')
+    }
+    if (!response.ok) {
+      const contentType = response.headers.get('content-type') || ''
+      const payload = contentType.includes('application/json')
+        ? ((await response.json()) as ApiErrorBody)
+        : null
+      throw new CognitradeApiError(
+        payload?.error?.message || `报告导出失败（HTTP ${response.status}）`,
+        response.status,
+        payload?.error?.code,
+        payload?.error?.request_id || response.headers.get('X-Request-ID') || undefined,
+      )
+    }
+    const disposition = response.headers.get('content-disposition') || ''
+    const filenameMatch = disposition.match(/filename="?([^";]+)"?/i)
+    return {
+      blob: await response.blob(),
+      filename: filenameMatch?.[1] || fallbackFilename,
+    }
   }
 
   private async request<T>(path: string, init: RequestInit = {}, baseUrl = this.settings.baseUrl): Promise<T> {

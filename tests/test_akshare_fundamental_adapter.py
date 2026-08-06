@@ -1,11 +1,24 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from research_system.adapters.vendors.akshare_fundamental_adapter import AkShareFundamentalAdapter
 
 
 class AkshareFundamentalAdapterTests(unittest.TestCase):
+    def test_individual_info_failure_is_a_gap_not_a_fake_info_payload(self) -> None:
+        adapter = AkShareFundamentalAdapter()
+        with patch(
+            "research_system.adapters.vendors.akshare_fundamental_adapter.call_with_retry",
+            side_effect=ConnectionError("private upstream detail"),
+        ):
+            info, gap = adapter._try_get_individual_info("600519")
+
+        self.assertEqual(info, {})
+        self.assertEqual(gap, "individual_info_unavailable")
+        self.assertNotIn("private upstream detail", str((info, gap)))
+
     def test_extract_banking_metrics_builds_same_basis_bank_fields(self) -> None:
         adapter = AkShareFundamentalAdapter()
 

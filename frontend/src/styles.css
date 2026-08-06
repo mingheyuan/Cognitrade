@@ -5196,6 +5196,112 @@ select:focus-visible {
 }
 
 /* UZI 3.9.2 Pack-native methods */
+.uzi-report-export {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 0 18px;
+  padding: 16px 18px;
+  background: linear-gradient(120deg, rgba(109, 230, 208, 0.08), rgba(240, 185, 84, 0.04));
+  border: 1px solid rgba(109, 230, 208, 0.28);
+  border-radius: 14px;
+}
+
+.uzi-report-export__identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.uzi-report-export__identity > span {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  color: var(--mint, #6de6d0);
+  background: rgba(109, 230, 208, 0.1);
+  border: 1px solid rgba(109, 230, 208, 0.25);
+  border-radius: 10px;
+}
+
+.uzi-report-export__identity div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.uzi-report-export__identity strong {
+  color: var(--text-primary, #e7f0ec);
+  font-size: 14px;
+}
+
+.uzi-report-export__identity small {
+  color: var(--text-secondary, #8ea69c);
+  font-size: 11px;
+}
+
+.uzi-report-export__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.uzi-report-export__actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 13px;
+  color: var(--text-primary, #e7f0ec);
+  background: rgba(9, 21, 16, 0.7);
+  border: 1px solid rgba(109, 230, 208, 0.28);
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.uzi-report-export__actions button:hover:not(:disabled) {
+  color: #08140f;
+  background: #6de6d0;
+}
+
+.uzi-report-export__actions button:disabled {
+  opacity: 0.58;
+  cursor: wait;
+}
+
+.uzi-report-export > p {
+  flex-basis: 100%;
+  margin: 0;
+  color: #ff9b7f;
+  font-size: 11px;
+}
+
+.is-spinning {
+  animation: uzi-report-spin 0.8s linear infinite;
+}
+
+@keyframes uzi-report-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 760px) {
+  .uzi-report-export {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .uzi-report-export__actions,
+  .uzi-report-export__actions button {
+    flex: 1;
+  }
+}
+
 .uzi-methods-page {
   display: grid;
   gap: 18px;
