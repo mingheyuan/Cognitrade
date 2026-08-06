@@ -4,6 +4,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime
 from io import BytesIO, StringIO
 import math
+from pathlib import Path
 import re
 import statistics
 from typing import Any
@@ -738,14 +739,14 @@ class FundSnapshotSkill:
         data = payload.get("data") if isinstance(payload, dict) else None
         return dict(data) if isinstance(data, dict) else {}
 
-    @staticmethod
-    def _load_target_fund_disclosure(code: str) -> dict[str, Any]:
+    @classmethod
+    def _load_target_fund_disclosure(cls, code: str) -> dict[str, Any]:
         announcements = call_with_retry(
             lambda: ak.fund_announcement_report_em(symbol=code),
             retries=2,
             delay_seconds=0.25,
         )
-        rows = FundSnapshotSkill._rows(announcements)
+        rows = cls._rows(announcements)
         reports = [
             row
             for row in rows
@@ -759,63 +760,120 @@ class FundSnapshotSkill:
         for report in reports[:8]:
             report_id = str(report.get("报告ID") or "").strip()
             source_ref = f"https://pdf.dfcfw.com/pdf/H2_{report_id}_1.pdf"
-            response = requests.get(
-                source_ref,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (compatible; Cognitrade/1.0)",
-                    "Referer": "https://fundf10.eastmoney.com/",
-                },
-                timeout=30,
-            )
-            response.raise_for_status()
-            if not response.content.startswith(b"%PDF"):
-                continue
-            reader = PdfReader(BytesIO(response.content), strict=False)
+            pdf_bytes = cls._download_report_pdf(source_ref)
+            reader = PdfReader(BytesIO(pdf_bytes), strict=False)
             text = "\n".join(page.extract_text() or "" for page in reader.pages)
-            identity_section = FundSnapshotSkill._report_section(
+            target = cls._parse_target_fund_report(
                 text,
-                "2.1.1 目标基金基本情况",
-                "2.1.2",
+                report_id=report_id,
+                source_ref=source_ref,
             )
-            holding_section = FundSnapshotSkill._report_section(
-                text,
-                "5.2 期末投资目标基金明细",
-                "5.3",
-            )
-            code_match = re.search(r"基金主代码\s*(\d{6})", identity_section)
-            name_match = re.search(
-                r"基金名称\s+(.+?)\s+基金主代码",
-                identity_section,
-                flags=re.S,
-            )
-            holding_values = re.findall(
-                r"([0-9][0-9,]*\.\d{2})\s+([0-9]{1,3}(?:\.\d+)?)",
-                holding_section,
-            )
-            if not code_match or not name_match or not holding_values:
-                continue
-            market_value, weight = holding_values[-1]
-            report_date_match = re.search(
-                r"(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日",
-                text[:2500],
-            )
-            report_date = None
-            if report_date_match:
-                report_date = (
-                    f"{int(report_date_match.group(1)):04d}-"
-                    f"{int(report_date_match.group(2)):02d}-"
-                    f"{int(report_date_match.group(3)):02d}"
-                )
-            return {
-                "code": code_match.group(1),
-                "name": re.sub(r"\s+", "", name_match.group(1)),
-                "weight_pct": FundSnapshotSkill._percent_value(weight),
-                "market_value_10k": round(float(market_value.replace(",", "")) / 10_000, 6),
-                "report_date": report_date,
-                "report_id": report_id,
-                "source_ref": source_ref,
-            }
+            if target:
+                return target
         return {}
+
+    @staticmethod
+    def _download_report_pdf(source_ref: str) -> bytes:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; Cognitrade/1.0)",
+            "Referer": "https://fundf10.eastmoney.com/",
+        }
+        response = requests.get(source_ref, headers=headers, timeout=30)
+        response.raise_for_status()
+        if response.content.startswith(b"%PDF"):
+            return response.content
+
+        # EastMoney may return an EO_Bot JavaScript challenge instead of the
+        # public report. Chromium completes that challenge and exposes the
+        # resulting file as a download; no account, cookie, or private API is
+        # involved.
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                context = browser.new_context(
+                    accept_downloads=True,
+                    user_agent=(
+                        "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 "
+                        "Chrome/151 Safari/537.36"
+                    ),
+                    extra_http_headers={"Referer": "https://fundf10.eastmoney.com/"},
+                )
+                page = context.new_page()
+                with page.expect_download(timeout=45_000) as pending:
+                    try:
+                        page.goto(source_ref, wait_until="domcontentloaded", timeout=45_000)
+                    except PlaywrightError as exc:
+                        if "Download is starting" not in str(exc):
+                            raise
+                download = pending.value
+                if download.failure():
+                    raise ValueError("EastMoney report download failed")
+                download_path = download.path()
+                if download_path is None:
+                    raise ValueError("EastMoney report download path is unavailable")
+                pdf_bytes = Path(download_path).read_bytes()
+            finally:
+                browser.close()
+        if not pdf_bytes.startswith(b"%PDF"):
+            raise ValueError("EastMoney report response is not a PDF")
+        return pdf_bytes
+
+    @classmethod
+    def _parse_target_fund_report(
+        cls,
+        text: str,
+        *,
+        report_id: str,
+        source_ref: str,
+    ) -> dict[str, Any]:
+        compact = re.sub(r"\s+", " ", text)
+        identity_match = re.search(
+            r"目标基金\s*基本情况(?P<body>.*?)(?=目标基金\s*产品说明|\d+\.\d+\.\d+\s|$)",
+            compact,
+        )
+        holding_match = re.search(
+            r"期末投资目标基金明细(?P<body>.*?)(?=\d+\.\d+\s+报告期末|报告期末按行业分类|$)",
+            compact,
+        )
+        identity_section = identity_match.group("body") if identity_match else ""
+        holding_section = holding_match.group("body") if holding_match else ""
+        code_match = re.search(r"基金主代码\s*(\d{6})", identity_section)
+        name_match = re.search(r"基金名称\s+(.+?)\s+基金主代码", identity_section)
+        holding_values = re.findall(
+            r"([0-9][0-9,]*\.\d{2})\s+([0-9]{1,3}(?:\.\d+)?)",
+            holding_section,
+        )
+        if not code_match or not name_match or not holding_values:
+            return {}
+        market_value, weight = holding_values[-1]
+        report_period_match = re.search(
+            r"本报告期自\s*(20\d{2})\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日"
+            r"\s*起至\s*(?:20\d{2}\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日",
+            compact[:4000],
+        )
+        report_date_match = report_period_match or re.search(
+            r"(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日",
+            compact[:4000],
+        )
+        report_date = None
+        if report_date_match:
+            report_date = (
+                f"{int(report_date_match.group(1)):04d}-"
+                f"{int(report_date_match.group(2)):02d}-"
+                f"{int(report_date_match.group(3)):02d}"
+            )
+        return {
+            "code": code_match.group(1),
+            "name": re.sub(r"\s+", "", name_match.group(1)),
+            "weight_pct": cls._percent_value(weight),
+            "market_value_10k": round(float(market_value.replace(",", "")) / 10_000, 6),
+            "report_date": report_date,
+            "report_id": report_id,
+            "source_ref": source_ref,
+        }
 
     @staticmethod
     def _report_section(text: str, start_marker: str, end_marker: str) -> str:
@@ -1074,7 +1132,17 @@ class FundSnapshotSkill:
             raw_rows = cls._rows(payload)
             periods = [str(row.get("季度") or "").strip() for row in raw_rows if row.get("季度")]
             if periods:
-                period = periods[0]
+                def period_key(value: str) -> tuple[int, int, str]:
+                    quarter = re.search(r"(20\d{2}).*?([1-4])季度", value)
+                    if quarter:
+                        return int(quarter.group(1)), int(quarter.group(2)), value
+                    calendar_date = re.search(r"(20\d{2})[-年](\d{1,2})", value)
+                    if calendar_date:
+                        month = int(calendar_date.group(2))
+                        return int(calendar_date.group(1)), max(1, min((month - 1) // 3 + 1, 4)), value
+                    return 0, 0, value
+
+                period = max(dict.fromkeys(periods), key=period_key)
                 raw_rows = [row for row in raw_rows if str(row.get("季度") or "").strip() == period]
         normalized: list[dict[str, Any]] = []
         for index, row in enumerate(raw_rows, start=1):
