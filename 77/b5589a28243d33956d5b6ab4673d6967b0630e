@@ -1,0 +1,49 @@
+README.md
+  s_a6a8a3a6f43b3c::t_0aad126ce1d5a7 14
+api-doc/api-v1.md
+  s_a6a8a3a6f43b3c::t_8cda9f3f87e90b 23,249-275,299
+domain_packs/finance_ashare/reporting/THIRD_PARTY_NOTICES.md
+  s_a6a8a3a6f43b3c::t_50dcb25d471b57 1-27
+domain_packs/finance_ashare/reporting/__init__.py
+  s_a6a8a3a6f43b3c::t_ac15f9b72972db 1-17
+frontend/src/CognitradeContext.tsx
+  s_a6a8a3a6f43b3c::t_878606a53c34fa 18-19,61,386-398,427,456
+frontend/src/api-client.ts
+  s_a6a8a3a6f43b3c::t_98802253320bf8 41-47,150-157,321-350
+frontend/src/components/Workbench.tsx
+  s_a6a8a3a6f43b3c::t_08b6e8cc05aadd 7-9,13,21,197,199-200,213-217,234-259,460-482
+frontend/src/styles.css
+  s_a6a8a3a6f43b3c::t_2a7b10639b027e 5199-5304
+plan/uzi-3.9.2-domainpack-migration.md
+  s_a6a8a3a6f43b3c::t_65357278484407 12,72,177
+research_system/api/app.py
+  s_a6a8a3a6f43b3c::t_179a1a4672cff4 144-148
+research_system/api/routes/runs.py
+  s_a6a8a3a6f43b3c::t_371121e991810d 5,9-14,198-275
+tests/api_test_support.py
+  s_a6a8a3a6f43b3c::t_d7353fa7e6db01 121,170-183
+tests/test_api_v1_runs.py
+  s_a6a8a3a6f43b3c::t_eb7109125b2b1f 8,28,231-274
+tests/test_api_v1_sse_openapi.py
+  s_a6a8a3a6f43b3c::t_258cbd2ee9debd 37,287,289
+tests/test_uzi_native_report.py
+  s_a6a8a3a6f43b3c::t_901592870a256b 1-160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "77b5589a28243d33956d5b6ab4673d6967b0630e",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
