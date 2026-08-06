@@ -9,7 +9,7 @@
 1. **零 UZI 外部运行依赖**：生产环境不 clone、submodule、shell-out 或 import 上游仓库；上游只作为版本固定的迁移来源与审计依据。
 2. **真实数据优先且禁止伪造**：数据源失败或字段缺失时输出 `data_gap`；显式模型假设只能标记 `assumption_only`，不能伪装成观测数据。
 3. **敏感来源显式启用**：浏览器、登录态、Cookie、账号型和可能受限的数据源默认关闭，只有管理员明确配置后才可进入允许列表。
-4. **不兼容旧运行边界**：不保留 UZI CLI、`.cache`、直接 HTML、cloudflared、legacy pipeline 或旧图协议的兼容层。
+4. **不兼容旧运行边界**：不保留 UZI CLI、`.cache`、HTML 报告服务器、cloudflared、legacy pipeline 或旧图协议的兼容层；报告导出由 DomainPack 直接读取 ArtifactBoard 后独立渲染。
 5. **可审计、不可静默遗漏**：每个上游采集器、命令、方法、评审席位都必须进入机器可读账本，并具有目标能力、迁移状态、差异说明和验收证据。
 
 ## 2. 精确基线
@@ -69,7 +69,7 @@ Agent OS Capability Planner
         └── Quality Gates ──────── available/degraded/data_gap/assumption_only
         │
         ▼
-API / SSE / Web（不输出 UZI 原始 HTML）
+API / SSE / Web / Pack-owned UZI HTML/PDF（零上游运行依赖）
 ```
 
 ## 4. 基金研究链
@@ -174,7 +174,7 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 - [x] 快速扫描、面板、陷阱、DCF/Comps/LBO 等转为 requested methods；
 - [x] 首次覆盖、财报、催化剂、thesis、DD、IC Memo 等转为独立 Artifact 交付链；
 - [x] 组合、对比、归因与两类再平衡接入 Agent OS 与现有 Web 边界；
-- [x] 不迁入 UZI CLI、缓存、HTML 服务或临时兼容入口。
+- [x] 不迁入 UZI CLI、缓存、HTML 服务或临时兼容入口；原生报告版式以 Pack-owned 模板迁入，并从 ArtifactBoard 导出 HTML/PDF。
 
 ### Phase E：Provider 完整性与敏感源开关
 

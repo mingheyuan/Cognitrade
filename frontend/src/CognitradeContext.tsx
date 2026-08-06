@@ -15,6 +15,8 @@ import {
   loadApiConnection,
   saveApiConnection,
   type ApiConnectionSettings,
+  type RunReportExport,
+  type RunReportFormat,
 } from './api-client'
 import { hasFinalDelivery, isActiveStatus } from './live-data'
 import type {
@@ -56,6 +58,7 @@ type CognitradeContextValue = {
   createRun: (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => Promise<ResearchResponse>
   cancelRun: (runId: string) => Promise<void>
   rerunRun: (runId: string, fromNode: string) => Promise<ResearchResponse>
+  exportRunReport: (runId: string, format: RunReportFormat) => Promise<RunReportExport>
   clearError: () => void
 }
 
@@ -380,6 +383,19 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
     [client, loadRun, refresh],
   )
 
+  const exportRunReport = useCallback(
+    async (runId: string, format: RunReportFormat) => {
+      setError('')
+      try {
+        return await client.getRunReport(runId, format)
+      } catch (exportError) {
+        setError(errorMessage(exportError))
+        throw exportError
+      }
+    },
+    [client],
+  )
+
   const value = useMemo<CognitradeContextValue>(
     () => ({
       settings,
@@ -408,6 +424,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
       createRun,
       cancelRun,
       rerunRun,
+      exportRunReport,
       clearError: () => setError(''),
     }),
     [
@@ -436,6 +453,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
       createRun,
       cancelRun,
       rerunRun,
+      exportRunReport,
     ],
   )
 

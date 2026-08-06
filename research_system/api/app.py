@@ -141,7 +141,11 @@ def create_app(
             "X-User-ID",
             "X-Tenant-ID",
         ],
-        expose_headers=["X-Request-ID"],
+        expose_headers=[
+            "X-Request-ID",
+            "Content-Disposition",
+            "X-Cognitrade-Source-Artifact-Count",
+        ],
     )
 
     @application.middleware("http")

@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header, Query, Response
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
+from domain_packs.finance_ashare.reporting import (
+    ReportArtifactMissingError,
+    ReportPdfUnavailableError,
+    render_uzi_native_html,
+    render_uzi_native_pdf,
+)
 from research_system.api.dependencies import (
     ApiPrincipal,
     get_event_source,
@@ -186,6 +192,84 @@ async def run_artifacts(
         artifact_type=artifact_type,
         status=status,
         principal=principal,
+    )
+
+
+@router.get(
+    "/runs/{run_id}/report",
+    responses={
+        200: {
+            "content": {
+                "text/html": {},
+                "application/pdf": {},
+            },
+            "description": "UZI native-style report derived from ArtifactBoard records",
+        },
+        409: {"description": "The run has no exportable UZI report"},
+        503: {"description": "The local PDF renderer is unavailable"},
+    },
+)
+async def export_run_report(
+    run_id: str,
+    format: Literal["html", "pdf"] = "html",
+    run_service=Depends(get_run_service),
+    principal: ApiPrincipal = Depends(require_principal),
+) -> Response:
+    """Render one immutable UZI report without invoking the legacy runtime."""
+    resolved = safe_identifier(run_id, field_name="run_id")
+    artifact_payload = await _call_run_resource(
+        run_service.artifacts,
+        resolved,
+        artifact_type=None,
+        status="active",
+        principal=principal,
+    )
+    try:
+        rendered = await run_in_threadpool(
+            render_uzi_native_html,
+            list(artifact_payload.get("artifacts") or []),
+            run_id=resolved,
+        )
+    except ReportArtifactMissingError as exc:
+        raise ApiError(
+            status_code=409,
+            code="uzi_report_unavailable",
+            message="The run does not contain an exportable UZI report",
+        ) from exc
+
+    common_headers = {
+        "Content-Security-Policy": (
+            "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+            "img-src data:; font-src data:; base-uri 'none'; form-action 'none'"
+        ),
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "X-Cognitrade-Source-Artifact-Count": str(len(rendered.source_artifact_ids)),
+    }
+    if format == "html":
+        return Response(
+            rendered.html,
+            media_type="text/html",
+            headers={
+                **common_headers,
+                "Content-Disposition": f'inline; filename="{rendered.filename_stem}.html"',
+            },
+        )
+    try:
+        pdf = await run_in_threadpool(render_uzi_native_pdf, rendered.html)
+    except ReportPdfUnavailableError as exc:
+        raise ApiError(
+            status_code=503,
+            code="uzi_pdf_renderer_unavailable",
+            message="The UZI PDF renderer is unavailable",
+        ) from exc
+    return Response(
+        pdf,
+        media_type="application/pdf",
+        headers={
+            **common_headers,
+            "Content-Disposition": f'attachment; filename="{rendered.filename_stem}.pdf"',
+        },
     )
 
 

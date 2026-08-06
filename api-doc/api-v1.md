@@ -20,7 +20,7 @@ FastAPI owns authentication, validation, CORS, error envelopes, request IDs,
 SSE transport, and mutation serialization. AgentOS owns planning, execution,
 artifacts, gates, replay, and long-term memory.
 
-There are 42 versioned operations. Proposal, dynamic subagent-discovery,
+There are 43 versioned operations. Proposal, dynamic subagent-discovery,
 ActionPlan, Supervisor, Handler, Blackboard, CLI, and unversioned business APIs
 are not part of the current runtime.
 
@@ -246,6 +246,33 @@ request-supplied `fee_model`, the service does not estimate transaction cost.
 Strategic asset-allocation targets never fall back to a balanced or equal-weight
 portfolio: missing classifications or targets produce `data_gap`.
 
+### UZI native report export
+
+Completed UZI stock runs expose a Pack-owned native-style report derived only
+from immutable ArtifactBoard records. The renderer uses `report_presentation`
+as the visual contract and `research_report` plus the independent UZI method
+Artifacts as the audit source. It never invokes the old UZI CLI, cache,
+report server, or an upstream checkout.
+
+```http
+GET /api/v1/runs/{run_id}/report?format=html
+Accept: text/html
+Authorization: Bearer <COGNITRADE_API_TOKEN>
+```
+
+```http
+GET /api/v1/runs/{run_id}/report?format=pdf
+Accept: application/pdf
+Authorization: Bearer <COGNITRADE_API_TOKEN>
+```
+
+`format` is exactly `html` or `pdf`. HTML is self-contained and escapes every
+Artifact value before insertion. PDF is rendered from that same HTML by the
+deployment's bundled Chromium, so HTML and PDF cannot silently diverge. A run
+without an active UZI `research_report` returns `409 uzi_report_unavailable`;
+missing Chromium returns `503 uzi_pdf_renderer_unavailable`. Neither failure
+falls back to a simulated report.
+
 ### Sensitive authenticated source policy
 
 Authenticated sources are disabled by default. The Xueqiu contest/cube source
@@ -269,6 +296,7 @@ generated.
 | `GET` | `/runs` | canonical Run history |
 | `GET` | `/runs/{run_id}` | complete run detail projection |
 | `GET` | `/runs/{run_id}/artifacts` | active ArtifactBoard records |
+| `GET` | `/runs/{run_id}/report?format=html|pdf` | Pack-owned UZI HTML/PDF report derived from active ArtifactBoard records |
 | `GET` | `/runs/{run_id}/replay` | snapshot, artifacts, and events |
 | `GET` | `/runs/{run_id}/events` | `execution_events.jsonl` |
 | `GET` | `/runs/{run_id}/events/stream` | canonical SSE stream |
