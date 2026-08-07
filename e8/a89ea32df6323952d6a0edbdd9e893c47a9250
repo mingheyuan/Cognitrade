@@ -1,0 +1,163 @@
+.env.example
+  s_a6a8a3a6f43b3c::t_9ebe6bf21ceb80 81-83
+api-doc/api-v1.md
+  s_a6a8a3a6f43b3c::t_c2538208e0a271 105-110,150-153
+api-doc/api-v2.md
+  s_a6a8a3a6f43b3c::t_18eec1e68f1e6e 479-481
+domain_packs/finance_ashare/artifact_schemas/deep_analysis.json
+  s_a6a8a3a6f43b3c::t_0adeb00b3b51c6 21-22,36-63
+domain_packs/finance_ashare/artifact_schemas/investor_panel_review.json
+  s_a6a8a3a6f43b3c::t_95b2fb010edaa2 10-25,28,42,51-55,67,71-83
+domain_packs/finance_ashare/artifact_schemas/report_presentation.json
+  s_a6a8a3a6f43b3c::t_7badeffedb8dff 34-39
+domain_packs/finance_ashare/artifact_schemas/research_workflow.json
+  s_a6a8a3a6f43b3c::t_ed482bdacfc06f 21-27
+domain_packs/finance_ashare/artifact_schemas/valuation_model.json
+  s_a6a8a3a6f43b3c::t_55acf4905f3b73 18,21,24-25,62
+domain_packs/finance_ashare/domain.yaml
+  s_a6a8a3a6f43b3c::t_190b0d6f0c5816 200,210,394,464,1552
+domain_packs/finance_ashare/migration/uzi_3_9_2_capability_ledger.yaml
+  s_a6a8a3a6f43b3c::t_76bf7e724d0fad 4-5,8,196,198-199
+domain_packs/finance_ashare/migration/uzi_source_mapping.yaml
+  s_a6a8a3a6f43b3c::t_e653f7dbb612a8 5,18-21,24,226,230,242,246
+domain_packs/finance_ashare/reporting/THIRD_PARTY_NOTICES.md
+  s_a6a8a3a6f43b3c::t_6b77ecdebb7010 7
+domain_packs/finance_ashare/reporting/uzi_native_report.py
+  s_a6a8a3a6f43b3c::t_a26ef2e21be4f1 21,197-211,325,354,365-367,382-383,431-439,449,456,614,694-696,704-705,708-711
+domain_packs/finance_ashare/skills/fund_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_2d0f1dc0919953 95,97-98
+domain_packs/finance_ashare/skills/fundamental_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_3803c34d17d231 34,64-70
+domain_packs/finance_ashare/skills/market_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_1eac48c00a1cd0 74-80
+domain_packs/finance_ashare/skills/uzi_source_snapshot/skill.py
+  s_a6a8a3a6f43b3c::t_e9e75d0a4d3c2c 22-48,76-82,86,143-150,306-309,312,315-321,324,329-339,344-355,404-450,453,455,458-459,477-480,485,488,491-495,519-523,791-801,805,812-817,819-833,836-921
+domain_packs/finance_ashare/subagents/runtime.py
+  s_a6a8a3a6f43b3c::t_f5ce0e104dadfb 10,17-18,198,737-741,776,873-880,925,952,973,982-989,1016-1018,1935-1944,1961-1965,2319-2320,2322,2337
+domain_packs/finance_ashare/subagents/task_intake.py
+  s_a6a8a3a6f43b3c::t_0bd47154bd8abc 95-105,134,220-240,391-413
+domain_packs/finance_ashare/subagents/uzi_advanced_methodology.py
+  s_a6a8a3a6f43b3c::t_61a1e7bb9f3480 12,92,94-106,111-116,118-135,139-147,152,155-156,168-176,184,293,295-347,352-359,361-362,372-373,375-432,437-447,449-450,454-464
+domain_packs/finance_ashare/subagents/uzi_agent_roleplay.py
+  s_a6a8a3a6f43b3c::t_214bc247b2e383 1-409
+domain_packs/finance_ashare/subagents/uzi_methodology.py
+  s_a6a8a3a6f43b3c::t_cf56b5a9458240 23-24,28,135,316-330,561-562,575-576,584-586,595,685,690-692,694,751-758,859-860,1063-1078,1108,1118,1155-1157,1162-1174,1193,1219,1250-1251,1321-1323,1337-1372,1388-1395,1399-1404,1410,1413,1454,1457-1461,1467-1471,1486-1487,1492-1495,1523-1527,1622-1640,1645-1648,1669,1679-1708,1715,1718-1723,1856-1861,1890,2234,2295-2296,2308,2327-2328,2336-2337,2350-2351,2359-2366,2406-2410,2445,2447-2449
+domain_packs/finance_ashare/subagents/uzi_panel_context.py
+  s_a6a8a3a6f43b3c::t_0d9d25eb763741 4
+domain_packs/finance_ashare/subagents/uzi_panel_metadata.py
+  s_a6a8a3a6f43b3c::t_4f4558b72d3d89 3
+domain_packs/finance_ashare/subagents/uzi_panel_profiles.py
+  s_a6a8a3a6f43b3c::t_a2b851e3cdf670 4
+domain_packs/finance_ashare/subagents/uzi_panel_registry.py
+  s_a6a8a3a6f43b3c::t_177c1beddb40f1 14,96-100
+domain_packs/finance_ashare/subagents/uzi_panel_rules.py
+  s_a6a8a3a6f43b3c::t_83cfcc9c86667c 1172-1180,1184,1194,1242-1244,1246,1291-1293,1309
+domain_packs/finance_ashare/subagents/uzi_qualitative_deep_dive.py
+  s_a6a8a3a6f43b3c::t_778680be4ebbba 1-339
+domain_packs/finance_ashare/tools/fund_data_provider.py
+  s_a6a8a3a6f43b3c::t_b900456b24e951 11-14,20
+domain_packs/finance_ashare/tools/snapshot_collector.py
+  s_a6a8a3a6f43b3c::t_bc657159a72a9d 96,98-100,216-235,237-271,284,288-292
+frontend/src/artifacts/finance-artifact-renderers.json
+  s_a6a8a3a6f43b3c::t_23fa5bf114b88b 18-19,21,23-24
+frontend/src/artifacts/generated/finance-artifact-contracts.ts
+  s_a6a8a3a6f43b3c::t_0f8fbb4e4f4896 824-825,830-833,911,927-934,941,954-963,994-995,1038-1039,1050-1051,1055-1069,2558-2559,2564-2567,2639,2654-2661,2667,2678-2686,2713-2714,2754-2755,2765-2766,2770-2783
+frontend/src/artifacts/labels.ts
+  s_a6a8a3a6f43b3c::t_ce0ccf6b76a8cf 443-454,456
+frontend/src/artifacts/renderers.tsx
+  s_a6a8a3a6f43b3c::t_9e8acf4edebf5e 86
+frontend/src/components/FundAnalysisDossier.tsx
+  s_a6a8a3a6f43b3c::t_42d34a5e1f9aea 76
+frontend/src/components/Funds.test.tsx
+  s_a6a8a3a6f43b3c::t_ca32c96fdf27ca 156-159,179,200
+frontend/src/components/Funds.tsx
+  s_a6a8a3a6f43b3c::t_62863b10b37a17 32,63,130,141,143
+frontend/src/components/ResearchReportPresentation.tsx
+  s_a6a8a3a6f43b3c::t_9c8574e7bff565 27-31,114-115,175-183,207,225,298,310,489-490,567
+frontend/src/components/Screening.tsx
+  s_a6a8a3a6f43b3c::t_d396e37e4d9396 23,32,60,63
+frontend/src/components/UziMethods.tsx
+  s_a6a8a3a6f43b3c::t_477baff3511efa 373
+plan/uzi-3.9.2-domainpack-migration.md
+  s_a6a8a3a6f43b3c::t_207ca8c8a4d988 20,126-129,149,151,199
+research_system/adapters/vendors/akshare_fundamental_adapter.py
+  s_a6a8a3a6f43b3c::t_9c0b7f16e5fe30 29,95,98,101-150
+research_system/adapters/vendors/data_source_registry.py
+  s_a6a8a3a6f43b3c::t_83e5611696fa83 103,286
+research_system/adapters/vendors/direct_http_market_adapter.py
+  s_a6a8a3a6f43b3c::t_8ec0cbdea12241 9,42-45,230
+research_system/adapters/vendors/market_router.py
+  s_a6a8a3a6f43b3c::t_f0cb8638e2b77b 14-57,70-100,119-121,133-135,138-153,160-173,184-186,195-197,205-207,210-219
+research_system/adapters/vendors/provider_registry.py
+  s_a6a8a3a6f43b3c::t_21c8fb14ad9a65 161,216,221
+research_system/adapters/vendors/uzi_global_peer_adapter.py
+  s_a6a8a3a6f43b3c::t_562e2d6a52f408 1-621
+research_system/adapters/vendors/yfinance_fundamental_adapter.py
+  s_a6a8a3a6f43b3c::t_6d572806b5b9a3 4-5,19-27,29-32,36-47,50-54,70-76,95-198
+research_system/api/validation.py
+  s_a6a8a3a6f43b3c::t_07464104b27047 102,246-252
+research_system/runtime/agent_os.py
+  s_a6a8a3a6f43b3c::t_c9b53fba3c89a6 1538
+research_system/runtime/execution/core/execution_context.py
+  s_a6a8a3a6f43b3c::t_f89c62b25f91af 56
+research_system/runtime/execution/core/graph_runner.py
+  s_a6a8a3a6f43b3c::t_2140e6df2b2e4f 127,153,1306
+tests/fixtures/uzi_finance_snapshot_replay.json
+  s_a6a8a3a6f43b3c::t_05d6e9edd07f5d 3
+tests/fixtures/uzi_methodology_baseline.json
+  s_a6a8a3a6f43b3c::t_3f9262d1d165df 3,28-31,47
+tests/fixtures/uzi_source_snapshot_replay.json
+  s_a6a8a3a6f43b3c::t_e0dd57ad83ea6d 3
+tests/fixtures/uzi_tier1_baseline.json
+  s_a6a8a3a6f43b3c::t_1db83028c1d671 2
+tests/test_agent_os.py
+  s_a6a8a3a6f43b3c::t_b157aefaa108d7 66
+tests/test_agent_os_task_intake.py
+  s_a6a8a3a6f43b3c::t_36f4b73ceb08d2 48,80,121-140
+tests/test_akshare_fundamental_adapter.py
+  s_a6a8a3a6f43b3c::t_3f1121bc63dc75 6-7,12-44
+tests/test_api_validation_dynamic.py
+  s_a6a8a3a6f43b3c::t_98eaef38a21acc 38-61
+tests/test_finance_ashare_dashboard_contract.py
+  s_a6a8a3a6f43b3c::t_98821db0341838 62-66
+tests/test_finance_pack_migration_completion.py
+  s_a6a8a3a6f43b3c::t_4564f40f96c9a8 220-223,317-320
+tests/test_fund_research.py
+  s_a6a8a3a6f43b3c::t_dc688ee0f42c72 173-183,368-371,379-402
+tests/test_uzi_deep_roleplay.py
+  s_a6a8a3a6f43b3c::t_a49f773c7b2be1 1-136
+tests/test_uzi_finance_pack.py
+  s_a6a8a3a6f43b3c::t_3e86675472de62 209,212,449-451,517-520,536-558,665-666,922,944
+tests/test_uzi_global_peer_adapter.py
+  s_a6a8a3a6f43b3c::t_16cfc5c955e6da 1-172
+tests/test_uzi_material_futures_link.py
+  s_a6a8a3a6f43b3c::t_9634a92c8a9c92 1-68
+tests/test_uzi_native_report.py
+  s_a6a8a3a6f43b3c::t_7e4a6994cbc4a6 31,40-41,47-48,58-59,63-64,122,184-203
+tests/test_uzi_qualitative_deep_dive.py
+  s_a6a8a3a6f43b3c::t_6c0e1ccf811277 1-168
+tests/test_uzi_rule_and_fallback_parity.py
+  s_a6a8a3a6f43b3c::t_9b162b64a20b16 87,150,164-168,172-193
+tests/test_vendor_data_plane.py
+  s_a6a8a3a6f43b3c::t_b40e852efc5ecb 45-72
+tests/test_yfinance_fundamental_adapter.py
+  s_a6a8a3a6f43b3c::t_3c7d64aa8d6220 1-103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "e8a89ea32df6323952d6a0edbdd9e893c47a9250",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
