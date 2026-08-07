@@ -4,7 +4,7 @@ import json
 import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
@@ -440,6 +440,113 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertEqual(features["operating_cash_flow_yi"], 15.0)
         self.assertIsNone(features["fcf_latest_yi"])
         self.assertNotIn("total_assets_missing", valuation["warnings"])
+
+    def test_uzi_rule_features_are_derived_from_verified_snapshots(self) -> None:
+        start = date(2025, 1, 1)
+        bars = [
+            {
+                "date": (start + timedelta(days=index)).isoformat(),
+                "open": 9.98 + index * 0.05,
+                "high": 10.1 + index * 0.05,
+                "low": 9.9 + index * 0.05,
+                "close": 10 + index * 0.05,
+                "volume": 1_000_000 + index * 1_000,
+            }
+            for index in range(300)
+        ]
+        annual = [
+            {"报告期": year, "营业总收入": f"{revenue}亿", "净利润": f"{profit}亿", "净资产收益率": f"{roe}%"}
+            for year, revenue, profit, roe in (
+                (2021, 80, 8, 12),
+                (2022, 100, 10, 14),
+                (2023, 120, 12, 16),
+                (2024, 150, 15, 18),
+                (2025, 200, 25, 20),
+            )
+        ]
+        valuation_history = [
+            {"数据日期": (start + timedelta(days=index)).isoformat(), "PE(TTM)": 10 + index / 100}
+            for index in range(300)
+        ]
+        rows = [
+            {
+                "snapshot_type": "market",
+                "symbol": "688012",
+                "snapshot_date": "2026-08-07",
+                "facts": {"market_overview": {"latest_price": 25, "market_cap": 50_000_000_000, "pe_ttm": 20, "pb": 2, "ps": 3, "valuation_history": valuation_history}},
+                "source": {"vendor": "fixture"},
+            },
+            {
+                "snapshot_type": "fundamental",
+                "symbol": "688012",
+                "snapshot_date": "2026-08-07",
+                "facts": {
+                    "financial_abstract": {"营业总收入": "200亿", "净利润": "25亿", "销售毛利率": "45%", "流动比率": 2.5, "净资产收益率": "20%", "资产负债率": "30%", "基本每股收益": 2},
+                    "financial_abstract_history": annual,
+                    "financial_abstract_new": {"operating_income_total": {"value": 5_000_000_000}},
+                    "financial_benefit_new": {"research_and_development_expenses": {"value": 500_000_000}},
+                    "financial_debt_new": {"assets_total": {"value": 30_000_000_000}, "total_debt": {"value": 9_000_000_000}, "cash": {"value": 5_000_000_000}, "long_term_loan": {"value": 1_000_000_000}, "lease_debt": {"value": 100_000_000}, "bonds_payable": {"value": "", "report_date": "2026-03-31"}},
+                    "financial_cash_new": {"act_cash_flow_net": {"value": 800_000_000}, "pay_fixed_assets_etc_cash": {"value": 200_000_000}},
+                },
+                "source": {"vendor": "fixture"},
+            },
+            {"snapshot_type": "kline", "symbol": "688012", "snapshot_date": "2026-08-07", "facts": {"history": {"bars": bars}}, "source": {"vendor": "fixture"}},
+            {"snapshot_type": "sentiment", "symbol": "688012", "snapshot_date": "2026-08-07", "facts": {"availability": "available", "hot_rank_latest": [{"item": "marketAllCount", "value": 1000}, {"item": "calcTime", "value": "2026-08-07 10:00:00"}, {"item": "rank", "value": 100}]}, "source": {"vendor": "fixture"}},
+            {"snapshot_type": "lhb", "symbol": "688012", "snapshot_date": "2026-08-07", "facts": {"availability": "available", "lhb_statistics": [{"上榜次数": 2}]}, "source": {"vendor": "fixture"}},
+            {"snapshot_type": "industry", "symbol": "688012", "snapshot_date": "2026-08-07", "facts": {"availability": "available", "industry": "半导体设备"}, "source": {"vendor": "fixture"}},
+            {"snapshot_type": "research", "symbol": "688012", "snapshot_date": "2026-08-07", "facts": {"availability": "available", "reports": [{"股票简称": "中微公司", "机构": "A", "东财评级": "买入", "2026-盈利预测-收益": 3}, {"股票简称": "中微公司", "机构": "B", "东财评级": "增持", "2026-盈利预测-收益": 3.4}]}, "source": {"vendor": "fixture"}},
+            {"snapshot_type": "notice", "symbol": "688012", "snapshot_date": "2026-08-07", "facts": {"recent_notices": [{"公告标题": "获得重大订单"}], "notice_count": 1}, "source": {"vendor": "fixture"}},
+        ]
+
+        features = build_features(rows, "688012")
+
+        self.assertEqual(features["name"], "中微公司")
+        self.assertEqual(features["revenue_latest_yi"], 200)
+        self.assertAlmostEqual(features["total_debt_yi"], 11)
+        self.assertEqual(features["stage_num"], 2)
+        self.assertTrue(features["price_above_ma200"])
+        self.assertAlmostEqual(features["sentiment_heat"], 90.09, places=2)
+        self.assertEqual(features["lhb_30d_count"], 2)
+        self.assertEqual(features["research_coverage"], 2)
+        self.assertEqual(features["buy_rating_pct"], 100)
+        self.assertAlmostEqual(features["rd_intensity"], 10)
+        self.assertAlmostEqual(features["fcf_margin"], 12)
+        self.assertTrue(features["fcf_positive"])
+        self.assertIsNotNone(features["revenue_growth_3y_cagr"])
+        self.assertEqual(features["roe_5y_above_15"], 3)
+        self.assertIsNotNone(features["pe_quantile_5y"])
+        self.assertTrue(features["ai_chain_hit"])
+        self.assertIn("stage_num=Weinstein", " ".join(features["feature_derivations"]))
+
+    def test_uzi_rule_features_do_not_relabel_fund_products_as_managers(self) -> None:
+        rows = _snapshots() + [
+            {"snapshot_type": "fund_holders", "symbol": "600000", "facts": {"availability": "available", "holders": [{"基金名称": "A"}], "active_funds_count": 999}}
+        ]
+
+        features = build_features(rows, "600000")
+
+        self.assertIsNone(features["fund_manager_count"])
+        self.assertIn("fund_manager_count", features["data_gap"])
+
+    def test_uzi_lhb_count_excludes_dated_rows_older_than_30_days(self) -> None:
+        rows = _snapshots() + [
+            {
+                "snapshot_type": "lhb",
+                "symbol": "600000",
+                "snapshot_date": "2026-08-07",
+                "facts": {
+                    "availability": "available",
+                    "lhb_statistics": [
+                        {"trade_date": "20260801"},
+                        {"trade_date": "20260601"},
+                    ],
+                },
+            }
+        ]
+
+        features = build_features(rows, "600000")
+
+        self.assertEqual(features["lhb_30d_count"], 1)
 
     def test_report_presentation_exposes_bento_dashboard_sections(self) -> None:
         rows = _snapshots()

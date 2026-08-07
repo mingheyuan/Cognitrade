@@ -7,7 +7,11 @@ no import or runtime dependency on the temporary UZI checkout or its CLI.
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+import json
+import math
+import re
+import statistics
 from typing import Any
 
 from domain_packs.finance_ashare.subagents.uzi_panel_registry import (
@@ -144,6 +148,18 @@ _PANEL_PERSPECTIVES = (
     ("contrarian", "逆向视角", "寻找市场价格与基本面之间的可解释偏差", ("pe", "pb", "risk")),
 )
 
+_AI_CHAIN_KEYWORDS = (
+    "光模块", "光芯片", "cpo", "光引擎", "硅光", "光通信", "光器件", "激光器", "eml", "vcsel",
+    "hbm", "cowos", "先进封装", "封装基板", "abf", "载板", "inp", "磷化铟", "砷化镓", "化合物半导体", "衬底", "外延",
+    "pcb", "高速铜", "铜连接", "铜缆", "连接器", "液冷", "散热", "电源", "bbu", "pdu", "交换机", "算力",
+    "ai 芯片", "asic", "gpu", "risc-v", "存储", "ddr", "ai server", "ai 服务器", "数据中心", "data center",
+    "半导体设备", "光刻", "刻蚀", "薄膜沉积", "量测", "测试机", "分选机",
+    "光学", "光电子", "光学元件", "光波导", "摄像模组", "增强现实", "虚拟现实", "ar眼镜", "micro-led",
+    "人形机器人", "具身智能", "humanoid", "机器人", "robot", "谐波减速器", "rv减速器", "精密减速器",
+    "行星滚柱丝杠", "滚柱丝杠", "灵巧手", "机械臂", "关节模组", "执行器", "actuator", "空心杯电机",
+    "六维力", "力传感器", "触觉传感器", "电子皮肤",
+)
+
 
 def select_profile(inputs: dict[str, Any]) -> dict[str, Any]:
     requested = str(
@@ -212,10 +228,196 @@ def _first_metric_number(
 def _amount_yi(value: Any) -> float | None:
     """Normalize financial amounts to the Pack's 亿元 unit when needed."""
 
-    number = _number(value)
+    if isinstance(value, bool) or value is None:
+        return None
+    text = str(value).strip().replace(",", "").replace("¥", "").replace("人民币", "")
+    if not text or text.lower() in {"-", "--", "—", "none", "nan", "n/a"}:
+        return None
+    match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
+    number = _number(match.group(0)) if match else None
     if number is None:
         return None
+    if "万亿" in text:
+        return number * 10_000
+    if "亿" in text:
+        return number
+    if "万" in text:
+        return number / 10_000
     return number / 100_000_000 if abs(number) >= 1_000_000 else number
+
+
+def _metric_amount_yi(mapping: dict[str, Any], keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, dict):
+            for nested_key in ("value", "single", "latest", "current"):
+                amount = _amount_yi(value.get(nested_key))
+                if amount is not None:
+                    return amount
+            continue
+        amount = _amount_yi(value)
+        if amount is not None:
+            return amount
+    return None
+
+
+def _parse_date(value: Any) -> date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    digits = "".join(char for char in text if char.isdigit())
+    if len(digits) >= 8:
+        try:
+            return date(int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
+        except ValueError:
+            return None
+    return None
+
+
+def _row_number(row: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        number = _number(row.get(key))
+        if number is not None:
+            return number
+    return None
+
+
+def _moving_average(values: list[float], period: int) -> float | None:
+    if len(values) < period:
+        return None
+    return sum(values[-period:]) / period
+
+
+def _kline_rule_features(
+    facts: dict[str, Any],
+    *,
+    symbol: str,
+    name: str,
+) -> tuple[dict[str, Any], dict[str, str], list[str]]:
+    """Derive UZI rule inputs from real OHLCV bars, without default values."""
+
+    history = facts.get("history") or facts.get("market_hist") or facts
+    bars = list(history.get("bars") or []) if isinstance(history, dict) else []
+    normalized: list[dict[str, Any]] = []
+    for index, raw in enumerate(bars):
+        if not isinstance(raw, dict):
+            continue
+        close = _row_number(raw, "close", "收盘", "Close")
+        high = _row_number(raw, "high", "最高", "High")
+        low = _row_number(raw, "low", "最低", "Low")
+        if close is None or close <= 0 or high is None or low is None:
+            continue
+        normalized.append(
+            {
+                "index": index,
+                "date": _parse_date(raw.get("date") or raw.get("日期") or raw.get("Date")),
+                "close": close,
+                "high": high,
+                "low": low,
+                "volume": _row_number(raw, "volume", "成交量", "Volume"),
+            }
+        )
+    normalized.sort(key=lambda row: (row["date"] or date.min, row["index"]))
+    closes = [float(row["close"]) for row in normalized]
+    highs = [float(row["high"]) for row in normalized]
+    volumes = [row["volume"] for row in normalized]
+    features: dict[str, Any] = {}
+    derivations: list[str] = []
+    if not closes:
+        return features, {}, derivations
+
+    last = closes[-1]
+    ma_values = {period: _moving_average(closes, period) for period in (5, 10, 20, 60, 120, 200)}
+    if all(ma_values[period] is not None for period in (5, 10, 20, 60, 120)):
+        features["ma_bull_aligned"] = bool(
+            ma_values[5] > ma_values[10] > ma_values[20] > ma_values[60] > ma_values[120]
+        )
+        derivations.append("ma_bull_aligned=MA5>MA10>MA20>MA60>MA120")
+    if ma_values[200] is not None:
+        features["price_above_ma200"] = bool(last > ma_values[200])
+        derivations.append("price_above_ma200=latest_close>MA200")
+    # Weinstein stage needs a comparable 200-day average from 60 sessions ago.
+    if len(closes) >= 260 and ma_values[200] is not None:
+        ma200_60_sessions_ago = sum(closes[-260:-60]) / 200
+        above = last > ma_values[200]
+        rising = ma_values[200] > ma200_60_sessions_ago
+        features["stage_num"] = 2 if above and rising else 1 if not above and rising else 3 if above else 4
+        derivations.append("stage_num=Weinstein(latest_close,MA200,MA200_60_sessions_ago)")
+
+    if len(closes) >= 15:
+        changes = [closes[index] - closes[index - 1] for index in range(len(closes) - 14, len(closes))]
+        average_gain = sum(max(change, 0.0) for change in changes) / 14
+        average_loss = sum(max(-change, 0.0) for change in changes) / 14
+        rsi = 100.0 if average_loss == 0 and average_gain > 0 else 50.0 if average_loss == 0 else 100 - 100 / (1 + average_gain / average_loss)
+        features["rsi"] = round(rsi, 4)
+        features["rsi_overbought"] = rsi > 70
+        derivations.append("rsi=14_session_simple_RSI")
+
+    if len(closes) >= 60:
+        high_60 = max(highs[-60:])
+        if high_60 > 0:
+            features["pct_from_60d_high"] = round((last - high_60) / high_60 * 100, 4)
+            derivations.append("pct_from_60d_high=(latest_close/max_high_60-1)*100")
+    if len(closes) >= 200:
+        year_window = min(250, len(closes))
+        year_high = max(highs[-year_window:])
+        if year_high > 0:
+            features["pct_from_year_high"] = round((last - year_high) / year_high * 100, 4)
+            derivations.append(f"pct_from_year_high=(latest_close/max_high_{year_window}-1)*100")
+
+    if len(closes) >= 20:
+        return_window = closes[-253:] if len(closes) >= 253 else closes
+        returns = [return_window[index] / return_window[index - 1] - 1 for index in range(1, len(return_window))]
+        if len(returns) >= 2:
+            features["volatility_1y"] = round(statistics.stdev(returns) * math.sqrt(252) * 100, 4)
+            derivations.append("volatility_1y=stdev(daily_returns)*sqrt(252)*100")
+        drawdown_window = closes[-252:] if len(closes) >= 252 else closes
+        peak = drawdown_window[0]
+        max_drawdown = 0.0
+        for close in drawdown_window:
+            peak = max(peak, close)
+            max_drawdown = min(max_drawdown, (close - peak) / peak)
+        features["max_drawdown_1y"] = round(max_drawdown * 100, 4)
+        derivations.append("max_drawdown_1y=min(close/running_peak-1)*100")
+
+    dated = [(row["date"], float(row["close"])) for row in normalized if row["date"] is not None]
+    if dated:
+        latest_year = dated[-1][0].year
+        year_rows = [(row_date, close) for row_date, close in dated if row_date.year == latest_year]
+        if len(year_rows) >= 2 and year_rows[0][1] > 0:
+            features["ytd_return"] = round((year_rows[-1][1] / year_rows[0][1] - 1) * 100, 4)
+            derivations.append("ytd_return=(latest_close/first_trading_close_of_year-1)*100")
+
+    numeric_volumes = [float(value) for value in volumes if value is not None and value >= 0]
+    if len(numeric_volumes) == len(volumes) and len(numeric_volumes) >= 20:
+        average_5 = sum(numeric_volumes[-5:]) / 5
+        average_20 = sum(numeric_volumes[-20:]) / 20
+        if average_20 > 0:
+            features["vol_amplified"] = average_5 > average_20
+            derivations.append("vol_amplified=average_volume_5>average_volume_20")
+
+    if len(closes) >= 2:
+        raw_code = re.sub(r"\D", "", symbol)[-6:]
+        limit_threshold = 29.5 if raw_code.startswith(("4", "8")) else 19.5 if raw_code.startswith(("300", "301", "688", "689")) else 4.8 if name.upper().startswith(("ST", "*ST")) else 9.5
+        recent = closes[-31:]
+        features["has_limit_up_recent"] = any(
+            previous > 0 and (current / previous - 1) * 100 >= limit_threshold
+            for previous, current in zip(recent, recent[1:])
+        )
+        derivations.append(f"has_limit_up_recent=30_session_return>={limit_threshold}%")
+
+    sources = {key: "kline_snapshot.history.bars" for key, value in features.items() if value is not None}
+    return features, sources, derivations
+
+
+def _item_value_map(rows: Any) -> dict[str, Any]:
+    if not isinstance(rows, list):
+        return {}
+    return {
+        str(row.get("item")): row.get("value")
+        for row in rows
+        if isinstance(row, dict) and str(row.get("item") or "").strip()
+    }
 
 
 def _first_amount_yi(
@@ -315,18 +517,38 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         return None, None
 
     def first_amount_with_source(keys: tuple[str, ...]) -> tuple[float | None, str | None]:
-        value, source = first_number_with_source(keys)
-        return _amount_yi(value), source
+        for section_name, section in metric_sections:
+            if not isinstance(section, dict):
+                continue
+            value = _metric_amount_yi(section, keys)
+            if value is not None:
+                return value, section_name
+        return None, None
     notices = _facts(grouped.get("notice"))
     capital = _facts(grouped.get("capital_flow"))
     sentiment = _facts(grouped.get("sentiment"))
+    events = _facts(grouped.get("events"))
+    lhb = _facts(grouped.get("lhb"))
+    kline = _facts(grouped.get("kline"))
+    research = _facts(grouped.get("research"))
+    industry_facts = _facts(grouped.get("industry"))
+    chain_facts = _facts(grouped.get("chain"))
+    fund_holders = _facts(grouped.get("fund_holders"))
     price = _first_number(market, ("latest_price", "price", "spot", "收盘", "close"))
     market_cap = _amount_yi(_first_number(market, ("market_cap", "market_cap_yi", "总市值")))
     shares = _first_number(market, ("shares_outstanding_yi", "shares", "total_shares", "总股本"))
     if shares is not None and abs(shares) >= 1_000_000:
         shares /= 100_000_000
     revenue, revenue_source = first_amount_with_source(
-        ("revenue", "revenue_latest_yi", "营业收入", "营业总收入", "主营业务收入", "operating_revenue")
+        (
+            "revenue",
+            "revenue_latest_yi",
+            "营业收入",
+            "营业总收入",
+            "主营业务收入",
+            "operating_revenue",
+            "operating_income_total",
+        )
     )
     net_profit, net_profit_source = first_amount_with_source(
         ("net_profit", "net_profit_latest_yi", "归母净利润", "净利润", "net_income")
@@ -346,10 +568,15 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
             "ocf",
             "经营活动现金流净额",
             "经营活动产生的现金流量净额",
+            "act_cash_flow_net",
         )
     )
     ocf_to_net_income_ratio, ocf_ratio_source = first_number_with_source(
-        ("ocf_to_net_income_ratio", "经营现金流净额/净利润")
+        (
+            "ocf_to_net_income_ratio",
+            "经营现金流净额/净利润",
+            "经营现金净流量与净利润的比率(%)",
+        )
     )
     ocf_ratio_derivation = None
     if (
@@ -363,30 +590,49 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         )
         ocf_ratio_derivation = "operating_cash_flow_yi / net_profit_latest_yi"
     total_assets, total_assets_source = first_amount_with_source(
-        ("total_assets_yi", "total_assets", "资产总计", "资产总额")
+        ("total_assets_yi", "total_assets", "assets_total", "debt_and_equity_total", "资产总计", "资产总额")
     )
     total_liabilities, total_liabilities_source = first_amount_with_source(
-        ("total_liabilities_yi", "total_liabilities", "负债合计", "负债总额")
+        ("total_liabilities_yi", "total_liabilities", "total_debt", "负债合计", "负债总额")
     )
     cash, cash_source = first_amount_with_source(
         ("cash_yi", "cash", "货币资金", "现金及现金等价物", "cash_and_equivalents")
     )
     direct_debt, debt_source = first_amount_with_source(
-        ("total_debt_yi", "total_debt", "有息负债", "债务合计")
+        ("total_debt_yi", "interest_bearing_debt", "有息负债", "债务合计")
     )
     short_debt, short_debt_source = first_amount_with_source(
-        ("short_term_debt", "short_term_borrowings", "短期借款")
+        ("short_term_debt", "short_term_borrowings", "short_term_loan", "短期借款")
     )
     long_debt, long_debt_source = first_amount_with_source(
-        ("long_term_debt", "long_term_borrowings", "长期借款")
+        ("long_term_debt", "long_term_borrowings", "long_term_loan", "长期借款")
     )
+    current_long_debt, current_long_debt_source = first_amount_with_source(
+        ("year_non_current_debt", "current_portion_long_term_debt", "一年内到期的非流动负债")
+    )
+    bonds_debt, bonds_debt_source = first_amount_with_source(
+        ("bonds_payable", "payable_short_term_bonds", "应付债券")
+    )
+    lease_debt, lease_debt_source = first_amount_with_source(("lease_debt", "lease_liabilities", "租赁负债"))
     debt_derivation = None
     if direct_debt is not None:
         total_debt = direct_debt
-    elif short_debt is not None or long_debt is not None:
-        total_debt = (short_debt or 0.0) + (long_debt or 0.0)
-        debt_source = "+".join(item for item in (short_debt_source, long_debt_source) if item)
-        debt_derivation = "short_term_debt + long_term_debt"
+    elif any(item is not None for item in (short_debt, long_debt, current_long_debt, bonds_debt, lease_debt)):
+        total_debt = sum(item or 0.0 for item in (short_debt, long_debt, current_long_debt, bonds_debt, lease_debt))
+        debt_source = "+".join(
+            dict.fromkeys(
+                item
+                for item in (
+                    short_debt_source,
+                    long_debt_source,
+                    current_long_debt_source,
+                    bonds_debt_source,
+                    lease_debt_source,
+                )
+                if item
+            )
+        )
+        debt_derivation = "short_term_debt + long_term_debt + current_portion + bonds + lease_liabilities"
     else:
         total_debt = None
     ebitda, ebitda_source = first_amount_with_source(
@@ -395,51 +641,338 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
     eps, eps_source = first_number_with_source(("eps", "EPS", "每股收益", "基本每股收益"))
     if shares is None and market_cap is not None and price and price > 0:
         shares = market_cap / price
+    net_margin_source = "financial_abstract" if _first_number(financial, ("net_margin", "净利率")) is not None else None
     net_margin = _first_number(financial, ("net_margin", "净利率"))
     if net_margin is None:
-        net_margin, _ = first_number_with_source(("net_margin", "净利率", "销售净利率", "销售净利率(%)"))
+        net_margin, net_margin_source = first_number_with_source(
+            ("net_margin", "净利率", "销售净利率", "销售净利率(%)", "sale_net_interest_ratio")
+        )
     if net_margin is None and revenue and revenue != 0 and net_profit is not None:
         net_margin = net_profit / revenue * 100
+        net_margin_source = "+".join(item for item in (net_profit_source, revenue_source) if item)
     elif net_margin is not None and abs(net_margin) <= 1:
         net_margin *= 100
     pe = _first_number(market, ("pe_ttm", "pe", "市盈率"))
     pb = _first_number(market, ("pb", "市净率"))
+    ps = _first_number(market, ("ps", "市销率"))
+    peg = _first_number(market, ("peg", "PEG值", "PEG"))
     roe = _first_number(banking, ("roe",)) or _first_number(financial, ("roe", "ROE"))
+    roe_source = "banking_metrics" if _first_number(banking, ("roe",)) is not None else "financial_abstract" if _first_number(financial, ("roe", "ROE")) is not None else None
     if roe is None:
-        roe, _ = first_number_with_source(
-            ("roe", "ROE", "净资产收益率", "净资产收益率(%)", "加权净资产收益率(%)")
+        roe, roe_source = first_number_with_source(
+            (
+                "roe",
+                "ROE",
+                "净资产收益率",
+                "净资产收益率(%)",
+                "加权净资产收益率(%)",
+                "index_weighted_avg_roe",
+                "index_full_diluted_roe",
+            )
         )
     debt_ratio = _first_number(
         financial,
         ("debt_ratio", "asset_liability_ratio", "debt_to_assets", "资产负债率"),
     )
     if debt_ratio is None:
-        debt_ratio, _ = first_number_with_source(
-            ("debt_ratio", "asset_liability_ratio", "资产负债率", "资产负债率(%)")
+        debt_ratio, debt_ratio_source = first_number_with_source(
+            ("debt_ratio", "asset_liability_ratio", "assets_debt_ratio", "资产负债率", "资产负债率(%)")
         )
+    else:
+        debt_ratio_source = "financial_abstract"
     if roe is not None and abs(roe) <= 1:
         roe *= 100
     if debt_ratio is not None and abs(debt_ratio) <= 1:
         debt_ratio *= 100
     pct_change = _first_number(market, ("pct_change", "change_pct", "涨跌幅"))
     revenue_growth = _first_number(financial, ("revenue_growth", "revenue_yoy", "营收同比"))
+    revenue_growth_source = "financial_abstract" if revenue_growth is not None else None
     if revenue_growth is None:
-        revenue_growth, _ = first_number_with_source(
-            ("revenue_growth", "revenue_yoy", "营收同比", "营业总收入同比增长率", "主营业务收入增长率(%)")
+        revenue_growth, revenue_growth_source = first_number_with_source(
+            (
+                "revenue_growth",
+                "revenue_yoy",
+                "营收同比",
+                "营业总收入同比增长率",
+                "主营业务收入增长率(%)",
+                "calculate_operating_income_total_yoy_growth_ratio",
+            )
         )
     profit_growth = _first_number(financial, ("profit_growth", "net_profit_yoy", "净利润同比"))
+    profit_growth_source = "financial_abstract" if profit_growth is not None else None
     if profit_growth is None:
-        profit_growth, _ = first_number_with_source(
-            ("profit_growth", "net_profit_yoy", "净利润同比", "净利润同比增长率", "净利润增长率(%)")
+        profit_growth, profit_growth_source = first_number_with_source(
+            (
+                "profit_growth",
+                "net_profit_yoy",
+                "净利润同比",
+                "净利润同比增长率",
+                "净利润增长率(%)",
+                "calculate_parent_holder_net_profit_yoy_growth_ratio",
+            )
         )
     amount = _first_number(market, ("amount", "成交额"))
     if revenue_growth is not None and abs(revenue_growth) <= 1:
         revenue_growth *= 100
     if profit_growth is not None and abs(profit_growth) <= 1:
         profit_growth *= 100
+    gross_margin, gross_margin_source = first_number_with_source(
+        ("gross_margin", "销售毛利率", "销售毛利率(%)", "主营业务利润率(%)", "sale_gross_margin")
+    )
+    if gross_margin is not None and abs(gross_margin) <= 1:
+        gross_margin *= 100
+    current_ratio, current_ratio_source = first_number_with_source(("current_ratio", "流动比率"))
+
+    latest_period_revenue, latest_period_revenue_source = first_amount_with_source(("operating_income_total",))
+    research_expense, research_expense_source = first_amount_with_source(
+        ("research_and_development_expenses", "research_expense", "研发费用")
+    )
+    rd_intensity = (
+        research_expense / latest_period_revenue * 100
+        if research_expense is not None and latest_period_revenue not in (None, 0)
+        else None
+    )
+    capital_expenditure, capital_expenditure_source = first_amount_with_source(
+        ("pay_fixed_assets_etc_cash", "capital_expenditure", "capex", "购建固定资产支付的现金")
+    )
+    panel_fcf = (
+        operating_cash_flow - capital_expenditure
+        if operating_cash_flow is not None and capital_expenditure is not None
+        else fcf
+    )
+    panel_fcf_source = (
+        "+".join(item for item in (operating_cash_flow_source, capital_expenditure_source) if item)
+        if operating_cash_flow is not None and capital_expenditure is not None
+        else fcf_source
+    )
+    fcf_margin = (
+        panel_fcf / latest_period_revenue * 100
+        if panel_fcf is not None and latest_period_revenue not in (None, 0)
+        else None
+    )
+
+    annual_history = [
+        row
+        for row in list(fundamental_facts.get("financial_abstract_history") or [])
+        if isinstance(row, dict)
+    ]
+    annual_history.sort(
+        key=lambda row: int(str(row.get("报告期") or "0")[:4])
+        if str(row.get("报告期") or "")[:4].isdigit()
+        else 0
+    )
+    annual_revenues = [
+        value
+        for row in annual_history
+        if (value := _metric_amount_yi(row, ("营业总收入", "营业收入", "revenue"))) is not None
+    ]
+    annual_profits = [
+        value
+        for row in annual_history
+        if (value := _metric_amount_yi(row, ("净利润", "归母净利润", "net_profit"))) is not None
+    ]
+    annual_roes = [
+        value
+        for row in annual_history
+        if (value := _metric_number(row, ("净资产收益率", "ROE", "roe"))) is not None
+    ]
+    revenue_growth_3y_cagr = (
+        ((annual_revenues[-1] / annual_revenues[-4]) ** (1 / 3) - 1) * 100
+        if len(annual_revenues) >= 4 and annual_revenues[-1] > 0 and annual_revenues[-4] > 0
+        else None
+    )
+    net_profit_growth_3y = (
+        ((annual_profits[-1] / annual_profits[-4]) ** (1 / 3) - 1) * 100
+        if len(annual_profits) >= 4 and annual_profits[-1] > 0 and annual_profits[-4] > 0
+        else None
+    )
+    roe_5y_min = min(annual_roes[-5:]) if len(annual_roes) >= 5 else None
+    roe_5y_above_15 = sum(value > 15 for value in annual_roes[-5:]) if len(annual_roes) >= 5 else None
+    consecutive_profit_years: int | None = None
+    if annual_profits:
+        consecutive_profit_years = 0
+        for value in reversed(annual_profits):
+            if value <= 0:
+                break
+            consecutive_profit_years += 1
+
+    valuation_history = [
+        row
+        for row in list(market.get("valuation_history") or [])
+        if isinstance(row, dict)
+    ]
+    historical_pe = [
+        value
+        for row in valuation_history
+        if (value := _row_number(row, "PE(TTM)", "pe_ttm", "pe")) is not None and value > 0
+    ]
+    pe_quantile_5y = (
+        sum(value <= pe for value in historical_pe) / len(historical_pe) * 100
+        if pe is not None and pe > 0 and len(historical_pe) >= 250
+        else None
+    )
     segments = financial.get("segments") or financial.get("segment_revenue")
     if not isinstance(segments, list):
         segments = None
+
+    reports = [row for row in list(research.get("reports") or []) if isinstance(row, dict)]
+    if name == symbol:
+        reported_name = next(
+            (
+                str(row.get("股票简称") or row.get("name") or "").strip()
+                for row in reports
+                if str(row.get("股票简称") or row.get("name") or "").strip()
+            ),
+            "",
+        )
+        if reported_name:
+            name = reported_name
+    brokers = {
+        str(row.get("机构") or row.get("broker") or "").strip()
+        for row in reports
+        if str(row.get("机构") or row.get("broker") or "").strip()
+    }
+    ratings = [
+        str(row.get("东财评级") or row.get("评级") or row.get("rating") or "").strip()
+        for row in reports
+        if str(row.get("东财评级") or row.get("评级") or row.get("rating") or "").strip()
+    ]
+    research_coverage = len(brokers) if reports else None
+    buy_rating_pct = (
+        sum(1 for rating in ratings if "买入" in rating or "增持" in rating) / len(ratings) * 100
+        if ratings
+        else None
+    )
+    consensus_eps_2026_values = [
+        value
+        for row in reports
+        if (value := _number(row.get("2026-盈利预测-收益") or row.get("consensus_eps_2026"))) is not None
+    ]
+    consensus_eps_2026 = (
+        sum(consensus_eps_2026_values) / len(consensus_eps_2026_values)
+        if consensus_eps_2026_values
+        else None
+    )
+    consensus_growth_to_2026 = (
+        (consensus_eps_2026 / eps - 1) * 100
+        if consensus_eps_2026 is not None and eps not in (None, 0)
+        else None
+    )
+
+    industry = str(
+        industry_facts.get("industry")
+        or (industry_facts.get("resolved_sector") or {}).get("sector_name")
+        or next((row.get("行业") for row in reports if row.get("行业")), "")
+        or info.get("所属行业")
+        or ""
+    ).strip()
+
+    sentiment_items = _item_value_map(sentiment.get("hot_rank_latest"))
+    sentiment_rank = _number(sentiment_items.get("rank"))
+    sentiment_universe = _number(sentiment_items.get("marketAllCount"))
+    sentiment_calc_date = _parse_date(sentiment_items.get("calcTime"))
+    sentiment_snapshot_date = _parse_date((grouped.get("sentiment") or {}).get("snapshot_date"))
+    sentiment_is_fresh = (
+        sentiment_calc_date is not None
+        and (sentiment_snapshot_date is None or abs((sentiment_snapshot_date - sentiment_calc_date).days) <= 7)
+    )
+    sentiment_heat = (
+        max(0.0, min(100.0, (sentiment_universe - sentiment_rank) / max(sentiment_universe - 1, 1) * 100))
+        if sentiment_is_fresh
+        and sentiment_rank is not None
+        and sentiment_universe is not None
+        and 1 <= sentiment_rank <= sentiment_universe
+        else None
+    )
+
+    lhb_statistics = [row for row in list(lhb.get("lhb_statistics") or []) if isinstance(row, dict)]
+    lhb_count_values = [
+        value
+        for row in lhb_statistics
+        if (value := _row_number(row, "lhb_count_30d", "上榜次数", "count")) is not None
+    ]
+    lhb_count_30d: float | None = max(lhb_count_values) if lhb_count_values else None
+    if lhb_count_30d is None and lhb_statistics:
+        snapshot_day = _parse_date((grouped.get("lhb") or {}).get("snapshot_date")) or date.today()
+        parsed_dates = [
+            row_date
+            for row in lhb_statistics
+            if (row_date := _parse_date(row.get("trade_date") or row.get("上榜日期") or row.get("日期")))
+        ]
+        lhb_count_30d = float(
+            sum(0 <= (snapshot_day - row_date).days <= 30 for row_date in parsed_dates)
+            if parsed_dates
+            else len(lhb_statistics)
+        )
+    lhb_snapshot = grouped.get("lhb") or {}
+    lhb_available = (
+        isinstance(lhb_snapshot, dict)
+        and not lhb_snapshot.get("degraded")
+        and str(lhb.get("availability") or "available") == "available"
+    )
+    if lhb_count_30d is None and lhb_available and "lhb_statistics" in lhb:
+        latest_lhb_day = _parse_date(lhb.get("latest_lhb_date"))
+        snapshot_day = _parse_date(lhb_snapshot.get("snapshot_date")) or date.today()
+        lhb_count_30d = 1.0 if latest_lhb_day and 0 <= (snapshot_day - latest_lhb_day).days <= 30 else 0.0
+
+    event_rows = [
+        row
+        for row in [
+            *list(events.get("event_notices") or []),
+            *list(notices.get("recent_notices") or []),
+        ]
+        if isinstance(row, dict)
+    ]
+    event_titles = list(
+        dict.fromkeys(
+            str(row.get("公告标题") or row.get("标题") or row.get("title") or "").strip()
+            for row in event_rows
+            if str(row.get("公告标题") or row.get("标题") or row.get("title") or "").strip()
+        )
+    )
+    recent_events_count = len(event_titles) if event_rows else None
+    positive_catalyst_keywords = ("预告", "增长", "大订单", "中标", "新品", "合作", "并购", "增持", "回购")
+    has_positive_catalyst = (
+        any(keyword in title for title in event_titles for keyword in positive_catalyst_keywords)
+        if event_rows
+        else None
+    )
+
+    recent_flows = [row for row in list(capital.get("recent_flows") or []) if isinstance(row, dict)]
+    main_flow_values = [
+        value
+        for row in recent_flows[:5]
+        if (value := _metric_amount_yi(row, ("主力净流入-净额", "main_net_inflow", "net_mf_amount"))) is not None
+    ]
+    main_fund_5d_net_yi = sum(main_flow_values) if main_flow_values else None
+
+    technical_values, technical_sources, technical_derivations = _kline_rule_features(
+        kline,
+        symbol=symbol,
+        name=name,
+    )
+    # `stock_fund_stock_holder` returns fund products, not named managers.
+    # Do not mislabel its row count as the UZI `fund_manager_count` input.
+    fund_managers = fund_holders.get("fund_managers")
+    fund_manager_count = float(len(fund_managers)) if isinstance(fund_managers, list) else None
+
+    pe_x_pb = pe * pb if pe is not None and pb is not None else None
+    if ps is None and market_cap is not None and revenue not in (None, 0):
+        ps = market_cap / revenue
+    revenue_b = revenue / 10 if revenue is not None else None
+    cash_to_marketcap_ratio = cash / market_cap if cash is not None and market_cap not in (None, 0) else None
+    normalized_market = "A" if re.sub(r"\D", "", symbol)[-6:].isdigit() else None
+    ai_evidence_text = " ".join(
+        (
+            industry,
+            name,
+            " ".join(event_titles),
+            json.dumps(chain_facts, ensure_ascii=False, default=str) if chain_facts else "",
+        )
+    ).lower()
+    ai_chain_keywords = [keyword for keyword in _AI_CHAIN_KEYWORDS if keyword.lower() in ai_evidence_text]
+    ai_chain_hit = bool(ai_chain_keywords) if ai_evidence_text.strip() else None
+    ai_smallcap = 0 < market_cap < 300 if market_cap is not None else None
     values = {
         "price": price,
         "market_cap_yi": market_cap,
@@ -457,11 +990,51 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         "eps": eps,
         "net_margin": net_margin,
         "pe": pe,
+        "pe_ttm": pe,
         "pb": pb,
+        "ps": ps,
+        "peg": peg,
+        "pe_x_pb": pe_x_pb,
         "roe": roe,
+        "roe_latest": roe,
         "debt_ratio": debt_ratio,
         "revenue_growth": revenue_growth,
+        "revenue_growth_latest": revenue_growth,
+        "rev_growth_yoy": revenue_growth,
+        "revenue_growth_3y_cagr": revenue_growth_3y_cagr,
+        "rev_growth_3y": revenue_growth_3y_cagr,
+        "rev_growth_3y_pct": revenue_growth_3y_cagr,
         "profit_growth": profit_growth,
+        "net_profit_growth_latest": profit_growth,
+        "net_profit_growth_3y": net_profit_growth_3y,
+        "gross_margin": gross_margin,
+        "current_ratio": current_ratio,
+        "rd_intensity": rd_intensity,
+        "fcf_margin": fcf_margin,
+        "fcf_positive": panel_fcf > 0 if panel_fcf is not None else None,
+        "revenue_b": revenue_b,
+        "rev": revenue_b,
+        "cash_to_marketcap_ratio": cash_to_marketcap_ratio,
+        "industry": industry or None,
+        "research_coverage": research_coverage,
+        "buy_rating_pct": buy_rating_pct,
+        "consensus_growth_to_2026": consensus_growth_to_2026,
+        "sentiment_heat": sentiment_heat,
+        "lhb_30d_count": lhb_count_30d,
+        "recent_events_count": recent_events_count,
+        "has_positive_catalyst": has_positive_catalyst,
+        "main_fund_5d_net_yi": main_fund_5d_net_yi,
+        "fund_manager_count": fund_manager_count,
+        "roe_5y_min": roe_5y_min,
+        "roe_5y_above_15": roe_5y_above_15,
+        "consecutive_profit_years": consecutive_profit_years,
+        "pe_quantile_5y": pe_quantile_5y,
+        "market": normalized_market,
+        "country": "CN" if normalized_market == "A" else None,
+        "ai_chain_hit": ai_chain_hit,
+        "ai_chain_keywords": ai_chain_keywords if ai_chain_hit is not None else None,
+        "ai_smallcap": ai_smallcap,
+        **technical_values,
     }
     market_source = (
         dict(grouped.get("market", {}).get("source") or {})
@@ -482,6 +1055,28 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
             "total_debt_yi": debt_source,
             "ebitda_yi": ebitda_source,
             "eps": eps_source,
+            "net_margin": net_margin_source,
+            "roe": roe_source,
+            "roe_latest": roe_source,
+            "debt_ratio": debt_ratio_source,
+            "revenue_growth": revenue_growth_source,
+            "revenue_growth_latest": revenue_growth_source,
+            "rev_growth_yoy": revenue_growth_source,
+            "profit_growth": profit_growth_source,
+            "net_profit_growth_latest": profit_growth_source,
+            "gross_margin": gross_margin_source,
+            "current_ratio": current_ratio_source,
+            "rd_intensity": "+".join(item for item in (research_expense_source, latest_period_revenue_source) if item),
+            "fcf_margin": panel_fcf_source,
+            "fcf_positive": panel_fcf_source,
+            "revenue_growth_3y_cagr": "financial_abstract_history" if revenue_growth_3y_cagr is not None else None,
+            "rev_growth_3y": "financial_abstract_history" if revenue_growth_3y_cagr is not None else None,
+            "rev_growth_3y_pct": "financial_abstract_history" if revenue_growth_3y_cagr is not None else None,
+            "net_profit_growth_3y": "financial_abstract_history" if net_profit_growth_3y is not None else None,
+            "roe_5y_min": "financial_abstract_history" if roe_5y_min is not None else None,
+            "roe_5y_above_15": "financial_abstract_history" if roe_5y_above_15 is not None else None,
+            "consecutive_profit_years": "financial_abstract_history" if consecutive_profit_years is not None else None,
+            "pe_quantile_5y": "market_snapshot.market_overview.valuation_history" if pe_quantile_5y is not None else None,
         }.items()
         if source
     }
@@ -492,11 +1087,63 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
             "pb": "market_snapshot",
             "market_cap_yi": "market_snapshot",
             "pct_change": "market_snapshot",
+            "pe_ttm": "market_snapshot",
+            "ps": "market_snapshot" if _first_number(market, ("ps", "市销率")) is not None else "+".join(item for item in ("market_snapshot", revenue_source) if item),
+            "peg": "market_snapshot",
+            "pe_x_pb": "market_snapshot",
+            "cash_to_marketcap_ratio": "+".join(item for item in (cash_source, "market_snapshot") if item),
         })
+    field_sources.update(technical_sources)
+    for key, source in {
+        "industry": "industry_snapshot" if industry_facts.get("industry") else "research_snapshot" if reports else None,
+        "research_coverage": "research_snapshot.reports" if reports else None,
+        "buy_rating_pct": "research_snapshot.reports" if ratings else None,
+        "consensus_growth_to_2026": "research_snapshot.reports+fundamental_snapshot" if consensus_growth_to_2026 is not None else None,
+        "sentiment_heat": "sentiment_snapshot.hot_rank_latest" if sentiment_heat is not None else None,
+        "lhb_30d_count": "lhb_snapshot.lhb_statistics" if lhb_count_30d is not None else None,
+        "recent_events_count": "events_snapshot+notice_snapshot" if recent_events_count is not None else None,
+        "has_positive_catalyst": "events_snapshot+notice_snapshot" if has_positive_catalyst is not None else None,
+        "main_fund_5d_net_yi": "capital_flow_snapshot.recent_flows" if main_fund_5d_net_yi is not None else None,
+        "fund_manager_count": "fund_holders_snapshot.holders" if fund_manager_count is not None else None,
+        "market": "symbol_identity" if normalized_market else None,
+        "country": "symbol_identity" if normalized_market else None,
+        "revenue_b": revenue_source,
+        "rev": revenue_source,
+        "ai_chain_hit": "industry_snapshot+chain_snapshot+events_snapshot" if ai_chain_hit is not None else None,
+        "ai_chain_keywords": "industry_snapshot+chain_snapshot+events_snapshot" if ai_chain_hit is not None else None,
+        "ai_smallcap": "market_snapshot" if ai_smallcap is not None else None,
+    }.items():
+        if source:
+            field_sources[key] = source
     assumptions = [
         item
         for item in (debt_derivation, ocf_ratio_derivation)
         if item
+    ]
+    feature_derivations = [
+        *technical_derivations,
+        *(
+            ["sentiment_heat=current_rank_percentile_within_market_universe"]
+            if sentiment_heat is not None
+            else []
+        ),
+        *(
+            ["fcf_margin=(operating_cash_flow-capital_expenditure)/same_period_revenue*100"]
+            if fcf_margin is not None and capital_expenditure is not None
+            else []
+        ),
+        *(
+            ["rd_intensity=research_and_development_expenses/same_period_revenue*100"]
+            if rd_intensity is not None
+            else []
+        ),
+        *(["pe_x_pb=pe_ttm*pb"] if pe_x_pb is not None else []),
+        *(["ps=market_cap/revenue"] if ps is not None and _first_number(market, ("ps", "市销率")) is None else []),
+        *(["cash_to_marketcap_ratio=cash/market_cap"] if cash_to_marketcap_ratio is not None else []),
+        *(["revenue_growth_3y_cagr=(revenue_t/revenue_t_minus_3)^(1/3)-1"] if revenue_growth_3y_cagr is not None else []),
+        *(["net_profit_growth_3y=(profit_t/profit_t_minus_3)^(1/3)-1"] if net_profit_growth_3y is not None else []),
+        *(["pe_quantile_5y=empirical_percentile_of_positive_daily_pe_ttm"] if pe_quantile_5y is not None else []),
+        *(["ai_chain_hit=keyword_matches_in_verified_industry_chain_and_event_evidence"] if ai_chain_hit is not None else []),
     ]
     return {
         "symbol": symbol,
@@ -510,11 +1157,13 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         "sentiment": sentiment,
         "segments": segments,
         "field_sources": field_sources,
+        "feature_derivations": feature_derivations,
         "assumptions": assumptions,
         "data_gap": [key for key, value in values.items() if value is None],
         "sector": str(
             _facts(grouped.get("sector")).get("sector")
             or _facts(grouped.get("sector")).get("name")
+            or industry
             or ""
         ),
         "available_fields": [key for key, value in values.items() if value is not None],
@@ -924,22 +1573,22 @@ def build_panel_review(snapshot_rows: list[dict[str, Any]], symbols: list[str], 
 
 
 _PANEL_FIELD_FEATURES: dict[str, tuple[str, ...]] = {
-    "1_financials": ("revenue_latest_yi", "net_profit_latest_yi", "fcf_latest_yi", "roe", "net_margin"),
-    "2_kline": ("price", "pct_change", "amount"),
-    "3_macro": ("pe", "revenue_growth", "debt_ratio"),
-    "4_peers": ("pe", "pb"),
-    "5_chain": ("revenue_growth", "net_margin"),
-    "7_industry": ("revenue_growth", "net_margin"),
-    "9_futures": ("amount", "pct_change"),
+    "1_financials": ("revenue_latest_yi", "net_profit_latest_yi", "operating_cash_flow_yi", "roe", "net_margin"),
+    "2_kline": ("stage_num", "ma_bull_aligned", "rsi", "volatility_1y"),
+    "3_macro": ("macro_rate_cycle", "macro_rate_easing"),
+    "4_peers": ("vs_peer_avg_pe", "industry_rank"),
+    "5_chain": ("ai_chain_hit", "ai_chain_keywords"),
+    "7_industry": ("industry", "industry_growth", "industry_lifecycle"),
+    "9_futures": ("macro_commodity",),
     "10_valuation": ("pe", "pb", "market_cap_yi"),
-    "11_governance": ("roe", "debt_ratio"),
-    "12_capital_flow": ("amount", "pct_change"),
-    "13_policy": ("revenue_growth",),
-    "14_moat": ("net_margin", "roe", "revenue_growth"),
-    "15_events": ("pct_change",),
-    "16_lhb": ("amount", "pct_change"),
-    "17_sentiment": ("pct_change", "amount"),
-    "18_trap": ("debt_ratio", "pct_change"),
+    "11_governance": ("governance_score", "no_violations", "has_pledge_issue"),
+    "12_capital_flow": ("main_fund_5d_net_yi",),
+    "13_policy": ("policy_supportive",),
+    "14_moat": ("moat_total", "moat_intangible", "moat_network", "moat_scale"),
+    "15_events": ("recent_events_count", "has_positive_catalyst"),
+    "16_lhb": ("lhb_30d_count",),
+    "17_sentiment": ("sentiment_heat",),
+    "18_trap": ("is_safe",),
 }
 
 

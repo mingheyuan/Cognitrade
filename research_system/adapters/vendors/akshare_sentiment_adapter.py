@@ -23,7 +23,10 @@ class AkShareSentimentAdapter:
         facts = {
             "symbol": symbol,
             "market_symbol": market_symbol,
-            "hot_rank_latest": [self._normalize_row(item) for item in hot_latest_df.head(5).to_dict("records")] if not hot_latest_df.empty else [],
+            # The current rank and universe size are separate item/value rows;
+            # truncating to five drops `rank` and makes the 0-100 percentile
+            # impossible to calculate.
+            "hot_rank_latest": [self._normalize_row(item) for item in hot_latest_df.to_dict("records")] if not hot_latest_df.empty else [],
             "hot_rank_detail": [self._normalize_row(item) for item in hot_detail_df.head(10).to_dict("records")] if not hot_detail_df.empty else [],
             "hot_keywords": [self._normalize_row(item) for item in hot_keywords_df.head(10).to_dict("records")] if not hot_keywords_df.empty else [],
             "news_samples": [self._normalize_row(item) for item in news_df.head(5).to_dict("records")] if news_df is not None and not news_df.empty else [],

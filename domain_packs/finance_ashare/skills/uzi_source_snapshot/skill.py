@@ -114,15 +114,20 @@ class UziSourceSnapshotSkill:
             snapshot = MarketSnapshotSkill(provider_registry=self.provider_registry).run(
                 query=query,
                 symbol=symbol,
-                history_days=365,
+                # True Weinstein Stage analysis compares MA200 with its value
+                # 60 trading sessions ago.  365 calendar days often yield only
+                # ~240 bars, so request enough history for the full rule input.
+                history_days=550,
             )
             facts = dict(snapshot.get("facts") or {})
             payload = dict(facts.get("market_hist") or {})
+            overview = dict(facts.get("market_overview") or {})
+            overview.pop("valuation_history", None)
             return self._from_snapshot(
                 snapshot,
                 {
                     "history": payload,
-                    "market_overview": facts.get("market_overview") or {},
+                    "market_overview": overview,
                     "availability": "available" if payload else "data_gap",
                     "data_gap": [] if payload else ["kline_missing"],
                 },

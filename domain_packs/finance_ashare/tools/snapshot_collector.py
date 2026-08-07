@@ -84,6 +84,11 @@ _SNAPSHOT_CACHE_TTLS = {
     "similar_stocks": 86400,
 }
 _DEFAULT_SNAPSHOT_CACHE_TTL = 43200
+_SNAPSHOT_CACHE_SCHEMA_VERSIONS = {
+    "market": "valuation-history-v2",
+    "fundamental": "financial-history-v2",
+    "kline": "kline-550-v2",
+}
 _UNAVAILABLE_QUALITY_STATUSES = {
     "degraded",
     "data_gap",
@@ -298,7 +303,7 @@ def _snapshot_cache_context(
         "artifact_type": "snapshot",
         "snapshot_type": snapshot_type,
         "provider": _SNAPSHOT_PROVIDER_HINTS.get(snapshot_type, snapshot_type),
-        "schema_version": "1",
+        "schema_version": _SNAPSHOT_CACHE_SCHEMA_VERSIONS.get(snapshot_type, "1"),
         "target": str(target).strip(),
         "profile": str(profile or "").strip().lower(),
     }
