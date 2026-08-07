@@ -7,7 +7,10 @@ services:
       context: .
       dockerfile: deploy/backend.Dockerfile
       args:
-        PYTHON_IMAGE: ${COGNITRADE_PYTHON_IMAGE:-public.ecr.aws/docker/library/python:3.11-slim-bookworm}
+        PYTHON_IMAGE: ${COGNITRADE_PYTHON_IMAGE:-python:3.11-slim-bookworm}
+        PIP_INDEX_URL: ${COGNITRADE_PIP_INDEX_URL:-https://pypi.org/simple}
+        DEBIAN_MIRROR: ${COGNITRADE_DEBIAN_MIRROR:-http://deb.debian.org/debian}
+        DEBIAN_SECURITY_MIRROR: ${COGNITRADE_DEBIAN_SECURITY_MIRROR:-http://deb.debian.org/debian-security}
     env_file:
       - ${COGNITRADE_ENV_FILE:-.env}
     environment:
@@ -41,8 +44,9 @@ services:
       context: .
       dockerfile: deploy/frontend.Dockerfile
       args:
-        NODE_IMAGE: ${COGNITRADE_NODE_IMAGE:-public.ecr.aws/docker/library/node:22-alpine}
-        NGINX_IMAGE: ${COGNITRADE_NGINX_IMAGE:-public.ecr.aws/docker/library/nginx:alpine}
+        NODE_IMAGE: ${COGNITRADE_NODE_IMAGE:-node:22-alpine}
+        NGINX_IMAGE: ${COGNITRADE_NGINX_IMAGE:-nginx:alpine}
+        NPM_CONFIG_REGISTRY: ${COGNITRADE_NPM_REGISTRY:-https://registry.npmjs.org}
         VITE_COGNITRADE_API_BASE_URL: /api/v1
     depends_on:
       api:

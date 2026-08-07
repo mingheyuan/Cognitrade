@@ -29,9 +29,16 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 ./scripts/deploy.sh status
 ./scripts/deploy.sh token
 ./scripts/deploy.sh logs all
+./scripts/deploy.sh runtime-check
 ./scripts/deploy.sh restart
 ./scripts/deploy.sh down
 ```
+
+完整部署会安装 API、数据源、Playwright Chromium、VeighNa PaperAccount 和
+Hikyuu，不把模拟盘或回测留成运行时可选项。镜像构建阶段会先执行一次无网络运行环境
+检查；`deploy`、`start`、`restart` 完成后还会以实际容器用户再次检查 Python 依赖图、
+API 导入、Chromium、VeighNa/Hikyuu 原生模块以及持久化目录读写权限。任一关键能力
+缺失都会让命令返回非零状态。
 
 部署镜像内可显式核验 UZI 3.9.2 的 22 类真实数据链；该检查不会在启动时自动执行，
 数据源无返回会记录为 `data_gap`，不会生成模拟数据：
@@ -128,10 +135,18 @@ TuShare 配置 Token 只表示客户端可以鉴权；具体 `daily`、`fina_ind
 镜像源可覆盖：
 
 ```dotenv
-COGNITRADE_PYTHON_IMAGE=public.ecr.aws/docker/library/python:3.11-slim-bookworm
-COGNITRADE_NODE_IMAGE=public.ecr.aws/docker/library/node:22-alpine
-COGNITRADE_NGINX_IMAGE=public.ecr.aws/docker/library/nginx:alpine
+COGNITRADE_PYTHON_IMAGE=python:3.11-slim-bookworm
+COGNITRADE_NODE_IMAGE=node:22-alpine
+COGNITRADE_NGINX_IMAGE=nginx:alpine
+COGNITRADE_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+COGNITRADE_NPM_REGISTRY=https://registry.npmmirror.com
+COGNITRADE_DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian
+COGNITRADE_DEBIAN_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian-security
 ```
+
+包与 Debian 镜像仅影响构建；不配置时使用 PyPI、npm 与 Debian 官方源。量化依赖集中声明在
+`requirements-quant.txt`，并由主 `requirements.txt` 强制包含，因此容器部署与本地
+`pip install -r requirements.txt` 安装的是同一套完整能力。
 
 完整变量见 [`.env.example`](./.env.example)。
 
