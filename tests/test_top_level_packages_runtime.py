@@ -28,7 +28,6 @@ class TopLevelPackagesRuntimeTests(unittest.TestCase):
 
     def test_services_package_exports_domain_modules(self) -> None:
         self.assertIs(services_package.memory, services.memory)
-        self.assertIs(services_package.methodologies, services.methodologies)
 
 
 if __name__ == "__main__":

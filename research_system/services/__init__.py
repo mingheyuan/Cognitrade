@@ -4,7 +4,6 @@ from importlib import import_module
 
 __all__ = [
     "memory",
-    "methodologies",
 ]
 
 _EXPORTS = {name: f"research_system.services.{name}" for name in __all__}

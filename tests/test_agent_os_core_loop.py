@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import sys
@@ -563,6 +564,29 @@ class AgentOSCoreLoopTests(unittest.TestCase):
                 }
             )
             agent_os = AgentOS(settings)
+            provider_tool = agent_os.tool_registry._tools["financial_data_provider"]
+            agent_os.tool_registry._tools["financial_data_provider"] = replace(
+                provider_tool,
+                handler=lambda _arguments, _context: {
+                    "symbols": ["600000"],
+                    "snapshots": [
+                        {
+                            "snapshot_type": "market",
+                            "symbol": "600000",
+                            "facts": {"availability": "available", "latest_price": 10.0},
+                        },
+                        {
+                            "snapshot_type": "fundamental",
+                            "symbol": "600000",
+                            "facts": {
+                                "availability": "available",
+                                "financial_abstract": {"net_profit": 1.0},
+                            },
+                        },
+                    ],
+                    "source_refs": [{"type": "test_fixture", "id": "clarification-resume"}],
+                },
+            )
             first = agent_os.handle_request(
                 RequestEnvelope(
                     thread_id="clarification-thread",
