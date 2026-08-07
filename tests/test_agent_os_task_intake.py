@@ -45,7 +45,7 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
 
         decision = service.resolve(RequestEnvelope(
             user_query="find interesting companies",
-            constraints={"research_profile": "lite"},
+            constraints={"research_profile": "lite", "investment_cycle": "short_term"},
         ))
 
         self.assertEqual(decision.status, "accepted")
@@ -77,7 +77,7 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
         decision = service.resolve(
             RequestEnvelope(
                 user_query="筛选最近值得关注的股票",
-                constraints={"research_profile": "deep"},
+                constraints={"research_profile": "deep", "investment_cycle": "long_term"},
             )
         )
 
@@ -116,6 +116,26 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
         self.assertEqual(
             decision.clarification.context["allowed_profiles"],
             ["lite", "medium", "deep"],
+        )
+
+    def test_finance_pack_requires_user_selected_stock_screen_cycle(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
+
+        decision = service.resolve(
+            RequestEnvelope(
+                intent="stock_screen",
+                user_query="筛选最近值得关注的股票",
+                constraints={"research_profile": "lite"},
+            )
+        )
+
+        self.assertEqual(decision.status, "needs_clarification")
+        self.assertEqual(decision.intent, "stock_screen")
+        self.assertEqual(decision.clarification.missing_fields, ["investment_cycle"])
+        self.assertEqual(
+            decision.clarification.context["allowed_cycles"],
+            ["short_term", "mid_term", "long_term"],
         )
 
     def test_finance_pack_does_not_treat_unnamed_multiple_banks_as_sector_research(self) -> None:

@@ -29,7 +29,7 @@ export function Funds({ onOpenRun }: FundsProps) {
   const client = useMemo(() => new CognitradeApiClient(settings), [settings])
   const [category, setCategory] = useState('混合型')
   const [selectionMode, setSelectionMode] = useState<FundSelectionMode>('category')
-  const [cycle, setCycle] = useState('long_term')
+  const [cycle, setCycle] = useState('')
   const [codes, setCodes] = useState('')
   const [candidatePoolSize, setCandidatePoolSize] = useState(8)
 
@@ -60,6 +60,7 @@ export function Funds({ onOpenRun }: FundsProps) {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
+    if (!cycle) return
     const fundCodes = (selectionMode === 'codes' ? codes : '')
       .split(/[\s,，、]+/)
       .map((value) => value.trim())
@@ -126,6 +127,7 @@ export function Funds({ onOpenRun }: FundsProps) {
             <label>
               <span>研究周期</span>
               <select value={cycle} onChange={(event) => setCycle(event.target.value)}>
+                <option value="">请选择研究周期</option>
                 <option value="short_term">短期</option>
                 <option value="mid_term">中期</option>
                 <option value="long_term">长期</option>
@@ -136,9 +138,9 @@ export function Funds({ onOpenRun }: FundsProps) {
               <input type="number" min="2" max="20" value={candidatePoolSize} onChange={(event) => setCandidatePoolSize(Number(event.target.value))} />
             </label> : <div className="fund-code-count"><span>本次分析数量</span><strong>{parseFundCodes(codes).length || '—'}</strong><small>最多 20 只</small></div>}
           </div>
-          <button className="primary-button fund-run-button" type="submit" disabled={submitting}>
+          <button className="primary-button fund-run-button" type="submit" disabled={submitting || !cycle}>
             {submitting ? <RefreshCw size={15} className="is-spinning" /> : <Play size={15} />}
-            {submitting ? 'Agent OS 正在采集' : selectionMode === 'category' ? '开始真实选基' : '开始基金分析'}
+            {submitting ? 'Agent OS 正在采集' : !cycle ? '请先选择研究周期' : selectionMode === 'category' ? '开始真实选基' : '开始基金分析'}
           </button>
           <p className="fund-config-note"><ShieldAlert size={14} />单只基金独立评估且不要求对照组；只有多基金或按类别选基时才生成横向排名。</p>
         </form>

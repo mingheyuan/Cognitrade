@@ -217,7 +217,10 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     json={
                         "intent": "stock_check",
                         "user_query": "分析 600000",
-                        "constraints": {"research_profile": "lite"},
+                        "constraints": {
+                            "research_profile": "lite",
+                            "investment_cycle": "short_term",
+                        },
                         "slots": {"snapshots": snapshots},
                     },
                 ).json()
@@ -311,7 +314,10 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     json={
                         "intent": "stock_screen",
                         "user_query": "筛选 600000 的现金流和估值",
-                        "constraints": {"research_profile": "lite"},
+                        "constraints": {
+                            "research_profile": "lite",
+                            "investment_cycle": "short_term",
+                        },
                         "slots": {"symbols": ["600000"], "snapshots": snapshots},
                     },
                 )

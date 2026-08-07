@@ -476,8 +476,9 @@ VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
 - `skip_reason`：仅用于整席流派锁定、市场不匹配或游资射程不匹配；
 - `time_horizon`、`position_sizing`、`what_would_change_my_mind`：上游决策 profile。
 
-逐规则 `skipped_rules`、`data_gap_rules`、`skipped_count` 已移除；规则缺键仍按
-UZI 源码 pass/fail，真实字段缺口通过上述完整性报告单独披露。
+逐规则 `skipped_rules`、`data_gap_rules` 不返回具体规则内容；最新 UZI 语义会将因缺数无法计算的规则排除在通过/失败及评分分母之外，并通过
+`skipped_rule_count` 暴露跳过数量；有真实观测值但未达阈值的规则仍计为失败。
+真实字段缺口同时通过完整性报告与维度 `checks` 单独披露。
 
 Lite/Medium/Deep 必须由用户在研究入口显式选择，后端不会默认选择 Medium；
 旧 `quick` 档位和兼容调用已删除。登录态或浏览器来源仍必须经过总开关、

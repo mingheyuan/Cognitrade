@@ -170,6 +170,17 @@ class FundResearchTests(unittest.TestCase):
         self.assertEqual(request.intent, "fund_research")
         self.assertTrue(request.constraints["background"])
 
+        with self.assertRaises(ApiError) as missing_cycle:
+            validate_research_request(
+                RequestEnvelope(
+                    intent="fund_research",
+                    user_query="分析 110011",
+                    constraints={"fund_codes": ["110011"]},
+                )
+            )
+        self.assertEqual(missing_cycle.exception.code, "missing_constraint")
+        self.assertEqual(missing_cycle.exception.details["field"], "investment_cycle")
+
         with self.assertRaises(ApiError):
             validate_research_request(
                 RequestEnvelope(
@@ -354,13 +365,40 @@ class FundResearchTests(unittest.TestCase):
             "domain_packs.finance_ashare.subagents.task_intake._FUND_MASTER.resolve",
             return_value=resolution,
         ):
-            decision = service.resolve(RequestEnvelope(user_query="分析 110011"))
+            decision = service.resolve(RequestEnvelope(
+                user_query="分析 110011",
+                constraints={"investment_cycle": "long_term"},
+            ))
 
         self.assertEqual(decision.status, "accepted")
         self.assertEqual(decision.intent, "fund_research")
         self.assertEqual(decision.slots["fund_codes"], ["110011"])
         self.assertNotIn("symbols", decision.slots)
         self.assertIn("finance.fund.analyze", decision.candidate_capabilities)
+
+    def test_pack_intake_requires_user_selected_fund_investment_cycle(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
+        resolution = FundResolution(
+            fund_codes=["110011"],
+            matches=[{"fund_code": "110011", "fund_name": "易方达优质精选混合"}],
+            ambiguous_terms=[],
+            source="test_fund_catalog",
+        )
+
+        with patch(
+            "domain_packs.finance_ashare.subagents.task_intake._FUND_MASTER.resolve",
+            return_value=resolution,
+        ):
+            decision = service.resolve(RequestEnvelope(user_query="分析 110011"))
+
+        self.assertEqual(decision.status, "needs_clarification")
+        self.assertEqual(decision.intent, "fund_research")
+        self.assertEqual(decision.clarification.missing_fields, ["investment_cycle"])
+        self.assertEqual(
+            decision.clarification.context["allowed_cycles"],
+            ["short_term", "mid_term", "long_term"],
+        )
 
     def test_fund_snapshot_uses_real_rank_nav_and_holdings_fields(self) -> None:
         skill = FundSnapshotSkill(

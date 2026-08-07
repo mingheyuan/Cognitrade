@@ -1,10 +1,11 @@
 schema_version: "1"
 upstream:
   repository: https://github.com/wbh604/UZI-Skill
-  commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
+  commit: 22e65f2e0cee2cb41cb40fdbe391c9600b7fe359
+  audit_previous_commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
   version: 3.9.2
   adapted_version: 3.9.2-adapted
-  previous_commit: 775c76101e8890492d21c2e2827692456fcddb58
+  migration_base_commit: 775c76101e8890492d21c2e2827692456fcddb58
 inventory:
   fetcher_count: 22
   command_count: 20
@@ -192,9 +193,10 @@ panel:
   context_and_reality_checks: domain_packs/finance_ashare/subagents/uzi_panel_context.py
   lite: 10
   medium: 51
-  deep: 51
+  deep: 66
   rule_count: 242
-  missing_rule_input: upstream_lambda_default_pass_or_fail
+  missing_rule_input: upstream_source_aware_rule_exclusion
+  rule_skip_boundary: missing_source_rules_are_excluded_from_score_denominator
   whole_seat_skip_only: [school_lock, market_mismatch, youzi_range_mismatch]
   integrity_boundary: pre_vote_uzi_integrity_report
   acceptance: tests.test_uzi_rule_and_fallback_parity.UziRuleSourceParityTests

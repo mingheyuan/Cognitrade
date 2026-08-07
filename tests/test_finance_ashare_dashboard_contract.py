@@ -59,7 +59,11 @@ class FinanceAshareDashboardContractTests(unittest.TestCase):
                     intent="stock_screen",
                     user_query="Screen the supplied candidate.",
                     slots={"symbols": ["600000"], "snapshots": self._screen_snapshots()},
-                    constraints={"screen_style": "value", "research_profile": "lite"},
+                    constraints={
+                        "screen_style": "value",
+                        "research_profile": "lite",
+                        "investment_cycle": "long_term",
+                    },
                 )
             )
             screening_board = ArtifactBoard(root / "runs" / screening.snapshot.run_id / "artifact_board.jsonl")

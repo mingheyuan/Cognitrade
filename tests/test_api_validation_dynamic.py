@@ -35,6 +35,30 @@ class DynamicApiValidationTests(unittest.TestCase):
             )
         self.assertEqual(obsolete.exception.code, "invalid_constraint")
 
+    def test_stock_screen_requires_an_explicit_investment_cycle(self) -> None:
+        with self.assertRaises(ApiError) as missing:
+            validate_research_request(
+                RequestEnvelope(
+                    intent="stock_screen",
+                    user_query="筛选 A 股",
+                    constraints={"research_profile": "lite"},
+                )
+            )
+        self.assertEqual(missing.exception.code, "missing_constraint")
+        self.assertEqual(missing.exception.details["field"], "investment_cycle")
+
+        request = validate_research_request(
+            RequestEnvelope(
+                intent="stock_screen",
+                user_query="筛选 A 股",
+                constraints={
+                    "research_profile": "lite",
+                    "investment_cycle": "short_term",
+                },
+            )
+        )
+        self.assertEqual(request.constraints["investment_cycle"], "short_term")
+
     def test_pack_owned_intent_is_validated_from_runtime_catalog(self) -> None:
         request = validate_research_request(
             RequestEnvelope(

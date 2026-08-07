@@ -1535,6 +1535,7 @@ class AgentOS:
                 version=version,
             ),
             settings=self.settings,
+            llm_provider=self.provider,
             cache_root=self.settings.memory_root / "agent_os_cache",
             event_callback=event_callback,
             progress_observer=self.main_agent.observe_graph_progress,

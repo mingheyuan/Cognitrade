@@ -206,10 +206,10 @@ class UziFinancePackTests(unittest.TestCase):
                 "16_lhb", "17_sentiment", "18_trap", "19_contests", "fund_holders", "similar_stocks",
             },
         )
-        self.assertEqual(mapping["source"]["commit"], "fce996c33e70eddce8e375f53cd252b549eb3d7c")
+        self.assertEqual(mapping["source"]["commit"], "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359")
         self.assertEqual(mapping["profiles"]["lite"]["panel_seats"], 10)
         self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 51)
-        self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 51)
+        self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 66)
         self.assertEqual(len(mapping["panel"]["member_ids"]), 66)
         required_mapping_fields = {
             "source_commit",
@@ -446,8 +446,9 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertEqual(features["total_assets_yi"], 200.0)
         self.assertEqual(features["total_liabilities_yi"], 80.0)
         self.assertEqual(features["cash_yi"], 30.0)
-        self.assertEqual(valuation["status"], "assumption_only")
-        self.assertIn("fcf_approximated_from_revenue_margin", valuation["assumption_flags"])
+        self.assertEqual(valuation["status"], "data_gap")
+        self.assertIn("fcf_missing", valuation["data_gap"])
+        self.assertNotIn("fcf_approximated_from_revenue_margin", valuation["assumption_flags"])
         self.assertEqual(features["operating_cash_flow_yi"], 15.0)
         self.assertIsNone(features["fcf_latest_yi"])
         self.assertNotIn("total_assets_missing", valuation["warnings"])
@@ -513,7 +514,10 @@ class UziFinancePackTests(unittest.TestCase):
 
         self.assertEqual(features["name"], "中微公司")
         self.assertEqual(features["revenue_latest_yi"], 200)
-        self.assertAlmostEqual(features["total_debt_yi"], 11)
+        # Latest UZI v3.9.4 uses the reported total-liabilities bridge before
+        # narrower interest-bearing components so DCF does not silently treat
+        # the rest of the balance sheet as zero.
+        self.assertAlmostEqual(features["total_debt_yi"], 90)
         self.assertEqual(features["stage_num"], 2)
         self.assertTrue(features["price_above_ma200"])
         self.assertAlmostEqual(features["sentiment_heat"], 90.09, places=2)
@@ -528,6 +532,29 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertIsNotNone(features["pe_quantile_5y"])
         self.assertTrue(features["ai_chain_hit"])
         self.assertIn("stage_num=Weinstein", " ".join(features["feature_derivations"]))
+
+    def test_uzi_market_currency_is_explicit_for_a_h_us_and_global_symbols(self) -> None:
+        cases = {
+            "600519": ("A", "CN", "CNY", "¥"),
+            "00700.HK": ("H", "HK", "HKD", "HK$"),
+            "AAPL": ("U", "US", "USD", "$"),
+            "7203.T": ("JP", "JP", "JPY", "JP¥"),
+        }
+        for symbol, expected in cases.items():
+            features = build_features(
+                [{
+                    "snapshot_type": "market",
+                    "symbol": symbol,
+                    "snapshot_date": "2026-08-07",
+                    "facts": {"market_overview": {"latest_price": 10}},
+                    "source": {"vendor": "fixture"},
+                }],
+                symbol,
+            )
+            self.assertEqual(
+                (features["market"], features["country"], features["currency"], features["currency_symbol"]),
+                expected,
+            )
 
     def test_uzi_rule_features_do_not_relabel_fund_products_as_managers(self) -> None:
         rows = _snapshots() + [
@@ -635,7 +662,8 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertEqual(len(presentation["panel_insights"]), panel["registered_seat_count"])
         self.assertTrue(presentation["great_divide"]["rounds"])
         self.assertTrue(presentation["institutional_modeling"][0]["methods"])
-        self.assertEqual(len(presentation["institutional_modeling"][0]["methods"][0]["sensitivity"]), 25)
+        self.assertEqual(len(presentation["institutional_modeling"][0]["methods"][0]["sensitivity"]), 0)
+        self.assertEqual(presentation["institutional_modeling"][0]["methods"][0]["status"], "data_gap")
         self.assertTrue(presentation["risk_list"])
         self.assertEqual(presentation["buy_zones"][0]["status"], "data_gap")
         self.assertEqual(presentation["buy_zones"][0]["kind"], "observation")
@@ -891,7 +919,7 @@ class UziFinancePackTests(unittest.TestCase):
         medium_panel = build_panel_review(rows, ["600000"], select_profile({"research_profile": "medium"}))
         deep_panel = build_panel_review(rows, ["600000"], select_profile({"research_profile": "deep"}))
         self.assertEqual(len(medium_panel["votes"]), 51)
-        self.assertEqual(len(deep_panel["votes"]), 51)
+        self.assertEqual(len(deep_panel["votes"]), 66)
         self.assertEqual(medium_panel["registered_seat_count"], 51)
         self.assertEqual(len(risk["signals"]), 8)
         self.assertIn("external_search_not_claimed", risk["risk_flags"])
@@ -913,7 +941,7 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertEqual(workflow["results"][0]["symbol"], "600000")
         self.assertEqual(deep["results"][0]["symbol"], "600000")
         self.assertIn("bull_bear_debate", deep["results"][0])
-        self.assertIn("segment_revenue_missing", deep_institutional["results"][0]["methods"]["segmental"]["data_gap"])
+        self.assertIn("reported_segment_data_missing", deep_institutional["results"][0]["methods"]["segmental"]["data_gap"])
 
     def test_agent_os_graph_commits_uzi_artifacts_and_presentation(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]

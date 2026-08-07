@@ -31,6 +31,12 @@
     "profile": {
       "type": "string"
     },
+    "currency": {
+      "type": ["string", "null"]
+    },
+    "currency_symbol": {
+      "type": ["string", "null"]
+    },
     "subject": {
       "type": "object"
     },

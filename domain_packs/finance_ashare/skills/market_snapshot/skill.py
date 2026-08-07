@@ -71,6 +71,13 @@ class MarketSnapshotSkill:
                 for provider_id, adapter in self.adapters.items()
             },
         )
+        execution.facts.update({
+            "market": route.market_code or route.market,
+            "provider_market": route.market,
+            "exchange": route.exchange,
+            "currency": route.currency or None,
+            "country": route.country or None,
+        })
         selected = execution.provider or providers[0]
         position = execution.chain_position if execution.chain_position is not None else 0
         source = self._source(selected, position)

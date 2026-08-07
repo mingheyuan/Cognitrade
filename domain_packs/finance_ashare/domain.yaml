@@ -197,7 +197,7 @@ intake:
       output_artifact_types: [research_report]
     - intent_id: stock_screen
       description: Screen an A-share universe and produce traceable candidates.
-      required_slots: [research_profile]
+      required_slots: [research_profile, investment_cycle]
       optional_slots: [symbols, sector]
       candidate_capabilities:
         - finance.query.normalize
@@ -207,7 +207,7 @@ intake:
       output_artifact_types: [research_report]
     - intent_id: fund_research
       description: Compare or assess Chinese public funds using real NAV, return, fee and disclosed-holdings evidence.
-      required_slots: []
+      required_slots: [investment_cycle]
       optional_slots: [fund_codes, fund_category]
       candidate_capabilities:
         - finance.query.normalize
@@ -391,7 +391,7 @@ capabilities:
     latency_class: low
     reliability: 0.86
     parallel_safe: true
-    cache_scope: global
+    cache_scope: run
     freshness_ttl_seconds: 86400
     tags: [profile:lite, profile:medium, profile:deep]
   - subagent_type: uzi_risk_scanner
@@ -461,7 +461,7 @@ capabilities:
     latency_class: high
     reliability: 0.78
     parallel_safe: true
-    cache_scope: global
+    cache_scope: run
     freshness_ttl_seconds: 43200
     tags: [profile:deep]
   - subagent_type: uzi_dimension_coverage_analyzer
@@ -1549,7 +1549,7 @@ metadata:
     uzi_source_mapping: migration/uzi_source_mapping.yaml
     uzi_source_mapping_schema: migration/uzi_source_mapping.schema.json
     uzi_source_mapping_schema_version: "2"
-    source_commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
+    source_commit: 22e65f2e0cee2cb41cb40fdbe391c9600b7fe359
     methodology_version: 3.9.2-adapted
   dashboard_views:
     overview:

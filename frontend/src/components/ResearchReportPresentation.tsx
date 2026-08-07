@@ -24,6 +24,11 @@ function numberText(value: unknown, digits = 2): string {
   return number === null ? '—' : number.toLocaleString('zh-CN', { maximumFractionDigits: digits })
 }
 
+function moneyText(value: unknown, symbol: string): string {
+  const formatted = numberText(value)
+  return formatted === '—' ? formatted : `${symbol}${formatted}`
+}
+
 function percentText(value: unknown, digits = 1): string {
   const number = asNumber(value)
   return number === null ? '—' : `${number.toFixed(digits)}%`
@@ -106,6 +111,8 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
   const price = asRecord(dashboard.price)
   const valuation = asRecord(dashboard.valuation)
   const panel = asRecord(presentation.panel)
+  const panelRoleplay = asRecord(panel.roleplay)
+  const agentRoleplayCompleted = panelRoleplay.status === 'completed' && panelRoleplay.agent_reviewed === true
   const greatDivide = asRecord(presentation.great_divide)
   const profile = asString(presentation.profile, '未记录')
   const valuationModel = asRecord(report.valuation_model)
@@ -165,6 +172,15 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
   const name = asString(subject.name || hero.name, symbol)
   const sector = asString(subject.sector || hero.sector, '行业未提供')
   const currentPrice = asNumber(subject.price ?? hero.price ?? price.current ?? primaryModel.market_price)
+  const currencySymbol = asString(
+    subject.currency_symbol
+      || hero.currency_symbol
+      || price.currency_symbol
+      || valuation.currency_symbol
+      || primaryModel.currency_symbol
+      || presentation.currency_symbol,
+    '',
+  )
   const change = asNumber(subject.change_pct ?? hero.change_pct ?? price.change_pct)
   const score = asNumber(hero.score ?? panel.average_score)
   const verdict = statusText(hero.verdict || primaryModel.verdict)
@@ -188,7 +204,7 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
           <h2>{name}</h2>
           <p>{symbol} · {sector}</p>
           <div className="research-presentation__price-row">
-            <strong>{currentPrice === null ? '—' : `¥${numberText(currentPrice)}`}</strong>
+            <strong>{moneyText(currentPrice, currencySymbol)}</strong>
             <span className={change === null ? '' : change >= 0 ? 'is-up' : 'is-down'}>
               {change === null ? '涨跌未提供' : `${change >= 0 ? '+' : ''}${percentText(change)}`}
             </span>
@@ -206,7 +222,7 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
           <span className="research-presentation__label">ALPHA SCORE</span>
           <strong>{score === null ? '—' : numberText(score, 1)}</strong>
           <p>{score === null ? '暂无 Panel 平均分' : `${bullCount} 派看多 · ${bearCount} 派看空`}</p>
-          <small>规则化方法论映射，不代表真实投资人意见</small>
+          <small>{agentRoleplayCompleted ? 'Agent 依据冻结证据与 UZI persona 逐席评审；不代表真实投资人意见' : '规则化方法论映射，不代表真实投资人意见'}</small>
         </article>
 
         <article className={`research-presentation__safety ${safety === 'low_observed' ? 'is-safe' : 'is-caution'}`}>
@@ -279,7 +295,7 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
           <span>03 / JURY</span>
           <h3>评委评分板</h3>
           <i />
-          <small>{asNumber(panel.registered_seat_count) ?? votes.length} 个方法论席位</small>
+          <small>{asNumber(panel.registered_seat_count) ?? votes.length} 个方法论席位 · {panelRoleplay.required === true ? agentRoleplayCompleted ? 'Deep Agent 评审完成' : 'Deep Agent 评审未完成' : '规则评审'}</small>
         </div>
         {votes.length ? (
           <div className="research-presentation__vote-grid">
@@ -291,7 +307,7 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
                 <article key={asString(vote.perspective_id, String(index))} className={signalClass(signal)}>
                   <div><span>{asString(vote.perspective_label, '方法论视角')}</span><strong>{scoreText}</strong></div>
                   <div className="research-presentation__vote-track"><i style={{ width: `${Math.max(0, Math.min(100, voteScore ?? 0))}%` }} /></div>
-                  <small>{signalLabel(signal)} · {asString(vote.headline || vote.reasoning, '未返回解释')}</small>
+                  <small>{signalLabel(signal)} · {vote.agent_roleplay_applied === true ? 'Agent 角色评审' : '规则参考'} · {asString(vote.headline || vote.reasoning, '未返回解释')}</small>
                 </article>
               )
             })}
@@ -470,8 +486,8 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
           />
           <article className="research-presentation-advanced-card research-presentation-advanced-card--valuation">
             <div className="research-presentation-advanced-card__topline"><span><LineChart size={13} />估值参考</span><span>{verdictLabel(statusText(primaryModel.status || verdict))}</span></div>
-            <strong>¥{numberText(valuation.fair_value ?? primaryModel.fair_value)}</strong>
-            <small>当前价 ¥{numberText(valuation.current ?? price.current ?? currentPrice)} · 安全边际 {ratioPercentText(valuation.margin_of_safety ?? primaryModel.margin_of_safety, 1)}</small>
+            <strong>{moneyText(valuation.fair_value ?? primaryModel.fair_value, currencySymbol)}</strong>
+            <small>当前价 {moneyText(valuation.current ?? price.current ?? currentPrice, currencySymbol)} · 安全边际 {ratioPercentText(valuation.margin_of_safety ?? primaryModel.margin_of_safety, 1)}</small>
           </article>
         </div>
       </section>
@@ -548,7 +564,7 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
           <div className="research-presentation__price-observation-grid">
             {buyZones.map((zone, index) => (
               <article key={asString(zone.zone_id, String(index))}>
-                <div><span>{asString(zone.label, '现价观察参考')}</span><strong>¥{numberText(zone.price)}</strong></div>
+                <div><span>{asString(zone.label, '现价观察参考')}</span><strong>{moneyText(zone.price, asString(zone.currency_symbol, currencySymbol))}</strong></div>
                 <small>{verdictLabel(statusText(zone.status))} · {asString(zone.kind, 'observation')}</small>
                 <p>{asString(zone.rationale, '缺少足够证据，不形成价格区间。')}</p>
               </article>

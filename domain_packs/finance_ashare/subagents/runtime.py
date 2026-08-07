@@ -7,12 +7,15 @@ from domain_packs.finance_ashare.subagents.fund_methodology import build_fund_an
 from domain_packs.finance_ashare.subagents.uzi_methodology import (
     UZI_METHOD_VERSION,
     build_delivery_conclusion,
+    build_features,
     build_panel_review,
     build_presentation,
     build_risk_scan,
     build_valuation_model,
     select_profile,
 )
+from domain_packs.finance_ashare.subagents.uzi_agent_roleplay import apply_deep_agent_roleplay
+from domain_packs.finance_ashare.subagents.uzi_qualitative_deep_dive import apply_qualitative_deep_dive
 from domain_packs.finance_ashare.subagents.uzi_advanced_methodology import (
     build_deep_analysis,
     build_dimension_coverage,
@@ -192,7 +195,7 @@ def collect_fund_snapshot(context):
         ).strip()
         or None,
         "candidate_pool_size": int(inputs.get("candidate_pool_size") or 8),
-        "investment_cycle": str(inputs.get("investment_cycle") or "mid_term"),
+        "investment_cycle": _required_investment_cycle(inputs),
     }
     call_tool = getattr(context, "call_tool", None)
     if callable(call_tool):
@@ -731,6 +734,11 @@ def _snapshot_context(context) -> tuple[list[dict], list[str], str, list[dict], 
             **content,
             "snapshot_type": snapshot_type,
             "quality_status": content.get("quality_status") or artifact.metadata.get("quality_status"),
+            "source_refs": list(
+                content.get("source_refs")
+                if isinstance(content.get("source_refs"), list)
+                else artifact.source_refs or []
+            ),
         }
         rows.append(row)
         parent_ids.append(artifact.artifact_id)
@@ -765,7 +773,7 @@ def analyze_financials(context):
         for symbol in symbols
         if grouped.get(symbol)
     ]
-    cycle = _investment_cycle(inputs)
+    cycle = _required_investment_cycle(inputs)
     comps_service = CompsService()
     dcf_service = DCFService()
     cashflow_service = CashflowResilienceService()
@@ -862,6 +870,14 @@ def evaluate_uzi_panel(context):
         symbols,
         profile,
     )
+    if profile["selected"] == "deep":
+        features = build_features(rows, symbols[0]) if symbols else {}
+        content = apply_deep_agent_roleplay(
+            content,
+            features=features,
+            llm_provider=getattr(context, "llm_provider", None),
+            cancellation=getattr(context, "cancellation", None),
+        )
     content = _with_quality_status(content)
     return ArtifactDraft(
         artifact_type="investor_panel_review",
@@ -906,6 +922,7 @@ def evaluate_uzi_institutional(context):
         symbols,
         valuation.content if valuation is not None else None,
         profile,
+        inputs,
     )
     content = _with_quality_status(content)
     if valuation is not None:
@@ -932,6 +949,7 @@ def evaluate_uzi_workflow(context):
         symbols,
         valuation.content if valuation is not None else None,
         profile,
+        inputs,
     )
     content = _with_quality_status(content)
     if valuation is not None:
@@ -952,6 +970,7 @@ def evaluate_uzi_deep(context):
     rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
     institutional = context.require_artifact("institutional_analysis")
     workflow = context.require_artifact("research_workflow")
+    risk_scan = (context.artifacts("risk_scan") or [None])[-1]
     inputs = dict(context.node.inputs or {})
     profile = select_profile(inputs)
     content = build_deep_analysis(
@@ -960,6 +979,14 @@ def evaluate_uzi_deep(context):
         institutional.content,
         workflow.content,
         profile,
+        inputs,
+        risk_scan.content if risk_scan is not None else None,
+    )
+    content = apply_qualitative_deep_dive(
+        content,
+        snapshot_rows=rows,
+        llm_provider=getattr(context, "llm_provider", None),
+        cancellation=getattr(context, "cancellation", None),
     )
     content = _with_quality_status(content)
     return ArtifactDraft(
@@ -986,9 +1013,9 @@ def evaluate_uzi_dimension_coverage(context):
         rows,
         symbols,
         profile,
-        institutional_available=institutional is not None,
-        workflow_available=workflow is not None,
-        deep_available=deep is not None,
+        institutional_available=_artifact_has_usable_result(institutional),
+        workflow_available=_artifact_has_usable_result(workflow),
+        deep_available=_artifact_has_usable_result(deep),
     )
     content = _with_quality_status(content)
     parents = list(parent_ids)
@@ -1905,6 +1932,16 @@ def _artifact_confidence(value: object) -> float:
     return numeric if numeric is not None else 0.2
 
 
+def _artifact_has_usable_result(artifact: object) -> bool:
+    if artifact is None:
+        return False
+    content = getattr(artifact, "content", None)
+    if not isinstance(content, dict):
+        return False
+    quality = str(content.get("quality_status") or content.get("status") or "").strip().lower()
+    return quality in {"available", "degraded", "assumption_only"}
+
+
 def _methodology_warnings(methodologies: list[dict]) -> list[str]:
     warnings: list[str] = []
     for methodology in methodologies:
@@ -1921,9 +1958,11 @@ def _methodology_warnings(methodologies: list[dict]) -> list[str]:
     return warnings
 
 
-def _investment_cycle(inputs: dict) -> str:
-    value = str(inputs.get("investment_cycle") or "mid_term")
-    return value if value in {"short_term", "mid_term", "long_term"} else "mid_term"
+def _required_investment_cycle(inputs: dict) -> str:
+    value = str(inputs.get("investment_cycle") or "").strip()
+    if value not in {"short_term", "mid_term", "long_term"}:
+        raise ValueError("investment_cycle is required; choose short_term, mid_term or long_term")
+    return value
 
 
 def _facts(snapshot: dict) -> dict:
@@ -2277,10 +2316,10 @@ def screen_stocks(context):
             "methodology": methodology,
         })
     candidates.sort(key=lambda item: (item["score"], item.get("latest_amount") or 0.0), reverse=True)
-    cycle = str(inputs.get("investment_cycle") or "mid_term")
-    default_min_score = {"short_term": 0.0, "mid_term": 0.0, "long_term": 0.15}.get(cycle, 0.0)
+    cycle = _required_investment_cycle(inputs)
+    cycle_min_score = {"short_term": 0.0, "mid_term": 0.0, "long_term": 0.15}[cycle]
     min_score = _to_float(inputs.get("min_score"))
-    min_score = default_min_score if min_score is None else min_score
+    min_score = cycle_min_score if min_score is None else min_score
     top_k = max(int(inputs.get("top_k") or 5), 1)
     watchlist_top_k = max(int(inputs.get("watchlist_top_k") or 2), 1)
     watchlist_min_score = _to_float(inputs.get("watchlist_min_score"))
@@ -2295,7 +2334,7 @@ def screen_stocks(context):
         item["candidate_tier"] = "watchlist"
     scorecard = {
         "investment_cycle": cycle,
-        "investment_cycle_assumption": "explicit" if inputs.get("investment_cycle") else "default_mid_term",
+        "investment_cycle_assumption": "explicit",
         "candidate_count": len(candidates),
         "eligible_candidate_count": len(screened),
         "top_candidate_count": len(screened),

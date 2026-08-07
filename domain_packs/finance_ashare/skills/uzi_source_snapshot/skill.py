@@ -19,6 +19,33 @@ from research_system.adapters.vendors.uzi_hottrend_adapter import UziHotTrendAda
 from research_system.adapters.vendors.uzi_news_adapter import UziNewsAdapter
 from research_system.adapters.vendors.uzi_web_search_adapter import UziWebSearchAdapter
 from research_system.adapters.vendors.yfinance_fundamental_adapter import YFinanceFundamentalAdapter
+from research_system.adapters.vendors.uzi_global_peer_adapter import (
+    fetch_global_peer_comparison,
+    global_peers_enabled,
+)
+
+
+_UZI_INDUSTRY_MATERIALS: dict[str, tuple[tuple[str, str], ...]] = {
+    "光学光电子": (("玻璃", "FG0"), ("铜", "CU0")),
+    "半导体": (("铜", "CU0"), ("黄金", "AU0"), ("白银", "AG0")),
+    "医药生物": (("黄金", "AU0"),),
+    "电池": (("碳酸锂", "LC0"), ("镍", "NI0"), ("钴", "")),
+    "钢铁": (("铁矿石", "I0"), ("焦炭", "J0"), ("螺纹钢", "RB0")),
+    "建材": (("水泥", ""), ("玻璃", "FG0"), ("沥青", "BU0")),
+    "化工": (("原油", "SC0"), ("聚丙烯", "PP0"), ("PVC", "V0"), ("甲醇", "MA0")),
+    "白酒": (("玉米", "C0"), ("大豆", "A0")),
+    "养殖业": (("豆粕", "M0"), ("玉米", "C0"), ("生猪", "LH0")),
+    "农业": (("大豆", "A0"), ("玉米", "C0"), ("棕榈油", "P0")),
+    "工业金属": (("沪铝", "AL0"), ("沪铜", "CU0"), ("沪锌", "ZN0")),
+    "有色金属": (("沪铝", "AL0"), ("沪铜", "CU0"), ("沪镍", "NI0")),
+    "贵金属": (("黄金", "AU0"), ("白银", "AG0")),
+    "能源金属": (("碳酸锂", "LC0"), ("镍", "NI0")),
+    "小金属": (("沪锡", "SN0"), ("沪铅", "PB0")),
+    "煤炭开采": (("焦煤", "JM0"), ("动力煤", "ZC0")),
+    "煤炭": (("焦煤", "JM0"), ("动力煤", "ZC0")),
+    "焦炭": (("焦炭", "J0"), ("焦煤", "JM0")),
+    "油气开采": (("原油", "SC0"),),
+}
 
 
 class UziSourceSnapshotSkill:
@@ -46,11 +73,17 @@ class UziSourceSnapshotSkill:
     def __init__(self, provider_registry: VendorProviderRegistry | None = None) -> None:
         self.provider_registry = provider_registry
 
-    def run(self, *, query: str, symbol: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        *,
+        query: str,
+        symbol: str | None = None,
+        dependencies: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         snapshot_date = date.today().isoformat()
         provider = self._selected_provider()
         try:
-            facts = self._collect(query=query, symbol=symbol)
+            facts = self._collect(query=query, symbol=symbol, dependencies=dependencies or {})
             source_meta = dict(facts.pop("_source", {}) or {})
             source_trace = list(facts.pop("_source_trace", []) or [])
             source = SnapshotSource(
@@ -107,7 +140,14 @@ class UziSourceSnapshotSkill:
                 source_trace=[{"source_id": source.source_id, "status": "provider_unavailable", "error_type": exc.__class__.__name__}],
             )
 
-    def _collect(self, *, query: str, symbol: str | None) -> dict[str, Any]:
+    def _collect(
+        self,
+        *,
+        query: str,
+        symbol: str | None,
+        dependencies: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        dependencies = dependencies or {}
         if not symbol:
             return {"availability": "data_gap", "degrade_reason": "symbol_missing"}
         if self.snapshot_type == "kline":
@@ -263,23 +303,56 @@ class UziSourceSnapshotSkill:
                 "_source_trace": [*list(context.get("_source_trace") or []), *list(search.get("source_trace") or []), *list(browser.get("source_trace") or [])],
             }
         if self.snapshot_type == "materials":
-            rows = self._futures_rows(("RB0", "CU0", "AL0"))
+            context = self._industry_context(symbol, query=query)
+            industry = str(context.get("industry") or "").strip()
+            contracts = self._material_contracts(industry)
+            rows = self._futures_rows(contracts)
             search = self._safe_search(query=f"{query} 原材料 价格 库存 基差", dimension="materials")
             available = bool(rows or search.get("results"))
+            trend_values = [float(row["trend_pct_12m"]) for row in rows if row.get("trend_pct_12m") is not None]
             return {
                 "contracts": rows,
+                "materials_detail": rows,
+                "core_material": " / ".join(str(row.get("name") or "") for row in rows if row.get("name")) or None,
+                "price_trend": (
+                    f"12月均 {sum(trend_values) / len(trend_values):+.1f}%"
+                    if trend_values else None
+                ),
+                "industry_resolved": industry or None,
                 "web_search": search.get("results") or [],
                 "availability": "available" if available else "data_gap",
-                "data_gap": [] if available else ["materials_provider_missing"],
+                "data_gap": [] if available else (["industry_material_mapping_missing"] if not contracts else ["materials_provider_missing"]),
                 "_source": {"vendor": "uzi_materials", "provider_id": "uzi_materials_multi", "source_id": "akshare" if rows else "ddgs"},
                 "_source_trace": [{"source_id": "akshare", "status": "available" if rows else "no_data", "count": len(rows)}, *list(search.get("source_trace") or [])],
             }
         if self.snapshot_type == "futures":
-            rows = self._futures_rows(("RB0", "CU0", "AL0", "SC0"))
+            material_snapshot = dict(dependencies.get("materials") or {})
+            material_facts = dict(material_snapshot.get("facts") or {})
+            material_rows = [row for row in material_facts.get("materials_detail") or [] if isinstance(row, dict)]
+            linked = next((row for row in material_rows if row.get("code") or row.get("contract")), None)
+            context = self._industry_context(symbol, query=query)
+            industry = str(context.get("industry") or "").strip()
+            contracts = (
+                ((str(linked.get("name") or linked.get("contract")), str(linked.get("code") or linked.get("contract"))),)
+                if linked else self._material_contracts(industry)[:1]
+            )
+            rows = self._futures_rows(contracts)
             search = self._safe_search(query=f"{query} 期货 库存 仓单 现货 基差", dimension="futures")
             available = bool(rows or search.get("results"))
             return {
                 "contracts": rows,
+                "linked_contract": rows[0].get("name") if rows else None,
+                "contract_code": rows[0].get("code") if rows else None,
+                "latest_price": rows[0].get("latest_price") if rows else None,
+                "contract_trend": rows[0].get("trend_pct_60d") if rows else None,
+                "price_history_60d": rows[0].get("price_history_60d") if rows else [],
+                "source_note": "8_materials 识别的原材料期货" if linked else "industry material mapping",
+                "dependency_lineage": {
+                    "snapshot_type": "materials",
+                    "symbol": material_snapshot.get("symbol"),
+                    "snapshot_date": material_snapshot.get("snapshot_date"),
+                    "used": bool(linked),
+                },
                 "web_search": search.get("results") or [],
                 "availability": "available" if available else "data_gap",
                 "data_gap": [] if available else ["futures_provider_missing"],
@@ -328,14 +401,62 @@ class UziSourceSnapshotSkill:
         if self.snapshot_type == "peers":
             fundamental = FundamentalSnapshotSkill(provider_registry=self.provider_registry).run(query=query, symbol=symbol)
             facts = dict(fundamental.get("facts") or {})
+            info = dict(facts.get("info") or {})
+            context = self._industry_context(symbol, query=query)
+            target_name = next(
+                (
+                    str(info.get(key) or "").strip()
+                    for key in ("股票简称", "名称", "公司名称", "longName", "shortName")
+                    if str(info.get(key) or "").strip()
+                ),
+                "",
+            )
+            target_industry = str(context.get("industry") or info.get("industry") or "").strip()
+            if not global_peers_enabled():
+                global_comparison = {"conclusion_status": "disabled", "peer_count": 0, "peers": []}
+                global_trace = {"source_id": "yfinance", "status": "disabled"}
+            elif not target_name or not target_industry:
+                global_comparison = {
+                    "conclusion_status": "insufficient_target_profile",
+                    "peer_count": 0,
+                    "peers": [],
+                    "data_gap": ["global_peer_target_name_or_industry_missing"],
+                }
+                global_trace = {"source_id": "yfinance", "status": "no_data", "reason": "target_profile_missing"}
+            else:
+                try:
+                    global_comparison = fetch_global_peer_comparison(
+                        symbol,
+                        basic={"name": target_name, "industry": target_industry},
+                        limit=8,
+                    )
+                    global_trace = {
+                        "source_id": "yfinance",
+                        "status": "available" if global_comparison.get("peer_count") else "no_data",
+                        "count": int(global_comparison.get("peer_count") or 0),
+                    }
+                except Exception as exc:
+                    global_comparison = {
+                        "conclusion_status": "unavailable",
+                        "peer_count": 0,
+                        "peers": [],
+                        "error_type": exc.__class__.__name__,
+                        "data_gap": ["global_peer_provider_unavailable"],
+                    }
+                    global_trace = {
+                        "source_id": "yfinance",
+                        "status": "provider_unavailable",
+                        "error_type": exc.__class__.__name__,
+                    }
             comparison = dict(facts.get("bank_peer_comparison") or {})
             if comparison:
-                return {
+                return self._from_snapshot(fundamental, {
                     "comparison": comparison,
+                    "global_peer_comparison": global_comparison,
                     "availability": "available",
                     "data_gap": [],
-                }
-            context = self._industry_context(symbol, query=query)
+                    "_source_trace": [*list(fundamental.get("source_trace") or []), global_trace],
+                })
             resolved = dict(context.get("resolved_sector") or {})
             try:
                 sector = AkShareSectorAdapter().get_sector_snapshot(
@@ -353,16 +474,26 @@ class UziSourceSnapshotSkill:
                 and str(row.get("symbol") or row.get("代码") or "") != symbol
             ][:10]
             if peers:
+                peers, roe_comparison, roe_trace = self._enrich_local_peer_roe(
+                    target_symbol=symbol,
+                    peers=peers,
+                )
                 return self._from_snapshot(fundamental, {
                     "comparison": {
                         "industry": context.get("industry"),
                         "peers": peers,
+                        "roe_comparison": roe_comparison,
                         "fallback_used": False,
                     },
+                    "global_peer_comparison": global_comparison,
                     "availability": "available",
                     "data_gap": [],
+                    "_source_trace": [
+                        *list(fundamental.get("source_trace") or []),
+                        *roe_trace,
+                        global_trace,
+                    ],
                 })
-            info = dict(facts.get("info") or {})
             search = self._safe_search(query=f"{query} 同行业 可比公司 竞争对手", dimension="peers")
             browser = self._safe_browser(source_ids=("iwencai", "ths_f10"), symbol=symbol, query=query)
             fallback_reason = (
@@ -385,10 +516,11 @@ class UziSourceSnapshotSkill:
                     "web_search": search.get("results") or [],
                     "browser_evidence": browser.get("evidence") or {},
                 },
-                "availability": "available" if search.get("results") or browser.get("evidence") else "degraded",
-                "data_gap": [] if search.get("results") or browser.get("evidence") else ["peer_group_missing"],
-                "degrade_reason": None if search.get("results") or browser.get("evidence") else fallback_reason,
-                "_source_trace": [*list(fundamental.get("source_trace") or []), *list(search.get("source_trace") or []), *list(browser.get("source_trace") or [])],
+                "global_peer_comparison": global_comparison,
+                "availability": "available" if search.get("results") or browser.get("evidence") or global_comparison.get("peer_count") else "degraded",
+                "data_gap": [] if search.get("results") or browser.get("evidence") or global_comparison.get("peer_count") else ["peer_group_missing"],
+                "degrade_reason": None if search.get("results") or browser.get("evidence") or global_comparison.get("peer_count") else fallback_reason,
+                "_source_trace": [*list(fundamental.get("source_trace") or []), *list(search.get("source_trace") or []), *list(browser.get("source_trace") or []), global_trace],
             })
         if self.snapshot_type == "fund_holders":
             fetcher = getattr(ak, "stock_fund_stock_holder", None)
@@ -656,22 +788,136 @@ class UziSourceSnapshotSkill:
         return None, None, None
 
     @staticmethod
-    def _futures_rows(symbols: tuple[str, ...]) -> list[dict[str, Any]]:
-        fetcher = getattr(ak, "futures_zh_daily_sina", None)
+    def _material_contracts(industry: str) -> tuple[tuple[str, str], ...]:
+        if industry in _UZI_INDUSTRY_MATERIALS:
+            return tuple(row for row in _UZI_INDUSTRY_MATERIALS[industry] if row[1])
+        for key, rows in _UZI_INDUSTRY_MATERIALS.items():
+            if key[:2] in industry or industry[:2] in key:
+                return tuple(row for row in rows if row[1])
+        return ()
+
+    @staticmethod
+    def _futures_rows(contracts: tuple[tuple[str, str], ...]) -> list[dict[str, Any]]:
+        fetcher = getattr(ak, "futures_main_sina", None) or getattr(ak, "futures_zh_daily_sina", None)
         if not callable(fetcher):
             return []
         rows: list[dict[str, Any]] = []
-        for contract in symbols:
+        for name, contract in contracts[:3]:
             try:
                 frame = call_with_retry(lambda contract=contract: fetcher(symbol=contract), retries=1, delay_seconds=0.2)
             except Exception:
                 continue
             if frame is None or getattr(frame, "empty", True):
                 continue
+            close_column = next((column for column in ("收盘价", "close", "收盘") if column in frame.columns), None)
+            closes = [
+                float(parsed)
+                for value in (frame[close_column].tail(250).tolist() if close_column else [])
+                if (parsed := coerce_numeric(value)) is not None and float(parsed) > 0
+            ]
             latest = frame.tail(1).to_dict("records")
-            if latest:
-                rows.append({"contract": contract, **{str(k): normalize_value(v) for k, v in latest[0].items()}})
+            if not latest:
+                continue
+            history_60d = closes[-60:]
+            rows.append({
+                "name": name,
+                "code": contract,
+                "contract": contract,
+                "latest_price": round(closes[-1], 4) if closes else None,
+                "price_history_60d": [round(value, 4) for value in history_60d],
+                "price_history_12m": [round(value, 4) for value in closes],
+                "trend_pct_60d": round((history_60d[-1] / history_60d[0] - 1) * 100, 2) if len(history_60d) >= 2 else None,
+                "trend_pct_12m": round((closes[-1] / closes[0] - 1) * 100, 2) if len(closes) >= 2 else None,
+                "data_points": len(closes),
+                "latest_record": {str(k): normalize_value(v) for k, v in latest[0].items()},
+            })
         return rows
+
+    @staticmethod
+    def _enrich_local_peer_roe(
+        *,
+        target_symbol: str,
+        peers: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
+        """Fill real ROE for the target and the first five local peers.
+
+        This mirrors latest UZI's per-security Eastmoney financial-indicator
+        fallback. A provider failure stays a per-row gap; it never turns into
+        a zero, a peer average, or an inferred value.
+        """
+
+        normalized_peers = [dict(row) for row in peers]
+        requested: list[tuple[str, dict[str, Any] | None]] = [(target_symbol, None)]
+        for row in normalized_peers[:5]:
+            code = str(row.get("symbol") or row.get("code") or row.get("代码") or "").strip()
+            if code:
+                requested.append((code, row))
+        for row in normalized_peers[5:]:
+            row.setdefault("roe", None)
+            row.setdefault("roe_status", "not_requested_outside_top5")
+
+        values: dict[str, float | None] = {}
+        trace: list[dict[str, Any]] = []
+        for raw_code, row in requested:
+            code = raw_code.split(".", 1)[0].zfill(6)
+            market = "SH" if code.startswith(("6", "9")) else "SZ"
+            try:
+                frame = call_with_retry(
+                    lambda code=code, market=market: ak.stock_financial_analysis_indicator_em(
+                        symbol=f"{code}.{market}"
+                    ),
+                    retries=1,
+                    delay_seconds=0.2,
+                )
+                if frame is None or getattr(frame, "empty", True) or "ROEJQ" not in frame.columns:
+                    roe = None
+                    status = "no_data"
+                else:
+                    annual = frame
+                    if "REPORT_DATE_NAME" in frame.columns:
+                        selected = frame[
+                            frame["REPORT_DATE_NAME"].astype(str).str.contains("年报", na=False)
+                        ]
+                        if not selected.empty:
+                            annual = selected
+                    roe = coerce_numeric(annual.iloc[-1].get("ROEJQ"))
+                    roe = round(float(roe), 2) if roe is not None else None
+                    status = "available" if roe is not None else "no_data"
+            except Exception as exc:
+                roe = None
+                status = "provider_unavailable"
+                trace.append({
+                    "source_id": "em_data.finance_analysis_indicator",
+                    "status": status,
+                    "symbol": code,
+                    "error_type": exc.__class__.__name__,
+                })
+            else:
+                trace.append({
+                    "source_id": "em_data.finance_analysis_indicator",
+                    "status": status,
+                    "symbol": code,
+                })
+            values[code] = roe
+            if row is not None:
+                row["roe"] = roe
+                row["roe_status"] = status
+
+        peer_values = [
+            float(row["roe"])
+            for row in normalized_peers[:5]
+            if row.get("roe") is not None
+        ]
+        target_code = target_symbol.split(".", 1)[0].zfill(6)
+        return normalized_peers, {
+            "metric": "roe",
+            "higher_is_better": True,
+            "target": values.get(target_code),
+            "peer_average": round(sum(peer_values) / len(peer_values), 2) if peer_values else None,
+            "peer_count": len(peer_values),
+            "requested_peer_count": min(len(normalized_peers), 5),
+            "source_id": "em_data.finance_analysis_indicator",
+        }, trace
 
     def _degraded(
         self,

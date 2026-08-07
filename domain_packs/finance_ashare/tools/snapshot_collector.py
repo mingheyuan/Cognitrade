@@ -93,8 +93,11 @@ _SNAPSHOT_CACHE_TTLS = {
 _DEFAULT_SNAPSHOT_CACHE_TTL = 43200
 _SNAPSHOT_CACHE_SCHEMA_VERSIONS = {
     "market": "valuation-history-v2",
-    "fundamental": "financial-history-v2",
+    "fundamental": "financial-history-v3",
     "kline": "kline-550-v2",
+    "peers": "global-peers-v2",
+    "materials": "uzi-industry-materials-v2",
+    "futures": "materials-linked-v2",
 }
 _UNAVAILABLE_QUALITY_STATUSES = {
     "degraded",
@@ -210,33 +213,62 @@ def collect_snapshots(
             results[index] = cached
     if pending_tasks:
         initialize_akshare_js_runtime()
-        requested_workers = 8 if max_workers is None else max(int(max_workers), 1)
-        executor = ThreadPoolExecutor(
-            max_workers=min(requested_workers, len(pending_tasks)),
-            thread_name_prefix="finance-snapshot",
-        )
-        futures = {
-            executor.submit(_run_snapshot_skill, query, symbol, snapshot_type, providers): (index, symbol, snapshot_type)
-            for index, symbol, snapshot_type in pending_tasks
+        # UZI main makes dimension 9 depend on dimension 8 so the futures
+        # contract is the material actually identified for the company rather
+        # than a generic hard-coded commodity. Material tasks therefore form
+        # a small first wave; all remaining independent tasks stay parallel.
+        material_tasks = [task for task in pending_tasks if task[2] == "materials"]
+        for index, symbol, snapshot_type in material_tasks:
+            result = _run_snapshot_skill(query, symbol, snapshot_type, providers)
+            results[index] = result
+            _save_snapshot_cache(
+                cache_root=cache_root,
+                snapshot_type=snapshot_type,
+                target=symbol,
+                profile=research_profile,
+                snapshot=result,
+            )
+        pending_tasks = [task for task in pending_tasks if task[2] != "materials"]
+        material_by_symbol = {
+            symbol: results[index]
+            for index, symbol, snapshot_type in tasks
+            if snapshot_type == "materials" and index in results
         }
-        try:
-            for future in as_completed(futures):
-                index, symbol, snapshot_type = futures[future]
-                if _cancelled(cancellation):
-                    for pending in futures:
-                        pending.cancel()
-                    break
-                result = future.result()
-                results[index] = result
-                _save_snapshot_cache(
-                    cache_root=cache_root,
-                    snapshot_type=snapshot_type,
-                    target=symbol,
-                    profile=research_profile,
-                    snapshot=result,
-                )
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+        requested_workers = 8 if max_workers is None else max(int(max_workers), 1)
+        if pending_tasks:
+            executor = ThreadPoolExecutor(
+                max_workers=min(requested_workers, len(pending_tasks)),
+                thread_name_prefix="finance-snapshot",
+            )
+            futures = {
+                executor.submit(
+                    _run_snapshot_skill,
+                    query,
+                    symbol,
+                    snapshot_type,
+                    providers,
+                    {"materials": material_by_symbol[symbol]} if snapshot_type == "futures" and symbol in material_by_symbol else None,
+                ): (index, symbol, snapshot_type)
+                for index, symbol, snapshot_type in pending_tasks
+            }
+            try:
+                for future in as_completed(futures):
+                    index, symbol, snapshot_type = futures[future]
+                    if _cancelled(cancellation):
+                        for pending in futures:
+                            pending.cancel()
+                        break
+                    result = future.result()
+                    results[index] = result
+                    _save_snapshot_cache(
+                        cache_root=cache_root,
+                        snapshot_type=snapshot_type,
+                        target=symbol,
+                        profile=research_profile,
+                        snapshot=result,
+                    )
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
     snapshots.extend(results[index] for index, _symbol, _snapshot_type in tasks if index in results)
     for snapshot_type in requested:
         if snapshot_type == "sector" and not sector:
@@ -249,10 +281,15 @@ def _run_snapshot_skill(
     symbol: str,
     snapshot_type: str,
     provider_registry: VendorProviderRegistry | None = None,
+    dependencies: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     skill_cls = _SYMBOL_SKILLS[snapshot_type]
     try:
-        return _instantiate_skill(skill_cls, provider_registry).run(query=query, symbol=symbol)
+        skill = _instantiate_skill(skill_cls, provider_registry)
+        kwargs: dict[str, Any] = {"query": query, "symbol": symbol}
+        if "dependencies" in inspect.signature(skill.run).parameters:
+            kwargs["dependencies"] = dependencies or {}
+        return skill.run(**kwargs)
     except Exception as exc:
         status = classify_provider_exception(exc)
         return {

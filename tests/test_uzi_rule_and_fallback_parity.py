@@ -84,7 +84,7 @@ class UziRuleSourceParityTests(unittest.TestCase):
         self.assertEqual(len(medium["fetchers_enabled"]), 20)
         self.assertEqual(set(medium["fetchers_enabled"]), set(deep["fetchers_enabled"]))
         self.assertEqual([lite["ddg_budget"], medium["ddg_budget"], deep["ddg_budget"]], [0, 30, 60])
-        self.assertEqual([lite["investors_count"], medium["investors_count"], deep["investors_count"]], [10, 51, 51])
+        self.assertEqual([lite["investors_count"], medium["investors_count"], deep["investors_count"]], [10, 51, 66])
         self.assertEqual(
             [len(lite["institutional_methods"]), len(medium["institutional_methods"]), len(deep["institutional_methods"])],
             [1, 17, 18],
@@ -147,7 +147,7 @@ class UziRuleSourceParityTests(unittest.TestCase):
         self.assertEqual(medium_config.timeout_seconds, 480)
         self.assertEqual(deep_config.timeout_seconds, 1200)
 
-    def test_source_semantics_never_skip_individual_rules(self) -> None:
+    def test_source_semantics_skip_only_rules_that_cannot_evaluate_missing_data(self) -> None:
         features = {
             "ticker": "000001",
             "market": "A",
@@ -161,9 +161,35 @@ class UziRuleSourceParityTests(unittest.TestCase):
                 self.assertTrue(result["skip_reason"])
                 self.assertEqual(result["score"], -1)
                 continue
-            self.assertEqual(result["pass_count"] + result["fail_count"], len(rules), investor_id)
+            self.assertEqual(
+                result["pass_count"] + result["fail_count"] + result["skipped_rule_count"],
+                len(rules),
+                investor_id,
+            )
             self.assertNotIn("skipped_rules", result)
             self.assertNotIn("data_gap_rules", result)
+
+    def test_missing_none_is_excluded_from_rule_denominator_not_counted_as_failure(self) -> None:
+        missing = evaluate_investor("buffett", {
+            "ticker": "600519",
+            "market": "A",
+            "name": "贵州茅台",
+            "industry": "白酒",
+            "net_margin": None,
+        })
+        observed_failure = evaluate_investor("buffett", {
+            "ticker": "600519",
+            "market": "A",
+            "name": "贵州茅台",
+            "industry": "白酒",
+            "net_margin": 10.0,
+        })
+
+        self.assertEqual(missing["skipped_rule_count"], 1)
+        self.assertEqual(missing["fail_count"], observed_failure["fail_count"] - 1)
+        self.assertEqual(missing["weight_total"], observed_failure["weight_total"] - 3)
+        self.assertFalse(any(rule["rule_id"] == "net_margin_15" for rule in missing["fail_rules"]))
+        self.assertTrue(any(rule["rule_id"] == "net_margin_15" for rule in observed_failure["fail_rules"]))
 
     def test_uzi_missing_key_defaults_and_whole_seat_skips_are_exact(self) -> None:
         chanos = evaluate_investor("chanos", {})

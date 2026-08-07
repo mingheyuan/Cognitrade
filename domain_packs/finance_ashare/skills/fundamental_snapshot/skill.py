@@ -31,7 +31,7 @@ class FundamentalSnapshotSkill:
         if token:
             self.adapters["tushare_fundamental"] = TuShareFundamentalAdapter(token)
         self.adapters["baostock_fundamental"] = BaoStockFundamentalAdapter()
-        if provider_registry and provider_registry.get_provider_chain("fundamental", "hk_equity"):
+        if provider_registry and provider_registry.get_provider_chain("fundamental", "global_equity"):
             self.adapters["yfinance_fundamental"] = YFinanceFundamentalAdapter()
 
     def run(self, *, query: str, symbol: str | None = None) -> dict[str, Any]:
@@ -61,6 +61,13 @@ class FundamentalSnapshotSkill:
                 for provider_id, adapter in self.adapters.items()
             },
         )
+        execution.facts.update({
+            "market": route.market_code or route.market,
+            "provider_market": route.market,
+            "exchange": route.exchange,
+            "currency": route.currency or execution.facts.get("currency"),
+            "country": route.country or None,
+        })
         selected = execution.provider or providers[0]
         position = execution.chain_position if execution.chain_position is not None else 0
         source = self._source(selected, position)

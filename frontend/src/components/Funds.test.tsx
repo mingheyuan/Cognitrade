@@ -153,6 +153,10 @@ describe('Funds', () => {
 
   it('lets the user select a category and omits empty fund codes', async () => {
     render(<Funds onOpenRun={mocks.openRun} />)
+    const submit = screen.getByRole('button', { name: '请先选择研究周期' })
+    expect(submit).toBeDisabled()
+    expect(screen.getByRole('combobox', { name: '研究周期' })).toHaveValue('')
+    fireEvent.change(screen.getByRole('combobox', { name: '研究周期' }), { target: { value: 'long_term' } })
     fireEvent.change(screen.getByLabelText('基金类别'), { target: { value: '债券型' } })
     expect(screen.getByLabelText('基金类别')).toHaveValue('债券型')
     fireEvent.click(screen.getByRole('button', { name: '开始真实选基' }))
@@ -172,6 +176,7 @@ describe('Funds', () => {
 
   it('submits explicit fund codes through the dedicated analysis mode', async () => {
     render(<Funds onOpenRun={mocks.openRun} />)
+    fireEvent.change(screen.getByRole('combobox', { name: '研究周期' }), { target: { value: 'long_term' } })
     fireEvent.click(screen.getByRole('button', { name: '指定基金分析' }))
     fireEvent.change(screen.getByPlaceholderText('例如 110011, 005827'), {
       target: { value: '110011, 005827' },
@@ -192,6 +197,7 @@ describe('Funds', () => {
 
   it('treats one explicit fund as an independent analysis instead of a comparison', async () => {
     render(<Funds onOpenRun={mocks.openRun} />)
+    fireEvent.change(screen.getByRole('combobox', { name: '研究周期' }), { target: { value: 'long_term' } })
     fireEvent.click(screen.getByRole('button', { name: '指定基金分析' }))
     fireEvent.change(screen.getByPlaceholderText('例如 110011, 005827'), {
       target: { value: '020464' },

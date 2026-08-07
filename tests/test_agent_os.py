@@ -63,7 +63,7 @@ class AgentOSTests(unittest.TestCase):
                     intent="stock_screen",
                     user_query="Screen the supplied candidate.",
                     slots={"symbols": ["600000"]},
-                    constraints={"research_profile": "lite"},
+                    constraints={"research_profile": "lite", "investment_cycle": "short_term"},
                 )
             )
 

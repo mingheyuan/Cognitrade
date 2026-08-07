@@ -18,6 +18,13 @@
     "results": {
       "type": "array"
     },
+    "status": {
+      "type": "string"
+    },
+    "data_gap": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
     "summary": {
       "type": "string"
     },

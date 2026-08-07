@@ -1,6 +1,6 @@
 {
   "fixture_id": "uzi-finance-replay-600000-20260712-v1",
-  "source_commit": "fce996c33e70eddce8e375f53cd252b549eb3d7c",
+  "source_commit": "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359",
   "as_of": "2026-07-12T00:00:00Z",
   "symbols": ["600000"],
   "snapshots": [

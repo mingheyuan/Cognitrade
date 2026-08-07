@@ -2,7 +2,7 @@ schema_version: "2"
 source:
   repository: https://github.com/wbh604/UZI-Skill
   audit_reference: pinned_commit_only_not_required_at_runtime
-  commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
+  commit: 22e65f2e0cee2cb41cb40fdbe391c9600b7fe359
   methodology_version: 3.9.2
   version_file: .claude-plugin/plugin.json
   version_file_sha256: 073F688721698FC4BAD5A2E5E0B93FB95661BA6DB2067DB548D8132A67D99B70
@@ -15,13 +15,13 @@ source:
     - tests/fixtures/uzi_methodology_baseline.json
     - tests/fixtures/uzi_tier1_baseline.json
   replay_fixture_sha256:
-    tests/fixtures/uzi_source_snapshot_replay.json: E4352EA11CBF0469D331F6DACFF333441C9CD269EBE3EBA479A2691F0A727F9A
-    tests/fixtures/uzi_finance_snapshot_replay.json: E81ABE9C4AABB39BE79D73561D51760BAA16EA72D52CA876B386A23E97428735
-    tests/fixtures/uzi_methodology_baseline.json: 334BC07EEF78632AAEE78391AFBFB2859140098396086AD96248FDD49D2B5FB8
-    tests/fixtures/uzi_tier1_baseline.json: 898C1E49E70FAE206C72E90471C4A81286C844E8D8A7F27D419442E872B8AC2B
+    tests/fixtures/uzi_source_snapshot_replay.json: 4256B52C237634E442E2E925AB9F2844F0D153F5872C33B14BACD678D86C2B26
+    tests/fixtures/uzi_finance_snapshot_replay.json: 4644A88A7B56A5D78581300214A177DA151B8518A437E184CCC09F4810C0B148
+    tests/fixtures/uzi_methodology_baseline.json: AE13CB41AED2E356F3AA4050639AC5DAFB1F3A61F3078515BD854CC3C388ED9C
+    tests/fixtures/uzi_tier1_baseline.json: F9EF3E71F1E93297856788AC55D4A6719D59E4757A9FCF27FF89369B9648B689
 
 source_defaults: &source_defaults
-  source_commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
+  source_commit: 22e65f2e0cee2cb41cb40fdbe391c9600b7fe359
   target_artifact_type: snapshot
   quality_policy:
     provider_error: data_gap
@@ -223,11 +223,11 @@ profiles:
     panel_seats: 51
   deep:
     source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests]
-    panel_seats: 51
+    panel_seats: 66
 
 panel:
   source_path: domain_packs/finance_ashare/subagents/uzi_panel_rules.py
-  source_commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
+  source_commit: 22e65f2e0cee2cb41cb40fdbe391c9600b7fe359
   registry_version: 3.9.2-adapted
   provider: finance_pack.panel_registry
   target_artifact_type: investor_panel_review
@@ -239,11 +239,11 @@ panel:
   migration_status: pack_native
   result_equivalence: semantic
   baseline_fixture: tests/fixtures/uzi_source_snapshot_replay.json
-  profile_seats: {lite: 10, medium: 51, deep: 51}
+  profile_seats: {lite: 10, medium: 51, deep: 66}
   member_ids: [buffett, graham, fisher, munger, templeton, klarman, lynch, oneill, thiel, wood, andreessen, gurley, naval, gerstner, chamath, soros, dalio, marks, druck, robertson, burry, chanos, livermore, minervini, darvas, gann, duan, zhangkun, zhushaoxing, xiezhiyu, fengliu, dengxiaofeng, zhang_lei, zhang_mz, sun_ge, zhao_lg, fs_wyj, yangjia, chen_xq, hu_jl, fang_xx, zuoshou, xiao_ey, jiao_yy, mao_lb, xiao_xian, lasa, chengdu, sunan, ningbo_st, liuyi_zl, liu_sh, gu_bl, bj_cj, wang_zr, xin_dd, ghzw, simons, thorp, shaw, asness, jensen_huang, musk, altman, saylor, serenity]
 
 derived_defaults: &derived_defaults
-  source_commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
+  source_commit: 22e65f2e0cee2cb41cb40fdbe391c9600b7fe359
   provider: finance_pack.artifact_board
   quality_policy:
     missing_inputs: data_gap

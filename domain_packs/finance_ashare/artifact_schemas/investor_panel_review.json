@@ -7,9 +7,25 @@
       "properties": {"rule_id": {"type": "string"}, "name": {"type": "string"}, "weight": {"type": "integer"}, "msg": {"type": "string"}},
       "additionalProperties": false
     },
+    "roleplay_override": {
+      "type": "object",
+      "required": ["investor_id", "signal", "score", "headline", "reasoning", "comment", "verdict", "override_rule_engine", "override_reason"],
+      "properties": {
+        "investor_id": {"type": "string"},
+        "signal": {"enum": ["bullish", "bearish", "neutral", "skip", "insufficient_evidence"]},
+        "score": {"type": "number", "minimum": 0, "maximum": 100},
+        "headline": {"type": "string"},
+        "reasoning": {"type": "string"},
+        "comment": {"type": ["string", "null"]},
+        "verdict": {"type": ["string", "null"]},
+        "override_rule_engine": {"type": "boolean"},
+        "override_reason": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
     "vote": {
       "type": "object",
-      "required": ["symbol", "investor_id", "perspective_id", "perspective_label", "investor_name_en", "methodology_source", "avatar_seed", "tier", "school", "required_dimensions", "signal", "score", "confidence", "uzi_confidence", "reasoning", "headline", "pass_rules", "fail_rules", "pass_count", "fail_count", "weight_pass", "weight_total", "rule_engine_version", "skip_reason", "time_horizon", "position_sizing", "what_would_change_my_mind", "checks", "is_methodology_perspective", "is_real_person_advice", "rule_mode"],
+      "required": ["symbol", "investor_id", "perspective_id", "perspective_label", "investor_name_en", "methodology_source", "avatar_seed", "tier", "school", "required_dimensions", "signal", "score", "confidence", "uzi_confidence", "reasoning", "headline", "pass_rules", "fail_rules", "pass_count", "fail_count", "skipped_rule_count", "weight_pass", "weight_total", "rule_engine_version", "skip_reason", "time_horizon", "position_sizing", "what_would_change_my_mind", "checks", "is_methodology_perspective", "is_real_person_advice", "rule_mode"],
       "properties": {
         "symbol": {"type": "string"}, "investor_id": {"type": "string"}, "perspective_id": {"type": "string"},
         "perspective_label": {"type": "string"},
@@ -23,7 +39,7 @@
         "reasoning": {"type": "string"}, "headline": {"type": "string"},
         "pass_rules": {"type": "array", "items": {"$ref": "#/$defs/rule"}},
         "fail_rules": {"type": "array", "items": {"$ref": "#/$defs/rule"}},
-        "pass_count": {"type": "integer"}, "fail_count": {"type": "integer"},
+        "pass_count": {"type": "integer"}, "fail_count": {"type": "integer"}, "skipped_rule_count": {"type": "integer", "minimum": 0},
         "weight_pass": {"type": "integer"}, "weight_total": {"type": "integer"}, "rule_engine_version": {"type": "string"},
         "skip_reason": {"type": ["string", "null"]},
         "time_horizon": {"type": ["string", "null"]},
@@ -32,7 +48,11 @@
         "checks": {
           "type": "array", "items": {"type": "object", "required": ["dimension", "status", "feature_names"], "properties": {"dimension": {"type": "string"}, "status": {"type": "string"}, "feature_names": {"type": "array", "items": {"type": "string"}}}, "additionalProperties": false}
         },
-        "is_methodology_perspective": {"type": "boolean"}, "is_real_person_advice": {"type": "boolean"}, "rule_mode": {"type": "string"}
+        "is_methodology_perspective": {"type": "boolean"}, "is_real_person_advice": {"type": "boolean"}, "rule_mode": {"type": "string"},
+        "original_rule_signal": {"type": "string"}, "original_rule_score": {"type": "number"},
+        "agent_roleplay_applied": {"type": "boolean"}, "override_rule_engine": {"type": "boolean"},
+        "override_reason": {"type": ["string", "null"]}, "roleplay_source": {"type": "string"},
+        "comment": {"type": ["string", "null"]}, "verdict": {"type": ["string", "null"]}
       },
       "additionalProperties": false
     }
@@ -44,11 +64,23 @@
     "source_commit": {"type": "string"}, "registered_seat_count": {"type": "integer", "minimum": 0}, "rule_mode": {"type": "string"},
     "method_input_contract": {"type": "object", "x-business-extensible": true},
     "votes": {"type": "array", "items": {"$ref": "#/$defs/vote"}},
-    "distribution": {"type": "object", "properties": {"bullish": {"type": "integer"}, "bearish": {"type": "integer"}, "neutral": {"type": "integer"}, "skip": {"type": "integer"}}, "additionalProperties": false},
+    "distribution": {"type": "object", "properties": {"bullish": {"type": "integer"}, "bearish": {"type": "integer"}, "neutral": {"type": "integer"}, "skip": {"type": "integer"}, "insufficient_evidence": {"type": "integer"}}, "additionalProperties": false},
     "average_score": {"type": ["number", "null"]}, "evaluated_rule_count": {"type": "integer", "minimum": 0}, "skipped_seat_count": {"type": "integer", "minimum": 0},
     "quality_status": {"type": "string"}, "data_gap": {"type": "array", "items": {"type": "string"}},
     "disagreement": {"type": "object", "required": ["exists", "summary"], "properties": {"exists": {"type": "boolean"}, "summary": {"type": "string"}}, "additionalProperties": false},
-    "confidence": {"type": "number", "minimum": 0, "maximum": 1}, "risk_flags": {"type": "array", "items": {"type": "string"}}
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1}, "risk_flags": {"type": "array", "items": {"type": "string"}},
+    "per_investor_override": {"type": "object", "x-business-extensible": true, "additionalProperties": {"$ref": "#/$defs/roleplay_override"}},
+    "roleplay": {
+      "type": "object",
+      "required": ["required", "status", "agent_reviewed", "source_commit", "group_count", "completed_group_count", "errors"],
+      "properties": {
+        "required": {"type": "boolean"}, "status": {"type": "string"}, "agent_reviewed": {"type": "boolean"},
+        "source_commit": {"type": "string"}, "group_count": {"type": "integer", "minimum": 0},
+        "completed_group_count": {"type": "integer", "minimum": 0},
+        "errors": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

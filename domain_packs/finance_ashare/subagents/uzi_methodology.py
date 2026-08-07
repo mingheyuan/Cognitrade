@@ -20,10 +20,12 @@ from domain_packs.finance_ashare.subagents.uzi_panel_registry import (
     panel_for_profile,
 )
 from domain_packs.finance_ashare.subagents.uzi_panel_rules import evaluate_investor
+from research_system.adapters.vendors.uzi_global_peer_adapter import global_peers_to_comps
+from research_system.adapters.vendors.market_router import MarketRouter
 
 
 UZI_METHOD_VERSION = "3.9.2-adapted"
-UZI_SOURCE_COMMIT = "fce996c33e70eddce8e375f53cd252b549eb3d7c"
+UZI_SOURCE_COMMIT = "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359"
 
 _PROFILES: dict[str, dict[str, Any]] = {
     "lite": {
@@ -130,7 +132,7 @@ _PROFILES: dict[str, dict[str, Any]] = {
         "industry_dynamic_lookup": True,
         "playwright_mode": "default_subject_to_sensitive_source_policy",
         "playwright_dimensions": ["peers", "materials", "events", "sentiment", "industry", "moat", "macro", "policy", "trap", "contests"],
-        "investors_count": 51,
+        "investors_count": 66,
         "enable_bull_bear_debate": True,
         "institutional_methods": [
             "dcf", "comps", "lbo", "three_statement", "merger",
@@ -309,6 +311,21 @@ def _amount_yi(value: Any) -> float | None:
     if "万" in text:
         return number / 10_000
     return number / 100_000_000 if abs(number) >= 1_000_000 else number
+
+
+def _currency_symbol(currency: str | None, market_code: str | None = None) -> str:
+    normalized = str(currency or "").strip().upper()
+    symbols = {
+        "CNY": "¥", "HKD": "HK$", "USD": "$", "EUR": "€", "GBP": "£",
+        "JPY": "JP¥", "KRW": "₩", "TWD": "NT$", "SGD": "S$", "CAD": "C$",
+        "AUD": "A$", "CHF": "CHF ", "SEK": "SEK ", "NOK": "NOK ",
+        "DKK": "DKK ", "BRL": "R$", "MXN": "MX$", "INR": "₹", "IDR": "Rp",
+        "MYR": "RM", "NZD": "NZ$", "ZAR": "R", "ILS": "₪", "PLN": "zł",
+        "CZK": "Kč", "HUF": "Ft", "THB": "฿",
+    }
+    if normalized in symbols:
+        return symbols[normalized]
+    return {"A": "¥", "H": "HK$", "U": "$"}.get(str(market_code or "").upper(), f"{normalized} " if normalized else "")
 
 
 def _metric_amount_yi(mapping: dict[str, Any], keys: tuple[str, ...]) -> float | None:
@@ -541,6 +558,8 @@ def _snapshot_identity(snapshots: list[dict[str, Any]], symbol: str) -> tuple[st
             info.get("company_name"),
             info.get("股票简称"),
             info.get("名称"),
+            info.get("longName"),
+            info.get("shortName"),
         ):
             if str(candidate or "").strip():
                 name = str(candidate).strip()
@@ -553,7 +572,8 @@ def _snapshot_identity(snapshots: list[dict[str, Any]], symbol: str) -> tuple[st
 def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str, Any]:
     grouped = _snapshot_for_symbol(snapshot_rows, symbol)
     name, data_period = _snapshot_identity(snapshot_rows, symbol)
-    market = _section(_facts(grouped.get("market")), "market_overview", "spot")
+    market_facts = _facts(grouped.get("market"))
+    market = _section(market_facts, "market_overview", "spot")
     fundamental_facts = _facts(grouped.get("fundamental"))
     financial = _section(fundamental_facts, "financial_abstract", "financials")
     analysis = _section(fundamental_facts, "financial_analysis", "financial_indicator")
@@ -561,6 +581,9 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
     banking = _section(fundamental_facts, "banking_metrics")
     valuation_facts = _facts(grouped.get("valuation"))
     metric_sections = [
+        # Prefer directly reported market/basic metrics for price-derived fields
+        # such as dividend yield before falling back to financial statements.
+        ("market_overview", market),
         ("financial_abstract", financial),
         ("financial_analysis", analysis),
         ("info", info),
@@ -569,6 +592,7 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         ("financial_benefit_new", fundamental_facts.get("financial_benefit_new") or {}),
         ("financial_debt_new", fundamental_facts.get("financial_debt_new") or {}),
         ("financial_cash_new", fundamental_facts.get("financial_cash_new") or {}),
+        ("financial_health", fundamental_facts.get("financial_health") or {}),
         ("valuation", valuation_facts),
     ]
 
@@ -658,13 +682,16 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         ("total_assets_yi", "total_assets", "assets_total", "debt_and_equity_total", "资产总计", "资产总额")
     )
     total_liabilities, total_liabilities_source = first_amount_with_source(
-        ("total_liabilities_yi", "total_liabilities", "total_debt", "负债合计", "负债总额")
+        ("total_liabilities_yi", "total_liabilities", "负债合计", "负债总额")
     )
     cash, cash_source = first_amount_with_source(
         ("cash_yi", "cash", "货币资金", "现金及现金等价物", "cash_and_equivalents")
     )
+    equity, equity_source = first_amount_with_source(
+        ("equity_yi", "equity", "total_parent_equity", "归属母公司股东权益", "所有者权益合计")
+    )
     direct_debt, debt_source = first_amount_with_source(
-        ("total_debt_yi", "interest_bearing_debt", "有息负债", "债务合计")
+        ("total_debt_yi", "total_debt", "interest_bearing_debt", "有息负债", "债务合计")
     )
     short_debt, short_debt_source = first_amount_with_source(
         ("short_term_debt", "short_term_borrowings", "short_term_loan", "短期借款")
@@ -721,7 +748,14 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
     pb = _first_number(market, ("pb", "市净率"))
     ps = _first_number(market, ("ps", "市销率"))
     peg = _first_number(market, ("peg", "PEG值", "PEG"))
-    roe = _first_number(banking, ("roe",)) or _first_number(financial, ("roe", "ROE"))
+    dividend_yield, dividend_yield_source = first_number_with_source(
+        ("dividend_yield", "dividend_yield_ttm", "股息率", "股息率TTM")
+    )
+    if dividend_yield is not None and 0 < abs(dividend_yield) <= 1:
+        dividend_yield *= 100
+    roe = _first_number(banking, ("roe",))
+    if roe is None:
+        roe = _first_number(financial, ("roe", "ROE"))
     roe_source = "banking_metrics" if _first_number(banking, ("roe",)) is not None else "financial_abstract" if _first_number(financial, ("roe", "ROE")) is not None else None
     if roe is None:
         roe, roe_source = first_number_with_source(
@@ -822,8 +856,8 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         if isinstance(row, dict)
     ]
     annual_history.sort(
-        key=lambda row: int(str(row.get("报告期") or "0")[:4])
-        if str(row.get("报告期") or "")[:4].isdigit()
+        key=lambda row: int(str(row.get("报告期") or row.get("report_date") or "0")[:4])
+        if str(row.get("报告期") or row.get("report_date") or "")[:4].isdigit()
         else 0
     )
     annual_revenues = [
@@ -1026,7 +1060,22 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         ps = market_cap / revenue
     revenue_b = revenue / 10 if revenue is not None else None
     cash_to_marketcap_ratio = cash / market_cap if cash is not None and market_cap not in (None, 0) else None
-    normalized_market = "A" if re.sub(r"\D", "", symbol)[-6:].isdigit() else None
+    market_route = MarketRouter().classify(symbol=symbol, query=name)
+    normalized_market = market_route.market_code or None
+    country = str(
+        market_facts.get("country")
+        or fundamental_facts.get("country")
+        or market_route.country
+        or ""
+    ).strip().upper() or None
+    currency = str(
+        market_facts.get("currency")
+        or fundamental_facts.get("currency")
+        or info.get("currency")
+        or market_route.currency
+        or ""
+    ).strip().upper() or None
+    currency_symbol = _currency_symbol(currency, normalized_market)
     matched_youzi = [
         str(item)
         for item in list(lhb.get("matched_youzi") or [])
@@ -1056,6 +1105,7 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         "total_assets_yi": total_assets,
         "total_liabilities_yi": total_liabilities,
         "cash_yi": cash,
+        "equity_yi": equity,
         "total_debt_yi": total_debt,
         "ebitda_yi": ebitda,
         "eps": eps,
@@ -1065,6 +1115,7 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         "pb": pb,
         "ps": ps,
         "peg": peg,
+        "dividend_yield": dividend_yield,
         "pe_x_pb": pe_x_pb,
         "roe": roe,
         "roe_latest": roe,
@@ -1101,11 +1152,26 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         "consecutive_profit_years": consecutive_profit_years,
         "pe_quantile_5y": pe_quantile_5y,
         "market": normalized_market,
-        "country": "CN" if normalized_market == "A" else None,
+        "country": country,
+        "currency": currency,
+        "currency_symbol": currency_symbol or None,
         "matched_youzi": matched_youzi,
         "ai_chain_hit": ai_chain_hit,
         "ai_chain_keywords": ai_chain_keywords if ai_chain_hit is not None else None,
         "ai_smallcap": ai_smallcap,
+        # Latest UZI marks source-less sole-dependency features as explicit
+        # missing values so affected rules are skipped rather than failed.
+        "founder_active": None,
+        "founder_ownership_pct": None,
+        "ev_to_revenue": None,
+        "governance_score": None,
+        "insider_selling_recent": None,
+        "retail_holding_pct": None,
+        "ceo_promotional_score": None,
+        "audit_qualified": None,
+        "off_balance_debt_ratio": None,
+        "capex_growth_yoy": None,
+        "btc_holdings_b": None,
         **technical_values,
     }
     market_source = (
@@ -1124,6 +1190,7 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
             "total_assets_yi": total_assets_source,
             "total_liabilities_yi": total_liabilities_source,
             "cash_yi": cash_source,
+            "equity_yi": equity_source,
             "total_debt_yi": debt_source,
             "ebitda_yi": ebitda_source,
             "eps": eps_source,
@@ -1149,6 +1216,7 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
             "roe_5y_above_15": "financial_abstract_history" if roe_5y_above_15 is not None else None,
             "consecutive_profit_years": "financial_abstract_history" if consecutive_profit_years is not None else None,
             "pe_quantile_5y": "market_snapshot.market_overview.valuation_history" if pe_quantile_5y is not None else None,
+            "dividend_yield": dividend_yield_source,
         }.items()
         if source
     }
@@ -1179,6 +1247,8 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         "fund_manager_count": "fund_holders_snapshot.holders" if fund_manager_count is not None else None,
         "market": "symbol_identity" if normalized_market else None,
         "country": "symbol_identity" if normalized_market else None,
+        "currency": "market_snapshot+fundamental_snapshot+symbol_identity" if currency else None,
+        "currency_symbol": "currency_mapping" if currency_symbol else None,
         "revenue_b": revenue_source,
         "rev": revenue_source,
         "ai_chain_hit": "industry_snapshot+chain_snapshot+events_snapshot" if ai_chain_hit is not None else None,
@@ -1245,24 +1315,12 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
 
 def _dcf_value(features: dict[str, Any]) -> dict[str, Any]:
     price = float(features.get("price") or 0.0)
-    revenue = float(features.get("revenue_latest_yi") or 0.0)
-    margin = float(features.get("net_margin") or 0.0) / 100.0
     fcf = float(features.get("fcf_latest_yi") or 0.0)
     warnings: list[str] = []
     data_gap: list[str] = []
-    assumption_flags: list[str] = []
-    if fcf <= 0 and revenue > 0 and margin > 0:
-        fcf = revenue * margin * 0.8
-        warnings.append("fcf_approximated_from_revenue_margin")
-        assumption_flags.append("fcf_approximated_from_revenue_margin")
-    if fcf <= 0:
-        market_cap = float(features.get("market_cap_yi") or 0.0)
-        fcf = market_cap * 0.05
-        warnings.append("fcf_proxy_from_market_cap")
-        assumption_flags.append("fcf_proxy_from_market_cap")
-    if fcf <= 0:
-        warnings.append("fcf_missing")
-        data_gap.append("fcf_missing")
+    assumption_flags: list[str] = ["uzi_methodology_default_dcf_assumptions"]
+    currency = str(features.get("currency") or "") or None
+    currency_symbol = str(features.get("currency_symbol") or "") or None
     # UZI A-share default: CAPM cost of equity plus after-tax debt cost.
     risk_free_rate = 0.025
     equity_risk_premium = 0.06
@@ -1276,6 +1334,42 @@ def _dcf_value(features: dict[str, Any]) -> dict[str, Any]:
     terminal_growth = 0.025
     stage_one_growth = 0.10
     stage_two_growth = 0.05
+    if fcf <= 0:
+        return {
+            "model": "dcf",
+            "methodology_version": UZI_METHOD_VERSION,
+            "symbol": features["symbol"],
+            "currency": currency,
+            "currency_symbol": currency_symbol,
+            "status": "data_gap",
+            "fair_value": None,
+            "market_price": price or None,
+            "margin_of_safety": None,
+            "assumptions": {
+                "wacc": wacc,
+                "terminal_growth": terminal_growth,
+                "stage_one_growth": stage_one_growth,
+                "stage_two_growth": stage_two_growth,
+                "forecast_years": 10,
+                "risk_free_rate": risk_free_rate,
+                "equity_risk_premium": equity_risk_premium,
+                "beta": beta,
+                "tax_rate": tax_rate,
+                "target_debt_ratio": target_debt_ratio,
+                "cost_of_equity": cost_of_equity,
+                "after_tax_cost_of_debt": after_tax_cost_of_debt,
+                "total_debt_yi": features.get("total_debt_yi"),
+                "cash_yi": features.get("cash_yi"),
+            },
+            "sensitivity": [],
+            "verdict": "data_gap",
+            "confidence": 0.0,
+            "warnings": ["fcf_missing"],
+            "data_gap": ["fcf_missing"],
+            "assumption_flags": list(dict.fromkeys(assumption_flags)),
+            "field_sources": dict(features.get("field_sources") or {}),
+            "methodology_log": ["未取得已披露或可审计派生的 FCF；DCF 跳过，未用营收、净利率或市值构造现金流。"],
+        }
     projected: list[float] = []
     current = fcf
     for _ in range(5):
@@ -1291,21 +1385,32 @@ def _dcf_value(features: dict[str, Any]) -> dict[str, Any]:
     cash_value = features.get("cash_yi")
     total_debt = float(total_debt_value or 0.0)
     cash = float(cash_value or 0.0)
-    equity_value = enterprise_value - total_debt + cash
+    has_net_debt_bridge = total_debt_value is not None and cash_value is not None
+    net_debt = total_debt - cash if has_net_debt_bridge else None
+    net_debt_bridge_note = (
+        ""
+        if has_net_debt_bridge
+        else "净债桥缺失；不将 EV 当作股权价值，不计算每股价值。"
+    )
+    equity_value = enterprise_value - float(net_debt) if net_debt is not None else None
     shares = float(features.get("shares_outstanding_yi") or 0.0)
     if shares <= 0 and price > 0 and features.get("market_cap_yi"):
         shares = float(features["market_cap_yi"]) / price
-    fair_value = equity_value / shares if shares > 0 else 0.0
-    margin_of_safety = (fair_value - price) / price if price > 0 and fair_value > 0 else None
+    fair_value = equity_value / shares if equity_value is not None and shares > 0 else None
+    margin_of_safety = (
+        (fair_value - price) / price
+        if price > 0 and fair_value is not None and fair_value > 0
+        else None
+    )
     if features.get("debt_ratio") is None:
         warnings.append("leverage_assumed")
         assumption_flags.append("leverage_assumed")
     if total_debt_value is None:
         warnings.append("total_debt_missing")
-        assumption_flags.append("total_debt_assumed_zero")
+        data_gap.append("total_debt_missing")
     if cash_value is None:
         warnings.append("cash_missing")
-        assumption_flags.append("cash_assumed_zero")
+        data_gap.append("cash_missing")
     if features.get("total_assets_yi") is None:
         warnings.append("total_assets_missing")
     if features.get("total_liabilities_yi") is None:
@@ -1346,17 +1451,24 @@ def _dcf_value(features: dict[str, Any]) -> dict[str, Any]:
                 if sensitivity_wacc > sensitivity_growth
                 else 0.0
             )
-            equity_sensitivity = (
+            enterprise_sensitivity = (
                 explicit_sensitivity
                 + terminal_sensitivity / (1 + sensitivity_wacc) ** len(projected_sensitivity)
-                - total_debt
-                + cash
+            )
+            equity_sensitivity = (
+                enterprise_sensitivity - float(net_debt)
+                if net_debt is not None
+                else None
             )
             sensitivity.append(
                 {
                     "wacc": round(sensitivity_wacc, 4),
                     "terminal_growth": round(sensitivity_growth, 4),
-                    "fair_value": round(equity_sensitivity / shares, 2) if shares > 0 else None,
+                    "fair_value": (
+                        round(equity_sensitivity / shares, 2)
+                        if equity_sensitivity is not None and shares > 0
+                        else None
+                    ),
                 }
             )
     if margin_of_safety is None or data_gap:
@@ -1371,10 +1483,16 @@ def _dcf_value(features: dict[str, Any]) -> dict[str, Any]:
         "model": "dcf",
         "methodology_version": UZI_METHOD_VERSION,
         "symbol": features["symbol"],
+        "currency": currency,
+        "currency_symbol": currency_symbol,
         "status": status,
         "fair_value": round(fair_value, 2) if fair_value else None,
         "market_price": price or None,
         "margin_of_safety": round(margin_of_safety, 4) if margin_of_safety is not None else None,
+        "enterprise_value_yi": round(enterprise_value, 3),
+        "net_debt_yi": round(net_debt, 3) if net_debt is not None else None,
+        "equity_value_yi": round(equity_value, 3) if equity_value is not None else None,
+        "net_debt_bridge_note": net_debt_bridge_note,
         "assumptions": {
             "wacc": wacc,
             "terminal_growth": terminal_growth,
@@ -1402,6 +1520,11 @@ def _dcf_value(features: dict[str, Any]) -> dict[str, Any]:
             f"基期 FCF={round(fcf, 3)} 亿",
             f"CAPM 股权成本={cost_of_equity:.2%}，税后债务成本={after_tax_cost_of_debt:.2%}，WACC={wacc:.2%}",
             f"显式期 PV={round(pv_explicit, 3)} 亿，终值占比按两阶段现金流折现",
+            (
+                f"EV {round(enterprise_value, 3)} 亿 - 净债 {round(net_debt, 3)} 亿 = 股权价值 {round(equity_value, 3)} 亿"
+                if net_debt is not None and equity_value is not None
+                else f"EV {round(enterprise_value, 3)} 亿；{net_debt_bridge_note}"
+            ),
             f"每股代理价值={round(fair_value, 2) if fair_value else '—'}，当前价={price or '—'}",
         ],
     }
@@ -1496,15 +1619,33 @@ def build_dimension_scores(
 
 
 def _build_comps(features: dict[str, Any], peers: list[dict[str, Any]]) -> dict[str, Any]:
-    valid_peers = [peer for peer in peers if peer.get("pe") is not None or peer.get("pb") is not None]
-    if not valid_peers:
+    target_symbol = str(features.get("symbol") or features.get("ticker") or "").strip().upper()
+    target_name = str(features.get("name") or "").strip()
+    valid_peers: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for peer in peers:
+        if not isinstance(peer, dict):
+            continue
+        peer_symbol = str(peer.get("ticker") or peer.get("symbol") or peer.get("code") or "").strip().upper()
+        peer_name = str(peer.get("name") or peer.get("名称") or "").strip()
+        if peer.get("is_self") or (target_symbol and peer_symbol == target_symbol) or (target_name and peer_name == target_name):
+            continue
+        identity = peer_symbol or peer_name
+        if not identity or identity in seen:
+            continue
+        if peer.get("pe") is None and peer.get("pb") is None:
+            continue
+        seen.add(identity)
+        valid_peers.append(peer)
+    if len(valid_peers) < 2:
         return {
             "method": "comps",
             "status": "data_gap",
             "relative_view": "insufficient_peer_signal",
-            "peer_count": 0,
-            "warnings": ["peer_group_missing"],
-            "methodology_log": ["没有足够的同行估值输入，未生成相对估值结论。"],
+            "peer_count": len(valid_peers),
+            "peers": valid_peers,
+            "warnings": ["peer_sample_below_two"],
+            "methodology_log": [f"有效同行池 {len(valid_peers)} 家，少于 2 家，未生成分位数或相对估值结论。"],
         }
     pe_values = sorted(float(peer["pe"]) for peer in valid_peers if peer.get("pe") is not None and float(peer["pe"]) > 0)
     pb_values = sorted(float(peer["pb"]) for peer in valid_peers if peer.get("pb") is not None and float(peer["pb"]) > 0)
@@ -1525,6 +1666,7 @@ def _build_comps(features: dict[str, Any], peers: list[dict[str, Any]]) -> dict[
         "status": "available",
         "relative_view": relative_view,
         "peer_count": len(valid_peers),
+        "peers": valid_peers,
         "peer_medians": {"pe": median_pe, "pb": median_pb},
         "target": {"pe": features.get("pe"), "pb": features.get("pb")},
         "score_gap_vs_peer_median": round(sum(gaps) / len(gaps), 4) if gaps else None,
@@ -1534,16 +1676,51 @@ def _build_comps(features: dict[str, Any], peers: list[dict[str, Any]]) -> dict[
     }
 
 
+def _comparable_peers_for_symbol(
+    snapshot_rows: list[dict[str, Any]],
+    symbol: str,
+    explicit_features: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    grouped = _snapshot_for_symbol(snapshot_rows, symbol)
+    peer_facts = _facts(grouped.get("peers"))
+    comparison = dict(peer_facts.get("comparison") or {})
+    local_rows = comparison.get("peers") or comparison.get("peer_table") or []
+    rows: list[dict[str, Any]] = []
+    for raw in local_rows if isinstance(local_rows, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        rows.append({
+            **raw,
+            "ticker": raw.get("ticker") or raw.get("symbol") or raw.get("code") or raw.get("代码"),
+            "name": raw.get("name") or raw.get("名称"),
+            "pe": _first_number(raw, ("pe", "pe_ttm", "市盈率-动态", "市盈率")),
+            "pb": _first_number(raw, ("pb", "市净率")),
+            "peer_source": "local_industry_peer_snapshot",
+        })
+    rows.extend(global_peers_to_comps(dict(peer_facts.get("global_peer_comparison") or {})))
+    rows.extend(
+        {**features, "peer_source": "explicit_comparison_symbol"}
+        for peer_symbol, features in explicit_features.items()
+        if peer_symbol != symbol
+    )
+    return rows
+
+
 def build_valuation_model(snapshot_rows: list[dict[str, Any]], symbols: list[str], profile: dict[str, Any]) -> dict[str, Any]:
     features_by_symbol = {symbol: build_features(snapshot_rows, symbol) for symbol in symbols}
     models: list[dict[str, Any]] = []
     dimensions: dict[str, list[dict[str, Any]]] = {}
     for symbol, features in features_by_symbol.items():
         model = _dcf_value(features)
-        peers = [features_by_symbol[peer] for peer in symbols if peer != symbol]
+        peers = _comparable_peers_for_symbol(snapshot_rows, symbol, features_by_symbol)
         model["comps"] = _build_comps(features, peers) if "comps" in profile.get("methods", []) else None
         models.append(model)
-        dimensions[symbol] = build_dimension_scores(snapshot_rows, symbol, model, len(peers))
+        dimensions[symbol] = build_dimension_scores(
+            snapshot_rows,
+            symbol,
+            model,
+            int((model.get("comps") or {}).get("peer_count") or 0),
+        )
     return {
         "methodology_version": UZI_METHOD_VERSION,
         "profile": profile["selected"],
@@ -1676,11 +1853,12 @@ def _registered_panel_vote(investor: dict[str, object], features: dict[str, Any]
                 "feature_names": list(feature_names),
             }
         )
-    # The UZI extractor treats unavailable observations as absent keys.  Keep
-    # the richer canonical feature record for lineage, but give the source-
-    # parity rule engine the same missing-key semantics as UZI 3.9.2.
-    rule_features = {key: value for key, value in features.items() if value is not None}
-    rule_result = evaluate_investor(str(investor.get("id") or ""), rule_features)
+    # Preserve explicit ``None`` observations.  UZI main (22e65f2) relies on
+    # those values to distinguish "source missing" (rule skipped) from a real
+    # observation that fails the threshold.  Removing them would activate
+    # many ``dict.get(..., default)`` fallbacks and silently recreate the old
+    # "missing data = failed rule" behaviour.
+    rule_result = evaluate_investor(str(investor.get("id") or ""), features)
     available = [item for item in checks if item["status"] == "available"]
     passed = len(available)
     total = len(checks)
@@ -1709,6 +1887,7 @@ def _registered_panel_vote(investor: dict[str, object], features: dict[str, Any]
         "fail_rules": list(rule_result.get("fail_rules") or []),
         "pass_count": int(rule_result.get("pass_count") or 0),
         "fail_count": int(rule_result.get("fail_count") or 0),
+        "skipped_rule_count": int(rule_result.get("skipped_rule_count") or 0),
         "weight_pass": int(rule_result.get("weight_pass") or 0),
         "weight_total": int(rule_result.get("weight_total") or 0),
         "rule_engine_version": str(rule_result.get("rule_engine_version") or ""),
@@ -2052,7 +2231,7 @@ def build_presentation(
     metric_specs = (
         ("pe", "PE (TTM)", features.get("pe"), "x"),
         ("pb", "PB", features.get("pb"), "x"),
-        ("market_cap_yi", "总市值", features.get("market_cap_yi"), "亿元"),
+        ("market_cap_yi", "总市值", features.get("market_cap_yi"), f"亿 {features.get('currency') or 'CNY'}"),
         ("net_margin", "销售净利率", features.get("net_margin"), "%"),
         ("roe", "ROE", features.get("roe"), "%"),
         ("debt_ratio", "资产负债率", features.get("debt_ratio"), "%"),
@@ -2113,6 +2292,8 @@ def build_presentation(
             "label": "现价观察参考",
             "kind": "observation",
             "price": features.get("price"),
+            "currency": features.get("currency"),
+            "currency_symbol": features.get("currency_symbol"),
             "status": "data_gap",
             "rationale": "当前仅有现价快照，缺少经验证的估值区间、趋势确认和风险回撤条件；不构成买入区间。",
             "source_refs": [
@@ -2124,6 +2305,7 @@ def build_presentation(
             [
                 *[str(item) for item in list(features.get("data_gap") or [])],
                 *[str(item) for item in list(risk.get("risk_flags") or [])],
+                *[str(item) for item in list(panel.get("data_gap") or [])],
                 *[
                     str(item)
                     for item in list(primary.get("data_gap") or [])
@@ -2142,6 +2324,8 @@ def build_presentation(
         "version": "2",
         "theme": "uzi_terminal_light",
         "profile": profile["selected"],
+        "currency": features.get("currency") or primary.get("currency"),
+        "currency_symbol": features.get("currency_symbol") or primary.get("currency_symbol"),
         "subject": {
             "symbol": symbol,
             "name": str(features.get("name") or symbol),
@@ -2149,6 +2333,8 @@ def build_presentation(
             "as_of": str(features.get("data_period") or ""),
             "price": features.get("price") if features else primary.get("market_price"),
             "change_pct": features.get("pct_change"),
+            "currency": features.get("currency") or primary.get("currency"),
+            "currency_symbol": features.get("currency_symbol") or primary.get("currency_symbol"),
             "metrics": metrics,
             "data_gap": data_gap,
         },
@@ -2161,6 +2347,8 @@ def build_presentation(
             "score": panel.get("average_score"),
             "verdict": primary.get("verdict") or "data_gap",
             "safety": risk.get("risk_level") or "data_gap",
+            "currency": features.get("currency") or primary.get("currency"),
+            "currency_symbol": features.get("currency_symbol") or primary.get("currency_symbol"),
         },
         "core_conclusion": str(report.get("conclusion") or ""),
         "dashboard": {
@@ -2168,8 +2356,15 @@ def build_presentation(
                 "current": features.get("price") if features else primary.get("market_price"),
                 "change_pct": features.get("pct_change"),
                 "as_of": str(features.get("data_period") or ""),
+                "currency": features.get("currency") or primary.get("currency"),
+                "currency_symbol": features.get("currency_symbol") or primary.get("currency_symbol"),
             },
-            "valuation": {"fair_value": primary.get("fair_value"), "margin_of_safety": primary.get("margin_of_safety")},
+            "valuation": {
+                "fair_value": primary.get("fair_value"),
+                "margin_of_safety": primary.get("margin_of_safety"),
+                "currency": primary.get("currency") or features.get("currency"),
+                "currency_symbol": primary.get("currency_symbol") or features.get("currency_symbol"),
+            },
             "fundamentals": {
                 "revenue_yi": features.get("revenue_latest_yi"),
                 "net_profit_yi": features.get("net_profit_latest_yi"),
@@ -2208,6 +2403,11 @@ def build_presentation(
             "average_score": panel.get("average_score"),
             "registered_seat_count": panel.get("registered_seat_count"),
             "disagreement": dict(panel.get("disagreement") or {}),
+            "quality_status": panel.get("quality_status"),
+            "data_gap": list(panel.get("data_gap") or []),
+            "rule_mode": panel.get("rule_mode"),
+            "roleplay": dict(panel.get("roleplay") or {}),
+            "per_investor_override": dict(panel.get("per_investor_override") or {}),
         },
         "radar": dimensions,
         "deep_scan": deep_scan,
@@ -2242,8 +2442,11 @@ def build_delivery_conclusion(
             clauses.append(f"{symbol} 的 DCF 代理价值约为 {fair_value}，低于当前价格 {market_price}")
         else:
             clauses.append(f"{symbol} 的 DCF 代理价值约为 {fair_value}，与当前价格 {market_price} 接近")
+    roleplay = panel.get("roleplay") if isinstance(panel.get("roleplay"), dict) else {}
     average_score = panel.get("average_score")
-    if average_score is not None:
+    if roleplay.get("required") is True and roleplay.get("status") != "completed":
+        clauses.append("Deep Agent 逐席角色评审未完成，规则引擎结果仅作参考，不能视为 Deep 最终结论")
+    elif average_score is not None:
         clauses.append(f"方法论视角平均分为 {average_score}")
     risk_level = str(risk.get("risk_level") or "data_gap")
     risk_text = {

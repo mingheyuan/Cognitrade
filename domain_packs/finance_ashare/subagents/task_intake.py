@@ -92,6 +92,17 @@ _PROFILE_ALIASES = {
     "deep": "deep",
     "深度": "deep",
 }
+_INVESTMENT_CYCLE_ALIASES = {
+    "short_term": "short_term",
+    "short term": "short_term",
+    "短期": "short_term",
+    "mid_term": "mid_term",
+    "mid term": "mid_term",
+    "中期": "mid_term",
+    "long_term": "long_term",
+    "long term": "long_term",
+    "长期": "long_term",
+}
 
 
 def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
@@ -120,6 +131,7 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
         "requested_methods",
         "model_updates",
         "method_assumptions",
+        "investment_cycle",
     ):
         if field_name in constraints:
             slots[field_name] = constraints[field_name]
@@ -205,6 +217,27 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
                 "provider_error": fund_resolution.provider_error,
             },
         )
+    if intent in {"fund_research", "stock_screen"}:
+        investment_cycle = _investment_cycle(query, slots=slots, constraints=constraints)
+        if investment_cycle is None:
+            return _clarify(
+                ["investment_cycle"],
+                query=query,
+                intent=intent,
+                slots=slots,
+                constraints=constraints,
+                context={
+                    "reason": "investment_cycle_required",
+                    "allowed_cycles": ["short_term", "mid_term", "long_term"],
+                    "cycle_labels": {
+                        "short_term": "短期",
+                        "mid_term": "中期",
+                        "long_term": "长期",
+                    },
+                },
+            )
+        slots["investment_cycle"] = investment_cycle
+        constraints["investment_cycle"] = investment_cycle
     if intent == "portfolio_research" and not portfolio_holdings:
         return _clarify(
             ["portfolio_holdings"],
@@ -352,6 +385,29 @@ def _research_profile(
                 return profile
         elif alias in query:
             return profile
+    return None
+
+
+def _investment_cycle(
+    query: str,
+    *,
+    slots: dict[str, Any],
+    constraints: dict[str, Any],
+) -> str | None:
+    supplied = str(
+        constraints.get("investment_cycle")
+        or slots.get("investment_cycle")
+        or ""
+    ).strip().lower()
+    if supplied:
+        return supplied if supplied in {"short_term", "mid_term", "long_term"} else None
+    lowered = query.casefold()
+    for alias, cycle in _INVESTMENT_CYCLE_ALIASES.items():
+        if alias.isascii():
+            if re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", lowered):
+                return cycle
+        elif alias in query:
+            return cycle
     return None
 
 

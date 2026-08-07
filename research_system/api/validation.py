@@ -99,6 +99,7 @@ _UZI_PROFILE_INTENTS = frozenset({
     "sector_research",
     "review_thesis",
 })
+_INVESTMENT_CYCLE_INTENTS = frozenset({"fund_research", "stock_screen"})
 
 _COMMON_REQUEST_FIELDS = {"planning_context_hints", "background"}
 _STOCK_FIELDS = {
@@ -241,6 +242,13 @@ def validate_research_request(
             code="missing_constraint",
             message="research_profile is required; choose lite, medium or deep",
             details={"intent": intent, "field": "research_profile", "allowed": sorted(_RESEARCH_PROFILES)},
+        )
+    if intent in _INVESTMENT_CYCLE_INTENTS and not str(constraints.get("investment_cycle") or "").strip():
+        raise ApiError(
+            status_code=422,
+            code="missing_constraint",
+            message="investment_cycle is required; choose short_term, mid_term or long_term",
+            details={"intent": intent, "field": "investment_cycle", "allowed": sorted(_INVESTMENT_CYCLES)},
         )
 
     _validate_common_constraints(

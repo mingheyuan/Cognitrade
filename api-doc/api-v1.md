@@ -102,7 +102,12 @@ contracts are:
 | --- | ---: | ---: | ---: | ---: | --- |
 | `lite` | 7 / 20 | 10 | 1 | 0 | off |
 | `medium` | 20 / 20 | 51 | 17 | 30 | opt-in, 6 dimensions |
-| `deep` | 20 / 20 | 51 | 18 | 60 | 10 dimensions after explicit sensitive-source enablement; includes Bull-Bear debate |
+| `deep` | 20 / 20 | 66 Agent role-play seats | 18 | 60 | 10 dimensions after explicit sensitive-source enablement; includes Bull-Bear debate |
+
+`stock_screen` additionally requires an explicit
+`constraints.investment_cycle` (`short_term`, `mid_term`, or `long_term`). The
+Web UI leaves both research depth and cycle unselected; no `medium` profile or
+`mid_term` cycle is inferred by the client, Task Intake, API, or Pack runtime.
 
 All declared intents accept the common boolean constraint `background`. When
 `true`, the API reserves the run immediately and executes it asynchronously;
@@ -141,6 +146,10 @@ Fund constraints:
 | `fund_category` | string | `全部`, `股票型`, `混合型`, `债券型`, `指数型`, `ETF`, `LOF`, `QDII`, or `FOF` |
 | `candidate_pool_size` | integer | 1–20; the Web UI uses a minimum of 2 for comparison |
 | `investment_cycle` | string | `short_term`, `mid_term`, or `long_term` |
+
+`investment_cycle` is required. There is no `mid_term` (or any other) server
+default: the Web UI starts with an empty selection and the API returns
+`missing_constraint` until the user explicitly chooses a cycle.
 
 The Web UI exposes category selection and explicit-code analysis as separate
 modes. Category mode omits `fund_codes`; explicit-code mode sends

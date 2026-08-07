@@ -28,7 +28,7 @@ def sample_uzi_artifacts() -> list[dict]:
         ],
         "risk": ["数据时效需要复核"],
         "follow_up": ["刷新公告"],
-        "uzi_profile": {"selected": "deep", "source_commit": "fce996c"},
+        "uzi_profile": {"selected": "deep", "source_commit": "22e65f2"},
         "valuation_model": {"models": [{"symbol": "600519", "market_price": 1450.5, "fair_value": 1502.0}]},
         "investor_panel_review": {},
         "risk_scan": {},
@@ -37,11 +37,15 @@ def sample_uzi_artifacts() -> list[dict]:
     presentation = {
         "version": "2",
         "profile": "deep",
+        "currency": "CNY",
+        "currency_symbol": "¥",
         "subject": {
             "symbol": "600519",
             "name": "贵州茅台 <script>alert(1)</script>",
             "sector": "白酒",
             "as_of": "2026-08-06",
+            "currency": "CNY",
+            "currency_symbol": "¥",
         },
         "hero": {
             "symbol": "600519",
@@ -51,11 +55,13 @@ def sample_uzi_artifacts() -> list[dict]:
             "score": 78,
             "verdict": "below_proxy_value",
             "safety": "attention",
+            "currency": "CNY",
+            "currency_symbol": "¥",
         },
         "core_conclusion": report["conclusion"],
         "dashboard": {
-            "price": {"current": 1450.5, "change_pct": 1.2, "as_of": "2026-08-06"},
-            "valuation": {"fair_value": 1502.0, "margin_of_safety": 3.55},
+            "price": {"current": 1450.5, "change_pct": 1.2, "as_of": "2026-08-06", "currency": "CNY", "currency_symbol": "¥"},
+            "valuation": {"fair_value": 1502.0, "margin_of_safety": 3.55, "currency": "CNY", "currency_symbol": "¥"},
             "fundamentals": {"revenue_yi": 1330.0, "net_profit_yi": 650.0, "roe": 31.2},
             "metrics": [{"key": "pe", "label": "PE (TTM)", "value": 22.4, "unit": "x", "status": "available"}],
             "risks": [{"summary": "估值波动"}],
@@ -113,7 +119,7 @@ def sample_uzi_artifacts() -> list[dict]:
             "data_gap": [],
         }],
         "risk_list": [{"signal_id": "valuation", "status": "attention", "title": "估值波动", "evidence": "PE 分位需复核"}],
-        "buy_zones": [{"label": "现价观察参考", "price": 1450.5, "status": "data_gap", "rationale": "不构成买入区间。"}],
+        "buy_zones": [{"label": "现价观察参考", "price": 1450.5, "currency": "CNY", "currency_symbol": "¥", "status": "data_gap", "rationale": "不构成买入区间。"}],
         "data_gap": ["sentiment:xueqiu_unavailable"],
         "generated_at": "2026-08-06T08:30:00+00:00",
     }
@@ -174,6 +180,26 @@ class UziNativeReportTests(unittest.TestCase):
         self.assertIn("目标 ETF 穿透持仓", rendered.html)
         self.assertIn("13.85%", rendered.html)
         self.assertIn("基金定期披露持仓不代表当前仍持有该证券", rendered.html)
+
+    def test_renders_hk_currency_without_hardcoded_renminbi_symbol(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        presentation = artifacts[1]["content"]
+        presentation["currency"] = "HKD"
+        presentation["currency_symbol"] = "HK$"
+        for key in ("subject", "hero"):
+            presentation[key]["currency"] = "HKD"
+            presentation[key]["currency_symbol"] = "HK$"
+        for key in ("price", "valuation"):
+            presentation["dashboard"][key]["currency"] = "HKD"
+            presentation["dashboard"][key]["currency_symbol"] = "HK$"
+        presentation["buy_zones"][0]["currency"] = "HKD"
+        presentation["buy_zones"][0]["currency_symbol"] = "HK$"
+
+        rendered = render_uzi_native_html(artifacts, run_id=RUN_ID)
+
+        self.assertIn("HK$1,450.50", rendered.html)
+        self.assertIn("HK$1,502.00", rendered.html)
+        self.assertNotIn("¥1,450.50", rendered.html)
 
     def test_numeric_panel_fallback_is_escaped_as_text(self) -> None:
         artifacts = sample_uzi_artifacts()

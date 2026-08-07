@@ -18,7 +18,7 @@ from typing import Any, Iterable
 
 
 _TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "uzi_native_report.html"
-_UZI_SOURCE_COMMIT = "fce996c33e70eddce8e375f53cd252b549eb3d7c"
+_UZI_SOURCE_COMMIT = "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359"
 _CORE_ARTIFACT_TYPES = {
     "stock_snapshot_bundle",
     "research_report",
@@ -194,6 +194,21 @@ def _metric(value: Any, unit: Any = "") -> str:
     return f"{rendered}{_text(unit, '')}"
 
 
+def _money(value: Any, *contexts: dict[str, Any]) -> str:
+    rendered = _metric(value)
+    if rendered == "—":
+        return rendered
+    symbol = next(
+        (
+            _text(context.get("currency_symbol"), "")
+            for context in contexts
+            if isinstance(context, dict) and _text(context.get("currency_symbol"), "")
+        ),
+        "",
+    )
+    return f"{symbol}{rendered}"
+
+
 def _latest(artifacts: list[dict[str, Any]], artifact_type: str) -> dict[str, Any] | None:
     matches = [
         artifact
@@ -307,7 +322,7 @@ def _render_hero(presentation: dict[str, Any], report: dict[str, Any], run_id: s
         <div class="hero-meta"><span>RUN {_e(run_id)}</span><span>PROFILE {_e(presentation.get('profile'), 'unknown')}</span><span>SOURCE {_e(_UZI_SOURCE_COMMIT[:8])}</span></div>
       </div>
       <div class="hero-terminal">
-        <div><span>现价</span><strong>{_metric(hero.get('price'))}</strong></div>
+        <div><span>现价</span><strong>{_money(hero.get('price'), hero, subject, presentation)}</strong></div>
         <div><span>涨跌</span><strong class="{change_class}">{_metric(change, '%')}</strong></div>
         <div><span>Panel 均分</span><strong>{score}</strong></div>
         <div><span>估值状态</span><strong>{_e(_localized(hero.get('verdict')))}</strong></div>
@@ -336,6 +351,7 @@ def _render_dashboard(presentation: dict[str, Any]) -> str:
     fundamentals = _record(dashboard.get("fundamentals"))
     valuation = _record(dashboard.get("valuation"))
     price = _record(dashboard.get("price"))
+    currency = _text(price.get("currency") or valuation.get("currency") or presentation.get("currency"), "")
     cards = []
     for metric in metrics:
         row = _record(metric)
@@ -346,9 +362,9 @@ def _render_dashboard(presentation: dict[str, Any]) -> str:
             f'{_badge(row.get("status"))}</article>'
         )
     fundamental_specs = (
-        ("revenue_yi", "营业收入", "亿元"),
-        ("net_profit_yi", "净利润", "亿元"),
-        ("fcf_yi", "自由现金流", "亿元"),
+        ("revenue_yi", "营业收入", f"亿 {currency}" if currency else "亿"),
+        ("net_profit_yi", "净利润", f"亿 {currency}" if currency else "亿"),
+        ("fcf_yi", "自由现金流", f"亿 {currency}" if currency else "亿"),
         ("revenue_growth", "营收增速", "%"),
         ("profit_growth", "利润增速", "%"),
         ("roe", "ROE", "%"),
@@ -363,8 +379,8 @@ def _render_dashboard(presentation: dict[str, Any]) -> str:
     return (
         _section("01", "核心仪表盘", "CORE DASHBOARD")
         + '<section class="dashboard-bento" id="section-core">'
-        + f'<article class="bento bento--price"><p>MARKET</p><h3>{_metric(price.get("current"))}</h3><span>{_metric(price.get("change_pct"), "%")} · {_e(price.get("as_of"))}</span></article>'
-        + f'<article class="bento bento--valuation"><p>VALUATION</p><h3>{_metric(valuation.get("fair_value"))}</h3><span>安全边际 {_metric(valuation.get("margin_of_safety"), "%")}</span></article>'
+        + f'<article class="bento bento--price"><p>MARKET</p><h3>{_money(price.get("current"), price, presentation)}</h3><span>{_metric(price.get("change_pct"), "%")} · {_e(price.get("as_of"))}</span></article>'
+        + f'<article class="bento bento--valuation"><p>VALUATION</p><h3>{_money(valuation.get("fair_value"), valuation, presentation)}</h3><span>安全边际 {_metric(valuation.get("margin_of_safety"), "%")}</span></article>'
         + f'<article class="bento bento--fundamentals"><p>FUNDAMENTALS</p><div class="mini-grid">{fundamentals_html}</div></article>'
         + f'<article class="bento bento--intelligence"><p>INTELLIGENCE</p><div><strong>风险 {len(risks)}</strong><strong>催化 {len(catalysts)}</strong></div><span>仅展示真实返回记录，不补造事件。</span></article>'
         + f'<div class="metric-grid">{cards_html}</div>'
@@ -412,6 +428,15 @@ def _render_panel(presentation: dict[str, Any]) -> str:
     panel = _record(presentation.get("panel"))
     votes = [_record(vote) for vote in _list(panel.get("votes"))]
     distribution = _record(panel.get("distribution"))
+    roleplay = _record(panel.get("roleplay"))
+    roleplay_status = str(roleplay.get("status") or "not_requested")
+    roleplay_label = (
+        "Deep Agent 逐席评审完成"
+        if roleplay_status == "completed" and roleplay.get("agent_reviewed") is True
+        else "Deep Agent 逐席评审未完成"
+        if roleplay.get("required") is True
+        else "规则引擎评审"
+    )
     cards = []
     for index, vote in enumerate(votes):
         signal = str(vote.get("signal") or "insufficient_evidence")
@@ -421,13 +446,14 @@ def _render_panel(presentation: dict[str, Any]) -> str:
             f'<header><span>{index + 1:02d}</span><div><h3>{_e(vote.get("perspective_label"), "方法论席位")}</h3><p>{_e(vote.get("school_label") or vote.get("school"), "未分组")}</p></div>{_badge(signal)}</header>'
             f'<div class="jury-score"><strong>{"不适用" if signal == "skip" else _metric(vote.get("score"))}</strong><span>置信度 {_metric((_number(vote.get("confidence")) or 0) * 100, "%")}</span></div>'
             f'<h4>{_e(vote.get("headline"), "未形成标题")}</h4><p>{_e(vote.get("reasoning"), "当前证据不足")}</p>'
-            f'<details><summary>方法论边界与检查项</summary>{_render_generic({"investor_name_en": vote.get("investor_name_en"), "methodology_source": vote.get("methodology_source"), "tier": vote.get("tier"), "skip_reason": vote.get("skip_reason"), "time_horizon": vote.get("time_horizon"), "position_sizing": vote.get("position_sizing"), "what_would_change_my_mind": vote.get("what_would_change_my_mind"), "checks": checks, "required_dimensions": _list(vote.get("required_dimensions"))})}</details>'
+            f'<details><summary>方法论边界与检查项</summary>{_render_generic({"review_source": "Agent 角色评审" if vote.get("agent_roleplay_applied") else "规则参考", "original_rule_signal": vote.get("original_rule_signal"), "original_rule_score": vote.get("original_rule_score"), "override_rule_engine": vote.get("override_rule_engine"), "override_reason": vote.get("override_reason"), "investor_name_en": vote.get("investor_name_en"), "methodology_source": vote.get("methodology_source"), "tier": vote.get("tier"), "skip_reason": vote.get("skip_reason"), "time_horizon": vote.get("time_horizon"), "position_sizing": vote.get("position_sizing"), "what_would_change_my_mind": vote.get("what_would_change_my_mind"), "checks": checks, "required_dimensions": _list(vote.get("required_dimensions"))})}</details>'
             '</article>'
         )
     cards_html = "".join(cards) or '<p class="muted">本次未请求 Panel，或没有生成评审席位。</p>'
     return (
         _section("03", "投资方法论评审团", "UZI INVESTOR PANEL")
         + '<section class="panel-section" id="section-jury">'
+        + f'<p class="muted">{_e(roleplay_label)} · 状态 {_e(roleplay_status)}</p>'
         + '<div class="panel-stats">'
         + f'<div><span>注册席位</span><strong>{_e(panel.get("registered_seat_count"), len(votes))}</strong></div>'
         + f'<div><span>实际返回</span><strong>{len(votes)}</strong></div>'
@@ -585,7 +611,7 @@ def _render_risks_and_zones(presentation: dict[str, Any]) -> str:
     zone_html = "".join(
         '<article class="zone-card">'
         f'<header><span>{_e(row.get("label"), "价格观察")}</span>{_badge(row.get("status"))}</header>'
-        f'<strong>{_metric(row.get("price"))}</strong><p>{_e(row.get("rationale"), "仅作观察，不构成买入建议。")}</p>'
+        f'<strong>{_money(row.get("price"), row, presentation)}</strong><p>{_e(row.get("rationale"), "仅作观察，不构成买入建议。")}</p>'
         '</article>'
         for row in zones
     )
@@ -665,7 +691,9 @@ def _fallback_presentation(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "version": "artifact-fallback",
         "profile": _record(report.get("uzi_profile")).get("selected"),
-        "subject": {"symbol": symbol, "name": symbol},
+        "currency": model.get("currency"),
+        "currency_symbol": model.get("currency_symbol"),
+        "subject": {"symbol": symbol, "name": symbol, "currency": model.get("currency"), "currency_symbol": model.get("currency_symbol")},
         "hero": {
             "symbol": symbol,
             "name": symbol,
@@ -673,9 +701,14 @@ def _fallback_presentation(report: dict[str, Any]) -> dict[str, Any]:
             "score": panel.get("average_score"),
             "verdict": model.get("verdict"),
             "safety": risk.get("risk_level"),
+            "currency": model.get("currency"),
+            "currency_symbol": model.get("currency_symbol"),
         },
         "core_conclusion": report.get("conclusion"),
-        "dashboard": {"price": {"current": model.get("market_price")}, "valuation": {"fair_value": model.get("fair_value"), "margin_of_safety": model.get("margin_of_safety")}},
+        "dashboard": {
+            "price": {"current": model.get("market_price"), "currency": model.get("currency"), "currency_symbol": model.get("currency_symbol")},
+            "valuation": {"fair_value": model.get("fair_value"), "margin_of_safety": model.get("margin_of_safety"), "currency": model.get("currency"), "currency_symbol": model.get("currency_symbol")},
+        },
         "great_divide": {"bull": {}, "bear": {}, "rounds": [], "punchline": _record(panel.get("disagreement")).get("summary")},
         "panel": panel,
         "deep_scan": [],

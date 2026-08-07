@@ -11,7 +11,7 @@ from domain_packs.finance_ashare.subagents.uzi_panel_metadata import UZI_PANEL_M
 
 
 UZI_PANEL_VERSION = "3.9.2-adapted"
-UZI_PANEL_SOURCE_COMMIT = "fce996c33e70eddce8e375f53cd252b549eb3d7c"
+UZI_PANEL_SOURCE_COMMIT = "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359"
 
 
 PANEL_REGISTRY: tuple[dict[str, object], ...] = (
@@ -93,7 +93,11 @@ PANEL_REGISTRY = tuple(
 
 def panel_for_profile(profile: str) -> list[dict[str, object]]:
     normalized = str(profile or "").strip().lower()
-    counts = {"lite": 10, "medium": 51, "deep": 51}
+    # UZI main (22e65f2) retains the historical profile metadata at 51, but
+    # its executable panel registry and Deep hard gate now require every one
+    # of the 66 registered seats.  Deep therefore cannot silently omit the
+    # 15 newer technology/quant/游资 perspectives.
+    counts = {"lite": 10, "medium": 51, "deep": 66}
     if normalized not in counts:
         raise ValueError("research_profile must be lite, medium or deep")
     count = counts[normalized]

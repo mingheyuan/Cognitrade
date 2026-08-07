@@ -83,7 +83,7 @@ export function ValuationModelArtifactRenderer({ content }: ArtifactRendererProp
 }
 
 export function InvestorPanelReviewArtifactRenderer({ content }: ArtifactRendererProps) {
-  return <ArtifactData content={content} priority={['average_score', 'distribution', 'disagreement', 'votes', 'confidence', 'risk_flags', 'profile', 'scope', 'panel_version']} />
+  return <ArtifactData content={content} priority={['roleplay', 'average_score', 'distribution', 'disagreement', 'votes', 'per_investor_override', 'confidence', 'risk_flags', 'profile', 'scope', 'panel_version']} />
 }
 
 export function RiskScanArtifactRenderer({ content }: ArtifactRendererProps) {

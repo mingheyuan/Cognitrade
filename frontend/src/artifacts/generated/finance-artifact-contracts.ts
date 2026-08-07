@@ -821,10 +821,16 @@ export type ValuationModelContent = {
     "model": string;
     "methodology_version": string;
     "symbol": string;
+    "currency": string | null;
+    "currency_symbol": string | null;
     "status": string;
     "fair_value": number | null;
     "market_price": number | null;
     "margin_of_safety": number | null;
+    "enterprise_value_yi"?: number | null;
+    "net_debt_yi"?: number | null;
+    "equity_value_yi"?: number | null;
+    "net_debt_bridge_note"?: string | null;
     "assumptions": {
       "wacc"?: number;
       "terminal_growth"?: number;
@@ -902,6 +908,7 @@ export type InvestorPanelReviewContent = {
     }>;
     "pass_count": number;
     "fail_count": number;
+    "skipped_rule_count": number;
     "weight_pass": number;
     "weight_total": number;
     "rule_engine_version": string;
@@ -917,12 +924,21 @@ export type InvestorPanelReviewContent = {
     "is_methodology_perspective": boolean;
     "is_real_person_advice": boolean;
     "rule_mode": string;
+    "original_rule_signal"?: string;
+    "original_rule_score"?: number;
+    "agent_roleplay_applied"?: boolean;
+    "override_rule_engine"?: boolean;
+    "override_reason"?: string | null;
+    "roleplay_source"?: string;
+    "comment"?: string | null;
+    "verdict"?: string | null;
   }>;
   "distribution": {
     "bullish"?: number;
     "bearish"?: number;
     "neutral"?: number;
     "skip"?: number;
+    "insufficient_evidence"?: number;
   };
   "average_score"?: number | null;
   "evaluated_rule_count"?: number;
@@ -935,6 +951,16 @@ export type InvestorPanelReviewContent = {
   };
   "confidence": number;
   "risk_flags": Array<string>;
+  "per_investor_override"?: Record<string, unknown>;
+  "roleplay"?: {
+    "required": boolean;
+    "status": string;
+    "agent_reviewed": boolean;
+    "source_commit": string;
+    "group_count": number;
+    "completed_group_count": number;
+    "errors": Array<string>;
+  };
 }
 
 export type RiskScanContent = {
@@ -965,6 +991,8 @@ export type ReportPresentationContent = {
   "version": string;
   "theme": string;
   "profile": string;
+  "currency"?: string | null;
+  "currency_symbol"?: string | null;
   "subject": Record<string, unknown>;
   "hero": Record<string, unknown>;
   "core_conclusion": string;
@@ -1007,6 +1035,8 @@ export type ResearchWorkflowContent = {
   "methodology_version": string;
   "profile": string;
   "results": Array<unknown>;
+  "status"?: string;
+  "data_gap"?: Array<string>;
   "summary"?: string;
   "confidence": number;
   "risk_flags": Array<string>;
@@ -1017,9 +1047,26 @@ export type DeepAnalysisContent = {
   "methodology_version": string;
   "profile": string;
   "results": Array<unknown>;
+  "status"?: string;
+  "assumption_flags"?: Array<string>;
   "summary"?: string;
   "confidence": number;
   "risk_flags": Array<string>;
+  "agent_reviewed"?: boolean;
+  "quality_status"?: string;
+  "data_gap"?: Array<string>;
+  "qualitative_deep_dive"?: Record<string, unknown>;
+  "qualitative_agent_execution"?: {
+    "required": boolean;
+    "status": string;
+    "agent_reviewed": boolean;
+    "source_commit": string;
+    "group_count": number;
+    "completed_group_count": number;
+    "evidence_count": number;
+    "association_count": number;
+    "errors": Array<string>;
+  };
 }
 
 export type UziDimensionCoverageContent = {
@@ -2508,10 +2555,16 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "models[].model",
     "models[].methodology_version",
     "models[].symbol",
+    "models[].currency",
+    "models[].currency_symbol",
     "models[].status",
     "models[].fair_value",
     "models[].market_price",
     "models[].margin_of_safety",
+    "models[].enterprise_value_yi",
+    "models[].net_debt_yi",
+    "models[].equity_value_yi",
+    "models[].net_debt_bridge_note",
     "models[].assumptions",
     "models[].assumptions.wacc",
     "models[].assumptions.terminal_growth",
@@ -2583,6 +2636,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "votes[].fail_rules[].msg",
     "votes[].pass_count",
     "votes[].fail_count",
+    "votes[].skipped_rule_count",
     "votes[].weight_pass",
     "votes[].weight_total",
     "votes[].rule_engine_version",
@@ -2597,11 +2651,20 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "votes[].is_methodology_perspective",
     "votes[].is_real_person_advice",
     "votes[].rule_mode",
+    "votes[].original_rule_signal",
+    "votes[].original_rule_score",
+    "votes[].agent_roleplay_applied",
+    "votes[].override_rule_engine",
+    "votes[].override_reason",
+    "votes[].roleplay_source",
+    "votes[].comment",
+    "votes[].verdict",
     "distribution",
     "distribution.bullish",
     "distribution.bearish",
     "distribution.neutral",
     "distribution.skip",
+    "distribution.insufficient_evidence",
     "average_score",
     "evaluated_rule_count",
     "skipped_seat_count",
@@ -2612,6 +2675,15 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "disagreement.summary",
     "confidence",
     "risk_flags",
+    "per_investor_override",
+    "roleplay",
+    "roleplay.required",
+    "roleplay.status",
+    "roleplay.agent_reviewed",
+    "roleplay.source_commit",
+    "roleplay.group_count",
+    "roleplay.completed_group_count",
+    "roleplay.errors",
   ],
   "risk_scan": [
     "methodology_version",
@@ -2638,6 +2710,8 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "version",
     "theme",
     "profile",
+    "currency",
+    "currency_symbol",
     "subject",
     "hero",
     "core_conclusion",
@@ -2677,6 +2751,8 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "methodology_version",
     "profile",
     "results",
+    "status",
+    "data_gap",
     "summary",
     "confidence",
     "risk_flags",
@@ -2686,9 +2762,25 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "methodology_version",
     "profile",
     "results",
+    "status",
+    "assumption_flags",
     "summary",
     "confidence",
     "risk_flags",
+    "agent_reviewed",
+    "quality_status",
+    "data_gap",
+    "qualitative_deep_dive",
+    "qualitative_agent_execution",
+    "qualitative_agent_execution.required",
+    "qualitative_agent_execution.status",
+    "qualitative_agent_execution.agent_reviewed",
+    "qualitative_agent_execution.source_commit",
+    "qualitative_agent_execution.group_count",
+    "qualitative_agent_execution.completed_group_count",
+    "qualitative_agent_execution.evidence_count",
+    "qualitative_agent_execution.association_count",
+    "qualitative_agent_execution.errors",
   ],
   "uzi_dimension_coverage": [
     "methodology_version",

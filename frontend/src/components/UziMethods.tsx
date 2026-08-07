@@ -370,7 +370,7 @@ function percentFromRatio(value: unknown): string {
 
 function money(value: unknown): string {
   const number = optionalNumber(value)
-  return number == null ? '—' : `¥${number.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}`
+  return number == null ? '—' : number.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
 }
 
 function qualityLabel(value: string): string {

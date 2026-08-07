@@ -53,6 +53,7 @@ class ExecutionNodeContext:
     skill_runtime: Any | None = None
     memory_store: Any | None = None
     settings: Any | None = None
+    llm_provider: Any | None = None
     event_callback: Callable[[dict[str, Any]], None] | None = None
     turn_id: str | None = None
     progress_observer: Callable[[dict[str, Any]], dict[str, str] | None] | None = None

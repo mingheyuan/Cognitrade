@@ -1169,11 +1169,19 @@ def coverage_stats() -> dict:
     }
 
 
-def _safe_check(rule: Rule, features: dict[str, Any]) -> bool:
+def _safe_check(rule: Rule, features: dict[str, Any]) -> bool | None:
+    """Evaluate one source rule without turning absent evidence into a failure.
+
+    UZI 3.9.2 main (22e65f2) treats comparison/format errors caused by missing
+    observations as an unevaluated rule.  The rule is therefore excluded from
+    both the pass/fail lists and the score denominator.  A real ``False``
+    result still means the observation was present and the rule failed.
+    """
+
     try:
         return bool(rule.check(features))
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
-        return False
+        return None
 
 
 def _format_rule_message(template: str, features: dict[str, Any]) -> str:
@@ -1183,7 +1191,7 @@ def _format_rule_message(template: str, features: dict[str, Any]) -> str:
         return ""
     try:
         return template.format(**features)
-    except (KeyError, IndexError, ValueError):
+    except (KeyError, IndexError, TypeError, ValueError):
         try:
             safe = {key: features.get(key, "?") for key in _extract_keys(template)}
             return template.format(**safe)
@@ -1231,8 +1239,11 @@ def evaluate_investor(investor_id: str, features: dict[str, Any]) -> dict[str, A
     weight_pass = 0
     weight_total = 0
     for rule in rules:
+        check_result = _safe_check(rule, features)
+        if check_result is None:
+            continue
         weight_total += rule.weight
-        if _safe_check(rule, features):
+        if check_result:
             weight_pass += rule.weight
             passed.append({
                 "rule_id": rule.rule_id,
@@ -1277,7 +1288,9 @@ def evaluate_investor(investor_id: str, features: dict[str, Any]) -> dict[str, A
     else:
         signal = "neutral"
 
-    rule_count = len(rules) + (1 if holding_match else 0)
+    evaluated_rule_count = len(passed) + len(failed)
+    skipped_rule_count = max(0, len(rules) - (evaluated_rule_count - (1 if holding_match else 0)))
+    rule_count = evaluated_rule_count
     base_confidence = min(100, 50 + rule_count * 8)
     extremeness = abs(score - 50) * 0.6
     confidence = round(min(100, base_confidence * 0.6 + 40 + extremeness * 0.4), 0)
@@ -1293,6 +1306,7 @@ def evaluate_investor(investor_id: str, features: dict[str, Any]) -> dict[str, A
         "weight_total": weight_total,
         "pass_count": len(passed),
         "fail_count": len(failed),
+        "skipped_rule_count": skipped_rule_count,
         "pass_rules": passed,
         "fail_rules": failed,
         "headline": _build_headline(signal, passed, failed),
