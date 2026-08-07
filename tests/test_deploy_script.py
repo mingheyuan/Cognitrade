@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_SCRIPT = REPO_ROOT / "scripts" / "deploy.sh"
 COMPOSE_FILE = REPO_ROOT / "compose.yaml"
 BACKEND_DOCKERFILE = REPO_ROOT / "deploy" / "backend.Dockerfile"
+BACKEND_ENTRYPOINT = REPO_ROOT / "deploy" / "backend-entrypoint.sh"
 FRONTEND_DOCKERFILE = REPO_ROOT / "deploy" / "frontend.Dockerfile"
 REQUIREMENTS_FILE = REPO_ROOT / "requirements.txt"
 QUANT_REQUIREMENTS_FILE = REPO_ROOT / "requirements-quant.txt"
@@ -75,12 +76,24 @@ class DeployScriptTests(unittest.TestCase):
 
     def test_images_install_and_verify_complete_runtime(self) -> None:
         backend = BACKEND_DOCKERFILE.read_text(encoding="utf-8")
+        backend_entrypoint = BACKEND_ENTRYPOINT.read_text(encoding="utf-8")
         frontend = FRONTEND_DOCKERFILE.read_text(encoding="utf-8")
 
         self.assertIn("COPY requirements.txt requirements-quant.txt", backend)
         self.assertIn("python -m playwright install-deps chromium", backend)
         self.assertIn("python -m playwright install chromium", backend)
         self.assertIn("deployment_preflight", backend)
+        for runtime_directory in (
+            "workspace/runs",
+            "workspace/chat_runs",
+            "workspace/reports",
+            "workspace/memory",
+            "workspace/cache/finance_ashare",
+            "workspace/paper_trading",
+            "workspace/backtests",
+        ):
+            self.assertIn(runtime_directory, backend)
+            self.assertIn(runtime_directory, backend_entrypoint)
         self.assertIn("npm ci --registry=", frontend)
 
     def test_compose_starts_frontend_web_after_healthy_api(self) -> None:

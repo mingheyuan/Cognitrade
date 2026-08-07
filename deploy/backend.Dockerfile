@@ -44,7 +44,7 @@ COPY deploy/backend-entrypoint.sh /usr/local/bin/cognitrade-entrypoint
 RUN if ! getent group cognitrade >/dev/null; then groupadd --gid 10001 cognitrade; fi \
     && if ! id -u cognitrade >/dev/null 2>&1; then useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin cognitrade; fi \
     && chmod 0755 /usr/local/bin/cognitrade-entrypoint \
-    && mkdir -p workspace/runs workspace/chat_runs workspace/reports workspace/memory workspace/paper_trading workspace/backtests \
+    && mkdir -p workspace/runs workspace/chat_runs workspace/reports workspace/memory workspace/cache/finance_ashare workspace/paper_trading workspace/backtests \
     && cp -a workspace_templates/. workspace/ \
     && chown -R cognitrade:cognitrade workspace /home/cognitrade /ms-playwright \
     && python -c "import research_system.api.app"
