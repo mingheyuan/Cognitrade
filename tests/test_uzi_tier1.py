@@ -189,6 +189,7 @@ class UziTier1IntegrationTests(unittest.TestCase):
                 user_query="更新 300001 模型",
                 constraints={
                     "symbol": "300001",
+                    "research_profile": "medium",
                     "requested_methods": ["model_update"],
                     "model_updates": {"net_margin": 22},
                 },
@@ -238,6 +239,7 @@ class UziTier1IntegrationTests(unittest.TestCase):
                     "intent_inputs": {
                         "intent": "stock_check",
                         "symbols": ["300001"],
+                        "research_profile": "deep",
                         "requested_methods": ["ai_readiness", "earnings_preview", "model_update"],
                         "model_updates": {"net_margin": 22},
                     },

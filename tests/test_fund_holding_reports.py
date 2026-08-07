@@ -311,7 +311,7 @@ class FundHoldingReportServiceTests(unittest.TestCase):
     def test_partial_failure_retry_and_partial_delivery(self) -> None:
         self.agent_os.fail_symbols.add("600001")
         self.agent_os.partial_symbols.add("600002")
-        created = self.service.create_batch("source-run", fund_code="110011", profile="quick")
+        created = self.service.create_batch("source-run", fund_code="110011", profile="lite")
         final = self.wait_terminal(created["batch_id"])
 
         self.assertEqual(final["status"], "completed_partial")
@@ -331,7 +331,7 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         self.run_service.source_artifacts = [snapshot_artifact(funds=[equity_fund(count=1)])]
         self.agent_os.raise_after_completion_symbols.add("600001")
 
-        created = self.service.create_batch("source-run", fund_code="110011", profile="quick")
+        created = self.service.create_batch("source-run", fund_code="110011", profile="lite")
         final = self.wait_terminal(created["batch_id"])
 
         self.assertEqual(final["status"], "completed")

@@ -20,6 +20,7 @@ from typing import Any, Iterable
 _TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "uzi_native_report.html"
 _UZI_SOURCE_COMMIT = "fce996c33e70eddce8e375f53cd252b549eb3d7c"
 _CORE_ARTIFACT_TYPES = {
+    "stock_snapshot_bundle",
     "research_report",
     "report_presentation",
     "main_agent_synthesis",
@@ -133,6 +134,7 @@ _STATUS_LABELS = {
     "bullish": "看多",
     "bearish": "看空",
     "neutral": "中性",
+    "skip": "不适用",
     "buy": "买入",
     "sell": "卖出",
     "strong_buy": "强烈看多",
@@ -387,7 +389,7 @@ def _render_divide(presentation: dict[str, Any]) -> str:
     round_html = "".join(
         '<article class="debate-round">'
         f'<header><strong>{_e(_record(row).get("label"), "方法论流派")}</strong><span>均分 {_metric(_record(row).get("average_score"))}</span></header>'
-        f'<div><span>看多 {_e(_record(row).get("bullish_count"), "0")}</span><span>看空 {_e(_record(row).get("bearish_count"), "0")}</span><span>中性 {_e(_record(row).get("neutral_count"), "0")}</span><span>证据不足 {_e(_record(row).get("insufficient_evidence_count"), "0")}</span></div>'
+        f'<div><span>看多 {_e(_record(row).get("bullish_count"), "0")}</span><span>看空 {_e(_record(row).get("bearish_count"), "0")}</span><span>中性 {_e(_record(row).get("neutral_count"), "0")}</span><span>不适用 {_e(_record(row).get("skip_count"), "0")}</span></div>'
         '</article>'
         for row in rounds
     )
@@ -417,9 +419,9 @@ def _render_panel(presentation: dict[str, Any]) -> str:
         cards.append(
             f'<article class="jury-card jury-card--{_e(signal)}">'
             f'<header><span>{index + 1:02d}</span><div><h3>{_e(vote.get("perspective_label"), "方法论席位")}</h3><p>{_e(vote.get("school_label") or vote.get("school"), "未分组")}</p></div>{_badge(signal)}</header>'
-            f'<div class="jury-score"><strong>{_metric(vote.get("score"))}</strong><span>置信度 {_metric((_number(vote.get("confidence")) or 0) * 100, "%")}</span></div>'
+            f'<div class="jury-score"><strong>{"不适用" if signal == "skip" else _metric(vote.get("score"))}</strong><span>置信度 {_metric((_number(vote.get("confidence")) or 0) * 100, "%")}</span></div>'
             f'<h4>{_e(vote.get("headline"), "未形成标题")}</h4><p>{_e(vote.get("reasoning"), "当前证据不足")}</p>'
-            f'<details><summary>检查项与所需维度</summary>{_render_generic({"checks": checks, "required_dimensions": _list(vote.get("required_dimensions"))})}</details>'
+            f'<details><summary>方法论边界与检查项</summary>{_render_generic({"investor_name_en": vote.get("investor_name_en"), "methodology_source": vote.get("methodology_source"), "tier": vote.get("tier"), "skip_reason": vote.get("skip_reason"), "time_horizon": vote.get("time_horizon"), "position_sizing": vote.get("position_sizing"), "what_would_change_my_mind": vote.get("what_would_change_my_mind"), "checks": checks, "required_dimensions": _list(vote.get("required_dimensions"))})}</details>'
             '</article>'
         )
     cards_html = "".join(cards) or '<p class="muted">本次未请求 Panel，或没有生成评审席位。</p>'
@@ -432,7 +434,7 @@ def _render_panel(presentation: dict[str, Any]) -> str:
         + f'<div><span>平均分</span><strong>{_metric(panel.get("average_score"))}</strong></div>'
         + f'<div><span>看多</span><strong>{_e(distribution.get("bullish"), "0")}</strong></div>'
         + f'<div><span>看空</span><strong>{_e(distribution.get("bearish"), "0")}</strong></div>'
-        + f'<div><span>证据不足</span><strong>{_e(distribution.get("insufficient_evidence"), "0")}</strong></div>'
+        + f'<div><span>不适用</span><strong>{_e(distribution.get("skip"), "0")}</strong></div>'
         + '</div>'
         + f'<div class="jury-grid">{cards_html}</div>'
         + '</section>'
@@ -507,6 +509,39 @@ def _render_dimensions(presentation: dict[str, Any]) -> str:
         + f'<aside class="radar-panel">{_radar_svg(rows)}<strong>{len(rows)} 个维度进入报告</strong><span>缺失维度保持 data_gap，不按中性分处理。</span></aside>'
         + f'<div class="dimension-grid">{cards_html}</div>'
         + '</section>'
+    )
+
+
+def _render_data_pipeline(presentation: dict[str, Any], report: dict[str, Any]) -> str:
+    pipeline = _record(presentation.get("data_pipeline") or report.get("uzi_data_pipeline"))
+    if not pipeline:
+        return ""
+    integrity = _record(pipeline.get("uzi_integrity"))
+    before = _record(integrity.get("before_recovery") or integrity)
+    after = _record(integrity.get("after_recovery") or integrity)
+    recovery = _record(pipeline.get("uzi_recovery"))
+    summary = (
+        '<div class="artifact-inventory">'
+        '<article class="artifact-inventory-card"><header><strong>恢复前完整性</strong>'
+        f'{_badge("available" if before.get("ok") else "data_gap")}</header>'
+        f'<p>覆盖率 {_metric(before.get("coverage_pct"), "%")} · 恢复任务 {_e(before.get("recovery_task_count"), "0")}</p></article>'
+        '<article class="artifact-inventory-card"><header><strong>恢复后完整性</strong>'
+        f'{_badge("available" if after.get("ok") else "data_gap")}</header>'
+        f'<p>覆盖率 {_metric(after.get("coverage_pct"), "%")} · 关键缺口 {_e(after.get("critical_missing"), "false")}</p></article>'
+        '<article class="artifact-inventory-card"><header><strong>真实兜底链</strong>'
+        f'{_badge("degraded" if recovery.get("failed") else "available")}</header>'
+        f'<p>尝试 {_e(recovery.get("attempted"), "0")} · 成功 {_e(recovery.get("succeeded"), "0")} · 失败 {_e(recovery.get("failed"), "0")}</p></article>'
+        '</div>'
+    )
+    details = (
+        '<details class="artifact-detail" open><summary>完整性检查与全部恢复任务</summary>'
+        f'{_render_generic(integrity)}</details>'
+        '<details class="artifact-detail" open><summary>MX → DDGS → Playwright 全部尝试</summary>'
+        f'{_render_generic(recovery)}</details>'
+    )
+    return (
+        _section("04B", "数据完整性与真实兜底", "INTEGRITY · RECOVERY TRACE")
+        + f'<section class="appendix" id="section-recovery">{summary}{details}</section>'
     )
 
 
@@ -647,6 +682,7 @@ def _fallback_presentation(report: dict[str, Any]) -> dict[str, Any]:
         "risk_list": _list(risk.get("signals")),
         "buy_zones": [],
         "institutional_modeling": [],
+        "data_pipeline": _record(report.get("uzi_data_pipeline")),
         "data_gap": _list(_record(report.get("uzi_dimension_coverage")).get("data_gap")),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -684,6 +720,7 @@ def render_uzi_native_html(
             _render_divide(presentation),
             _render_panel(presentation),
             _render_dimensions(presentation),
+            _render_data_pipeline(presentation, report),
             _render_modeling(presentation),
             _render_risks_and_zones(presentation),
             _render_evidence(report),

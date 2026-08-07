@@ -265,17 +265,19 @@ def build_institutional_analysis(
     for symbol in symbols:
         features = build_features(rows, symbol)
         model = next((item for item in valuation_models if item.get("symbol") == symbol), {})
+        methods = {
+            "dcf": model,
+            "three_statement": _three_statement(features, profile["selected"]),
+            "quick_lbo": _lbo(features, profile["selected"]),
+            "accretion_dilution": _merger(features, profile["selected"]),
+        }
+        if bool(profile.get("enable_segmental_model")):
+            methods["segmental"] = _segmental(rows, symbol, profile["selected"])
         results.append(
             {
                 "symbol": symbol,
                 "status": "available",
-                "methods": {
-                    "dcf": model,
-                    "three_statement": _three_statement(features, profile["selected"]),
-                    "quick_lbo": _lbo(features, profile["selected"]),
-                    "accretion_dilution": _merger(features, profile["selected"]),
-                    "segmental": _segmental(rows, symbol, profile["selected"]),
-                },
+                "methods": methods,
             }
         )
     gaps = [
@@ -295,7 +297,10 @@ def build_institutional_analysis(
         "methodology_version": UZI_METHOD_VERSION,
         "profile": profile["selected"],
         "status": "data_gap" if gaps else ("assumption_only" if assumption_flags else "available"),
-        "methods": ["dcf", "comps", "three_statement", "quick_lbo", "accretion_dilution", "segmental"],
+        "methods": [
+            "dcf", "comps", "three_statement", "quick_lbo", "accretion_dilution",
+            *(["segmental"] if bool(profile.get("enable_segmental_model")) else []),
+        ],
         "results": results,
         "data_gap": gaps,
         "confidence": round(max(0.2, 0.85 - 0.05 * len(gaps)), 4),

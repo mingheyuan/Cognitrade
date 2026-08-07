@@ -76,13 +76,17 @@
         "type": "object"
       }
     },
+    "data_pipeline": {
+      "type": ["object", "null"]
+    },
     "advanced_methods": {
       "type": "object",
       "properties": {
         "institutional_analysis": {"type": ["object", "null"]},
         "research_workflow": {"type": ["object", "null"]},
         "deep_analysis": {"type": ["object", "null"]},
-        "uzi_dimension_coverage": {"type": ["object", "null"]}
+        "uzi_dimension_coverage": {"type": ["object", "null"]},
+        "uzi_data_pipeline": {"type": ["object", "null"]}
       },
       "additionalProperties": false
     },

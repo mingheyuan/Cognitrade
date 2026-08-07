@@ -455,3 +455,30 @@ VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
 ```
 
 前端 API Client 对 Finance Workspace 请求自动将同一 host 的 `/api/v1` 替换为 `/api/v2`。Bearer token 与 v1 共用。
+
+## UZI 数据完整性与真实兜底字段
+
+股票研究的 `research_report` 新增 `uzi_data_pipeline`，对应的
+`report_presentation` 新增 `data_pipeline`。两者来自同一个
+`stock_snapshot_bundle.collection`，不会在前端重算：
+
+- `uzi_integrity.before_recovery`：主 provider 完成后的 18 项检查、关键/可选缺口、16 个扩展维度缺口与逐项恢复任务；
+- `uzi_integrity.after_recovery`：MX、DDGS、Playwright 全部结束后的复检；顶层覆盖率字段与此一致；
+- `uzi_recovery.stage_order`：固定为 `primary_providers → integrity_check → mx_api → ddgs → playwright → integrity_recheck`；
+- `uzi_recovery.qualitative_stage`：六类定性维度的 MX→DDGS 尝试及完整 `source_trace`；
+- `uzi_recovery.playwright_stage`：按 Lite/Medium/Deep 白名单触发的浏览器最终兜底、质量触发原因、策略来源和解析状态；
+- `uzi_recovery.attempts`：供列表展示的统一摘要。失败保留为 `data_gap`，不生成模拟值。
+
+`investor_panel_review.votes[]` 严格按 UZI 3.9.2 执行 242 条规则，并新增：
+
+- `uzi_confidence`：UZI 原始 0–100 置信度；`confidence` 仍为 Agent OS 的 0–1 归一化值；
+- `investor_name_en`、`methodology_source`、`avatar_seed`、`tier`：上游席位元数据；
+- `skip_reason`：仅用于整席流派锁定、市场不匹配或游资射程不匹配；
+- `time_horizon`、`position_sizing`、`what_would_change_my_mind`：上游决策 profile。
+
+逐规则 `skipped_rules`、`data_gap_rules`、`skipped_count` 已移除；规则缺键仍按
+UZI 源码 pass/fail，真实字段缺口通过上述完整性报告单独披露。
+
+Lite/Medium/Deep 必须由用户在研究入口显式选择，后端不会默认选择 Medium；
+旧 `quick` 档位和兼容调用已删除。登录态或浏览器来源仍必须经过总开关、
+敏感源开关、allowlist 与凭据校验，缺少授权时保留真实 `data_gap`。

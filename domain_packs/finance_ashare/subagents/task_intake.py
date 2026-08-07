@@ -76,6 +76,22 @@ _FUND_CATEGORY_ALIASES = {
 }
 _RUN_ID_PATTERN = re.compile(r"(?:run|运行)(?:\s*id)?\s*[#：:=]?\s*([A-Za-z0-9][A-Za-z0-9_-]{5,127})", re.IGNORECASE)
 _CODE_PATTERN = re.compile(r"(?<!\d)(\d{6})(?!\d)")
+_UZI_PROFILE_INTENTS = frozenset({
+    "stock_check",
+    "stock_compare",
+    "stock_screen",
+    "sector_research",
+    "review_thesis",
+})
+_PROFILE_ALIASES = {
+    "lite": "lite",
+    "速判": "lite",
+    "轻量": "lite",
+    "medium": "medium",
+    "标准": "medium",
+    "deep": "deep",
+    "深度": "deep",
+}
 
 
 def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
@@ -239,6 +255,26 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
                 context={"reason": "review_target_missing"},
             )
         constraints["review_target_run_id"] = review_target_run_id
+    if intent in _UZI_PROFILE_INTENTS:
+        research_profile = _research_profile(query, slots=slots, constraints=constraints)
+        if research_profile is None:
+            return _clarify(
+                ["research_profile"],
+                query=query,
+                intent=intent,
+                slots=slots,
+                constraints=constraints,
+                context={
+                    "reason": "research_profile_required",
+                    "allowed_profiles": ["lite", "medium", "deep"],
+                    "profile_labels": {
+                        "lite": "速判模式（1-2 分钟）",
+                        "medium": "标准分析（5-8 分钟）",
+                        "deep": "深度研究（15-20 分钟）",
+                    },
+                },
+            )
+        constraints["research_profile"] = research_profile
     return {
         "status": "accepted",
         "intent": intent,
@@ -294,6 +330,29 @@ def _sector(query: str, *, slots: dict[str, Any], constraints: dict[str, Any]) -
     candidate = match.group(1).strip()
     candidate = re.sub(r"^(?:请|帮我|分析|研究|梳理|看看|复盘|关于|筛选)", "", candidate)
     return candidate or None
+
+
+def _research_profile(
+    query: str,
+    *,
+    slots: dict[str, Any],
+    constraints: dict[str, Any],
+) -> str | None:
+    supplied = str(
+        constraints.get("research_profile")
+        or slots.get("research_profile")
+        or ""
+    ).strip().lower()
+    if supplied:
+        return supplied if supplied in {"lite", "medium", "deep"} else None
+    lowered = query.casefold()
+    for alias, profile in _PROFILE_ALIASES.items():
+        if alias.isascii():
+            if re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", lowered):
+                return profile
+        elif alias in query:
+            return profile
+    return None
 
 
 def _contains_sector_alias(query: str, lowered: str, alias: str) -> bool:

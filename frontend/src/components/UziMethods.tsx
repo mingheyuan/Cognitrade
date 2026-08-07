@@ -33,6 +33,7 @@ type HoldingDraft = {
   assetClass: string
   assetTarget: string
 }
+type ResearchProfile = '' | 'lite' | 'medium' | 'deep'
 
 const emptyHolding = (): HoldingDraft => ({
   ticker: '', name: '', weight: '', returnPct: '', target: '', value: '', price: '', market: 'A', assetClass: '', assetTarget: '',
@@ -68,6 +69,7 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
   const { createRun, selectedRun, selectedRunId, selectRun, submitting } = useCognitrade()
   const [mode, setMode] = useState<'stock' | 'portfolio'>('stock')
   const [symbol, setSymbol] = useState('')
+  const [researchProfile, setResearchProfile] = useState<ResearchProfile>('')
   const [method, setMethod] = useState<(typeof stockMethods)[number]['id']>('ai_readiness')
   const [modelField, setModelField] = useState('net_margin')
   const [modelValue, setModelValue] = useState('')
@@ -91,9 +93,10 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
   const submitStock = async (event: FormEvent) => {
     event.preventDefault()
     const normalized = symbol.trim()
-    if (!normalized) return
+    if (!normalized || !researchProfile) return
     const constraints: Record<string, unknown> = {
       symbol: normalized,
+      research_profile: researchProfile,
       requested_methods: [method],
     }
     if (method === 'model_update') {
@@ -179,6 +182,7 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
           <form className="uzi-config-card" onSubmit={submitStock}>
             <header><div><span className="section-kicker">STOCK METHOD</span><h2>创建个股专项任务</h2></div><span className="quality-pill quality-pill--available">真实快照</span></header>
             <label><span>股票代码</span><input value={symbol} onChange={(event) => setSymbol(event.target.value)} placeholder="例如 300750" /></label>
+            <label><span>研究深度</span><select value={researchProfile} onChange={(event) => setResearchProfile(event.target.value as ResearchProfile)}><option value="">请选择</option><option value="lite">速判 · 1–2 分钟</option><option value="medium">标准 · 5–8 分钟</option><option value="deep">深度 · 15–20 分钟</option></select></label>
             <div className="uzi-method-picker">
               {stockMethods.map((item) => {
                 const Icon = item.icon
@@ -192,7 +196,7 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
               </div>
             )}
             <MethodAssumptionFields method={method} values={assumptionInputs} onChange={(key, value) => setAssumptionInputs((current) => ({ ...current, [key]: value }))} />
-            <button className="primary-button uzi-run-button" disabled={submitting || !symbol.trim() || (method === 'model_update' && optionalNumber(modelValue) == null) || (methodNeedsAssumptions(method) && !buildMethodAssumptions(method, assumptionInputs))}>{submitting ? <RefreshCw size={15} className="is-spinning" /> : <Play size={15} />}{submitting ? '正在运行' : '运行专项方法'}</button>
+            <button className="primary-button uzi-run-button" disabled={submitting || !symbol.trim() || !researchProfile || (method === 'model_update' && optionalNumber(modelValue) == null) || (methodNeedsAssumptions(method) && !buildMethodAssumptions(method, assumptionInputs))}>{submitting ? <RefreshCw size={15} className="is-spinning" /> : <Play size={15} />}{submitting ? '正在运行' : '运行专项方法'}</button>
           </form>
         ) : (
           <form className="uzi-config-card uzi-portfolio-form" onSubmit={submitPortfolio}>

@@ -198,7 +198,9 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
         command_intents = {
             str(row["target"]).split("+", 1)[0]
             for row in ledger["commands"]
-            if not str(row["target"]).startswith("finance.")
+            if row.get("status") != "removed"
+            and row.get("target")
+            and not str(row["target"]).startswith("finance.")
         }
         self.assertEqual(command_intents - intents, set())
         self.assertEqual(len(ledger["upstream_3_9_2_regressions"]), 8)
@@ -253,27 +255,26 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
                 user_query="读取全部已迁入数据维度",
                 constraints={
                     "symbol": "300001",
+                    "research_profile": "medium",
                     "snapshot_types": sorted(expected),
                 },
             )
         )
         self.assertEqual(set(validated.constraints["snapshot_types"]), expected)
 
-    def test_profiles_do_not_implicitly_run_assumption_heavy_or_legacy_aggregate_methods(self) -> None:
+    def test_profiles_match_the_uzi_three_tier_output_contract(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         manifest = yaml.safe_load(
             (repository_root / "domain_packs/finance_ashare/domain.yaml").read_text(encoding="utf-8")
         )
         policies = manifest["planner_policies"]
-        forbidden = {
-            "three_statement", "quick_lbo", "accretion_dilution", "segmental",
-            "workflow", "deep_analysis",
-        }
-        legacy_outputs = {"institutional_analysis", "research_workflow", "deep_analysis"}
-
-        for profile in ("medium", "deep"):
-            self.assertTrue(forbidden.isdisjoint(policies["research_profiles"][profile]["methods"]))
-            self.assertTrue(legacy_outputs.isdisjoint(policies["profile_outputs"][profile]))
+        self.assertEqual(set(policies["research_profiles"]), {"lite", "medium", "deep"})
+        self.assertNotIn("default_profile", policies)
+        self.assertEqual(policies["research_profiles"]["lite"]["methods"], ["dcf"])
+        self.assertIn("institutional_analysis", policies["profile_outputs"]["medium"])
+        self.assertIn("research_workflow", policies["profile_outputs"]["medium"])
+        self.assertNotIn("deep_analysis", policies["profile_outputs"]["medium"])
+        self.assertIn("deep_analysis", policies["profile_outputs"]["deep"])
 
     def test_migration_ledger_has_no_planned_or_partial_capability(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -295,6 +296,7 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
                 user_query="为 300001 建立三表",
                 constraints={
                     "symbol": "300001",
+                    "research_profile": "medium",
                     "requested_methods": ["three_statement"],
                     "method_assumptions": {
                         "three_statement": {
@@ -330,6 +332,7 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
                     user_query="拒绝无效 LBO 假设",
                     constraints={
                         "symbol": "300001",
+                        "research_profile": "medium",
                         "requested_methods": ["quick_lbo"],
                         "method_assumptions": {
                             "quick_lbo": {
@@ -375,7 +378,12 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
                         metadata={
                             "intent": "stock_check",
                             "required_outputs_source": "manifest_report_contract",
-                            "intent_inputs": {"intent": "stock_check", "symbols": ["300001"], "requested_methods": [method]},
+                            "intent_inputs": {
+                                "intent": "stock_check",
+                                "symbols": ["300001"],
+                                "research_profile": "deep",
+                                "requested_methods": [method],
+                            },
                         },
                     )
                 )

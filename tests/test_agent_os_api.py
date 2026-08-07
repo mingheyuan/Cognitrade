@@ -156,6 +156,7 @@ class AgentOSApiTests(unittest.TestCase):
                     headers=headers,
                     json={
                         "user_query": "Review supplied evidence for 600000.",
+                        "constraints": {"research_profile": "lite"},
                         "slots": {
                             "symbols": ["600000"],
                             "snapshots": [
@@ -262,6 +263,7 @@ class AgentOSApiTests(unittest.TestCase):
                     json={
                         "intent": "stock_check",
                         "user_query": "Analyze a stock.",
+                        "constraints": {"research_profile": "lite"},
                     },
                 )
                 self.assertEqual(first.status_code, 200, first.text)

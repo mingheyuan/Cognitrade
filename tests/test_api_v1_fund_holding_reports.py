@@ -120,7 +120,7 @@ class ApiV1FundHoldingReportsTests(unittest.TestCase):
         response = self.client.post(
             "/api/v1/runs/01J00000000000000000000001/holding-reports",
             headers=auth_headers(),
-            json={"fund_code": "110011"},
+            json={"fund_code": "110011", "profile": "lite"},
         )
 
         self.assertEqual(response.status_code, 409)

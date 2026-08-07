@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -29,12 +30,40 @@ class AgentOSTests(unittest.TestCase):
         repository_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
+            fixture_bundle = {
+                "symbols": ["600000"],
+                "snapshots": [
+                    {
+                        "snapshot_type": "market",
+                        "symbol": "600000",
+                        "facts": {"availability": "available", "latest_price": 10.0},
+                    }
+                ],
+                "candidate_universe": [
+                    {"symbol": "600000", "name": "Fixture", "source": "test_fixture"}
+                ],
+                "collection": {
+                    "universe_source": "test_fixture",
+                    "candidate_count": 1,
+                    "requested_snapshot_types": ["market", "fundamental", "notice"],
+                    "collected_snapshot_types": ["market"],
+                    "enrichment_targets": [],
+                    "degraded": True,
+                },
+                "source_refs": [{"type": "test_fixture", "id": "stock-screen-routing"}],
+            }
             agent_os = AgentOS(self._settings(repository_root, root))
+            provider_tool = agent_os.tool_registry._tools["financial_data_provider"]
+            agent_os.tool_registry._tools["financial_data_provider"] = replace(
+                provider_tool,
+                handler=lambda _arguments, _context: fixture_bundle,
+            )
             response = agent_os.handle_request(
                 RequestEnvelope(
                     intent="stock_screen",
                     user_query="Screen the supplied candidate.",
                     slots={"symbols": ["600000"]},
+                    constraints={"research_profile": "lite"},
                 )
             )
 

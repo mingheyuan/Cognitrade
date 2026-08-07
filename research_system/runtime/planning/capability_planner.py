@@ -55,6 +55,16 @@ class CapabilityPlanner:
             )
             or ""
         ).strip().lower()
+        self._require_explicit_profile(
+            manifest=manifest,
+            intent=intent,
+            selected_profile=selected_profile,
+            explicit_profile=str(
+                intent_inputs.get("research_profile")
+                or metadata.get("research_profile")
+                or ""
+            ).strip().lower(),
+        )
         profile_policy = dict(
             (manifest.planner_policies.get("research_profiles") or {}).get(selected_profile)
             or {}
@@ -191,6 +201,12 @@ class CapabilityPlanner:
             )
             or ""
         ).strip().lower()
+        self._require_explicit_profile(
+            manifest=manifest,
+            intent=intent,
+            selected_profile=requested_profile,
+            explicit_profile=explicit_profile,
+        )
         profile_policy = dict(
             (manifest.planner_policies.get("research_profiles") or {}).get(requested_profile)
             or {}
@@ -535,6 +551,33 @@ class CapabilityPlanner:
         )
 
     @staticmethod
+    def _require_explicit_profile(
+        *,
+        manifest,
+        intent: str,
+        selected_profile: str,
+        explicit_profile: str,
+    ) -> None:
+        """Reject profile-required Pack intents that rely on a hidden default."""
+
+        intent_definition = next(
+            (item for item in manifest.intake.intents if item.intent_id == intent),
+            None,
+        )
+        requires_profile = bool(
+            intent_definition
+            and "research_profile" in set(intent_definition.required_slots or [])
+        )
+        if requires_profile and not explicit_profile:
+            raise CapabilityPlanningError(
+                "research_profile is required; choose lite, medium or deep"
+            )
+        if requires_profile and selected_profile not in {"lite", "medium", "deep"}:
+            raise CapabilityPlanningError(
+                "research_profile must be lite, medium or deep"
+            )
+
+    @staticmethod
     def _required_artifact_types(
         manifest,
         request: CapabilityPlanningRequest,
@@ -656,7 +699,7 @@ class CapabilityPlanner:
         if explicit and explicit == selected_profile:
             return "user_explicit_profile"
         if selected_profile:
-            return "pack_default_profile" if intent in (profile_intents or set()) else "request_constraint_profile"
+            return "request_constraint_profile"
         return "no_profile_selected"
 
     @staticmethod

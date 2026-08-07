@@ -15,11 +15,18 @@ To add a new investor: add to INVESTOR_RULES with their criteria list.
 """
 from __future__ import annotations
 
-import dis
 from dataclasses import dataclass
 import re
-from string import Formatter
 from typing import Callable, Any
+
+from domain_packs.finance_ashare.subagents.uzi_panel_context import (
+    SCHOOL_LABELS,
+    decision_profile,
+    get_locked_school,
+    investor_group,
+    is_youzi_out_of_range,
+    reality_check,
+)
 
 
 @dataclass
@@ -30,7 +37,6 @@ class Rule:
     check: Callable[[dict], bool]
     pass_msg: str = ""  # e.g. "ROE 18.7% 连续 5 年 > 15%"
     fail_msg: str = ""  # e.g. "ROE 仅 11.8%，不达持续 15% 标准"
-    required_fields: tuple[str, ...] = ()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -889,10 +895,9 @@ CHANOS_RULES = [
          pass_msg="审计 clean · 无保留意见",
          fail_msg="审计有保留意见 · 立即怀疑"),
     Rule("cash_matches_eps", "现金匹配利润", 5,
-         check=lambda f: abs(f["ocf_to_net_income_ratio"] - 1.0) < 0.4,
+         check=lambda f: abs(f.get("ocf_to_net_income_ratio", 1.0) - 1.0) < 0.4,
          pass_msg="OCF/净利 {ocf_to_net_income_ratio:.1f} · 比例合理",
-         fail_msg="OCF/净利 {ocf_to_net_income_ratio:.1f} · 大幅背离 · 可能账面利润",
-         required_fields=("ocf_to_net_income_ratio",)),
+         fail_msg="OCF/净利 {ocf_to_net_income_ratio:.1f} · 大幅背离 · 可能账面利润"),
     Rule("not_china_concept", "非中概雷区", 3,
          check=lambda f: not (f.get("market") == "US" and "China" in (f.get("industry","") + f.get("country",""))),
          pass_msg="非美上市中概 · 跳过 Chanos 黑名单",
@@ -1172,125 +1177,115 @@ def _safe_check(rule: Rule, features: dict[str, Any]) -> bool:
 
 
 def _format_rule_message(template: str, features: dict[str, Any]) -> str:
+    """Match UZI 3.9.2's best-effort rule message formatter."""
+
     if not template:
         return ""
     try:
         return template.format(**features)
-    except (KeyError, IndexError, TypeError, ValueError):
-        # Missing source fields must be visible as a gap, never as a raw
-        # Python format placeholder in the user-facing methodology panel.
-        return re.sub(r"\{[^{}]+\}", "—", template)
+    except (KeyError, IndexError, ValueError):
+        try:
+            safe = {key: features.get(key, "?") for key in _extract_keys(template)}
+            return template.format(**safe)
+        except Exception:
+            return template
 
 
-def _rule_source_fields(rule: Rule) -> tuple[str, ...]:
-    """Extract feature reads without treating lambda fallback defaults as data."""
+def _extract_keys(template: str) -> list[str]:
+    return re.findall(r"\{([a-zA-Z_][a-zA-Z0-9_]*)", template)
 
-    fields = set(rule.required_fields)
-    instructions = list(dis.get_instructions(rule.check))
-    for index, instruction in enumerate(instructions):
-        if instruction.opname in {"LOAD_METHOD", "LOAD_ATTR"} and instruction.argval == "get":
-            for following in instructions[index + 1:index + 5]:
-                if following.opname == "LOAD_CONST" and isinstance(following.argval, str):
-                    fields.add(following.argval)
-                    break
-                if following.opname.startswith("CALL") or following.opname == "PRECALL":
-                    break
-        if instruction.opname == "LOAD_CONST" and isinstance(instruction.argval, str):
-            if any(
-                following.opname == "BINARY_SUBSCR"
-                for following in instructions[index + 1:index + 3]
-            ):
-                fields.add(instruction.argval)
-    for template in (rule.pass_msg, rule.fail_msg):
-        for _literal, field_name, _format_spec, _conversion in Formatter().parse(template):
-            if field_name:
-                fields.add(field_name.split(".", 1)[0].split("[", 1)[0])
-    return tuple(sorted(fields))
+
+BULLISH_THRESHOLD = 65
+BEARISH_THRESHOLD = 35
 
 
 def evaluate_investor(investor_id: str, features: dict[str, Any]) -> dict[str, Any]:
-    """Evaluate one registered seat using the migrated UZI rule engine."""
+    """Evaluate one seat with UZI 3.9.2's three-layer execution semantics."""
 
-    rules = list(INVESTOR_RULES.get(str(investor_id), []))
+    investor_id = str(investor_id)
+    locked = get_locked_school()
+    if locked and investor_group(investor_id) != locked:
+        return _skip_result(
+            investor_id,
+            f"用户锁定 {SCHOOL_LABELS.get(locked, locked)} 派视角 · 非该派评委不参与",
+        )
+
+    market = str(features.get("market") or "A")
+    ticker = str(features.get("ticker") or "")
+    name = str(features.get("name") or "")
+    industry = str(features.get("industry") or "")
+    check = reality_check(investor_id, market, ticker, name, industry)
+    if not check["should_evaluate"]:
+        return _skip_result(investor_id, str(check["skip_reason"] or "不在能力圈"))
+
+    out_of_range, range_reason = is_youzi_out_of_range(investor_id, features)
+    if out_of_range:
+        return _skip_result(investor_id, range_reason)
+
+    rules = list(INVESTOR_RULES.get(investor_id, []))
     if not rules:
-        return {
-            "score": 0.0,
-            "signal": "insufficient_evidence",
-            "confidence": 0.0,
-            "weight_pass": 0,
-            "weight_total": 0,
-            "pass_rules": [],
-            "fail_rules": [],
-            "headline": "没有注册的规则集，暂不形成判断。",
-            "rationale": "该方法论席位没有可执行的规则契约。",
-        }
+        return _unknown_result(investor_id)
+
     passed: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
     weight_pass = 0
     weight_total = 0
     for rule in rules:
-        weight = max(int(rule.weight), 0)
-        missing_fields = [
-            field_name
-            for field_name in _rule_source_fields(rule)
-            if features.get(field_name) is None
-        ]
-        if missing_fields:
-            skipped.append({
-                "rule_id": rule.rule_id,
-                "name": rule.name,
-                "weight": weight,
-                "missing_fields": missing_fields,
-                "msg": f"缺少字段：{', '.join(missing_fields)}",
-            })
-            continue
-        weight_total += weight
+        weight_total += rule.weight
         if _safe_check(rule, features):
-            weight_pass += weight
+            weight_pass += rule.weight
             passed.append({
                 "rule_id": rule.rule_id,
                 "name": rule.name,
-                "weight": weight,
+                "weight": rule.weight,
                 "msg": _format_rule_message(rule.pass_msg or rule.name, features),
             })
         else:
             failed.append({
                 "rule_id": rule.rule_id,
                 "name": rule.name,
-                "weight": weight,
+                "weight": rule.weight,
                 "msg": _format_rule_message(rule.fail_msg or f"未达{rule.name}", features),
             })
-    score = round(weight_pass / weight_total * 100, 1) if weight_total else 0.0
-    signal = (
-        "insufficient_evidence"
-        if not weight_total
-        else "bullish"
-        if score >= 65
-        else "bearish"
-        if score < 35
-        else "neutral"
+
+    holding_match = check["holding_match"]
+    if holding_match:
+        attitude, note = holding_match
+        if attitude in ("held", "bullish_known"):
+            passed.insert(0, {
+                "rule_id": "known_holding",
+                "name": "实际持仓 / 公开看好",
+                "weight": 6,
+                "msg": f"📌 {note}",
+            })
+            weight_pass += 6
+            weight_total += 6
+
+    affinity_adjust = int(check["affinity_adjust"] or 0)
+    score = (
+        round(weight_pass / weight_total * 100 + affinity_adjust, 1)
+        if weight_total
+        else round(50 + affinity_adjust, 1)
     )
-    evaluated_ratio = (len(passed) + len(failed)) / len(rules) if rules else 0.0
-    confidence = round(min(1.0, 0.35 + (len(passed) + len(failed)) * 0.04) * evaluated_ratio, 4)
+    score = max(0, min(100, score))
+    if check["override_signal"]:
+        signal = str(check["override_signal"])
+    elif score >= BULLISH_THRESHOLD:
+        signal = "bullish"
+    elif score < BEARISH_THRESHOLD:
+        signal = "bearish"
+    else:
+        signal = "neutral"
+
+    rule_count = len(rules) + (1 if holding_match else 0)
+    base_confidence = min(100, 50 + rule_count * 8)
+    extremeness = abs(score - 50) * 0.6
+    confidence = round(min(100, base_confidence * 0.6 + 40 + extremeness * 0.4), 0)
     passed.sort(key=lambda row: -int(row["weight"]))
     failed.sort(key=lambda row: -int(row["weight"]))
-    if signal == "insufficient_evidence":
-        headline = "数据不足，暂无判断。"
-    elif signal == "bullish" and passed:
-        headline = f"看多核心：{passed[0]['msg']}"
-    elif signal == "bearish" and failed:
-        headline = f"看空核心：{failed[0]['msg']}"
-    elif passed and failed:
-        headline = f"观望：{passed[0]['msg']}；但{failed[0]['msg']}"
-    elif passed:
-        headline = f"中性：{passed[0]['msg']}"
-    else:
-        headline = "数据不足，暂无判断。"
-    rationale = "；".join(
-        [*(f"通过：{row['msg']}" for row in passed[:4]), *(f"未通过：{row['msg']}" for row in failed[:4])]
-    )
+    profile = decision_profile(investor_id)
     return {
+        "investor_id": investor_id,
         "score": score,
         "signal": signal,
         "confidence": confidence,
@@ -1298,19 +1293,129 @@ def evaluate_investor(investor_id: str, features: dict[str, Any]) -> dict[str, A
         "weight_total": weight_total,
         "pass_count": len(passed),
         "fail_count": len(failed),
-        "skipped_count": len(skipped),
         "pass_rules": passed,
         "fail_rules": failed,
-        "skipped_rules": skipped,
-        "data_gap_rules": [row["rule_id"] for row in skipped],
-        "headline": headline,
-        "rationale": rationale or "没有规则命中。",
-        "rule_engine_version": "uzi-3.9.2-adapted",
+        "headline": _build_headline(signal, passed, failed),
+        "rationale": _build_rationale(passed, failed),
+        "time_horizon": profile["time_horizon"],
+        "position_sizing": profile["position_sizing"],
+        "what_would_change_my_mind": profile["what_would_change_my_mind"],
+        "rule_engine_version": "uzi-3.9.2-source-parity",
+    }
+
+
+def _build_headline(signal: str, passed: list[dict[str, Any]], failed: list[dict[str, Any]]) -> str:
+    if signal == "bullish" and passed:
+        return f"看多核心：{passed[0]['msg']}"
+    if signal == "bearish" and failed:
+        return f"看空核心：{failed[0]['msg']}"
+    if passed and failed:
+        return f"观望：{passed[0]['msg']}；但 {failed[0]['msg']}"
+    if passed:
+        return f"中性：{passed[0]['msg']}"
+    if failed:
+        return f"中性：{failed[0]['msg']}"
+    return "数据不足，暂无判断"
+
+
+def _build_rationale(passed: list[dict[str, Any]], failed: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    if passed:
+        lines.append("✅ 符合标准：")
+        lines.extend(f"  • [权{row['weight']}] {row['msg']}" for row in passed[:4])
+    if failed:
+        lines.append("❌ 未达标准：")
+        lines.extend(f"  • [权{row['weight']}] {row['msg']}" for row in failed[:4])
+    return "\n".join(lines) if lines else "无有效规则命中"
+
+
+def _skip_result(investor_id: str, reason: str) -> dict[str, Any]:
+    profile = decision_profile(investor_id)
+    return {
+        "investor_id": investor_id,
+        "score": -1,
+        "signal": "skip",
+        "confidence": 0,
+        "weight_pass": 0,
+        "weight_total": 0,
+        "pass_count": 0,
+        "fail_count": 0,
+        "pass_rules": [],
+        "fail_rules": [],
+        "headline": f"不适合 — {reason}",
+        "rationale": f"该投资者{reason}，不对此股票发表意见。",
+        "skip_reason": reason,
+        "time_horizon": profile["time_horizon"],
+        "position_sizing": profile["position_sizing"],
+        "what_would_change_my_mind": profile["what_would_change_my_mind"],
+        "rule_engine_version": "uzi-3.9.2-source-parity",
+    }
+
+
+def _unknown_result(investor_id: str) -> dict[str, Any]:
+    profile = decision_profile(investor_id)
+    return {
+        "investor_id": investor_id,
+        "score": 50.0,
+        "signal": "neutral",
+        "confidence": 30,
+        "weight_pass": 0,
+        "weight_total": 0,
+        "pass_count": 0,
+        "fail_count": 0,
+        "pass_rules": [],
+        "fail_rules": [],
+        "headline": "该投资者暂无量化评估规则",
+        "rationale": "此投资者未配置规则库，使用默认中性判断。",
+        "time_horizon": profile["time_horizon"],
+        "position_sizing": profile["position_sizing"],
+        "what_would_change_my_mind": profile["what_would_change_my_mind"],
+        "rule_engine_version": "uzi-3.9.2-source-parity",
     }
 
 
 def evaluate_all(features: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {investor_id: evaluate_investor(investor_id, features) for investor_id in INVESTOR_RULES}
+
+
+def panel_summary(results: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    if not results:
+        return {"bullish": 0, "bearish": 0, "neutral": 0, "skip": 0, "avg_score": 50.0}
+    active = {key: value for key, value in results.items() if value["signal"] != "skip"}
+    skipped = {key: value for key, value in results.items() if value["signal"] == "skip"}
+    bullish = sum(1 for row in active.values() if row["signal"] == "bullish")
+    bearish = sum(1 for row in active.values() if row["signal"] == "bearish")
+    neutral = sum(1 for row in active.values() if row["signal"] == "neutral")
+    active_scores = [float(row["score"]) for row in active.values() if float(row["score"]) >= 0]
+    average_score = round(sum(active_scores) / len(active_scores), 1) if active_scores else 50.0
+    average_confidence = round(
+        sum(float(row["confidence"]) for row in active.values()) / max(len(active), 1),
+        0,
+    )
+    sorted_bull = sorted(active.items(), key=lambda item: -float(item[1]["score"]))[:5]
+    sorted_bear = sorted(active.items(), key=lambda item: float(item[1]["score"]))[:5]
+    active_count = len(active)
+    return {
+        "total": len(results),
+        "active": active_count,
+        "skip": len(skipped),
+        "skip_names": [row.get("skip_reason", "") for row in skipped.values()],
+        "bullish": bullish,
+        "bearish": bearish,
+        "neutral": neutral,
+        "avg_score": average_score,
+        "avg_confidence": average_confidence,
+        "bullish_pct": round(bullish / active_count * 100, 0) if active_count else 0,
+        "bearish_pct": round(bearish / active_count * 100, 0) if active_count else 0,
+        "top_bulls": [
+            {"id": key, "score": row["score"], "headline": row["headline"]}
+            for key, row in sorted_bull
+        ],
+        "top_bears": [
+            {"id": key, "score": row["score"], "headline": row["headline"]}
+            for key, row in sorted_bear
+        ],
+    }
 
 
 if __name__ == "__main__":

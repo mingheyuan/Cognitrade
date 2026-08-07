@@ -568,6 +568,10 @@ class AgentOSCoreLoopTests(unittest.TestCase):
                     thread_id="clarification-thread",
                     intent="stock_check",
                     user_query="Analyze a stock.",
+                    constraints={
+                        "research_profile": "lite",
+                        "turn_config": {"timeout_seconds": 300},
+                    },
                 )
             )
 

@@ -15,6 +15,9 @@
     "profile": {
       "type": "string"
     },
+    "status": {
+      "type": "string"
+    },
     "methods": {
       "type": "array"
     },
@@ -34,6 +37,12 @@
       "items": {
         "type": "string"
       }
+    },
+    "summary": {
+      "type": "string"
+    },
+    "quality_status": {
+      "type": "string"
     }
   },
   "additionalProperties": false

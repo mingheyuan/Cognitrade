@@ -2,6 +2,9 @@ evaluation_id: finance.research.failure.v1
 mode: execution
 objective: Verify a halted Finance Pack analysis failure is observable.
 intent: stock_check
+metadata:
+  research_profile: lite
+  intent_inputs: {research_profile: lite}
 available_artifact_types: [user_request, snapshot, stock_snapshot_bundle]
 required_artifact_types: [research_report]
 seed_artifacts:

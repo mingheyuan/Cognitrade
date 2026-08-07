@@ -114,7 +114,7 @@ class UziFinancePackTests(unittest.TestCase):
             "uzi_dimension_coverage": [],
         }
         context = SimpleNamespace(
-            node=SimpleNamespace(inputs={"research_profile": "quick", "symbols": ["688012"]}),
+            node=SimpleNamespace(inputs={"research_profile": "lite", "symbols": ["688012"]}),
             require_artifact=lambda artifact_type: {
                 "normalized_query": normalized,
                 "evidence_set": evidence,
@@ -165,7 +165,15 @@ class UziFinancePackTests(unittest.TestCase):
         ]
         self.assertEqual(
             {draft.content["snapshot_type"] for draft in snapshots},
-            {"market", "fundamental", "notice", "capital_flow", "sentiment", "events", "lhb"},
+            {
+                "market",
+                "fundamental",
+                "kline",
+                "valuation",
+                "governance",
+                "events",
+                "lhb",
+            },
         )
         self.assertTrue(all(draft.content["quality_status"] == "data_gap" for draft in snapshots))
         self.assertTrue(
@@ -200,8 +208,8 @@ class UziFinancePackTests(unittest.TestCase):
         )
         self.assertEqual(mapping["source"]["commit"], "fce996c33e70eddce8e375f53cd252b549eb3d7c")
         self.assertEqual(mapping["profiles"]["lite"]["panel_seats"], 10)
-        self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 66)
-        self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 66)
+        self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 51)
+        self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 51)
         self.assertEqual(len(mapping["panel"]["member_ids"]), 66)
         required_mapping_fields = {
             "source_commit",
@@ -307,6 +315,9 @@ class UziFinancePackTests(unittest.TestCase):
             universe_rows=[],
             universe_source="structured_symbols",
             enrichment_targets=[],
+            query="分析 300750",
+            research_profile="lite",
+            settings=Settings.from_env(Path(__file__).resolve().parents[1]),
         )
         self.assertEqual(result["collection"]["quality_status"], "degraded")
         self.assertEqual(result["collection"]["quality_counts"], {"available": 1, "data_gap": 1})
@@ -687,9 +698,9 @@ class UziFinancePackTests(unittest.TestCase):
             DomainPackRegistry.load(repository_root / "domain_packs")
         )
         cases = {
-            "stock_screen": ("quick", "screening_result", "finance.screening.quality", 90.0),
-            "sector_research": ("lite", "sector_analysis", "finance.sector.analysis", 300.0),
-            "review_thesis": ("quick", "thesis_review", "finance.thesis.review", 90.0),
+            "stock_screen": ("lite", "screening_result", "finance.screening.quality", 120.0),
+            "sector_research": ("medium", "sector_analysis", "finance.sector.analysis", 480.0),
+            "review_thesis": ("deep", "thesis_review", "finance.thesis.review", 1200.0),
         }
         for intent, (profile, artifact_type, gate_id, timeout) in cases.items():
             with self.subTest(intent=intent):
@@ -701,7 +712,7 @@ class UziFinancePackTests(unittest.TestCase):
                         required_artifact_types=["research_report"],
                         metadata={
                             "intent": intent,
-                            "intent_inputs": {"intent": intent},
+                            "intent_inputs": {"intent": intent, "research_profile": profile},
                         },
                     )
                 )
@@ -815,32 +826,32 @@ class UziFinancePackTests(unittest.TestCase):
             DomainPackRegistry.load(repository_root / "domain_packs")
         )
 
-        quick = planner.build_graph(
+        lite = planner.build_graph(
             CapabilityPlanningRequest(
                 domain_id="finance_ashare",
-                objective="快速检查 600000",
+                objective="速判检查 600000",
                 available_artifact_types=["user_request"],
                 required_artifact_types=["research_report"],
                 metadata={
                     "intent": "stock_check",
                     "intent_inputs": {
                         "intent": "stock_check",
-                        "research_profile": "quick",
+                        "research_profile": "lite",
                     },
                 },
             )
         )
-        quick_capabilities = {node.capability for node in quick.nodes if node.capability}
-        self.assertIn("finance.uzi.valuation.evaluate", quick_capabilities)
-        self.assertIn("finance.uzi.risk.scan", quick_capabilities)
-        self.assertNotIn("finance.uzi.panel.review", quick_capabilities)
-        quick_valuation = next(
-            node for node in quick.nodes if node.capability == "finance.uzi.valuation.evaluate"
+        lite_capabilities = {node.capability for node in lite.nodes if node.capability}
+        self.assertIn("finance.uzi.valuation.evaluate", lite_capabilities)
+        self.assertIn("finance.uzi.risk.scan", lite_capabilities)
+        self.assertIn("finance.uzi.panel.review", lite_capabilities)
+        lite_valuation = next(
+            node for node in lite.nodes if node.capability == "finance.uzi.valuation.evaluate"
         )
-        quick_methods = {
-            item["method_id"] for item in quick_valuation.metadata["method_contracts"]
+        lite_methods = {
+            item["method_id"] for item in lite_valuation.metadata["method_contracts"]
         }
-        self.assertEqual(quick_methods, {"dcf"})
+        self.assertEqual(lite_methods, {"dcf"})
 
         dcf_only = planner.build_graph(
             CapabilityPlanningRequest(
@@ -879,9 +890,9 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertTrue(all(vote["is_methodology_perspective"] for vote in panel["votes"]))
         medium_panel = build_panel_review(rows, ["600000"], select_profile({"research_profile": "medium"}))
         deep_panel = build_panel_review(rows, ["600000"], select_profile({"research_profile": "deep"}))
-        self.assertEqual(len(medium_panel["votes"]), 66)
-        self.assertEqual(len(deep_panel["votes"]), 66)
-        self.assertEqual(medium_panel["registered_seat_count"], 66)
+        self.assertEqual(len(medium_panel["votes"]), 51)
+        self.assertEqual(len(deep_panel["votes"]), 51)
+        self.assertEqual(medium_panel["registered_seat_count"], 51)
         self.assertEqual(len(risk["signals"]), 8)
         self.assertIn("external_search_not_claimed", risk["risk_flags"])
 
@@ -891,15 +902,18 @@ class UziFinancePackTests(unittest.TestCase):
         valuation = build_valuation_model(rows, ["600000"], medium)
         institutional = build_institutional_analysis(rows, ["600000"], valuation, medium)
         workflow = build_research_workflow(rows, ["600000"], valuation, medium)
-        deep = build_deep_analysis(rows, ["600000"], institutional, workflow, select_profile({"research_profile": "deep"}))
+        deep_profile = select_profile({"research_profile": "deep"})
+        deep_institutional = build_institutional_analysis(rows, ["600000"], valuation, deep_profile)
+        deep = build_deep_analysis(rows, ["600000"], deep_institutional, workflow, deep_profile)
 
         self.assertEqual(institutional["results"][0]["symbol"], "600000")
         self.assertIn("three_statement", institutional["results"][0]["methods"])
         self.assertIn("quick_lbo", institutional["results"][0]["methods"])
+        self.assertNotIn("segmental", institutional["results"][0]["methods"])
         self.assertEqual(workflow["results"][0]["symbol"], "600000")
         self.assertEqual(deep["results"][0]["symbol"], "600000")
         self.assertIn("bull_bear_debate", deep["results"][0])
-        self.assertIn("segment_revenue_missing", institutional["results"][0]["methods"]["segmental"]["data_gap"])
+        self.assertIn("segment_revenue_missing", deep_institutional["results"][0]["methods"]["segmental"]["data_gap"])
 
     def test_agent_os_graph_commits_uzi_artifacts_and_presentation(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -988,7 +1002,7 @@ class UziFinancePackTests(unittest.TestCase):
                 self.assertEqual(presentation["content"]["profile"], "lite")
                 self.assertTrue(presentation["content"]["source_artifact_ids"])
 
-    def test_medium_agent_os_run_uses_independent_safe_default_artifacts(self) -> None:
+    def test_explicit_medium_agent_os_run_uses_medium_artifact_contract(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1029,14 +1043,14 @@ class UziFinancePackTests(unittest.TestCase):
                         "valuation_model",
                         "investor_panel_review",
                         "risk_scan",
+                        "institutional_analysis",
+                        "research_workflow",
                         "uzi_dimension_coverage",
                         "research_report",
                         "report_presentation",
                     }.issubset(types)
                 )
-                self.assertTrue(
-                    {"institutional_analysis", "research_workflow", "deep_analysis"}.isdisjoint(types)
-                )
+                self.assertNotIn("deep_analysis", types)
 
 
 if __name__ == "__main__":

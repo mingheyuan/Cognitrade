@@ -92,18 +92,6 @@ export function Overview({ onSubmit, onOpenWorkbench, onOpenRuns, onOpenRun }: O
           <h1>今天想研究什么？</h1>
           <p>问题会直接提交到 `/api/v1/runs`，候选与板块信号则读取 DomainPack 声明的 Agent OS Dashboard。</p>
           <ResearchComposer onSubmit={onSubmit} running={submitting} />
-          <div className="query-presets">
-            <span>常用研究</span>
-            <button onClick={() => onSubmit('筛选现金流质量改善且估值合理的公司', 'stock_screen')}>现金流筛选</button>
-            <button onClick={() => onSubmit('梳理人形机器人板块的近期催化与主要风险', 'sector_research')}>板块催化</button>
-            <button
-              onClick={() => onSubmit(
-                '复核上一轮研究判断，并用最新证据检查结论是否仍成立',
-                'review_thesis',
-                selectedRunId ? { review_target_run_id: selectedRunId } : undefined,
-              )}
-            >复核判断</button>
-          </div>
         </div>
         <aside className="daily-focus-card">
           <div className="daily-focus-topline"><span><Sparkles size={14} />最近选中运行</span><span className="live-data-label">实时 API</span></div>

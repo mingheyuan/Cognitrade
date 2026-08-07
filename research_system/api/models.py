@@ -14,7 +14,7 @@ class RerunRequest(ApiRequestModel):
 
 class FundHoldingReportCreateRequest(ApiRequestModel):
     fund_code: str = Field(pattern=r"^\d{6}$")
-    profile: Literal["quick", "lite", "medium", "deep"] = "lite"
+    profile: Literal["lite", "medium", "deep"]
     source_artifact_id: str | None = Field(default=None, min_length=1, max_length=128)
     confirm_stale: bool = False
     force: bool = False

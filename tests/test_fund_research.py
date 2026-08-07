@@ -679,7 +679,7 @@ class FundResearchTests(unittest.TestCase):
                 required_artifact_types=[],
                 metadata={
                     "intent": "stock_check",
-                    "intent_inputs": {"symbols": ["600000"]},
+                    "intent_inputs": {"symbols": ["600000"], "research_profile": "lite"},
                 },
             )
         )
@@ -807,16 +807,14 @@ class FundResearchTests(unittest.TestCase):
         self.assertIn("cninfo 市场加权均值", facts["valuation"]["industry_pe_fallback_reason"])
         self.assertEqual(facts["valuation"]["industry_pe_source"]["scope"], "market_weighted_average")
 
-    def test_cash_profit_rule_is_skipped_when_ocf_ratio_is_missing(self) -> None:
+    def test_cash_profit_rule_preserves_uzi_392_missing_key_semantics(self) -> None:
         result = evaluate_investor("chanos", {})
 
-        self.assertIn("cash_matches_eps", result["data_gap_rules"])
-        self.assertEqual(result["pass_rules"], [])
-        self.assertEqual(result["fail_rules"], [])
-        self.assertEqual(result["signal"], "insufficient_evidence")
-        self.assertTrue(
-            all(row["rule_id"] != "cash_matches_eps" for row in result["pass_rules"])
-        )
+        self.assertEqual(result["signal"], "bullish")
+        self.assertEqual(result["score"], 100)
+        self.assertEqual(result["pass_count"], 5)
+        self.assertEqual(result["fail_count"], 0)
+        self.assertIn("cash_matches_eps", {row["rule_id"] for row in result["pass_rules"]})
 
 
 if __name__ == "__main__":

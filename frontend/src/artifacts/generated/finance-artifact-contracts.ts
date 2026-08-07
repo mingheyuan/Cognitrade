@@ -774,6 +774,7 @@ export type ResearchReportContent = {
   "research_workflow"?: Record<string, unknown> | null;
   "deep_analysis"?: Record<string, unknown> | null;
   "uzi_dimension_coverage"?: Record<string, unknown> | null;
+  "uzi_data_pipeline"?: Record<string, unknown> | null;
   "presentation_artifact_type"?: string;
   "holding_context"?: {
     "parent_batch_id": string;
@@ -875,11 +876,16 @@ export type InvestorPanelReviewContent = {
     "investor_id": string;
     "perspective_id": string;
     "perspective_label": string;
+    "investor_name_en": string | null;
+    "methodology_source": string | null;
+    "avatar_seed": string | null;
+    "tier": string | null;
     "school": string;
     "required_dimensions": Array<string>;
     "signal": string;
     "score": number;
     "confidence": number;
+    "uzi_confidence": number;
     "reasoning": string;
     "headline": string;
     "pass_rules": Array<{
@@ -887,29 +893,22 @@ export type InvestorPanelReviewContent = {
       "name": string;
       "weight": number;
       "msg": string;
-      "missing_fields"?: Array<string>;
     }>;
     "fail_rules": Array<{
       "rule_id": string;
       "name": string;
       "weight": number;
       "msg": string;
-      "missing_fields"?: Array<string>;
     }>;
-    "skipped_rules": Array<{
-      "rule_id": string;
-      "name": string;
-      "weight": number;
-      "msg": string;
-      "missing_fields"?: Array<string>;
-    }>;
-    "data_gap_rules": Array<string>;
     "pass_count": number;
     "fail_count": number;
-    "skipped_count": number;
     "weight_pass": number;
     "weight_total": number;
     "rule_engine_version": string;
+    "skip_reason": string | null;
+    "time_horizon": string | null;
+    "position_sizing": string | null;
+    "what_would_change_my_mind": string | null;
     "checks": Array<{
       "dimension": string;
       "status": string;
@@ -923,11 +922,11 @@ export type InvestorPanelReviewContent = {
     "bullish"?: number;
     "bearish"?: number;
     "neutral"?: number;
-    "insufficient_evidence"?: number;
+    "skip"?: number;
   };
   "average_score"?: number | null;
   "evaluated_rule_count"?: number;
-  "skipped_rule_count"?: number;
+  "skipped_seat_count"?: number;
   "quality_status"?: string;
   "data_gap"?: Array<string>;
   "disagreement": {
@@ -978,11 +977,13 @@ export type ReportPresentationContent = {
   "risk_list": Array<unknown>;
   "buy_zones": Array<unknown>;
   "institutional_modeling": Array<Record<string, unknown>>;
+  "data_pipeline"?: Record<string, unknown> | null;
   "advanced_methods"?: {
     "institutional_analysis"?: Record<string, unknown> | null;
     "research_workflow"?: Record<string, unknown> | null;
     "deep_analysis"?: Record<string, unknown> | null;
     "uzi_dimension_coverage"?: Record<string, unknown> | null;
+    "uzi_data_pipeline"?: Record<string, unknown> | null;
   };
   "source_artifact_ids": Array<string>;
   "generated_at": string;
@@ -992,11 +993,14 @@ export type ReportPresentationContent = {
 export type InstitutionalAnalysisContent = {
   "methodology_version": string;
   "profile": string;
+  "status"?: string;
   "methods"?: Array<unknown>;
   "results": Array<unknown>;
   "data_gap"?: Array<unknown>;
   "confidence": number;
   "risk_flags": Array<string>;
+  "summary"?: string;
+  "quality_status"?: string;
 }
 
 export type ResearchWorkflowContent = {
@@ -1006,6 +1010,7 @@ export type ResearchWorkflowContent = {
   "summary"?: string;
   "confidence": number;
   "risk_flags": Array<string>;
+  "quality_status"?: string;
 }
 
 export type DeepAnalysisContent = {
@@ -1405,7 +1410,7 @@ export type FundHoldingReportBatchContent = {
   "fund_code": string;
   "fund_name": string;
   "fund_type"?: string | null;
-  "profile": "quick" | "lite" | "medium" | "deep";
+  "profile": "lite" | "medium" | "deep";
   "status": "running" | "completed" | "completed_partial" | "failed" | "cancelled";
   "concurrency": number;
   "holding_source": "direct_equity_disclosure" | "target_etf_lookthrough";
@@ -2459,6 +2464,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "research_workflow",
     "deep_analysis",
     "uzi_dimension_coverage",
+    "uzi_data_pipeline",
     "presentation_artifact_type",
     "holding_context",
     "holding_context.parent_batch_id",
@@ -2553,11 +2559,16 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "votes[].investor_id",
     "votes[].perspective_id",
     "votes[].perspective_label",
+    "votes[].investor_name_en",
+    "votes[].methodology_source",
+    "votes[].avatar_seed",
+    "votes[].tier",
     "votes[].school",
     "votes[].required_dimensions",
     "votes[].signal",
     "votes[].score",
     "votes[].confidence",
+    "votes[].uzi_confidence",
     "votes[].reasoning",
     "votes[].headline",
     "votes[].pass_rules",
@@ -2565,26 +2576,20 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "votes[].pass_rules[].name",
     "votes[].pass_rules[].weight",
     "votes[].pass_rules[].msg",
-    "votes[].pass_rules[].missing_fields",
     "votes[].fail_rules",
     "votes[].fail_rules[].rule_id",
     "votes[].fail_rules[].name",
     "votes[].fail_rules[].weight",
     "votes[].fail_rules[].msg",
-    "votes[].fail_rules[].missing_fields",
-    "votes[].skipped_rules",
-    "votes[].skipped_rules[].rule_id",
-    "votes[].skipped_rules[].name",
-    "votes[].skipped_rules[].weight",
-    "votes[].skipped_rules[].msg",
-    "votes[].skipped_rules[].missing_fields",
-    "votes[].data_gap_rules",
     "votes[].pass_count",
     "votes[].fail_count",
-    "votes[].skipped_count",
     "votes[].weight_pass",
     "votes[].weight_total",
     "votes[].rule_engine_version",
+    "votes[].skip_reason",
+    "votes[].time_horizon",
+    "votes[].position_sizing",
+    "votes[].what_would_change_my_mind",
     "votes[].checks",
     "votes[].checks[].dimension",
     "votes[].checks[].status",
@@ -2596,10 +2601,10 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "distribution.bullish",
     "distribution.bearish",
     "distribution.neutral",
-    "distribution.insufficient_evidence",
+    "distribution.skip",
     "average_score",
     "evaluated_rule_count",
-    "skipped_rule_count",
+    "skipped_seat_count",
     "quality_status",
     "data_gap",
     "disagreement",
@@ -2645,11 +2650,13 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "risk_list",
     "buy_zones",
     "institutional_modeling",
+    "data_pipeline",
     "advanced_methods",
     "advanced_methods.institutional_analysis",
     "advanced_methods.research_workflow",
     "advanced_methods.deep_analysis",
     "advanced_methods.uzi_dimension_coverage",
+    "advanced_methods.uzi_data_pipeline",
     "source_artifact_ids",
     "generated_at",
     "data_gap",
@@ -2657,11 +2664,14 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
   "institutional_analysis": [
     "methodology_version",
     "profile",
+    "status",
     "methods",
     "results",
     "data_gap",
     "confidence",
     "risk_flags",
+    "summary",
+    "quality_status",
   ],
   "research_workflow": [
     "methodology_version",
@@ -2670,6 +2680,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "summary",
     "confidence",
     "risk_flags",
+    "quality_status",
   ],
   "deep_analysis": [
     "methodology_version",

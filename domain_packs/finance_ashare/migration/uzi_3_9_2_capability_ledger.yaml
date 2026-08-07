@@ -85,7 +85,7 @@ fetchers:
 
 commands:
   - {id: analyze-stock, target: stock_check+research_profile, status: adapted}
-  - {id: quick-scan, target: stock_check+quick, status: adapted}
+  - {id: quick-scan, target: null, status: removed, replacement: explicit_stock_check_plus_lite}
   - {id: panel-only, target: finance.uzi.panel.review, status: adapted}
   - {id: scan-trap, target: finance.uzi.risk.scan, status: adapted, deviation: missing_news_is_data_gap}
   - {id: dcf, target: finance.uzi.valuation.evaluate, status: adapted}
@@ -186,11 +186,32 @@ provider_smoke:
 
 panel:
   registry: domain_packs/finance_ashare/subagents/uzi_panel_registry.py
-  quick: 5
+  metadata: domain_packs/finance_ashare/subagents/uzi_panel_metadata.py
+  rules: domain_packs/finance_ashare/subagents/uzi_panel_rules.py
+  decision_profiles: domain_packs/finance_ashare/subagents/uzi_panel_profiles.py
+  context_and_reality_checks: domain_packs/finance_ashare/subagents/uzi_panel_context.py
   lite: 10
-  medium: 66
-  deep: 66
-  missing_rule_input: skip_and_record_data_gap
+  medium: 51
+  deep: 51
+  rule_count: 242
+  missing_rule_input: upstream_lambda_default_pass_or_fail
+  whole_seat_skip_only: [school_lock, market_mismatch, youzi_range_mismatch]
+  integrity_boundary: pre_vote_uzi_integrity_report
+  acceptance: tests.test_uzi_rule_and_fallback_parity.UziRuleSourceParityTests
+
+real_fallback_chain:
+  status: implemented_v1
+  stage_order: [primary_providers, integrity_check, mx_api, ddgs, playwright, integrity_recheck]
+  integrity_checks: 18
+  enrichment_dimensions: 16
+  qualitative_autofill_dimensions: [3_macro, 7_industry, 8_materials, 9_futures, 13_policy, 15_events]
+  playwright_profiles:
+    lite: []
+    medium: [4_peers, 8_materials, 15_events, 17_sentiment, 7_industry, 14_moat]
+    deep: [4_peers, 8_materials, 15_events, 17_sentiment, 7_industry, 14_moat, 3_macro, 13_policy, 18_trap, 19_contests]
+  provider_policy: explicit_browser_and_sensitive_switch_plus_allowlist_and_credentials
+  simulated_values: forbidden
+  acceptance: tests.test_uzi_rule_and_fallback_parity.UziFallbackParityTests
 
 method_products_extension:
   status: implemented_v1

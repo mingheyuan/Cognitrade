@@ -211,7 +211,10 @@ describe('Funds', () => {
 
   it('starts a lite top-holding report batch from the frozen fund run', async () => {
     render(<Funds onOpenRun={mocks.openRun} />)
-    fireEvent.click(screen.getByRole('button', { name: '生成 轻量持仓股票报告' }))
+    fireEvent.change(screen.getByRole('combobox', { name: '研究档位' }), {
+      target: { value: 'lite' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '生成 速判持仓股票报告' }))
 
     await waitFor(() => {
       const calls = vi.mocked(fetch).mock.calls

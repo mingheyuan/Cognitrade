@@ -91,7 +91,14 @@ _RESEARCH_METHODS = frozenset(
     }
 )
 _SCREEN_STYLES = frozenset({"value", "growth", "quality", "gulp", "short"})
-_RESEARCH_PROFILES = frozenset({"quick", "lite", "medium", "deep"})
+_RESEARCH_PROFILES = frozenset({"lite", "medium", "deep"})
+_UZI_PROFILE_INTENTS = frozenset({
+    "stock_check",
+    "stock_compare",
+    "stock_screen",
+    "sector_research",
+    "review_thesis",
+})
 
 _COMMON_REQUEST_FIELDS = {"planning_context_hints", "background"}
 _STOCK_FIELDS = {
@@ -120,6 +127,7 @@ _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
         "watchlist_min_score",
         "enrichment_top_n",
         "skip_enrichment",
+        "research_profile",
         *_COMMON_REQUEST_FIELDS,
     },
     "fund_research": {
@@ -139,7 +147,7 @@ _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
         "requested_methods",
         *_COMMON_REQUEST_FIELDS,
     },
-    "sector_research": {"sector_query", "include_policy_snapshot", *_COMMON_REQUEST_FIELDS},
+    "sector_research": {"sector_query", "include_policy_snapshot", "research_profile", *_COMMON_REQUEST_FIELDS},
     "distill_kol_logic": set(_COMMON_REQUEST_FIELDS),
     "review_thesis": {
         "review_target_run_id",
@@ -147,6 +155,7 @@ _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
         "allow_partial_snapshot_types",
         "include_policy_snapshot",
         "investment_cycle",
+        "research_profile",
         *_COMMON_REQUEST_FIELDS,
     },
 }
@@ -225,6 +234,13 @@ def validate_research_request(
             code="unknown_constraint",
             message="Request contains constraints that are not available for this intent",
             details={"intent": intent, "fields": unknown_fields},
+        )
+    if intent in _UZI_PROFILE_INTENTS and not str(constraints.get("research_profile") or "").strip():
+        raise ApiError(
+            status_code=422,
+            code="missing_constraint",
+            message="research_profile is required; choose lite, medium or deep",
+            details={"intent": intent, "field": "research_profile", "allowed": sorted(_RESEARCH_PROFILES)},
         )
 
     _validate_common_constraints(

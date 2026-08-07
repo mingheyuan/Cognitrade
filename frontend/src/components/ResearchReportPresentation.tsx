@@ -52,6 +52,7 @@ function signalLabel(value: string): string {
     bullish: '偏多',
     bearish: '偏空',
     neutral: '中性',
+    skip: '不适用',
     insufficient_evidence: '证据不足',
   }[value] || value || '未返回'
 }
@@ -106,13 +107,25 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
   const valuation = asRecord(dashboard.valuation)
   const panel = asRecord(presentation.panel)
   const greatDivide = asRecord(presentation.great_divide)
-  const profile = asString(presentation.profile, 'lite')
+  const profile = asString(presentation.profile, '未记录')
   const valuationModel = asRecord(report.valuation_model)
   const valuationModels = Array.isArray(valuationModel.models)
     ? valuationModel.models.map((model) => asRecord(model))
     : []
   const primaryModel = valuationModels[0] || {}
   const advanced = asRecord(presentation.advanced_methods)
+  const dataPipeline = asRecord(presentation.data_pipeline || report.uzi_data_pipeline)
+  const integrity = asRecord(dataPipeline.uzi_integrity)
+  const integrityBefore = asRecord(integrity.before_recovery || integrity)
+  const integrityAfter = asRecord(integrity.after_recovery || integrity)
+  const recovery = asRecord(dataPipeline.uzi_recovery)
+  const qualitativeStage = asRecord(recovery.qualitative_stage)
+  const playwrightStage = asRecord(recovery.playwright_stage)
+  const integritySymbols = Array.isArray(integrityAfter.symbols) ? integrityAfter.symbols.map(asRecord) : []
+  const recoveryAttempts = [
+    ...(Array.isArray(qualitativeStage.attempts) ? qualitativeStage.attempts.map(asRecord) : []),
+    ...(Array.isArray(playwrightStage.attempts) ? playwrightStage.attempts.map(asRecord) : []),
+  ]
   const institutional = asRecord(advanced.institutional_analysis)
   const workflow = asRecord(advanced.research_workflow)
   const deep = asRecord(advanced.deep_analysis)
@@ -273,9 +286,10 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
             {votes.map((vote, index) => {
               const signal = asString(vote.signal, 'neutral')
               const voteScore = asNumber(vote.score)
+              const scoreText = signal === 'skip' ? '不适用' : voteScore === null ? '—' : numberText(voteScore, 1)
               return (
                 <article key={asString(vote.perspective_id, String(index))} className={signalClass(signal)}>
-                  <div><span>{asString(vote.perspective_label, '方法论视角')}</span><strong>{voteScore === null ? '—' : numberText(voteScore, 1)}</strong></div>
+                  <div><span>{asString(vote.perspective_label, '方法论视角')}</span><strong>{scoreText}</strong></div>
                   <div className="research-presentation__vote-track"><i style={{ width: `${Math.max(0, Math.min(100, voteScore ?? 0))}%` }} /></div>
                   <small>{signalLabel(signal)} · {asString(vote.headline || vote.reasoning, '未返回解释')}</small>
                 </article>
@@ -311,7 +325,82 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
 
       <section className="research-presentation__section">
         <div className="research-presentation__section-head">
-          <span>05 / PANEL INSIGHTS</span>
+          <span>05 / DATA RECOVERY</span>
+          <h3>数据完整性与真实兜底</h3>
+          <i />
+          <small>{recoveryAttempts.length} 次兜底尝试</small>
+        </div>
+        <div className="research-presentation__advanced-grid">
+          <AdvancedSummary
+            label="主数据采集"
+            status={statusText(dataPipeline.quality_status)}
+            summary={`${asNumber(asRecord(dataPipeline.quality_counts).available) ?? 0} 个可用快照`}
+            detail={asStringList(dataPipeline.degrade_reasons).join(' · ') || '主数据源未标记降级'}
+          />
+          <AdvancedSummary
+            label="恢复前完整性"
+            status={integrityBefore.critical_missing ? 'data_gap' : 'available'}
+            summary={`覆盖率 ${numberText(integrityBefore.coverage_pct, 1)}%`}
+            detail={`${asNumber(integrityBefore.recovery_task_count) ?? 0} 个恢复任务`}
+          />
+          <AdvancedSummary
+            label="恢复后完整性"
+            status={integrityAfter.critical_missing ? 'data_gap' : 'available'}
+            summary={`覆盖率 ${numberText(integrityAfter.coverage_pct, 1)}%`}
+            detail={integrityAfter.ok ? '完整性门已通过' : '仍有真实数据缺口'}
+          />
+          <AdvancedSummary
+            label="MX → DDGS → Playwright"
+            status={(asNumber(recovery.failed) ?? 0) > 0 ? 'data_gap' : 'available'}
+            summary={`成功 ${asNumber(recovery.succeeded) ?? 0} / 尝试 ${asNumber(recovery.attempted) ?? 0}`}
+            detail={asStringList(recovery.stage_order).join(' → ') || '按 UZI 3.9.2 顺序执行'}
+          />
+        </div>
+        {integritySymbols.length > 0 && (
+          <div className="research-presentation__institutional-grid">
+            {integritySymbols.map((item, index) => {
+              const critical = Array.isArray(item.missing_critical) ? item.missing_critical.map(asRecord) : []
+              const optional = Array.isArray(item.missing_optional) ? item.missing_optional.map(asRecord) : []
+              const enrichment = Array.isArray(item.missing_enrichment) ? item.missing_enrichment.map(asRecord) : []
+              const tasks = Array.isArray(item.recovery_tasks) ? item.recovery_tasks.map(asRecord) : []
+              return (
+                <article key={asString(item.symbol, String(index))} className={`research-presentation__method-card ${item.ok ? '' : 'is-gap'}`}>
+                  <div className="research-presentation__method-card__head">
+                    <span>{asString(item.symbol, '标的')} · 完整性检查</span>
+                    <strong>{numberText(item.coverage_pct, 1)}%</strong>
+                  </div>
+                  <p>关键缺口：{critical.map((row) => asString(row.label || row.path)).join('、') || '无'}</p>
+                  <small>可选缺口：{optional.map((row) => asString(row.label || row.path)).join('、') || '无'}</small>
+                  <small>扩展维度：{enrichment.map((row) => asString(row.label || row.dim)).join('、') || '无'}</small>
+                  {tasks.length > 0 && <small className="research-presentation__method-card__gap">恢复建议：{tasks.map((task) => `${asString(task.label || task.field)}（${asStringList(task.suggested_actions).join(' / ')}）`).join(' · ')}</small>}
+                </article>
+              )
+            })}
+          </div>
+        )}
+        {recoveryAttempts.length > 0 && (
+          <div className="research-presentation__institutional-grid">
+            {recoveryAttempts.map((attempt, index) => {
+              const trace = Array.isArray(attempt.source_trace) ? attempt.source_trace.map(asRecord) : []
+              return (
+                <article key={`${asString(attempt.symbol, 'global')}-${asString(attempt.snapshot_type, 'dimension')}-${index}`} className={`research-presentation__method-card ${statusText(attempt.status) === 'available' ? '' : 'is-gap'}`}>
+                  <div className="research-presentation__method-card__head">
+                    <span>{asString(attempt.symbol, '全局')} · {businessFieldLabel(asString(attempt.snapshot_type, 'dimension'))}</span>
+                    <strong>{verdictLabel(statusText(attempt.status))}</strong>
+                  </div>
+                  <p>{asString(attempt.query || attempt.reason, '按数据质量阈值触发兜底')}</p>
+                  <small>来源：{asString(attempt.source_id) || asStringList(attempt.source_ids).join('、') || '未取得'}</small>
+                  <small>链路：{trace.map((row) => `${asString(row.strategy_id || row.source_id, 'source')}:${asString(row.status, 'unknown')}`).join(' → ') || '无可用来源返回'}</small>
+                </article>
+              )
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="research-presentation__section">
+        <div className="research-presentation__section-head">
+          <span>06 / PANEL INSIGHTS</span>
           <h3>派系评审洞察</h3>
           <i />
           <small>{panelInsights.length} 个方法论席位</small>
@@ -324,7 +413,7 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
                   <span>{asString(round.label, '方法论派系')}</span>
                   <strong>{asNumber(round.average_score) === null ? '—' : numberText(round.average_score, 1)}</strong>
                 </div>
-                <small>{asNumber(round.seat_count) ?? 0} 席 · 偏多 {asNumber(round.bullish_count) ?? 0} · 偏空 {asNumber(round.bearish_count) ?? 0} · 证据不足 {asNumber(round.insufficient_evidence_count) ?? 0}</small>
+                <small>{asNumber(round.seat_count) ?? 0} 席 · 偏多 {asNumber(round.bullish_count) ?? 0} · 偏空 {asNumber(round.bearish_count) ?? 0} · 中性 {asNumber(round.neutral_count) ?? 0} · 不适用 {asNumber(round.skip_count) ?? 0}</small>
                 <p>{asString(asRecord(round.bull_case).headline || asRecord(round.bull_case).reasoning, '该派系没有偏多席位。')}</p>
                 <p className="is-bearish-text">{asString(asRecord(round.bear_case).headline || asRecord(round.bear_case).reasoning, '该派系没有偏空席位。')}</p>
               </article>
@@ -339,10 +428,14 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
                 <article key={asString(insight.perspective_id, String(index))} className={signalClass(signal)}>
                   <div className="research-presentation__insight-card__head">
                     <span>{asString(insight.perspective_label, '方法论席位')}</span>
-                    <strong>{numberText(insight.score, 1)}</strong>
+                    <strong>{signal === 'skip' ? '不适用' : numberText(insight.score, 1)}</strong>
                   </div>
                   <small>{asString(insight.school_label, '方法论派系')} · {signalLabel(signal)} · 置信度 {percentText(asNumber(insight.confidence) === null ? null : asNumber(insight.confidence)! * 100)}</small>
                   <p>{asString(insight.headline || insight.reasoning, '未返回评审解释。')}</p>
+                  <small>方法来源：{asString(insight.methodology_source, 'UZI 3.9.2 规则库')}</small>
+                  <small>观察周期：{asString(insight.time_horizon, '—')}</small>
+                  <small>仓位方法：{asString(insight.position_sizing, '—')}</small>
+                  <small>改变判断：{asString(insight.what_would_change_my_mind, '—')}</small>
                 </article>
               )
             })}
@@ -352,7 +445,7 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
 
       <section className="research-presentation__section">
         <div className="research-presentation__section-head">
-          <span>06 / MODELING</span>
+          <span>07 / MODELING</span>
           <h3>机构模型与研究工作流</h3>
           <i />
         </div>
@@ -385,7 +478,7 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
 
       <section className="research-presentation__section">
         <div className="research-presentation__section-head">
-          <span>07 / METHODS</span>
+          <span>08 / METHODS</span>
           <h3>机构模型明细</h3>
           <i />
           <small>{institutionalModeling.reduce((count, item) => count + (Array.isArray(item.methods) ? item.methods.length : 0), 0)} 个模型输出</small>
@@ -420,7 +513,7 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
 
       <section className="research-presentation__section">
         <div className="research-presentation__section-head">
-          <span>08 / RISKS</span>
+          <span>09 / RISKS</span>
           <h3>核心风险清单</h3>
           <i />
           <small>{risks.length} 个风险信号</small>
@@ -448,7 +541,7 @@ export function ResearchReportPresentation({ report }: ResearchReportPresentatio
       {buyZones.length > 0 && (
         <section className="research-presentation__section">
           <div className="research-presentation__section-head">
-            <span>09 / OBSERVATION</span>
+            <span>10 / OBSERVATION</span>
             <h3>价格观察参考</h3>
             <i />
           </div>

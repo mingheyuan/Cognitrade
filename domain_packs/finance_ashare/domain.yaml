@@ -179,7 +179,7 @@ intake:
   intents:
     - intent_id: stock_check
       description: Analyze one or more A-share companies with evidence-backed financial context.
-      required_slots: [symbols]
+      required_slots: [symbols, research_profile]
       candidate_capabilities:
         - finance.query.normalize
         - finance.ashare.snapshot.collect
@@ -188,7 +188,7 @@ intake:
       output_artifact_types: [research_report]
     - intent_id: stock_compare
       description: Compare two or more A-share companies on a consistent evidence basis.
-      required_slots: [symbols]
+      required_slots: [symbols, research_profile]
       candidate_capabilities:
         - finance.query.normalize
         - finance.ashare.snapshot.collect
@@ -197,7 +197,7 @@ intake:
       output_artifact_types: [research_report]
     - intent_id: stock_screen
       description: Screen an A-share universe and produce traceable candidates.
-      required_slots: []
+      required_slots: [research_profile]
       optional_slots: [symbols, sector]
       candidate_capabilities:
         - finance.query.normalize
@@ -227,7 +227,7 @@ intake:
       output_artifact_types: [returns_attribution, holding_rebalance]
     - intent_id: sector_research
       description: Research a sector or industry using current evidence.
-      required_slots: [sector]
+      required_slots: [sector, research_profile]
       candidate_capabilities:
         - finance.query.normalize
         - finance.ashare.snapshot.collect
@@ -236,7 +236,7 @@ intake:
       output_artifact_types: [research_report]
     - intent_id: review_thesis
       description: Review a prior research thesis and identify support, gaps, and risks.
-      required_slots: [review_target_run_id]
+      required_slots: [review_target_run_id, research_profile]
       candidate_capabilities:
         - finance.query.normalize
         - evidence.select
@@ -377,7 +377,7 @@ capabilities:
     cache_scope: run
     freshness_ttl_seconds: 86400
     data_period_policy: {kind: latest_available_financial_period}
-    tags: [profile:quick, profile:lite, profile:medium, profile:deep]
+    tags: [profile:lite, profile:medium, profile:deep]
   - subagent_type: uzi_panel_reviewer
     capability: finance.uzi.panel.review
     capability_version: "1"
@@ -393,7 +393,7 @@ capabilities:
     parallel_safe: true
     cache_scope: global
     freshness_ttl_seconds: 86400
-    tags: [profile:quick, profile:lite, profile:medium, profile:deep]
+    tags: [profile:lite, profile:medium, profile:deep]
   - subagent_type: uzi_risk_scanner
     capability: finance.uzi.risk.scan
     capability_version: "1"
@@ -409,7 +409,7 @@ capabilities:
     parallel_safe: true
     cache_scope: global
     freshness_ttl_seconds: 3600
-    tags: [profile:quick, profile:lite, profile:medium, profile:deep]
+    tags: [profile:lite, profile:medium, profile:deep]
   - subagent_type: uzi_institutional_analyst
     capability: finance.uzi.institutional.evaluate
     capability_version: "1"
@@ -501,7 +501,7 @@ capabilities:
     parallel_safe: true
     cache_scope: run
     freshness_ttl_seconds: 86400
-    tags: [profile:quick, profile:lite, profile:medium, profile:deep]
+    tags: [profile:lite, profile:medium, profile:deep]
   - subagent_type: uzi_earnings_preview_analyst
     capability: finance.uzi.tier1.earnings_preview
     capability_version: "1"
@@ -517,7 +517,7 @@ capabilities:
     parallel_safe: true
     cache_scope: run
     freshness_ttl_seconds: 86400
-    tags: [profile:quick, profile:lite, profile:medium, profile:deep]
+    tags: [profile:lite, profile:medium, profile:deep]
   - subagent_type: uzi_model_update_analyst
     capability: finance.uzi.tier1.model_update
     capability_version: "1"
@@ -535,7 +535,7 @@ capabilities:
     parallel_safe: true
     cache_scope: run
     freshness_ttl_seconds: 86400
-    tags: [profile:quick, profile:lite, profile:medium, profile:deep]
+    tags: [profile:lite, profile:medium, profile:deep]
   - subagent_type: uzi_returns_attribution_analyst
     capability: finance.uzi.tier1.returns_attribution
     capability_version: "1"
@@ -849,7 +849,7 @@ capabilities:
     reliability: 0.9
     cache_scope: run
     freshness_ttl_seconds: 0
-    tags: [profile:quick, profile:lite, profile:medium, profile:deep]
+    tags: [profile:lite, profile:medium, profile:deep]
   - subagent_type: research_safety_gate_evaluator
     capability: finance.report.safety.gate
     implementation: subagents.runtime:evaluate_research_safety_gate
@@ -1133,13 +1133,8 @@ report_contracts:
     required_gate_ids: [finance.presentation.lineage]
 planner_policies:
   prefer_evidence_backed_paths: true
-  default_profile: lite
   profile_intents: [stock_check, stock_compare, stock_screen, sector_research, review_thesis]
   profile_output_intents: [stock_check, stock_compare]
-  intent_profiles:
-    stock_screen: quick
-    sector_research: lite
-    review_thesis: quick
   progress_policy:
     max_model_updates: 12
     max_tokens: 1200
@@ -1172,35 +1167,28 @@ planner_policies:
     - fund_holders
     - similar_stocks
   research_profiles:
-    quick:
-      max_cost_class: medium
-      max_latency_class: medium
-      max_duration_seconds: 90
-      allowed_capability_tags: [profile:quick]
-      methods: [dcf, risk]
     lite:
       max_cost_class: medium
       max_latency_class: medium
-      max_duration_seconds: 300
-      allowed_capability_tags: [profile:quick, profile:lite]
-      methods: [dcf, panel, risk]
+      max_duration_seconds: 120
+      allowed_capability_tags: [profile:lite]
+      methods: [dcf]
     medium:
       max_cost_class: high
       max_latency_class: high
-      max_duration_seconds: 900
-      allowed_capability_tags: [profile:quick, profile:lite, profile:medium]
-      methods: [dcf, comps, panel, risk, dimensions]
+      max_duration_seconds: 480
+      allowed_capability_tags: [profile:lite, profile:medium]
+      methods: [dcf, comps, panel, risk, institutional, workflow, dimensions]
     deep:
       max_cost_class: high
       max_latency_class: high
-      max_duration_seconds: 1800
-      allowed_capability_tags: [profile:quick, profile:lite, profile:medium, profile:deep]
-      methods: [dcf, comps, panel, risk, dimensions]
+      max_duration_seconds: 1200
+      allowed_capability_tags: [profile:lite, profile:medium, profile:deep]
+      methods: [dcf, comps, panel, risk, institutional, workflow, deep, dimensions]
   profile_outputs:
-    quick: [research_report, report_presentation, valuation_model, risk_scan]
     lite: [research_report, report_presentation, valuation_model, investor_panel_review, risk_scan]
-    medium: [research_report, report_presentation, valuation_model, investor_panel_review, risk_scan, uzi_dimension_coverage]
-    deep: [research_report, report_presentation, valuation_model, investor_panel_review, risk_scan, uzi_dimension_coverage]
+    medium: [research_report, report_presentation, valuation_model, investor_panel_review, risk_scan, institutional_analysis, research_workflow, uzi_dimension_coverage]
+    deep: [research_report, report_presentation, valuation_model, investor_panel_review, risk_scan, institutional_analysis, research_workflow, deep_analysis, uzi_dimension_coverage]
   methodology_outputs:
     dcf: [valuation_model]
     comps: [valuation_model]

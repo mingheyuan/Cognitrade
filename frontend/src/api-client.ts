@@ -45,7 +45,7 @@ export type RunReportExport = {
   filename: string
 }
 
-export type HoldingReportProfile = 'quick' | 'lite' | 'medium' | 'deep'
+export type HoldingReportProfile = 'lite' | 'medium' | 'deep'
 
 export type FundHoldingReportItem = {
   rank: number

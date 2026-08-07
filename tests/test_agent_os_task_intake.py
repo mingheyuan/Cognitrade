@@ -43,7 +43,10 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
             llm_provider=provider,
         )
 
-        decision = service.resolve(RequestEnvelope(user_query="find interesting companies"))
+        decision = service.resolve(RequestEnvelope(
+            user_query="find interesting companies",
+            constraints={"research_profile": "lite"},
+        ))
 
         self.assertEqual(decision.status, "accepted")
         self.assertEqual(decision.request_kind, "domain_task")
@@ -57,7 +60,10 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
         service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
 
         decision = service.resolve(
-            RequestEnvelope(user_query="\u5bf9\u6bd4\u5e73\u5b89\u94f6\u884c\u548c\u62db\u5546\u94f6\u884c")
+            RequestEnvelope(
+                user_query="\u5bf9\u6bd4\u5e73\u5b89\u94f6\u884c\u548c\u62db\u5546\u94f6\u884c",
+                constraints={"research_profile": "medium"},
+            )
         )
 
         self.assertEqual(decision.status, "accepted")
@@ -69,7 +75,10 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
         service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
 
         decision = service.resolve(
-            RequestEnvelope(user_query="筛选最近值得关注的股票")
+            RequestEnvelope(
+                user_query="筛选最近值得关注的股票",
+                constraints={"research_profile": "deep"},
+            )
         )
 
         self.assertEqual(decision.status, "accepted")
@@ -94,6 +103,20 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
         self.assertEqual(decision.status, "needs_clarification")
         self.assertEqual(decision.intent, "stock_compare")
         self.assertEqual(decision.clarification.missing_fields, ["symbols"])
+
+    def test_finance_pack_requires_user_selected_research_profile(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
+
+        decision = service.resolve(RequestEnvelope(user_query="分析贵州茅台"))
+
+        self.assertEqual(decision.status, "needs_clarification")
+        self.assertEqual(decision.intent, "stock_check")
+        self.assertEqual(decision.clarification.missing_fields, ["research_profile"])
+        self.assertEqual(
+            decision.clarification.context["allowed_profiles"],
+            ["lite", "medium", "deep"],
+        )
 
     def test_finance_pack_does_not_treat_unnamed_multiple_banks_as_sector_research(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -164,6 +187,7 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
                     headers={"Authorization": "Bearer task-intake-test"},
                     json={
                         "user_query": "\u5bf9\u6bd4\u5e73\u5b89\u94f6\u884c\u548c\u62db\u5546\u94f6\u884c",
+                        "constraints": {"research_profile": "lite"},
                         "slots": {
                             "snapshots": [
                                 {"snapshot_type": "market", "symbol": "000001", "facts": {"market_overview": {"latest_price": 10}}},
@@ -221,7 +245,11 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
                 response = client.post(
                     "/api/v1/runs",
                     headers={"Authorization": "Bearer task-intake-test"},
-                    json={"intent": "review_thesis", "user_query": "review the previous thesis"},
+                    json={
+                        "intent": "review_thesis",
+                        "user_query": "review the previous thesis",
+                        "constraints": {"research_profile": "medium"},
+                    },
                 )
 
         self.assertEqual(response.status_code, 200, response.text)

@@ -122,9 +122,11 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 
 ### 5.2 评审团
 
-- Quick：5 席；Lite：10 席；Medium/Deep：66 席；
-- 66 个稳定 `member_id` 必须全部注册，不按旧版 51 席截断；
-- 规则缺字段时跳过该规则并记录 `data_gap_rules`，不得以默认值判定通过；
+- 只有 Lite / Medium / Deep 三档，必须由用户显式选择；不提供默认 Medium，也不保留本地 Quick 兼容档；
+- Lite：10 席；Medium/Deep：51 席，与上游 `analysis_profile.py` 一致；
+- 66 个稳定 `member_id` 全部注册用于完整方法论目录，但 Medium/Deep 每次按上游契约选择前 51 席；
+- 严格保留 UZI 3.9.2 规则执行语义：每条规则都进入权重分母，缺键按上游 lambda 默认值形成 pass/fail，不引入 Pack 自定义的逐规则 `skip`；
+- `skip` 只允许出现在上游定义的整席边界（流派锁定、市场不匹配、游资射程不匹配）；字段缺口由投票前的完整性检查和恢复任务单独披露，不能把规则结果冒充为已观测事实；
 - 每个 vote 必须标明它是方法论视角，不冒充对应人物的现实观点或实时持仓。
 
 ### 5.3 方法与命令
@@ -146,9 +148,10 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 
 - [x] 固定 UZI `fce996c` / 3.9.2；
 - [x] 更新 source mapping、插件与许可证指纹；
-- [x] Medium/Deep 评审团恢复为 66 席；
-- [x] OCF 与 FCF 分离，OCF 缺失规则不再默认通过；
-- [x] 所有评审规则字段均进入证据门，lambda 默认值不再当作观测值参与投票；
+- [x] 三档严格对齐为 10/51/51 席，并保留完整 66 席注册表；
+- [x] OCF 与 FCF 分离，并严格保留上游 `cash_matches_eps` 的缺键默认语义；
+- [x] 66 席 242 条规则、决策 profile、市场范围、已知持仓、行业偏好与 23 个游资射程/席位关键字逐项对齐；
+- [x] 所有评审输入先进入独立完整性门；规则层仍按 UZI 源码执行，界面同时展示恢复前后覆盖率，避免把默认规则结果误读为真实数据覆盖；
 - [x] 更新 replay fixture 版本与哈希；
 - [x] 将上游 8 个 3.9.2 回归逐个映射为 Pack 原生测试或明确拒绝迁入的运行边界测试。
 
@@ -171,7 +174,7 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 
 ### Phase D：20 个命令的 Web/Intent 等价交付
 
-- [x] 快速扫描、面板、陷阱、DCF/Comps/LBO 等转为 requested methods；
+- [x] 删除旧 Quick/quick-scan 兼容调用；速判由用户显式选择 `lite`，面板、陷阱、DCF/Comps/LBO 等转为 requested methods；
 - [x] 首次覆盖、财报、催化剂、thesis、DD、IC Memo 等转为独立 Artifact 交付链；
 - [x] 组合、对比、归因与两类再平衡接入 Agent OS 与现有 Web 边界；
 - [x] 不迁入 UZI CLI、缓存、HTML 服务或临时兼容入口；原生报告版式以 Pack-owned 模板迁入，并从 ArtifactBoard 导出 HTML/PDF。
@@ -188,6 +191,16 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 - [x] Playwright 及 Chromium 纳入本地安装说明和后端部署镜像，但浏览器抓取仍受显式开关约束；
 - [x] 端到端验证 API、SSE、ArtifactBoard 与 Web 一致；基金 v2 字段已覆盖 API 运行、Artifact、Replay、事件和前端渲染测试。
 
+### Phase F：UZI 真实兜底链
+
+- [x] 主 provider 完成后先执行 UZI 18 项完整性检查，保留恢复前报告和逐字段/逐维恢复任务；
+- [x] 对 6 个定性维度严格执行 MX API → DDGS，垃圾文本过滤与字段写入语义对齐 3.9.2；
+- [x] MX/DDGS 结束后才执行 profile 受控的 Playwright 最终兜底；Lite 关闭、Medium 6 维、Deep 10 维；
+- [x] API、Task Intake、Planner、普通研究和基金持仓子报告均不设置默认档位，缺失时统一要求用户选择 Lite/Medium/Deep；
+- [x] Playwright 只在解析出 UZI 对应结构化字段时算恢复成功，原始页面证据、strategy id、source trace 和失败原因全部保留；
+- [x] 登录态/浏览器源继续受 Cognitrade 显式总开关、敏感源开关、allowlist 和凭证约束，不自动安装或隐式启用；
+- [x] 报告 Artifact 和 Web 同时展示恢复前后覆盖率、所有恢复任务、每次 MX/DDGS/Playwright 尝试与最终缺口。
+
 ## 8. 完成定义
 
 只有同时满足以下条件才可将 UZI 迁移标记为完成：
@@ -195,7 +208,7 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 1. 账本中 22 fetchers、20 commands、23 methods、66 panel seats 均无未解释缺项；
 2. 所有 `equivalent` 条目有自动测试；所有 `adapted` 条目有差异说明；
 3. 生产代码不依赖 UZI checkout、CLI、缓存目录或报告服务器；
-4. 任意 provider 断网时不产生模拟数据或默认通过的研究结论；
+4. 任意 provider 断网时不产生模拟观测；UZI 规则缺键默认语义必须原样保留，但完整性缺口、恢复失败和置信边界必须同时进入 Artifact 与 Web，不能作为“数据已取得”展示；
 5. 基金与股票代码不会串路由，基金推荐满足同类样本和证据覆盖门槛；
 6. 前端不显示原始 JSON、原始网络异常或未经 gate 的推荐；
 7. migration mapping、fixture hash、DomainPack manifest 与 UI 版本标识一致。

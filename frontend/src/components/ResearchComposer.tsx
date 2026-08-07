@@ -3,7 +3,7 @@ import { type ChangeEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEv
 import type { ResearchIntent } from '../research-contracts'
 
 type ResearchComposerProps = {
-  onSubmit: (query: string, intent?: ResearchIntent) => void
+  onSubmit: (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => void
   running: boolean
   compact?: boolean
 }
@@ -19,12 +19,21 @@ const intentLabels = {
 }
 
 type IntentValue = keyof typeof intentLabels
+type ResearchProfile = '' | 'lite' | 'medium' | 'deep'
+
+const profileIntents = new Set<IntentValue>(['stock_check', 'stock_compare', 'stock_screen', 'sector_research'])
+const profileOptions: Array<{ value: Exclude<ResearchProfile, ''>; label: string; detail: string }> = [
+  { value: 'lite', label: '速判', detail: '1–2 分钟' },
+  { value: 'medium', label: '标准', detail: '5–8 分钟' },
+  { value: 'deep', label: '深度', detail: '15–20 分钟' },
+]
 
 const intentEntries = Object.entries(intentLabels) as Array<[IntentValue, string]>
 
 export function ResearchComposer({ onSubmit, running, compact = false }: ResearchComposerProps) {
   const [query, setQuery] = useState('')
   const [intent, setIntent] = useState<IntentValue>('auto')
+  const [profile, setProfile] = useState<ResearchProfile>('')
   const [intentMenuOpen, setIntentMenuOpen] = useState(false)
   const intentSelectRef = useRef<HTMLDivElement>(null)
   const intentTriggerRef = useRef<HTMLButtonElement>(null)
@@ -74,8 +83,13 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
   const submit = (event: FormEvent) => {
     event.preventDefault()
     const normalized = query.trim()
-    if (!normalized || running) return
-    onSubmit(normalized, intent === 'auto' ? undefined : intent)
+    const requiresProfile = profileIntents.has(intent)
+    if (!normalized || running || (requiresProfile && !profile)) return
+    onSubmit(
+      normalized,
+      intent === 'auto' ? undefined : intent,
+      requiresProfile && profile ? { research_profile: profile } : undefined,
+    )
     setQuery('')
   }
 
@@ -110,7 +124,7 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
         <button
           className="submit-research-button"
           type="submit"
-          disabled={!query.trim() || running}
+          disabled={!query.trim() || running || (profileIntents.has(intent) && !profile)}
           aria-label={running ? '研究正在运行' : '开始研究'}
         >
           <ArrowUp size={17} />
@@ -150,6 +164,7 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
                   aria-checked={intent === value}
                   onClick={() => {
                     setIntent(value)
+                    if (!profileIntents.has(value)) setProfile('')
                     setIntentMenuOpen(false)
                     intentTriggerRef.current?.focus()
                   }}
@@ -162,6 +177,20 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
             </div>
           )}
         </div>
+        <label className={`profile-select ${profileIntents.has(intent) ? '' : 'is-disabled'}`}>
+          <span className="visually-hidden">研究深度</span>
+          <select
+            value={profile}
+            disabled={!profileIntents.has(intent)}
+            aria-label="选择研究深度"
+            onChange={(event) => setProfile(event.target.value as ResearchProfile)}
+          >
+            <option value="">{intent === 'auto' ? '先选择研究类型' : profileIntents.has(intent) ? '选择研究深度' : '该类型无需档位'}</option>
+            {profileOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label} · {option.detail}</option>
+            ))}
+          </select>
+        </label>
         <input
           ref={materialInputRef}
           className="visually-hidden"

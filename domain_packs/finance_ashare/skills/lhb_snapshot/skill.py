@@ -10,6 +10,7 @@ from research_system.adapters.vendors.provider_execution import execute_provider
 from research_system.adapters.vendors.tushare_signal_adapter import TuShareLHBAdapter
 from research_system.adapters.vendors.uzi_browser_adapter import UziBrowserAdapter
 from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
+from domain_packs.finance_ashare.subagents.uzi_panel_context import match_youzi_seats
 
 
 class LHBSnapshotSkill:
@@ -85,12 +86,26 @@ class LHBSnapshotSkill:
             dim="lhb",
         )
         available = execution.availability == "available" or browser_available
-        facts = execution.facts if execution.availability == "available" else {
-            **execution.facts,
-            "browser_evidence": browser_result.get("evidence") or {},
-            "availability": "available" if browser_available else execution.availability,
-            "data_gap": [] if browser_available else list(execution.facts.get("data_gap") or []),
-        }
+        if execution.availability == "available":
+            facts = dict(execution.facts)
+            records = [
+                row
+                for row in [
+                    *list(facts.get("buy_detail") or []),
+                    *list(facts.get("sell_detail") or []),
+                ]
+                if isinstance(row, dict)
+            ]
+            matches = match_youzi_seats(records)
+            facts["matched_youzi"] = list(matches)
+            facts["youzi_matches"] = matches
+        else:
+            facts = {
+                **execution.facts,
+                "browser_evidence": browser_result.get("evidence") or {},
+                "availability": "available" if browser_available else execution.availability,
+                "data_gap": [] if browser_available else list(execution.facts.get("data_gap") or []),
+            }
         return VerifiedSnapshot(
             snapshot_type="lhb",
             symbol=symbol,

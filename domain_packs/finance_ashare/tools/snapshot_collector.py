@@ -37,7 +37,13 @@ from domain_packs.finance_ashare.skills.uzi_source_snapshot.skill import (
 )
 
 from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
+from domain_packs.finance_ashare.tools.uzi_data_recovery import (
+    assess_integrity,
+    recover_playwright_snapshots,
+    recover_qualitative_snapshots,
+)
 from research_system.runtime.storage.jsonl import read_json, write_json
+from research_system.adapters.vendors.akshare_utils import initialize_akshare_js_runtime
 from research_system.adapters.vendors.provider_execution import classify_provider_exception, failure_facts
 from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
 from research_system.runtime.platform.settings import Settings
@@ -47,6 +53,7 @@ _SYMBOL_SKILLS = {
     "market": MarketSnapshotSkill,
     "fundamental": FundamentalSnapshotSkill,
     "notice": NoticeSnapshotSkill,
+    "policy": PolicySnapshotSkill,
     "capital_flow": CapitalFlowSnapshotSkill,
     "sentiment": SentimentSnapshotSkill,
     "events": EventsSnapshotSkill,
@@ -181,11 +188,11 @@ def collect_snapshots(
         for index, (symbol, snapshot_type) in enumerate(
             (pair for symbol in resolved_symbols for pair in ((symbol, item) for item in requested))
         )
-        if snapshot_type in _SYMBOL_SKILLS
+        if snapshot_type in _SYMBOL_SKILLS and not (snapshot_type == "policy" and sector)
     ]
     if not tasks:
         for snapshot_type in requested:
-            if snapshot_type in {"sector", "policy"} and not sector:
+            if snapshot_type == "sector" and not sector:
                 snapshots.append(_missing_scope_snapshot(query=query, snapshot_type=snapshot_type))
         return snapshots
     results: dict[int, dict[str, Any]] = {}
@@ -202,6 +209,7 @@ def collect_snapshots(
         else:
             results[index] = cached
     if pending_tasks:
+        initialize_akshare_js_runtime()
         requested_workers = 8 if max_workers is None else max(int(max_workers), 1)
         executor = ThreadPoolExecutor(
             max_workers=min(requested_workers, len(pending_tasks)),
@@ -231,7 +239,7 @@ def collect_snapshots(
             executor.shutdown(wait=False, cancel_futures=True)
     snapshots.extend(results[index] for index, _symbol, _snapshot_type in tasks if index in results)
     for snapshot_type in requested:
-        if snapshot_type in {"sector", "policy"} and not sector:
+        if snapshot_type == "sector" and not sector:
             snapshots.append(_missing_scope_snapshot(query=query, snapshot_type=snapshot_type))
     return snapshots
 
@@ -500,6 +508,9 @@ def collect_snapshot_bundle(
             universe_rows=universe_rows,
             universe_source=universe_source or "sector_unavailable",
             enrichment_targets=[],
+            query=query,
+            research_profile=research_profile,
+            settings=providers.settings,
         )
 
     pool_size = max(int(candidate_pool_size), 1)
@@ -561,6 +572,9 @@ def collect_snapshot_bundle(
         universe_rows=universe_rows,
         universe_source=universe_source or ("structured_symbols" if resolved_symbols else "unavailable"),
         enrichment_targets=enrichment_targets,
+        query=query,
+        research_profile=research_profile,
+        settings=providers.settings,
     )
 
 
@@ -618,8 +632,57 @@ def _bundle_result(
     universe_rows: list[dict[str, Any]],
     universe_source: str,
     enrichment_targets: list[str],
+    query: str,
+    research_profile: str | None,
+    settings: Settings,
 ) -> dict[str, Any]:
+    # UZI 3.9.2 stage order is intentional: primary fetchers, integrity report
+    # and recovery tasks, MX→DDGS qualitative recovery, then the profile-
+    # scoped Playwright last resort.  Preserve both integrity snapshots so a
+    # successful fallback cannot erase evidence of the original provider gap.
     normalized_snapshots = [_normalize_snapshot_quality(snapshot) for snapshot in snapshots]
+    integrity_before = assess_integrity(normalized_snapshots, symbols)
+    selected_profile = str(research_profile or "").strip().lower()
+    if not selected_profile:
+        raise ValueError("research_profile is required; choose lite, medium or deep")
+    if selected_profile in {"lite", "medium", "deep"}:
+        qualitative_recovery = recover_qualitative_snapshots(
+            normalized_snapshots,
+            query=query,
+            symbols=symbols,
+            profile=selected_profile,
+            settings=settings,
+        )
+        playwright_recovery = recover_playwright_snapshots(
+            normalized_snapshots,
+            query=query,
+            symbols=symbols,
+            profile=selected_profile,
+            settings=settings,
+        )
+    elif selected_profile == "workspace_market_data":
+        # Non-UZI workspaces (for example the standalone market-data view)
+        # share the collector but must not silently enter an analysis profile.
+        qualitative_recovery = {
+            "schema_version": "uzi-3.9.2-agent-os-v1",
+            "profile": selected_profile,
+            "enabled": False,
+            "attempted": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "attempts": [],
+            "disabled_reason": "non_uzi_collection_profile",
+        }
+        playwright_recovery = dict(qualitative_recovery)
+    else:
+        raise ValueError("research_profile must be lite, medium or deep")
+    normalized_snapshots = [_normalize_snapshot_quality(snapshot) for snapshot in normalized_snapshots]
+    integrity_after = assess_integrity(normalized_snapshots, symbols)
+    integrity = {
+        **integrity_after,
+        "before_recovery": integrity_before,
+        "after_recovery": integrity_after,
+    }
     collected_types = list(
         dict.fromkeys(
             str(snapshot.get("snapshot_type") or "")
@@ -677,7 +740,57 @@ def _bundle_result(
                 )
             ),
             "parallelism": "per_snapshot_dimension",
+            "uzi_integrity": integrity,
+            "uzi_recovery": _recovery_summary(
+                normalized_snapshots,
+                qualitative=qualitative_recovery,
+                playwright=playwright_recovery,
+            ),
         },
+    }
+
+
+def _recovery_summary(
+    snapshots: list[dict[str, Any]],
+    *,
+    qualitative: dict[str, Any] | None = None,
+    playwright: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    attempts = []
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict):
+            continue
+        facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
+        recovery = facts.get("_uzi_recovery") if isinstance(facts.get("_uzi_recovery"), dict) else None
+        if recovery is not None:
+            attempts.append({
+                "stage": "mx_ddgs",
+                "symbol": snapshot.get("symbol"),
+                "snapshot_type": snapshot.get("snapshot_type"),
+                "status": recovery.get("status"),
+                "source_id": recovery.get("source"),
+                "query": recovery.get("query"),
+            })
+        playwright_fact = facts.get("_uzi_playwright_recovery") if isinstance(facts.get("_uzi_playwright_recovery"), dict) else None
+        if playwright_fact is not None:
+            attempts.append({
+                "stage": "playwright",
+                "symbol": snapshot.get("symbol"),
+                "snapshot_type": snapshot.get("snapshot_type"),
+                "status": playwright_fact.get("status"),
+                "source_ids": playwright_fact.get("source_ids"),
+                "trigger_reason": playwright_fact.get("trigger_reason"),
+            })
+    return {
+        "schema_version": "uzi-3.9.2-agent-os-v1",
+        "stage_order": ["primary_providers", "integrity_check", "mx_api", "ddgs", "playwright", "integrity_recheck"],
+        "order": ["mx_api", "ddgs", "playwright"],
+        "attempted": len(attempts),
+        "succeeded": sum(row.get("status") == "available" for row in attempts),
+        "failed": sum(row.get("status") != "available" for row in attempts),
+        "attempts": attempts,
+        "qualitative_stage": dict(qualitative or {}),
+        "playwright_stage": dict(playwright or {}),
     }
 
 

@@ -26,46 +26,80 @@ UZI_METHOD_VERSION = "3.9.2-adapted"
 UZI_SOURCE_COMMIT = "fce996c33e70eddce8e375f53cd252b549eb3d7c"
 
 _PROFILES: dict[str, dict[str, Any]] = {
-    "quick": {
-        "depth": "quick",
-        "max_duration_seconds": 90,
-        # Cognitrade-only quick policy; it is intentionally not UZI Lite.
-        "investors_count": 5,
-        "methods": ["dcf"],
-        "snapshot_types": ["market", "fundamental", "notice"],
-        "allowed_capability_tags": ["profile:quick"],
-    },
     "lite": {
         "depth": "lite",
-        "max_duration_seconds": 300,
+        "label_cn": "速判模式",
+        "estimated_minutes": "1-2 分钟",
+        "max_duration_seconds": 120,
+        "ddg_budget": 0,
+        "industry_dynamic_lookup": False,
+        "playwright_mode": "off",
+        "playwright_dimensions": [],
         "investors_count": 10,
-        "methods": ["dcf", "panel", "risk"],
+        "enable_bull_bear_debate": False,
+        "institutional_methods": ["dcf"],
+        "methods": ["dcf"],
+        "enable_segmental_model": False,
+        "enable_owner_earnings": False,
+        "enable_narrative_gap": False,
+        "fund_stats_top_n": 5,
+        "fund_lite_list_enabled": False,
+        "require_qualitative_deep_dive": False,
+        "self_review_block_warnings": False,
+        "fetchers_enabled": [
+            "0_basic", "1_financials", "2_kline", "10_valuation",
+            "11_governance", "15_events", "16_lhb",
+        ],
         "snapshot_types": [
             "market",
             "fundamental",
-            "notice",
-            "capital_flow",
-            "sentiment",
+            "kline",
+            "valuation",
+            "governance",
             "events",
             "lhb",
         ],
-        "allowed_capability_tags": ["profile:lite", "profile:quick"],
+        "allowed_capability_tags": ["profile:lite"],
     },
     "medium": {
         "depth": "medium",
+        "label_cn": "标准分析",
+        "estimated_minutes": "5-8 分钟",
         "max_duration_seconds": 480,
-        "investors_count": 66,
-        "methods": ["dcf", "comps", "three_statement", "quick_lbo", "accretion_dilution", "panel", "risk", "workflow"],
+        "ddg_budget": 30,
+        "industry_dynamic_lookup": True,
+        "playwright_mode": "opt-in",
+        "playwright_dimensions": ["peers", "materials", "events", "sentiment", "industry", "moat"],
+        "investors_count": 51,
+        "enable_bull_bear_debate": False,
+        "institutional_methods": [
+            "dcf", "comps", "lbo", "three_statement", "merger",
+            "initiating", "earnings", "catalysts", "thesis", "morning",
+            "screen", "sector", "ic_memo", "porter_bcg", "dd",
+            "unit_economics", "portfolio_rebalance",
+        ],
+        "methods": [
+            "dcf", "comps", "quick_lbo", "three_statement", "accretion_dilution",
+            "initiation_report", "earnings_review", "catalyst_calendar", "thesis_tracker",
+            "morning_note", "stock_screen", "sector_research", "ic_memo", "porter_bcg",
+            "dd_checklist", "unit_economics", "portfolio_rebalance",
+        ],
+        "enable_segmental_model": False,
+        "enable_owner_earnings": False,
+        "enable_narrative_gap": False,
+        "fund_stats_top_n": 20,
+        "fund_lite_list_enabled": True,
+        "require_qualitative_deep_dive": True,
+        "self_review_block_warnings": False,
+        "fetchers_enabled": [
+            "0_basic", "1_financials", "2_kline", "3_macro", "4_peers", "5_chain",
+            "6_research", "7_industry", "8_materials", "9_futures", "10_valuation",
+            "11_governance", "12_capital_flow", "13_policy", "14_moat", "15_events",
+            "16_lhb", "17_sentiment", "18_trap", "19_contests",
+        ],
         "snapshot_types": [
             "market",
             "fundamental",
-            "notice",
-            "capital_flow",
-            "sentiment",
-            "events",
-            "lhb",
-            "sector",
-            "policy",
             "kline",
             "macro",
             "peers",
@@ -76,42 +110,70 @@ _PROFILES: dict[str, dict[str, Any]] = {
             "futures",
             "valuation",
             "governance",
+            "capital_flow",
+            "policy",
             "moat",
+            "events",
+            "lhb",
+            "sentiment",
             "trap",
             "contests",
         ],
-        "allowed_capability_tags": [
-            "profile:quick",
-            "profile:lite",
-            "profile:medium",
-        ],
+        "allowed_capability_tags": ["profile:lite", "profile:medium"],
     },
     "deep": {
         "depth": "deep",
+        "label_cn": "深度研究",
+        "estimated_minutes": "15-20 分钟",
         "max_duration_seconds": 1200,
-        "investors_count": 66,
+        "ddg_budget": 60,
+        "industry_dynamic_lookup": True,
+        "playwright_mode": "default_subject_to_sensitive_source_policy",
+        "playwright_dimensions": ["peers", "materials", "events", "sentiment", "industry", "moat", "macro", "policy", "trap", "contests"],
+        "investors_count": 51,
+        "enable_bull_bear_debate": True,
+        "institutional_methods": [
+            "dcf", "comps", "lbo", "three_statement", "merger",
+            "initiating", "earnings", "catalysts", "thesis", "morning",
+            "screen", "sector", "ic_memo", "porter_bcg", "dd",
+            "unit_economics", "portfolio_rebalance", "segmental",
+        ],
         "methods": [
             "dcf",
             "comps",
             "three_statement",
             "quick_lbo",
             "accretion_dilution",
-            "panel",
-            "risk",
+            "initiation_report",
+            "earnings_review",
+            "catalyst_calendar",
+            "thesis_tracker",
+            "morning_note",
+            "stock_screen",
+            "sector_research",
+            "ic_memo",
+            "porter_bcg",
+            "dd_checklist",
+            "unit_economics",
+            "portfolio_rebalance",
             "segmental",
-            "workflow",
-            "deep_analysis",
+        ],
+        "enable_segmental_model": True,
+        "enable_owner_earnings": True,
+        "enable_narrative_gap": True,
+        "fund_stats_top_n": 100,
+        "fund_lite_list_enabled": True,
+        "require_qualitative_deep_dive": True,
+        "self_review_block_warnings": True,
+        "fetchers_enabled": [
+            "0_basic", "1_financials", "2_kline", "3_macro", "4_peers", "5_chain",
+            "6_research", "7_industry", "8_materials", "9_futures", "10_valuation",
+            "11_governance", "12_capital_flow", "13_policy", "14_moat", "15_events",
+            "16_lhb", "17_sentiment", "18_trap", "19_contests",
         ],
         "snapshot_types": [
             "market",
             "fundamental",
-            "notice",
-            "capital_flow",
-            "sentiment",
-            "events",
-            "lhb",
-            "sector",
-            "policy",
             "kline",
             "macro",
             "peers",
@@ -122,16 +184,16 @@ _PROFILES: dict[str, dict[str, Any]] = {
             "futures",
             "valuation",
             "governance",
+            "capital_flow",
+            "policy",
             "moat",
+            "events",
+            "lhb",
+            "sentiment",
             "trap",
             "contests",
         ],
-        "allowed_capability_tags": [
-            "profile:quick",
-            "profile:lite",
-            "profile:medium",
-            "profile:deep",
-        ],
+        "allowed_capability_tags": ["profile:lite", "profile:medium", "profile:deep"],
     },
 }
 
@@ -162,21 +224,24 @@ _AI_CHAIN_KEYWORDS = (
 
 
 def select_profile(inputs: dict[str, Any]) -> dict[str, Any]:
-    requested = str(
-        inputs.get("research_profile")
-        or inputs.get("depth")
-        or inputs.get("profile")
-        or "lite"
-    ).strip().lower()
-    selected = requested if requested in _PROFILES else "lite"
+    supplied = next(
+        (
+            inputs.get(key)
+            for key in ("research_profile", "depth", "profile")
+            if str(inputs.get(key) or "").strip()
+        ),
+        None,
+    )
+    if supplied is None:
+        raise ValueError("research_profile is required; choose lite, medium or deep")
+    requested = str(supplied).strip().lower()
+    if requested not in _PROFILES:
+        raise ValueError("research_profile must be lite, medium or deep")
+    selected = requested
     profile = dict(_PROFILES[selected])
     profile["requested"] = requested
     profile["selected"] = selected
-    profile["selection_reason"] = (
-        "用户显式指定研究深度"
-        if requested in _PROFILES
-        else "未指定或档位无效，使用 Finance Pack 默认 Lite"
-    )
+    profile["selection_reason"] = "用户显式指定研究深度"
     profile["source_commit"] = UZI_SOURCE_COMMIT
     return profile
 
@@ -962,6 +1027,11 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
     revenue_b = revenue / 10 if revenue is not None else None
     cash_to_marketcap_ratio = cash / market_cap if cash is not None and market_cap not in (None, 0) else None
     normalized_market = "A" if re.sub(r"\D", "", symbol)[-6:].isdigit() else None
+    matched_youzi = [
+        str(item)
+        for item in list(lhb.get("matched_youzi") or [])
+        if str(item).strip()
+    ]
     ai_evidence_text = " ".join(
         (
             industry,
@@ -976,6 +1046,7 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
     values = {
         "price": price,
         "market_cap_yi": market_cap,
+        "market_cap": market_cap * 100_000_000 if market_cap is not None else None,
         "shares_outstanding_yi": shares,
         "revenue_latest_yi": revenue,
         "net_profit_latest_yi": net_profit,
@@ -1031,6 +1102,7 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         "pe_quantile_5y": pe_quantile_5y,
         "market": normalized_market,
         "country": "CN" if normalized_market == "A" else None,
+        "matched_youzi": matched_youzi,
         "ai_chain_hit": ai_chain_hit,
         "ai_chain_keywords": ai_chain_keywords if ai_chain_hit is not None else None,
         "ai_smallcap": ai_smallcap,
@@ -1147,6 +1219,7 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
     ]
     return {
         "symbol": symbol,
+        "ticker": symbol,
         "name": name,
         "data_period": data_period,
         **values,
@@ -1528,26 +1601,21 @@ def _panel_vote(perspective: tuple[str, str, str, tuple[str, ...]], features: di
 
 def build_panel_review(snapshot_rows: list[dict[str, Any]], symbols: list[str], profile: dict[str, Any]) -> dict[str, Any]:
     votes: list[dict[str, Any]] = []
-    panel_seats = panel_for_profile(str(profile.get("selected") or "lite"))
+    panel_seats = panel_for_profile(str(profile["selected"]))
     for symbol in symbols[:1]:
         features = build_features(snapshot_rows, symbol)
         for investor in panel_seats:
             vote = _registered_panel_vote(investor, features)
             votes.append({"symbol": symbol, **vote})
     distribution = Counter(vote["signal"] for vote in votes)
-    scores = [float(vote["score"]) for vote in votes if vote["score"] > 0]
+    active_votes = [vote for vote in votes if vote.get("signal") != "skip"]
+    scores = [float(vote["score"]) for vote in active_votes if float(vote["score"]) >= 0]
     evaluated_rule_count = sum(
         int(vote.get("pass_count") or 0) + int(vote.get("fail_count") or 0)
         for vote in votes
     )
-    skipped_rule_count = sum(int(vote.get("skipped_count") or 0) for vote in votes)
-    quality_status = (
-        "data_gap"
-        if not evaluated_rule_count
-        else "degraded"
-        if skipped_rule_count
-        else "available"
-    )
+    skipped_seat_count = sum(vote.get("signal") == "skip" for vote in votes)
+    quality_status = "available" if evaluated_rule_count else "data_gap"
     return {
         "methodology_version": UZI_METHOD_VERSION,
         "profile": profile["selected"],
@@ -1555,19 +1623,22 @@ def build_panel_review(snapshot_rows: list[dict[str, Any]], symbols: list[str], 
         "panel_version": UZI_PANEL_VERSION,
         "source_commit": UZI_PANEL_SOURCE_COMMIT,
         "registered_seat_count": len(panel_seats),
-        "rule_mode": "source_dimension_rule_adapter",
+        "rule_mode": "uzi_3_9_2_source_parity",
         "votes": votes,
         "distribution": dict(distribution),
         "average_score": round(sum(scores) / len(scores), 2) if scores else None,
         "evaluated_rule_count": evaluated_rule_count,
-        "skipped_rule_count": skipped_rule_count,
+        "skipped_seat_count": skipped_seat_count,
         "quality_status": quality_status,
-        "data_gap": ["panel_rule_inputs_missing"] if skipped_rule_count else [],
+        "data_gap": ["panel_rules_not_evaluated"] if not evaluated_rule_count else [],
         "disagreement": {
             "exists": len({vote["signal"] for vote in votes}) > 1,
             "summary": "不同方法论视角对证据解释存在分歧。" if votes else "没有足够证据形成 Panel 视角。",
         },
-        "confidence": round(sum(vote["confidence"] for vote in votes) / len(votes), 4) if votes else 0.0,
+        "confidence": round(
+            sum(float(vote["confidence"]) for vote in active_votes) / len(active_votes),
+            4,
+        ) if active_votes else 0.0,
         "risk_flags": ["perspectives_are_not_real_person_advice"],
     }
 
@@ -1605,39 +1676,50 @@ def _registered_panel_vote(investor: dict[str, object], features: dict[str, Any]
                 "feature_names": list(feature_names),
             }
         )
-    rule_result = evaluate_investor(str(investor.get("id") or ""), features)
+    # The UZI extractor treats unavailable observations as absent keys.  Keep
+    # the richer canonical feature record for lineage, but give the source-
+    # parity rule engine the same missing-key semantics as UZI 3.9.2.
+    rule_features = {key: value for key, value in features.items() if value is not None}
+    rule_result = evaluate_investor(str(investor.get("id") or ""), rule_features)
     available = [item for item in checks if item["status"] == "available"]
     passed = len(available)
     total = len(checks)
     score = float(rule_result.get("score") or 0.0)
-    confidence = float(rule_result.get("confidence") or 0.0)
-    signal = str(rule_result.get("signal") or "insufficient_evidence")
+    uzi_confidence = float(rule_result.get("confidence") or 0.0)
+    confidence = max(0.0, min(1.0, uzi_confidence / 100.0))
+    signal = str(rule_result.get("signal") or "neutral")
     label = str(investor.get("name") or investor.get("id") or "方法论席位")
     return {
         "investor_id": str(investor.get("id") or ""),
         "perspective_id": str(investor.get("id") or ""),
         "perspective_label": label,
+        "investor_name_en": investor.get("en"),
+        "methodology_source": investor.get("source"),
+        "avatar_seed": investor.get("avatar_seed"),
+        "tier": investor.get("tier"),
         "school": str(investor.get("group") or ""),
         "required_dimensions": fields,
         "signal": signal,
         "score": score,
         "confidence": confidence,
+        "uzi_confidence": uzi_confidence,
         "reasoning": str(rule_result.get("rationale") or f"{label}规则覆盖 {passed}/{total} 个声明维度。"),
         "headline": str(rule_result.get("headline") or "数据不足，暂无判断。"),
         "pass_rules": list(rule_result.get("pass_rules") or []),
         "fail_rules": list(rule_result.get("fail_rules") or []),
-        "skipped_rules": list(rule_result.get("skipped_rules") or []),
-        "data_gap_rules": list(rule_result.get("data_gap_rules") or []),
         "pass_count": int(rule_result.get("pass_count") or 0),
         "fail_count": int(rule_result.get("fail_count") or 0),
-        "skipped_count": int(rule_result.get("skipped_count") or 0),
         "weight_pass": int(rule_result.get("weight_pass") or 0),
         "weight_total": int(rule_result.get("weight_total") or 0),
         "rule_engine_version": str(rule_result.get("rule_engine_version") or ""),
+        "skip_reason": rule_result.get("skip_reason"),
+        "time_horizon": rule_result.get("time_horizon"),
+        "position_sizing": rule_result.get("position_sizing"),
+        "what_would_change_my_mind": rule_result.get("what_would_change_my_mind"),
         "checks": checks,
         "is_methodology_perspective": True,
         "is_real_person_advice": False,
-        "rule_mode": "migrated_uzi_rule_engine",
+        "rule_mode": "uzi_3_9_2_source_parity",
     }
 
 
@@ -1768,6 +1850,10 @@ def _panel_presentation_data(panel: dict[str, Any]) -> tuple[list[dict[str, Any]
             {
                 "perspective_id": vote.get("perspective_id") or vote.get("investor_id"),
                 "perspective_label": vote.get("perspective_label"),
+                "investor_name_en": vote.get("investor_name_en"),
+                "methodology_source": vote.get("methodology_source"),
+                "avatar_seed": vote.get("avatar_seed"),
+                "tier": vote.get("tier"),
                 "school": vote.get("school"),
                 "school_label": _PANEL_SCHOOL_LABELS.get(str(vote.get("school") or ""), "方法论席位"),
                 "signal": vote.get("signal") or "insufficient_evidence",
@@ -1775,6 +1861,10 @@ def _panel_presentation_data(panel: dict[str, Any]) -> tuple[list[dict[str, Any]
                 "confidence": vote.get("confidence"),
                 "headline": vote.get("headline"),
                 "reasoning": vote.get("reasoning"),
+                "skip_reason": vote.get("skip_reason"),
+                "time_horizon": vote.get("time_horizon"),
+                "position_sizing": vote.get("position_sizing"),
+                "what_would_change_my_mind": vote.get("what_would_change_my_mind"),
                 "checks": list(vote.get("checks") or []),
                 "required_dimensions": list(vote.get("required_dimensions") or []),
                 "is_methodology_perspective": bool(vote.get("is_methodology_perspective", True)),
@@ -1786,7 +1876,11 @@ def _panel_presentation_data(panel: dict[str, Any]) -> tuple[list[dict[str, Any]
         if not school:
             continue
         school_votes = [vote for vote in insights if vote.get("school") == school]
-        scores = [float(vote["score"]) for vote in school_votes if vote.get("score") is not None]
+        scores = [
+            float(vote["score"])
+            for vote in school_votes
+            if vote.get("score") is not None and vote.get("signal") != "skip"
+        ]
         signal_counts = Counter(str(vote.get("signal") or "insufficient_evidence") for vote in school_votes)
         bullish = [vote for vote in school_votes if vote.get("signal") == "bullish"]
         bearish = [vote for vote in school_votes if vote.get("signal") == "bearish"]
@@ -1802,6 +1896,7 @@ def _panel_presentation_data(panel: dict[str, Any]) -> tuple[list[dict[str, Any]
                 "bearish_count": signal_counts.get("bearish", 0),
                 "neutral_count": signal_counts.get("neutral", 0),
                 "insufficient_evidence_count": signal_counts.get("insufficient_evidence", 0),
+                "skip_count": signal_counts.get("skip", 0),
                 "average_score": round(sum(scores) / len(scores), 2) if scores else None,
                 "bull_case": top_bull,
                 "bear_case": top_bear,
@@ -1936,6 +2031,7 @@ def build_presentation(
     profile: dict[str, Any],
     advanced: dict[str, Any] | None = None,
     snapshot_rows: list[dict[str, Any]] | None = None,
+    data_pipeline: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     models = list(valuation.get("models") or [])
     primary = models[0] if models else {}
@@ -2100,6 +2196,7 @@ def build_presentation(
                 "top_vote": top_bear,
             },
             "neutral": panel.get("distribution", {}).get("neutral", 0),
+            "skip": panel.get("distribution", {}).get("skip", 0),
             "insufficient_evidence": panel.get("distribution", {}).get("insufficient_evidence", 0),
             "rounds": panel_rounds,
             "punchline": panel.get("disagreement", {}).get("summary"),
@@ -2118,6 +2215,7 @@ def build_presentation(
         "risk_list": normalized_risks or list(risk.get("signals") or []),
         "buy_zones": price_observation,
         "institutional_modeling": institutional_modeling,
+        "data_pipeline": dict(data_pipeline or {}),
         "advanced_methods": advanced,
         "source_artifact_ids": [],
         "generated_at": datetime.now(timezone.utc).isoformat(),

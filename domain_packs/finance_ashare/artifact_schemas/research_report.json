@@ -57,6 +57,9 @@
     "uzi_dimension_coverage": {
       "type": ["object", "null"]
     },
+    "uzi_data_pipeline": {
+      "type": ["object", "null"]
+    },
     "presentation_artifact_type": {
       "type": "string"
     },

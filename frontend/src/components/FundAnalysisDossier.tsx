@@ -71,10 +71,9 @@ const SCORE_LABELS: Record<string, string> = {
 }
 
 const REPORT_PROFILES: Array<{ value: HoldingReportProfile; label: string; detail: string }> = [
-  { value: 'quick', label: '快速', detail: '核心行情、财务与风险结论' },
-  { value: 'lite', label: '轻量', detail: '默认档，补充估值与基础评审' },
-  { value: 'medium', label: '标准', detail: '更完整的方法论和证据覆盖' },
-  { value: 'deep', label: '深度', detail: '完整 UZI 能力，耗时最长' },
+  { value: 'lite', label: '速判', detail: '1–2 分钟 · 10 位评委' },
+  { value: 'medium', label: '标准', detail: '5–8 分钟 · 51 位评委' },
+  { value: 'deep', label: '深度', detail: '15–20 分钟 · 51 位评委与多空辩论' },
 ]
 
 function asRecord(value: unknown): RecordValue {
@@ -404,7 +403,7 @@ function FundCandidateDossier({
   const gaps = Array.isArray(candidate.data_gap) ? candidate.data_gap.map(String) : []
   const isSingleFund = String(candidate.analysis_mode || '') === 'single_fund'
   const usesSinceInceptionReturn = numberValue(returns.year_3) == null
-  const [reportProfile, setReportProfile] = useState<HoldingReportProfile>('lite')
+  const [reportProfile, setReportProfile] = useState<HoldingReportProfile | ''>('')
   const [confirmStale, setConfirmStale] = useState(false)
   const currentBatch = holdingBatches
     .filter((row) => row.profile === reportProfile)
@@ -549,7 +548,8 @@ function FundCandidateDossier({
               <div className="fund-holding-report-config">
                 <label>
                   <span>研究档位</span>
-                  <select value={reportProfile} onChange={(event) => setReportProfile(event.target.value as HoldingReportProfile)} disabled={currentBatch?.status === 'running'}>
+                  <select value={reportProfile} onChange={(event) => setReportProfile(event.target.value as HoldingReportProfile | '')} disabled={currentBatch?.status === 'running'}>
+                    <option value="">请选择研究深度</option>
                     {REPORT_PROFILES.map((profile) => <option key={profile.value} value={profile.value}>{profile.label} · {profile.detail}</option>)}
                   </select>
                 </label>
@@ -568,11 +568,11 @@ function FundCandidateDossier({
                 <button
                   type="button"
                   className="primary-button fund-holding-start"
-                  disabled={(requiresConfirmation && !confirmStale) || holdingAction === `create:${String(candidate.fund_code || '')}`}
-                  onClick={() => onCreateHoldingBatch(String(candidate.fund_code || ''), reportProfile, confirmStale, false)}
+                  disabled={!reportProfile || (requiresConfirmation && !confirmStale) || holdingAction === `create:${String(candidate.fund_code || '')}`}
+                  onClick={() => { if (reportProfile) onCreateHoldingBatch(String(candidate.fund_code || ''), reportProfile, confirmStale, false) }}
                 >
                   {holdingAction === `create:${String(candidate.fund_code || '')}` ? <LoaderCircle size={15} className="is-spinning" /> : <FileText size={15} />}
-                  生成 {REPORT_PROFILES.find((row) => row.value === reportProfile)?.label}持仓股票报告
+                  {reportProfile ? `生成 ${REPORT_PROFILES.find((row) => row.value === reportProfile)?.label}持仓股票报告` : '请先选择研究深度'}
                 </button>
               ) : (
                 <div className="fund-holding-batch">
@@ -590,7 +590,7 @@ function FundCandidateDossier({
                     {currentBatch.counts.failed > 0 && currentBatch.status !== 'running' && <button type="button" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'retry')} disabled={holdingAction === `retry:${currentBatch.batch_id}`}><RefreshCw size={13} />重试失败项</button>}
                     {currentBatch.counts.cancelled > 0 && currentBatch.status !== 'running' && <button type="button" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'continue')} disabled={holdingAction === `continue:${currentBatch.batch_id}`}><RefreshCw size={13} />继续未完成项</button>}
                     {currentBatch.counts.deliverable > 0 && <button type="button" onClick={() => onDownloadZip(currentBatch.batch_id)} disabled={holdingAction === `zip:${currentBatch.batch_id}`}><Download size={13} />下载 PDF 报告包</button>}
-                    {currentBatch.status !== 'running' && <button type="button" onClick={() => onCreateHoldingBatch(String(candidate.fund_code || ''), reportProfile, confirmStale, true)} disabled={requiresConfirmation && !confirmStale}><RefreshCw size={13} />重新生成</button>}
+                    {currentBatch.status !== 'running' && <button type="button" onClick={() => { if (reportProfile) onCreateHoldingBatch(String(candidate.fund_code || ''), reportProfile, confirmStale, true) }} disabled={!reportProfile || (requiresConfirmation && !confirmStale)}><RefreshCw size={13} />重新生成</button>}
                   </div>
 
                   <div className="fund-holding-report-list">

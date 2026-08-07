@@ -37,6 +37,26 @@ class MxApiAdapter:
     def get_news(self, *, query: str) -> dict[str, Any]:
         return self._post("news-search", {"query": query})
 
+    def query_text(self, *, query: str) -> dict[str, Any]:
+        """Return UZI's compact qualitative text projection with full provenance."""
+
+        payload = self._query(query)
+        data = payload.get("data") or {}
+        inner = data.get("data") or {}
+        result = inner.get("searchDataResultDTO") or {}
+        tables = result.get("dataTableDTOList") or []
+        parts: list[str] = []
+        for table in tables[:2]:
+            if not isinstance(table, dict):
+                continue
+            title = table.get("title") or table.get("entityName") or ""
+            if title:
+                parts.append(str(title)[:120])
+        text = "；".join(parts)[:300] if parts else str(inner.get("entityName") or "")[:200]
+        if not text:
+            raise ValueError("MX API returned no qualitative text")
+        return {"query": query, "text": text, "source_id": "mx_api"}
+
     def _query(self, query: str) -> dict[str, Any]:
         return self._post("query", {"toolQuery": query})
 

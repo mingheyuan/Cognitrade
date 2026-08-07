@@ -8,6 +8,33 @@ from research_system.schemas.protocol import RequestEnvelope
 
 
 class DynamicApiValidationTests(unittest.TestCase):
+    def test_stock_research_requires_an_explicit_supported_profile(self) -> None:
+        with self.assertRaises(ApiError) as missing:
+            validate_research_request(
+                RequestEnvelope(intent="stock_check", user_query="分析 600519")
+            )
+        self.assertEqual(missing.exception.code, "missing_constraint")
+
+        for profile in ("lite", "medium", "deep"):
+            request = validate_research_request(
+                RequestEnvelope(
+                    intent="stock_check",
+                    user_query="分析 600519",
+                    constraints={"research_profile": profile},
+                )
+            )
+            self.assertEqual(request.constraints["research_profile"], profile)
+
+        with self.assertRaises(ApiError) as obsolete:
+            validate_research_request(
+                RequestEnvelope(
+                    intent="stock_check",
+                    user_query="分析 600519",
+                    constraints={"research_profile": "quick"},
+                )
+            )
+        self.assertEqual(obsolete.exception.code, "invalid_constraint")
+
     def test_pack_owned_intent_is_validated_from_runtime_catalog(self) -> None:
         request = validate_research_request(
             RequestEnvelope(

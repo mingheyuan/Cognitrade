@@ -17,7 +17,7 @@ source:
   replay_fixture_sha256:
     tests/fixtures/uzi_source_snapshot_replay.json: E4352EA11CBF0469D331F6DACFF333441C9CD269EBE3EBA479A2691F0A727F9A
     tests/fixtures/uzi_finance_snapshot_replay.json: E81ABE9C4AABB39BE79D73561D51760BAA16EA72D52CA876B386A23E97428735
-    tests/fixtures/uzi_methodology_baseline.json: E7C3CACBF80178DA5583099EFC550A2AD8BFF41FFAD34A37A6D2396E268D2D89
+    tests/fixtures/uzi_methodology_baseline.json: 334BC07EEF78632AAEE78391AFBFB2859140098396086AD96248FDD49D2B5FB8
     tests/fixtures/uzi_tier1_baseline.json: 898C1E49E70FAE206C72E90471C4A81286C844E8D8A7F27D419442E872B8AC2B
 
 source_defaults: &source_defaults
@@ -215,31 +215,31 @@ fetchers:
 
 profiles:
   lite:
-    source_dimensions: [0_basic, 1_financials, 2_kline, 10_valuation, 12_capital_flow, 15_events, 16_lhb]
+    source_dimensions: [0_basic, 1_financials, 2_kline, 10_valuation, 11_governance, 15_events, 16_lhb]
     panel_seats: 10
     methodology_capabilities: [finance.uzi.valuation.evaluate, finance.uzi.panel.review, finance.uzi.risk.scan]
   medium:
     source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests]
-    panel_seats: 66
+    panel_seats: 51
   deep:
     source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests]
-    panel_seats: 66
+    panel_seats: 51
 
 panel:
-  source_path: domain_packs/finance_ashare/subagents/uzi_panel_registry.py
+  source_path: domain_packs/finance_ashare/subagents/uzi_panel_rules.py
   source_commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
   registry_version: 3.9.2-adapted
   provider: finance_pack.panel_registry
   target_artifact_type: investor_panel_review
-  field_mapping: {id: id, name: name, group: group, fields: fields}
+  field_mapping: {id: id, name: name, en: investor_name_en, source: methodology_source, avatar_seed: avatar_seed, tier: tier, group: school, fields: required_dimensions, confidence: uzi_confidence}
   quality_policy:
-    missing_source_fields: data_gap
-    skipped_seat: data_gap
+    missing_source_fields: upstream_lambda_default_with_separate_integrity_report
+    skipped_seat: upstream_whole_seat_boundaries_only
     methodology_perspective: available
   migration_status: pack_native
-  result_equivalence: not_equivalent
+  result_equivalence: semantic
   baseline_fixture: tests/fixtures/uzi_source_snapshot_replay.json
-  profile_seats: {lite: 10, medium: 66, deep: 66}
+  profile_seats: {lite: 10, medium: 51, deep: 51}
   member_ids: [buffett, graham, fisher, munger, templeton, klarman, lynch, oneill, thiel, wood, andreessen, gurley, naval, gerstner, chamath, soros, dalio, marks, druck, robertson, burry, chanos, livermore, minervini, darvas, gann, duan, zhangkun, zhushaoxing, xiezhiyu, fengliu, dengxiaofeng, zhang_lei, zhang_mz, sun_ge, zhao_lg, fs_wyj, yangjia, chen_xq, hu_jl, fang_xx, zuoshou, xiao_ey, jiao_yy, mao_lb, xiao_xian, lasa, chengdu, sunan, ningbo_st, liuyi_zl, liu_sh, gu_bl, bj_cj, wang_zr, xin_dd, ghzw, simons, thorp, shaw, asness, jensen_huang, musk, altman, saylor, serenity]
 
 derived_defaults: &derived_defaults

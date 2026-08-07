@@ -890,9 +890,9 @@ class FundHoldingReportService:
 
     @staticmethod
     def _profile(value: str) -> str:
-        profile = str(value or "lite").strip().lower()
-        if profile not in {"quick", "lite", "medium", "deep"}:
-            raise ValueError("research profile must be quick, lite, medium or deep")
+        profile = str(value or "").strip().lower()
+        if profile not in {"lite", "medium", "deep"}:
+            raise ValueError("research profile must be lite, medium or deep")
         return profile
 
     @staticmethod

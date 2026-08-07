@@ -1250,11 +1250,17 @@ def compose_uzi_report(context):
     workflow = (context.artifacts("research_workflow") or [None])[-1]
     deep = (context.artifacts("deep_analysis") or [None])[-1]
     dimension_coverage = (context.artifacts("uzi_dimension_coverage") or [None])[-1]
+    snapshot_bundle = (context.artifacts("stock_snapshot_bundle") or [None])[-1]
     inputs = dict(context.node.inputs or {})
     normalized_content = dict(normalized_query.content or {})
     holding_context = dict(normalized_content.get("holding_context") or {})
     profile = select_profile(inputs)
     evidence_items = list(evidence.content.get("items") or [])
+    data_pipeline = (
+        dict((snapshot_bundle.content or {}).get("collection") or {})
+        if snapshot_bundle is not None
+        else {}
+    )
     base_content = {
         "conclusion": "",
         "assessment": {
@@ -1315,6 +1321,7 @@ def compose_uzi_report(context):
             "research_workflow": dict(workflow.content) if workflow is not None else None,
             "deep_analysis": dict(deep.content) if deep is not None else None,
             "uzi_dimension_coverage": dict(dimension_coverage.content) if dimension_coverage is not None else None,
+            "uzi_data_pipeline": data_pipeline or None,
             "presentation_artifact_type": "report_presentation",
             "holding_context": holding_context or None,
         }
@@ -1347,6 +1354,7 @@ def compose_uzi_report(context):
             *(list(workflow.source_refs) if workflow is not None else []),
             *(list(deep.source_refs) if deep is not None else []),
             *(list(dimension_coverage.source_refs) if dimension_coverage is not None else []),
+            *(list(snapshot_bundle.source_refs) if snapshot_bundle is not None else []),
         ]
     )
     if holding_context.get("source_fund_artifact_id"):
@@ -1370,6 +1378,7 @@ def compose_uzi_report(context):
         *( [workflow.artifact_id] if workflow is not None else [] ),
         *( [deep.artifact_id] if deep is not None else [] ),
         *( [dimension_coverage.artifact_id] if dimension_coverage is not None else [] ),
+        *( [snapshot_bundle.artifact_id] if snapshot_bundle is not None else [] ),
     ]
     confidence_values = [
         _artifact_confidence(base_confidence),
@@ -1420,8 +1429,10 @@ def compose_uzi_report(context):
             "research_workflow": workflow.content if workflow is not None else None,
             "deep_analysis": deep.content if deep is not None else None,
             "uzi_dimension_coverage": dimension_coverage.content if dimension_coverage is not None else None,
+            "uzi_data_pipeline": data_pipeline or None,
         },
         snapshot_rows=evidence_items,
+        data_pipeline=data_pipeline,
     )
     presentation_content["source_artifact_ids"] = parents
     presentation = ArtifactDraft(

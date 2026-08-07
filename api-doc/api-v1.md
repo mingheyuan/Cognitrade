@@ -64,6 +64,7 @@ Content-Type: application/json
 {
   "intent": "stock_check",
   "user_query": "Review supplied evidence for 600000.",
+  "constraints": {"research_profile": "medium"},
   "slots": {"symbols": ["600000"]}
 }
 ```
@@ -90,6 +91,18 @@ endpoint: `stock_check`, `stock_compare`, `stock_screen`, `fund_research`,
 `distill_kol_logic`. When `intent` is omitted, Pack Task Intake resolves it
 from the query or returns a structured
 clarification instead of silently defaulting to stock analysis.
+
+`stock_check`, `stock_compare`, `stock_screen`, `sector_research`, and
+`review_thesis` require an explicit `constraints.research_profile`. The only
+accepted values are `lite`, `medium`, and `deep`; there is no server default
+and the removed `quick` profile is rejected. Their UZI 3.9.2 execution
+contracts are:
+
+| profile | Fetchers | Panel | Institutional methods | DDGS budget | Playwright fallback |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `lite` | 7 / 20 | 10 | 1 | 0 | off |
+| `medium` | 20 / 20 | 51 | 17 | 30 | opt-in, 6 dimensions |
+| `deep` | 20 / 20 | 51 | 18 | 60 | 10 dimensions after explicit sensitive-source enablement; includes Bull-Bear debate |
 
 All declared intents accept the common boolean constraint `background`. When
 `true`, the API reserves the run immediately and executes it asynchronously;
@@ -203,8 +216,8 @@ Content-Type: application/json
 }
 ```
 
-`profile` is `quick`, `lite`, `medium`, or `deep`; the default is `lite` and
-all children in one batch use the same profile. An equivalent existing batch
+`profile` is required and must be `lite`, `medium`, or `deep`; the service does
+not choose a default. All children in one batch use the same explicitly selected profile. An equivalent existing batch
 is returned unless `force: true` explicitly creates another historical batch.
 Disclosures 121–180 days old carry a warning. Disclosures older than 180 days
 return `409 stale_holdings_confirmation_required` until `confirm_stale: true`

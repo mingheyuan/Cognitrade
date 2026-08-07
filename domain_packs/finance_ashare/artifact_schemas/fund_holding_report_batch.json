@@ -13,7 +13,7 @@
     "fund_code": {"type": "string"},
     "fund_name": {"type": "string"},
     "fund_type": {"type": ["string", "null"]},
-    "profile": {"enum": ["quick", "lite", "medium", "deep"]},
+    "profile": {"enum": ["lite", "medium", "deep"]},
     "status": {"enum": ["running", "completed", "completed_partial", "failed", "cancelled"]},
     "concurrency": {"type": "integer", "minimum": 1, "maximum": 10},
     "holding_source": {"enum": ["direct_equity_disclosure", "target_etf_lookthrough"]},

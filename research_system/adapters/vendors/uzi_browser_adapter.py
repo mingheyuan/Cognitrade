@@ -14,10 +14,19 @@ class UziBrowserAdapter:
         "iwencai": lambda symbol, query: f"https://www.iwencai.com/unifiedwap/result?w={quote(query or symbol)}",
         "ths_f10": lambda symbol, _query: f"https://stockpage.10jqka.com.cn/{_digits(symbol)}/",
         "xueqiu_f10": lambda symbol, _query: f"https://xueqiu.com/S/{_xueqiu_symbol(symbol)}",
+        "xueqiu_posts": lambda symbol, _query: f"https://xueqiu.com/S/{_xueqiu_symbol(symbol)}/POST",
+        "xueqiu_contests": lambda _symbol, _query: "https://xueqiu.com/cube/rank/list",
         "legulegu": lambda symbol, query: f"https://legulegu.com/search?q={quote(query or symbol)}",
         "stockstar": lambda symbol, _query: f"https://stock.quote.stockstar.com/{_digits(symbol)}.shtml",
         "futu": lambda symbol, _query: f"https://www.futunn.com/stock/{symbol}",
         "yuncaijing": lambda symbol, _query: f"https://www.yuncaijing.com/stock/details/id/{_digits(symbol)}.html",
+        "em_data": lambda symbol, _query: f"https://emweb.securities.eastmoney.com/PC_HSF10/BusinessAnalysis/Index?type=web&code={_digits(symbol)}",
+        "cninfo": lambda symbol, _query: f"http://www.cninfo.com.cn/new/disclosure/stock?stockCode={_digits(symbol)}",
+        "stats_gov": lambda _symbol, _query: "https://www.stats.gov.cn/sj/sjjd/",
+        "baidu_search": lambda _symbol, query: f"https://www.baidu.com/s?wd={quote(query)}",
+        "baidu_baike": lambda _symbol, query: f"https://baike.baidu.com/item/{quote(query)}",
+        "csrc": lambda _symbol, _query: "http://www.csrc.gov.cn/csrc/c100028/common_list.shtml",
+        "xiaohongshu": lambda _symbol, query: f"https://www.xiaohongshu.com/search_result?keyword={quote(query)}",
     }
 
     def __init__(self, settings: Settings) -> None:
@@ -27,9 +36,10 @@ class UziBrowserAdapter:
         evidence: dict[str, dict[str, Any]] = {}
         trace: list[dict[str, Any]] = []
         for source_id in source_ids:
+            canonical_source_id = self._canonical_source_id(source_id)
             reason = self._policy_gap(source_id)
             if reason:
-                trace.append({"source_id": source_id, "status": "disabled", "reason": reason})
+                trace.append({"source_id": canonical_source_id, "strategy_id": source_id, "status": "disabled", "reason": reason})
                 continue
             try:
                 item = self._collect(source_id=source_id, symbol=symbol, query=query)
@@ -39,15 +49,20 @@ class UziBrowserAdapter:
                     for marker in ("just a moment", "access denied", "captcha", "验证后继续")
                 )
                 if excerpt and not blocked:
-                    evidence[source_id] = item
+                    # Keep the strategy identity as the evidence key.  Several
+                    # UZI browser strategies share one registered provider;
+                    # collapsing them to the provider id would lose which
+                    # parser/source page actually produced the evidence.
+                    evidence[source_id] = {**item, "source_id": canonical_source_id, "strategy_id": source_id}
                 trace.append(
                     {
-                        "source_id": source_id,
+                        "source_id": canonical_source_id,
+                        "strategy_id": source_id,
                         "status": "available" if excerpt and not blocked else "no_data",
                     }
                 )
             except Exception as exc:
-                trace.append({"source_id": source_id, "status": "provider_unavailable", "error_type": exc.__class__.__name__})
+                trace.append({"source_id": canonical_source_id, "strategy_id": source_id, "status": "provider_unavailable", "error_type": exc.__class__.__name__})
         return {"evidence": evidence, "source_trace": trace}
 
     def _policy_gap(self, source_id: str) -> str | None:
@@ -55,12 +70,12 @@ class UziBrowserAdapter:
             return "browser_sources_disabled"
         if not self.settings.sensitive_sources_enabled:
             return "sensitive_sources_disabled"
-        aliases = {source_id}
-        if source_id == "xueqiu_f10":
+        aliases = {source_id, self._canonical_source_id(source_id)}
+        if source_id in {"xueqiu_f10", "xueqiu_posts", "xueqiu_contests"}:
             aliases.add("xueqiu")
         if not aliases.intersection(self.settings.sensitive_source_allowlist):
             return "source_not_allowlisted"
-        if source_id == "xueqiu_f10" and not self.settings.xueqiu_cookie:
+        if source_id in {"xueqiu_f10", "xueqiu_posts", "xueqiu_contests"} and not self.settings.xueqiu_cookie:
             return "credentials_missing"
         return None
 
@@ -76,7 +91,7 @@ class UziBrowserAdapter:
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
             )
-            if source_id == "xueqiu_f10" and self.settings.xueqiu_cookie:
+            if source_id in {"xueqiu_f10", "xueqiu_posts", "xueqiu_contests"} and self.settings.xueqiu_cookie:
                 context.add_cookies(_cookies(self.settings.xueqiu_cookie, ".xueqiu.com"))
             page = context.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=20_000)
@@ -87,6 +102,16 @@ class UziBrowserAdapter:
             )
             browser.close()
         return {"source_id": source_id, "url": url, "title": title, "text_excerpt": text, "links": links}
+
+    @staticmethod
+    def _canonical_source_id(source_id: str) -> str:
+        return {
+            "xueqiu_posts": "xueqiu_f10",
+            "xueqiu_contests": "xueqiu_f10",
+            "baidu_search": "ddgs",
+            "baidu_baike": "ddgs",
+            "xiaohongshu": "ddgs",
+        }.get(source_id, source_id)
 
 
 def _digits(symbol: str) -> str:
