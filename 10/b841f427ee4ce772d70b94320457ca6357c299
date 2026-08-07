@@ -1,0 +1,95 @@
+.env.example
+  s_a6a8a3a6f43b3c::t_e146e6cee87234 56
+README.md
+  s_a6a8a3a6f43b3c::t_7668fada277672 15,120
+api-doc/api-v1.md
+  s_a6a8a3a6f43b3c::t_e320be2072e80f 23,168-232
+domain_packs/finance_ashare/artifact_schemas/fund_holding_report_batch.json
+  s_a6a8a3a6f43b3c::t_3de43711a64c30 1-78
+domain_packs/finance_ashare/artifact_schemas/main_agent_synthesis.json
+  s_a6a8a3a6f43b3c::t_fb1d16b27a86e1 29-35
+domain_packs/finance_ashare/artifact_schemas/normalized_query.json
+  s_a6a8a3a6f43b3c::t_8eb08623d1fd94 48-69
+domain_packs/finance_ashare/artifact_schemas/research_report.json
+  s_a6a8a3a6f43b3c::t_223b600e7e63e9 63-88
+domain_packs/finance_ashare/artifact_schemas/user_request.json
+  s_a6a8a3a6f43b3c::t_58e943bba310bd 24-50
+domain_packs/finance_ashare/domain.yaml
+  s_a6a8a3a6f43b3c::t_23a839b1aabf52 2,29,831
+domain_packs/finance_ashare/holding_reports.py
+  s_a6a8a3a6f43b3c::t_ba39ca32a35e01 1-268
+domain_packs/finance_ashare/reporting/templates/uzi_native_report.html
+  s_a6a8a3a6f43b3c::t_6ef0ec79a52591 168-181,371-372,427-428
+domain_packs/finance_ashare/reporting/uzi_native_report.py
+  s_a6a8a3a6f43b3c::t_1243e5c8d0cb37 151,153,159,277-295,304
+domain_packs/finance_ashare/subagents/runtime.py
+  s_a6a8a3a6f43b3c::t_1e6a54bc645bd9 8,166-170,1244,1254-1255,1319,1352-1362,1364
+frontend/src/api-client.ts
+  s_a6a8a3a6f43b3c::t_649ee4fa6bf2c0 48-103,214-264
+frontend/src/artifacts/finance-artifact-renderers.json
+  s_a6a8a3a6f43b3c::t_da2a1be4abca35 4-5,16-17,28
+frontend/src/artifacts/generated/finance-artifact-contracts.ts
+  s_a6a8a3a6f43b3c::t_f1843c222a095e 29,72-89,105-122,778-795,812,1401-1452,1786,1828-1844,1859-1875,2463-2479,2495,3025-3073
+frontend/src/artifacts/registry.ts
+  s_a6a8a3a6f43b3c::t_994a272c5442bd 34
+frontend/src/artifacts/renderers.tsx
+  s_a6a8a3a6f43b3c::t_3a9fd37a0f6d07 121-124
+frontend/src/components/Funds.tsx
+  s_a6a8a3a6f43b3c::t_4b19a5e998b64b 8,21,29,157-162
+frontend/src/styles/finance-components.css
+  s_a6a8a3a6f43b3c::t_78ae3c3647fc4d 1998-2326,2532-2543,2602-2623
+plan/current-architecture.md
+  s_a6a8a3a6f43b3c::t_94b1c65ef37203 44,62-67
+plan/uzi-3.9.2-domainpack-migration.md
+  s_a6a8a3a6f43b3c::t_3baee2af75270c 178
+research_system/api/agent_os_run_service.py
+  s_a6a8a3a6f43b3c::t_7166f2d4ae211b 34,45-48,111-116,348-353,414-421,463-469,482-490,522-537,573-575,623-625,736-738,823-833,893-897,972-987,1057-1066
+research_system/api/app.py
+  s_a6a8a3a6f43b3c::t_c8ca6c2703073b 18,26,45,94-104,120,135-137,165,187
+research_system/api/dependencies.py
+  s_a6a8a3a6f43b3c::t_659fac2ec9584a 40,72-82,227
+research_system/api/fund_holding_report_service.py
+  s_a6a8a3a6f43b3c::t_b55786fc6d31bb 1-951
+research_system/api/models.py
+  s_a6a8a3a6f43b3c::t_5a7e4f20f6b87c 15-41,91-92
+research_system/api/routes/fund_holding_reports.py
+  s_a6a8a3a6f43b3c::t_466f33d3f47fde 1-207
+research_system/runtime/agent_os.py
+  s_a6a8a3a6f43b3c::t_fba8baf3083840 625
+research_system/runtime/config/settings_env.py
+  s_a6a8a3a6f43b3c::t_bf23311b8a6e72 118-120
+research_system/runtime/platform/settings.py
+  s_a6a8a3a6f43b3c::t_4a6d29ce2cb7c6 58,101-102
+research_system/runtime/turn_runner.py
+  s_a6a8a3a6f43b3c::t_75c81e69b46b09 1722-1732,1735-1736,1748,1754
+tests/test_api_v1_fund_holding_reports.py
+  s_a6a8a3a6f43b3c::t_ee37d758674dfc 1-147
+tests/test_api_v1_sse_openapi.py
+  s_a6a8a3a6f43b3c::t_605431ebf8c7c6 51-57,294,296
+tests/test_finance_artifact_ui_contracts.py
+  s_a6a8a3a6f43b3c::t_24be9693390577 75,119
+tests/test_fund_holding_reports.py
+  s_a6a8a3a6f43b3c::t_d2665ed6bdbab7 1-405
+tests/test_uzi_finance_pack.py
+  s_a6a8a3a6f43b3c::t_e813c1040fb86e 25,49-132
+tests/test_uzi_native_report.py
+  s_a6a8a3a6f43b3c::t_45d9b75c121667 149-186
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "10b841f427ee4ce772d70b94320457ca6357c299",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
