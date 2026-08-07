@@ -3,18 +3,51 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "codex/**"
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  finance-contracts:
+    name: Finance chain and scoring contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      COGNITRADE_API_ALLOW_UNAUTHENTICATED: "true"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt
+      - name: Validate API, planning, fund scoring, artifacts, and frontend contracts
+        run: >-
+          python -m unittest
+          tests.test_api_validation_dynamic
+          tests.test_agent_os_task_intake
+          tests.test_pack_planner_contracts
+          tests.test_finance_pack_migration_completion
+          tests.test_finance_ashare_dashboard_contract
+          tests.test_fund_research
+          tests.test_uzi_method_products
+          tests.test_finance_artifact_ui_contracts
+
   backend:
+    name: Complete backend suite
+    needs: finance-contracts
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       COGNITRADE_API_ALLOW_UNAUTHENTICATED: "true"
+      PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,6 +59,7 @@ jobs:
       - run: python -m unittest discover -s tests -p "test_*.py"
 
   frontend:
+    name: Frontend lint, tests, and build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
