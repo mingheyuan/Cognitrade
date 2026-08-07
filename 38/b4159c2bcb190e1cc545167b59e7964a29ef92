@@ -1,0 +1,29 @@
+frontend/src/components/Funds.tsx
+  s_a6a8a3a6f43b3c::t_4fe9cb439c5bdc 11,15,20,166
+frontend/src/components/WorkspaceView.tsx
+  s_a6a8a3a6f43b3c::t_a379217be80d3a 6,29-30,42-43,58,60
+frontend/src/finance-contracts.ts
+  s_a6a8a3a6f43b3c::t_651e1dff510361 172,176-201,204-205,218
+research_system/api/hikyuu_backtest_runner.py
+  s_a6a8a3a6f43b3c::t_c7d85d17cb5370 20-21
+research_system/api/routes/finance.py
+  s_a6a8a3a6f43b3c::t_f80861b451a11a 3,49-50,247-248
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "38b4159c2bcb190e1cc545167b59e7964a29ef92",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
