@@ -559,11 +559,17 @@
 }
 
 .backtest-engine-strategies small,
-.backtest-engine-strategies p {
+.backtest-engine-strategies p,
+.backtest-engine-strategies em {
   margin: 0;
   color: var(--muted-dim);
   font-size: 8px;
   line-height: 1.5;
+}
+
+.backtest-engine-strategies em {
+  color: var(--blue);
+  font-style: normal;
 }
 
 .backtest-engine-strip > div {
@@ -668,7 +674,8 @@
   font-size: 10px;
 }
 
-.backtest-config-card input {
+.backtest-config-card input,
+.backtest-config-card select {
   width: 100%;
   min-width: 0;
   height: 41px;
@@ -681,9 +688,31 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-.backtest-config-card input:focus {
+.backtest-config-card input:focus,
+.backtest-config-card select:focus {
   border-color: rgba(125, 226, 189, .5);
   box-shadow: 0 0 0 3px rgba(125, 226, 189, .06);
+}
+
+.backtest-linked-source {
+  display: block;
+  margin-top: 8px;
+  color: var(--mint);
+  line-height: 1.55;
+}
+
+.backtest-config-card label > small {
+  color: var(--text-faint);
+  line-height: 1.45;
+}
+
+.backtest-parameter-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-inline: 17px;
+  color: var(--gold);
+  font-size: 9px;
 }
 
 .backtest-form-grid {
@@ -2313,11 +2342,30 @@
   padding: 0 12px 10px;
 }
 
-.fund-holding-history > div span {
+.fund-holding-history > div button {
   display: flex;
+  align-items: center;
   gap: 8px;
-  padding: 5px 0;
+  width: 100%;
+  padding: 7px 4px;
   border-top: 1px solid var(--border);
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  background: transparent;
+  color: var(--text-faint);
+  text-align: left;
+  cursor: pointer;
+}
+
+.fund-holding-history > div button span {
+  flex: 1;
+}
+
+.fund-holding-history > div button:hover,
+.fund-holding-history > div button.is-current {
+  color: var(--mint);
+  background: color-mix(in srgb, var(--mint) 4%, transparent);
 }
 
 .fund-holding-history strong {

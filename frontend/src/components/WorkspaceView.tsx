@@ -3,6 +3,7 @@ import type { Dispatch, SetStateAction } from 'react'
 import type { ViewId } from '../data'
 import type { ResearchIntent } from '../research-contracts'
 import type { MarketDataViewState } from './MarketData'
+import type { BacktestTarget } from '../finance-contracts'
 import { RunInspector } from './RunInspector'
 
 const Workbench = lazy(() => import('./Workbench').then((module) => ({ default: module.Workbench })))
@@ -25,6 +26,8 @@ type WorkspaceViewProps = {
   setSelectedEvidence: Dispatch<SetStateAction<string>>
   onResearch: (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => Promise<void>
   onOpenRun: (runId: string) => void
+  backtestTarget: BacktestTarget | null
+  onOpenBacktest: (target: BacktestTarget) => void
 }
 
 export function WorkspaceView({
@@ -36,6 +39,8 @@ export function WorkspaceView({
   setSelectedEvidence,
   onResearch,
   onOpenRun,
+  backtestTarget,
+  onOpenBacktest,
 }: WorkspaceViewProps) {
   if (activeView === 'workbench') {
     return (
@@ -50,9 +55,9 @@ export function WorkspaceView({
   }
   if (activeView === 'market') return <MarketData state={marketDataState} setState={setMarketDataState} />
   if (activeView === 'paper') return <PaperTrading onOpenMarketData={() => navigate('market')} />
-  if (activeView === 'backtest') return <Backtesting />
+  if (activeView === 'backtest') return <Backtesting initialTarget={backtestTarget} />
   if (activeView === 'screening') return <Screening onSubmit={onResearch} onOpenRun={onOpenRun} />
-  if (activeView === 'funds') return <Funds onOpenRun={onOpenRun} />
+  if (activeView === 'funds') return <Funds onOpenRun={onOpenRun} onOpenBacktest={onOpenBacktest} />
   if (activeView === 'uzi') return <UziMethods onOpenRun={onOpenRun} />
   if (activeView === 'methodology') return <Methodology />
   return <Runs onOpenRun={onOpenRun} onResearch={onResearch} />

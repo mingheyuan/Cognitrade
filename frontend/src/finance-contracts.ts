@@ -169,29 +169,53 @@ export type QuantEngineStatus = {
   cash_ledger?: string
   load_error?: string | null
   capabilities?: Record<string, boolean>
-  strategies?: Array<{ id: string; name: string; description: string }>
+  strategies?: BacktestStrategy[]
   data_source?: string
+}
+
+export type BacktestStrategyParameter = {
+  id: string
+  label: string
+  type: 'integer' | 'number'
+  default: number
+  minimum: number
+  maximum: number
+  step: number
+  help?: string
+}
+
+export type BacktestStrategy = {
+  id: string
+  name: string
+  description: string
+  parameters?: BacktestStrategyParameter[]
+}
+
+export type BacktestTarget = {
+  symbol: string
+  name?: string
+  fundCode?: string
+  fundName?: string
+  sourceRunId?: string
 }
 
 export type BacktestRequest = {
   symbol: string
-  strategy?: 'ma_cross'
+  strategy: string
+  strategy_parameters: Record<string, number>
   initial_cash: number
-  fast_period: number
-  slow_period: number
   trade_size: number
   refresh?: boolean
 }
 
 export type BacktestParameters = {
   initial_cash: number
-  fast_period: number
-  slow_period: number
   trade_size: number
   commission_rate: number
   minimum_commission: number
   stamp_duty_rate: number
   transfer_fee_rate: number
+  [key: string]: number
 }
 
 export type BacktestResult = {

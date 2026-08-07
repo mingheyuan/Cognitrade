@@ -37,6 +37,9 @@ jobs:
           tests.test_finance_pack_migration_completion
           tests.test_finance_ashare_dashboard_contract
           tests.test_fund_research
+          tests.test_api_v1_fund_holding_reports
+          tests.test_api_v2_finance
+          tests.test_backtest_strategies
           tests.test_uzi_method_products
           tests.test_finance_artifact_ui_contracts
 

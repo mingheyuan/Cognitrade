@@ -410,9 +410,15 @@ Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格�
 ## Hikyuu 策略回测
 
 回测与模拟盘完全独立。服务端把 Finance Pack `kline.bars` 转换为 Hikyuu 外部
-`Stock/KRecord`，使用 `SYS_Simple + SG_Cross + MM_FixedCount` 执行双均线策略。
+`Stock/KRecord`，使用 `SYS_Simple + SG_Cross + MM_FixedCount` 执行注册策略。
 每次回测在 120 秒受控子进程中运行，隔离 HOME 已预置本地空策略仓库，因此不会
 自动下载 Hikyuu Hub，也不会影响 API 主进程。
+
+`GET /api/v2/finance/backtests/engine` 的 `strategies` 返回可用策略及其动态参数合同。
+当前包括 `ma_cross`（双均线交叉）和 `price_ma_cross`（价格均线趋势）；前端严格按
+该合同生成参数表单。新增内置策略统一在
+`research_system/api/backtest_strategies.py` 注册，并由隔离 runner 显式实现，不执行
+用户提交的任意 Python 代码。
 
 ### `POST /api/v2/finance/backtests`
 
@@ -420,16 +426,19 @@ Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格�
 {
   "symbol": "600519",
   "strategy": "ma_cross",
+  "strategy_parameters": {
+    "fast_period": 5,
+    "slow_period": 20
+  },
   "initial_cash": 1000000,
-  "fast_period": 5,
-  "slow_period": 20,
   "trade_size": 1000,
   "refresh": false
 }
 ```
 
-约束：`slow_period > fast_period >= 2`，`trade_size` 为 100 股整数倍，并且有效
-K 线至少为 `slow_period + 5` 根。结果包含：
+约束由所选策略的参数合同决定；双均线策略要求 `slow_period > fast_period >= 2`。
+`trade_size` 为 100 股整数倍，有效 K 线至少为策略最长周期加 5 根。未知策略、未知
+参数、越界参数都会以结构化 422 错误拒绝。结果包含：
 
 - 回测 ID、Hikyuu 版本、标的、参数和数据来源；
 - 初始/期末权益、总收益、年化收益、最大回撤、胜率和盈亏比；

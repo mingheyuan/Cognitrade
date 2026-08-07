@@ -51,20 +51,39 @@ class HikyuuBacktestServiceTests(unittest.TestCase):
 
             result = service.run(
                 symbol="600519",
+                strategy_id="ma_cross",
+                strategy_parameters={"fast_period": 5, "slow_period": 20},
                 initial_cash=1_000_000,
-                fast_period=5,
-                slow_period=20,
                 trade_size=1_000,
             )
             persisted = service.get_result(result["backtest_id"])
             summaries = service.list_results()
 
         self.assertEqual(result["engine"]["name"], "hikyuu")
+        self.assertEqual(result["strategy"]["id"], "ma_cross")
         self.assertEqual(result["period"]["bar_count"], 90)
         self.assertEqual(len(result["equity_curve"]), 90)
         self.assertIn("total_return_pct", result["metrics"])
         self.assertEqual(persisted["backtest_id"], result["backtest_id"])
         self.assertEqual(summaries[0]["backtest_id"], result["backtest_id"])
+
+    def test_runs_registered_price_ma_strategy(self) -> None:
+        with TemporaryDirectory() as temporary:
+            service = HikyuuBacktestService(
+                result_root=Path(temporary),
+                market_data=_SyntheticMarket(),
+            )
+
+            result = service.run(
+                symbol="600519",
+                strategy_id="price_ma_cross",
+                strategy_parameters={"lookback_period": 20},
+                initial_cash=1_000_000,
+                trade_size=1_000,
+            )
+
+        self.assertEqual(result["strategy"]["id"], "price_ma_cross")
+        self.assertEqual(result["parameters"]["lookback_period"], 20)
 
 
 if __name__ == "__main__":

@@ -384,9 +384,9 @@ class ApiV2FinanceTests(unittest.TestCase):
             headers=auth_headers(),
             json={
                 "symbol": "600519",
+                "strategy": "ma_cross",
+                "strategy_parameters": {"fast_period": 2, "slow_period": 3},
                 "initial_cash": 1_000_000,
-                "fast_period": 2,
-                "slow_period": 3,
                 "trade_size": 100,
             },
         )

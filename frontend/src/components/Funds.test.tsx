@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   createRun: vi.fn(async () => ({ run_id: 'run-new' })),
   selectRun: vi.fn(),
   openRun: vi.fn(),
+  openBacktest: vi.fn(),
 }))
 
 vi.mock('../CognitradeContext', () => ({
@@ -107,6 +108,7 @@ describe('Funds', () => {
     mocks.createRun.mockClear()
     mocks.selectRun.mockClear()
     mocks.openRun.mockClear()
+    mocks.openBacktest.mockClear()
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/holding-reports') && init?.method === 'POST') {
@@ -232,5 +234,42 @@ describe('Funds', () => {
       profile: 'lite',
       force: false,
     }))
+  })
+
+  it('restores a persisted batch, retries one failed report and opens its backtest', async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const batch = {
+        batch_id: 'batch-failed', source_run_id: 'run-fund', source_artifact_id: 'artifact-fund',
+        fund_code: '110011', fund_name: '易方达优质精选混合', fund_type: 'ETF联接',
+        profile: 'deep', status: 'failed', concurrency: 5,
+        holding_source: 'target_etf_lookthrough', is_fund_of_funds: true,
+        disclosure_date: '2026-06-30', disclosure_age_days: 38, stale_level: 'current', cancel_requested: false,
+        holdings: [{
+          rank: 1, symbol: '688012', name: '中微公司', market: 'SH', supported: true,
+          status: init?.method === 'POST' ? 'queued' : 'failed', fund_weight_pct: 13.85,
+          target_security_weight_pct: 15.02, holding_source: 'target_etf_lookthrough',
+          disclosure_date: '2026-06-30', child_run_id: null, attempt_run_ids: [], report_available: false,
+          retry_count: 0, data_gap: [], error: init?.method === 'POST' ? null : 'temporary failure',
+          started_at: null, completed_at: null,
+        }],
+        counts: { total: 1, supported: 1, queued: init?.method === 'POST' ? 1 : 0, running: 0, deliverable: 0, failed: init?.method === 'POST' ? 0 : 1, cancelled: 0, unsupported: 0 },
+        data_gap: [], created_at: '2026-08-07T00:00:00Z', updated_at: '2026-08-07T00:00:00Z', completed_at: '2026-08-07T00:10:00Z',
+      }
+      if (url.endsWith('/holding-report-batches')) return new Response(JSON.stringify([batch]), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      if (url.endsWith('/holding-report-batches/batch-failed/retry') && init?.method === 'POST') return new Response(JSON.stringify(batch), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+
+    render(<Funds onOpenRun={mocks.openRun} onOpenBacktest={mocks.openBacktest} />)
+
+    await waitFor(() => expect(screen.getByRole('combobox', { name: '研究档位' })).toHaveValue('deep'))
+    fireEvent.click(screen.getByRole('button', { name: '重试该报告' }))
+    await waitFor(() => {
+      const call = vi.mocked(fetch).mock.calls.find(([input]) => String(input).endsWith('/holding-report-batches/batch-failed/retry'))
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ symbols: ['688012'] })
+    })
+    fireEvent.click(screen.getByRole('button', { name: '回测' }))
+    expect(mocks.openBacktest).toHaveBeenCalledWith(expect.objectContaining({ symbol: '688012', fundCode: '110011' }))
   })
 })

@@ -13,24 +13,15 @@ from tempfile import TemporaryDirectory
 from threading import RLock
 from typing import Any
 
+from research_system.api.backtest_strategies import (
+    BacktestError,
+    STRATEGIES,
+    minimum_required_bars,
+    resolve_strategy,
+    strategy_catalog,
+)
 from research_system.api.finance_market_data_service import FinanceMarketDataService
 from research_system.runtime.core.id_utils import generate_ulid
-
-
-class BacktestError(ValueError):
-    def __init__(
-        self,
-        code: str,
-        message: str,
-        *,
-        status_code: int = 422,
-        details: dict[str, Any] | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.status_code = status_code
-        self.details = details
 
 
 class HikyuuBacktestService:
@@ -53,13 +44,7 @@ class HikyuuBacktestService:
             "available": available,
             "version": version,
             "mode": "isolated_external_kdata",
-            "strategies": [
-                {
-                    "id": "ma_cross",
-                    "name": "双均线交叉",
-                    "description": "短周期均线上穿长周期均线买入，反向交叉卖出。",
-                }
-            ],
+            "strategies": strategy_catalog(),
             "data_source": "Finance Pack K-line snapshot",
         }
 
@@ -67,9 +52,9 @@ class HikyuuBacktestService:
         self,
         *,
         symbol: str,
+        strategy_id: str,
+        strategy_parameters: dict[str, Any] | None,
         initial_cash: float,
-        fast_period: int,
-        slow_period: int,
         trade_size: int,
         refresh: bool = False,
     ) -> dict[str, Any]:
@@ -79,8 +64,7 @@ class HikyuuBacktestService:
                 "Hikyuu 未安装，请安装项目量化依赖后重试",
                 status_code=503,
             )
-        if fast_period < 2 or slow_period <= fast_period:
-            raise BacktestError("invalid_strategy_parameters", "长周期必须大于短周期，且短周期至少为 2")
+        strategy, parameters = resolve_strategy(strategy_id, strategy_parameters)
         if trade_size <= 0 or trade_size % 100 != 0:
             raise BacktestError("invalid_trade_size", "每次交易数量必须是 100 股的正整数倍")
         if initial_cash < 10_000:
@@ -90,7 +74,7 @@ class HikyuuBacktestService:
         bars = self._normalise_bars(
             market_payload.get("sections", {}).get("kline", {}).get("bars")
         )
-        minimum_bars = slow_period + 5
+        minimum_bars = minimum_required_bars(strategy, parameters)
         if len(bars) < minimum_bars:
             raise BacktestError(
                 "insufficient_kline_history",
@@ -103,9 +87,9 @@ class HikyuuBacktestService:
                 symbol=str(market_payload["symbol"]),
                 name=str(market_payload["name"]),
                 bars=bars,
+                strategy_id=strategy.id,
+                strategy_parameters=parameters,
                 initial_cash=float(initial_cash),
-                fast_period=int(fast_period),
-                slow_period=int(slow_period),
                 trade_size=int(trade_size),
             )
             payload.update(
@@ -125,9 +109,9 @@ class HikyuuBacktestService:
         symbol: str,
         name: str,
         bars: list[dict[str, Any]],
+        strategy_id: str,
+        strategy_parameters: dict[str, int],
         initial_cash: float,
-        fast_period: int,
-        slow_period: int,
         trade_size: int,
     ) -> dict[str, Any]:
         runtime_home = self.result_root / ".hikyuu_runtime"
@@ -138,9 +122,9 @@ class HikyuuBacktestService:
             "symbol": symbol,
             "name": name,
             "bars": bars,
+            "strategy_id": strategy_id,
+            "strategy_parameters": strategy_parameters,
             "initial_cash": initial_cash,
-            "fast_period": fast_period,
-            "slow_period": slow_period,
             "trade_size": trade_size,
         }
         with TemporaryDirectory(dir=runtime_root) as temporary:
@@ -321,9 +305,9 @@ class HikyuuBacktestService:
         symbol: str,
         name: str,
         bars: list[dict[str, Any]],
+        strategy_id: str,
+        strategy_parameters: dict[str, int],
         initial_cash: float,
-        fast_period: int,
-        slow_period: int,
         trade_size: int,
     ) -> dict[str, Any]:
         import hikyuu as hku
@@ -366,10 +350,18 @@ class HikyuuBacktestService:
             cost_func=costs,
             name=f"Cognitrade-{symbol}",
         )
-        signal = hku.SG_Cross(
-            hku.MA(hku.CLOSE(), fast_period),
-            hku.MA(hku.CLOSE(), slow_period),
-        )
+        if strategy_id == "ma_cross":
+            signal = hku.SG_Cross(
+                hku.MA(hku.CLOSE(), strategy_parameters["fast_period"]),
+                hku.MA(hku.CLOSE(), strategy_parameters["slow_period"]),
+            )
+        elif strategy_id == "price_ma_cross":
+            signal = hku.SG_Cross(
+                hku.CLOSE(),
+                hku.MA(hku.CLOSE(), strategy_parameters["lookback_period"]),
+            )
+        else:
+            raise RuntimeError(f"unregistered backtest strategy: {strategy_id}")
         system = hku.SYS_Simple(
             tm=manager,
             sg=signal,
@@ -420,13 +412,12 @@ class HikyuuBacktestService:
             "symbol": symbol,
             "name": name,
             "strategy": {
-                "id": "ma_cross",
-                "name": "双均线交叉",
+                "id": strategy_id,
+                "name": STRATEGIES[strategy_id].name,
             },
             "parameters": {
                 "initial_cash": initial_cash,
-                "fast_period": fast_period,
-                "slow_period": slow_period,
+                **strategy_parameters,
                 "trade_size": trade_size,
                 "commission_rate": 0.00025,
                 "minimum_commission": 5.0,

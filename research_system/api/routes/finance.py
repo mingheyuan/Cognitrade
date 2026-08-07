@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -46,10 +46,9 @@ class BacktestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     symbol: str = Field(min_length=1, max_length=64)
-    strategy: Literal["ma_cross"] = "ma_cross"
+    strategy: str = Field(default="ma_cross", pattern=r"^[a-z][a-z0-9_]{1,63}$")
+    strategy_parameters: dict[str, Any] = Field(default_factory=dict)
     initial_cash: float = Field(default=1_000_000, ge=10_000, le=1_000_000_000)
-    fast_period: int = Field(default=5, ge=2, le=120)
-    slow_period: int = Field(default=20, ge=3, le=250)
     trade_size: int = Field(default=1000, ge=100, le=10_000_000)
     refresh: bool = False
 
@@ -245,9 +244,9 @@ async def run_backtest(
         return await run_in_threadpool(
             service.run,
             symbol=request.symbol,
+            strategy_id=request.strategy,
+            strategy_parameters=request.strategy_parameters,
             initial_cash=request.initial_cash,
-            fast_period=request.fast_period,
-            slow_period=request.slow_period,
             trade_size=request.trade_size,
             refresh=request.refresh,
         )

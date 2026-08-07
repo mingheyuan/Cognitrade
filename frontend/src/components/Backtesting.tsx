@@ -17,20 +17,26 @@ import { BusinessDataView } from '../artifacts/BusinessDataView'
 import { useCognitrade } from '../CognitradeContext'
 import type {
   BacktestResult,
+  BacktestStrategy,
   BacktestSummary,
+  BacktestTarget,
   QuantEngineStatus,
 } from '../finance-contracts'
 
-export function Backtesting() {
+type BacktestingProps = {
+  initialTarget?: BacktestTarget | null
+}
+
+export function Backtesting({ initialTarget = null }: BacktestingProps) {
   const { settings } = useCognitrade()
   const client = useMemo(() => new CognitradeApiClient(settings), [settings])
   const [engine, setEngine] = useState<QuantEngineStatus | null>(null)
   const [history, setHistory] = useState<BacktestSummary[]>([])
   const [result, setResult] = useState<BacktestResult | null>(null)
-  const [symbol, setSymbol] = useState('600519')
+  const [symbol, setSymbol] = useState(initialTarget?.symbol || '600519')
+  const [strategyId, setStrategyId] = useState('')
+  const [strategyParameters, setStrategyParameters] = useState<Record<string, number>>({})
   const [initialCash, setInitialCash] = useState(1_000_000)
-  const [fastPeriod, setFastPeriod] = useState(5)
-  const [slowPeriod, setSlowPeriod] = useState(20)
   const [tradeSize, setTradeSize] = useState(1000)
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState(false)
@@ -63,6 +69,23 @@ export function Backtesting() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client])
 
+  const effectiveStrategyId = strategyId || engine?.strategies?.[0]?.id || ''
+  const selectedStrategy = useMemo(
+    () => engine?.strategies?.find((strategy) => strategy.id === effectiveStrategyId) || null,
+    [effectiveStrategyId, engine?.strategies],
+  )
+  const effectiveStrategyParameters = useMemo(
+    () => ({ ...(selectedStrategy ? strategyDefaults(selectedStrategy) : {}), ...strategyParameters }),
+    [selectedStrategy, strategyParameters],
+  )
+  const strategyParameterError = validateStrategyParameters(selectedStrategy, effectiveStrategyParameters)
+
+  const selectStrategy = (nextId: string) => {
+    const strategy = engine?.strategies?.find((row) => row.id === nextId)
+    setStrategyId(nextId)
+    setStrategyParameters(strategy ? strategyDefaults(strategy) : {})
+  }
+
   const runBacktest = async (event: FormEvent) => {
     event.preventDefault()
     setRunning(true)
@@ -70,10 +93,9 @@ export function Backtesting() {
     try {
       const payload = await client.runBacktest({
         symbol: symbol.trim(),
-        strategy: 'ma_cross',
+        strategy: effectiveStrategyId,
+        strategy_parameters: effectiveStrategyParameters,
         initial_cash: initialCash,
-        fast_period: fastPeriod,
-        slow_period: slowPeriod,
         trade_size: tradeSize,
       })
       setResult(payload)
@@ -105,6 +127,7 @@ export function Backtesting() {
           <span className="section-kicker">HIKYUU · ISOLATED BACKTEST LAB</span>
           <h1>策略回测</h1>
           <p>使用 Finance Pack 历史 K 线驱动 Hikyuu 原生交易系统，回测结果独立保存，不影响模拟盘现金和持仓。</p>
+          {initialTarget && <small className="backtest-linked-source">来自 {initialTarget.fundName || initialTarget.fundCode || '基金持仓'} · {initialTarget.name || initialTarget.symbol}；仅复用股票代码，不把研究评分转换为交易信号。</small>}
         </div>
         <button className="secondary-button" onClick={() => void loadOverview()} disabled={loading}>
           <RefreshCw size={14} className={loading ? 'is-spinning' : ''} />刷新记录
@@ -139,21 +162,20 @@ export function Backtesting() {
       <div className="backtest-workspace">
         <form className="backtest-config-card" onSubmit={runBacktest}>
           <header>
-            <div><span className="section-kicker">STRATEGY CONFIG</span><h2>双均线策略</h2></div>
-            <span className="quality-pill quality-pill--available">MA CROSS</span>
+            <div><span className="section-kicker">STRATEGY CONFIG</span><h2>{selectedStrategy?.name || '选择回测策略'}</h2></div>
+            <span className="quality-pill quality-pill--available">{effectiveStrategyId || 'LOADING'}</span>
           </header>
           <label><span>股票代码或名称</span><input value={symbol} onChange={(event) => setSymbol(event.target.value)} required /></label>
-          <div className="backtest-form-grid">
-            <label><span>短周期</span><input type="number" min="2" max="120" value={fastPeriod} onChange={(event) => setFastPeriod(Number(event.target.value))} required /></label>
-            <label><span>长周期</span><input type="number" min="3" max="250" value={slowPeriod} onChange={(event) => setSlowPeriod(Number(event.target.value))} required /></label>
-          </div>
+          <label><span>策略</span><select aria-label="回测策略" value={effectiveStrategyId} onChange={(event) => selectStrategy(event.target.value)} required>{engine?.strategies?.map((strategy) => <option key={strategy.id} value={strategy.id}>{strategy.name}</option>)}</select><small>{selectedStrategy?.description}</small></label>
+          <div className="backtest-form-grid">{selectedStrategy?.parameters?.map((parameter) => <label key={parameter.id}><span>{parameter.label}</span><input type="number" min={parameter.minimum} max={parameter.maximum} step={parameter.step} value={effectiveStrategyParameters[parameter.id] ?? parameter.default} onChange={(event) => setStrategyParameters((current) => ({ ...current, [parameter.id]: Number(event.target.value) }))} required />{parameter.help && <small>{parameter.help}</small>}</label>)}</div>
           <label><span>初始资金</span><input type="number" min="10000" step="10000" value={initialCash} onChange={(event) => setInitialCash(Number(event.target.value))} required /></label>
           <label><span>每次交易数量</span><div className="quantity-input-row"><input type="number" min="100" step="100" value={tradeSize} onChange={(event) => setTradeSize(Number(event.target.value))} required /><span>股</span></div></label>
           <div className="backtest-rule-note">
             <Database size={15} />
             <span>采用当前行情模块返回的完整日 K；佣金万 2.5（最低 5 元）、印花税万 5、过户费万 0.1。</span>
           </div>
-          <button className="primary-button backtest-run-button" disabled={running || !engine?.available || slowPeriod <= fastPeriod}>
+          {strategyParameterError && <div className="backtest-parameter-error"><AlertCircle size={13} />{strategyParameterError}</div>}
+          <button className="primary-button backtest-run-button" disabled={running || !engine?.available || !effectiveStrategyId || Boolean(strategyParameterError)}>
             {running ? <RefreshCw className="is-spinning" size={16} /> : <Play size={16} />}
             {running ? 'Hikyuu 正在计算' : '开始回测'}
           </button>
@@ -176,7 +198,7 @@ export function Backtesting() {
         <div className="backtest-history-list">
           {history.map((item) => (
             <button key={item.backtest_id} onClick={() => void openResult(item.backtest_id)}>
-              <span><strong>{item.name || item.symbol}</strong><small>{item.symbol} · MA {String(item.parameters.fast_period)}/{String(item.parameters.slow_period)}</small></span>
+              <span><strong>{item.name || item.symbol}</strong><small>{item.symbol} · {item.strategy?.name || item.strategy?.id || '策略未记录'}{backtestParameterSummary(item.parameters)}</small></span>
               <span><strong className={item.metrics.total_return_pct >= 0 ? 'number-up' : 'number-down'}>{formatPercent(item.metrics.total_return_pct)}</strong><small>{item.period.start} → {item.period.end}</small></span>
             </button>
           ))}
@@ -193,7 +215,7 @@ export function BacktestEngineDisclosure({ engine }: { engine: QuantEngineStatus
     <section className="backtest-engine-disclosure" aria-label="完整回测引擎能力">
       <header><div><span className="section-kicker">ENGINE CAPABILITIES</span><h2>回测引擎能力</h2></div><span className={engine.available ? 'is-ready' : 'is-missing'}>{engine.available ? '可用' : '不可用'}</span></header>
       <dl><div><dt>引擎</dt><dd>{engine.engine}</dd></div><div><dt>版本</dt><dd>{engine.version || '未提供'}</dd></div><div><dt>运行模式</dt><dd>{engine.mode === 'isolated_external_kdata' ? '隔离进程 · 外部 K 线输入' : engine.mode}</dd></div><div><dt>数据输入</dt><dd>{engine.data_source || '未提供'}</dd></div></dl>
-      <div className="backtest-engine-strategies"><h3>可用策略</h3>{engine.strategies?.length ? <ul>{engine.strategies.map((strategy) => <li key={strategy.id}><strong>{strategy.name}</strong><small>{strategy.id}</small><p>{strategy.description}</p></li>)}</ul> : <p>后端未声明可用策略。</p>}</div>
+      <div className="backtest-engine-strategies"><h3>可用策略</h3>{engine.strategies?.length ? <ul>{engine.strategies.map((strategy) => <li key={strategy.id}><strong>{strategy.name}</strong><small>{strategy.id}</small><p>{strategy.description}</p><em>{strategy.parameters?.map((parameter) => parameter.label).join(' · ') || '无额外参数'}</em></li>)}</ul> : <p>后端未声明可用策略。</p>}</div>
       {engine.load_error && <p className="paper-engine-warning"><AlertCircle size={13} />回测依赖未完整加载，请检查服务端量化依赖。</p>}
     </section>
   )
@@ -219,7 +241,7 @@ export function BacktestResultPanel({ result }: { result: BacktestResult }) {
       </div>
       <EquityCurve points={result.equity_curve} initialCash={result.metrics.initial_cash} />
       <section className="backtest-contract-grid" aria-label="完整回测配置与数据说明">
-        <article><h3>策略与费用参数</h3><dl><div><dt>策略</dt><dd>{result.strategy.name}（{result.strategy.id}）</dd></div><div><dt>短周期</dt><dd>{String(result.parameters.fast_period)}</dd></div><div><dt>长周期</dt><dd>{String(result.parameters.slow_period)}</dd></div><div><dt>每次交易数量</dt><dd>{Number(result.parameters.trade_size || 0).toLocaleString()} 股</dd></div><div><dt>佣金率</dt><dd>{formatRate(result.parameters.commission_rate)}</dd></div><div><dt>最低佣金</dt><dd>{formatMoney(Number(result.parameters.minimum_commission || 0))}</dd></div><div><dt>印花税率</dt><dd>{formatRate(result.parameters.stamp_duty_rate)}</dd></div><div><dt>过户费率</dt><dd>{formatRate(result.parameters.transfer_fee_rate)}</dd></div></dl></article>
+        <article><h3>策略与费用参数</h3><dl><div><dt>策略</dt><dd>{result.strategy.name}（{result.strategy.id}）</dd></div>{strategyResultParameters(result.parameters).map(([key, value]) => <div key={key}><dt>{strategyParameterLabel(key)}</dt><dd>{String(value)}</dd></div>)}<div><dt>每次交易数量</dt><dd>{Number(result.parameters.trade_size || 0).toLocaleString()} 股</dd></div><div><dt>佣金率</dt><dd>{formatRate(result.parameters.commission_rate)}</dd></div><div><dt>最低佣金</dt><dd>{formatMoney(Number(result.parameters.minimum_commission || 0))}</dd></div><div><dt>印花税率</dt><dd>{formatRate(result.parameters.stamp_duty_rate)}</dd></div><div><dt>过户费率</dt><dd>{formatRate(result.parameters.transfer_fee_rate)}</dd></div></dl></article>
         <article><h3>数据与运行范围</h3><dl><div><dt>数据质量</dt><dd>{qualityLabel(result.data_quality_status)}</dd></div><div><dt>数据频率</dt><dd>{frequencyLabel(result.period.frequency)}</dd></div><div><dt>K 线数量</dt><dd>{result.period.bar_count.toLocaleString()} 根</dd></div><div><dt>开始日期</dt><dd>{result.period.start}</dd></div><div><dt>结束日期</dt><dd>{result.period.end}</dd></div><div><dt>回测引擎</dt><dd>{result.engine.name} {result.engine.version}</dd></div></dl>{result.data_source && <div className="backtest-source-disclosure"><h4>行情来源</h4><BusinessDataView value={result.data_source} fieldKey="source" path="backtest.data_source" compact /></div>}</article>
       </section>
       <div className="backtest-trade-table-wrap">
@@ -325,6 +347,47 @@ function frequencyLabel(value: string): string {
 
 function qualityLabel(value?: string): string {
   return ({ available: '数据可用', degraded: '部分数据降级', data_gap: '数据不足' } as Record<string, string>)[String(value || '')] || value || '未提供'
+}
+
+function strategyDefaults(strategy: BacktestStrategy): Record<string, number> {
+  return Object.fromEntries((strategy.parameters || []).map((parameter) => [parameter.id, parameter.default]))
+}
+
+function validateStrategyParameters(strategy: BacktestStrategy | null, values: Record<string, number>): string {
+  if (!strategy) return ''
+  for (const parameter of strategy.parameters || []) {
+    const value = values[parameter.id]
+    if (!Number.isFinite(value) || value < parameter.minimum || value > parameter.maximum) {
+      return `${parameter.label}必须在 ${parameter.minimum} 到 ${parameter.maximum} 之间`
+    }
+    if (parameter.type === 'integer' && !Number.isInteger(value)) return `${parameter.label}必须是整数`
+  }
+  if (strategy.id === 'ma_cross' && values.slow_period <= values.fast_period) return '长周期必须大于短周期'
+  return ''
+}
+
+const COMMON_BACKTEST_PARAMETERS = new Set([
+  'initial_cash',
+  'trade_size',
+  'commission_rate',
+  'minimum_commission',
+  'stamp_duty_rate',
+  'transfer_fee_rate',
+])
+
+function strategyResultParameters(parameters: BacktestResult['parameters']): Array<[string, number]> {
+  return Object.entries(parameters).filter(([key]) => !COMMON_BACKTEST_PARAMETERS.has(key))
+}
+
+function strategyParameterLabel(key: string): string {
+  return ({ fast_period: '短周期', slow_period: '长周期', lookback_period: '均线周期' } as Record<string, string>)[key] || key
+}
+
+function backtestParameterSummary(parameters: BacktestResult['parameters']): string {
+  const values = strategyResultParameters(parameters)
+    .map(([key, value]) => `${strategyParameterLabel(key)} ${value}`)
+    .join(' / ')
+  return values ? ` · ${values}` : ''
 }
 
 function apiErrorMessage(error: unknown): string {
