@@ -9,7 +9,6 @@ from research_system.schemas import (
     runtime,
     snapshots,
     subagents,
-    valuation,
 )
 
 
@@ -24,7 +23,6 @@ class SchemaTaxonomyPackagesRuntimeTests(unittest.TestCase):
         self.assertIs(schemas_package.runtime, runtime)
         self.assertIs(schemas_package.snapshots, snapshots)
         self.assertIs(schemas_package.subagents, subagents)
-        self.assertIs(schemas_package.valuation, valuation)
 
 
 if __name__ == "__main__":

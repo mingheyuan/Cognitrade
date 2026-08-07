@@ -95,6 +95,18 @@ class UziMethodProductTests(unittest.TestCase):
         self.assertEqual(len(supplied["results"][0]["derived"]["projection"]), 2)
         self.assertIn("300001:projection_growth_path", supplied["assumption_flags"])
 
+    def test_cashflow_resilience_uses_reported_facts_without_default_stress_values(self) -> None:
+        product = build_method_product("cashflow_resilience", _rows(), ["300001"])
+        result = product["results"][0]
+
+        self.assertEqual(result["observed"]["operating_cash_flow"], 12)
+        self.assertEqual(result["derived"]["operating_cash_flow_to_net_profit"], 1.2)
+        self.assertEqual(result["derived"]["liabilities_to_assets"], 80 / 180)
+        self.assertIsNone(result["methodology"]["composite_score"])
+        self.assertIsNone(result["methodology"]["stress_scenario"])
+        self.assertEqual(result["assumption_flags"], [])
+        self.assertIn("300001:reported_free_cash_flow_missing", product["data_gap"])
+
     def test_quick_lbo_requires_reported_ebitda_and_every_transaction_input(self) -> None:
         missing = build_method_product("quick_lbo", _rows(), ["300001"])
         supplied = build_method_product(
@@ -234,6 +246,24 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
 
         self.assertEqual(violations, [])
 
+    def test_legacy_methodology_runtime_is_deleted(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        legacy_files = [
+            repository_root / "research_system/services/methodologies/__init__.py",
+            repository_root / "research_system/services/methodologies/valuation/__init__.py",
+            repository_root / "research_system/services/methodologies/valuation/comps_service.py",
+            repository_root / "research_system/services/methodologies/valuation/dcf_service.py",
+            repository_root / "research_system/services/methodologies/valuation/cashflow_resilience_service.py",
+            repository_root / "research_system/schemas/valuation.py",
+        ]
+
+        self.assertEqual([path for path in legacy_files if path.exists()], [])
+        runtime = (
+            repository_root / "domain_packs/finance_ashare/subagents/runtime.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("research_system.services.methodologies", runtime)
+        self.assertNotIn("finance.analysis.evaluate", runtime)
+
     def test_every_pack_snapshot_dimension_is_accepted_by_api_and_schema(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         manifest = yaml.safe_load(
@@ -352,6 +382,7 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
         repository_root = Path(__file__).resolve().parents[1]
         planner = CapabilityPlanner(DomainPackRegistry.load(repository_root / "domain_packs"))
         expected = {
+            "cashflow_resilience": "finance.uzi.method.cashflow_resilience",
             "three_statement": "finance.uzi.method.three_statement",
             "quick_lbo": "finance.uzi.method.quick_lbo",
             "accretion_dilution": "finance.uzi.method.accretion_dilution",

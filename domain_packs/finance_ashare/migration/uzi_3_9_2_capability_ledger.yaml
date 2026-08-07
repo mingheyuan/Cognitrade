@@ -219,6 +219,7 @@ method_products_extension:
   status: implemented_v1
   source_module: domain_packs/finance_ashare/subagents/uzi_method_products.py
   capabilities:
+    - finance.uzi.method.cashflow_resilience
     - finance.uzi.method.three_statement
     - finance.uzi.method.quick_lbo
     - finance.uzi.method.accretion_dilution

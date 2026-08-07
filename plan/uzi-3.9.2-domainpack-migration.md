@@ -167,6 +167,7 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 ### Phase C：23 个方法完整能力化
 
 - [x] 按账本逐个实现 Pack-native capability；
+- [x] 删除 `research_system.services.methodologies` 的旧 DCF/Comps/Cashflow 运行链；公开 `cashflow_resilience` 方法名改由 Pack-native capability 承接，缺数不再使用默认压力参数或伪综合分；
 - [x] 每个方法补齐 input contract、quality gate、fixture 和等价性级别；
 - [x] Tier‑1 的逐持仓 rebalance 已与旧组合再平衡语义拆开；旧组合再平衡仍单独保留在账本；
 - [x] Tier‑1 五方法全部提供专属 Capability、Artifact、质量门、测试与 Web 视图；

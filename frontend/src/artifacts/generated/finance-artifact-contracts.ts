@@ -166,10 +166,14 @@ export type EvidenceSetContent = {
 }
 
 export type FinancialAnalysisContent = {
-  "symbols": Array<unknown>;
-  "methodologies": Array<unknown>;
-  "scorecards": Array<unknown>;
-  "summary": string;
+  "methodology_version": string;
+  "method": "cashflow_resilience";
+  "artifact_type": "financial_analysis";
+  "results": Array<Record<string, unknown>>;
+  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
+  "data_gap": Array<string>;
+  "assumption_flags": Array<string>;
+  "generated_at": string;
 }
 
 export type ScreeningResultContent = {
@@ -1966,10 +1970,14 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "query",
   ],
   "financial_analysis": [
-    "symbols",
-    "methodologies",
-    "scorecards",
-    "summary",
+    "methodology_version",
+    "method",
+    "artifact_type",
+    "results",
+    "quality_status",
+    "data_gap",
+    "assumption_flags",
+    "generated_at",
   ],
   "screening_result": [
     "screened_candidates",

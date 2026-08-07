@@ -6,7 +6,7 @@
     "stock_snapshot_bundle": {"title": "股票数据采集包", "renderer": "StockSnapshotBundleArtifactRenderer", "schema_field_digest": "c189aefce2848122"},
     "snapshot": {"title": "业务数据快照", "renderer": "SnapshotArtifactRenderer", "schema_field_digest": "b68f4f9c07d756f0"},
     "evidence_set": {"title": "分析证据集", "renderer": "EvidenceSetArtifactRenderer", "schema_field_digest": "1b8b92e4ee2d59c4"},
-    "financial_analysis": {"title": "财务分析", "renderer": "FinancialAnalysisArtifactRenderer", "schema_field_digest": "a94a727ddc50e6f1"},
+    "financial_analysis": {"title": "现金流韧性", "renderer": "FinancialAnalysisArtifactRenderer", "schema_field_digest": "9c169805365daba5"},
     "screening_result": {"title": "股票筛选结果", "renderer": "ScreeningResultArtifactRenderer", "schema_field_digest": "55e8b8a6fa9f9bbc"},
     "sector_analysis": {"title": "板块研究结果", "renderer": "SectorAnalysisArtifactRenderer", "schema_field_digest": "ac40854fe2e6ff81"},
     "thesis_review": {"title": "投资逻辑复核", "renderer": "ThesisReviewArtifactRenderer", "schema_field_digest": "5e919345b5d4e488"},

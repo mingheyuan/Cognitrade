@@ -10,6 +10,7 @@ from typing import Any, Callable
 UZI_METHOD_PRODUCT_VERSION = "3.9.2-adapted-products-v1"
 
 METHOD_ARTIFACT_TYPES: dict[str, str] = {
+    "cashflow_resilience": "financial_analysis",
     "three_statement": "three_statement_model",
     "quick_lbo": "quick_lbo",
     "accretion_dilution": "accretion_dilution",
@@ -36,6 +37,7 @@ def build_method_product(
     risk_scan: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     builders: dict[str, Callable[..., dict[str, Any]]] = {
+        "cashflow_resilience": _cashflow_resilience,
         "three_statement": _three_statement,
         "quick_lbo": _quick_lbo,
         "accretion_dilution": _accretion_dilution,
@@ -92,6 +94,104 @@ def build_method_product(
         "assumption_flags": assumptions,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _cashflow_resilience(
+    snapshots: dict[str, dict[str, Any]],
+    symbol: str,
+    _inputs: dict[str, Any],
+    _valuation: dict[str, Any],
+    _risk: dict[str, Any],
+) -> dict[str, Any]:
+    """Describe cash-flow resilience from reported facts without stress-test defaults."""
+
+    fundamental = _facts(snapshots.get("fundamental"))
+    operating_cash_flow = _find_number(
+        fundamental,
+        ("operating_cash_flow", "operating_cash_flow_yi", "act_cash_flow_net", "经营活动产生的现金流量净额", "经营活动现金流净额"),
+    )
+    free_cash_flow = _find_number(
+        fundamental,
+        ("free_cash_flow", "free_cash_flow_yi", "fcf_latest_yi", "自由现金流"),
+    )
+    net_profit = _find_number(
+        fundamental,
+        ("net_profit", "net_profit_latest_yi", "parent_holder_net_profit", "归母净利润", "净利润"),
+    )
+    revenue = _find_number(
+        fundamental,
+        ("revenue", "revenue_latest_yi", "operating_income_total", "营业总收入", "营业收入"),
+    )
+    total_assets = _find_number(fundamental, ("total_assets", "total_assets_yi", "assets_total", "资产总计"))
+    total_liabilities = _find_number(
+        fundamental,
+        ("total_liabilities", "total_liabilities_yi", "负债合计"),
+    )
+    total_debt = _find_number(
+        fundamental,
+        ("total_debt", "total_debt_yi", "interest_bearing_debt", "有息负债", "债务合计"),
+    )
+    cash = _find_number(
+        fundamental,
+        ("cash", "cash_yi", "cash_and_equivalents", "货币资金", "现金及现金等价物"),
+    )
+
+    ocf_to_net_profit = (
+        operating_cash_flow / net_profit
+        if operating_cash_flow is not None and net_profit not in (None, 0)
+        else None
+    )
+    ocf_margin = (
+        operating_cash_flow / revenue
+        if operating_cash_flow is not None and revenue not in (None, 0)
+        else None
+    )
+    liabilities_to_assets = (
+        total_liabilities / total_assets
+        if total_liabilities is not None and total_assets not in (None, 0)
+        else None
+    )
+    cash_to_debt = cash / total_debt if cash is not None and total_debt not in (None, 0) else None
+
+    gaps = []
+    for field, value in (
+        ("operating_cash_flow_missing", operating_cash_flow),
+        ("net_profit_missing", net_profit),
+        ("revenue_missing", revenue),
+        ("total_assets_missing", total_assets),
+        ("total_liabilities_missing", total_liabilities),
+        ("total_debt_missing", total_debt),
+        ("cash_missing", cash),
+        ("reported_free_cash_flow_missing", free_cash_flow),
+    ):
+        if value is None:
+            gaps.append(field)
+
+    return _result(
+        symbol,
+        observed={
+            "operating_cash_flow": operating_cash_flow,
+            "reported_free_cash_flow": free_cash_flow,
+            "net_profit": net_profit,
+            "revenue": revenue,
+            "total_assets": total_assets,
+            "total_liabilities": total_liabilities,
+            "total_debt": total_debt,
+            "cash": cash,
+        },
+        derived={
+            "operating_cash_flow_to_net_profit": ocf_to_net_profit,
+            "operating_cash_flow_margin": ocf_margin,
+            "liabilities_to_assets": liabilities_to_assets,
+            "cash_to_debt": cash_to_debt,
+        },
+        gaps=gaps,
+        methodology={
+            "calculation_basis": "reported_financial_facts_only",
+            "composite_score": None,
+            "stress_scenario": None,
+        },
+    )
 
 
 def _three_statement(

@@ -151,6 +151,12 @@ Fund constraints:
 default: the Web UI starts with an empty selection and the API returns
 `missing_constraint` until the user explicitly chooses a cycle.
 
+The public `cashflow_resilience` requested-method identifier is retained, but
+its implementation is Pack-native. It reports observed cash-flow, profit,
+revenue, debt and cash fields plus directly derived ratios. Missing fields are
+returned as `data_gap`; the service does not supply default margins, leverage,
+stress scenarios or a synthetic composite score.
+
 The Web UI exposes category selection and explicit-code analysis as separate
 modes. Category mode omits `fund_codes`; explicit-code mode sends
 `fund_category: "全部"` and evaluates every supplied code using its observed

@@ -352,14 +352,19 @@ capabilities:
     latency_class: medium
     reliability: 0.85
     cache_scope: run
-  - subagent_type: financial_analyst
-    capability: finance.analysis.evaluate
-    implementation: subagents.runtime:analyze_financials
+  - subagent_type: uzi_cashflow_resilience_analyst
+    capability: finance.uzi.method.cashflow_resilience
+    capability_version: "1"
+    methodology_version: "3.9.2-adapted-products-v1"
+    implementation: subagents.runtime:evaluate_uzi_cashflow_resilience
     consumes:
       - *finance_snapshot_input
     produces:
       - artifact_type: financial_analysis
-    reliability: 0.92
+    cost_class: low
+    latency_class: low
+    reliability: 0.84
+    parallel_safe: true
     cache_scope: run
   - subagent_type: uzi_valuation_analyst
     capability: finance.uzi.valuation.evaluate
@@ -1251,14 +1256,14 @@ planner_policies:
       result_equivalence: {level: numeric_tolerance, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json, tolerance: 0.1}
     cashflow_resilience:
       output_artifact_types: [financial_analysis]
-      capability: finance.analysis.evaluate
+      capability: finance.uzi.method.cashflow_resilience
       required_inputs:
         - artifact_type: snapshot
           selector: {snapshot_type: fundamental, scope: symbol}
           required_fields:
             - {path: facts.financial_abstract.operating_cash_flow, type: number, unit: CNY_100M}
       required_gate_ids: [finance.financial.input]
-      allowed_quality_statuses: [available, degraded, assumption_only]
+      allowed_quality_statuses: [available, degraded, data_gap]
       result_equivalence: {level: semantic, baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json}
     three_statement:
       output_artifact_types: [three_statement_model]

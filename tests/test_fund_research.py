@@ -804,6 +804,8 @@ class FundResearchTests(unittest.TestCase):
                 "_industry_context",
                 return_value={"availability": "data_gap", "data_gap": ["industry_missing"]},
             ),
+            patch.object(skill, "_safe_search", return_value={"results": [], "source_trace": []}),
+            patch.object(skill, "_safe_browser", return_value={"evidence": {}, "source_trace": []}),
         ):
             facts = skill._collect(query="分析测试公司", symbol="600000")
 

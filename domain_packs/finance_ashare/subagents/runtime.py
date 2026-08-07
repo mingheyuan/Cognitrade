@@ -35,11 +35,6 @@ from domain_packs.finance_ashare.subagents.uzi_method_products import (
     build_method_product,
 )
 from research_system.adapters.vendors.akshare_utils import coerce_numeric
-from research_system.services.methodologies import (
-    CashflowResilienceService,
-    CompsService,
-    DCFService,
-)
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.schemas.artifacts import ArtifactDraft
 from research_system.schemas.execution_runtime import NodeExecutionOutput
@@ -70,34 +65,6 @@ _SCREEN_STYLE_CRITERIA = {
 }
 _STOCK_CODE_PATTERN = re.compile(r"\b(\d{6})\b")
 _SAFE_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
-_BANK_METRIC_WEIGHTS = {
-    "pb": 0.20,
-    "roe": 0.16,
-    "asset_liability_ratio": 0.08,
-    "capital_adequacy_ratio": 0.05,
-    "core_tier1_capital_adequacy_ratio": 0.05,
-    "net_interest_spread": 0.05,
-    "nonperforming_loan_ratio": 0.07,
-    "provision_coverage_ratio": 0.06,
-    "dividend_yield_proxy": 0.08,
-    "revenue_yoy": 0.04,
-    "net_profit_yoy": 0.06,
-    "interest_margin_proxy": 0.04,
-}
-_BANK_METRIC_DIRECTION = {
-    "pb": "lower",
-    "roe": "higher",
-    "asset_liability_ratio": "lower",
-    "capital_adequacy_ratio": "higher",
-    "core_tier1_capital_adequacy_ratio": "higher",
-    "net_interest_spread": "higher",
-    "nonperforming_loan_ratio": "lower",
-    "provision_coverage_ratio": "higher",
-    "dividend_yield_proxy": "higher",
-    "revenue_yoy": "higher",
-    "net_profit_yoy": "higher",
-    "interest_margin_proxy": "higher",
-}
 
 
 def normalize_query(context):
@@ -764,67 +731,6 @@ def select_evidence(context):
     )
 
 
-def analyze_financials(context):
-    rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
-    inputs = dict(context.node.inputs or {})
-    grouped = _snapshots_by_symbol(rows)
-    candidates = [
-        _analysis_candidate(symbol=symbol, snapshots=grouped.get(symbol, {}))
-        for symbol in symbols
-        if grouped.get(symbol)
-    ]
-    cycle = _required_investment_cycle(inputs)
-    comps_service = CompsService()
-    dcf_service = DCFService()
-    cashflow_service = CashflowResilienceService()
-    methodologies: list[dict] = []
-    for candidate in candidates:
-        symbol = str(candidate["symbol"])
-        peers = [peer for peer in candidates if peer["symbol"] != symbol]
-        market_snapshot = grouped[symbol].get("market")
-        fundamental_snapshot = grouped[symbol].get("fundamental")
-        methodologies.extend(
-            [
-                comps_service.build_for_candidate(
-                    candidate=candidate,
-                    peers=peers,
-                    cycle=cycle,
-                    sector_context={"sector": candidate.get("sector")},
-                ),
-                dcf_service.build_for_stock(
-                    symbol=symbol,
-                    fundamental_snapshot=fundamental_snapshot,
-                    market_snapshot=market_snapshot,
-                    cycle=cycle,
-                ),
-                cashflow_service.build_for_stock(
-                    symbol=symbol,
-                    fundamental_snapshot=fundamental_snapshot,
-                    market_snapshot=market_snapshot,
-                    cycle=cycle,
-                ),
-            ]
-        )
-    scorecard = _bank_compare_scorecard(candidates)
-    scorecards = [scorecard] if scorecard else []
-    analysis_content = _with_quality_status(
-        {
-            "symbols": [candidate["symbol"] for candidate in candidates],
-            "methodologies": methodologies,
-            "scorecards": scorecards,
-            "summary": _analysis_summary(methodologies=methodologies, scorecards=scorecards),
-        }
-    )
-    return ArtifactDraft(
-        artifact_type="financial_analysis",
-        content=analysis_content,
-        source_refs=source_refs,
-        parent_artifact_ids=parent_ids,
-        confidence=_analysis_confidence(methodologies),
-        risk_flags=["methodology_assumption_driven"] if methodologies else ["financial_evidence_missing"],
-    )
-
-
 def evaluate_uzi_valuation(context):
     rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
     inputs = dict(context.node.inputs or {})
@@ -1100,6 +1006,10 @@ def _evaluate_uzi_method_product(context, method_id: str) -> ArtifactDraft:
         source_refs=source_refs,
         parent_ids=list(dict.fromkeys(parent_ids)),
     )
+
+
+def evaluate_uzi_cashflow_resilience(context):
+    return _evaluate_uzi_method_product(context, "cashflow_resilience")
 
 
 def evaluate_uzi_three_statement(context):
@@ -1538,92 +1448,6 @@ def evaluate_methodology_quality_gate(context):
     }
 
 
-def _build_assessment(methodologies: list[dict]) -> dict:
-    """Summarize observable model outputs without turning them into a recommendation."""
-
-    by_symbol: dict[str, dict[str, dict]] = {}
-    for methodology in methodologies:
-        if not isinstance(methodology, dict):
-            continue
-        symbol = str(methodology.get("target_symbol") or "unknown")
-        kind = str(methodology.get("methodology_type") or "methodology")
-        by_symbol.setdefault(symbol, {})[kind] = methodology
-
-    factors: list[dict] = []
-    summaries: list[str] = []
-    for symbol, views in by_symbol.items():
-        signals: list[str] = []
-        dcf = views.get("dcf") or {}
-        dcf_outputs = dcf.get("outputs") if isinstance(dcf.get("outputs"), dict) else {}
-        gap = _number(dcf_outputs.get("market_to_intrinsic_gap"))
-        if gap is not None:
-            if gap <= -0.2:
-                signal = "DCF proxy is above the latest market price"
-            elif gap >= 0.2:
-                signal = "DCF proxy is below the latest market price"
-            else:
-                signal = "DCF proxy is close to the latest market price"
-            signals.append(signal)
-            factors.append({
-                "symbol": symbol,
-                "methodology": "DCF",
-                "signal": signal,
-                "value": gap,
-                "confidence": dcf.get("confidence"),
-                "basis": "market_to_intrinsic_gap",
-                "warnings": list(dcf.get("warnings") or []),
-            })
-
-        resilience = views.get("cashflow_resilience") or {}
-        resilience_outputs = resilience.get("outputs") if isinstance(resilience.get("outputs"), dict) else {}
-        cashflow_state = str(resilience_outputs.get("cashflow_state") or "")
-        debt_state = str(resilience_outputs.get("debt_capacity_state") or "")
-        if cashflow_state or debt_state:
-            signal = ", ".join(
-                value for value in (
-                    f"cashflow {cashflow_state}" if cashflow_state else "",
-                    f"debt capacity {debt_state}" if debt_state else "",
-                ) if value
-            )
-            signals.append(signal)
-            factors.append({
-                "symbol": symbol,
-                "methodology": "Cashflow resilience",
-                "signal": signal,
-                "value": resilience_outputs.get("resilience_score"),
-                "confidence": resilience.get("confidence"),
-                "basis": "cashflow_state/debt_capacity_state",
-                "warnings": list(resilience.get("warnings") or []),
-            })
-
-        comps = views.get("comps") or {}
-        comps_outputs = comps.get("outputs") if isinstance(comps.get("outputs"), dict) else {}
-        relative_view = str(comps_outputs.get("relative_view") or "")
-        if relative_view:
-            signals.append(f"relative view {relative_view}")
-            factors.append({
-                "symbol": symbol,
-                "methodology": "Comps",
-                "signal": relative_view,
-                "value": comps_outputs.get("score_gap_vs_peer_median"),
-                "confidence": comps.get("confidence"),
-                "basis": "relative_view",
-                "warnings": list(comps.get("warnings") or []),
-            })
-
-        if signals:
-            summaries.append(f"{symbol}: " + "; ".join(signals))
-
-    if not summaries:
-        summary = "No methodology-based assessment was available from the collected evidence."
-    else:
-        summary = (
-            "; ".join(summaries)
-            + ". This is a preliminary, assumption-sensitive evidence view, not an investment recommendation."
-        )
-    return {"status": "preliminary", "summary": summary, "factors": factors}
-
-
 def compose_screening_report(context):
     screening = context.require_artifact("screening_result")
     candidates = list(screening.content.get("screened_candidates") or [])
@@ -1797,136 +1621,6 @@ def compose_thesis_review_report(context):
     )
 
 
-def _snapshots_by_symbol(rows: list[object]) -> dict[str, dict[str, dict]]:
-    grouped: dict[str, dict[str, dict]] = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        symbol = str(row.get("symbol") or "").strip()
-        snapshot_type = str(row.get("snapshot_type") or "").strip()
-        if symbol and snapshot_type:
-            grouped.setdefault(symbol, {})[snapshot_type] = row
-    return grouped
-
-
-def _analysis_candidate(*, symbol: str, snapshots: dict[str, dict]) -> dict:
-    market_snapshot = snapshots.get("market") or {}
-    fundamental_snapshot = snapshots.get("fundamental") or {}
-    market = _market_overview(market_snapshot)
-    fundamental_facts = _facts(fundamental_snapshot)
-    banking_metrics = fundamental_facts.get("banking_metrics")
-    return {
-        "symbol": symbol,
-        "name": str(market.get("name") or symbol),
-        "sector": str(market.get("sector") or ""),
-        "latest_price": _number(market.get("latest_price")),
-        "latest_pct_change": _number(market.get("pct_change")),
-        "latest_amount": _number(market.get("amount")),
-        "pb": _number(market.get("pb")),
-        "pe_ttm": _number(market.get("pe_ttm")),
-        "market_cap": _number(market.get("market_cap")),
-        "float_market_cap": _number(market.get("float_market_cap")),
-        "market_total_shares": _number(market.get("total_shares")),
-        "revenue_proxy": _revenue_proxy(fundamental_snapshot),
-        "banking_metrics": dict(banking_metrics) if isinstance(banking_metrics, dict) else {},
-    }
-
-
-def _bank_compare_scorecard(candidates: list[dict]) -> dict | None:
-    banks = [candidate for candidate in candidates if _is_bank_candidate(candidate)]
-    if len(banks) < 2:
-        return None
-    metric_series = {
-        metric: [_number(_bank_metrics(candidate).get(metric)) for candidate in banks]
-        for metric in _BANK_METRIC_WEIGHTS
-    }
-    rows: list[dict] = []
-    for candidate in banks:
-        metrics = _bank_metrics(candidate)
-        score = 0.0
-        weight_used = 0.0
-        breakdown: dict[str, float | None] = {}
-        for metric, weight in _BANK_METRIC_WEIGHTS.items():
-            value = _number(metrics.get(metric))
-            breakdown[metric] = value
-            series = [item for item in metric_series[metric] if item is not None]
-            if value is None or len(series) < 2:
-                continue
-            percentile = _bank_percentile(
-                value=value,
-                series=series,
-                preference=_BANK_METRIC_DIRECTION[metric],
-            )
-            if percentile is not None:
-                score += percentile * weight
-                weight_used += weight
-        rows.append(
-            {
-                "symbol": candidate["symbol"],
-                "name": candidate["name"],
-                "score": round(score / weight_used, 4) if weight_used else 0.0,
-                "weight_coverage": round(weight_used, 4),
-                "latest_price": candidate.get("latest_price"),
-                "pb": candidate.get("pb"),
-                "pe_ttm": candidate.get("pe_ttm"),
-                "banking_metrics": breakdown,
-                "missing_metrics": sorted(key for key, value in breakdown.items() if value is None),
-            }
-        )
-    rows.sort(key=lambda row: (row["score"], row["weight_coverage"]), reverse=True)
-    for rank, row in enumerate(rows, start=1):
-        row["rank"] = rank
-    return {
-        "scorecard_type": "bank_compare_scorecard",
-        "candidate_count": len(rows),
-        "ranked_candidates": rows,
-        "metric_weights": _BANK_METRIC_WEIGHTS,
-        "summary": "Bank comparison ranks peers using available same-basis banking metrics and valuation anchors.",
-    }
-
-
-def _bank_metrics(candidate: dict) -> dict:
-    metrics = dict(candidate.get("banking_metrics") or {})
-    metrics["pb"] = _number(candidate.get("pb"))
-    latest_price = _number(candidate.get("latest_price"))
-    total_shares = _number(candidate.get("market_total_shares"))
-    dividend_cash = _number(metrics.get("pay_dividends_profits_interest_cash"))
-    if dividend_cash not in (None, 0) and latest_price not in (None, 0) and total_shares not in (None, 0):
-        metrics["dividend_yield_proxy"] = dividend_cash / total_shares / latest_price
-    return metrics
-
-
-def _is_bank_candidate(candidate: dict) -> bool:
-    metrics = dict(candidate.get("banking_metrics") or {})
-    return bool(metrics.get("is_bank_like")) or any(
-        key in metrics
-        for key in ("roe", "nonperforming_loan_ratio", "net_interest_spread", "capital_adequacy_ratio")
-    )
-
-
-def _bank_percentile(*, value: float, series: list[float], preference: str) -> float | None:
-    if not series:
-        return None
-    percentile = sum(1 for item in sorted(series) if item <= value) / len(series)
-    return round(1.0 - percentile if preference == "lower" else percentile, 4)
-
-
-def _analysis_summary(*, methodologies: list[dict], scorecards: list[dict]) -> str:
-    if not methodologies:
-        return "No methodology model could be built because financial snapshots were unavailable."
-    symbols = {item.get("target_symbol") for item in methodologies}
-    summary = f"Built {len(methodologies)} methodology view(s) across {len(symbols)} symbol(s)."
-    if scorecards:
-        summary += f" {scorecards[0]['summary']}"
-    return summary
-
-
-def _analysis_confidence(methodologies: list[dict]) -> float:
-    values = [_number(item.get("confidence")) for item in methodologies if isinstance(item, dict)]
-    usable = [value for value in values if value is not None]
-    return round(sum(usable) / len(usable), 4) if usable else 0.2
-
-
 def _artifact_confidence(value: object) -> float:
     numeric = _number(value)
     return numeric if numeric is not None else 0.2
@@ -1942,53 +1636,11 @@ def _artifact_has_usable_result(artifact: object) -> bool:
     return quality in {"available", "degraded", "assumption_only"}
 
 
-def _methodology_warnings(methodologies: list[dict]) -> list[str]:
-    warnings: list[str] = []
-    for methodology in methodologies:
-        if not isinstance(methodology, dict):
-            continue
-        for warning in [
-            *list(methodology.get("warnings") or []),
-            *list(methodology.get("data_gap") or []),
-            *list(methodology.get("assumption_flags") or []),
-        ]:
-            text = str(warning)
-            if text and text not in warnings:
-                warnings.append(text)
-    return warnings
-
-
 def _required_investment_cycle(inputs: dict) -> str:
     value = str(inputs.get("investment_cycle") or "").strip()
     if value not in {"short_term", "mid_term", "long_term"}:
         raise ValueError("investment_cycle is required; choose short_term, mid_term or long_term")
     return value
-
-
-def _facts(snapshot: dict) -> dict:
-    facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
-    return facts
-
-
-def _market_overview(snapshot: dict) -> dict:
-    overview = _facts(snapshot).get("market_overview")
-    return overview if isinstance(overview, dict) else {}
-
-
-def _revenue_proxy(snapshot: dict) -> float | None:
-    facts = _facts(snapshot)
-    banking = facts.get("banking_metrics") if isinstance(facts.get("banking_metrics"), dict) else {}
-    for key in ("interest_income", "deposits_and_deposits", "customer_loan_advance_net_addition"):
-        value = _number(banking.get(key))
-        if value is not None:
-            return value
-    abstract = facts.get("financial_abstract") if isinstance(facts.get("financial_abstract"), dict) else {}
-    for key, value in abstract.items():
-        if "revenue" in str(key).lower() or "income" in str(key).lower():
-            numeric = _number(value)
-            if numeric is not None:
-                return numeric
-    return None
 
 
 def _number(value: object) -> float | None:

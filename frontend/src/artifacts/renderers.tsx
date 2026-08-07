@@ -43,7 +43,7 @@ export function EvidenceSetArtifactRenderer({ content }: ArtifactRendererProps) 
 }
 
 export function FinancialAnalysisArtifactRenderer({ content }: ArtifactRendererProps) {
-  return <ArtifactData content={content} priority={['summary', 'symbols', 'scorecards', 'methodologies']} />
+  return <ArtifactData content={content} priority={METHOD_PRIORITY} />
 }
 
 export function ScreeningResultArtifactRenderer({ content }: ArtifactRendererProps) {

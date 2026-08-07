@@ -271,12 +271,13 @@ derived_methods:
     baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
   - source_id: cashflow_resilience
     <<: *derived_defaults
-    source_path: domain_packs/finance_ashare/subagents/runtime.py
-    target_capability: finance.analysis.evaluate
+    source_path: domain_packs/finance_ashare/subagents/uzi_method_products.py
+    target_capability: finance.uzi.method.cashflow_resilience
     target_artifact_type: financial_analysis
-    field_mapping: {fundamental: facts.financial_abstract.operating_cash_flow}
+    field_mapping: {fundamental: facts.financial_abstract, derived: reported_cashflow_ratios}
     migration_status: pack_native
-    result_equivalence: not_equivalent
+    quality_policy: {missing_inputs: data_gap, numeric_imputation: forbidden}
+    result_equivalence: semantic
     baseline_fixture: tests/fixtures/uzi_finance_snapshot_replay.json
   - source_id: panel
     <<: *derived_defaults
