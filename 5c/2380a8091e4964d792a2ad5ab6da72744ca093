@@ -1,0 +1,43 @@
+api-doc/api-v1.md
+  s_a6a8a3a6f43b3c::t_d7631da8f76cef 154-159
+domain_packs/finance_ashare/artifact_schemas/financial_analysis.json
+  s_a6a8a3a6f43b3c::t_8c7ec4b90e4806 5-12,15-36,38-42,44-48,50
+domain_packs/finance_ashare/domain.yaml
+  s_a6a8a3a6f43b3c::t_7959d83d223475 355-359,364-367,1259,1266
+domain_packs/finance_ashare/migration/uzi_3_9_2_capability_ledger.yaml
+  s_a6a8a3a6f43b3c::t_78046093700c8e 222
+domain_packs/finance_ashare/migration/uzi_source_mapping.yaml
+  s_a6a8a3a6f43b3c::t_0799060b34bc5e 274-275,277,279-280
+domain_packs/finance_ashare/subagents/runtime.py
+  s_a6a8a3a6f43b3c::t_816a2b5f4619d1 1011-1014
+domain_packs/finance_ashare/subagents/uzi_method_products.py
+  s_a6a8a3a6f43b3c::t_8dc215a8b5e642 13,40,99-196
+frontend/src/artifacts/finance-artifact-renderers.json
+  s_a6a8a3a6f43b3c::t_06fe0f6cc5951a 9
+frontend/src/artifacts/generated/finance-artifact-contracts.ts
+  s_a6a8a3a6f43b3c::t_530fbbb1a104ba 169-176,1973-1980
+frontend/src/artifacts/renderers.tsx
+  s_a6a8a3a6f43b3c::t_6f45214042719c 46
+plan/uzi-3.9.2-domainpack-migration.md
+  s_a6a8a3a6f43b3c::t_46a1b4541017dd 170
+tests/test_uzi_method_products.py
+  s_a6a8a3a6f43b3c::t_5283b6718b23b6 98-109,249-266,385
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "5c2380a8091e4964d792a2ad5ab6da72744ca093",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
