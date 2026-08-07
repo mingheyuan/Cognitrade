@@ -28,9 +28,14 @@ class AkShareFundamentalAdapter:
         cash_new_df = self._try_get_new_metric_frame("stock_financial_cash_new_ths", symbol)
 
         abstract_payload: dict[str, Any] = {}
+        abstract_history: list[dict[str, Any]] = []
         if not abstract_df.empty:
             latest = abstract_df.iloc[-1].to_dict()
             abstract_payload = {str(k): normalize_value(v) for k, v in latest.items()}
+            abstract_history = [
+                {str(k): normalize_value(v) for k, v in row.items()}
+                for row in abstract_df.to_dict("records")
+            ]
 
         info_payload, info_gap = self._try_get_individual_info(symbol)
         analysis_payload = self._latest_record(analysis_df)
@@ -80,6 +85,7 @@ class AkShareFundamentalAdapter:
             "symbol": symbol,
             "info": info_payload,
             "financial_abstract": abstract_payload,
+            "financial_abstract_history": abstract_history,
             "financial_analysis": analysis_payload,
             "financial_abstract_new": abstract_new_payload,
             "financial_benefit_new": benefit_new_payload,
