@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from research_system.runtime.diagnostics.status.uzi_provider_smoke import (
     UZI_FETCHER_DIMENSIONS,
+    main,
     run_uzi_provider_smoke,
 )
 from research_system.runtime.platform.settings import Settings
@@ -104,6 +107,22 @@ class UziProviderSmokeTests(unittest.TestCase):
             settings = Settings.from_env(Path(temp_dir))
             with self.assertRaisesRegex(ValueError, "must run serially"):
                 run_uzi_provider_smoke(settings, max_workers=2)
+
+    def test_cli_writes_redacted_json_evidence_file(self) -> None:
+        report = {
+            "contract_status": "passed",
+            "dimensions": [{"fetcher_id": "0_basic", "status": "available"}],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "evidence" / "provider-smoke.json"
+            with patch(
+                "research_system.runtime.diagnostics.status.uzi_provider_smoke.run_uzi_provider_smoke",
+                return_value=report,
+            ):
+                exit_code = main(["--dimensions", "0_basic", "--output", str(output)])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(json.loads(output.read_text(encoding="utf-8")), report)
 
 
 if __name__ == "__main__":

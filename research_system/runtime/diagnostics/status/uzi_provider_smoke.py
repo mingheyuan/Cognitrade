@@ -228,6 +228,12 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also return a non-zero exit code when a real provider has no data",
     )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Optional path for the redacted JSON smoke report",
+    )
     return parser
 
 
@@ -244,7 +250,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (TypeError, ValueError) as exc:
         print(json.dumps({"status": "invalid_request", "error_type": exc.__class__.__name__}))
         return 2
-    print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+    rendered = json.dumps(report, ensure_ascii=False, indent=2, default=str)
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered + "\n", encoding="utf-8")
+    print(rendered)
     if report["contract_status"] != "passed":
         return 2
     if args.fail_on_data_gap and any(
