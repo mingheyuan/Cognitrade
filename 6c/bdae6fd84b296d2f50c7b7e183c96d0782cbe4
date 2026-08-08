@@ -1,0 +1,29 @@
+domain_packs/finance_ashare/domain.yaml
+  s_a6a8a3a6f43b3c::t_af40a1d875a652 2,827,841,858,874,890,908,926,944,966,982,998,1016,1031,1046,1061,1073,1085,1097,1109,1121,1133,1145,1157,1169,1181,1193,1205,1217,1621,1627,1633
+domain_packs/finance_ashare/migration/UZI_3_9_2_STRICT_ALIGNMENT_TARGET.md
+  s_a6a8a3a6f43b3c::t_b42bf7fbc946aa 11-12
+tests/test_uzi_finance_pack.py
+  s_a6a8a3a6f43b3c::t_0635a077362b90 542,544-545,547-548,555-556,624,626,628-629,636,654,656-657,659-660,666-667,719,721,723-724,730-731
+tests/test_uzi_method_products.py
+  s_a6a8a3a6f43b3c::t_2fa4da39761641 304,325,349,367,371-381,396,398-406,416,418,421,429-430
+tests/test_uzi_tier1.py
+  s_a6a8a3a6f43b3c::t_9cb93a81a4e83c 188,229-255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "6cbdae6fd84b296d2f50c7b7e183c96d0782cbe4",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
