@@ -23,6 +23,9 @@ output_schema:
 permissions: [finance:data:read]
 parallel_safe: true
 max_concurrency: 8
-timeout_seconds: 300
+# The selected UZI research profile owns the real deadline: lite/medium/deep
+# are governed at 120/480/1200 seconds. This tool ceiling must not preempt a
+# valid cold-cache medium/deep run before that profile deadline.
+timeout_seconds: 1200
 max_retries: 1
 implementation: tools.financial_data_provider:invoke

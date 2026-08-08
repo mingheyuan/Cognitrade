@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import importlib
 import hashlib
 import json
+from threading import Lock
+from time import sleep
 import unittest
 from unittest.mock import patch
 
@@ -79,6 +82,70 @@ class UziSourceParityTests(unittest.TestCase):
             options=None,
         )
         self.assertEqual(snapshot["facts"]["_uzi_raw_result"], upstream)
+
+    def test_uzi_resource_sensitive_fetchers_share_one_serial_execution_lane(self) -> None:
+        state_lock = Lock()
+        active = 0
+        maximum_active = 0
+
+        def collect(_runtime, fetcher_id: str, **kwargs):
+            nonlocal active, maximum_active
+            with state_lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            try:
+                sleep(0.03)
+                return {
+                    "ticker": kwargs["ticker"],
+                    "data": {"fetcher_id": fetcher_id},
+                    "source": f"uzi:{fetcher_id}",
+                    "fallback": False,
+                }
+            finally:
+                with state_lock:
+                    active -= 1
+
+        snapshot_types = ("industry", "valuation", "capital_flow")
+        with patch.object(Uzi392FetcherRuntime, "collect", autospec=True, side_effect=collect):
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                futures = [
+                    executor.submit(
+                        snapshot_collector._run_uzi_fetcher_snapshot,
+                        query="分析寒武纪",
+                        symbol="688256",
+                        snapshot_type=snapshot_type,
+                        provider_registry=None,
+                    )
+                    for snapshot_type in snapshot_types
+                ]
+                for future in futures:
+                    future.result()
+
+        self.assertEqual(maximum_active, 1)
+        self.assertEqual(snapshot_collector._UZI_MAX_WORKERS, 6)
+
+    def test_financial_provider_ceiling_does_not_preempt_uzi_profile_budget(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        tool = yaml.safe_load(
+            (
+                repository_root
+                / "domain_packs"
+                / "finance_ashare"
+                / "tools"
+                / "financial_data_provider.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        manifest = yaml.safe_load(
+            (
+                repository_root / "domain_packs" / "finance_ashare" / "domain.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        profile_ceiling = max(
+            int(profile["max_duration_seconds"])
+            for profile in manifest["planner_policies"]["research_profiles"].values()
+        )
+
+        self.assertGreaterEqual(int(tool["timeout_seconds"]), profile_ceiling)
 
     def test_catalog_fields_are_deep_equal_to_pinned_upstream_registry(self) -> None:
         Uzi392FetcherRuntime(workspace_root=Path(__file__).resolve().parents[1] / "workspace")

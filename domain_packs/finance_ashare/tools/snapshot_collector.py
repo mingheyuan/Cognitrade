@@ -10,6 +10,7 @@ import inspect
 import json
 import math
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from uuid import UUID
 
@@ -137,6 +138,11 @@ _UNAVAILABLE_QUALITY_STATUSES = {
     "rate_limited",
     "parse_failed",
 }
+_UZI_MINI_RACER_FETCHERS = frozenset(
+    {"7_industry", "10_valuation", "12_capital_flow"}
+)
+_UZI_MINI_RACER_LOCK = Lock()
+_UZI_MAX_WORKERS = 6
 _SNAPSHOT_PROVIDER_HINTS = {
     "market": "akshare",
     "fundamental": "akshare",
@@ -354,7 +360,9 @@ def collect_snapshots(
             for index, symbol, snapshot_type in tasks
             if snapshot_type == "materials" and index in results
         }
-        requested_workers = 8 if max_workers is None else max(int(max_workers), 1)
+        # UZI's native collectors use six workers. Keep the same in-stock
+        # fan-out so provider pressure and cold-cache latency match upstream.
+        requested_workers = _UZI_MAX_WORKERS if max_workers is None else max(int(max_workers), 1)
         if pending_tasks:
             executor = ThreadPoolExecutor(
                 max_workers=min(requested_workers, len(pending_tasks)),
@@ -483,13 +491,21 @@ def _run_uzi_fetcher_snapshot(
                 "cookie": settings.xueqiu_cookie if xueqiu_enabled else None,
             }
         }
-    result = runtime.collect(
-        fetcher_id,
-        ticker=str(symbol or "").strip(),
-        industry=industry,
-        dependencies=dependencies,
-        options=options,
-    )
+    collect_kwargs = {
+        "ticker": str(symbol or "").strip(),
+        "industry": industry,
+        "dependencies": dependencies,
+        "options": options,
+    }
+    if fetcher_id in _UZI_MINI_RACER_FETCHERS:
+        # UZI's run_real_test and v3 pipeline share one lock across industry,
+        # valuation and capital-flow because their AkShare paths initialize
+        # the same V8/mini-racer runtime. Holding reports may run concurrently
+        # at the product layer, but these native fetchers remain serialized.
+        with _UZI_MINI_RACER_LOCK:
+            result = runtime.collect(fetcher_id, **collect_kwargs)
+    else:
+        result = runtime.collect(fetcher_id, **collect_kwargs)
     data = dict(result.get("data") or {}) if isinstance(result.get("data"), dict) else {}
     error = str(result.get("error") or "").strip()
     availability = "available" if data and not error else "data_gap"
