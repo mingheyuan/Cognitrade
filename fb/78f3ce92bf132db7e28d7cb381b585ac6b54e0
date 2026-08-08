@@ -1,0 +1,35 @@
+domain_packs/finance_ashare/subagents/uzi_392_analysis.py
+  s_a6a8a3a6f43b3c::t_f54841b38f70c8 155-170,180
+domain_packs/finance_ashare/subagents/uzi_392_native_methods.py
+  s_a6a8a3a6f43b3c::t_53f396fac19658 98-101,104-113,156-157
+domain_packs/finance_ashare/tools/snapshot_collector.py
+  s_a6a8a3a6f43b3c::t_b2c46c55825878 132,541-546,618-624,639,721-725,734,736
+domain_packs/finance_ashare/vendor/uzi_3_9_2/assets/report-template.html
+  s_a6a8a3a6f43b3c::t_2554687077502e 3588
+tests/test_uzi_392_analysis.py
+  s_a6a8a3a6f43b3c::t_fe2a9139afd472 52-65
+tests/test_uzi_392_native_methods.py
+  s_a6a8a3a6f43b3c::t_bd236f5acaf351 212-222
+tests/test_uzi_392_vendor_runtime.py
+  s_a6a8a3a6f43b3c::t_f3fbb74ca6022e 234,242-251
+tests/test_uzi_native_report.py
+  s_a6a8a3a6f43b3c::t_6c69f77fe86967 224
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "fb78f3ce92bf132db7e28d7cb381b585ac6b54e0",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
