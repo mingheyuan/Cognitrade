@@ -2,7 +2,7 @@
 
 ## 1. 文档状态
 
-- 目标状态：实现收口完成，等待 GitHub Actions 全量验收
+- 目标状态：完成；固定提交差异测试、全量回归与真实 provider smoke 均已由 GitHub Actions 验收
 - 上游仓库：`https://github.com/wbh604/UZI-Skill`
 - 唯一基准提交：`22e65f2e0cee2cb41cb40fdbe391c9600b7fe359`
 - 上游版本：`3.9.2`
@@ -174,26 +174,38 @@
 
 | 编号 | 证明对象 | 必须提供的证据 | 状态 |
 |---|---|---|---|
-| A1 | 22 fetcher 完整性 | 上游/本地 ID 集合完全相等 | 已实现；`test_uzi_source_parity`，CI 待确认 |
-| A2 | 73 sources 完整性 | 注册表逐字段深度相等 | 已实现；`test_uzi_source_parity`，CI 待确认 |
-| A3 | fetcher 结果 | 22 组调用参数与返回对象身份差异测试 | 已实现；`UziFetcherInvocationParityTests`，CI 待确认 |
-| A4 | provider 行为 | 可用、失败、超时、空响应、敏感源关闭的 smoke | 已实现 provider-smoke 与失败语义；联网运行由 CI/部署环境留证 |
-| B1 | 20 commands 完整性 | 命令 ID、schema、执行图、产物逐项等价 | 已实现；`test_uzi_392_commands`，CI 待确认 |
-| B2 | quick-scan | 1/2/10/18、10 席、Markdown、无 HTML | 已实现；`test_uzi_quick_scan`，CI 待确认 |
-| C1 | 23 methods 完整性 | ID/公式/字段/阈值/缺失分支差异测试 | 已实现；23 个上游函数直接输出比较，CI 待确认 |
-| C2 | 显式假设 | API、Web、ArtifactBoard 往返及无 silent-mid 测试 | 已实现；非法/缺失 profile 与假设均拒绝，CI 待确认 |
-| D1 | suggested_fix | 每种 issue 被执行并触发重算/自审 | 已实现；`test_uzi_strict_recovery`，CI 待确认 |
-| D2 | critical 门控 | critical 永不生成 HTML/PDF，且不能被 completed_partial 绕过 | 已实现；API、持仓批次与导出三层门控，CI 待确认 |
-| D3 | warning | 原生 banner 可见且报告成功 | 已实现；固定原生模板渲染测试，CI 待确认 |
-| D4 | 无三轮上限 | 超过三轮仍继续，来源耗尽才阻断 | 已实现；`round_limit: null` 与 >3 轮测试，CI 待确认 |
-| E1 | 模板完整性 | vendor 文件哈希等于上游固定值 | 已实现；SHA-256 固定测试，CI 待确认 |
-| E2 | HTML 可见等价 | DOM/CSS/JS selector 与安全转义回归 | 已实现；固定模板精确渲染，CI 待确认 |
+| A1 | 22 fetcher 完整性 | 上游/本地 ID 集合完全相等 | 已通过；`test_uzi_source_parity`，CI run `31265934582` |
+| A2 | 73 sources 完整性 | 注册表逐字段深度相等 | 已通过；`test_uzi_source_parity`，CI run `31265934582` |
+| A3 | fetcher 结果 | 22 组调用参数与返回对象身份差异测试 | 已通过；`UziFetcherInvocationParityTests`，CI run `31265934582` |
+| A4 | provider 行为 | 可用、失败、超时、空响应、敏感源关闭的 smoke | 已通过；22/22 完成、18 available、4 data_gap、来源链与雪球关闭策略均通过 |
+| B1 | 20 commands 完整性 | 命令 ID、schema、执行图、产物逐项等价 | 已通过；`test_uzi_392_commands`，CI run `31265934582` |
+| B2 | quick-scan | 1/2/10/18、10 席、Markdown、无 HTML | 已通过；`test_uzi_quick_scan`，CI run `31265934582` |
+| C1 | 23 methods 完整性 | ID/公式/字段/阈值/缺失分支差异测试 | 已通过；23 个上游函数直接输出比较，CI run `31265934582` |
+| C2 | 显式假设 | API、Web、ArtifactBoard 往返及无 silent-mid 测试 | 已通过；非法/缺失 profile 与假设均拒绝，CI run `31265934582` |
+| D1 | suggested_fix | 每种 issue 被执行并触发重算/自审 | 已通过；`test_uzi_strict_recovery`，CI run `31265934582` |
+| D2 | critical 门控 | critical 永不生成 HTML/PDF，且不能被 completed_partial 绕过 | 已通过；API、持仓批次与导出三层门控，CI run `31265934582` |
+| D3 | warning | 原生 banner 可见且报告成功 | 已通过；固定原生模板渲染测试，CI run `31265934582` |
+| D4 | 无三轮上限 | 超过三轮仍继续，来源耗尽才阻断 | 已通过；`round_limit: null` 与 >3 轮测试，CI run `31265934582` |
+| E1 | 模板完整性 | vendor 文件哈希等于上游固定值 | 已通过；SHA-256 固定测试，CI run `31265934582` |
+| E2 | HTML 可见等价 | DOM/CSS/JS selector 与安全转义回归 | 已通过；固定模板精确渲染，CI run `31265934582` |
 | E3 | PDF 可见等价 | 同 HTML 渲染和 PDF 头/页面回归 | 已实现；真实 Chromium smoke 已生成 26,814 字节 PDF |
 | E4 | PDF 稳定性 | 并发 10 次全部成功且资源回收 | 已验证；10/10 成功，2 个 render slot，缓存命中一致 |
-| F1 | 零外部依赖 | 生产导入/运行不读取 UZI checkout | 已实现；vendored in-process runtime 边界测试，CI 待确认 |
-| F2 | 完成审计 | 本文每一行具有代码、测试和运行证据 | 实现审计完成；GitHub Actions 结果待回填 |
+| F1 | 零外部依赖 | 生产导入/运行不读取 UZI checkout | 已通过；vendored in-process runtime 边界测试，CI run `31265934582` |
+| F2 | 完成审计 | 本文每一行具有代码、测试和运行证据 | 已完成；见下方 GitHub Actions 与脱敏 Artifact 证据 |
 
-## 10. 完成定义
+## 10. GitHub Actions 最终证据
+
+- 验收提交：`542ea6ccc3b231d81d63634b266648aa8309b292`。
+- CI 运行：[31265934582](https://github.com/mingheyuan/Cognitrade/actions/runs/31265934582)，四个 job 全部成功。
+- Finance chain and scoring contracts：138 项后端契约测试通过。
+- Complete backend suite：509 项完整后端测试通过。
+- Frontend lint/tests/build：13 个测试文件、33 项测试通过，lint 与生产构建通过。
+- UZI real-provider smoke：22/22 维完成，`contract_status=passed`，18 个维度当次可用，4 个维度按真实超时记录为 `data_gap`，未填充模拟数据。
+- 敏感源证据：CI 显式关闭敏感来源且不配置 Cookie；`19_contests` 的雪球审计为 `configured_enabled=false`、`observation_present=false`、`source_mode=cognitrade_policy_disabled`、`policy_ok=true`。公开比赛来源可独立提供结果，不代表启用了雪球。
+- 脱敏运行产物：GitHub Actions artifact `uzi-provider-smoke-542ea6ccc3b231d81d63634b266648aa8309b292`，保留 14 天，不含原始市场观察、Cookie 或 provider 原始错误正文。
+- 后端测试执行边界：按项目约定仅由 GitHub Actions 执行；本地只做静态语法、diff 与文档检查。
+
+## 11. 完成定义
 
 只有同时满足以下条件才能将迁移清单中的 `not_equivalent`、`semantic`、`adapted` 或 `removed` 改为 `equivalent`：
 
