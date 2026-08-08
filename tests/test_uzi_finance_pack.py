@@ -28,6 +28,7 @@ from domain_packs.finance_ashare.subagents.uzi_advanced_methodology import (
     build_institutional_analysis,
     build_research_workflow,
 )
+from domain_packs.finance_ashare.vendor.uzi_3_9_2 import verify_vendored_uzi_integrity
 from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshots
 import domain_packs.finance_ashare.tools.snapshot_collector as snapshot_collector
 from research_system.api.app import create_app
@@ -148,31 +149,18 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertEqual(mapping["profiles"]["lite"]["panel_seats"], 10)
         self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 51)
         self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 66)
-        self.assertEqual(len(mapping["panel"]["member_ids"]), 66)
         required_mapping_fields = {
             "source_commit",
             "source_path",
-            "provider",
-            "field_mapping",
-            "quality_policy",
+            "target_skill",
             "migration_status",
             "result_equivalence",
-            "baseline_fixture",
+            "invocation_acceptance",
         }
-        self.assertTrue(
-            all(
-                required_mapping_fields.issubset(row)
-                for row in [*fetchers, *mapping["derived_methods"]]
-            )
-        )
-        replay = json.loads(
-            (repository_root / "tests" / "fixtures" / "uzi_source_snapshot_replay.json")
-            .read_text(encoding="utf-8")
-        )
-        self.assertEqual(
-            {row["source_id"] for row in replay["records"]},
-            {row["source_id"] for row in fetchers},
-        )
+        self.assertTrue(all(required_mapping_fields.issubset(row) for row in fetchers))
+        self.assertEqual(mapping["source_registry"]["source_count"], 73)
+        self.assertEqual(mapping["contract"]["returned_object"], "exact_upstream_identity")
+        self.assertEqual(mapping["contract"]["external_checkout_runtime"], "forbidden")
 
     def test_uzi_source_and_replay_fingerprints_are_verified(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -185,21 +173,15 @@ class UziFinancePackTests(unittest.TestCase):
         )
         mapping = yaml.safe_load(mapping_path.read_text(encoding="utf-8"))
         source = mapping["source"]
-        self.assertRegex(source["version_file_sha256"], r"^[A-Fa-f0-9]{64}$")
         self.assertRegex(source["license_sha256"], r"^[A-Fa-f0-9]{64}$")
-        fixture_hashes = source["replay_fixture_sha256"]
-        self.assertEqual(set(source["replay_fixtures"]), set(fixture_hashes))
-
-        def sha256(path: Path) -> str:
-            return hashlib.sha256(path.read_bytes()).hexdigest().upper()
-
-        for fixture in source["replay_fixtures"]:
-            fixture_path = repository_root / fixture
-            self.assertTrue(fixture_path.is_file(), fixture)
-            self.assertEqual(sha256(fixture_path), str(fixture_hashes[fixture]).upper())
-
-        for entry in [*mapping["fetchers"], *mapping["derived_methods"]]:
-            self.assertIn(entry["baseline_fixture"], fixture_hashes)
+        vendor_root = repository_root / source["vendored_root"]
+        license_hash = hashlib.sha256((vendor_root / "LICENSE").read_bytes()).hexdigest()
+        self.assertEqual(license_hash, source["license_sha256"])
+        integrity = verify_vendored_uzi_integrity()
+        self.assertTrue(integrity["valid"], integrity)
+        self.assertEqual(integrity["source_commit"], source["commit"])
+        self.assertEqual(integrity["fetcher_count"], 22)
+        self.assertEqual(integrity["command_count"], 20)
 
     def test_unconfigured_uzi_sources_are_explicit_degraded_snapshots(self) -> None:
         class DegradedSkill:

@@ -242,10 +242,10 @@ class ApiV1RunsTests(unittest.TestCase):
 
         self.assertEqual(html_response.status_code, 200, html_response.text)
         self.assertTrue(html_response.headers["content-type"].startswith("text/html"))
-        self.assertIn("游资 <span>SKILLS</span>", html_response.text)
+        self.assertIn("游资 SKILLS", html_response.text)
         self.assertIn("FloatFu-true", html_response.text)
         self.assertIn("uzi-report-600519", html_response.headers["content-disposition"])
-        self.assertEqual(html_response.headers["x-cognitrade-source-artifact-count"], "3")
+        self.assertEqual(html_response.headers["x-cognitrade-source-artifact-count"], "2")
         self.assertIn("default-src 'none'", html_response.headers["content-security-policy"])
 
         with patch(
