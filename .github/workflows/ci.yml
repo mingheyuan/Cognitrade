@@ -92,6 +92,7 @@ jobs:
           python -m research_system.runtime.diagnostics.status.uzi_provider_smoke
           --symbol 600519
           --sector 白酒
+          --dimension-timeout-seconds 35
           --output ci-artifacts/uzi-provider-smoke.json
       - name: Upload redacted provider evidence
         if: always()

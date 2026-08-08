@@ -5,7 +5,9 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 import json
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 import time
 from typing import Any
 
@@ -57,6 +59,13 @@ _SOURCE_FIELDS = (
     "status",
     "error_type",
 )
+_MODULE_NAME = "research_system.runtime.diagnostics.status.uzi_provider_smoke"
+
+
+class _DimensionProbeFailure(RuntimeError):
+    def __init__(self, return_code: int) -> None:
+        super().__init__(f"dimension probe exited with code {return_code}")
+        self.return_code = int(return_code)
 
 
 def run_uzi_provider_smoke(
@@ -98,12 +107,102 @@ def run_uzi_provider_smoke(
         _summarize_snapshot(fetcher_id, snapshot_type, by_type.get(snapshot_type))
         for fetcher_id, snapshot_type in selected
     ]
+    return _assemble_report(
+        settings,
+        symbol=symbol,
+        sector=sector,
+        selected=selected,
+        rows=rows,
+        started=started,
+    )
+
+
+def run_uzi_provider_smoke_isolated(
+    settings: Settings,
+    *,
+    symbol: str = "600519",
+    sector: str | None = None,
+    dimensions: Iterable[str] | None = None,
+    timeout_seconds: float = 35.0,
+    output: Path | None = None,
+    runner: Callable[..., dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Probe each dimension in a fresh process and persist evidence incrementally.
+
+    Third-party provider SDKs can block below Python's request timeout. Process
+    isolation lets the CI smoke record that real timeout as a data gap without
+    losing the evidence already collected for other dimensions.
+    """
+
+    timeout = float(timeout_seconds)
+    if timeout <= 0:
+        raise ValueError("dimension timeout must be greater than zero")
+    selected = _select_dimensions(dimensions)
+    started = time.monotonic()
+    probe = runner or _probe_dimension_subprocess
+    rows: list[dict[str, Any]] = []
+    for index, (fetcher_id, snapshot_type) in enumerate(selected, start=1):
+        try:
+            child_report = probe(
+                fetcher_id=fetcher_id,
+                symbol=symbol,
+                sector=sector,
+                timeout_seconds=timeout,
+            )
+            child_rows = child_report.get("dimensions")
+            row = (
+                child_rows[0]
+                if isinstance(child_rows, list)
+                and len(child_rows) == 1
+                and isinstance(child_rows[0], dict)
+                and child_rows[0].get("fetcher_id") == fetcher_id
+                and child_rows[0].get("snapshot_type") == snapshot_type
+                else _failed_probe_row(fetcher_id, snapshot_type, "invalid_child_report")
+            )
+        except subprocess.TimeoutExpired:
+            row = _timeout_row(fetcher_id, snapshot_type, timeout)
+        except _DimensionProbeFailure as exc:
+            row = _failed_probe_row(
+                fetcher_id,
+                snapshot_type,
+                f"child_exit_{exc.return_code}",
+            )
+        rows.append(row)
+        report = _assemble_report(
+            settings,
+            symbol=symbol,
+            sector=sector,
+            selected=selected,
+            rows=rows,
+            started=started,
+        )
+        if output is not None:
+            _write_report(output, report)
+        print(
+            f"[uzi-provider-smoke] {index}/{len(selected)} "
+            f"{fetcher_id}={row['status']}",
+            file=sys.stderr,
+            flush=True,
+        )
+    return report
+
+
+def _assemble_report(
+    settings: Settings,
+    *,
+    symbol: str,
+    sector: str | None,
+    selected: Sequence[tuple[str, str]],
+    rows: Sequence[dict[str, Any]],
+    started: float,
+) -> dict[str, Any]:
     status_counts = Counter(str(row["status"]) for row in rows)
     contract_failures = [
         str(row["fetcher_id"])
         for row in rows
         if row["status"] == "missing_result" or not row["lineage_ok"]
     ]
+    incomplete = [fetcher_id for fetcher_id, _snapshot_type in selected[len(rows) :]]
     return {
         "schema_version": "1",
         "uzi_version": "3.9.2",
@@ -111,8 +210,11 @@ def run_uzi_provider_smoke(
         "sector": sector,
         "requested_count": len(selected),
         "completed_count": len(rows),
-        "contract_status": "failed" if contract_failures else "passed",
+        "contract_status": (
+            "in_progress" if incomplete else "failed" if contract_failures else "passed"
+        ),
         "contract_failures": contract_failures,
+        "pending_dimensions": incomplete,
         "status_counts": dict(sorted(status_counts.items())),
         "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
         "sensitive_sources": {
@@ -121,6 +223,87 @@ def run_uzi_provider_smoke(
             "xueqiu_cookie_configured": bool(settings.xueqiu_cookie),
         },
         "dimensions": rows,
+    }
+
+
+def _probe_dimension_subprocess(
+    *,
+    fetcher_id: str,
+    symbol: str,
+    sector: str | None,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="uzi-provider-smoke-") as temp_dir:
+        output = Path(temp_dir) / "dimension.json"
+        command = [
+            sys.executable,
+            "-m",
+            _MODULE_NAME,
+            "--symbol",
+            symbol,
+            "--dimensions",
+            fetcher_id,
+            "--output",
+            str(output),
+        ]
+        if sector:
+            command.extend(("--sector", sector))
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        if output.is_file():
+            try:
+                report = json.loads(output.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise _DimensionProbeFailure(completed.returncode or 2) from exc
+            if isinstance(report, dict):
+                return report
+        raise _DimensionProbeFailure(completed.returncode or 2)
+
+
+def _timeout_row(
+    fetcher_id: str,
+    snapshot_type: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    return {
+        "fetcher_id": fetcher_id,
+        "snapshot_type": snapshot_type,
+        "status": "data_gap",
+        "degraded": True,
+        "degrade_reason": "provider_chain_timeout",
+        "data_gap": [f"provider_chain_timeout:{timeout_seconds:g}s"],
+        "source_refs": [
+            {
+                "skill": "uzi_provider_smoke",
+                "source_id": f"uzi_fetcher:{fetcher_id}",
+                "dim": snapshot_type,
+                "status": "provider_unavailable",
+                "error_type": "TimeoutExpired",
+            }
+        ],
+        "lineage_ok": True,
+    }
+
+
+def _failed_probe_row(
+    fetcher_id: str,
+    snapshot_type: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "fetcher_id": fetcher_id,
+        "snapshot_type": snapshot_type,
+        "status": "missing_result",
+        "degraded": True,
+        "degrade_reason": reason,
+        "data_gap": [reason],
+        "source_refs": [],
+        "lineage_ok": False,
     }
 
 
@@ -234,26 +417,50 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional path for the redacted JSON smoke report",
     )
+    parser.add_argument(
+        "--dimension-timeout-seconds",
+        type=float,
+        default=None,
+        help="Run each selected dimension in an isolated process with this timeout",
+    )
     return parser
+
+
+def _write_report(output: Path, report: dict[str, Any]) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     repo_root = Path(__file__).resolve().parents[4]
     try:
-        report = run_uzi_provider_smoke(
-            Settings.from_env(repo_root),
-            symbol=args.symbol,
-            sector=args.sector,
-            dimensions=args.dimensions,
-        )
+        settings = Settings.from_env(repo_root)
+        if args.dimension_timeout_seconds is not None:
+            report = run_uzi_provider_smoke_isolated(
+                settings,
+                symbol=args.symbol,
+                sector=args.sector,
+                dimensions=args.dimensions,
+                timeout_seconds=args.dimension_timeout_seconds,
+                output=args.output,
+            )
+        else:
+            report = run_uzi_provider_smoke(
+                settings,
+                symbol=args.symbol,
+                sector=args.sector,
+                dimensions=args.dimensions,
+            )
     except (TypeError, ValueError) as exc:
         print(json.dumps({"status": "invalid_request", "error_type": exc.__class__.__name__}))
         return 2
     rendered = json.dumps(report, ensure_ascii=False, indent=2, default=str)
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(rendered + "\n", encoding="utf-8")
+        _write_report(args.output, report)
     print(rendered)
     if report["contract_status"] != "passed":
         return 2
@@ -268,4 +475,8 @@ if __name__ == "__main__":
     sys.exit(main())
 
 
-__all__ = ["UZI_FETCHER_DIMENSIONS", "run_uzi_provider_smoke"]
+__all__ = [
+    "UZI_FETCHER_DIMENSIONS",
+    "run_uzi_provider_smoke",
+    "run_uzi_provider_smoke_isolated",
+]

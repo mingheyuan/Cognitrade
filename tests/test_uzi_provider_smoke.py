@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ from research_system.runtime.diagnostics.status.uzi_provider_smoke import (
     UZI_FETCHER_DIMENSIONS,
     main,
     run_uzi_provider_smoke,
+    run_uzi_provider_smoke_isolated,
 )
 from research_system.runtime.platform.settings import Settings
 
@@ -123,6 +125,44 @@ class UziProviderSmokeTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertEqual(json.loads(output.read_text(encoding="utf-8")), report)
+
+    def test_isolated_smoke_records_timeout_and_continues(self) -> None:
+        def runner(**kwargs):
+            if kwargs["fetcher_id"] == "0_basic":
+                raise subprocess.TimeoutExpired(cmd=["provider-probe"], timeout=35)
+            return {
+                "dimensions": [
+                    {
+                        "fetcher_id": kwargs["fetcher_id"],
+                        "snapshot_type": "fundamental",
+                        "status": "available",
+                        "degraded": False,
+                        "degrade_reason": None,
+                        "data_gap": [],
+                        "source_refs": [{"source_id": "public_provider"}],
+                        "lineage_ok": True,
+                    }
+                ]
+            }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "provider-smoke.json"
+            report = run_uzi_provider_smoke_isolated(
+                Settings.from_env(Path(temp_dir)),
+                dimensions=["0_basic", "1_financials"],
+                output=output,
+                runner=runner,
+            )
+
+            self.assertEqual(json.loads(output.read_text(encoding="utf-8")), report)
+
+        self.assertEqual(report["requested_count"], 2)
+        self.assertEqual(report["completed_count"], 2)
+        self.assertEqual(report["contract_status"], "passed")
+        self.assertEqual(report["status_counts"], {"available": 1, "data_gap": 1})
+        timeout_row = report["dimensions"][0]
+        self.assertEqual(timeout_row["degrade_reason"], "provider_chain_timeout")
+        self.assertEqual(timeout_row["source_refs"][0]["error_type"], "TimeoutExpired")
 
 
 if __name__ == "__main__":
