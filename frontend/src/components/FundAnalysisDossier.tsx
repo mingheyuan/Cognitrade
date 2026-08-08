@@ -15,7 +15,7 @@ import {
   Square,
   Users,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   CartesianGrid,
   Legend,
@@ -202,21 +202,46 @@ export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun,
     ...(Array.isArray(snapshot.data_gap) ? snapshot.data_gap.map(String) : []),
     ...(Array.isArray(analysis.data_gap) ? analysis.data_gap.map(String) : []),
   ]))
-  const [holdingBatches, setHoldingBatches] = useState<FundHoldingReportBatch[]>([])
+  const [holdingBatchSnapshot, setHoldingBatchSnapshot] = useState<{
+    sourceRunId: string
+    rows: FundHoldingReportBatch[]
+  }>({ sourceRunId: '', rows: [] })
+  const [holdingBatchesLoading, setHoldingBatchesLoading] = useState(Boolean(sourceRunId))
   const [holdingAction, setHoldingAction] = useState('')
   const [holdingError, setHoldingError] = useState('')
+  const holdingBatchLoadSequence = useRef(0)
+  const sourceRunIdRef = useRef(sourceRunId)
+  const holdingBatches = holdingBatchSnapshot.sourceRunId === sourceRunId
+    ? holdingBatchSnapshot.rows
+    : []
+  const holdingBatchesRestoring = holdingBatchesLoading
+    || Boolean(sourceRunId && holdingBatchSnapshot.sourceRunId !== sourceRunId)
+
+  useEffect(() => {
+    sourceRunIdRef.current = sourceRunId
+  }, [sourceRunId])
 
   const refreshHoldingBatches = useCallback(async (quiet = false) => {
+    const requestSequence = ++holdingBatchLoadSequence.current
     if (!sourceRunId) {
-      setHoldingBatches([])
+      setHoldingBatchSnapshot({ sourceRunId: '', rows: [] })
+      setHoldingBatchesLoading(false)
       return
     }
+    if (!quiet) setHoldingBatchesLoading(true)
     try {
       const rows = await client.listFundHoldingReportBatches(sourceRunId)
-      setHoldingBatches(rows)
+      if (sourceRunIdRef.current !== sourceRunId || holdingBatchLoadSequence.current !== requestSequence) return
+      setHoldingBatchSnapshot({ sourceRunId, rows })
       if (!quiet) setHoldingError('')
     } catch (error) {
+      if (sourceRunIdRef.current !== sourceRunId || holdingBatchLoadSequence.current !== requestSequence) return
+      setHoldingBatchSnapshot({ sourceRunId, rows: [] })
       if (!quiet) setHoldingError(reportErrorMessage(error))
+    } finally {
+      if (!quiet && holdingBatchLoadSequence.current === requestSequence) {
+        setHoldingBatchesLoading(false)
+      }
     }
   }, [client, sourceRunId])
 
@@ -239,16 +264,21 @@ export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun,
     setHoldingError('')
     try {
       const batch = await action()
-      setHoldingBatches((current) => [
-        batch,
-        ...current.filter((row) => row.batch_id !== batch.batch_id),
-      ])
+      if (sourceRunIdRef.current !== sourceRunId) return
+      setHoldingBatchSnapshot((current) => ({
+        sourceRunId,
+        rows: [
+          batch,
+          ...(current.sourceRunId === sourceRunId ? current.rows : [])
+            .filter((row) => row.batch_id !== batch.batch_id),
+        ],
+      }))
     } catch (error) {
       setHoldingError(reportErrorMessage(error))
     } finally {
       setHoldingAction('')
     }
-  }, [])
+  }, [sourceRunId])
 
   const createHoldingBatch = useCallback((
     fundCode: string,
@@ -267,11 +297,12 @@ export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun,
 
   const mutateHoldingBatch = useCallback((
     batchId: string,
-    action: 'cancel' | 'retry' | 'continue',
+    action: 'cancel' | 'retry' | 'continue' | 'regenerate',
     symbols: string[] = [],
   ) => runHoldingAction(holdingMutationKey(action, batchId, symbols), () => {
     if (action === 'cancel') return client.cancelFundHoldingReportBatch(batchId)
     if (action === 'continue') return client.continueFundHoldingReportBatch(batchId, symbols)
+    if (action === 'regenerate') return client.retryFundHoldingReportBatch(batchId, symbols, true)
     return client.retryFundHoldingReportBatch(batchId, symbols)
   }), [client, runHoldingAction])
 
@@ -333,6 +364,7 @@ export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun,
           candidate={candidate}
           defaultOpen={index === 0}
           holdingBatches={holdingBatches.filter((row) => row.fund_code === String(candidate.fund_code || ''))}
+          holdingBatchesLoading={holdingBatchesRestoring}
           holdingAction={holdingAction}
           onCreateHoldingBatch={createHoldingBatch}
           onMutateHoldingBatch={mutateHoldingBatch}
@@ -365,6 +397,7 @@ function FundCandidateDossier({
   candidate,
   defaultOpen,
   holdingBatches,
+  holdingBatchesLoading,
   holdingAction,
   onCreateHoldingBatch,
   onMutateHoldingBatch,
@@ -376,9 +409,10 @@ function FundCandidateDossier({
   candidate: RecordValue
   defaultOpen: boolean
   holdingBatches: FundHoldingReportBatch[]
+  holdingBatchesLoading: boolean
   holdingAction: string
   onCreateHoldingBatch: (fundCode: string, profile: HoldingReportProfile, confirmStale: boolean, force: boolean) => void
-  onMutateHoldingBatch: (batchId: string, action: 'cancel' | 'retry' | 'continue', symbols?: string[]) => void
+  onMutateHoldingBatch: (batchId: string, action: 'cancel' | 'retry' | 'continue' | 'regenerate', symbols?: string[]) => void
   onDownloadZip: (batchId: string) => void
   onDownloadReport: (runId: string, format: RunReportFormat) => void
   onOpenRun: (runId: string) => void
@@ -560,7 +594,7 @@ function FundCandidateDossier({
               <div className="fund-holding-report-config">
                 <label>
                   <span>研究档位</span>
-                  <select value={effectiveReportProfile} onChange={(event) => { setReportProfile(event.target.value as HoldingReportProfile | ''); setSelectedBatchId('') }} disabled={currentBatch?.status === 'running'}>
+                  <select value={effectiveReportProfile} onChange={(event) => { setReportProfile(event.target.value as HoldingReportProfile | ''); setSelectedBatchId('') }} disabled={holdingBatchesLoading || currentBatch?.status === 'running'}>
                     <option value="">请选择研究深度</option>
                     {REPORT_PROFILES.map((profile) => <option key={profile.value} value={profile.value}>{profile.label} · {profile.detail}</option>)}
                   </select>
@@ -576,7 +610,9 @@ function FundCandidateDossier({
                 </label>}
               </div>
 
-              {!currentBatch ? (
+              {holdingBatchesLoading && !currentBatch ? (
+                <div className="fund-holding-report-empty" role="status"><LoaderCircle size={16} className="is-spinning" /><span>正在恢复本次基金研究绑定的历史报告批次…</span></div>
+              ) : !currentBatch ? (
                 <button
                   type="button"
                   className="primary-button fund-holding-start"
@@ -612,7 +648,9 @@ function FundCandidateDossier({
                       <span className="fund-holding-report-status">{holdingItemStatusLabel(item.status)}</span>
                       <div className="fund-holding-report-actions">
                         <button type="button" title="使用该持仓股票打开策略回测" onClick={() => onOpenBacktest({ symbol: item.symbol, name: item.name, fundCode: String(candidate.fund_code || ''), fundName: String(candidate.fund_name || '') })}><LineChartIcon size={13} />回测</button>
-                        {item.status === 'failed' && <button type="button" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'retry', [item.symbol])} disabled={holdingAction === holdingMutationKey('retry', currentBatch.batch_id, [item.symbol])}><RefreshCw size={13} />重试该报告</button>}
+                        {item.status === 'failed' && <button type="button" title="只重试这一只股票，其他持仓报告不重新执行" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'retry', [item.symbol])} disabled={holdingAction === holdingMutationKey('retry', currentBatch.batch_id, [item.symbol])}><RefreshCw size={13} />仅重试此项</button>}
+                        {item.status === 'cancelled' && <button type="button" title="只继续这一只股票，其他持仓报告不重新执行" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'continue', [item.symbol])} disabled={holdingAction === holdingMutationKey('continue', currentBatch.batch_id, [item.symbol])}><RefreshCw size={13} />仅继续此项</button>}
+                        {['completed', 'completed_partial'].includes(item.status) && <button type="button" title="只重新生成这一只股票，其他持仓报告保持不变" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'regenerate', [item.symbol])} disabled={holdingAction === holdingMutationKey('regenerate', currentBatch.batch_id, [item.symbol])}><RefreshCw size={13} />重新生成此项</button>}
                         {item.child_run_id && <button type="button" title="打开完整证据链" onClick={() => onOpenRun(item.child_run_id || '')}><ExternalLink size={13} />证据</button>}
                         {item.report_available && item.child_run_id && <>
                           <button type="button" onClick={() => onDownloadReport(item.child_run_id || '', 'html')} disabled={holdingAction === `html:${item.child_run_id}`}><FileText size={13} />HTML</button>
@@ -646,7 +684,7 @@ function FundCandidateDossier({
   )
 }
 
-function holdingMutationKey(action: 'cancel' | 'retry' | 'continue', batchId: string, symbols: string[] = []): string {
+function holdingMutationKey(action: 'cancel' | 'retry' | 'continue' | 'regenerate', batchId: string, symbols: string[] = []): string {
   return `${action}:${batchId}${symbols.length ? `:${symbols.join(',')}` : ''}`
 }
 

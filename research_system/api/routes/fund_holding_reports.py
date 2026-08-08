@@ -150,6 +150,7 @@ async def retry_holding_report_batch(
             resolved,
             symbols=payload.symbols,
             include_cancelled=False,
+            force=payload.force,
             **_scope(principal),
         )
     except Exception as exc:

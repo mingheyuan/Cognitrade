@@ -102,24 +102,46 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState('')
   const streamAbort = useRef<AbortController | null>(null)
   const streamCursors = useRef<Record<string, string>>({})
+  const selectedRunIdRef = useRef(selectedRunId)
+  const loadRunSequence = useRef(0)
   const client = useMemo(() => new CognitradeApiClient(settings), [settings])
+
+  const selectRun = useCallback((runId: string) => {
+    if (selectedRunIdRef.current === runId) return
+    selectedRunIdRef.current = runId
+    loadRunSequence.current += 1
+    setSelectedRun(null)
+    setSelectedRunLoading(Boolean(runId))
+    setSelectedRunId(runId)
+  }, [])
 
   const loadRun = useCallback(
     async (runId: string, quiet = false) => {
+      // A stream or polling callback from the previously selected run may still
+      // arrive after navigation. It must not invalidate the current run's load.
+      if (selectedRunIdRef.current !== runId) return
+      const requestSequence = ++loadRunSequence.current
       if (!runId) {
-        setSelectedRun(null)
+        if (selectedRunIdRef.current === runId && loadRunSequence.current === requestSequence) {
+          setSelectedRun(null)
+        }
         return
       }
       if (!quiet) setSelectedRunLoading(true)
       try {
         const detail = await client.getRunDetail(runId)
+        if (selectedRunIdRef.current !== runId || loadRunSequence.current !== requestSequence) return
         setSelectedRun(detail)
         setConnectionState('online')
       } catch (loadError) {
+        if (selectedRunIdRef.current !== runId || loadRunSequence.current !== requestSequence) return
         setError(errorMessage(loadError))
         setConnectionState(connectionFromError(loadError))
       } finally {
-        if (!quiet) setSelectedRunLoading(false)
+        if (
+          selectedRunIdRef.current === runId
+          && loadRunSequence.current === requestSequence
+        ) setSelectedRunLoading(false)
       }
     },
     [client],
@@ -223,9 +245,9 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!selectedRunId && runs[0]?.run_id) {
       const firstRunId = runs[0].run_id
-      queueMicrotask(() => setSelectedRunId(firstRunId))
+      queueMicrotask(() => selectRun(firstRunId))
     }
-  }, [runs, selectedRunId])
+  }, [runs, selectRun, selectedRunId])
 
   useEffect(() => {
     if (selectedRunId) queueMicrotask(() => void loadRun(selectedRunId))
@@ -325,7 +347,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
         }
         setLastResponse(response)
         if (response.run_id) {
-          setSelectedRunId(response.run_id)
+          selectRun(response.run_id)
           await loadRun(response.run_id)
           void subscribeToRun(response.run_id)
         }
@@ -333,7 +355,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
         if (response.run_id) {
           // Refresh updates the history list asynchronously; reload the submitted run
           // afterward so an older selected run cannot replace the new result.
-          setSelectedRunId(response.run_id)
+          selectRun(response.run_id)
           await loadRun(response.run_id, true)
         }
         return response
@@ -345,7 +367,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
         setSubmitting(false)
       }
     },
-    [client, createChatThread, ensureChatThread, loadRun, refresh, subscribeToRun],
+    [client, createChatThread, ensureChatThread, loadRun, refresh, selectRun, subscribeToRun],
   )
 
   const cancelRun = useCallback(
@@ -369,7 +391,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
       try {
         const response = await client.rerunRun(runId, fromNode)
         setLastResponse(response)
-        if (response.run_id) setSelectedRunId(response.run_id)
+        if (response.run_id) selectRun(response.run_id)
         await refresh()
         if (response.run_id) await loadRun(response.run_id)
         return response
@@ -380,7 +402,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
         setSubmitting(false)
       }
     },
-    [client, loadRun, refresh],
+    [client, loadRun, refresh, selectRun],
   )
 
   const exportRunReport = useCallback(
@@ -419,7 +441,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
       error,
       configure,
       refresh,
-      selectRun: setSelectedRunId,
+      selectRun,
       reloadRun: loadRun,
       createRun,
       cancelRun,
@@ -449,6 +471,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
       error,
       configure,
       refresh,
+      selectRun,
       loadRun,
       createRun,
       cancelRun,
