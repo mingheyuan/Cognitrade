@@ -362,6 +362,19 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         self.assertEqual(recovered["counts"]["deliverable"], 10)
         self.assertEqual(len(recovered["holdings"][0]["attempt_run_ids"]), 2)
 
+        regenerated = self.service.retry(
+            recovered["batch_id"], symbols=["600002"], force=True
+        )
+        regenerated_final = self.wait_terminal(regenerated["batch_id"])
+        regenerated_item = next(
+            item for item in regenerated_final["holdings"] if item["symbol"] == "600002"
+        )
+        untouched_item = next(
+            item for item in regenerated_final["holdings"] if item["symbol"] == "600003"
+        )
+        self.assertEqual(len(regenerated_item["attempt_run_ids"]), 2)
+        self.assertEqual(len(untouched_item["attempt_run_ids"]), 1)
+
     def test_committed_reports_survive_response_finalization_error(self) -> None:
         self.run_service.source_artifacts = [snapshot_artifact(funds=[equity_fund(count=1)])]
         self.agent_os.raise_after_completion_symbols.add("600001")

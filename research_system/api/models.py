@@ -22,6 +22,7 @@ class FundHoldingReportCreateRequest(ApiRequestModel):
 
 class FundHoldingReportRetryRequest(ApiRequestModel):
     symbols: list[str] = Field(default_factory=list, max_length=10)
+    force: bool = False
 
     @field_validator("symbols", mode="before")
     @classmethod

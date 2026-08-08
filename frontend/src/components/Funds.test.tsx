@@ -5,8 +5,10 @@ import { Funds } from './Funds'
 const mocks = vi.hoisted(() => ({
   createRun: vi.fn(async () => ({ run_id: 'run-new' })),
   selectRun: vi.fn(),
+  reloadRun: vi.fn(async () => undefined),
   openRun: vi.fn(),
   openBacktest: vi.fn(),
+  selectedRunDetailId: 'run-fund',
 }))
 
 vi.mock('../CognitradeContext', () => ({
@@ -16,9 +18,11 @@ vi.mock('../CognitradeContext', () => ({
     runs: [{ run_id: 'run-fund', intent: 'fund_research', status: 'completed' }],
     selectedRunId: 'run-fund',
     selectRun: mocks.selectRun,
+    reloadRun: mocks.reloadRun,
     selectedRunLoading: false,
     submitting: false,
     selectedRun: {
+      runId: mocks.selectedRunDetailId,
       replay: {
         artifacts: [
           {
@@ -107,8 +111,10 @@ describe('Funds', () => {
   beforeEach(() => {
     mocks.createRun.mockClear()
     mocks.selectRun.mockClear()
+    mocks.reloadRun.mockClear()
     mocks.openRun.mockClear()
     mocks.openBacktest.mockClear()
+    mocks.selectedRunDetailId = 'run-fund'
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/holding-reports') && init?.method === 'POST') {
@@ -151,6 +157,16 @@ describe('Funds', () => {
     expect(screen.getByRole('link', { name: '查看官方报告' })).toHaveAttribute('href', 'https://pdf.dfcfw.com/example.pdf')
     expect(screen.getByText('单位净值完整趋势')).toBeInTheDocument()
     expect(screen.getByText('易方达基金')).toBeInTheDocument()
+  })
+
+  it('does not render a stale holding batch as the selected fund run and reloads the parent run', async () => {
+    mocks.selectedRunDetailId = 'batch-newer-than-fund'
+
+    render(<Funds onOpenRun={mocks.openRun} />)
+
+    expect(screen.getByText('正在读取 ArtifactBoard')).toBeInTheDocument()
+    expect(screen.queryByText('基金完整分析')).not.toBeInTheDocument()
+    await waitFor(() => expect(mocks.reloadRun).toHaveBeenCalledWith('run-fund'))
   })
 
   it('lets the user select a category and omits empty fund codes', async () => {
@@ -219,6 +235,7 @@ describe('Funds', () => {
 
   it('starts a lite top-holding report batch from the frozen fund run', async () => {
     render(<Funds onOpenRun={mocks.openRun} />)
+    await waitFor(() => expect(screen.getByRole('combobox', { name: '研究档位' })).toBeEnabled())
     fireEvent.change(screen.getByRole('combobox', { name: '研究档位' }), {
       target: { value: 'lite' },
     })
@@ -264,12 +281,51 @@ describe('Funds', () => {
     render(<Funds onOpenRun={mocks.openRun} onOpenBacktest={mocks.openBacktest} />)
 
     await waitFor(() => expect(screen.getByRole('combobox', { name: '研究档位' })).toHaveValue('deep'))
-    fireEvent.click(screen.getByRole('button', { name: '重试该报告' }))
+    expect(screen.getByText('批次状态')).toBeInTheDocument()
+    expect(screen.getByText('执行失败')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '仅重试此项' }))
     await waitFor(() => {
       const call = vi.mocked(fetch).mock.calls.find(([input]) => String(input).endsWith('/holding-report-batches/batch-failed/retry'))
-      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ symbols: ['688012'] })
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ symbols: ['688012'], force: false })
     })
     fireEvent.click(screen.getByRole('button', { name: '回测' }))
     expect(mocks.openBacktest).toHaveBeenCalledWith(expect.objectContaining({ symbol: '688012', fundCode: '110011' }))
+  })
+
+  it('regenerates only one selected completed report without rerunning the batch', async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const batch = {
+        batch_id: 'batch-completed', source_run_id: 'run-fund', source_artifact_id: 'artifact-fund',
+        fund_code: '110011', fund_name: '易方达优质精选混合', fund_type: 'ETF联接',
+        profile: 'medium', status: init?.method === 'POST' ? 'running' : 'completed', concurrency: 5,
+        holding_source: 'target_etf_lookthrough', is_fund_of_funds: true,
+        disclosure_date: '2026-06-30', disclosure_age_days: 38, stale_level: 'current', cancel_requested: false,
+        holdings: [{
+          rank: 1, symbol: '688012', name: '中微公司', market: 'SH', supported: true,
+          status: init?.method === 'POST' ? 'queued' : 'completed', fund_weight_pct: 13.85,
+          target_security_weight_pct: 15.02, holding_source: 'target_etf_lookthrough',
+          disclosure_date: '2026-06-30', child_run_id: 'child-completed', attempt_run_ids: ['child-completed'],
+          report_available: init?.method !== 'POST', retry_count: 0, data_gap: [], error: null,
+          started_at: null, completed_at: '2026-08-07T00:10:00Z',
+        }],
+        counts: { total: 1, supported: 1, queued: init?.method === 'POST' ? 1 : 0, running: 0, deliverable: init?.method === 'POST' ? 0 : 1, failed: 0, cancelled: 0, unsupported: 0 },
+        data_gap: [], created_at: '2026-08-07T00:00:00Z', updated_at: '2026-08-07T00:10:00Z', completed_at: '2026-08-07T00:10:00Z',
+      }
+      if (url.endsWith('/holding-report-batches')) return new Response(JSON.stringify([batch]), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      if (url.endsWith('/holding-report-batches/batch-completed/retry') && init?.method === 'POST') return new Response(JSON.stringify(batch), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+
+    render(<Funds onOpenRun={mocks.openRun} />)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '重新生成此项' })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: '重新生成此项' }))
+    await waitFor(() => {
+      const call = vi.mocked(fetch).mock.calls.find(([input, init]) => (
+        String(input).endsWith('/holding-report-batches/batch-completed/retry') && init?.method === 'POST'
+      ))
+      expect(JSON.parse(String(call?.[1]?.body))).toEqual({ symbols: ['688012'], force: true })
+    })
   })
 })

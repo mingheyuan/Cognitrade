@@ -25,6 +25,7 @@ export function Funds({ onOpenRun, onOpenBacktest = () => undefined }: FundsProp
     selectedRun,
     selectedRunId,
     selectRun,
+    reloadRun,
     selectedRunLoading,
     submitting,
   } = useCognitrade()
@@ -40,16 +41,27 @@ export function Funds({ onOpenRun, onOpenBacktest = () => undefined }: FundsProp
     [runs],
   )
   const selectedRecord = runs.find((run) => run.run_id === selectedRunId)
+  const sourceRunId = selectedRecord?.intent === 'fund_research'
+    ? selectedRunId
+    : latestFundRun?.run_id || ''
   useEffect(() => {
-    if (selectedRecord?.intent === 'fund_research' || !latestFundRun?.run_id) return
-    selectRun(latestFundRun.run_id)
-  }, [latestFundRun?.run_id, selectRun, selectedRecord?.intent])
+    if (!sourceRunId) return
+    if (selectedRunId !== sourceRunId) {
+      selectRun(sourceRunId)
+      return
+    }
+    if (!selectedRunLoading && selectedRun?.runId !== sourceRunId) {
+      void reloadRun(sourceRunId)
+    }
+  }, [reloadRun, selectRun, selectedRun?.runId, selectedRunId, selectedRunLoading, sourceRunId])
+
+  const fundRun = selectedRun?.runId === sourceRunId ? selectedRun : null
 
   const artifacts = useMemo(
-    () => (Array.isArray(selectedRun?.replay?.artifacts)
-      ? selectedRun.replay.artifacts
+    () => (Array.isArray(fundRun?.replay?.artifacts)
+      ? fundRun.replay.artifacts
       : []),
-    [selectedRun],
+    [fundRun],
   )
   const analysis = useMemo(() => {
     const artifact = [...artifacts].reverse().find((row) => (
@@ -58,7 +70,7 @@ export function Funds({ onOpenRun, onOpenBacktest = () => undefined }: FundsProp
     return asRecord(asRecord(artifact).content)
   }, [artifacts])
   const hasFundArtifacts = artifacts.some((row) => ['fund_snapshot', 'fund_analysis'].includes(String(asRecord(row).artifact_type || '')))
-  const sourceRunId = selectedRecord?.intent === 'fund_research' ? selectedRunId : latestFundRun?.run_id
+  const restoringFundRun = Boolean(sourceRunId && (!fundRun || selectedRunLoading))
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -155,7 +167,7 @@ export function Funds({ onOpenRun, onOpenBacktest = () => undefined }: FundsProp
             </span>
           </header>
 
-          {selectedRunLoading ? (
+          {restoringFundRun ? (
             <div className="fund-empty"><RefreshCw size={22} className="is-spinning" /><strong>正在读取 ArtifactBoard</strong></div>
           ) : hasFundArtifacts ? (
             <FundAnalysisDossier

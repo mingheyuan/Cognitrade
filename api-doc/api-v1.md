@@ -245,7 +245,7 @@ documented partial result.
 | `GET` | `/runs/{source_run_id}/holding-report-batches?fund_code=110011` | List preserved batches for the source run, optionally filtered by fund |
 | `GET` | `/holding-report-batches/{batch_id}` | Read parent progress, child statuses, gaps and report availability |
 | `POST` | `/holding-report-batches/{batch_id}/cancel` | Best-effort cancel queued/running children; completed reports are retained |
-| `POST` | `/holding-report-batches/{batch_id}/retry` | Retry failed children; optional body `{"symbols":["600519"]}` |
+| `POST` | `/holding-report-batches/{batch_id}/retry` | Retry failed children; `{"symbols":["600519"],"force":true}` explicitly regenerates only the selected terminal reports |
 | `POST` | `/holding-report-batches/{batch_id}/continue` | Continue cancelled/failed children; optional symbol filter |
 | `GET` | `/holding-report-batches/{batch_id}/reports.zip` | Download child PDFs that passed the UZI critical gate plus an audit README |
 

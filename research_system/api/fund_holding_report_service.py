@@ -388,6 +388,7 @@ class FundHoldingReportService:
         *,
         symbols: Iterable[str] | None = None,
         include_cancelled: bool = False,
+        force: bool = False,
         user_id: str | None = None,
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
@@ -396,6 +397,8 @@ class FundHoldingReportService:
         with self._lock:
             state = self._load_batch(batch_id, user_id=user_id, tenant_id=tenant_id)
             allowed = {"failed"} | ({"cancelled"} if include_cancelled else set())
+            if force:
+                allowed.update({"completed", "completed_partial", "cancelled"})
             for item in state["holdings"]:
                 if item["status"] not in allowed or (selected and item["symbol"] not in selected):
                     continue
@@ -411,7 +414,9 @@ class FundHoldingReportService:
                 item["completed_at"] = None
                 scheduled.append((str(item["symbol"]), child_run_id))
             if not scheduled:
-                raise FundHoldingBatchConflict("no failed or cancelled holding report matched the retry request")
+                raise FundHoldingBatchConflict(
+                    "no eligible terminal holding report matched the retry request"
+                )
             state["cancel_requested"] = False
             state["status"] = "running"
             state["completed_at"] = None

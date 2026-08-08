@@ -240,10 +240,10 @@ export class CognitradeApiClient {
     return this.request(`/holding-report-batches/${encodeURIComponent(batchId)}/cancel`, { method: 'POST' })
   }
 
-  retryFundHoldingReportBatch(batchId: string, symbols: string[] = []): Promise<FundHoldingReportBatch> {
+  retryFundHoldingReportBatch(batchId: string, symbols: string[] = [], force = false): Promise<FundHoldingReportBatch> {
     return this.request(`/holding-report-batches/${encodeURIComponent(batchId)}/retry`, {
       method: 'POST',
-      body: JSON.stringify({ symbols }),
+      body: JSON.stringify({ symbols, force }),
     })
   }
 
