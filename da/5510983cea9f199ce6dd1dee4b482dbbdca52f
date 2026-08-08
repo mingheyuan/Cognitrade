@@ -1,0 +1,25 @@
+.github/workflows/ci.yml
+  s_a6a8a3a6f43b3c::t_de43783b0edc91 95
+research_system/runtime/diagnostics/status/uzi_provider_smoke.py
+  s_a6a8a3a6f43b3c::t_21ad7c21251e3e 8,10,62-68,110-198,205,213-215,217,229-309,420-425,429-436,441-457,463,478-482
+tests/test_uzi_provider_smoke.py
+  s_a6a8a3a6f43b3c::t_a8a6b28ac69093 4,14,129-166
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "da5510983cea9f199ce6dd1dee4b482dbbdca52f",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
