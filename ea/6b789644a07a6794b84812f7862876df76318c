@@ -1,0 +1,189 @@
+README.md
+  s_eed87e69af68fb::t_a3005e82b378c3 14
+domain_packs/finance_ashare/holding_reports.py
+  s_55ae2015391f6f::t_a366adc9074587 58,71,78
+domain_packs/finance_ashare/migration/UZI_3_9_2_STRICT_ALIGNMENT_TARGET.md
+  s_eed87e69af68fb::t_e5344b9cbd1192 32,165
+domain_packs/finance_ashare/migration/uzi_3_9_2_capability_ledger.yaml
+  s_eed87e69af68fb::t_9e728201f1212a 122-129
+domain_packs/finance_ashare/reporting/uzi_392_exact_report.py
+  s_55ae2015391f6f::t_278915a3d1d959 1,19-22,45,48,51,55,61,155,197
+domain_packs/finance_ashare/reporting/uzi_native_report.py
+  s_55ae2015391f6f::t_5e496b2343c418 1,84,114,122,140-152,154,164,168
+domain_packs/finance_ashare/subagents/runtime.py
+  s_55ae2015391f6f::t_239c506ccd6f6e 1650
+domain_packs/finance_ashare/subagents/uzi_392_analysis.py
+  s_55ae2015391f6f::t_08e674fce5927e 307
+domain_packs/finance_ashare/vendor/uzi_3_9_2/SOURCE.md
+  s_eed87e69af68fb::t_0e174d51e9cd80 4-7,12-14,19-23
+domain_packs/finance_ashare/vendor/uzi_3_9_2/__init__.py
+  s_eed87e69af68fb::t_ac555157118d71 1,3-6,15-16,18,29-30,32
+domain_packs/finance_ashare/vendor/uzi_3_9_2/assets/report-template.html
+  s_55ae2015391f6f::t_8803eba8ec7d34 1398,1400-1402,1764-1772,1774-1778,2013-2034,2503-2510,3588
+domain_packs/finance_ashare/vendor/uzi_3_9_2/runtime.py
+  s_eed87e69af68fb::t_d3c36ed346375b 13-22,321-329,369-370,382-383,392,403-404,406
+domain_packs/finance_ashare/vendor/uzi_3_9_2/scripts/lib/report/dim_viz.py
+  s_eed87e69af68fb::t_010189be0f273c 323-336,376-384,471-479,499,503,509,556,558-561,565
+domain_packs/finance_ashare/vendor/uzi_3_9_2/scripts/lib/report/institutional.py
+  s_eed87e69af68fb::t_3468479506d551 229-231
+domain_packs/finance_ashare/vendor/uzi_3_9_2/scripts/lib/report/panel_cards.py
+  s_eed87e69af68fb::t_232e53b6b02ec1 49-56
+domain_packs/finance_ashare/vendor/uzi_3_9_2/scripts/lib/report/svg_primitives.py
+  s_eed87e69af68fb::t_03c20f34f18915 40,52,54
+domain_packs/legal_contract/subagents/runtime.py
+  s_55ae2015391f6f::t_7d841df2259449 108
+frontend/src/CognitradeContext.tsx
+  s_55ae2015391f6f::t_66d5222213bd5b 21,31,70,72,203-205,305,501
+frontend/src/api-client.ts
+  s_55ae2015391f6f::t_2a2cd2af540e1a 29,116,287,292,435,467,487-497
+frontend/src/artifacts/BusinessDataView.tsx
+  s_55ae2015391f6f::t_8b0f798a30ae2d 19,86-91
+frontend/src/artifacts/RunGovernanceDossier.test.tsx
+  s_55ae2015391f6f::t_ffe771a948a2d5 3,49-84
+frontend/src/components/Backtesting.tsx
+  s_55ae2015391f6f::t_2be485903f2305 25,395-396
+frontend/src/components/FundAnalysisDossier.tsx
+  s_55ae2015391f6f::t_ec2987c636da57 40,661,760,762
+frontend/src/components/MarketData.tsx
+  s_55ae2015391f6f::t_cb88240e2fdfce 20,762-763
+frontend/src/components/PaperTrading.tsx
+  s_55ae2015391f6f::t_48b399c6147d1b 23,402,407,410
+frontend/src/components/RunInspector.tsx
+  s_55ae2015391f6f::t_b09ab97b3fd1f2 25,83
+frontend/src/components/Workbench.tsx
+  s_55ae2015391f6f::t_2d9033510dd646 49,253
+frontend/src/live-data.ts
+  s_55ae2015391f6f::t_edca32f421e941 13,228,233-235,257,264-266,270,276-279,296-297,306,308-312,326-327,330-332,345,414-416,471
+frontend/src/utils/error-message.test.ts
+  s_55ae2015391f6f::t_9b1ea9b1d64be8 1-21
+frontend/src/utils/error-message.ts
+  s_55ae2015391f6f::t_6f2747a7709268 1-36
+plan/cognitrade-architecture-cn-overview.puml
+  s_55ae2015391f6f::t_4e178571445afa 1-59
+plan/cognitrade-architecture-cn-overview.svg
+  s_55ae2015391f6f::t_064332927dcd89 1
+plan/cognitrade-architecture-cn-simple.puml
+  s_55ae2015391f6f::t_2300e56008fecb 1-142
+plan/cognitrade-architecture-cn-simple.svg
+  s_dfc5d68635fdcc::t_72d9f479165a5f 1
+plan/cognitrade-architecture-cn.puml
+  s_dfc5d68635fdcc::t_53565dc29993ea 1-161
+plan/cognitrade-architecture-cn.svg
+  s_a6a8a3a6f43b3c::t_68b85ea1e590af 1
+plan/cognitrade-architecture.puml
+  s_dfc5d68635fdcc::t_e0d2de91c9c24d 1-225
+plan/cognitrade-architecture.svg
+  s_dfc5d68635fdcc::t_d885b12bcb2301 1
+research_system/api/agent_os_admin_service.py
+  s_55ae2015391f6f::t_eb81b4cd55e7b2 13,325-326,332
+research_system/api/agent_os_run_service.py
+  s_55ae2015391f6f::t_9f20f875da00aa 14-18,73,78,132,313,329,334,337,1070,1081,1088,1106,1136,1140,1217
+research_system/api/app.py
+  s_55ae2015391f6f::t_eb78be2e519437 39-49,160
+research_system/api/chat_service.py
+  s_55ae2015391f6f::t_7ebfd6858d84a3 10,56-57,65,76-78,90-94,160-162,194-196,233-235,348
+research_system/api/dependencies.py
+  s_55ae2015391f6f::t_5a3289264b3215 55,78,141,156,166,172,211
+research_system/api/errors.py
+  s_55ae2015391f6f::t_a2eee6e97f9485 4,13-17,20-21,63,73,109,122-125,128,131-133,175-254,257
+research_system/api/fund_holding_report_service.py
+  s_55ae2015391f6f::t_234ac2aa553d2d 20,419,444,458,467-468,471,626,647,796,998,1003-1005
+research_system/api/paper_trading_service.py
+  s_55ae2015391f6f::t_cb3615bd03c02e 16,615
+research_system/api/routes/admin.py
+  s_55ae2015391f6f::t_6049af7f4cc42b 16,24,33-37,55,65,70,84,95,110,124,130,136,153,165,171,177,190,207,221,238,244,259,270,281,291
+research_system/api/routes/chat.py
+  s_55ae2015391f6f::t_d8713fd2bc3814 12,19-23,64,77,92,107,123,138,152,166,180,218
+research_system/api/routes/dashboard.py
+  s_55ae2015391f6f::t_d5313109dc67ea 8,10,44,50,55,61
+research_system/api/routes/finance.py
+  s_55ae2015391f6f::t_c40a926e09b949 23,29-32,69,81,93,104,111,122,127,138,161,172,182,197,202,215,220,229,240,249,257,270
+research_system/api/routes/fund_holding_reports.py
+  s_55ae2015391f6f::t_0d5450a5dc0531 20,31,37-41,53,55,57,59,64,72,74,76,89,111,127,140,154,175
+research_system/api/routes/runs.py
+  s_55ae2015391f6f::t_b4a329c57f685a 26,92,98,103,111,119,128,152-155,172,242,269
+research_system/api/routes/system.py
+  s_55ae2015391f6f::t_67f18da84a43a9 9,17-18,23-24,34-35
+research_system/api/sse.py
+  s_55ae2015391f6f::t_aab982bf8eade1 12,63,120,142,155,161,181
+research_system/api/validation.py
+  s_55ae2015391f6f::t_45f3564f057d76 227,245,252,276,294,301,308,877,881-882,886-945
+research_system/api/veighna_paper_adapter.py
+  s_55ae2015391f6f::t_b9bbe23c4ed7b4 10-11,101,242
+research_system/runtime/core/core_loop.py
+  s_55ae2015391f6f::t_a12eceee314b27 14,70,173,362,467,519-520,741,766,776,779,797,936,942,952,997,1001
+research_system/runtime/core/main_agent.py
+  s_55ae2015391f6f::t_50f3c87467ba6e 21,454,456,538,814,826,841
+research_system/runtime/core/tool_registry.py
+  s_55ae2015391f6f::t_1cdadb1d008c5b 20,258,268,280,289,312,322,346,355,364,373,396,410,420,457,470,517,597,702,744,777,1207
+research_system/runtime/diagnostics/status/deployment_preflight.py
+  s_55ae2015391f6f::t_dcd65caebff6f8 101
+research_system/runtime/execution/core/graph_runner.py
+  s_55ae2015391f6f::t_13c0205a6da832 183,236,264,331,365,385,988-989,1005-1006,1027-1028,1109,1411,1911,1926,1928,1930,1950,1975,1991,2009,2017,2035,2064,2104
+research_system/runtime/follow_up.py
+  s_55ae2015391f6f::t_b23ff1ef8295fb 343,350,357,391
+research_system/runtime/graph_delivery.py
+  s_55ae2015391f6f::t_1ef11113510a19 7,219-221,224
+research_system/runtime/platform/checks.py
+  s_55ae2015391f6f::t_a49910950fb272 50
+research_system/runtime/presentation/display.py
+  s_55ae2015391f6f::t_0fa163f3f84827 3,7-15,54-227
+research_system/runtime/storage/runs/run_store.py
+  s_55ae2015391f6f::t_f028ee034c938e 84
+tests/test_agent_os_core_loop.py
+  s_55ae2015391f6f::t_8c9aeb8d26f101 292,340,524,961
+tests/test_api_v1_admin_system.py
+  s_55ae2015391f6f::t_37ed33ed2aea5b 314-330
+tests/test_api_v1_errors.py
+  s_55ae2015391f6f::t_3d347f811c0134 3,54,166-176
+tests/test_api_v1_runs.py
+  s_55ae2015391f6f::t_9b099d291a2498 219-244
+tests/test_display_summary.py
+  s_55ae2015391f6f::t_220e103dea47fa 5-10,46-116
+tests/test_uzi_392_vendor_runtime.py
+  s_eed87e69af68fb::t_39ef974eba3eb6 11-12,34-36
+tests/test_uzi_native_report.py
+  s_dfc5d68635fdcc::t_eb10bcfdedf0d2 118,127-129,228-234,241-242,245-246,288-293
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "ea6b789644a07a6794b84812f7862876df76318c",
+  "prompts": {},
+  "sessions": {
+    "s_55ae2015391f6f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe29e-e05e-73a3-89d9-4ce96e74cb1a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_dfc5d68635fdcc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6eb7-85f9-7432-98dc-8c57152f1b7e",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_eed87e69af68fb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe293-3d9a-7d90-9103-316890232507",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
