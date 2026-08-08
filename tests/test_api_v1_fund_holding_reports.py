@@ -6,7 +6,7 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from api_test_support import API_TOKEN, FakeRunService, FakeRunServiceFactory, auth_headers
+from tests.api_test_support import API_TOKEN, FakeRunService, FakeRunServiceFactory, auth_headers
 from domain_packs.finance_ashare.holding_reports import StaleHoldingsConfirmationRequired
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
