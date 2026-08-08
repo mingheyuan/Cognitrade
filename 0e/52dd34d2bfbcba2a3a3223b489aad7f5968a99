@@ -1,0 +1,33 @@
+domain_packs/finance_ashare/tools/financial_data_provider.py
+  s_a6a8a3a6f43b3c::t_6741f3d378b7c3 5-8,13-25,27-28
+domain_packs/finance_ashare/tools/snapshot_collector.py
+  s_a6a8a3a6f43b3c::t_b498462c09abaa 5-7,11,14,155-204,417-427,435,687-689,709-710
+tests/test_finance_snapshot_json_serialization.py
+  s_55ae2015391f6f::t_983a0a3f7b88ad 1-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "0e52dd34d2bfbcba2a3a3223b489aad7f5968a99",
+  "prompts": {},
+  "sessions": {
+    "s_55ae2015391f6f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe29e-e05e-73a3-89d9-4ce96e74cb1a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
