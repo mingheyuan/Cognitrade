@@ -539,24 +539,23 @@ class UziFinancePackTests(unittest.TestCase):
                 domain_id="finance_ashare",
                 objective="只做 300750 的 DCF",
                 available_artifact_types=["user_request"],
-                required_artifact_types=["research_report"],
+                required_artifact_types=["uzi_native_method_result"],
                 metadata={
-                    "intent": "stock_check",
-                    "required_outputs_source": "manifest_report_contract",
+                    "intent": "uzi_dcf",
+                    "required_outputs_source": "intent_output_contract",
                     "intent_inputs": {
-                        "intent": "stock_check",
-                        "research_profile": "lite",
-                        "requested_methods": ["dcf"],
+                        "intent": "uzi_dcf",
+                        "symbols": ["300750"],
                     },
                 },
             )
         )
         capabilities = {node.capability for node in graph.nodes if node.capability}
 
-        self.assertIn("finance.uzi.valuation.evaluate", capabilities)
+        self.assertIn("finance.uzi.native.dcf", capabilities)
+        self.assertNotIn("finance.uzi.valuation.evaluate", capabilities)
         self.assertNotIn("finance.uzi.report.compose", capabilities)
         self.assertNotIn("finance.report.compose", capabilities)
-        self.assertIn("finance.valuation.input", graph.governance.required_gate_ids)
 
     def test_specialized_intents_select_profile_and_quality_gate(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -622,20 +621,19 @@ class UziFinancePackTests(unittest.TestCase):
                         "quality_status": "available",
                     },
                 ],
-                required_artifact_types=["valuation_model"],
+                required_artifact_types=["uzi_native_method_result"],
                 metadata={
-                    "intent": "stock_check",
+                    "intent": "uzi_dcf",
                     "intent_inputs": {
-                        "intent": "stock_check",
-                        "research_profile": "lite",
-                        "requested_methods": ["dcf"],
+                        "intent": "uzi_dcf",
+                        "symbols": ["300750"],
                     },
                 },
             )
         )
         valuation = next(
             node for node in graph.nodes
-            if node.capability == "finance.uzi.valuation.evaluate"
+            if node.capability == "finance.uzi.native.dcf"
         )
         self.assertEqual(valuation.consumes[0].artifact_type, "snapshot")
         self.assertTrue(valuation.consumes[0].multiple)
@@ -653,20 +651,20 @@ class UziFinancePackTests(unittest.TestCase):
                 domain_id="finance_ashare",
                 objective="只做 300750 的 LBO",
                 available_artifact_types=["user_request"],
-                required_artifact_types=["research_report"],
+                required_artifact_types=["uzi_native_method_result"],
                 metadata={
-                    "intent": "stock_check",
-                    "required_outputs_source": "manifest_report_contract",
+                    "intent": "uzi_lbo",
+                    "required_outputs_source": "intent_output_contract",
                     "intent_inputs": {
-                        "intent": "stock_check",
-                        "research_profile": "medium",
-                        "requested_methods": ["lbo"],
+                        "intent": "uzi_lbo",
+                        "symbols": ["300750"],
                     },
                 },
             )
         )
         capabilities = {node.capability for node in graph.nodes if node.capability}
-        self.assertIn("finance.uzi.method.quick_lbo", capabilities)
+        self.assertIn("finance.uzi.native.quick_lbo", capabilities)
+        self.assertNotIn("finance.uzi.method.quick_lbo", capabilities)
         self.assertNotIn("finance.uzi.panel.review", capabilities)
         self.assertIn("capability_selections", graph.metadata)
 
@@ -718,19 +716,19 @@ class UziFinancePackTests(unittest.TestCase):
                 domain_id="finance_ashare",
                 objective="只做 600000 的 DCF",
                 available_artifact_types=["user_request"],
-                required_artifact_types=["research_report"],
+                required_artifact_types=["uzi_native_method_result"],
                 metadata={
-                    "intent": "stock_check",
+                    "intent": "uzi_dcf",
                     "intent_inputs": {
-                        "intent": "stock_check",
-                        "research_profile": "lite",
-                        "requested_methods": ["dcf"],
+                        "intent": "uzi_dcf",
+                        "symbols": ["600000"],
                     },
                 },
             )
         )
         dcf_capabilities = {node.capability for node in dcf_only.nodes if node.capability}
-        self.assertIn("finance.uzi.valuation.evaluate", dcf_capabilities)
+        self.assertIn("finance.uzi.native.dcf", dcf_capabilities)
+        self.assertNotIn("finance.uzi.valuation.evaluate", dcf_capabilities)
         self.assertNotIn("finance.uzi.panel.review", dcf_capabilities)
         self.assertNotIn("finance.uzi.risk.scan", dcf_capabilities)
 

@@ -301,7 +301,7 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
         policies = manifest["planner_policies"]
         self.assertEqual(set(policies["research_profiles"]), {"lite", "medium", "deep"})
         self.assertNotIn("default_profile", policies)
-        self.assertEqual(policies["research_profiles"]["lite"]["methods"], ["dcf"])
+        self.assertEqual(policies["research_profiles"]["lite"]["methods"], [])
         self.assertEqual(policies["profile_outputs"]["lite"], ["research_report"])
         self.assertEqual(policies["profile_outputs"]["medium"], ["research_report"])
         self.assertEqual(policies["profile_outputs"]["deep"], ["research_report"])
@@ -322,12 +322,10 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
     def test_validation_accepts_explicit_method_and_asset_policy_inputs(self) -> None:
         stock = validate_research_request(
             RequestEnvelope(
-                intent="stock_check",
+                intent="uzi_three_statement_method",
                 user_query="为 300001 建立三表",
                 constraints={
                     "symbol": "300001",
-                    "research_profile": "medium",
-                    "requested_methods": ["three_statement"],
                     "method_assumptions": {
                         "three_statement": {
                             "revenue_growth_y1": 0.10,
@@ -348,7 +346,7 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
         )
         portfolio = validate_research_request(
             RequestEnvelope(
-                intent="portfolio_research",
+                intent="uzi_portfolio_rebalance_method",
                 user_query="资产配置再平衡",
                 constraints={
                     "portfolio_holdings": [
@@ -356,7 +354,6 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
                         {"ticker": "511010", "weight": 40, "asset_class": "债券"},
                     ],
                     "asset_class_targets": {"股票": 50, "债券": 50},
-                    "requested_methods": ["portfolio_rebalance"],
                 },
             )
         )
@@ -367,11 +364,21 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
             validate_research_request(
                 RequestEnvelope(
                     intent="stock_check",
-                    user_query="拒绝无效 LBO 假设",
+                    user_query="旧 requested_methods 入口不再受支持",
                     constraints={
                         "symbol": "300001",
                         "research_profile": "medium",
-                        "requested_methods": ["quick_lbo"],
+                        "requested_methods": ["three_statement"],
+                    },
+                )
+            )
+        with self.assertRaises(ApiError):
+            validate_research_request(
+                RequestEnvelope(
+                    intent="uzi_lbo",
+                    user_query="拒绝无效 LBO 假设",
+                    constraints={
+                        "symbol": "300001",
                         "method_assumptions": {
                             "quick_lbo": {
                                 "entry_multiple": 8,
@@ -386,47 +393,17 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
                 )
             )
 
-    def test_planner_selects_each_product_capability_independently(self) -> None:
+    def test_legacy_requested_method_catalog_is_not_active(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
-        planner = CapabilityPlanner(DomainPackRegistry.load(repository_root / "domain_packs"))
-        expected = {
-            "cashflow_resilience": "finance.uzi.method.cashflow_resilience",
-            "three_statement": "finance.uzi.method.three_statement",
-            "quick_lbo": "finance.uzi.method.quick_lbo",
-            "accretion_dilution": "finance.uzi.method.accretion_dilution",
-            "segmental": "finance.uzi.method.segmental",
-            "initiation_report": "finance.uzi.method.initiation_report",
-            "earnings_review": "finance.uzi.method.earnings_review",
-            "catalyst_calendar": "finance.uzi.method.catalyst_calendar",
-            "thesis_tracker": "finance.uzi.method.thesis_tracker",
-            "morning_note": "finance.uzi.method.morning_note",
-            "ic_memo": "finance.uzi.method.ic_memo",
-            "porter_bcg": "finance.uzi.method.porter_bcg",
-            "dd_checklist": "finance.uzi.method.dd_checklist",
-            "unit_economics": "finance.uzi.method.unit_economics",
-            "value_creation_plan": "finance.uzi.method.value_creation_plan",
-        }
-        for method, capability in expected.items():
-            with self.subTest(method=method):
-                graph = planner.build_graph(
-                    CapabilityPlanningRequest(
-                        domain_id="finance_ashare",
-                        objective=f"运行 {method}",
-                        available_artifact_types=["user_request"],
-                        required_artifact_types=["research_report"],
-                        metadata={
-                            "intent": "stock_check",
-                            "required_outputs_source": "manifest_report_contract",
-                            "intent_inputs": {
-                                "intent": "stock_check",
-                                "symbols": ["300001"],
-                                "research_profile": "deep",
-                                "requested_methods": [method],
-                            },
-                        },
-                    )
-                )
-                self.assertIn(capability, {node.capability for node in graph.nodes})
+        manifest = yaml.safe_load(
+            (repository_root / "domain_packs/finance_ashare/domain.yaml").read_text(encoding="utf-8")
+        )
+        policies = manifest["planner_policies"]
+        self.assertNotIn("method_catalog", policies)
+        self.assertNotIn("methodology_outputs", policies)
+        self.assertNotIn("retired_method_catalog", policies)
+        self.assertNotIn("retired_methodology_outputs", policies)
+        self.assertNotIn("3.9.2-adapted", (repository_root / "domain_packs/finance_ashare/domain.yaml").read_text(encoding="utf-8"))
 
     def test_portfolio_method_adds_asset_class_artifact_to_intent_outputs(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -436,22 +413,21 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
                 domain_id="finance_ashare",
                 objective="运行战略资产配置再平衡",
                 available_artifact_types=["user_request"],
-                required_artifact_types=["returns_attribution", "holding_rebalance"],
+                required_artifact_types=["uzi_native_method_result"],
                 metadata={
-                    "intent": "portfolio_research",
+                    "intent": "uzi_portfolio_rebalance_method",
                     "required_outputs_source": "intent_output_contract",
                     "intent_inputs": {
-                        "intent": "portfolio_research",
+                        "intent": "uzi_portfolio_rebalance_method",
                         "portfolio_holdings": [{"ticker": "600519", "weight": 1, "asset_class": "股票"}],
                         "asset_class_targets": {"股票": 1},
-                        "requested_methods": ["portfolio_rebalance"],
                     },
                 },
             )
         )
 
-        self.assertIn("portfolio_rebalance", graph.metadata["required_artifact_types"])
-        self.assertIn("finance.uzi.portfolio.rebalance", {node.capability for node in graph.nodes})
+        self.assertIn("uzi_native_method_result", graph.metadata["required_artifact_types"])
+        self.assertIn("finance.uzi.native.portfolio_rebalance", {node.capability for node in graph.nodes})
 
     def test_contests_source_is_disabled_by_default_and_uses_real_payload_when_enabled(self) -> None:
         with TemporaryDirectory() as temp_dir:

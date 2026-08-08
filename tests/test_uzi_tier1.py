@@ -185,12 +185,10 @@ class UziTier1IntegrationTests(unittest.TestCase):
 
         stock = validate_research_request(
             RequestEnvelope(
-                intent="stock_check",
+                intent="uzi_model_update",
                 user_query="更新 300001 模型",
                 constraints={
                     "symbol": "300001",
-                    "research_profile": "medium",
-                    "requested_methods": ["model_update"],
                     "model_updates": {"net_margin": 22},
                 },
             )
@@ -228,55 +226,33 @@ class UziTier1IntegrationTests(unittest.TestCase):
         registry = DomainPackRegistry.load(repository_root / "domain_packs")
         planner = CapabilityPlanner(registry)
 
-        stock_graph = planner.build_graph(
-            CapabilityPlanningRequest(
-                domain_id="finance_ashare",
-                objective="运行三个 Tier-1 个股方法",
-                available_artifact_types=["user_request"],
-                required_artifact_types=["research_report"],
-                metadata={
-                    "intent": "stock_check",
-                    "intent_inputs": {
-                        "intent": "stock_check",
-                        "symbols": ["300001"],
-                        "research_profile": "deep",
-                        "requested_methods": ["ai_readiness", "earnings_preview", "model_update"],
-                        "model_updates": {"net_margin": 22},
-                    },
-                },
-            )
-        )
-        stock_capabilities = {node.capability for node in stock_graph.nodes}
-        self.assertTrue(
-            {
-                "finance.uzi.tier1.ai_readiness",
-                "finance.uzi.tier1.earnings_preview",
-                "finance.uzi.tier1.model_update",
-            }.issubset(stock_capabilities)
-        )
-
-        portfolio_graph = planner.build_graph(
-            CapabilityPlanningRequest(
-                domain_id="finance_ashare",
-                objective="组合归因与再平衡",
-                available_artifact_types=["user_request"],
-                required_artifact_types=["returns_attribution", "holding_rebalance"],
-                metadata={
-                    "intent": "portfolio_research",
-                    "intent_inputs": {
-                        "intent": "portfolio_research",
-                        "portfolio_holdings": [{"ticker": "600519", "weight": 1, "return_pct": 5}],
-                    },
-                },
-            )
-        )
-        portfolio_capabilities = {node.capability for node in portfolio_graph.nodes}
-        self.assertTrue(
-            {
-                "finance.uzi.tier1.returns_attribution",
-                "finance.uzi.tier1.holding_rebalance",
-            }.issubset(portfolio_capabilities)
-        )
+        expected = {
+            "uzi_ai_readiness": "finance.uzi.native.ai_readiness",
+            "uzi_earnings_preview": "finance.uzi.native.earnings_preview",
+            "uzi_model_update": "finance.uzi.native.model_update",
+            "uzi_returns": "finance.uzi.native.returns_attribution",
+            "uzi_rebalance": "finance.uzi.native.holding_rebalance",
+        }
+        for intent, capability in expected.items():
+            with self.subTest(intent=intent):
+                graph = planner.build_graph(
+                    CapabilityPlanningRequest(
+                        domain_id="finance_ashare",
+                        objective=f"运行 {intent}",
+                        available_artifact_types=["user_request"],
+                        required_artifact_types=["uzi_native_method_result"],
+                        metadata={
+                            "intent": intent,
+                            "intent_inputs": {
+                                "intent": intent,
+                                "symbols": ["300001"],
+                                "portfolio_holdings": [{"ticker": "600519", "weight": 1, "return_pct": 5}],
+                                "model_updates": {"net_margin": 22},
+                            },
+                        },
+                    )
+                )
+                self.assertIn(capability, {node.capability for node in graph.nodes})
 
     def test_api_executes_portfolio_graph_and_commits_both_artifacts(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
