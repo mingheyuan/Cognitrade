@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
+from enum import Enum
 import hashlib
 import inspect
 import json
+import math
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from domain_packs.finance_ashare.skills.capital_flow_snapshot.skill import CapitalFlowSnapshotSkill
 from domain_packs.finance_ashare.skills.events_snapshot.skill import EventsSnapshotSkill
@@ -146,6 +150,56 @@ _SNAPSHOT_PROVIDER_HINTS = {
     "fund_holders": "akshare",
     "similar_stocks": "akshare",
 }
+
+
+def normalize_json_value(value: Any) -> Any:
+    """Convert provider-native scalar values into strict JSON values.
+
+    AkShare and pandas may expose ``date``, ``Timestamp`` or NumPy scalar
+    objects inside otherwise ordinary dictionaries.  Pack artifacts and the
+    raw-provider cache are JSON contracts, so those runtime-specific values
+    must be normalized at the Pack boundary instead of relying on permissive
+    ``default=str`` persistence.
+    """
+
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value) if value.is_finite() else None
+    if isinstance(value, Enum):
+        return normalize_json_value(value.value)
+    if isinstance(value, (Path, UUID)):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            str(normalize_json_value(key)): normalize_json_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [normalize_json_value(item) for item in value]
+
+    # NumPy scalar values expose ``item``; pandas Timestamp-like values expose
+    # ``to_pydatetime``.  Keep these imports optional because providers are
+    # allowed to run without pandas/NumPy in lightweight tests.
+    to_pydatetime = getattr(value, "to_pydatetime", None)
+    if callable(to_pydatetime):
+        converted = to_pydatetime()
+        if converted is not value:
+            return normalize_json_value(converted)
+    scalar_item = getattr(value, "item", None)
+    if callable(scalar_item):
+        converted = scalar_item()
+        if converted is not value:
+            return normalize_json_value(converted)
+    if str(value) in {"<NA>", "NaT", "nan"}:
+        return None
+    return value
 
 
 def collect_snapshots(
@@ -360,13 +414,17 @@ def _run_snapshot_skill(
     if _uses_uzi_fetcher(snapshot_type):
         raw_basic = (dependencies or {}).get("0_basic") or {}
         industry = str((raw_basic.get("data") or {}).get("industry") or "").strip() or None
-        return _run_uzi_fetcher_snapshot(
-            query=query,
-            symbol=symbol,
-            snapshot_type=snapshot_type,
-            provider_registry=provider_registry,
-            industry=industry,
-            dependencies=dependencies,
+        return dict(
+            normalize_json_value(
+                _run_uzi_fetcher_snapshot(
+                    query=query,
+                    symbol=symbol,
+                    snapshot_type=snapshot_type,
+                    provider_registry=provider_registry,
+                    industry=industry,
+                    dependencies=dependencies,
+                )
+            )
         )
     skill_cls = _SYMBOL_SKILLS[snapshot_type]
     try:
@@ -374,7 +432,7 @@ def _run_snapshot_skill(
         kwargs: dict[str, Any] = {"query": query, "symbol": symbol}
         if "dependencies" in inspect.signature(skill.run).parameters:
             kwargs["dependencies"] = dependencies or {}
-        return skill.run(**kwargs)
+        return dict(normalize_json_value(skill.run(**kwargs)))
     except Exception as exc:
         status = classify_provider_exception(exc)
         return {
@@ -626,6 +684,9 @@ def _save_snapshot_cache(
     )
     if path is None:
         return
+    safe_snapshot = normalize_json_value(snapshot)
+    if not isinstance(safe_snapshot, dict):
+        raise TypeError("snapshot cache payload must normalize to an object")
     now = datetime.now(timezone.utc)
     ttl = _SNAPSHOT_CACHE_TTLS.get(snapshot_type, _DEFAULT_SNAPSHOT_CACHE_TTL)
     write_json(
@@ -645,8 +706,8 @@ def _save_snapshot_cache(
             ),
             "created_at": now.isoformat(),
             "expires_at": (now + timedelta(seconds=ttl)).isoformat(),
-            "quality_status": _snapshot_quality(snapshot),
-            "snapshot": snapshot,
+            "quality_status": _snapshot_quality(safe_snapshot),
+            "snapshot": safe_snapshot,
         },
     )
 

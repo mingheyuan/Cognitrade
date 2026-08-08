@@ -2,23 +2,30 @@ from __future__ import annotations
 
 from typing import Any
 
-from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshot_bundle
+from domain_packs.finance_ashare.tools.snapshot_collector import (
+    collect_snapshot_bundle,
+    normalize_json_value,
+)
 
 
 def invoke(arguments: dict[str, Any], context) -> dict[str, Any]:
     """Execute the Finance Pack data provider through the shared Tool Registry."""
-    payload = collect_snapshot_bundle(
-        query=str(arguments.get("query") or ""),
-        symbols=list(arguments.get("symbols") or []),
-        snapshot_types=list(arguments.get("snapshot_types") or []),
-        intent=str(arguments.get("intent") or "stock_check"),
-        sector=str(arguments.get("sector") or "").strip() or None,
-        candidate_pool_size=int(arguments.get("candidate_pool_size") or 8),
-        enrichment_top_n=int(arguments.get("enrichment_top_n") or 2),
-        cancellation=context.cancellation,
-        cache_root=getattr(context, "cache_root", None),
-        research_profile=str(arguments.get("research_profile") or "").strip() or None,
+    payload = normalize_json_value(
+        collect_snapshot_bundle(
+            query=str(arguments.get("query") or ""),
+            symbols=list(arguments.get("symbols") or []),
+            snapshot_types=list(arguments.get("snapshot_types") or []),
+            intent=str(arguments.get("intent") or "stock_check"),
+            sector=str(arguments.get("sector") or "").strip() or None,
+            candidate_pool_size=int(arguments.get("candidate_pool_size") or 8),
+            enrichment_top_n=int(arguments.get("enrichment_top_n") or 2),
+            cancellation=context.cancellation,
+            cache_root=getattr(context, "cache_root", None),
+            research_profile=str(arguments.get("research_profile") or "").strip() or None,
+        )
     )
+    if not isinstance(payload, dict):
+        raise TypeError("financial data provider payload must normalize to an object")
     source_refs: list[dict[str, Any]] = []
     for row in list(payload.get("snapshots") or []):
         if not isinstance(row, dict):
