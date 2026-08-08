@@ -49,6 +49,20 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
                         llm_provider=None,
                     )
 
+    def test_plain_and_exchange_suffixed_symbols_are_analyzed_once(self) -> None:
+        rows = _snapshots()
+        rows[0]["symbol"] = "600000.SH"
+
+        result = execute_native_analysis(
+            rows,
+            ["600000.SH", "600000"],
+            profile="lite",
+            llm_provider=None,
+        )
+
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["results"][0]["raw"]["ticker"], "600000.SH")
+
 
 if __name__ == "__main__":
     unittest.main()

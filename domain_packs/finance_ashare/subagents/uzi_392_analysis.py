@@ -152,6 +152,22 @@ def execute_native_analysis(
     selected_profile = str(profile or "").strip().lower()
     if selected_profile not in {"lite", "medium", "deep"}:
         raise ValueError("research_profile is required; choose lite, medium or deep")
+    _initialize_native_imports()
+    market_router = importlib.import_module("lib.market_router")
+    unique_symbols: list[str] = []
+    seen_symbols: set[str] = set()
+    for symbol in symbols:
+        normalized = str(symbol or "").strip()
+        if not normalized:
+            continue
+        try:
+            canonical = market_router.parse_ticker(normalized).full
+        except (TypeError, ValueError):
+            canonical = normalized
+        if canonical in seen_symbols:
+            continue
+        seen_symbols.add(canonical)
+        unique_symbols.append(normalized)
     results = [
         _execute_symbol(
             snapshot_rows,
@@ -161,7 +177,7 @@ def execute_native_analysis(
             cancellation=cancellation,
             recovery_history=list(recovery_history or []),
         )
-        for symbol in symbols
+        for symbol in unique_symbols
     ]
     critical = sum(int((row.get("self_review") or {}).get("critical_count") or 0) for row in results)
     warnings = sum(int((row.get("self_review") or {}).get("warning_count") or 0) for row in results)

@@ -95,9 +95,22 @@ _REQUIRED_DIMENSIONS: dict[str, tuple[str, ...]] = {
 
 
 def build_uzi_raw(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str, Any]:
+    _initialize_native_imports()
+    market_router = importlib.import_module("lib.market_router")
+    target_info = market_router.parse_ticker(symbol)
+    target_symbol = target_info.full
     dimensions: dict[str, dict[str, Any]] = {}
     for row in snapshot_rows:
-        if not isinstance(row, dict) or str(row.get("symbol") or "") != symbol:
+        if not isinstance(row, dict):
+            continue
+        row_symbol = str(row.get("symbol") or "").strip()
+        if not row_symbol:
+            continue
+        try:
+            row_target = market_router.parse_ticker(row_symbol).full
+        except (TypeError, ValueError):
+            row_target = row_symbol
+        if row_target != target_symbol:
             continue
         snapshot_type = str(row.get("snapshot_type") or "").strip()
         fetcher_id = _FETCHER_BY_SNAPSHOT_TYPE.get(snapshot_type)
@@ -139,11 +152,9 @@ def build_uzi_raw(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str,
                     "source_trace": list(row.get("source_trace") or []),
                 }
             dimensions[fetcher_id] = native_result
-    _initialize_native_imports()
-    ticker_info = importlib.import_module("lib.market_router").parse_ticker(symbol)
     raw: dict[str, Any] = {
-        "ticker": ticker_info.full,
-        "market": ticker_info.market,
+        "ticker": target_info.full,
+        "market": target_info.market,
         "dimensions": dimensions,
     }
     holders = (dimensions.get("fund_holders") or {}).get("data") or {}

@@ -129,6 +129,7 @@ _SNAPSHOT_CACHE_SCHEMA_VERSIONS = {
     "materials": "uzi-industry-materials-v2",
     "futures": "materials-linked-v2",
 }
+_UZI_NATIVE_SNAPSHOT_CACHE_SCHEMA_VERSION = "uzi-3.9.2-native-raw-v1"
 _UNAVAILABLE_QUALITY_STATUSES = {
     "degraded",
     "data_gap",
@@ -537,7 +538,12 @@ def _run_uzi_fetcher_snapshot(
     elif snapshot_type == "kline":
         facts["history"] = data
     retrieved_at = datetime.now(timezone.utc).isoformat()
-    target_symbol = str(result.get("ticker") or symbol or "").strip() or None
+    # UZI fetchers do not all return the same ticker spelling: some return
+    # ``002371.SZ`` while others echo ``002371``.  The ArtifactBoard entity
+    # key must remain the caller's requested symbol so the twenty dimensions
+    # are not split into separate stock analyses.  The untouched upstream
+    # ticker remains available inside ``_uzi_raw_result``.
+    target_symbol = str(symbol or result.get("ticker") or "").strip() or None
     return {
         "snapshot_type": snapshot_type,
         "symbol": target_symbol,
@@ -609,6 +615,13 @@ def _snapshot_cache_path(
     return Path(cache_root) / "finance_ashare" / "snapshot_partitions" / f"{digest}.json"
 
 
+def _snapshot_cache_schema_version(snapshot_type: str) -> str:
+    base_version = _SNAPSHOT_CACHE_SCHEMA_VERSIONS.get(snapshot_type, "1")
+    if snapshot_type in _UZI_FETCHER_BY_SNAPSHOT_TYPE:
+        return f"{base_version}+{_UZI_NATIVE_SNAPSHOT_CACHE_SCHEMA_VERSION}"
+    return base_version
+
+
 def _snapshot_cache_context(
     *,
     snapshot_type: str,
@@ -623,7 +636,7 @@ def _snapshot_cache_context(
         "artifact_type": "snapshot",
         "snapshot_type": snapshot_type,
         "provider": _SNAPSHOT_PROVIDER_HINTS.get(snapshot_type, snapshot_type),
-        "schema_version": _SNAPSHOT_CACHE_SCHEMA_VERSIONS.get(snapshot_type, "1"),
+        "schema_version": _snapshot_cache_schema_version(snapshot_type),
         "target": str(target).strip(),
         "profile": str(profile or "").strip().lower(),
     }
@@ -705,6 +718,11 @@ def _save_snapshot_cache(
         raise TypeError("snapshot cache payload must normalize to an object")
     now = datetime.now(timezone.utc)
     ttl = _SNAPSHOT_CACHE_TTLS.get(snapshot_type, _DEFAULT_SNAPSHOT_CACHE_TTL)
+    cache_context = _snapshot_cache_context(
+        snapshot_type=snapshot_type,
+        target=target,
+        profile=profile,
+    )
     write_json(
         path,
         {
@@ -713,13 +731,9 @@ def _save_snapshot_cache(
             "artifact_type": "snapshot",
             "snapshot_type": snapshot_type,
             "provider": _SNAPSHOT_PROVIDER_HINTS.get(snapshot_type, snapshot_type),
-            "schema_version": "1",
+            "schema_version": cache_context["schema_version"],
             "profile": str(profile or "").strip().lower() or None,
-            "cache_context": _snapshot_cache_context(
-                snapshot_type=snapshot_type,
-                target=target,
-                profile=profile,
-            ),
+            "cache_context": cache_context,
             "created_at": now.isoformat(),
             "expires_at": (now + timedelta(seconds=ttl)).isoformat(),
             "quality_status": _snapshot_quality(safe_snapshot),

@@ -231,12 +231,23 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
         self.assertEqual(set(called), set(UZI_FETCHER_IDS))
         self.assertEqual(len(called), 22)
         self.assertEqual(len(rows), 22)
+        self.assertEqual({row.get("symbol") for row in rows}, {"600519"})
         self.assertTrue(
             all(
                 isinstance((row.get("facts") or {}).get("_uzi_raw_result"), dict)
                 for row in rows
             )
         )
+
+    def test_native_snapshot_cache_version_rejects_pre_raw_payload_entries(self) -> None:
+        for snapshot_type in snapshot_collector._UZI_FETCHER_BY_SNAPSHOT_TYPE:
+            with self.subTest(snapshot_type=snapshot_type):
+                context = snapshot_collector._snapshot_cache_context(
+                    snapshot_type=snapshot_type,
+                    target="600519",
+                    profile="medium",
+                )
+                self.assertIn("uzi-3.9.2-native-raw-v1", context["schema_version"])
 
 
 if __name__ == "__main__":

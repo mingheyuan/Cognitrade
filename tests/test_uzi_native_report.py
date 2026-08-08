@@ -221,7 +221,7 @@ class UziNativeReportTests(unittest.TestCase):
         second["symbol"] = "000001"
         artifacts[0]["content"]["results"].append(second)
 
-        with self.assertRaisesRegex(ReportArtifactMissingError, "exactly one"):
+        with self.assertRaisesRegex(ReportArtifactMissingError, "且仅允许一个"):
             render_uzi_native_html(artifacts, run_id=RUN_ID)
 
     def test_pdf_pool_bounds_ten_concurrent_exports_and_caches_identical_html(self) -> None:
