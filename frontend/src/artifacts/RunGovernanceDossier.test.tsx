@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
-import { activityFromEvents } from '../live-data'
+import { activityFromEvents, eventSummary } from '../live-data'
 import type { RunDetail, RunEvent } from '../research-contracts'
 import { RunGovernanceDossier } from './RunGovernanceDossier'
 
@@ -45,5 +45,41 @@ describe('RunGovernanceDossier', () => {
     expect(activity.message).toContain('HTTP 502')
     expect(activity.message).not.toContain('LLMProviderError')
     expect(activity.message).not.toContain('InternalServerError')
+  })
+
+  it('localizes raw failure progress and actions before rendering', () => {
+    const event = {
+      event_id: 'failed-provider-call',
+      event_type: 'graph_node_failed',
+      message: 'provider execution failed',
+      current_action: 'Retry failed provider request',
+    } as RunEvent
+
+    expect(eventSummary(event)).toMatch(/[\u3400-\u9fff]/)
+    expect(eventSummary(event)).not.toContain('provider execution failed')
+    const [activity] = activityFromEvents([event])
+    expect(activity.currentAction).toMatch(/[\u3400-\u9fff]/)
+    expect(activity.currentAction).not.toContain('Retry failed provider request')
+  })
+
+  it('renders terminal and tool failure statuses in Chinese', () => {
+    expect(eventSummary({ event_type: 'run_timed_out' } as RunEvent)).toBe('运行超时。')
+    expect(eventSummary({ event_type: 'approval_rejected' } as RunEvent)).toBe('审批已拒绝。')
+    const summary = eventSummary({
+      event_type: 'main_agent_tool_loop_result',
+      status: 'failed',
+      output_summary: 'provider request failed',
+    } as RunEvent)
+    expect(summary).toContain('状态：失败')
+    expect(summary).not.toContain('provider request failed')
+    expect(eventSummary({
+      event_type: 'plan_decision',
+      status: 'failed',
+      decision: { action: 'abort', reason: 'provider planning failed' },
+    } as RunEvent)).not.toContain('provider planning failed')
+    expect(eventSummary({
+      event_type: 'tool_call_completed',
+      output_summary: 'RemoteDisconnected while reading response',
+    } as RunEvent)).not.toContain('RemoteDisconnected')
   })
 })

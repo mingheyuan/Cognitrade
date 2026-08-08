@@ -124,18 +124,13 @@ class UziSourceParityTests(unittest.TestCase):
         self.assertEqual(maximum_active, 1)
         self.assertEqual(snapshot_collector._UZI_MAX_WORKERS, 6)
 
-    def test_financial_provider_does_not_add_a_timeout_to_uzi_collection(self) -> None:
+    def test_uzi_providers_do_not_add_an_aggregate_collection_timeout(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
-        tool = yaml.safe_load(
-            (
-                repository_root
-                / "domain_packs"
-                / "finance_ashare"
-                / "tools"
-                / "financial_data_provider.yaml"
-            ).read_text(encoding="utf-8")
-        )
-        self.assertIsNone(tool.get("timeout_seconds"))
+        tools_root = repository_root / "domain_packs" / "finance_ashare" / "tools"
+        for filename in ("financial_data_provider.yaml", "fund_data_provider.yaml"):
+            with self.subTest(filename=filename):
+                tool = yaml.safe_load((tools_root / filename).read_text(encoding="utf-8"))
+                self.assertIsNone(tool.get("timeout_seconds"))
 
     def test_catalog_fields_are_deep_equal_to_pinned_upstream_registry(self) -> None:
         Uzi392FetcherRuntime(workspace_root=Path(__file__).resolve().parents[1] / "workspace")

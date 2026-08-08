@@ -116,7 +116,7 @@ class UziRuleSourceParityTests(unittest.TestCase):
                     settings=_settings(),
                 )
 
-    def test_agent_os_root_turn_uses_the_uzi_profile_budget(self) -> None:
+    def test_agent_os_root_turn_does_not_turn_uzi_estimates_into_deadlines(self) -> None:
         settings = _settings()
         agent_os = AgentOS(settings)
         decision = RequestIntakeDecision(
@@ -144,8 +144,25 @@ class UziRuleSourceParityTests(unittest.TestCase):
             decision=decision,
             execution_mode="graph",
         )
-        self.assertEqual(medium_config.timeout_seconds, 480)
-        self.assertEqual(deep_config.timeout_seconds, 1200)
+        self.assertEqual(medium_config.deadline_policy, "unbounded")
+        self.assertIsNone(medium_config.timeout_seconds)
+        self.assertEqual(deep_config.deadline_policy, "unbounded")
+        self.assertIsNone(deep_config.timeout_seconds)
+
+        explicit_timeout = agent_os._domain_turn_config(
+            request=RequestEnvelope(
+                intent="stock_check",
+                user_query="最多等待 30 秒",
+                constraints={
+                    "research_profile": "medium",
+                    "turn_config": {"timeout_seconds": 30},
+                },
+            ),
+            decision=decision,
+            execution_mode="graph",
+        )
+        self.assertEqual(explicit_timeout.deadline_policy, "default")
+        self.assertEqual(explicit_timeout.timeout_seconds, 30)
 
     def test_source_semantics_skip_only_rules_that_cannot_evaluate_missing_data(self) -> None:
         features = {

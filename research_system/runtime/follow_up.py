@@ -340,21 +340,21 @@ class FollowUpRuntime:
                     target_child_turn_id=request.target_child_turn_id,
                     accepted=False,
                     delivery="rejected",
-                    reason="child follow-up task is disabled for this Turn",
+                    reason="当前 Turn 已禁用子任务追问。",
                 )
             if request.target_child_turn_id == self.turn_id:
                 return FollowupTaskResult(
                     target_child_turn_id=request.target_child_turn_id,
                     accepted=False,
                     delivery="rejected",
-                    reason="followup_task cannot target the root Turn",
+                    reason="followup_task 不能以根 Turn 为目标",
                 )
             if known_child_turn_ids is not None and request.target_child_turn_id not in known_child_turn_ids:
                 return FollowupTaskResult(
                     target_child_turn_id=request.target_child_turn_id,
                     accepted=False,
                     delivery="rejected",
-                    reason="target child Turn is not known to the parent",
+                    reason="父 Turn 中不存在目标子 Turn。",
                 )
             existing = next(
                 (
@@ -388,7 +388,7 @@ class FollowUpRuntime:
                         target_child_turn_id=request.target_child_turn_id,
                         accepted=False,
                         delivery="rejected",
-                        reason="operation_id belongs to another follow-up operation",
+                        reason="operation_id 已属于另一个追问操作。",
                     )
                 stored = FollowupTaskResult.model_validate(receipt["result"])
                 duplicate = stored.model_copy(update={"duplicate": True})

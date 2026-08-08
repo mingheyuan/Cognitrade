@@ -23,6 +23,8 @@ output_schema:
 permissions: [finance:data:read]
 parallel_safe: false
 max_concurrency: 2
-timeout_seconds: 300
+# UZI fund collection has no aggregate wall-clock cutoff. Individual native
+# sources retain their own request/error semantics, while Agent OS waits for
+# the provider chain to complete and still permits explicit user cancellation.
 max_retries: 1
 implementation: tools.fund_data_provider:invoke

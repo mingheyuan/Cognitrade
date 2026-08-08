@@ -311,6 +311,23 @@ class ApiV1AdminSystemTests(unittest.TestCase):
         self.assertEqual(doctor.json(), doctor_payload)
         self.assertEqual(checks.json(), checks_payload)
 
+    def test_failed_system_checks_localize_diagnostics_without_rewriting_passed_details(self) -> None:
+        payload = {
+            "status": "failed",
+            "checks": [
+                {"status": "passed", "detail": "https://provider.example/health"},
+                {"status": "failed", "output": "Traceback: provider process failed"},
+            ],
+        }
+
+        with patch("research_system.api.routes.system.run_checks", return_value=payload):
+            response = self.client.post("/api/v1/admin/system/checks", headers=auth_headers())
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["checks"][0]["detail"], "https://provider.example/health")
+        self.assertRegex(response.json()["checks"][1]["output"], r"[\u3400-\u9fff]")
+        self.assertNotIn("Traceback", response.json()["checks"][1]["output"])
+
     def test_admin_side_effects_require_an_explicit_admin_token_when_configured(self) -> None:
         app = create_app(
             settings=self.settings,

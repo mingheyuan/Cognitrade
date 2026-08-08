@@ -4,6 +4,7 @@ from typing import Any
 
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.storage.jsonl import read_json
+from research_system.runtime.presentation.display import runtime_status_message
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.schemas.execution_runtime import ExecutionRunResult
 
@@ -215,12 +216,12 @@ def ensure_graph_assistant_message(
         source_refs = [{"type": "request", "id": result.snapshot.request_id}]
     else:
         message = {
-            "gated": "Agent OS produced professional artifacts, but delivery is blocked by a quality gate or approval.",
-            "waiting_approval": "Agent OS is waiting for the required approval before delivery.",
-            "failed": "Agent OS could not complete the professional run; produced artifacts remain available for inspection.",
+            "gated": "Agent OS 已生成专业产物，但交付被质量门禁或审批阻止。",
+            "waiting_approval": "Agent OS 正在等待所需审批，审批通过后才能交付。",
+            "failed": "Agent OS 未能完成专业运行，已生成的产物仍可查看。",
         }.get(
             result.snapshot.status,
-            f"Agent OS graph run {result.snapshot.status}.",
+            runtime_status_message(result.snapshot.status, subject="Agent OS 图运行"),
         )
         source_refs = [{"type": "request", "id": result.snapshot.request_id}]
     delivery_status = (

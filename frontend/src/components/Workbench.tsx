@@ -46,6 +46,7 @@ import { IntentDeliveryDossier } from '../artifacts/IntentDeliveryDossier'
 import { MethodDeliveryDossier } from '../artifacts/MethodDeliveryDossier'
 import { RunGovernanceDossier } from '../artifacts/RunGovernanceDossier'
 import { ResearchComposer } from './ResearchComposer'
+import { localizeErrorMessage } from '../utils/error-message'
 
 type WorkbenchProps = {
   onSubmit: (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => void
@@ -249,7 +250,7 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
       anchor.remove()
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
     } catch (error) {
-      setReportExportError(error instanceof Error ? error.message : String(error))
+      setReportExportError(localizeErrorMessage(error, '报告导出失败，请稍后重试。'))
     } finally {
       setExportingReport('')
     }

@@ -1,4 +1,4 @@
-"""Strict ArtifactBoard boundary for the vendored UZI 3.9.2 report."""
+"""Strict ArtifactBoard boundary for UZI 3.9.2 analysis and 3.9.4 presentation."""
 
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ def render_uzi_native_html(
     rows = [dict(item) for item in artifacts if isinstance(item, dict)]
     native_artifact = _latest(rows, "uzi_native_analysis")
     if native_artifact is None:
-        raise ReportArtifactMissingError("uzi_native_analysis artifact is unavailable")
+        raise ReportArtifactMissingError("uzi_native_analysis artifact 暂不可用")
     segmental_model, segmental_validation = _validated_segmental(rows)
     try:
         html_document, symbol = render_exact_uzi_392_report(
@@ -111,7 +111,7 @@ def render_uzi_native_pdf(html_document: str) -> bytes:
         from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import sync_playwright
     except ImportError as exc:  # pragma: no cover - deployment dependency guard
-        raise ReportPdfUnavailableError("Playwright is not installed") from exc
+        raise ReportPdfUnavailableError("未安装 Playwright") from exc
     digest = hashlib.sha256(html_document.encode("utf-8")).hexdigest()
     with _PDF_CACHE_LOCK:
         cached = _PDF_CACHE.get(digest)
@@ -119,7 +119,7 @@ def render_uzi_native_pdf(html_document: str) -> bytes:
             _PDF_CACHE.move_to_end(digest)
             return cached
     if not _PDF_RENDER_SLOTS.acquire(timeout=60):
-        raise ReportPdfUnavailableError("Chromium PDF render queue timed out")
+        raise ReportPdfUnavailableError("Chromium PDF 渲染队列等待超时")
     try:
         # Check again after waiting in the bounded queue: another worker may
         # already have rendered the identical immutable HTML.
@@ -137,11 +137,21 @@ def render_uzi_native_pdf(html_document: str) -> bytes:
                         device_scale_factor=1,
                     )
                     page.set_content(html_document, wait_until="load", timeout=30_000)
-                    page.evaluate("() => document.fonts.ready")
-                    page.locator("details").evaluate_all(
-                        "elements => elements.forEach(element => { element.open = true })"
+                    page.emulate_media(
+                        media="print",
+                        color_scheme="light",
+                        reduced_motion="reduce",
                     )
-                    page.emulate_media(media="print")
+                    page.evaluate(
+                        """() => {
+                            document.documentElement.setAttribute('data-theme', 'light');
+                            document.getElementById('boot-overlay')?.remove();
+                            document.querySelectorAll('details').forEach(element => {
+                                element.open = true;
+                            });
+                        }"""
+                    )
+                    page.evaluate("() => document.fonts.ready")
                     payload = page.pdf(
                         print_background=True,
                         prefer_css_page_size=True,
@@ -151,11 +161,11 @@ def render_uzi_native_pdf(html_document: str) -> bytes:
                 finally:
                     browser.close()
         except (PlaywrightError, OSError) as exc:
-            raise ReportPdfUnavailableError("Chromium PDF renderer is unavailable") from exc
+            raise ReportPdfUnavailableError("Chromium PDF 渲染器暂不可用") from exc
     finally:
         _PDF_RENDER_SLOTS.release()
     if not payload.startswith(b"%PDF"):
-        raise ReportPdfUnavailableError("Chromium returned an invalid PDF payload")
+        raise ReportPdfUnavailableError("Chromium 返回了无效的 PDF 数据")
     with _PDF_CACHE_LOCK:
         _PDF_CACHE[digest] = payload
         _PDF_CACHE.move_to_end(digest)

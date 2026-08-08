@@ -29,7 +29,7 @@
 | 资产 | 上游路径 | 固定证据 | 目标 |
 |---|---|---|---|
 | 许可证 | `LICENSE` | SHA-256 `78bebb5232741327c31b0da4f5bbd570dc59ab3c3230582a4d1b4650238a7d58` | 保留 MIT notice 与来源提交 |
-| 原生报告模板 | `skills/deep-analysis/assets/report-template.html` | 3568 行；SHA-256 `f3baeb8b1bc769b2bfe78a89fa89b7625607e44814388ecf0db5e3b97091617f` | 原样迁入并加哈希测试 |
+| 原生报告呈现层 | `skills/deep-analysis/assets/report-template.html` + 4 个 `lib/report` helper | v3.9.4 commit `0acf25122cabf493e7bc442faff62ceceb7f2f02`；模板 3615 行；SHA-256 `1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8` | 原样迁入并加逐文件哈希测试；分析方法仍固定在 3.9.2 |
 | 来源注册表 | `skills/deep-analysis/scripts/lib/data_source_registry.py` | 73 个 source ID | 目标目录和运行注册表均为 73 项 |
 | 命令目录 | `commands/*.md` | 20 个命令 | 20 个独立 Agent OS/API/Web 能力 |
 | Fetcher | `skills/deep-analysis/scripts/fetch_*.py` | 22 个 fetcher | 调用链与结果契约逐项等价 |
@@ -162,7 +162,7 @@
 
 ## 8. 工作包 E：UZI 原生报告
 
-- 原样 vendor 上游 `report-template.html`，固定 SHA-256；不得以当前简化模板继续宣称 native。
+- 原样 vendor 上游 v3.9.4 `report-template.html` 和产生可见 DOM/SVG 的 4 个 `lib/report` helper，逐文件固定 SHA-256；不得只同步模板而留下旧 renderer。
 - 迁入 `assemble_report.py` 及其 `lib/report/` 渲染依赖所需的纯能力，输入适配到 ArtifactBoard，但不执行外部 UZI runtime。
 - 保持上游 DOM、CSS、JavaScript、19 维卡片、panel、机构模型、友好层、warning banner 与打印样式。
 - HTML 与 PDF 使用相同 HTML；PDF 不得另建白底或简化版布局。

@@ -47,7 +47,7 @@ def run_checks(repo_root: Path) -> dict:
             {
                 "name": "unit_tests",
                 "status": "skipped",
-                "reason": "tests directory not found",
+                "reason": "未找到 tests 目录",
             }
         )
 

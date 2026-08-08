@@ -1,4 +1,4 @@
-"""ArtifactBoard-to-HTML adapter for the exact vendored UZI 3.9.2 report.
+"""ArtifactBoard adapter for UZI 3.9.2 analysis and exact 3.9.4 report presentation.
 
 Visible DOM, CSS and JavaScript come from the pinned upstream template and
 renderer helpers.  Cognitrade metadata is deliberately kept out of the visible
@@ -16,7 +16,10 @@ import re
 from threading import RLock
 from typing import Any
 
-from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import Uzi392FetcherRuntime
+from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import (
+    UZI_REPORT_VERSION,
+    Uzi392FetcherRuntime,
+)
 
 
 _VENDOR_ROOT = Path(__file__).resolve().parents[1] / "vendor" / "uzi_3_9_2"
@@ -39,23 +42,23 @@ def render_exact_uzi_392_report(
 
     results = [row for row in native_analysis.get("results") or [] if isinstance(row, dict)]
     if not results:
-        raise UziNativeQualityGateError("UZI native analysis has no result")
+        raise UziNativeQualityGateError("UZI native 分析没有可用结果")
     if len(results) != 1:
         raise UziNativeQualityGateError(
-            "UZI native HTML/PDF export requires exactly one analyzed symbol"
+            "UZI native HTML/PDF 导出要求且仅允许一个已分析 symbol"
         )
     if native_analysis.get("report_allowed") is not True:
-        raise UziNativeQualityGateError("UZI critical quality gate has not passed")
+        raise UziNativeQualityGateError("UZI 关键质量门禁尚未通过")
     result = results[0]
     review = result.get("self_review") if isinstance(result.get("self_review"), dict) else {}
     if int(review.get("critical_count") or 0) != 0 or result.get("report_allowed") is not True:
-        raise UziNativeQualityGateError("UZI critical quality gate has not passed")
+        raise UziNativeQualityGateError("UZI 关键质量门禁尚未通过")
     raw = _escape_payload(result.get("raw") if isinstance(result.get("raw"), dict) else {})
     dimensions = _escape_payload(result.get("dimensions") if isinstance(result.get("dimensions"), dict) else {})
     panel = _escape_payload(result.get("panel") if isinstance(result.get("panel"), dict) else {})
     synthesis = _escape_payload(result.get("synthesis") if isinstance(result.get("synthesis"), dict) else {})
     if not (raw and dimensions and panel and synthesis):
-        raise UziNativeQualityGateError("UZI native report prerequisites are incomplete")
+        raise UziNativeQualityGateError("UZI native 报告所需数据不完整")
 
     renderer = _renderer_module()
     basic = ((raw.get("dimensions") or {}).get("0_basic") or {}).get("data") or {}
@@ -149,7 +152,7 @@ def render_exact_uzi_392_report(
         "{{MARKET_STATUS}}": market_status.get("label", ""),
         "{{MARKET_STATUS_CLASS}}": "open" if market_status.get("is_open") else "closed",
         "{{DATA_FETCHED_AT}}": (raw.get("fetched_at") or "")[:19].replace("T", " "),
-        "{{PLUGIN_VERSION}}": "3.9.2",
+        "{{PLUGIN_VERSION}}": UZI_REPORT_VERSION,
     }
     for marker, value in replacements.items():
         template = template.replace(marker, str(value))
@@ -191,7 +194,7 @@ def render_exact_uzi_392_report(
         template = template.replace("¥", currency_symbol)
     unresolved = sorted(set(re.findall(r"\{\{[A-Z0-9_]+\}\}|<!-- INJECT_[A-Z0-9_]+ -->", template)))
     if unresolved:
-        raise RuntimeError(f"unresolved UZI native template markers: {', '.join(unresolved)}")
+        raise RuntimeError(f"存在未解析的 UZI native 模板标记：{', '.join(unresolved)}")
     return _inline_avatars(template), str(raw.get("ticker") or result.get("symbol") or "unknown")
 
 

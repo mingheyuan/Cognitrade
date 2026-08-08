@@ -226,9 +226,9 @@ def _render_lbo_block(dim20: dict) -> str:
         <div><div style="font-size:11px;color:#6b7280">退出 IRR</div><div style="font-size:24px;font-weight:900;color:{irr_color}">{irr}%</div><div style="font-size:10px;color:#9ca3af">MOIC {moic}x</div></div>
         <div><div style="font-size:11px;color:#6b7280">结论</div><div style="font-size:14px;font-weight:700;color:{irr_color}">{verdict}</div></div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
-        <div><div style="font-size:11px;color:#6b7280;margin-bottom:4px">5 年 EBITDA 路径</div>{ebitda_sparks}</div>
-        <div><div style="font-size:11px;color:#6b7280;margin-bottom:4px">债务偿还进度</div>{debt_sparks}</div>
+      <div class="lbo-spark-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+        <div style="min-width:0"><div style="font-size:11px;color:#6b7280;margin-bottom:4px">5 年 EBITDA 路径</div>{ebitda_sparks}</div>
+        <div style="min-width:0"><div style="font-size:11px;color:#6b7280;margin-bottom:4px">债务偿还进度</div>{debt_sparks}</div>
       </div>
     </div>
     '''

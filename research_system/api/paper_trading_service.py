@@ -13,6 +13,7 @@ from research_system.api.finance_market_data_service import FinanceMarketDataSer
 from research_system.api.trading_calendar import AShareTradingCalendar
 from research_system.api.veighna_paper_adapter import VeighNaPaperAdapter
 from research_system.runtime.core.id_utils import generate_ulid
+from research_system.runtime.presentation.display import localize_runtime_error
 
 
 _CENT = Decimal("0.01")
@@ -611,7 +612,7 @@ class PaperTradingService:
                 errors.append(
                     {
                         "order_id": str(order["order_id"]),
-                        "error": str(exc),
+                        "error": localize_runtime_error(exc, fallback="该委托撮合失败，请稍后重试。"),
                     }
                 )
         return {

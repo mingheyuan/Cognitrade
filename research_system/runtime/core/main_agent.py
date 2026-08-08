@@ -18,6 +18,7 @@ from research_system.runtime.core.tool_registry import (
 from research_system.runtime.event_store import append_canonical_event
 from research_system.runtime.follow_up import FollowUpRuntime
 from research_system.runtime.hooks import StopHookInput, StopHookOutcome
+from research_system.runtime.presentation.display import localize_runtime_error
 from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
@@ -450,9 +451,9 @@ class MainAgent:
             mode=state.mode,
             intent=decision.intent,
             message=(
-                "Agent OS Core Agent Loop paused."
+                "Agent OS Core Agent Loop 已暂停。"
                 if status == "paused"
-                else "Agent OS Core Agent Loop cancelled."
+                else "Agent OS Core Agent Loop 已取消。"
             ),
             artifact_ids=list(state.artifact_ids),
             tool_calls=tool_results,
@@ -534,7 +535,7 @@ class MainAgent:
                     "hook_iteration": iteration,
                     "continuation": continuation,
                     "assistant_message": message,
-                    "error": "StopHook continuation limit exceeded.",
+                    "error": "StopHook 继续执行次数已达到上限。",
                     "updated_at": utc_now(),
                 }
             )
@@ -810,7 +811,7 @@ class MainAgent:
             tool_results.append(result)
             if result.status == "completed":
                 return str(result.output.get("content") or "")
-            return f"无法读取文件：{result.error or 'Core Tool failed'}"
+            return localize_runtime_error(result.error, fallback="无法读取文件，请稍后重试。")
         search_match = re.search(r"(?:search files|搜索文件)\s+(.+)$", query, flags=re.IGNORECASE)
         if search_match:
             result = self.tools.invoke(
@@ -822,7 +823,7 @@ class MainAgent:
             if result.status == "completed":
                 matches = result.output.get("matches") or []
                 return f"找到 {len(matches)} 个匹配项：{matches}"
-            return f"无法搜索文件：{result.error or 'Core Tool failed'}"
+            return localize_runtime_error(result.error, fallback="无法搜索文件，请稍后重试。")
         skill_match = re.search(
             r"(?:invoke skill|调用 skill|调用技能)\s+([A-Za-z0-9_.-]+)",
             query,
@@ -837,7 +838,7 @@ class MainAgent:
             tool_results.append(result)
             if result.status == "completed":
                 return f"Skill {skill_match.group(1)} 已完成：{result.output.get('result')}"
-            return f"无法调用 Skill：{result.error or 'Core Tool failed'}"
+            return localize_runtime_error(result.error, fallback="无法调用 Skill，请稍后重试。")
         if self._is_context_recall(query):
             context_answer = self._context_recall_answer(request)
             if context_answer:

@@ -69,6 +69,14 @@ class CapabilityPlanner:
             (manifest.planner_policies.get("research_profiles") or {}).get(selected_profile)
             or {}
         )
+        deadline_policy = str(profile_policy.get("deadline_policy") or "default").strip().lower()
+        if deadline_policy not in {"default", "unbounded"}:
+            raise ValueError(f"unsupported research profile deadline policy: {deadline_policy}")
+        profile_timeout_seconds = (
+            None
+            if deadline_policy == "unbounded"
+            else profile_policy.get("max_duration_seconds") or manifest.governance.timeout_seconds
+        )
         intent_inputs_methods = intent_inputs.get("requested_methods") or intent_inputs.get("methodologies")
         if isinstance(intent_inputs_methods, str):
             intent_inputs_methods = [intent_inputs_methods]
@@ -98,6 +106,7 @@ class CapabilityPlanner:
                 ).strip().lower()
                 or None,
                 "selected_research_profile": selected_profile or None,
+                "deadline_policy": deadline_policy,
                 "profile_selection_reason": self._profile_selection_reason(
                     metadata=metadata,
                     intent=intent,
@@ -135,10 +144,7 @@ class CapabilityPlanner:
             update={
                 "required_gate_ids": required_gate_ids,
                 "token_budget": request.token_budget or manifest.governance.token_budget,
-                "timeout_seconds": (
-                    profile_policy.get("max_duration_seconds")
-                    or manifest.governance.timeout_seconds
-                ),
+                "timeout_seconds": profile_timeout_seconds,
                 "cost_budget": (
                     request.cost_budget
                     if request.cost_budget is not None
@@ -210,6 +216,14 @@ class CapabilityPlanner:
         profile_policy = dict(
             (manifest.planner_policies.get("research_profiles") or {}).get(requested_profile)
             or {}
+        )
+        deadline_policy = str(profile_policy.get("deadline_policy") or "default").strip().lower()
+        if deadline_policy not in {"default", "unbounded"}:
+            raise ValueError(f"unsupported research profile deadline policy: {deadline_policy}")
+        profile_timeout_seconds = (
+            None
+            if deadline_policy == "unbounded"
+            else profile_policy.get("max_duration_seconds") or manifest.governance.timeout_seconds
         )
         if profile_policy:
             request = request.model_copy(
@@ -507,10 +521,7 @@ class CapabilityPlanner:
             update={
                 "required_gate_ids": required_gate_ids,
                 "token_budget": request.token_budget or manifest.governance.token_budget,
-                "timeout_seconds": (
-                    profile_policy.get("max_duration_seconds")
-                    or manifest.governance.timeout_seconds
-                ),
+                "timeout_seconds": profile_timeout_seconds,
                 "cost_budget": (
                     request.cost_budget
                     if request.cost_budget is not None
@@ -532,6 +543,7 @@ class CapabilityPlanner:
                 "capability_selections": selection_decisions,
                 "requested_research_profile": explicit_profile or None,
                 "selected_research_profile": requested_profile or None,
+                "deadline_policy": deadline_policy,
                 "profile_selection_reason": self._profile_selection_reason(
                     metadata={
                         **dict(request.metadata),
@@ -1219,7 +1231,7 @@ class CapabilityDynamicPlanner:
                 ExecutionGraphPatchOperation(
                     op_type="insert_node",
                     node=node.model_copy(update={"parent_node_id": parent_id}, deep=True),
-                    reason=f"required artifacts missing after frontier: {','.join(missing)}",
+                reason=f"执行前沿结束后仍缺少必需产物：{','.join(missing)}",
                 )
             )
         if not operations:

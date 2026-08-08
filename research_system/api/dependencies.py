@@ -52,7 +52,7 @@ def get_api_runtime(request: Request) -> ApiRuntimeState:
         raise ApiError(
             status_code=503,
             code="api_not_ready",
-            message="API runtime has not finished starting",
+            message="API 运行时尚未完成启动",
         )
     return runtime
 
@@ -75,7 +75,7 @@ def get_fund_holding_reports(request: Request):
         raise ApiError(
             status_code=503,
             code="fund_holding_reports_unavailable",
-            message="Fund holding report orchestration is unavailable",
+            message="基金持仓报告编排服务暂不可用",
         )
     return service
 
@@ -138,7 +138,7 @@ def _authenticate_principal(
         raise ApiError(
             status_code=401,
             code="authentication_required",
-            message="A Bearer token is required",
+            message="需要提供 Bearer token",
             headers={"WWW-Authenticate": "Bearer"},
         )
     token = credentials.credentials.strip()
@@ -153,7 +153,7 @@ def _authenticate_principal(
         raise ApiError(
             status_code=401,
             code="invalid_token",
-            message="The Bearer token is invalid",
+            message="Bearer token 无效",
             headers={"WWW-Authenticate": "Bearer"},
         )
     if binding is not None:
@@ -163,13 +163,13 @@ def _authenticate_principal(
             raise ApiError(
                 status_code=403,
                 code="identity_header_conflict",
-                message="The request identity does not match the authenticated principal",
+                message="请求身份与已认证主体不一致",
             )
         if header_tenant_id and header_tenant_id != binding.tenant_id:
             raise ApiError(
                 status_code=403,
                 code="identity_header_conflict",
-                message="The request identity does not match the authenticated principal",
+                message="请求身份与已认证主体不一致",
             )
         return ApiPrincipal(
             actor_id=binding.actor_id,
@@ -208,7 +208,7 @@ def require_role(role: str):
             raise ApiError(
                 status_code=403,
                 code="insufficient_role",
-                message="The authenticated principal lacks the required role",
+                message="当前认证主体缺少所需角色",
                 details={"required_role": required_role},
             )
         return principal

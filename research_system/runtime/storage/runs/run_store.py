@@ -81,7 +81,7 @@ class RunStore:
             if payload is None:
                 payload = {
                     "status": "unknown",
-                    "message": "run metadata unavailable",
+                    "message": "运行元数据不可用",
                 }
             payload["run_id"] = run_dir.name
             display_summary = build_display_summary(

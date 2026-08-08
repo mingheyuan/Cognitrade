@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from http import HTTPStatus
+import re
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -10,7 +10,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from research_system.runtime.presentation.display import (
+    localize_public_error_fields,
+    localize_runtime_error,
+)
+
 logger = logging.getLogger(__name__)
+
+_CHINESE_TEXT = re.compile(r"[\u3400-\u9fff]")
 
 
 class ApiError(Exception):
@@ -53,7 +60,7 @@ async def _handle_request_validation_error(request: Request, exc: RequestValidat
     details = [
         {
             "location": list(error.get("loc") or ()),
-            "message": str(error.get("msg") or "Invalid value"),
+            "message": _validation_error_message(error),
             "type": str(error.get("type") or "validation_error"),
         }
         for error in raw_errors
@@ -63,7 +70,7 @@ async def _handle_request_validation_error(request: Request, exc: RequestValidat
         request,
         status_code=400 if invalid_json else 422,
         code="invalid_json" if invalid_json else "validation_error",
-        message="Request body contains invalid JSON" if invalid_json else "Request validation failed",
+        message="请求体包含无效的 JSON" if invalid_json else "请求参数校验失败",
         details={"errors": details},
     )
 
@@ -99,7 +106,7 @@ async def _handle_unknown_error(request: Request, exc: Exception) -> JSONRespons
         request,
         status_code=500,
         code="internal_server_error",
-        message="An unexpected server error occurred",
+        message="服务器发生未预期的错误",
     )
 
 
@@ -112,12 +119,18 @@ def _error_response(
     details: Any = None,
     headers: dict[str, str] | None = None,
 ) -> JSONResponse:
+    public_message = public_error_message(
+        message,
+        fallback=_default_error_message(code=code, status_code=status_code),
+    )
     error: dict[str, Any] = {
         "code": code,
-        "message": message,
+        "message": public_message,
     }
     if details is not None:
-        error["details"] = jsonable_encoder(details)
+        error["details"] = jsonable_encoder(
+            localize_public_error_fields(details, failed_context=True)
+        )
     request_id = _request_id(request)
     if request_id is not None:
         error["request_id"] = request_id
@@ -159,10 +172,86 @@ def _http_error_code(status_code: int) -> str:
 
 
 def _http_status_message(status_code: int) -> str:
-    try:
-        return HTTPStatus(status_code).phrase
-    except ValueError:
-        return "HTTP request failed"
+    return {
+        400: "请求格式错误",
+        401: "需要身份认证",
+        403: "没有访问权限",
+        404: "未找到请求的资源",
+        405: "不支持该请求方法",
+        409: "请求与当前资源状态冲突",
+        413: "请求内容过大",
+        415: "不支持该媒体类型",
+        422: "请求参数校验失败",
+        429: "请求过于频繁，请稍后重试",
+        500: "服务器内部错误",
+        502: "上游服务请求失败",
+        503: "服务暂时不可用",
+        504: "上游服务响应超时",
+    }.get(status_code, "HTTP 请求失败")
 
 
-__all__ = ["ApiError", "install_exception_handlers"]
+def public_error_message(value: Any, *, fallback: str = "请求处理失败") -> str:
+    """Return a user-facing Chinese message without exposing raw internal errors."""
+    message = str(value or "").strip()
+    if message and _CHINESE_TEXT.search(message):
+        return localize_runtime_error(message, fallback=fallback)
+    return str(fallback or "请求处理失败").strip() or "请求处理失败"
+
+
+def _default_error_message(*, code: str, status_code: int) -> str:
+    messages = {
+        "authentication_required": "需要提供 Bearer token",
+        "invalid_token": "Bearer token 无效",
+        "identity_header_conflict": "请求身份与已认证主体不一致",
+        "insufficient_role": "当前认证主体缺少所需角色",
+        "invalid_identifier": "标识符格式无效",
+        "invalid_json": "请求体包含无效的 JSON",
+        "validation_error": "请求参数校验失败",
+        "resource_not_found": "未找到请求的资源",
+        "nested_resource_not_found": "未找到请求的子资源",
+        "internal_server_error": "服务器发生未预期的错误",
+    }
+    return messages.get(code, _http_status_message(status_code))
+
+
+def _validation_error_message(error: dict[str, Any]) -> str:
+    error_type = str(error.get("type") or "validation_error")
+    context = error.get("ctx") if isinstance(error.get("ctx"), dict) else {}
+    if error_type == "missing":
+        return "缺少必填字段"
+    if error_type == "extra_forbidden":
+        return "不允许提供该字段"
+    if error_type == "json_invalid":
+        return "JSON 格式无效"
+    if error_type in {"string_type", "string_unicode"}:
+        return "字段值必须是字符串"
+    if error_type == "string_too_short":
+        return f"字符串长度不能少于 {context.get('min_length')} 个字符"
+    if error_type == "string_too_long":
+        return f"字符串长度不能超过 {context.get('max_length')} 个字符"
+    if error_type == "string_pattern_mismatch":
+        return "字段格式不符合要求"
+    if error_type in {"int_type", "int_parsing"}:
+        return "字段值必须是整数"
+    if error_type in {"float_type", "float_parsing"}:
+        return "字段值必须是数字"
+    if error_type == "bool_type":
+        return "字段值必须是布尔值"
+    if error_type == "list_type":
+        return "字段值必须是数组"
+    if error_type == "dict_type":
+        return "字段值必须是对象"
+    if error_type == "literal_error":
+        return f"字段值必须是以下选项之一：{context.get('expected', '允许值')}"
+    if error_type == "greater_than_equal":
+        return f"字段值必须大于或等于 {context.get('ge')}"
+    if error_type == "greater_than":
+        return f"字段值必须大于 {context.get('gt')}"
+    if error_type == "less_than_equal":
+        return f"字段值必须小于或等于 {context.get('le')}"
+    if error_type == "less_than":
+        return f"字段值必须小于 {context.get('lt')}"
+    return "字段值无效"
+
+
+__all__ = ["ApiError", "install_exception_handlers", "public_error_message"]

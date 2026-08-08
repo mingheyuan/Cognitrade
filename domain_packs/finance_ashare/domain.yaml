@@ -1616,19 +1616,22 @@ planner_policies:
     lite:
       max_cost_class: medium
       max_latency_class: medium
-      max_duration_seconds: 120
+      estimated_duration_seconds: 120
+      deadline_policy: unbounded
       allowed_capability_tags: [profile:lite]
       methods: []
     medium:
       max_cost_class: high
       max_latency_class: high
-      max_duration_seconds: 480
+      estimated_duration_seconds: 480
+      deadline_policy: unbounded
       allowed_capability_tags: [profile:lite, profile:medium]
       methods: []
     deep:
       max_cost_class: high
       max_latency_class: high
-      max_duration_seconds: 1200
+      estimated_duration_seconds: 1200
+      deadline_policy: unbounded
       allowed_capability_tags: [profile:lite, profile:medium, profile:deep]
       methods: []
   profile_outputs:

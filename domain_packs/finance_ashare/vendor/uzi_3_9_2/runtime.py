@@ -10,8 +10,16 @@ from typing import Any, Callable
 
 
 UZI_SOURCE_COMMIT = "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359"
-UZI_REPORT_TEMPLATE_SHA256 = "f3baeb8b1bc769b2bfe78a89fa89b7625607e44814388ecf0db5e3b97091617f"
-UZI_PURE_PYTHON_TREE_SHA256 = "1e72e08a910724ac7d927422cbdff4ac173b0a15bdf70e5a68c9eae02b35ccf3"
+UZI_REPORT_SOURCE_COMMIT = "0acf25122cabf493e7bc442faff62ceceb7f2f02"
+UZI_REPORT_VERSION = "3.9.4"
+UZI_REPORT_TEMPLATE_SHA256 = "1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8"
+UZI_REPORT_RENDERER_SHA256 = {
+    "lib/report/dim_viz.py": "032dd9e0429f8d5e4ffd030dcc33c6360817b4ac81f6983479b4f82adef29304",
+    "lib/report/institutional.py": "ca2e0ff2ba3dcc2690834da994e5a292e466b137875f660306be4687506e3fef",
+    "lib/report/panel_cards.py": "0b21aefb50d87dc992a378cbe8e50eef9988e0d69147d9956db759858ec666ce",
+    "lib/report/svg_primitives.py": "2b13c6fdc9bfc1a5182a39c74d75d8c14ce1d52c26b7e88ae32975d1b547f93e",
+}
+UZI_PURE_PYTHON_TREE_SHA256 = "127fd378e71c098691e5573bd860455bc181cbb664cc9443e010ce284d245051"
 UZI_COMMAND_TREE_SHA256 = "18a54c151139e8cfe50ffa093035bf90ebbf3bd6327248adc5b5bfdbda7ccc61"
 UZI_ANALYST_ASSET_TREE_SHA256 = "876a9e4714ba2894454195f3bc06b9326938bc243a7531848536129addc4da85"
 
@@ -310,6 +318,15 @@ def verify_vendored_uzi_integrity() -> dict[str, Any]:
     ]
     template = root / "assets" / "report-template.html"
     template_sha256 = hashlib.sha256(template.read_bytes()).hexdigest() if template.is_file() else None
+    report_renderer_sha256 = {
+        relative_path: (
+            hashlib.sha256((scripts / relative_path).read_bytes()).hexdigest()
+            if (scripts / relative_path).is_file()
+            else None
+        )
+        for relative_path in UZI_REPORT_RENDERER_SHA256
+    }
+    report_renderer_matches = report_renderer_sha256 == UZI_REPORT_RENDERER_SHA256
     python_paths = sorted(
         path
         for path in scripts.rglob("*.py")
@@ -349,6 +366,8 @@ def verify_vendored_uzi_integrity() -> dict[str, Any]:
     analyst_tree_sha256 = analyst_tree.hexdigest()
     return {
         "source_commit": UZI_SOURCE_COMMIT,
+        "report_source_commit": UZI_REPORT_SOURCE_COMMIT,
+        "report_version": UZI_REPORT_VERSION,
         "fetcher_count": len(_FETCHERS),
         "missing_fetchers": missing_fetchers,
         "command_count": len(command_ids),
@@ -360,6 +379,8 @@ def verify_vendored_uzi_integrity() -> dict[str, Any]:
         "command_tree_matches": command_tree_sha256 == UZI_COMMAND_TREE_SHA256,
         "report_template_sha256": template_sha256,
         "report_template_matches": template_sha256 == UZI_REPORT_TEMPLATE_SHA256,
+        "report_renderer_sha256": report_renderer_sha256,
+        "report_renderer_matches": report_renderer_matches,
         "analyst_asset_file_count": len(analyst_paths),
         "analyst_asset_tree_sha256": analyst_tree_sha256,
         "analyst_asset_tree_matches": analyst_tree_sha256 == UZI_ANALYST_ASSET_TREE_SHA256,
@@ -368,6 +389,7 @@ def verify_vendored_uzi_integrity() -> dict[str, Any]:
         and python_tree_sha256 == UZI_PURE_PYTHON_TREE_SHA256
         and command_tree_sha256 == UZI_COMMAND_TREE_SHA256
         and template_sha256 == UZI_REPORT_TEMPLATE_SHA256
+        and report_renderer_matches
         and analyst_tree_sha256 == UZI_ANALYST_ASSET_TREE_SHA256,
     }
 
@@ -378,7 +400,10 @@ __all__ = [
     "UZI_ANALYST_ASSET_TREE_SHA256",
     "UZI_FETCHER_IDS",
     "UZI_PURE_PYTHON_TREE_SHA256",
+    "UZI_REPORT_RENDERER_SHA256",
+    "UZI_REPORT_SOURCE_COMMIT",
     "UZI_REPORT_TEMPLATE_SHA256",
+    "UZI_REPORT_VERSION",
     "UZI_SOURCE_COMMIT",
     "Uzi392FetcherRuntime",
     "verify_vendored_uzi_integrity",

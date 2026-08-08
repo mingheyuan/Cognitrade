@@ -18,7 +18,7 @@ import {
   type RunReportExport,
   type RunReportFormat,
 } from './api-client'
-import { hasFinalDelivery, isActiveStatus } from './live-data'
+import { eventSummary, hasFinalDelivery, isActiveStatus } from './live-data'
 import type {
   AgentOSDashboardView,
   ResearchIntent,
@@ -28,6 +28,7 @@ import type {
   RunHistoryRecord,
   SystemStatus,
 } from './research-contracts'
+import { errorMessageWithRequestId, localizeErrorMessage } from './utils/error-message'
 
 type ConnectionState = 'connecting' | 'online' | 'auth-required' | 'offline'
 
@@ -66,10 +67,9 @@ const CognitradeContext = createContext<CognitradeContextValue | null>(null)
 const CHAT_THREAD_STORAGE_KEY = 'cognitrade.chat.thread-id'
 function errorMessage(error: unknown): string {
   if (error instanceof CognitradeApiError) {
-    const requestId = error.requestId ? ` · request ${error.requestId}` : ''
-    return `${error.message}${requestId}`
+    return errorMessageWithRequestId(error.message, error.requestId)
   }
-  return error instanceof Error ? error.message : String(error)
+  return localizeErrorMessage(error)
 }
 
 function connectionFromError(error: unknown): ConnectionState {
@@ -200,7 +200,9 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
               const eventMessage = String(event.message || '')
               const isFinalMessageEvent = ['assistant_message_delta', 'assistant_message_ready'].includes(String(event.event_type || ''))
               const isReportProgressEvent = String(event.event_type || '') === 'agent_progress' && eventMessage.startsWith('research_report:')
-              if (event.message && !isFinalMessageEvent && !isReportProgressEvent) setLiveProgress(event.message)
+              if (event.message && !isFinalMessageEvent && !isReportProgressEvent) {
+                setLiveProgress(eventSummary(event))
+              }
               if (event.event_type === 'assistant_message_delta' && event.message) {
                 setLiveAnswer((current) => `${current}${event.message}`)
               }
@@ -300,7 +302,7 @@ export function CognitradeProvider({ children }: { children: ReactNode }) {
   const createChatThread = useCallback(async () => {
     const created = await client.createChatThread()
     const nextThreadId = String(created.thread_id || '').trim()
-    if (!nextThreadId) throw new Error('Chat API returned no thread_id')
+    if (!nextThreadId) throw new Error('Chat API 未返回 thread_id')
     localStorage.setItem(CHAT_THREAD_STORAGE_KEY, nextThreadId)
     setChatThreadId(nextThreadId)
     return nextThreadId
@@ -496,6 +498,6 @@ async function waitForStreamReconnect(attempt: number, signal: AbortSignal): Pro
 
 export function useCognitrade(): CognitradeContextValue {
   const value = useContext(CognitradeContext)
-  if (!value) throw new Error('useCognitrade must be used inside CognitradeProvider')
+  if (!value) throw new Error('useCognitrade 必须在 CognitradeProvider 内部使用')
   return value
 }

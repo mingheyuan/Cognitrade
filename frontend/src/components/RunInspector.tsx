@@ -22,6 +22,7 @@ import {
   asRecord,
   asString,
   evidenceFromReport,
+  eventSummary,
   formatDate,
   isActiveStatus,
   latestEvent,
@@ -79,7 +80,7 @@ export function RunInspector({ selectedEvidence, onSelectEvidence }: RunInspecto
           </span>
         </div>
 
-        <div className="run-progress-copy"><span>{submitting ? '同步研究请求执行中' : asString(currentEvent?.message, '等待运行事件')}</span><strong>{progress}%</strong></div>
+        <div className="run-progress-copy"><span>{submitting ? '同步研究请求执行中' : currentEvent ? eventSummary(currentEvent) : '等待运行事件'}</span><strong>{progress}%</strong></div>
         <div className={`progress-track progress-track--large ${submitting ? 'is-indeterminate' : ''}`} role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}><span style={{ width: submitting ? '30%' : `${progress}%` }} /></div>
 
         <div className="run-meta-grid">

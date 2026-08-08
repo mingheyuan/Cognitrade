@@ -8,6 +8,8 @@ from unittest.mock import Mock, patch
 from domain_packs.finance_ashare.vendor.uzi_3_9_2 import (
     UZI_COMMAND_IDS,
     UZI_FETCHER_IDS,
+    UZI_REPORT_SOURCE_COMMIT,
+    UZI_REPORT_VERSION,
     Uzi392FetcherRuntime,
     verify_vendored_uzi_integrity,
 )
@@ -29,6 +31,9 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
         self.assertTrue(report["python_tree_matches"])
         self.assertTrue(report["command_tree_matches"])
         self.assertTrue(report["report_template_matches"])
+        self.assertTrue(report["report_renderer_matches"])
+        self.assertEqual(report["report_source_commit"], UZI_REPORT_SOURCE_COMMIT)
+        self.assertEqual(report["report_version"], UZI_REPORT_VERSION)
         self.assertEqual(report["analyst_asset_file_count"], 138)
         self.assertTrue(report["analyst_asset_tree_matches"])
         self.assertIn("quick-scan", UZI_COMMAND_IDS)

@@ -37,6 +37,7 @@ import {
   type RunReportFormat,
 } from '../api-client'
 import type { BacktestTarget } from '../finance-contracts'
+import { errorMessageWithRequestId, localizeErrorMessage } from '../utils/error-message'
 
 type FundAnalysisDossierProps = {
   artifacts: Array<Record<string, unknown>>
@@ -657,7 +658,7 @@ function FundCandidateDossier({
                           <button type="button" onClick={() => onDownloadReport(item.child_run_id || '', 'pdf')} disabled={holdingAction === `pdf:${item.child_run_id}`}><Download size={13} />PDF</button>
                         </>}
                       </div>
-                      {(item.data_gap.length > 0 || item.error) && <p>{item.error || item.data_gap.map(dataGapLabel).join('；')}</p>}
+                      {(item.data_gap.length > 0 || item.error) && <p>{item.error ? localizeErrorMessage(item.error, '持仓股票报告执行失败，请稍后重试。') : item.data_gap.map(dataGapLabel).join('；')}</p>}
                     </article>)}
                   </div>
 
@@ -756,9 +757,9 @@ function holdingItemStatusLabel(value: FundHoldingReportBatch['holdings'][number
 function reportErrorMessage(error: unknown): string {
   if (error instanceof CognitradeApiError) {
     if (error.code === 'stale_holdings_confirmation_required') return '持仓披露超过 180 天，请确认历史披露风险后再生成。'
-    return `${error.message}${error.requestId ? ` · request ${error.requestId}` : ''}`
+    return errorMessageWithRequestId(error.message, error.requestId)
   }
-  return error instanceof Error ? error.message : String(error)
+  return localizeErrorMessage(error)
 }
 
 function saveReportExport(exported: RunReportExport): void {

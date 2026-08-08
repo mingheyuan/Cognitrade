@@ -16,6 +16,7 @@ import {
   dataGapLabel,
   isSensitiveBusinessKey,
 } from './labels'
+import { localizeErrorMessage } from '../utils/error-message'
 
 type BusinessDataViewProps = {
   value: unknown
@@ -81,6 +82,12 @@ function scalarText(value: unknown, key = ''): string {
       ReadTimeout: '上游数据源读取超时',
       HTTPError: '上游数据源返回 HTTP 错误',
     } as Record<string, string>)[text] || text
+  }
+  if (
+    /(^|_)(error|errors|exception|failure)(_|$)/i.test(key)
+    || ['degrade_reason', 'diagnostic', 'diagnostics', 'stderr', 'stdout'].includes(key.toLowerCase())
+  ) {
+    return localizeErrorMessage(text, '处理过程中发生错误，请稍后重试。')
   }
   if (key === 'data_gap' || key === 'risk_flags') return dataGapLabel(text)
   return businessValueLabel(text)
@@ -243,4 +250,3 @@ export function BusinessDataView({ value, fieldKey = '', path = fieldKey || 'art
     </div>
   )
 }
-

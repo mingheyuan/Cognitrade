@@ -119,7 +119,14 @@ recovery_loop:
 native_report:
   status: source_parity
   template: domain_packs/finance_ashare/vendor/uzi_3_9_2/assets/report-template.html
-  template_sha256: f3baeb8b1bc769b2bfe78a89fa89b7625607e44814388ecf0db5e3b97091617f
+  presentation_version: 3.9.4
+  presentation_commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
+  template_sha256: 1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8
+  renderer_helpers:
+    lib/report/dim_viz.py: 032dd9e0429f8d5e4ffd030dcc33c6360817b4ac81f6983479b4f82adef29304
+    lib/report/institutional.py: ca2e0ff2ba3dcc2690834da994e5a292e466b137875f660306be4687506e3fef
+    lib/report/panel_cards.py: 0b21aefb50d87dc992a378cbe8e50eef9988e0d69147d9956db759858ec666ce
+    lib/report/svg_primitives.py: 2b13c6fdc9bfc1a5182a39c74d75d8c14ce1d52c26b7e88ae32975d1b547f93e
   html_pdf_same_source: true
   critical_blocks_export: true
   warning_banner: upstream_native

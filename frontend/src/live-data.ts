@@ -10,6 +10,7 @@ import type {
   RunStatus,
   RunStep,
 } from './research-contracts'
+import { localizeErrorMessage } from './utils/error-message'
 
 export type RunListItem = {
   id: string
@@ -224,11 +225,14 @@ export function assistantMessageFromDetail(detail?: RunDetail | null): string {
     asString(asRecord(artifact).artifact_type) === 'assistant_message'
   ))
   const artifactContent = asRecord(asRecord(assistantArtifact).content)
-  return asString(
+  const message = asString(
     artifactContent.message
       || asRecord(detail?.replay.snapshot).assistant_message
       || asRecord(detail?.replay.result).message,
   )
+  const failure = asString(artifactContent.delivery_status) === 'synthesis_unavailable'
+    || ['failed', 'timed_out', 'cancelled', 'gated'].includes(statusFromDetail(detail))
+  return failure ? safeOperationalMessage(message, true) : message
 }
 
 export function hasFinalDelivery(detail?: RunDetail | null): boolean {
@@ -250,24 +254,29 @@ function eventId(event: RunEvent, index: number): string {
   return asString(event.event_id) || `${event.created_at || ''}:${event.event_type || ''}:${event.node_id || ''}:${index}`
 }
 
-function safeOperationalMessage(value: unknown): string {
+function safeOperationalMessage(value: unknown, forceError = false): string {
   const message = asString(value)
   if (!message) return ''
   if (/(traceback|stack trace|internalservererror|llmprovidererror|remote.?disconnected|connection aborted|socket|econn|errno|httpx|requests\.|urllib|ssl|tcp)/i.test(message)) {
     const status = message.match(/(?:error code|status(?: code)?)\D{0,8}(\d{3})/i)?.[1]
     return `模型或外部数据服务暂时不可用${status ? `（HTTP ${status}）` : ''}，详细诊断已保留在服务端日志中。`
   }
+  if (forceError || /(error|fail|invalid|missing|required|unsupported|unavailable|timeout|timed out|rejected|denied|cannot|could not)/i.test(message)) {
+    return localizeErrorMessage(message, '运行过程中发生错误，请稍后重试。')
+  }
   return message
 }
 
-function eventSummary(event: RunEvent): string {
+export function eventSummary(event: RunEvent): string {
   const eventType = asString(event.event_type)
   const turn = asNumber(event.turn)
   const toolName = asString(event.tool_name || event.tool)
   const status = asString(event.status)
   const decision = asRecord(event.decision)
-  const reason = safeOperationalMessage(event.message || event.reason || decision.reason)
-  const error = safeOperationalMessage(event.error)
+  const failureEvent = /(failed|failure|rejected|timed_out|cancelled|gated|blocked|denied|error)/i.test(eventType)
+    || ['failed', 'timed_out', 'cancelled', 'gated', 'rejected', 'blocked'].includes(status)
+  const reason = safeOperationalMessage(event.message || event.reason || decision.reason, failureEvent)
+  const error = safeOperationalMessage(event.error, true)
   if (eventType === 'assistant_message_ready') return 'Main Agent 已生成最终交付产物。'
   if (eventType === 'assistant_message_status' && asString(event.delivery_status) === 'synthesis_unavailable') {
     return '研究产物已保存，但 Main Agent 最终答复暂不可用。'
@@ -284,8 +293,8 @@ function eventSummary(event: RunEvent): string {
   if (eventType === 'agent_progress' && reason.startsWith('research_report:')) return 'Report Composer 已生成最终研究报告产物。'
   if (eventType === 'main_agent_tool_loop_result') {
     return [
-      `第 ${turn ?? '?'} 轮调用 Tool ${toolName || 'call'}，状态：${status || '已完成'}。`,
-      asString(event.output_summary),
+      `第 ${turn ?? '?'} 轮调用 Tool ${toolName || 'call'}，状态：${status ? statusLabel(status) : '已完成'}。`,
+      safeOperationalMessage(event.output_summary, failureEvent),
     ].filter(Boolean).join(' ')
   }
   if (eventType === 'main_agent_model_turn_failed') {
@@ -294,8 +303,13 @@ function eventSummary(event: RunEvent): string {
   if (eventType === 'main_agent_failed') return `Main Agent 失败${error || reason ? `：${error || reason}` : '。'}`
   if (eventType === 'graph_node_failed') return `Subagent ${asString(event.node_id, 'node')} 失败${error || reason ? `：${error || reason}` : '。'}`
   if (eventType === 'tool_call_rejected' || eventType === 'tool_call_failed') {
-    return `Tool ${toolName || 'call'} ${status || '失败'}${error || reason ? `：${error || reason}` : '。'}`
+    return `Tool ${toolName || 'call'} ${status ? statusLabel(status) : '失败'}${error || reason ? `：${error || reason}` : '。'}`
   }
+  if (eventType === 'run_failed') return `运行失败${error || reason ? `：${error || reason}` : '。'}`
+  if (eventType === 'run_cancelled') return `运行已取消${error || reason ? `：${error || reason}` : '。'}`
+  if (eventType === 'run_timed_out') return `运行超时${error || reason ? `：${error || reason}` : '。'}`
+  if (eventType === 'approval_rejected') return `审批已拒绝${error || reason ? `：${error || reason}` : '。'}`
+  if (eventType === 'graph_run_gated_by_approval') return '当前运行已被审批门禁阻止。'
   if (reason) return reason
   if (eventType === 'main_agent_started' || eventType === 'main_agent_resumed') {
     return `Main Agent 已${eventType === 'main_agent_resumed' ? '恢复' : '启动'}，当前模式：${asString(event.mode, 'core')}。`
@@ -309,10 +323,13 @@ function eventSummary(event: RunEvent): string {
   }
   if (eventType === 'tool_call_started') return `Tool ${toolName || 'call'} 已开始。`
   if (eventType === 'tool_call_completed') {
-    return `Tool ${toolName || 'call'} 已完成${asString(event.output_summary) ? `：${asString(event.output_summary)}` : '。'}`
+    const outputSummary = safeOperationalMessage(event.output_summary)
+    return `Tool ${toolName || 'call'} 已完成${outputSummary ? `：${outputSummary}` : '。'}`
   }
   if (eventType === 'plan_decision') {
-    return `PlanAgent ${asString(decision.action, '继续执行')}：${asString(decision.reason, '已更新执行前沿。')}`
+    const action = localizeAgentAction(asString(decision.action, '继续执行'))
+    const decisionReason = safeOperationalMessage(decision.reason, failureEvent)
+    return `PlanAgent ${action}：${decisionReason || '已更新执行前沿。'}`
   }
   if (eventType === 'graph_run_started') return 'Main Agent 已启动受治理的 ExecutionGraph。'
   if (eventType === 'graph_frontier_ready') {
@@ -325,7 +342,7 @@ function eventSummary(event: RunEvent): string {
   if (eventType === 'graph_node_started') return `Subagent ${asString(event.node_id, 'node')} 已开始。`
   if (eventType === 'graph_node_completed') return `Subagent ${asString(event.node_id, 'node')} 已完成。`
   if (eventType === 'main_agent_completed') return 'Main Agent 已完成请求。'
-  if (eventType === 'graph_run_finished') return `ExecutionGraph 已完成，状态：${asString(event.status, 'unknown')}。`
+  if (eventType === 'graph_run_finished') return `ExecutionGraph 已完成，状态：${statusLabel(asString(event.status, 'unknown'))}。`
   return eventType ? `运行事件：${eventType.replaceAll('_', ' ')}` : ''
 }
 
@@ -394,6 +411,9 @@ function activityKind(event: RunEvent): AgentActivityItem['kind'] {
 function localizeAgentAction(value: string): string {
   const action = value.trim()
   if (!action) return ''
+  if (/(error|fail|invalid|missing|required|unsupported|unavailable|timeout|timed out|rejected|denied|cancelled|gated|blocked|unhealthy|cannot|could not)/i.test(action)) {
+    return safeOperationalMessage(action, true)
+  }
   const match = action.match(/^ExecutionGraph (\S+) started at revision (\d+)$/)
   if (match) return `ExecutionGraph ${match[1]} 已在第 ${match[2]} 个修订版本启动`
   if (action === 'Expand lazy compounds and calculate the ready frontier') return '展开延迟 compound 节点并计算可执行前沿'
@@ -448,7 +468,7 @@ export function progressFromEvents(events: RunEvent[]): AgentProgressItem[] {
   const rows: AgentProgressItem[] = []
   for (const event of events) {
     if (event.event_type !== 'agent_progress') continue
-    const message = asString(event.message)
+    const message = eventSummary(event)
     if (!message) continue
     const id = asString(event.event_id) || `${event.created_at || ''}:${event.node_id || ''}:${message}`
     if (seen.has(id)) continue

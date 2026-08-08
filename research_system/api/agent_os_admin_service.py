@@ -10,6 +10,7 @@ from research_system.runtime.core.approvals import (
 )
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.storage.runs.retention import RunRetentionService
+from research_system.runtime.presentation.display import localize_runtime_error
 from research_system.runtime.storage.jsonl import read_json
 from research_system.schemas.execution_runtime import ExecutionRunSnapshot
 from research_system.schemas.memory import MemoryEvaluation
@@ -321,14 +322,14 @@ class AgentOSAdminService:
         except QdrantUnavailableError as exc:
             return {
                 "status": "skipped",
-                "message": "Qdrant unavailable",
-                "qdrant_error": str(exc),
+                "message": "Qdrant 暂不可用",
+                "qdrant_error": localize_runtime_error(exc, fallback="Qdrant 暂不可用。"),
             }
         try:
             if not qdrant.available:
                 return {
                     "status": "skipped",
-                    "message": "Qdrant unavailable",
+                "message": "Qdrant 暂不可用",
                     "qdrant_error": None,
                 }
             qdrant.reset_collection()

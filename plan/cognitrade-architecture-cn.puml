@@ -1,0 +1,161 @@
+@startuml CognitradeArchitectureCN
+title Cognitrade 中文版总体架构图
+
+top to bottom direction
+skinparam shadowing false
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam componentStyle rectangle
+skinparam defaultFontName "Microsoft YaHei"
+skinparam ArrowColor #53657A
+skinparam PackageBorderColor #53657A
+skinparam ComponentBorderColor #53657A
+skinparam DatabaseBorderColor #53657A
+skinparam NoteBackgroundColor #FFF8DC
+skinparam NoteBorderColor #B7950B
+
+actor "研究者" as user
+
+package "一、用户与前端" as frontendLayer {
+  component "React + Vite 研究工作台\n研究、基金、行情、筛选、运行记录" as frontend
+  component "前端状态与 API 客户端\nBearer Token / 轮询 / SSE 进度" as frontendApi
+}
+
+package "二、HTTP 接入层" as httpLayer {
+  component "Nginx\n静态文件 + /api 反向代理" as nginx
+  component "FastAPI\n/api/v1 研究接口\n/api/v2 金融接口\n鉴权、CORS、错误处理" as fastapi
+}
+
+package "三、业务服务层" as serviceLayer {
+  component "研究运行服务\n创建、查询、取消、重跑、导出" as researchService
+  component "基金持仓报告服务\n披露冻结、ETF 穿透、股票报告批量生成" as fundService
+  component "金融数据服务\n行情、报价、K 线与缓存" as marketService
+  component "模拟盘服务\n账户、订单、资金、T+1" as paperService
+  component "回测服务\n策略目录、历史 K 线、回测结果" as backtestService
+  component "聊天与线程服务\n会话、上下文、后台任务" as chatService
+  component "VeighNa 模拟撮合" as veighna
+  component "Hikyuu 回测引擎" as hikyuu
+}
+
+package "四、Agent OS 核心运行时" as agentLayer {
+  component "请求入口\n识别意图、补齐槽位、必要时澄清" as intake
+  component "DomainPack 注册表\n加载业务能力、工具、策略和质量门" as registry
+  component "能力规划器\n把用户问题变成执行计划" as planner
+  component "执行图运行器\n按依赖执行节点、重试、暂停、恢复" as graph
+  component "TurnRunner\n超时、检查点、并发和故障恢复" as turnRunner
+  component "ArtifactBoard\n统一保存证据、数据缺口、来源和报告" as board
+  component "主 Agent\n调用模型、工具和最终合成" as mainAgent
+  component "分层记忆\n工作记忆、历史记忆、语义检索" as memory
+}
+
+package "五、DomainPack 业务能力层" as domainLayer {
+  component "Finance DomainPack\n个股、行业、筛选、基金、组合研究" as financePack
+  component "Finance 数据快照\n行情、基本面、公告、事件、资金流、K 线" as snapshots
+  component "基金研究能力\n净值、基准、经理、规模、披露持仓" as fundPack
+  component "ETF / FOF 穿透\n目标基金持仓 -> 股票持仓" as lookthrough
+  component "UZI 3.9.2 方法与报告\n分析、面板、估值、HTML / PDF" as uzi
+  component "质量门\n来源完整性、安全性、方法论质量" as gates
+  component "Legal DomainPack\n合同条款、风险、义务、引用和报告" as legalPack
+}
+
+package "六、数据源与模型" as providerLayer {
+  component "Provider 注册表\n优先级、凭证、回退链、来源追踪" as providerRegistry
+  component "公开金融数据\nAkShare、东方财富、蛋卷、CNInfo" as publicProviders
+  component "备用数据源\nTuShare、BaoStock、eFinance、直连 HTTP" as fallbackProviders
+  component "可选浏览器与搜索\nPlaywright、敏感来源策略" as browserProviders
+  component "OpenAI / 兼容模型\n规划、分析、报告合成" as llm
+}
+
+package "七、持久化与基础设施" as storageLayer {
+  database "workspace/runs\n运行状态、执行图、事件、Artifact、报告" as runs
+  database "workspace/cache\n行情与数据快照缓存" as cache
+  database "workspace/memory\n记忆、提案、长期上下文" as memoryStore
+  database "workspace/paper_trading\nSQLite 模拟账户和订单账本" as paperDb
+  database "workspace/backtests\n回测结果和隔离运行目录" as backtestDb
+  database "Qdrant（可选）\n向量 + 关键词检索" as qdrant
+}
+
+user --> frontend : 提交研究问题
+frontend --> frontendApi : 页面操作
+frontendApi --> nginx : HTTPS API 请求
+nginx --> fastapi : /api/v1、/api/v2
+
+fastapi --> researchService
+fastapi --> fundService
+fastapi --> marketService
+fastapi --> paperService
+fastapi --> backtestService
+fastapi --> chatService
+
+researchService --> intake : 研究请求
+intake --> registry : 查找可用能力
+registry --> planner : 能力与依赖
+planner --> graph : 执行计划
+graph --> turnRunner : 执行、恢复、重跑
+graph --> board : 产出和消费 Artifact
+mainAgent --> llm : 规划、分析、合成
+mainAgent --> board : 读取证据、写入结果
+mainAgent --> memory : 读取和沉淀记忆
+memory --> memoryStore
+board --> runs : 保存运行产物
+turnRunner --> runs : 状态、检查点、事件
+
+registry --> financePack : 加载 Finance DomainPack
+registry --> legalPack : 加载 Legal DomainPack
+financePack --> snapshots
+financePack --> fundPack
+financePack --> uzi
+financePack --> gates
+fundPack --> lookthrough : 联接基金 / FOF
+lookthrough --> uzi : 为持仓股票生成报告
+gates --> board : 质量结论与数据缺口
+
+snapshots --> providerRegistry
+fundPack --> providerRegistry
+providerRegistry --> publicProviders
+providerRegistry --> fallbackProviders
+providerRegistry --> browserProviders
+providerRegistry --> cache : 读取和写入缓存
+llm --> publicProviders : 不直接访问金融数据
+
+marketService --> snapshots : 行情 / K 线
+marketService --> cache
+fundService --> fundPack
+fundService --> board
+chatService --> runs
+
+paperService --> marketService : 取价
+paperService --> paperDb : 账户、订单、成交
+backtestService --> marketService : 取历史 K 线
+backtestService --> backtestDb : 保存回测结果
+paperService ..> veighna : 可选引擎
+backtestService ..> hikyuu : 隔离子进程
+memory ..> qdrant : 可选向量检索
+
+note right of board
+  全系统的核心数据面：
+  研究结论不能只保存文本，
+  还要保存来源、时间、质量状态、
+  data_gap、missing_fields 和版本。
+end note
+
+note right of fundPack
+  基金持仓是定期披露数据，
+  不是实时持仓。
+  报告中的“最新”指最新公开披露。
+end note
+
+note right of backtestService
+  当前回测主要由 K 线驱动。
+  如果接入自制评分报告，
+  必须提供带日期的历史评分快照，
+  避免未来函数和回测作弊。
+end note
+
+legend bottom
+  实线：主要调用或数据流
+  虚线：可选组件或扩展引擎
+  阅读顺序：从上到下，再看三条业务支线
+endlegend
+
+@enduml

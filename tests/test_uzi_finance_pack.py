@@ -563,11 +563,11 @@ class UziFinancePackTests(unittest.TestCase):
             DomainPackRegistry.load(repository_root / "domain_packs")
         )
         cases = {
-            "stock_screen": ("lite", "screening_result", "finance.screening.quality", 120.0),
-            "sector_research": ("medium", "sector_analysis", "finance.sector.analysis", 480.0),
-            "review_thesis": ("deep", "thesis_review", "finance.thesis.review", 1200.0),
+            "stock_screen": ("lite", "screening_result", "finance.screening.quality", 120),
+            "sector_research": ("medium", "sector_analysis", "finance.sector.analysis", 480),
+            "review_thesis": ("deep", "thesis_review", "finance.thesis.review", 1200),
         }
-        for intent, (profile, artifact_type, gate_id, timeout) in cases.items():
+        for intent, (profile, artifact_type, gate_id, estimate) in cases.items():
             with self.subTest(intent=intent):
                 graph = planner.build_graph(
                     CapabilityPlanningRequest(
@@ -584,7 +584,26 @@ class UziFinancePackTests(unittest.TestCase):
                 self.assertEqual(graph.metadata["selected_research_profile"], profile)
                 self.assertIn(artifact_type, graph.metadata["required_artifact_types"])
                 self.assertIn(gate_id, graph.governance.required_gate_ids)
-                self.assertEqual(graph.governance.timeout_seconds, timeout)
+                self.assertEqual(graph.metadata["deadline_policy"], "unbounded")
+                self.assertIsNone(graph.governance.timeout_seconds)
+                self.assertEqual(
+                    graph.metadata["profile_policy"]["estimated_duration_seconds"],
+                    estimate,
+                )
+                lazy_graph = planner.build_lazy_graph(
+                    CapabilityPlanningRequest(
+                        domain_id="finance_ashare",
+                        objective=f"Run {intent}",
+                        available_artifact_types=["user_request"],
+                        required_artifact_types=["research_report"],
+                        metadata={
+                            "intent": intent,
+                            "intent_inputs": {"intent": intent, "research_profile": profile},
+                        },
+                    )
+                )
+                self.assertEqual(lazy_graph.metadata["deadline_policy"], "unbounded")
+                self.assertIsNone(lazy_graph.governance.timeout_seconds)
                 if intent == "stock_screen":
                     self.assertNotIn(
                         "valuation_model",

@@ -301,7 +301,7 @@ class RegularExecutor:
                 execution_mode=context.config.execution_mode,
                 status="timed_out",
                 result=context.last_result,
-                error="Turn exceeded its configured timeout at a safe point.",
+                    error="Turn 在安全点超过了配置的超时时间。",
             )
         executor = (
             self.graph_executor
@@ -500,7 +500,7 @@ class ReviewExecutor:
                 "verdict": verdict,
                 "reviewed_artifact_ids": reviewed_ids,
                 "findings": findings,
-                "summary": f"Reviewed {len(reviewed_ids)} active artifact(s).",
+                "summary": f"已审查 {len(reviewed_ids)} 个有效 artifact。",
             },
             source_refs=[{"type": "artifact", "id": item} for item in reviewed_ids],
             parent_artifact_ids=reviewed_ids,
@@ -511,7 +511,7 @@ class ReviewExecutor:
         continuation = (
             {
                 "source": "review",
-                "reason": "Review findings require a Gate decision.",
+                "reason": "审查发现问题，需要质量门禁作出决策。",
                 "resume_task_type": "review",
                 "review_artifact_id": review_artifact.artifact_id,
                 "findings": findings,
@@ -540,7 +540,7 @@ class ReviewExecutor:
             status=status,
             mode=context.config.execution_mode,
             intent=context.decision.intent,
-            message=f"Reviewed {len(reviewed_ids)} artifact(s): {verdict}.",
+            message=f"已审查 {len(reviewed_ids)} 个 artifact，结论为 {verdict}。",
             artifact_ids=[review_artifact.artifact_id],
             continuation=continuation,
             state=state,
@@ -698,7 +698,7 @@ class CompactExecutor:
             status=main_state.status,
             mode=context.config.execution_mode,
             intent=context.decision.intent,
-            message=f"Compacted Turn context: retained {len(compacted)} message(s); the original task is ready to resume.",
+            message=f"Turn 上下文已压缩，保留 {len(compacted)} 条消息；原任务可以恢复。",
             state=main_state,
             continuation=continuation,
         )
@@ -1395,7 +1395,11 @@ class TurnRunner:
             requested=requested,
             request=request,
         )
-        if config.timeout_seconds is None and self.timeout_seconds is not None:
+        if (
+            config.deadline_policy != "unbounded"
+            and config.timeout_seconds is None
+            and self.timeout_seconds is not None
+        ):
             config = config.model_copy(update={"timeout_seconds": self.timeout_seconds})
         return config
 
@@ -1682,7 +1686,7 @@ class TurnRunner:
                 outcome = outcome.model_copy(
                     update={
                         "status": "timed_out",
-                        "error": "Turn exceeded its configured timeout.",
+                    "error": "Turn 超过了配置的超时时间。",
                     }
                 )
             self._finish_turn(context, outcome)
@@ -1853,12 +1857,12 @@ class TurnRunner:
                 mode=turn.execution_mode,
                 task_type=turn.task_type,
                 status=(getattr(result, "status", "completed")),
-                message=str(getattr(result, "message", None) or f"Turn {getattr(result, 'status', 'completed')}"),
+                message=str(getattr(result, "message", None) or f"Turn 状态：{getattr(result, 'status', 'completed')}"),
                 progress=ProgressState(
                     current_phase="turn",
                     active_agent="main_agent",
                     latest_event="turn_resumed",
-                    status_message="Turn resumed",
+                    status_message="Turn 已恢复",
                     percent=100 if getattr(result, "status", "") in {"completed", "failed", "cancelled", "gated"} else 0,
                 ),
             )
@@ -2144,7 +2148,7 @@ class TurnRunner:
                     "created_at": _utc_now().isoformat(),
                 },
             )
-        timeout = config.timeout_seconds or self.timeout_seconds
+        timeout = self._effective_timeout_seconds(config)
         deadline_at = (
             _utc_now() + timedelta(seconds=float(timeout)) if timeout is not None else None
         )
@@ -2205,7 +2209,7 @@ class TurnRunner:
     def _ensure_turn_deadline(self, turn: TurnSnapshot, config: TurnConfig) -> TurnSnapshot:
         if turn.deadline_at is not None:
             return turn
-        timeout = config.timeout_seconds or self.timeout_seconds
+        timeout = self._effective_timeout_seconds(config)
         if timeout is None:
             return turn
         updated = turn.model_copy(
@@ -2216,6 +2220,13 @@ class TurnRunner:
         )
         self._persist_turn(updated)
         return updated
+
+    def _effective_timeout_seconds(self, config: TurnConfig) -> float | None:
+        if config.deadline_policy == "unbounded":
+            return None
+        if config.timeout_seconds is not None:
+            return float(config.timeout_seconds)
+        return float(self.timeout_seconds) if self.timeout_seconds is not None else None
 
     @staticmethod
     def _monotonic_deadline(deadline_at: datetime | None) -> float | None:
@@ -2587,7 +2598,7 @@ class TurnRunner:
                     target_child_turn_id=request.target_child_turn_id,
                     accepted=False,
                     delivery="rejected",
-                    reason=tool_result.error or "follow-up Tool invocation was rejected",
+                    reason=tool_result.error or "follow-up Tool 调用已被拒绝",
                 )
             result = FollowupTaskResult.model_validate(tool_result.output)
             if existing_operation and not result.duplicate:
@@ -2610,7 +2621,7 @@ class TurnRunner:
                 target_child_turn_id=request.target_child_turn_id,
                 accepted=False,
                 delivery="rejected",
-                reason="parent Turn does not match the requested follow-up",
+                reason="父 Turn 与请求的追问不匹配。",
             )
         target_child = next(
             (item for item in turn.child_turns if item.child_turn_id == request.target_child_turn_id),
@@ -2624,7 +2635,7 @@ class TurnRunner:
                 target_child_turn_id=request.target_child_turn_id,
                 accepted=False,
                 delivery="rejected",
-                reason="target agent does not match the ChildTurn role",
+                reason="目标 Agent 与 ChildTurn 角色不匹配。",
             )
         event_turn = turn
 
@@ -2884,7 +2895,7 @@ class TurnRunner:
             child_root=child_root,
             child_turn=child_turn,
             event_type="child_turn_started",
-            source_event={"message": "ChildTurn follow-up started."},
+            source_event={"message": "ChildTurn 追问已开始。"},
         )
         event_turn = self._append_child_event(
             event_turn,

@@ -304,7 +304,7 @@ def _execute_symbol(
                 agent_issues = [{
                     "severity": "error",
                     "field": "agent_analysis",
-                    "message": f"Agent analysis generation failed: {exc.__class__.__name__}: {str(exc)[:300]}",
+                    "message": f"Agent 分析生成失败：{exc.__class__.__name__}",
                     "suggestion": "按自审问题修正结构化 Agent 分析后重算",
                 }]
 

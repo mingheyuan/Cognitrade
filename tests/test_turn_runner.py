@@ -83,6 +83,42 @@ class _UnusedGraphAdapter:
 
 
 class TurnRunnerTests(unittest.TestCase):
+    def test_unbounded_deadline_policy_bypasses_the_runner_default(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            run_store = RunStore(Path(temporary_directory) / "runs")
+            request = RequestEnvelope(
+                user_query="wait for upstream completion",
+                constraints={"turn_config": {"deadline_policy": "unbounded"}},
+            )
+            run_id, _, _ = run_store.create_run(request, "core.conversation.answer")
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="conversation",
+                recommended_mode="core",
+            )
+            runner = TurnRunner(
+                run_store=run_store,
+                main_agent=object(),
+                graph_adapter=_UnusedGraphAdapter(),
+                core_executor=_RecordingExecutor("completed"),
+                timeout_seconds=60,
+            )
+
+            runner.execute_task(
+                request=request,
+                decision=decision,
+                run_id=run_id,
+                thread_id="thread-unbounded",
+                execution_mode="core",
+            )
+
+            turn = TurnSnapshot.model_validate(
+                read_json(run_store.load_run_paths(run_id).root / "turn_state.json")
+            )
+            self.assertEqual(turn.config.deadline_policy, "unbounded")
+            self.assertIsNone(turn.config.timeout_seconds)
+            self.assertIsNone(turn.deadline_at)
+
     def test_timeout_recovery_creates_a_same_run_continuation(self) -> None:
         class Executor:
             def __init__(self) -> None:

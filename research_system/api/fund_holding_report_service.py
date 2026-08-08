@@ -17,6 +17,7 @@ from domain_packs.finance_ashare.holding_reports import (
 from domain_packs.finance_ashare.reporting import render_uzi_native_html, render_uzi_native_pdf
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.core.id_utils import generate_ulid
+from research_system.runtime.presentation.display import localize_public_error_fields, localize_runtime_error
 from research_system.runtime.storage.jsonl import append_jsonl, read_json, write_json
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.schemas.protocol import RequestEnvelope
@@ -415,7 +416,7 @@ class FundHoldingReportService:
                 scheduled.append((str(item["symbol"]), child_run_id))
             if not scheduled:
                 raise FundHoldingBatchConflict(
-                    "no eligible terminal holding report matched the retry request"
+                    "没有符合重试条件的终态持仓报告"
                 )
             state["cancel_requested"] = False
             state["status"] = "running"
@@ -440,7 +441,7 @@ class FundHoldingReportService:
             if item.get("report_available") and item.get("child_run_id")
         ]
         if not deliverable:
-            raise FundHoldingReportsUnavailable("the batch has no deliverable stock reports")
+            raise FundHoldingReportsUnavailable("该批次没有可交付的股票报告")
         buffer = BytesIO()
         included = 0
         zip_errors: list[str] = []
@@ -454,6 +455,7 @@ class FundHoldingReportService:
                         user_id=user_id,
                         tenant_id=tenant_id,
                     )
+                    payload = localize_public_error_fields(payload)
                     rendered = render_uzi_native_html(
                         list(payload.get("artifacts") or []),
                         run_id=str(item["child_run_id"]),
@@ -462,11 +464,11 @@ class FundHoldingReportService:
                     filename = self._report_filename(item)
                     archive.writestr(filename, pdf)
                     included += 1
-                except Exception as exc:
-                    zip_errors.append(f"{item['symbol']} {item['name']}: {exc.__class__.__name__}")
+                except Exception:
+                    zip_errors.append(f"{item['symbol']} {item['name']}：PDF 打包失败")
             archive.writestr("README.txt", self._zip_readme(state, included=included, zip_errors=zip_errors))
         if included == 0:
-            raise FundHoldingReportsUnavailable("PDF rendering failed for every deliverable report")
+            raise FundHoldingReportsUnavailable("所有可交付报告的 PDF 渲染均失败")
         filename = f"fund-{state['fund_code']}-holding-reports-{state['profile']}.zip"
         return buffer.getvalue(), filename, included
 
@@ -621,7 +623,7 @@ class FundHoldingReportService:
                 error = None
             else:
                 final_status = "failed"
-                error = f"{exc.__class__.__name__}: {exc}"
+                error = localize_runtime_error(exc, fallback="持仓股票报告执行失败，请稍后重试。")
                 data_gap = ["holding_stock_report_execution_failed"]
 
         with self._lock:
@@ -642,7 +644,7 @@ class FundHoldingReportService:
                 item["status"] = "cancelled"
             else:
                 item["status"] = "failed"
-                item["error"] = item["error"] or f"child run ended as {final_status} without a complete report"
+                item["error"] = item["error"] or f"子运行以 {final_status} 状态结束，未生成完整报告"
             item["completed_at"] = self._now()
             self._refresh_parent_status(state)
             self._write_batch(state, event_type="fund_holding_child_finished")
@@ -791,7 +793,7 @@ class FundHoldingReportService:
             "phase": "holding_reports",
             "actor": "fund_holding_report_coordinator",
             "agent": "fund_holding_report_coordinator",
-            "message": f"Fund holding report batch is {state['status']}",
+            "message": f"基金持仓报告批次状态：{state['status']}",
             "payload": {"status": state["status"], "counts": state["counts"]},
             "artifacts": [],
             "created_at": state["updated_at"],
@@ -993,12 +995,14 @@ class FundHoldingReportService:
     def _profile(value: str) -> str:
         profile = str(value or "").strip().lower()
         if profile not in {"lite", "medium", "deep"}:
-            raise ValueError("research profile must be lite, medium or deep")
+            raise ValueError("research_profile 必须是 lite、medium 或 deep")
         return profile
 
     @staticmethod
     def _public(state: dict[str, Any]) -> dict[str, Any]:
-        return {key: value for key, value in state.items() if key not in {"request_id", "source_data_gap"}}
+        return localize_public_error_fields(
+            {key: value for key, value in state.items() if key not in {"request_id", "source_data_gap"}}
+        )
 
     @staticmethod
     def _now() -> str:

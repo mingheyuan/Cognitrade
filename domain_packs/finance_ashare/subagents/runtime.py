@@ -1647,7 +1647,7 @@ def evaluate_uzi_native_report_gate(context):
     if not allowed or critical:
         return {
             "verdict": "fail",
-            "reason": f"UZI native critical gate blocked report export (critical_count={critical})",
+            "reason": f"UZI native 关键质量门禁已阻止报告导出（critical_count={critical}）",
             "evidence_refs": list(context.artifact.source_refs),
             "score": 0.0,
         }
