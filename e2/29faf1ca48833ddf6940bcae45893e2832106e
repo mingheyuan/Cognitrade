@@ -1,0 +1,25 @@
+domain_packs/finance_ashare/tools/financial_data_provider.yaml
+  s_a6a8a3a6f43b3c::t_f128e73631386a 26-29
+domain_packs/finance_ashare/tools/snapshot_collector.py
+  s_a6a8a3a6f43b3c::t_5f5be28445a22f 13,141-145,363-365,494-508
+tests/test_uzi_source_parity.py
+  s_a6a8a3a6f43b3c::t_ab71eb1c0319e2 3,8-9,86-149
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "e229faf1ca48833ddf6940bcae45893e2832106e",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
