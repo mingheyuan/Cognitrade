@@ -1,0 +1,23 @@
+tests/test_api_v1_runs.py
+  s_a6a8a3a6f43b3c::t_4fc1d59c0b5960 245,248
+tests/test_uzi_finance_pack.py
+  s_a6a8a3a6f43b3c::t_3a39df0419b6b3 31,155,158,160-163,177-184
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "cf32baaa95414befb80588a802d6f7a59d6b20f3",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
