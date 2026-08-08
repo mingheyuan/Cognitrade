@@ -1,0 +1,23 @@
+frontend/src/CognitradeContext.tsx
+  s_a6a8a3a6f43b3c::t_81c2773a5cead7 105-106,109-117,120-123,125-127,133,137,141-144,248,250,350,358,370,394,405,444,474
+frontend/src/components/Funds.tsx
+  s_a6a8a3a6f43b3c::t_887fc7b00790a6 28,44-46,48-58,61-62,64,73,170
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "bf57f2c0c00127e09fec21e6162c1dfe57a9fbfd",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
