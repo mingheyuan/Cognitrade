@@ -114,18 +114,13 @@ export function reportFromDetail(detail?: RunDetail | null): ResearchReport {
   const assistantArtifact = [...artifacts].reverse().find((artifact) => (
     asString(asRecord(artifact).artifact_type) === 'assistant_message'
   ))
-  const presentationArtifact = [...artifacts].reverse().find((artifact) => (
-    asString(asRecord(artifact).artifact_type) === 'report_presentation'
-  ))
   const reportContent = asRecord(asRecord(reportArtifact).content)
   const synthesisContent = asRecord(asRecord(synthesisArtifact).content)
   const assistantContent = asRecord(asRecord(assistantArtifact).content)
-  const presentationContent = asRecord(asRecord(presentationArtifact).content)
   const synthesisAvailable = Object.keys(synthesisContent).length > 0
   const synthesisUnavailable = asString(assistantContent.delivery_status) === 'synthesis_unavailable'
   const content = {
     ...reportContent,
-    ...(Object.keys(presentationContent).length > 0 ? { presentation: presentationContent } : {}),
     ...synthesisContent,
     ...(synthesisContent.conclusion ? {
       assessment: {

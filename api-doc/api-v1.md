@@ -247,16 +247,17 @@ documented partial result.
 | `POST` | `/holding-report-batches/{batch_id}/cancel` | Best-effort cancel queued/running children; completed reports are retained |
 | `POST` | `/holding-report-batches/{batch_id}/retry` | Retry failed children; optional body `{"symbols":["600519"]}` |
 | `POST` | `/holding-report-batches/{batch_id}/continue` | Continue cancelled/failed children; optional symbol filter |
-| `GET` | `/holding-report-batches/{batch_id}/reports.zip` | Download successful and partial child PDFs plus an audit README |
+| `GET` | `/holding-report-batches/{batch_id}/reports.zip` | Download child PDFs that passed the UZI critical gate plus an audit README |
 
 Parent status is `completed` only when every supported child completes without
-batch-level gaps. A mix of completed, partial, failed, cancelled, or unsupported
+batch-level gaps. A mix of completed, gated, failed, cancelled, or unsupported
 items is `completed_partial`; zero successful execution results with all
-supported items failed is `failed`. A child `completed_partial` result that has
-both `research_report` and `report_presentation` is still deliverable and its
-PDF is included in the ZIP with its data gaps. The ZIP deliberately contains
-individual stock reports only; it does not synthesize a fund-level holdings
-HTML/PDF report.
+supported items failed is `failed`. A child is deliverable only when its active
+`uzi_native_analysis` has `critical_count=0` and the bound `research_report`
+records `report_allowed=true`. No run status or auxiliary artifact can bypass
+this gate. The ZIP deliberately
+contains individual stock reports only; it does not synthesize a fund-level
+holdings HTML/PDF report.
 
 ### UZI Tier-1 and portfolio research
 
@@ -341,11 +342,11 @@ portfolio: missing classifications or targets produce `data_gap`.
 
 ### UZI native report export
 
-Completed UZI stock runs expose a Pack-owned native-style report derived only
-from immutable ArtifactBoard records. The renderer uses `report_presentation`
-as the visual contract and `research_report` plus the independent UZI method
-Artifacts as the audit source. It never invokes the old UZI CLI, cache,
-report server, or an upstream checkout.
+Completed UZI single-stock runs expose the exact vendored UZI 3.9.2 report
+derived only from immutable `uzi_native_analysis` ArtifactBoard records. HTML
+and PDF share that same visible DOM/CSS/JavaScript. Cognitrade metadata remains
+in API headers and Artifact sidecars. The renderer never invokes the old UZI
+CLI, cache, report server, or an upstream checkout.
 
 ```http
 GET /api/v1/runs/{run_id}/report?format=html

@@ -26,7 +26,13 @@ from domain_packs.finance_ashare.subagents.uzi_panel_profiles import get_profile
 
 
 LATEST_UZI_SOURCE_COMMIT = "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359"
-PERSONAS_DIR = Path(__file__).resolve().parents[1] / "personas"
+PERSONAS_DIR = (
+    Path(__file__).resolve().parents[1]
+    / "vendor"
+    / "uzi_3_9_2"
+    / "skill"
+    / "personas"
+)
 _SIGNALS = {"bullish", "bearish", "neutral", "skip", "insufficient_evidence"}
 _CONCRETE_FACT = re.compile(r"\d|数据缺口|能力圈|不适合|非A股|非 A 股|未取得|缺少|行业|市场")
 _GROUP_BATCHES: tuple[tuple[str, frozenset[str]], ...] = (
@@ -262,8 +268,8 @@ def _evaluate_batch(
                 "investor_id": vote.get("investor_id"),
                 "rule_signal": vote.get("signal"),
                 "rule_score": vote.get("score"),
-                "pass_rules": vote.get("pass_rules"),
-                "fail_rules": vote.get("fail_rules"),
+                "pass_rules": vote.get("pass_rules") or vote.get("pass"),
+                "fail_rules": vote.get("fail_rules") or vote.get("fail"),
                 "skipped_rule_count": vote.get("skipped_rule_count"),
                 "rule_reasoning": vote.get("reasoning"),
             }
@@ -336,7 +342,11 @@ def _compact_mapping(value: dict[str, Any], *, depth: int = 0) -> dict[str, Any]
 def _nonempty_batches(votes: list[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
     result: list[tuple[str, list[dict[str, Any]]]] = []
     for label, groups in _GROUP_BATCHES:
-        rows = [row for row in votes if str(row.get("school") or "") in groups]
+        rows = [
+            row
+            for row in votes
+            if str(row.get("school") or row.get("group") or "") in groups
+        ]
         if rows:
             result.append((label, rows))
     return result
@@ -400,10 +410,47 @@ def _recompute_panel_aggregates(result: dict[str, Any]) -> None:
     )
 
 
+def build_native_panel_overrides(
+    panel: dict[str, Any],
+    *,
+    features: dict[str, Any],
+    llm_provider: Any | None,
+    cancellation: Event | None = None,
+) -> dict[str, Any]:
+    """Generate Agent OS overrides for the exact upstream ``investors`` list.
+
+    UZI's pure rule engine calls the rows ``investors`` while the earlier
+    Cognitrade adapter called them ``votes``.  This bridge changes only that
+    transport key: persona files, frozen evidence, five parallel role-play
+    groups and the all-or-nothing membership gate remain identical.
+    """
+
+    native = deepcopy(panel)
+    native["profile"] = "deep"
+    native["votes"] = [
+        deepcopy(row)
+        for row in list(native.get("investors") or [])
+        if isinstance(row, dict)
+    ]
+    evaluated = apply_deep_agent_roleplay(
+        native,
+        features=features,
+        llm_provider=llm_provider,
+        cancellation=cancellation,
+    )
+    return {
+        "per_investor_override": dict(evaluated.get("per_investor_override") or {}),
+        "roleplay": dict(evaluated.get("roleplay") or {}),
+        "data_gap": list(evaluated.get("data_gap") or []),
+        "risk_flags": list(evaluated.get("risk_flags") or []),
+    }
+
+
 __all__ = [
     "AgentRoleplayBatch",
     "AgentRoleplayVote",
     "LATEST_UZI_SOURCE_COMMIT",
     "apply_deep_agent_roleplay",
+    "build_native_panel_overrides",
     "load_persona",
 ]

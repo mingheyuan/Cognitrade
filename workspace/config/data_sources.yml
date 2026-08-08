@@ -1,8 +1,8 @@
 catalog:
   upstream: UZI-Skill
   version: 3.9.2
-  commit: fce996c33e70eddce8e375f53cd252b549eb3d7c
-  source_count: 70
+  commit: 22e65f2e0cee2cb41cb40fdbe391c9600b7fe359
+  source_count: 73
   metadata_registry: research_system/adapters/vendors/uzi_source_catalog.py
   semantics: catalogue entries are candidates; every run reports actual availability in source_trace
 
@@ -30,6 +30,9 @@ sources:
   - yfinance
   - ddgs
   - yahoo_chart_v8
+  - yahoo_equity_screener
+  - yahoo_fundamentals_timeseries
+  - yahoo_fx_chart
   - tencent_hk_quote
   - coingecko_simple_price
   - coingecko_markets

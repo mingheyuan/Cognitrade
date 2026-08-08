@@ -6,10 +6,9 @@ from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapsho
 from domain_packs.finance_ashare.subagents.fund_methodology import build_fund_analysis
 from domain_packs.finance_ashare.subagents.uzi_methodology import (
     UZI_METHOD_VERSION,
-    build_delivery_conclusion,
     build_features,
     build_panel_review,
-    build_presentation,
+    build_quick_scan,
     build_risk_scan,
     build_valuation_model,
     select_profile,
@@ -34,6 +33,13 @@ from domain_packs.finance_ashare.subagents.uzi_method_products import (
     METHOD_ARTIFACT_TYPES,
     build_method_product,
 )
+from domain_packs.finance_ashare.subagents.uzi_392_native_methods import execute_native_method
+from domain_packs.finance_ashare.subagents.uzi_392_native_commands import (
+    execute_panel_only,
+    execute_scan_trap,
+    execute_segmental_model,
+)
+from domain_packs.finance_ashare.subagents.uzi_392_analysis import execute_native_analysis
 from research_system.adapters.vendors.akshare_utils import coerce_numeric
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.schemas.artifacts import ArtifactDraft
@@ -796,6 +802,433 @@ def evaluate_uzi_panel(context):
     )
 
 
+def compose_uzi_quick_scan(context):
+    rows, symbols, _query, source_refs, parent_ids = _snapshot_context(context)
+    content = build_quick_scan(rows, symbols)
+    return ArtifactDraft(
+        artifact_type="quick_scan",
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=float(content.get("confidence") or 0.0),
+        risk_flags=list(content.get("risk_flags") or []),
+        metadata={
+            "quality_status": content.get("quality_status"),
+            "methodology_version": content.get("methodology_version"),
+            "source_commit": content.get("source_commit"),
+            "output_format": "markdown",
+        },
+    )
+
+
+def execute_uzi_native_full_analysis(context):
+    rows, symbols, _query, source_refs, parent_ids = _snapshot_context(context)
+    inputs = dict(context.node.inputs or {})
+    profile = select_profile(inputs)
+    normalized = (context.artifacts("normalized_query") or [None])[-1]
+    holding_context = (
+        dict((normalized.content or {}).get("holding_context") or {})
+        if normalized is not None
+        else {}
+    )
+    bundle = (context.artifacts("stock_snapshot_bundle") or [None])[-1]
+    recovery_history = []
+    if bundle is not None:
+        recovery = dict((bundle.content or {}).get("collection") or {}).get("uzi_recovery")
+        if isinstance(recovery, dict):
+            recovery_history = list(recovery.get("attempts") or [])
+    content = execute_native_analysis(
+        rows,
+        symbols,
+        profile=str(profile.get("selected") or ""),
+        llm_provider=getattr(context, "llm_provider", None),
+        cancellation=getattr(context, "cancellation", None),
+        recovery_history=recovery_history,
+    )
+    content["holding_context"] = holding_context or None
+    if normalized is not None:
+        parent_ids = list(dict.fromkeys([*parent_ids, normalized.artifact_id]))
+        source_refs = _unique_source_refs([*source_refs, *list(normalized.source_refs)])
+    if holding_context.get("source_fund_artifact_id"):
+        source_refs = _unique_source_refs([
+            *source_refs,
+            {
+                "type": "fund_snapshot_artifact",
+                "id": str(holding_context["source_fund_artifact_id"]),
+                "locator": str(holding_context.get("source_fund_run_id") or ""),
+            },
+        ])
+    critical = int(content.get("critical_count") or 0)
+    return ArtifactDraft(
+        artifact_type="uzi_native_analysis",
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=0.86 if critical == 0 else 0.0,
+        risk_flags=[
+            str(issue.get("issue") or issue.get("dim") or "critical")
+            for result in list(content.get("results") or [])
+            for issue in list((result.get("self_review") or {}).get("issues") or [])
+            if isinstance(issue, dict) and issue.get("severity") == "critical"
+        ],
+        metadata={
+            "quality_status": content.get("quality_status"),
+            "methodology_version": content.get("methodology_version"),
+            "source_commit": content.get("source_commit"),
+            "report_allowed": content.get("report_allowed"),
+        },
+    )
+
+
+def compose_uzi_native_delivery(context):
+    analysis = context.require_artifact("uzi_native_analysis")
+    content = dict(analysis.content or {})
+    results = [row for row in list(content.get("results") or []) if isinstance(row, dict)]
+    first = results[0] if results else {}
+    synthesis = dict(first.get("synthesis") or {})
+    review = dict(first.get("self_review") or {})
+    critical_issues = [
+        row
+        for result in results
+        for row in list((result.get("self_review") or {}).get("issues") or [])
+        if isinstance(row, dict) and row.get("severity") == "critical"
+    ]
+    warning_issues = [
+        row
+        for result in results
+        for row in list((result.get("self_review") or {}).get("issues") or [])
+        if isinstance(row, dict) and row.get("severity") == "warning"
+    ]
+    allowed = content.get("report_allowed") is True
+    holding_context = dict(content.get("holding_context") or {})
+    conclusion = str(
+        (synthesis.get("dashboard") or {}).get("core_conclusion")
+        or synthesis.get("verdict_label")
+        or (
+            "UZI critical 质量门未通过，HTML/PDF 已禁用。"
+            if not allowed
+            else "UZI 原生研究链已通过机械自审。"
+        )
+    )
+    report_content = {
+        "conclusion": conclusion,
+        "assessment": {
+            "status": "uzi_native_passed" if allowed else "uzi_native_quality_gate_blocked",
+            "summary": conclusion,
+            "factors": [
+                {
+                    "symbol": row.get("symbol"),
+                    "overall_score": (row.get("synthesis") or {}).get("overall_score"),
+                    "verdict": (row.get("synthesis") or {}).get("verdict_label"),
+                    "critical_count": (row.get("self_review") or {}).get("critical_count"),
+                    "warning_count": (row.get("self_review") or {}).get("warning_count"),
+                }
+                for row in results
+            ],
+        },
+        "evidence": [
+            {
+                "artifact_id": analysis.artifact_id,
+                "artifact_type": "uzi_native_analysis",
+                "source_refs": list(analysis.source_refs),
+            }
+        ],
+        "risk": [str(row.get("issue") or "") for row in [*critical_issues, *warning_issues]],
+        "follow_up": [str(row.get("suggested_fix") or "") for row in critical_issues],
+        "quality_status": "available" if allowed else "quality_gate_blocked",
+        "delivery_type": "uzi_native_3_9_2",
+        "native_analysis_artifact_id": analysis.artifact_id,
+        "report_allowed": allowed,
+        "critical_count": int(content.get("critical_count") or 0),
+        "warning_count": int(content.get("warning_count") or review.get("warning_count") or 0),
+        "holding_context": holding_context or None,
+    }
+    return ArtifactDraft(
+        artifact_type="research_report",
+        content=report_content,
+        source_refs=list(analysis.source_refs),
+        parent_artifact_ids=[analysis.artifact_id],
+        confidence=analysis.confidence if allowed else 0.0,
+        risk_flags=list(analysis.risk_flags),
+        metadata={
+            "quality_status": report_content["quality_status"],
+            "methodology_version": content.get("methodology_version"),
+            "source_commit": content.get("source_commit"),
+            "report_allowed": allowed,
+        },
+    )
+
+
+def compose_stock_comparison_delivery(context):
+    """Compose a comparison without pretending it is one native UZI report.
+
+    Each symbol is still evaluated by the complete pinned UZI pipeline.  The
+    comparison is a Cognitrade semantic artifact and therefore cannot be
+    exported through the single-stock UZI HTML/PDF endpoint.
+    """
+
+    analysis = context.require_artifact("uzi_native_analysis")
+    content = dict(analysis.content or {})
+    results = [row for row in list(content.get("results") or []) if isinstance(row, dict)]
+    factors = [
+        {
+            "symbol": str(row.get("symbol") or ""),
+            "name": str((row.get("synthesis") or {}).get("name") or ""),
+            "overall_score": (row.get("synthesis") or {}).get("overall_score"),
+            "verdict": (row.get("synthesis") or {}).get("verdict_label"),
+            "critical_count": int((row.get("self_review") or {}).get("critical_count") or 0),
+            "warning_count": int((row.get("self_review") or {}).get("warning_count") or 0),
+            "report_allowed": row.get("report_allowed") is True,
+        }
+        for row in results
+    ]
+    critical_issues = [
+        issue
+        for row in results
+        for issue in list((row.get("self_review") or {}).get("issues") or [])
+        if isinstance(issue, dict) and issue.get("severity") == "critical"
+    ]
+    warning_issues = [
+        issue
+        for row in results
+        for issue in list((row.get("self_review") or {}).get("issues") or [])
+        if isinstance(issue, dict) and issue.get("severity") == "warning"
+    ]
+    critical_count = int(content.get("critical_count") or len(critical_issues))
+    allowed = bool(results) and content.get("report_allowed") is True and critical_count == 0
+    ranked = sorted(
+        factors,
+        key=lambda row: (
+            row.get("overall_score") is not None,
+            float(row.get("overall_score") or 0),
+        ),
+        reverse=True,
+    )
+    if allowed:
+        conclusion = "；".join(
+            f"{row['name'] or row['symbol']}：{row['verdict'] or '未给出结论'}"
+            + (f"（{float(row['overall_score']):g} 分）" if row.get("overall_score") is not None else "")
+            for row in ranked
+        ) or "UZI 比较研究已完成。"
+    else:
+        conclusion = "至少一个比较对象仍有 UZI critical 缺口，比较结果停在质量门。"
+    report_content = {
+        "conclusion": conclusion,
+        "assessment": {
+            "status": "uzi_native_comparison_passed" if allowed else "uzi_native_quality_gate_blocked",
+            "summary": conclusion,
+            "factors": factors,
+        },
+        "evidence": [{
+            "artifact_id": analysis.artifact_id,
+            "artifact_type": "uzi_native_analysis",
+            "source_refs": list(analysis.source_refs),
+        }],
+        "risk": [
+            str(issue.get("message") or issue.get("issue") or "")
+            for issue in [*critical_issues, *warning_issues]
+            if str(issue.get("message") or issue.get("issue") or "").strip()
+        ],
+        "follow_up": [
+            str(issue.get("suggested_fix") or "")
+            for issue in critical_issues
+            if str(issue.get("suggested_fix") or "").strip()
+        ],
+        "delivery_type": "stock_compare_uzi_3_9_2",
+        "quality_status": "available" if allowed else "quality_gate_blocked",
+        "native_analysis_artifact_id": analysis.artifact_id,
+        "report_allowed": allowed,
+        "critical_count": critical_count,
+        "warning_count": int(content.get("warning_count") or len(warning_issues)),
+        "comparison": {"ranked_results": ranked, "source_commit": content.get("source_commit")},
+    }
+    return ArtifactDraft(
+        artifact_type="research_report",
+        content=report_content,
+        source_refs=list(analysis.source_refs),
+        parent_artifact_ids=[analysis.artifact_id],
+        confidence=analysis.confidence if allowed else 0.0,
+        risk_flags=list(analysis.risk_flags),
+        metadata={
+            "quality_status": report_content["quality_status"],
+            "methodology_version": content.get("methodology_version"),
+            "source_commit": content.get("source_commit"),
+            "report_allowed": allowed,
+        },
+    )
+
+
+def _evaluate_uzi_native_method(context, method_id: str) -> ArtifactDraft:
+    inputs = dict(context.node.inputs or {})
+    if method_id in {"returns_attribution", "holding_rebalance", "portfolio_rebalance"}:
+        query = context.require_artifact("normalized_query")
+        native_inputs = {**dict(query.content or {}), **inputs}
+        content = execute_native_method(method_id, [], [], native_inputs)
+        source_refs = list(query.source_refs)
+        parent_ids = [query.artifact_id]
+    else:
+        rows, symbols, _query, source_refs, parent_ids = _snapshot_context(context)
+        content = execute_native_method(method_id, rows, symbols, inputs)
+    quality = str(content.get("quality_status") or "data_gap")
+    return ArtifactDraft(
+        artifact_type="uzi_native_method_result",
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=0.82 if quality == "available" else 0.5 if quality == "degraded" else 0.0,
+        risk_flags=list(content.get("data_gap") or []),
+        metadata={
+            "quality_status": quality,
+            "methodology_version": "3.9.2-source-parity",
+            "source_commit": content.get("source_commit"),
+            "native_method_id": method_id,
+        },
+    )
+
+
+def execute_uzi_native_dcf(context):
+    return _evaluate_uzi_native_method(context, "dcf")
+
+
+def execute_uzi_native_comps(context):
+    return _evaluate_uzi_native_method(context, "comps")
+
+
+def execute_uzi_native_three_statement(context):
+    return _evaluate_uzi_native_method(context, "three_statement")
+
+
+def execute_uzi_native_quick_lbo(context):
+    return _evaluate_uzi_native_method(context, "quick_lbo")
+
+
+def execute_uzi_native_accretion_dilution(context):
+    return _evaluate_uzi_native_method(context, "accretion_dilution")
+
+
+def execute_uzi_native_initiation_report(context):
+    return _evaluate_uzi_native_method(context, "initiation_report")
+
+
+def execute_uzi_native_earnings_review(context):
+    return _evaluate_uzi_native_method(context, "earnings_review")
+
+
+def execute_uzi_native_catalyst_calendar(context):
+    return _evaluate_uzi_native_method(context, "catalyst_calendar")
+
+
+def execute_uzi_native_thesis_tracker(context):
+    return _evaluate_uzi_native_method(context, "thesis_tracker")
+
+
+def execute_uzi_native_morning_note(context):
+    return _evaluate_uzi_native_method(context, "morning_note")
+
+
+def execute_uzi_native_quantitative_screen(context):
+    return _evaluate_uzi_native_method(context, "quantitative_screen")
+
+
+def execute_uzi_native_sector_review(context):
+    return _evaluate_uzi_native_method(context, "sector_review")
+
+
+def execute_uzi_native_ic_memo(context):
+    return _evaluate_uzi_native_method(context, "ic_memo")
+
+
+def execute_uzi_native_porter_bcg(context):
+    return _evaluate_uzi_native_method(context, "porter_bcg")
+
+
+def execute_uzi_native_dd_checklist(context):
+    return _evaluate_uzi_native_method(context, "dd_checklist")
+
+
+def execute_uzi_native_unit_economics(context):
+    return _evaluate_uzi_native_method(context, "unit_economics")
+
+
+def execute_uzi_native_value_creation_plan(context):
+    return _evaluate_uzi_native_method(context, "value_creation_plan")
+
+
+def execute_uzi_native_portfolio_rebalance(context):
+    return _evaluate_uzi_native_method(context, "portfolio_rebalance")
+
+
+def execute_uzi_native_ai_readiness(context):
+    return _evaluate_uzi_native_method(context, "ai_readiness")
+
+
+def execute_uzi_native_earnings_preview(context):
+    return _evaluate_uzi_native_method(context, "earnings_preview")
+
+
+def execute_uzi_native_model_update(context):
+    return _evaluate_uzi_native_method(context, "model_update")
+
+
+def execute_uzi_native_returns_attribution(context):
+    return _evaluate_uzi_native_method(context, "returns_attribution")
+
+
+def execute_uzi_native_holding_rebalance(context):
+    return _evaluate_uzi_native_method(context, "holding_rebalance")
+
+
+def _uzi_native_command_artifact(
+    *,
+    content: dict,
+    source_refs: list[dict],
+    parent_ids: list[str],
+) -> ArtifactDraft:
+    quality = str(content.get("quality_status") or "data_gap")
+    return ArtifactDraft(
+        artifact_type="uzi_native_command_result",
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=0.82 if quality == "available" else 0.5 if quality == "degraded" else 0.0,
+        risk_flags=list(content.get("data_gap") or []),
+        metadata={
+            "quality_status": quality,
+            "methodology_version": "3.9.2-source-parity",
+            "source_commit": content.get("source_commit"),
+            "native_command_id": content.get("command_id"),
+            "phase": content.get("phase"),
+        },
+    )
+
+
+def execute_uzi_command_panel_only(context):
+    rows, symbols, _query, source_refs, parent_ids = _snapshot_context(context)
+    return _uzi_native_command_artifact(
+        content=execute_panel_only(rows, symbols),
+        source_refs=source_refs,
+        parent_ids=parent_ids,
+    )
+
+
+def execute_uzi_command_scan_trap(context):
+    rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
+    return _uzi_native_command_artifact(
+        content=execute_scan_trap(rows, symbols, query=query),
+        source_refs=source_refs,
+        parent_ids=parent_ids,
+    )
+
+
+def execute_uzi_command_segmental_model(context):
+    rows, symbols, _query, source_refs, parent_ids = _snapshot_context(context)
+    return _uzi_native_command_artifact(
+        content=execute_segmental_model(rows, symbols, dict(context.node.inputs or {})),
+        source_refs=source_refs,
+        parent_ids=parent_ids,
+    )
+
+
 def evaluate_uzi_risk(context):
     rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
     inputs = dict(context.node.inputs or {})
@@ -1177,213 +1610,6 @@ def _tier1_request_artifact(*, artifact_type: str, content: dict, query) -> Arti
     )
 
 
-def compose_uzi_report(context):
-    normalized_query = context.require_artifact("normalized_query")
-    evidence = context.require_artifact("evidence_set")
-    valuation = context.require_artifact("valuation_model")
-    panel = (context.artifacts("investor_panel_review") or [None])[-1]
-    risk = (context.artifacts("risk_scan") or [None])[-1]
-    institutional = (context.artifacts("institutional_analysis") or [None])[-1]
-    workflow = (context.artifacts("research_workflow") or [None])[-1]
-    deep = (context.artifacts("deep_analysis") or [None])[-1]
-    dimension_coverage = (context.artifacts("uzi_dimension_coverage") or [None])[-1]
-    snapshot_bundle = (context.artifacts("stock_snapshot_bundle") or [None])[-1]
-    inputs = dict(context.node.inputs or {})
-    normalized_content = dict(normalized_query.content or {})
-    holding_context = dict(normalized_content.get("holding_context") or {})
-    profile = select_profile(inputs)
-    evidence_items = list(evidence.content.get("items") or [])
-    data_pipeline = (
-        dict((snapshot_bundle.content or {}).get("collection") or {})
-        if snapshot_bundle is not None
-        else {}
-    )
-    base_content = {
-        "conclusion": "",
-        "assessment": {
-            "status": "pack_methodology",
-            "summary": "UZI Finance Pack methods are presented from the current ArtifactBoard.",
-            "factors": [],
-        },
-        "evidence": [
-            _report_evidence_item(item, index)
-            for index, item in enumerate(evidence_items)
-        ],
-        "methodologies": [],
-        "scorecard": None,
-        "risk": [],
-        "follow_up": [],
-    }
-    base_source_refs = list(evidence.source_refs)
-    base_confidence = evidence.confidence
-    base_risk_flags = ["decision_support_only"]
-    panel_content = (
-        dict(panel.content)
-        if panel is not None
-        else {
-            "methodology_version": UZI_METHOD_VERSION,
-            "profile": profile["selected"],
-            "scope": "not_requested",
-            "panel_version": "uzi-adapted-1",
-            "votes": [],
-            "distribution": {},
-            "average_score": None,
-            "disagreement": {"exists": False, "summary": "本次请求未要求 Panel 方法论视角。"},
-            "confidence": 0.0,
-            "risk_flags": ["panel_not_requested"],
-        }
-    )
-    risk_content = (
-        dict(risk.content)
-        if risk is not None
-        else {
-            "methodology_version": UZI_METHOD_VERSION,
-            "profile": profile["selected"],
-            "risk_level": "data_gap",
-            "signals": [],
-            "signals_hit_count": 0,
-            "recommendation": "本次请求未要求风险扫描，不能据此判断外部风险。",
-            "confidence": 0.0,
-            "risk_flags": ["risk_scan_not_requested"],
-        }
-    )
-    report_content = dict(base_content)
-    report_content.update(
-        {
-            "uzi_profile": profile,
-            "valuation_model": dict(valuation.content),
-            "investor_panel_review": panel_content,
-            "risk_scan": risk_content,
-            "institutional_analysis": dict(institutional.content) if institutional is not None else None,
-            "research_workflow": dict(workflow.content) if workflow is not None else None,
-            "deep_analysis": dict(deep.content) if deep is not None else None,
-            "uzi_dimension_coverage": dict(dimension_coverage.content) if dimension_coverage is not None else None,
-            "uzi_data_pipeline": data_pipeline or None,
-            "presentation_artifact_type": "report_presentation",
-            "holding_context": holding_context or None,
-        }
-    )
-    report_content["conclusion"] = build_delivery_conclusion(
-        valuation.content,
-        panel_content,
-        risk_content,
-    )
-    report_content["risk"] = [
-        "证据完整性和时间新鲜度仍需在使用前复核。",
-        str(risk_content.get("recommendation") or "风险扫描未返回建议。"),
-        *[
-            f"模型输入缺口：{warning}"
-            for model in list(valuation.content.get("models") or [])
-            for warning in list(model.get("warnings") or [])
-        ],
-    ]
-    report_content["follow_up"] = [
-        "复核引用的快照、公告和方法论假设后再使用研究结果。",
-        "如需提高结论可靠性，补充同行、公告和外部风险核验数据。",
-    ]
-    source_refs = _unique_source_refs(
-        [
-            *base_source_refs,
-            *list(valuation.source_refs),
-            *(list(panel.source_refs) if panel is not None else []),
-            *(list(risk.source_refs) if risk is not None else []),
-            *(list(institutional.source_refs) if institutional is not None else []),
-            *(list(workflow.source_refs) if workflow is not None else []),
-            *(list(deep.source_refs) if deep is not None else []),
-            *(list(dimension_coverage.source_refs) if dimension_coverage is not None else []),
-            *(list(snapshot_bundle.source_refs) if snapshot_bundle is not None else []),
-        ]
-    )
-    if holding_context.get("source_fund_artifact_id"):
-        source_refs = _unique_source_refs(
-            [
-                *source_refs,
-                {
-                    "type": "fund_snapshot_artifact",
-                    "id": str(holding_context["source_fund_artifact_id"]),
-                    "locator": str(holding_context.get("source_fund_run_id") or ""),
-                },
-            ]
-        )
-    parents = [
-        normalized_query.artifact_id,
-        evidence.artifact_id,
-        valuation.artifact_id,
-        *( [panel.artifact_id] if panel is not None else [] ),
-        *( [risk.artifact_id] if risk is not None else [] ),
-        *( [institutional.artifact_id] if institutional is not None else [] ),
-        *( [workflow.artifact_id] if workflow is not None else [] ),
-        *( [deep.artifact_id] if deep is not None else [] ),
-        *( [dimension_coverage.artifact_id] if dimension_coverage is not None else [] ),
-        *( [snapshot_bundle.artifact_id] if snapshot_bundle is not None else [] ),
-    ]
-    confidence_values = [
-        _artifact_confidence(base_confidence),
-        _artifact_confidence(valuation.confidence),
-    ]
-    if panel is not None:
-        confidence_values.append(_artifact_confidence(panel.confidence))
-    if risk is not None:
-        confidence_values.append(_artifact_confidence(risk.confidence))
-    if institutional is not None:
-        confidence_values.append(_artifact_confidence(institutional.confidence))
-    if workflow is not None:
-        confidence_values.append(_artifact_confidence(workflow.confidence))
-    if deep is not None:
-        confidence_values.append(_artifact_confidence(deep.confidence))
-    if dimension_coverage is not None:
-        confidence_values.append(_artifact_confidence(dimension_coverage.confidence))
-    report = ArtifactDraft(
-        artifact_type="research_report",
-        content=report_content,
-        source_refs=source_refs,
-        parent_artifact_ids=parents,
-        confidence=min(confidence_values),
-        risk_flags=list(
-            dict.fromkeys(
-                [
-                    *base_risk_flags,
-                    *valuation.risk_flags,
-                    *(list(panel.risk_flags) if panel is not None else ["panel_not_requested"]),
-                    *(list(risk.risk_flags) if risk is not None else ["risk_scan_not_requested"]),
-                    *(list(institutional.risk_flags) if institutional is not None else []),
-                    *(list(workflow.risk_flags) if workflow is not None else []),
-                    *(list(deep.risk_flags) if deep is not None else []),
-                    *(list(dimension_coverage.risk_flags) if dimension_coverage is not None else []),
-                ]
-            )
-        ),
-        metadata={"profile": profile, "methodology_version": "3.9.2-adapted", "source_commit": profile.get("source_commit")},
-    )
-    presentation_content = build_presentation(
-        report_content,
-        valuation.content,
-        panel_content,
-        risk_content,
-        profile,
-        advanced={
-            "institutional_analysis": institutional.content if institutional is not None else None,
-            "research_workflow": workflow.content if workflow is not None else None,
-            "deep_analysis": deep.content if deep is not None else None,
-            "uzi_dimension_coverage": dimension_coverage.content if dimension_coverage is not None else None,
-            "uzi_data_pipeline": data_pipeline or None,
-        },
-        snapshot_rows=evidence_items,
-        data_pipeline=data_pipeline,
-    )
-    presentation_content["source_artifact_ids"] = parents
-    presentation = ArtifactDraft(
-        artifact_type="report_presentation",
-        content=presentation_content,
-        source_refs=source_refs,
-        parent_artifact_ids=parents,
-        confidence=report.confidence,
-        risk_flags=list(report.risk_flags),
-        metadata={"profile": profile, "methodology_version": "3.9.2-adapted", "source_commit": profile.get("source_commit")},
-    )
-    return [report, presentation]
-
-
 def evaluate_research_safety_gate(context):
     content = context.artifact.content if isinstance(context.artifact.content, dict) else {}
     risk_scan = content.get("risk_scan") if isinstance(content.get("risk_scan"), dict) else {}
@@ -1397,6 +1623,37 @@ def evaluate_research_safety_gate(context):
     return {
         "verdict": "fail" if reasons else "pass",
         "reason": "; ".join(reasons) if reasons else "research delivery passed source and safety checks",
+        "evidence_refs": list(context.artifact.source_refs),
+        "score": float(context.artifact.confidence or 0.0),
+    }
+
+
+def evaluate_uzi_native_report_gate(context):
+    """Fail closed when a native UZI report still has any critical issue."""
+
+    content = context.artifact.content if isinstance(context.artifact.content, dict) else {}
+    if content.get("delivery_type") not in {
+        "uzi_native_3_9_2",
+        "stock_compare_uzi_3_9_2",
+    }:
+        return {
+            "verdict": "pass",
+            "reason": "not a native UZI analyze-stock delivery",
+            "evidence_refs": list(context.artifact.source_refs),
+            "score": float(context.artifact.confidence or 0.0),
+        }
+    critical = int(content.get("critical_count") or 0)
+    allowed = content.get("report_allowed") is True
+    if not allowed or critical:
+        return {
+            "verdict": "fail",
+            "reason": f"UZI native critical gate blocked report export (critical_count={critical})",
+            "evidence_refs": list(context.artifact.source_refs),
+            "score": 0.0,
+        }
+    return {
+        "verdict": "pass",
+        "reason": "UZI native self-review passed with critical_count=0",
         "evidence_refs": list(context.artifact.source_refs),
         "score": float(context.artifact.confidence or 0.0),
     }
@@ -1648,6 +1905,37 @@ def _number(value: object) -> float | None:
 
 
 def _requested_snapshot_types(*, inputs: dict, sector: str | None) -> list[str]:
+    intent = str(inputs.get("intent") or "").strip()
+    if intent == "quick_scan":
+        # UZI /quick-scan is a fixed four-dimension command, not a profile.
+        return ["fundamental", "kline", "valuation", "trap"]
+    native_command_snapshot_types: dict[str, tuple[str, ...]] = {
+        "uzi_panel_only": ("market", "fundamental"),
+        "uzi_scan_trap": ("trap",),
+        "uzi_segmental_model": ("market", "fundamental", "chain", "events", "research"),
+        "uzi_dcf": ("market", "fundamental"),
+        "uzi_comps": ("market", "fundamental", "similar_stocks"),
+        "uzi_lbo": ("fundamental",),
+        "uzi_initiate": ("market", "fundamental", "similar_stocks"),
+        "uzi_earnings": ("market", "fundamental"),
+        "uzi_catalysts": ("market", "events"),
+        "uzi_thesis": ("market", "fundamental", "kline", "valuation"),
+        "uzi_screen": ("market", "fundamental", "kline", "valuation"),
+        "uzi_dd": ("market", "fundamental"),
+        "uzi_ic_memo": ("market", "fundamental", "similar_stocks"),
+        "uzi_ai_readiness": ("market", "chain", "industry", "moat", "events"),
+        "uzi_earnings_preview": ("market", "fundamental", "research"),
+        "uzi_model_update": ("market", "fundamental", "similar_stocks"),
+        "uzi_three_statement_method": ("fundamental",),
+        "uzi_accretion_dilution_method": ("market", "fundamental"),
+        "uzi_morning_note_method": ("market", "kline"),
+        "uzi_sector_review_method": ("market", "industry"),
+        "uzi_porter_bcg_method": ("market", "industry"),
+        "uzi_unit_economics_method": ("market", "fundamental"),
+        "uzi_value_creation_plan_method": ("market", "fundamental"),
+    }
+    if intent in native_command_snapshot_types:
+        return list(native_command_snapshot_types[intent])
     requested_methods = _unique_strings(inputs.get("requested_methods") or [])
     method_snapshot_types: dict[str, tuple[str, ...]] = {
         "ai_readiness": ("market", "chain", "industry", "events", "research", "moat"),
@@ -1680,7 +1968,6 @@ def _requested_snapshot_types(*, inputs: dict, sector: str | None) -> list[str]:
     explicit = inputs.get("snapshot_types")
     if isinstance(explicit, list) and explicit:
         return _unique_strings([*explicit, *method_required])
-    intent = str(inputs.get("intent") or "").strip()
     if intent == "sector_research":
         return [
             "sector",

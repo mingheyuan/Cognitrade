@@ -116,14 +116,49 @@ class FakeAgentOS:
                     "artifacts": [],
                 }
             else:
-                status = "completed_partial" if symbol in self.partial_symbols else "completed"
-                risks = ["quote_data_gap"] if status == "completed_partial" else []
+                status = "completed"
+                risks = ["quote_data_gap"] if symbol in self.partial_symbols else []
+                native_id = f"native-{symbol}"
                 self.details[run_id] = {
                     "mode": "graph",
                     "snapshot": {"status": status},
                     "artifacts": [
-                        {"artifact_type": "research_report", "status": "active", "content": {}, "risk_flags": risks},
-                        {"artifact_type": "report_presentation", "status": "active", "content": {}, "risk_flags": risks},
+                        {
+                            "artifact_id": native_id,
+                            "artifact_type": "uzi_native_analysis",
+                            "status": "active",
+                            "content": {
+                                "critical_count": 0,
+                                "report_allowed": True,
+                                "recovery_history": [],
+                                "results": [{
+                                    "self_review": {
+                                        "critical_count": 0,
+                                        "warning_count": len(risks),
+                                        "issues": [
+                                            {
+                                                "severity": "warning",
+                                                "issue": risk,
+                                                "suggested_fix": "补充真实数据后重算",
+                                            }
+                                            for risk in risks
+                                        ],
+                                    }
+                                }],
+                            },
+                            "risk_flags": risks,
+                        },
+                        {
+                            "artifact_id": f"report-{symbol}",
+                            "artifact_type": "research_report",
+                            "status": "active",
+                            "content": {
+                                "native_analysis_artifact_id": native_id,
+                                "critical_count": 0,
+                                "report_allowed": True,
+                            },
+                            "risk_flags": risks,
+                        },
                     ],
                 }
                 if symbol in self.raise_after_completion_symbols:
@@ -368,6 +403,54 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
             self.assertIn("README.txt", bundle.namelist())
             self.assertEqual(len([name for name in bundle.namelist() if name.endswith(".pdf")]), 2)
+
+    def test_completed_partial_and_legacy_presentation_cannot_bypass_uzi_gate(self) -> None:
+        detail = {
+            "mode": "graph",
+            "snapshot": {"status": "completed_partial"},
+            "artifacts": [
+                {"artifact_id": "report", "artifact_type": "research_report", "status": "active", "content": {}},
+                {"artifact_id": "presentation", "artifact_type": "report_presentation", "status": "active", "content": {}},
+            ],
+        }
+
+        available, gaps = self.service._report_state(detail)
+
+        self.assertFalse(available)
+        self.assertIn("uzi_native_analysis_missing", gaps)
+
+    def test_native_critical_blocks_holding_report_delivery(self) -> None:
+        detail = {
+            "mode": "graph",
+            "snapshot": {"status": "completed_partial"},
+            "artifacts": [
+                {
+                    "artifact_id": "native",
+                    "artifact_type": "uzi_native_analysis",
+                    "status": "active",
+                    "content": {
+                        "critical_count": 1,
+                        "report_allowed": False,
+                        "results": [{"self_review": {"issues": [{"severity": "critical", "issue": "缺少真实价格"}]}}],
+                    },
+                },
+                {
+                    "artifact_id": "report",
+                    "artifact_type": "research_report",
+                    "status": "active",
+                    "content": {
+                        "native_analysis_artifact_id": "native",
+                        "critical_count": 1,
+                        "report_allowed": False,
+                    },
+                },
+            ],
+        }
+
+        available, gaps = self.service._report_state(detail)
+
+        self.assertFalse(available)
+        self.assertIn("uzi_critical_quality_gate_blocked", gaps)
 
     def test_batch_scope_requires_exact_user_and_tenant_match(self) -> None:
         created = self.service.create_batch(

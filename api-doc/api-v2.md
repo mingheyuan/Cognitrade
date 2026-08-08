@@ -467,9 +467,8 @@ VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
 
 ## UZI 数据完整性与真实兜底字段
 
-股票研究的 `research_report` 新增 `uzi_data_pipeline`，对应的
-`report_presentation` 新增 `data_pipeline`。两者来自同一个
-`stock_snapshot_bundle.collection`，不会在前端重算：
+股票研究的完整恢复记录保存在 `stock_snapshot_bundle.collection` 与
+`uzi_native_analysis.recovery_history`，前端从 ArtifactBoard 读取，不重算：
 
 - `uzi_integrity.before_recovery`：主 provider 完成后的 18 项检查、关键/可选缺口、16 个扩展维度缺口与逐项恢复任务；
 - `uzi_integrity.after_recovery`：MX、DDGS、Playwright 全部结束后的复检；顶层覆盖率字段与此一致；

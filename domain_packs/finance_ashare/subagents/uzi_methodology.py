@@ -15,6 +15,7 @@ import statistics
 from typing import Any
 
 from domain_packs.finance_ashare.subagents.uzi_panel_registry import (
+    PANEL_REGISTRY,
     UZI_PANEL_SOURCE_COMMIT,
     UZI_PANEL_VERSION,
     panel_for_profile,
@@ -1820,6 +1821,204 @@ def build_panel_review(snapshot_rows: list[dict[str, Any]], symbols: list[str], 
     }
 
 
+UZI_QUICK_SCAN_INVESTOR_IDS: tuple[str, ...] = (
+    "buffett",
+    "duan",
+    "lynch",
+    "oneill",
+    "wood",
+    "marks",
+    "minervini",
+    "zhang_mz",
+    "zhao_lg",
+    "chen_xq",
+)
+UZI_QUICK_SCAN_DIMENSIONS: tuple[str, ...] = (
+    "1_financials",
+    "2_kline",
+    "10_valuation",
+    "18_trap",
+)
+
+
+def _quick_scan_dimension_data(
+    snapshot_rows: list[dict[str, Any]],
+    symbol: str,
+    snapshot_type: str,
+) -> tuple[dict[str, Any], str]:
+    rows = [
+        row
+        for row in snapshot_rows
+        if isinstance(row, dict)
+        and str(row.get("symbol") or "") == symbol
+        and str(row.get("snapshot_type") or "") == snapshot_type
+    ]
+    if not rows:
+        return {}, "data_gap"
+    row = rows[-1]
+    facts = _facts(row)
+    raw = facts.get("_uzi_raw_result")
+    data = raw.get("data") if isinstance(raw, dict) else None
+    if not isinstance(data, dict):
+        data = {
+            key: value
+            for key, value in facts.items()
+            if not str(key).startswith("_key")
+            and not str(key).startswith("_uzi_")
+            and key not in {"availability", "market_overview", "financial_abstract", "history"}
+        }
+    quality = str(row.get("quality_status") or facts.get("availability") or "").strip().lower()
+    if not data or quality == "data_gap":
+        return {}, "data_gap"
+    return dict(data), quality or "available"
+
+
+def build_quick_scan(snapshot_rows: list[dict[str, Any]], symbols: list[str]) -> dict[str, Any]:
+    """Implement UZI 3.9.2 `/quick-scan` as its own delivery contract.
+
+    The command is deliberately not an alias for Cognitrade's historical
+    ``lite`` profile: it consumes exactly dimensions 1/2/10/18, evaluates the
+    exact ten seats named by upstream, and emits Markdown rather than HTML.
+    """
+
+    symbol = str((symbols or [""])[0] or "").strip()
+    snapshot_types = ("fundamental", "kline", "valuation", "trap")
+    dimension_status: dict[str, str] = {}
+    for dimension_id, snapshot_type in zip(UZI_QUICK_SCAN_DIMENSIONS, snapshot_types):
+        _data, status = _quick_scan_dimension_data(snapshot_rows, symbol, snapshot_type)
+        dimension_status[dimension_id] = status
+
+    features = build_features(snapshot_rows, symbol) if symbol else {}
+    trap_data, trap_status = _quick_scan_dimension_data(snapshot_rows, symbol, "trap")
+    trap_level = str(trap_data.get("trap_level") or "").strip() or None
+    # Upstream stock_features defaults an absent trap payload to safe.  The
+    # product policy is stricter: only a real dimension-18 observation can
+    # establish safety.
+    features["trap_level"] = trap_level
+    features["is_safe"] = ("安全" in trap_level) if trap_level else None
+
+    seats_by_id = {str(row.get("id") or ""): row for row in PANEL_REGISTRY}
+    votes = [
+        {"symbol": symbol, **_registered_panel_vote(dict(seats_by_id[investor_id]), features)}
+        for investor_id in UZI_QUICK_SCAN_INVESTOR_IDS
+    ]
+    active_votes = [
+        vote
+        for vote in votes
+        if vote.get("signal") != "skip"
+        and int(vote.get("pass_count") or 0) + int(vote.get("fail_count") or 0) > 0
+    ]
+    scores = [
+        float(vote["score"])
+        for vote in active_votes
+        if isinstance(vote.get("score"), (int, float)) and float(vote["score"]) >= 0
+    ]
+    aggregate_score = round(sum(scores) / len(scores), 1) if scores else None
+    if aggregate_score is None:
+        verdict = "核心维度证据不足，暂不能形成速判结论"
+    elif aggregate_score >= 65:
+        verdict = "核心四维与方法论投票整体偏积极，但仍需核对风险与缺口"
+    elif aggregate_score < 35:
+        verdict = "核心四维与方法论投票整体偏谨慎，不宜忽略已识别风险"
+    else:
+        verdict = "核心四维与方法论投票分歧较大，当前以中性观察为宜"
+
+    risks: list[str] = []
+    for detail in list(trap_data.get("signals_hit_detail") or []):
+        if not isinstance(detail, dict):
+            continue
+        name = str(detail.get("name") or "").strip()
+        evidence = "、".join(str(item) for item in list(detail.get("evidence_kws") or []) if str(item).strip())
+        if name:
+            risks.append(f"{name}{f'（{evidence}）' if evidence else ''}")
+    missing_dimensions = [key for key, status in dimension_status.items() if status == "data_gap"]
+    if trap_status == "data_gap":
+        risks.append("杀猪盘检测没有取得真实来源结果，安全等级未知")
+    if missing_dimensions:
+        risks.append(f"数据维度缺口：{', '.join(missing_dimensions)}")
+    risks = list(dict.fromkeys(risks))[:2]
+    if not risks:
+        risks = ["未命中明确推广风险，但速判只覆盖四个核心维度"]
+
+    signal_labels = {
+        "bullish": "看多",
+        "bearish": "看空",
+        "neutral": "中性",
+        "skip": "跳过",
+    }
+    vote_lines = [
+        (
+            f"- {vote['perspective_label']}：{signal_labels.get(str(vote.get('signal') or ''), str(vote.get('signal') or '未知'))}"
+            + (
+                f" · {float(vote['score']):.1f} 分"
+                if isinstance(vote.get("score"), (int, float)) and float(vote["score"]) >= 0
+                else ""
+            )
+            + f" · {vote.get('headline') or vote.get('reasoning') or '无有效规则命中'}"
+        )
+        for vote in votes
+    ]
+    markdown = "\n".join(
+        [
+            f"# {symbol or '未知标的'} · UZI 速判",
+            "",
+            f"**一句话定调：** {verdict}。",
+            "",
+            f"**综合评分：** {f'{aggregate_score:.1f}/100' if aggregate_score is not None else '数据不足，未评分'}",
+            "",
+            "## 10 位方法论投票",
+            "",
+            *vote_lines,
+            "",
+            f"**杀猪盘安全等级：** {trap_level or '数据缺口，无法判断'}",
+            "",
+            "## 关键风险",
+            "",
+            *[f"- {risk}" for risk in risks],
+            "",
+            "> 仅为基于当前真实来源的研究辅助信息，不构成投资建议。",
+        ]
+    )
+    available_count = sum(status != "data_gap" for status in dimension_status.values())
+    quality_status = (
+        "available"
+        if available_count == len(UZI_QUICK_SCAN_DIMENSIONS) and aggregate_score is not None
+        else "degraded"
+        if available_count
+        else "data_gap"
+    )
+    confidence = (
+        round(sum(float(vote.get("confidence") or 0.0) for vote in active_votes) / len(active_votes), 4)
+        if active_votes
+        else 0.0
+    )
+    return {
+        "command": "quick-scan",
+        "methodology_version": UZI_METHOD_VERSION,
+        "source_commit": UZI_SOURCE_COMMIT,
+        "symbol": symbol or None,
+        "required_dimensions": list(UZI_QUICK_SCAN_DIMENSIONS),
+        "dimension_status": dimension_status,
+        "investor_ids": list(UZI_QUICK_SCAN_INVESTOR_IDS),
+        "verdict": verdict,
+        "aggregate_score": aggregate_score,
+        "votes": votes,
+        "trap_level": trap_level,
+        "trap_signals_hit": trap_data.get("signals_hit_count"),
+        "risks": risks,
+        "markdown": markdown,
+        "output_format": "markdown",
+        "html_generated": False,
+        "quality_status": quality_status,
+        "confidence": confidence,
+        "data_gap": missing_dimensions,
+        "risk_flags": [
+            "decision_support_only",
+            *(('trap_status_unknown',) if trap_status == "data_gap" else ()),
+        ],
+    }
+
+
 _PANEL_FIELD_FEATURES: dict[str, tuple[str, ...]] = {
     "1_financials": ("revenue_latest_yi", "net_profit_latest_yi", "operating_cash_flow_yi", "roe", "net_margin"),
     "2_kline": ("stage_num", "ma_bull_aligned", "rsi", "volatility_1y"),
@@ -2466,9 +2665,12 @@ __all__ = [
     "UZI_SOURCE_COMMIT",
     "build_features",
     "build_panel_review",
+    "build_quick_scan",
     "build_presentation",
     "build_risk_scan",
     "build_delivery_conclusion",
     "build_valuation_model",
     "select_profile",
+    "UZI_QUICK_SCAN_DIMENSIONS",
+    "UZI_QUICK_SCAN_INVESTOR_IDS",
 ]

@@ -27,4 +27,18 @@ describe('ResearchComposer', () => {
       { research_profile: 'deep' },
     )
   })
+
+  it('submits UZI quick scan without a research profile', () => {
+    const onSubmit = vi.fn()
+    render(<ResearchComposer onSubmit={onSubmit} running={false} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '选择研究意图，当前为自动识别' }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'UZI 股票速判' }))
+    fireEvent.change(screen.getByRole('textbox', { name: '研究问题' }), {
+      target: { value: '速判贵州茅台' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '开始研究' }))
+
+    expect(onSubmit).toHaveBeenCalledWith('速判贵州茅台', 'quick_scan', undefined)
+  })
 })

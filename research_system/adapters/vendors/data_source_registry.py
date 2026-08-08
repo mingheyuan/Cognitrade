@@ -249,6 +249,7 @@ class DataSourceRegistry:
         access_map: dict[str, SourceAccess] = {
             "http": "http",
             "akshare": "sdk",
+            "yfinance": "sdk",
             "mx_api": "api",
             "playwright": "browser",
             "ddgs": "search",

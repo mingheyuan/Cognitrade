@@ -26,7 +26,8 @@ const SPECIALIST_METHOD_TYPES = new Set<FinanceArtifactType>([
   'holding_rebalance', 'portfolio_rebalance', 'three_statement_model', 'quick_lbo',
   'accretion_dilution', 'segmental_model', 'initiation_report', 'earnings_review',
   'catalyst_calendar', 'thesis_tracker', 'morning_note', 'ic_memo', 'porter_bcg',
-  'dd_checklist', 'unit_economics', 'value_creation_plan',
+  'dd_checklist', 'unit_economics', 'value_creation_plan', 'uzi_native_method_result',
+  'uzi_native_command_result',
 ])
 
 type MethodDeliveryDossierProps = {

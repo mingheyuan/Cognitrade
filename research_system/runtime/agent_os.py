@@ -1255,7 +1255,7 @@ class AgentOS:
             intent_outputs = list(intent_definition.output_artifact_types) if intent_definition else []
             if intent_outputs:
                 # Intent-specific delivery contracts must not inherit unrelated
-                # report contracts such as report_presentation. The planner will
+                # report contracts such as research_report. The planner will
                 # add the intent's specialist artifacts and any profile outputs.
                 required = list(dict.fromkeys(str(item).strip() for item in intent_outputs if str(item).strip()))
                 required_outputs_source = "intent_output_contract"

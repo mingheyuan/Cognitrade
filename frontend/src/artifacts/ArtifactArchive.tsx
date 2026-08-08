@@ -30,7 +30,7 @@ const GROUPS: Array<{
   {
     id: 'delivery',
     title: '结论与交付',
-    types: ['main_agent_synthesis', 'research_report', 'report_presentation'],
+    types: ['main_agent_synthesis', 'research_report', 'quick_scan'],
   },
   {
     id: 'analysis',
@@ -52,7 +52,7 @@ const GROUPS: Array<{
     id: 'methods',
     title: '专项方法与组合',
     types: [
-      'ai_readiness', 'earnings_preview', 'model_update', 'returns_attribution',
+      'uzi_native_method_result', 'uzi_native_command_result', 'ai_readiness', 'earnings_preview', 'model_update', 'returns_attribution',
       'holding_rebalance', 'portfolio_rebalance', 'three_statement_model', 'quick_lbo',
       'accretion_dilution', 'segmental_model', 'initiation_report', 'earnings_review',
       'catalyst_calendar', 'thesis_tracker', 'morning_note', 'ic_memo', 'porter_bcg',
@@ -112,7 +112,7 @@ function ArtifactCard({ artifact, artifactType, index }: { artifact: ArtifactRec
   const riskFlags = Array.isArray(artifact.risk_flags) ? artifact.risk_flags : []
   const confidence = numberValue(artifact.confidence)
   const quality = qualityStatus(artifact)
-  const defaultOpen = ['research_report', 'main_agent_synthesis', 'fund_analysis'].includes(artifactType) && index === 0
+  const defaultOpen = ['research_report', 'main_agent_synthesis', 'fund_analysis', 'quick_scan'].includes(artifactType) && index === 0
   return (
     <details className="artifact-archive-card" open={defaultOpen} data-artifact-type={artifactType}>
       <summary>

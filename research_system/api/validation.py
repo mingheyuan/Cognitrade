@@ -12,6 +12,34 @@ from research_system.schemas.protocol import RequestEnvelope
 SUPPORTED_RESEARCH_INTENTS = frozenset(
     {
         "stock_check",
+        "uzi_analyze_stock",
+        "quick_scan",
+        "uzi_dcf",
+        "uzi_panel_only",
+        "uzi_scan_trap",
+        "uzi_segmental_model",
+        "uzi_comps",
+        "uzi_lbo",
+        "uzi_initiate",
+        "uzi_earnings",
+        "uzi_catalysts",
+        "uzi_thesis",
+        "uzi_screen",
+        "uzi_dd",
+        "uzi_ic_memo",
+        "uzi_ai_readiness",
+        "uzi_earnings_preview",
+        "uzi_model_update",
+        "uzi_three_statement_method",
+        "uzi_accretion_dilution_method",
+        "uzi_morning_note_method",
+        "uzi_sector_review_method",
+        "uzi_porter_bcg_method",
+        "uzi_unit_economics_method",
+        "uzi_value_creation_plan_method",
+        "uzi_portfolio_rebalance_method",
+        "uzi_returns",
+        "uzi_rebalance",
         "stock_compare",
         "stock_screen",
         "fund_research",
@@ -94,6 +122,7 @@ _SCREEN_STYLES = frozenset({"value", "growth", "quality", "gulp", "short"})
 _RESEARCH_PROFILES = frozenset({"lite", "medium", "deep"})
 _UZI_PROFILE_INTENTS = frozenset({
     "stock_check",
+    "uzi_analyze_stock",
     "stock_compare",
     "stock_screen",
     "sector_research",
@@ -115,6 +144,37 @@ _STOCK_FIELDS = {
 }
 _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
     "stock_check": set(_STOCK_FIELDS),
+    "uzi_analyze_stock": set(_STOCK_FIELDS),
+    "quick_scan": {"symbol", *_COMMON_REQUEST_FIELDS},
+    "uzi_dcf": {"symbol", "method_assumptions", *_COMMON_REQUEST_FIELDS},
+    "uzi_panel_only": {"symbol", *_COMMON_REQUEST_FIELDS},
+    "uzi_scan_trap": {"symbol", *_COMMON_REQUEST_FIELDS},
+    "uzi_segmental_model": {"symbol", "segmental_model", *_COMMON_REQUEST_FIELDS},
+    "uzi_comps": {"symbol", *_COMMON_REQUEST_FIELDS},
+    "uzi_lbo": {"symbol", "method_assumptions", *_COMMON_REQUEST_FIELDS},
+    "uzi_initiate": {"symbol", *_COMMON_REQUEST_FIELDS},
+    "uzi_earnings": {"symbol", "method_assumptions", *_COMMON_REQUEST_FIELDS},
+    "uzi_catalysts": {"symbol", *_COMMON_REQUEST_FIELDS},
+    "uzi_thesis": {"symbol", "method_assumptions", *_COMMON_REQUEST_FIELDS},
+    "uzi_screen": {"symbol", "method_assumptions", *_COMMON_REQUEST_FIELDS},
+    "uzi_dd": {"symbol", *_COMMON_REQUEST_FIELDS},
+    "uzi_ic_memo": {"symbol", *_COMMON_REQUEST_FIELDS},
+    "uzi_ai_readiness": {"symbol", *_COMMON_REQUEST_FIELDS},
+    "uzi_earnings_preview": {"symbol", *_COMMON_REQUEST_FIELDS},
+    "uzi_model_update": {"symbol", "model_updates", *_COMMON_REQUEST_FIELDS},
+    "uzi_three_statement_method": {"symbol", "method_assumptions", *_COMMON_REQUEST_FIELDS},
+    "uzi_accretion_dilution_method": {"symbol", "method_assumptions", *_COMMON_REQUEST_FIELDS},
+    "uzi_morning_note_method": {"symbol", *_COMMON_REQUEST_FIELDS},
+    "uzi_sector_review_method": {"symbol", *_COMMON_REQUEST_FIELDS},
+    "uzi_porter_bcg_method": {"symbol", *_COMMON_REQUEST_FIELDS},
+    "uzi_unit_economics_method": {"symbol", "method_assumptions", *_COMMON_REQUEST_FIELDS},
+    "uzi_value_creation_plan_method": {"symbol", "method_assumptions", *_COMMON_REQUEST_FIELDS},
+    "uzi_portfolio_rebalance_method": {"portfolio_holdings", "asset_class_targets", *_COMMON_REQUEST_FIELDS},
+    "uzi_returns": {"portfolio_holdings", "benchmark_return", *_COMMON_REQUEST_FIELDS},
+    "uzi_rebalance": {
+        "portfolio_holdings", "rebalance_targets", "drift_threshold",
+        "accept_uzi_native_fee_schedule", *_COMMON_REQUEST_FIELDS,
+    },
     "stock_compare": {"symbols", *_STOCK_FIELDS},
     "stock_screen": {
         "sector_query",
@@ -264,6 +324,8 @@ def validate_research_request(
         _validate_fund_research_constraints(constraints)
     elif intent == "portfolio_research":
         _validate_portfolio_research_constraints(constraints)
+    elif intent in {"uzi_returns", "uzi_rebalance", "uzi_portfolio_rebalance_method"}:
+        _validate_portfolio_research_constraints(constraints)
     return request.model_copy(update={"intent": intent, "user_query": query, "constraints": constraints})
 
 
@@ -341,6 +403,7 @@ def _validate_common_constraints(
         "skip_enrichment",
         "auto_approve",
         "force_auto_approve",
+        "accept_uzi_native_fee_schedule",
     ):
         if field_name in constraints and not isinstance(constraints[field_name], bool):
             _invalid_constraint(field_name, "must be a boolean")
@@ -563,10 +626,15 @@ def _validate_method_assumptions(value: Any) -> None:
     if not isinstance(value, dict) or not value:
         _invalid_constraint("method_assumptions", "must be a non-empty object")
     allowed_methods = {
+        "dcf",
         "three_statement",
         "quick_lbo",
         "accretion_dilution",
+        "earnings_review",
+        "thesis_tracker",
+        "quantitative_screen",
         "value_creation_plan",
+        "unit_economics",
     }
     unknown = sorted(str(key) for key in value if str(key) not in allowed_methods)
     if unknown:
@@ -576,7 +644,7 @@ def _validate_method_assumptions(value: Any) -> None:
         if item is None or isinstance(item, str):
             return
         if isinstance(item, bool):
-            _invalid_constraint(path, "must not contain boolean values")
+            return
         if isinstance(item, (int, float)):
             _require_finite_number(item, field_name=path)
             return
@@ -604,20 +672,59 @@ def _validate_method_assumptions(value: Any) -> None:
 
 
 def _validate_method_assumption_contract(method: str, assumptions: dict[str, Any]) -> None:
+    if method == "dcf":
+        allowed = {
+            "stage1_growth", "stage2_growth", "stage1_years", "stage2_years",
+            "terminal_g", "beta", "tax", "target_debt_ratio",
+        }
+        unknown = sorted(set(map(str, assumptions)) - allowed)
+        if unknown:
+            _invalid_constraint("method_assumptions.dcf", f"contains unsupported fields: {', '.join(unknown)}")
+        for key, item in assumptions.items():
+            number = _require_finite_number(item, field_name=f"method_assumptions.dcf.{key}")
+            if key in {"stage1_years", "stage2_years"} and (number <= 0 or number != int(number)):
+                _invalid_constraint(f"method_assumptions.dcf.{key}", "must be a positive integer")
+        return
+
+    if method == "earnings_review":
+        if set(assumptions) != {"consensus"} or not isinstance(assumptions.get("consensus"), dict):
+            _invalid_constraint("method_assumptions.earnings_review", "must contain exactly a consensus object")
+        return
+
+    if method == "thesis_tracker":
+        if set(assumptions) != {"direction"}:
+            _invalid_constraint("method_assumptions.thesis_tracker", "must contain exactly direction")
+        _require_enum(assumptions["direction"], field_name="method_assumptions.thesis_tracker.direction", allowed={"long", "short"})
+        return
+
+    if method == "quantitative_screen":
+        if set(assumptions) != {"style"}:
+            _invalid_constraint("method_assumptions.quantitative_screen", "must contain exactly style")
+        _require_enum(assumptions["style"], field_name="method_assumptions.quantitative_screen.style", allowed=_SCREEN_STYLES)
+        return
+
+    if method in {"unit_economics", "value_creation_plan"}:
+        if set(assumptions) != {"accept_uzi_native_defaults"} or assumptions.get("accept_uzi_native_defaults") is not True:
+            _invalid_constraint(
+                f"method_assumptions.{method}",
+                "must explicitly set accept_uzi_native_defaults=true",
+            )
+        return
+
     required_keys = {
         "three_statement": {
-            "revenue_growth_path", "capex_to_revenue",
-            "working_capital_to_incremental_revenue",
+            "revenue_growth_y1", "revenue_growth_y2", "revenue_growth_y3",
+            "revenue_growth_y4", "revenue_growth_y5", "gross_margin",
+            "opex_pct_revenue", "tax_rate", "capex_pct_revenue",
+            "dep_pct_revenue", "nwc_pct_revenue",
         },
         "quick_lbo": {
             "entry_multiple", "debt_multiple", "exit_multiple",
-            "annual_ebitda_growth", "annual_debt_paydown_pct", "hold_years",
+            "hold_years", "ebitda_growth", "interest_rate",
         },
         "accretion_dilution": {
-            "target_net_income", "new_shares", "after_tax_synergies",
-            "after_tax_financing_cost",
+            "target", "premium_pct", "cash_pct", "synergies_yi", "new_debt_rate",
         },
-        "value_creation_plan": {"levers"},
     }[method]
     actual_keys = {str(key) for key in assumptions}
     missing = sorted(required_keys - actual_keys)
@@ -634,40 +741,10 @@ def _validate_method_assumption_contract(method: str, assumptions: dict[str, Any
         )
 
     if method == "three_statement":
-        growth_path = assumptions["revenue_growth_path"]
-        if not isinstance(growth_path, list) or not growth_path:
-            _invalid_constraint(
-                "method_assumptions.three_statement.revenue_growth_path",
-                "must be a non-empty array of finite numbers",
-            )
-        if len(growth_path) > 20:
-            _invalid_constraint(
-                "method_assumptions.three_statement.revenue_growth_path",
-                "must contain at most 20 periods",
-            )
-        for index, item in enumerate(growth_path):
-            growth = _require_finite_number(
-                item,
-                field_name=f"method_assumptions.three_statement.revenue_growth_path.{index}",
-            )
-            if growth <= -1:
-                _invalid_constraint(
-                    f"method_assumptions.three_statement.revenue_growth_path.{index}",
-                    "must be greater than -1",
-                )
-        capex = _require_finite_number(
-            assumptions["capex_to_revenue"],
-            field_name="method_assumptions.three_statement.capex_to_revenue",
-        )
-        if capex < 0:
-            _invalid_constraint(
-                "method_assumptions.three_statement.capex_to_revenue",
-                "must be non-negative",
-            )
-        _require_finite_number(
-            assumptions["working_capital_to_incremental_revenue"],
-            field_name="method_assumptions.three_statement.working_capital_to_incremental_revenue",
-        )
+        for key in required_keys:
+            number = _require_finite_number(assumptions[key], field_name=f"method_assumptions.three_statement.{key}")
+            if key.startswith("revenue_growth_") and number <= -1:
+                _invalid_constraint(f"method_assumptions.three_statement.{key}", "must be greater than -1")
         return
 
     if method == "quick_lbo":
@@ -686,15 +763,10 @@ def _validate_method_assumption_contract(method: str, assumptions: dict[str, Any
             _invalid_constraint(
                 "method_assumptions.quick_lbo.debt_multiple", "must be non-negative"
             )
-        if numbers["annual_ebitda_growth"] <= -1:
+        if numbers["ebitda_growth"] <= -1:
             _invalid_constraint(
-                "method_assumptions.quick_lbo.annual_ebitda_growth",
+                "method_assumptions.quick_lbo.ebitda_growth",
                 "must be greater than -1",
-            )
-        if not 0 <= numbers["annual_debt_paydown_pct"] <= 1:
-            _invalid_constraint(
-                "method_assumptions.quick_lbo.annual_debt_paydown_pct",
-                "must be between 0 and 1",
             )
         hold_years = numbers["hold_years"]
         if hold_years <= 0 or hold_years != int(hold_years):
@@ -705,36 +777,42 @@ def _validate_method_assumption_contract(method: str, assumptions: dict[str, Any
         return
 
     if method == "accretion_dilution":
+        if not isinstance(assumptions["target"], dict) or not assumptions["target"]:
+            _invalid_constraint("method_assumptions.accretion_dilution.target", "must be a non-empty object")
+        target = assumptions["target"]
+        target_required = {"ticker", "name", "shares_yi", "price", "eps", "pe", "net_income_yi"}
+        target_actual = {str(key) for key in target}
+        target_missing = sorted(target_required - target_actual)
+        target_unknown = sorted(target_actual - target_required)
+        if target_missing:
+            _invalid_constraint(
+                "method_assumptions.accretion_dilution.target",
+                f"missing required fields: {', '.join(target_missing)}",
+            )
+        if target_unknown:
+            _invalid_constraint(
+                "method_assumptions.accretion_dilution.target",
+                f"contains unsupported fields: {', '.join(target_unknown)}",
+            )
+        _require_non_empty_string(target["ticker"], field_name="method_assumptions.accretion_dilution.target.ticker")
+        _require_non_empty_string(target["name"], field_name="method_assumptions.accretion_dilution.target.name")
+        for key in target_required - {"ticker", "name"}:
+            number = _require_finite_number(
+                target[key], field_name=f"method_assumptions.accretion_dilution.target.{key}"
+            )
+            if number < 0:
+                _invalid_constraint(
+                    f"method_assumptions.accretion_dilution.target.{key}", "must be non-negative"
+                )
         numbers = {
             key: _require_finite_number(
                 assumptions[key], field_name=f"method_assumptions.accretion_dilution.{key}"
             )
-            for key in required_keys
+            for key in required_keys - {"target"}
         }
-        if numbers["new_shares"] < 0:
-            _invalid_constraint(
-                "method_assumptions.accretion_dilution.new_shares",
-                "must be non-negative",
-            )
-        if numbers["after_tax_financing_cost"] < 0:
-            _invalid_constraint(
-                "method_assumptions.accretion_dilution.after_tax_financing_cost",
-                "must be non-negative",
-            )
+        if not 0 <= numbers["cash_pct"] <= 1:
+            _invalid_constraint("method_assumptions.accretion_dilution.cash_pct", "must be between 0 and 1")
         return
-
-    levers = assumptions["levers"]
-    if not isinstance(levers, list) or not levers:
-        _invalid_constraint(
-            "method_assumptions.value_creation_plan.levers",
-            "must be a non-empty array",
-        )
-    for index, lever in enumerate(levers):
-        path = f"method_assumptions.value_creation_plan.levers.{index}"
-        if not isinstance(lever, dict) or set(lever) != {"name", "ebitda_impact"}:
-            _invalid_constraint(path, "must contain exactly name and ebitda_impact")
-        _require_non_empty_string(lever["name"], field_name=f"{path}.name")
-        _require_finite_number(lever["ebitda_impact"], field_name=f"{path}.ebitda_impact")
 
 
 def _require_non_empty_string(value: Any, *, field_name: str) -> str:

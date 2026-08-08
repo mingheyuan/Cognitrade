@@ -239,7 +239,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     headers=headers,
                 ).json()
 
-            self.assertEqual(prior["status"], "completed_partial")
+            self.assertEqual(prior["status"], "gated")
         self.assertEqual(review_response.status_code, 200, review_response.text)
         self.assertEqual(review_response.json()["status"], "completed_partial")
         review_artifact = next(

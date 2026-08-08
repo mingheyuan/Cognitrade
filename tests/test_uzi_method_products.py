@@ -237,7 +237,8 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
         for path in pack_root.rglob("*"):
             if not path.is_file() or path.suffix not in {".py", ".yaml", ".json"}:
                 continue
-            if "migration" in path.relative_to(pack_root).parts:
+            relative_parts = path.relative_to(pack_root).parts
+            if "migration" in relative_parts or "vendor" in relative_parts:
                 continue
             content = path.read_text(encoding="utf-8")
             for marker in forbidden:
@@ -301,10 +302,9 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
         self.assertEqual(set(policies["research_profiles"]), {"lite", "medium", "deep"})
         self.assertNotIn("default_profile", policies)
         self.assertEqual(policies["research_profiles"]["lite"]["methods"], ["dcf"])
-        self.assertIn("institutional_analysis", policies["profile_outputs"]["medium"])
-        self.assertIn("research_workflow", policies["profile_outputs"]["medium"])
-        self.assertNotIn("deep_analysis", policies["profile_outputs"]["medium"])
-        self.assertIn("deep_analysis", policies["profile_outputs"]["deep"])
+        self.assertEqual(policies["profile_outputs"]["lite"], ["research_report"])
+        self.assertEqual(policies["profile_outputs"]["medium"], ["research_report"])
+        self.assertEqual(policies["profile_outputs"]["deep"], ["research_report"])
 
     def test_migration_ledger_has_no_planned_or_partial_capability(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -330,9 +330,17 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
                     "requested_methods": ["three_statement"],
                     "method_assumptions": {
                         "three_statement": {
-                            "revenue_growth_path": [0.1, 0.08],
-                            "capex_to_revenue": 0.05,
-                            "working_capital_to_incremental_revenue": 0.1,
+                            "revenue_growth_y1": 0.10,
+                            "revenue_growth_y2": 0.08,
+                            "revenue_growth_y3": 0.07,
+                            "revenue_growth_y4": 0.06,
+                            "revenue_growth_y5": 0.05,
+                            "gross_margin": 0.35,
+                            "opex_pct_revenue": 0.18,
+                            "tax_rate": 0.25,
+                            "capex_pct_revenue": 0.05,
+                            "dep_pct_revenue": 0.03,
+                            "nwc_pct_revenue": 0.10,
                         }
                     },
                 },

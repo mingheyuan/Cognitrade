@@ -41,13 +41,21 @@ jobs:
           tests.test_api_v2_finance
           tests.test_backtest_strategies
           tests.test_uzi_method_products
+          tests.test_uzi_392_vendor_runtime
+          tests.test_uzi_source_parity
+          tests.test_uzi_392_commands
+          tests.test_uzi_392_native_methods
+          tests.test_uzi_392_analysis
+          tests.test_uzi_quick_scan
+          tests.test_uzi_strict_recovery
+          tests.test_uzi_native_report
           tests.test_finance_artifact_ui_contracts
 
   backend:
     name: Complete backend suite
     needs: finance-contracts
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       COGNITRADE_API_ALLOW_UNAUTHENTICATED: "true"
       PYTHONUNBUFFERED: "1"

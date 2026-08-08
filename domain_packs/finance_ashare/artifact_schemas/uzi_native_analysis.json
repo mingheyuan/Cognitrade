@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "source_commit",
+    "methodology_version",
+    "profile",
+    "results",
+    "critical_count",
+    "warning_count",
+    "report_allowed",
+    "quality_status",
+    "recovery_history"
+  ],
+  "properties": {
+    "source_commit": {"type": "string"},
+    "methodology_version": {"type": "string"},
+    "profile": {"enum": ["lite", "medium", "deep"]},
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "x-business-extensible": true
+      }
+    },
+    "critical_count": {"type": "integer", "minimum": 0},
+    "warning_count": {"type": "integer", "minimum": 0},
+    "report_allowed": {"type": "boolean"},
+    "quality_status": {"enum": ["available", "quality_gate_blocked"]},
+    "recovery_history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "x-business-extensible": true
+      }
+    },
+    "holding_context": {"type": ["object", "null"], "x-business-extensible": true}
+  },
+  "additionalProperties": false
+}

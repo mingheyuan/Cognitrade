@@ -19,7 +19,10 @@ export const FINANCE_ARTIFACT_TYPES = [
   "valuation_model",
   "investor_panel_review",
   "risk_scan",
-  "report_presentation",
+  "quick_scan",
+  "uzi_native_method_result",
+  "uzi_native_command_result",
+  "uzi_native_analysis",
   "institutional_analysis",
   "research_workflow",
   "deep_analysis",
@@ -764,6 +767,7 @@ export type DistillationReviewContent = {
 export type ResearchReportContent = {
   "conclusion": string;
   "assessment"?: Record<string, unknown> | null;
+  "comparison"?: Record<string, unknown> | null;
   "evidence": Array<unknown>;
   "risk": Array<unknown>;
   "follow_up": Array<unknown>;
@@ -800,6 +804,10 @@ export type ResearchReportContent = {
   } | null;
   "fund_analysis"?: Record<string, unknown>;
   "quality_status"?: string | null;
+  "native_analysis_artifact_id"?: string;
+  "report_allowed"?: boolean;
+  "critical_count"?: number;
+  "warning_count"?: number;
   "delivery_type"?: string;
   "candidates"?: Array<Record<string, unknown>>;
   "screening"?: Record<string, unknown>;
@@ -991,35 +999,120 @@ export type RiskScanContent = {
   "risk_flags": Array<string>;
 }
 
-export type ReportPresentationContent = {
-  "version": string;
-  "theme": string;
-  "profile": string;
-  "currency"?: string | null;
-  "currency_symbol"?: string | null;
-  "subject": Record<string, unknown>;
-  "hero": Record<string, unknown>;
-  "core_conclusion": string;
-  "dashboard": Record<string, unknown>;
-  "great_divide": Record<string, unknown>;
-  "panel": Record<string, unknown>;
-  "radar": Array<unknown>;
-  "deep_scan": Array<Record<string, unknown>>;
-  "panel_insights": Array<Record<string, unknown>>;
-  "risk_list": Array<unknown>;
-  "buy_zones": Array<unknown>;
-  "institutional_modeling": Array<Record<string, unknown>>;
-  "data_pipeline"?: Record<string, unknown> | null;
-  "advanced_methods"?: {
-    "institutional_analysis"?: Record<string, unknown> | null;
-    "research_workflow"?: Record<string, unknown> | null;
-    "deep_analysis"?: Record<string, unknown> | null;
-    "uzi_dimension_coverage"?: Record<string, unknown> | null;
-    "uzi_data_pipeline"?: Record<string, unknown> | null;
+export type QuickScanContent = {
+  "command": "quick-scan";
+  "methodology_version": string;
+  "source_commit": string;
+  "symbol": string | null;
+  "required_dimensions": Array<unknown>;
+  "dimension_status": {
+    "1_financials": string;
+    "2_kline": string;
+    "10_valuation": string;
+    "18_trap": string;
   };
-  "source_artifact_ids": Array<string>;
-  "generated_at": string;
+  "investor_ids": Array<string>;
+  "verdict": string;
+  "aggregate_score": number | null;
+  "votes": Array<{
+    "symbol": string;
+    "investor_id": string;
+    "perspective_id": string;
+    "perspective_label": string;
+    "investor_name_en": string | null;
+    "methodology_source": string | null;
+    "avatar_seed": string | null;
+    "tier": string | null;
+    "school": string;
+    "required_dimensions": Array<string>;
+    "signal": string;
+    "score": number;
+    "confidence": number;
+    "uzi_confidence": number;
+    "reasoning": string;
+    "headline": string;
+    "pass_rules": Array<{
+      "rule_id": string;
+      "name": string;
+      "weight": number;
+      "msg": string;
+    }>;
+    "fail_rules": Array<{
+      "rule_id": string;
+      "name": string;
+      "weight": number;
+      "msg": string;
+    }>;
+    "pass_count": number;
+    "fail_count": number;
+    "skipped_rule_count": number;
+    "weight_pass": number;
+    "weight_total": number;
+    "rule_engine_version": string;
+    "skip_reason": string | null;
+    "time_horizon": string | null;
+    "position_sizing": string | null;
+    "what_would_change_my_mind": string | null;
+    "checks": Array<{
+      "dimension": string;
+      "status": string;
+      "feature_names": Array<string>;
+    }>;
+    "is_methodology_perspective": boolean;
+    "is_real_person_advice": boolean;
+    "rule_mode": string;
+  }>;
+  "trap_level": string | null;
+  "trap_signals_hit": number | null;
+  "risks": Array<string>;
+  "markdown": string;
+  "output_format": "markdown";
+  "html_generated": false;
+  "quality_status": "available" | "degraded" | "data_gap";
+  "confidence": number;
   "data_gap": Array<string>;
+  "risk_flags": Array<string>;
+}
+
+export type UziNativeMethodResultContent = {
+  "method_id": "dcf" | "comps" | "three_statement" | "quick_lbo" | "accretion_dilution" | "initiation_report" | "earnings_review" | "catalyst_calendar" | "thesis_tracker" | "morning_note" | "quantitative_screen" | "sector_review" | "ic_memo" | "porter_bcg" | "dd_checklist" | "unit_economics" | "value_creation_plan" | "portfolio_rebalance" | "ai_readiness" | "earnings_preview" | "model_update" | "returns_attribution" | "holding_rebalance";
+  "source_commit": "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359";
+  "implementation": "vendored_uzi_3_9_2_pure_function";
+  "results": Array<{
+    "symbol": string | null;
+    "result": unknown;
+    "data_gap": Array<string>;
+  }>;
+  "quality_status": "available" | "degraded" | "data_gap";
+  "data_gap": Array<string>;
+  "assumptions": Record<string, unknown>;
+}
+
+export type UziNativeCommandResultContent = {
+  "command_id": "analyze-stock" | "quick-scan" | "panel-only" | "scan-trap" | "dcf" | "comps" | "lbo" | "segmental-model" | "initiate" | "earnings" | "catalysts" | "thesis" | "screen" | "dd" | "ic-memo" | "ai-readiness" | "earnings-preview" | "model-update" | "returns" | "rebalance";
+  "source_commit": "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359";
+  "implementation": "vendored_uzi_3_9_2_command_boundary";
+  "phase": string;
+  "results": Array<{
+    "symbol": string | null;
+    "result": unknown;
+    "data_gap": Array<string>;
+  }>;
+  "quality_status": "available" | "degraded" | "data_gap";
+  "data_gap": Array<string>;
+}
+
+export type UziNativeAnalysisContent = {
+  "source_commit": string;
+  "methodology_version": string;
+  "profile": "lite" | "medium" | "deep";
+  "results": Array<Record<string, unknown>>;
+  "critical_count": number;
+  "warning_count": number;
+  "report_allowed": boolean;
+  "quality_status": "available" | "quality_gate_blocked";
+  "recovery_history": Array<Record<string, unknown>>;
+  "holding_context"?: Record<string, unknown> | null;
 }
 
 export type InstitutionalAnalysisContent = {
@@ -1832,7 +1925,10 @@ export type FinanceArtifactContentMap = {
   "valuation_model": ValuationModelContent
   "investor_panel_review": InvestorPanelReviewContent
   "risk_scan": RiskScanContent
-  "report_presentation": ReportPresentationContent
+  "quick_scan": QuickScanContent
+  "uzi_native_method_result": UziNativeMethodResultContent
+  "uzi_native_command_result": UziNativeCommandResultContent
+  "uzi_native_analysis": UziNativeAnalysisContent
   "institutional_analysis": InstitutionalAnalysisContent
   "research_workflow": ResearchWorkflowContent
   "deep_analysis": DeepAnalysisContent
@@ -2505,6 +2601,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
   "research_report": [
     "conclusion",
     "assessment",
+    "comparison",
     "evidence",
     "risk",
     "follow_up",
@@ -2540,6 +2637,10 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "holding_context.disclaimer",
     "fund_analysis",
     "quality_status",
+    "native_analysis_artifact_id",
+    "report_allowed",
+    "critical_count",
+    "warning_count",
     "delivery_type",
     "candidates",
     "screening",
@@ -2714,34 +2815,110 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "confidence",
     "risk_flags",
   ],
-  "report_presentation": [
-    "version",
-    "theme",
-    "profile",
-    "currency",
-    "currency_symbol",
-    "subject",
-    "hero",
-    "core_conclusion",
-    "dashboard",
-    "great_divide",
-    "panel",
-    "radar",
-    "deep_scan",
-    "panel_insights",
-    "risk_list",
-    "buy_zones",
-    "institutional_modeling",
-    "data_pipeline",
-    "advanced_methods",
-    "advanced_methods.institutional_analysis",
-    "advanced_methods.research_workflow",
-    "advanced_methods.deep_analysis",
-    "advanced_methods.uzi_dimension_coverage",
-    "advanced_methods.uzi_data_pipeline",
-    "source_artifact_ids",
-    "generated_at",
+  "quick_scan": [
+    "command",
+    "methodology_version",
+    "source_commit",
+    "symbol",
+    "required_dimensions",
+    "dimension_status",
+    "dimension_status.1_financials",
+    "dimension_status.2_kline",
+    "dimension_status.10_valuation",
+    "dimension_status.18_trap",
+    "investor_ids",
+    "verdict",
+    "aggregate_score",
+    "votes",
+    "votes[].symbol",
+    "votes[].investor_id",
+    "votes[].perspective_id",
+    "votes[].perspective_label",
+    "votes[].investor_name_en",
+    "votes[].methodology_source",
+    "votes[].avatar_seed",
+    "votes[].tier",
+    "votes[].school",
+    "votes[].required_dimensions",
+    "votes[].signal",
+    "votes[].score",
+    "votes[].confidence",
+    "votes[].uzi_confidence",
+    "votes[].reasoning",
+    "votes[].headline",
+    "votes[].pass_rules",
+    "votes[].pass_rules[].rule_id",
+    "votes[].pass_rules[].name",
+    "votes[].pass_rules[].weight",
+    "votes[].pass_rules[].msg",
+    "votes[].fail_rules",
+    "votes[].fail_rules[].rule_id",
+    "votes[].fail_rules[].name",
+    "votes[].fail_rules[].weight",
+    "votes[].fail_rules[].msg",
+    "votes[].pass_count",
+    "votes[].fail_count",
+    "votes[].skipped_rule_count",
+    "votes[].weight_pass",
+    "votes[].weight_total",
+    "votes[].rule_engine_version",
+    "votes[].skip_reason",
+    "votes[].time_horizon",
+    "votes[].position_sizing",
+    "votes[].what_would_change_my_mind",
+    "votes[].checks",
+    "votes[].checks[].dimension",
+    "votes[].checks[].status",
+    "votes[].checks[].feature_names",
+    "votes[].is_methodology_perspective",
+    "votes[].is_real_person_advice",
+    "votes[].rule_mode",
+    "trap_level",
+    "trap_signals_hit",
+    "risks",
+    "markdown",
+    "output_format",
+    "html_generated",
+    "quality_status",
+    "confidence",
     "data_gap",
+    "risk_flags",
+  ],
+  "uzi_native_method_result": [
+    "method_id",
+    "source_commit",
+    "implementation",
+    "results",
+    "results[].symbol",
+    "results[].result",
+    "results[].data_gap",
+    "quality_status",
+    "data_gap",
+    "assumptions",
+  ],
+  "uzi_native_command_result": [
+    "command_id",
+    "source_commit",
+    "implementation",
+    "phase",
+    "results",
+    "results[].symbol",
+    "results[].result",
+    "results[].data_gap",
+    "quality_status",
+    "data_gap",
+  ],
+  "uzi_native_analysis": [
+    "source_commit",
+    "methodology_version",
+    "profile",
+    "results",
+    "critical_count",
+    "warning_count",
+    "report_allowed",
+    "quality_status",
+    "recovery_history",
+    "holding_context",
   ],
   "institutional_analysis": [
     "methodology_version",

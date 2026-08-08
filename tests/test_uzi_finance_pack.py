@@ -17,12 +17,11 @@ from fastapi.testclient import TestClient
 from domain_packs.finance_ashare.subagents.uzi_methodology import (
     build_features,
     build_panel_review,
-    build_presentation,
     build_risk_scan,
     build_valuation_model,
     select_profile,
 )
-from domain_packs.finance_ashare.subagents.runtime import collect_snapshot, compose_uzi_report
+from domain_packs.finance_ashare.subagents.runtime import collect_snapshot
 from domain_packs.finance_ashare.subagents.uzi_advanced_methodology import (
     build_deep_analysis,
     build_dimension_coverage,
@@ -68,67 +67,6 @@ class UziFinancePackTests(unittest.TestCase):
             },
             schema,
         )
-
-    def test_quick_report_composes_with_fund_context_without_optional_panel(self) -> None:
-        holding_context = {
-            "parent_batch_id": "batch-1",
-            "source_fund_run_id": "fund-run-1",
-            "source_fund_artifact_id": "fund-artifact-1",
-            "fund_code": "020464",
-            "fund_name": "测试股票基金",
-            "fund_type": "指数型-股票",
-            "holding_rank": 1,
-            "symbol": "688012",
-            "security_name": "中微公司",
-            "fund_weight_pct": 13.85,
-            "target_security_weight_pct": 15.02,
-            "holding_source": "target_etf_lookthrough",
-            "disclosure_date": "2026-06-30",
-            "disclosure_age_days": 37,
-            "stale_level": "current",
-            "disclaimer": "基金披露持仓不代表当前持仓。",
-        }
-
-        def artifact(artifact_id: str, content: dict) -> SimpleNamespace:
-            return SimpleNamespace(
-                artifact_id=artifact_id,
-                content=content,
-                source_refs=[{"type": "test", "id": artifact_id}],
-                confidence=0.8,
-                risk_flags=[],
-            )
-
-        evidence = artifact("evidence-1", {"items": []})
-        valuation = artifact("valuation-1", {"models": [], "dimensions": {}})
-        normalized = artifact(
-            "normalized-1",
-            {"query": "分析 688012", "symbols": ["688012"], "holding_context": holding_context},
-        )
-        rows = {
-            "normalized_query": [normalized],
-            "investor_panel_review": [],
-            "risk_scan": [],
-            "institutional_analysis": [],
-            "research_workflow": [],
-            "deep_analysis": [],
-            "uzi_dimension_coverage": [],
-        }
-        context = SimpleNamespace(
-            node=SimpleNamespace(inputs={"research_profile": "lite", "symbols": ["688012"]}),
-            require_artifact=lambda artifact_type: {
-                "normalized_query": normalized,
-                "evidence_set": evidence,
-                "valuation_model": valuation,
-            }[artifact_type],
-            artifacts=lambda artifact_type: rows.get(artifact_type, []),
-        )
-
-        report, presentation = compose_uzi_report(context)
-
-        self.assertEqual(report.content["holding_context"], holding_context)
-        self.assertEqual(report.content["investor_panel_review"]["scope"], "not_requested")
-        self.assertEqual(report.artifact_type, "research_report")
-        self.assertEqual(presentation.artifact_type, "report_presentation")
 
     def test_empty_provider_results_materialize_auditable_gap_snapshots(self) -> None:
         query = SimpleNamespace(
@@ -586,88 +524,6 @@ class UziFinancePackTests(unittest.TestCase):
 
         self.assertEqual(features["lhb_30d_count"], 1)
 
-    def test_report_presentation_exposes_bento_dashboard_sections(self) -> None:
-        rows = _snapshots()
-        profile = select_profile({"research_profile": "lite"})
-        valuation = build_valuation_model(rows, ["600000"], profile)
-        panel = build_panel_review(rows, ["600000"], profile)
-        risk = build_risk_scan("分析 600000", rows, ["600000"], profile)
-
-        presentation = build_presentation(
-            {
-                "symbols": ["600000"],
-                "risk": ["需要复核数据完整性"],
-                "conclusion": "结构化研究结论",
-            },
-            valuation,
-            panel,
-            risk,
-            profile,
-            snapshot_rows=rows,
-        )
-
-        self.assertEqual(presentation["version"], "2")
-        self.assertEqual(presentation["subject"]["symbol"], "600000")
-        self.assertEqual(len(presentation["subject"]["metrics"]), 6)
-        self.assertIn("fundamentals", presentation["dashboard"])
-        self.assertIn("change_pct", presentation["dashboard"]["price"])
-        self.assertIn("top_vote", presentation["great_divide"]["bull"])
-        self.assertEqual(
-            presentation["panel"]["distribution"],
-            panel["distribution"],
-        )
-
-    def test_report_presentation_exposes_full_scan_panel_and_model_details(self) -> None:
-        rows = _snapshots()
-        profile = select_profile({"research_profile": "medium"})
-        valuation = build_valuation_model(rows, ["600000"], profile)
-        panel = build_panel_review(rows, ["600000"], profile)
-        risk = build_risk_scan("分析 600000", rows, ["600000"], profile)
-        institutional = build_institutional_analysis(rows, ["600000"], valuation, profile)
-        workflow = build_research_workflow(rows, ["600000"], valuation, profile)
-        deep = build_deep_analysis(rows, ["600000"], institutional, workflow, profile)
-        coverage = build_dimension_coverage(
-            rows,
-            ["600000"],
-            profile,
-            institutional_available=True,
-            workflow_available=True,
-            deep_available=True,
-        )
-
-        presentation = build_presentation(
-            {
-                "symbols": ["600000"],
-                "risk": ["需要复核数据完整性"],
-                "conclusion": "结构化研究结论",
-            },
-            valuation,
-            panel,
-            risk,
-            profile,
-            advanced={
-                "institutional_analysis": institutional,
-                "research_workflow": workflow,
-                "deep_analysis": deep,
-                "uzi_dimension_coverage": coverage,
-            },
-            snapshot_rows=rows,
-        )
-
-        schema = json.loads(
-            (Path(__file__).resolve().parents[1] / "domain_packs" / "finance_ashare" / "artifact_schemas" / "report_presentation.json").read_text(encoding="utf-8")
-        )
-        jsonschema.validate(presentation, schema)
-        self.assertEqual(len(presentation["deep_scan"]), 25)
-        self.assertEqual(len(presentation["panel_insights"]), panel["registered_seat_count"])
-        self.assertTrue(presentation["great_divide"]["rounds"])
-        self.assertTrue(presentation["institutional_modeling"][0]["methods"])
-        self.assertEqual(len(presentation["institutional_modeling"][0]["methods"][0]["sensitivity"]), 0)
-        self.assertEqual(presentation["institutional_modeling"][0]["methods"][0]["status"], "data_gap")
-        self.assertTrue(presentation["risk_list"])
-        self.assertEqual(presentation["buy_zones"][0]["status"], "data_gap")
-        self.assertEqual(presentation["buy_zones"][0]["kind"], "observation")
-
     def test_uzi_methodology_replay_matches_versioned_dcf_baseline(self) -> None:
         fixture = json.loads(
             (Path(__file__).resolve().parent / "fixtures" / "uzi_methodology_baseline.json")
@@ -870,16 +726,10 @@ class UziFinancePackTests(unittest.TestCase):
             )
         )
         lite_capabilities = {node.capability for node in lite.nodes if node.capability}
-        self.assertIn("finance.uzi.valuation.evaluate", lite_capabilities)
-        self.assertIn("finance.uzi.risk.scan", lite_capabilities)
-        self.assertIn("finance.uzi.panel.review", lite_capabilities)
-        lite_valuation = next(
-            node for node in lite.nodes if node.capability == "finance.uzi.valuation.evaluate"
-        )
-        lite_methods = {
-            item["method_id"] for item in lite_valuation.metadata["method_contracts"]
-        }
-        self.assertEqual(lite_methods, {"dcf"})
+        self.assertIn("finance.uzi.native.analyze_stock", lite_capabilities)
+        self.assertIn("finance.uzi.native.report.compose", lite_capabilities)
+        self.assertNotIn("finance.uzi.valuation.evaluate", lite_capabilities)
+        self.assertNotIn("finance.uzi.report.compose", lite_capabilities)
 
         dcf_only = planner.build_graph(
             CapabilityPlanningRequest(
@@ -943,7 +793,7 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertIn("bull_bear_debate", deep["results"][0])
         self.assertIn("reported_segment_data_missing", deep_institutional["results"][0]["methods"]["segmental"]["data_gap"])
 
-    def test_agent_os_graph_commits_uzi_artifacts_and_presentation(self) -> None:
+    def test_agent_os_graph_commits_native_uzi_analysis_and_gated_delivery(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -972,13 +822,14 @@ class UziFinancePackTests(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 200, response.text)
                 payload = response.json()
-                self.assertEqual(payload["status"], "completed_partial")
+                self.assertEqual(payload["status"], "gated")
                 run_id = payload["run_id"]
                 detail = client.get(
                     f"/api/v1/runs/{run_id}",
                     headers={"Authorization": "Bearer uzi-test"},
                 )
                 self.assertEqual(detail.status_code, 200, detail.text)
+                self.assertEqual(detail.json()["snapshot"]["status"], "gated")
                 self.assertEqual(detail.json()["snapshot"]["graph"]["metadata"]["research_profile"], "lite")
                 steps = client.get(
                     f"/api/v1/runs/{run_id}/steps",
@@ -986,7 +837,9 @@ class UziFinancePackTests(unittest.TestCase):
                 )
                 self.assertEqual(steps.status_code, 200, steps.text)
                 capabilities = {step["capability"] for step in steps.json()["steps"]}
-                self.assertIn("finance.uzi.report.compose", capabilities)
+                self.assertIn("finance.uzi.native.analyze_stock", capabilities)
+                self.assertIn("finance.uzi.native.report.compose", capabilities)
+                self.assertNotIn("finance.uzi.report.compose", capabilities)
                 self.assertNotIn("finance.analysis.evaluate", capabilities)
                 self.assertNotIn("finance.report.compose", capabilities)
                 artifacts = client.get(
@@ -999,13 +852,12 @@ class UziFinancePackTests(unittest.TestCase):
                 self.assertTrue(
                     {
                         "snapshot",
-                        "valuation_model",
-                        "investor_panel_review",
-                        "risk_scan",
-                        "report_presentation",
+                        "uzi_native_analysis",
+                        "research_report",
                         "assistant_message",
                     }.issubset(types)
                 )
+                self.assertNotIn("report_presentation", types)
                 snapshot_rows = [row for row in rows if row["artifact_type"] == "snapshot"]
                 self.assertTrue(snapshot_rows)
                 self.assertTrue(
@@ -1024,11 +876,13 @@ class UziFinancePackTests(unittest.TestCase):
                         for row in snapshot_rows
                     )
                 )
-                presentation = next(
-                    row for row in rows if row["artifact_type"] == "report_presentation"
-                )
-                self.assertEqual(presentation["content"]["profile"], "lite")
-                self.assertTrue(presentation["content"]["source_artifact_ids"])
+                native = next(row for row in rows if row["artifact_type"] == "uzi_native_analysis")
+                report = next(row for row in rows if row["artifact_type"] == "research_report")
+                self.assertEqual(native["content"]["profile"], "lite")
+                self.assertFalse(native["content"]["report_allowed"])
+                self.assertGreater(native["content"]["critical_count"], 0)
+                self.assertFalse(report["content"]["report_allowed"])
+                self.assertEqual(report["content"]["native_analysis_artifact_id"], native["artifact_id"])
 
     def test_explicit_medium_agent_os_run_uses_medium_artifact_contract(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -1068,16 +922,12 @@ class UziFinancePackTests(unittest.TestCase):
                 types = {row["artifact_type"] for row in artifacts.json()["artifacts"]}
                 self.assertTrue(
                     {
-                        "valuation_model",
-                        "investor_panel_review",
-                        "risk_scan",
-                        "institutional_analysis",
-                        "research_workflow",
-                        "uzi_dimension_coverage",
+                        "uzi_native_analysis",
                         "research_report",
-                        "report_presentation",
                     }.issubset(types)
                 )
+                self.assertNotIn("report_presentation", types)
+                self.assertNotIn("valuation_model", types)
                 self.assertNotIn("deep_analysis", types)
 
 

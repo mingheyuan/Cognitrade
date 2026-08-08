@@ -72,7 +72,7 @@ class FinanceArtifactUiContractTests(unittest.TestCase):
     def test_manifest_schema_and_renderer_inventories_are_exact(self) -> None:
         self.assertEqual(set(self.schemas), self.declared)
         self.assertEqual(set(self.renderers), self.declared)
-        self.assertEqual(len(self.renderers), 45)
+        self.assertEqual(len(self.renderers), 48)
 
     def test_every_artifact_has_a_named_dedicated_renderer(self) -> None:
         renderer_names: list[str] = []

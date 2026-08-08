@@ -26,7 +26,7 @@ _BATCH_FILE = "fund_holding_batch.json"
 _TERMINAL_ITEM_STATUSES = {
     "completed", "completed_partial", "failed", "cancelled", "unsupported"
 }
-_DELIVERABLE_ITEM_STATUSES = {"completed", "completed_partial"}
+_DELIVERABLE_ITEM_STATUSES = {"completed"}
 _RECOVERABLE_RUN_STATUSES = {"running", "paused", "waiting_approval", "gated", "timed_out", "failed", "cancelled"}
 
 
@@ -321,7 +321,7 @@ class FundHoldingReportService:
             "steps": [
                 {
                     "node_id": f"holding-{item['rank']}-{item['symbol']}",
-                    "capability": "finance.uzi.report.compose",
+                    "capability": "finance.uzi.native.report.compose",
                     "status": item["status"],
                     "objective": f"生成 {item['name']}（{item['symbol']}）UZI 报告",
                     "child_run_id": item.get("child_run_id"),
@@ -561,22 +561,29 @@ class FundHoldingReportService:
         try:
             request_payload = read_json(self.agent_os.run_store.load_run_paths(child_run_id).root / "request.json")
             request = RequestEnvelope.model_validate(request_payload or {})
-            for attempt in range(3):
+            seen_recovery_states: set[tuple[Any, ...]] = set()
+            while True:
                 detail = self.agent_os.inspect_run(child_run_id)
                 mode = str(detail.get("mode") or "")
                 current = self._detail_status(detail)
                 if mode == "pending":
                     self.agent_os.handle_request(request, run_id=child_run_id)
-                elif current not in {"completed", "completed_partial"}:
-                    if current not in _RECOVERABLE_RUN_STATUSES:
-                        raise RuntimeError(f"child run cannot be resumed from {current or 'unknown'}")
+                elif current in _RECOVERABLE_RUN_STATUSES:
                     self.agent_os.resume(child_run_id)
+                elif current != "completed":
+                    break
                 detail = self.agent_os.inspect_run(child_run_id)
                 final_status = self._detail_status(detail) or "failed"
                 report_available, data_gap = self._report_state(detail)
-                if report_available or final_status not in {"failed", "timed_out"} or attempt >= 2:
+                if report_available and final_status == "completed":
                     break
-                retry_count = attempt + 1
+                if final_status not in _RECOVERABLE_RUN_STATUSES:
+                    break
+                recovery_state = self._recovery_fingerprint(detail)
+                if recovery_state in seen_recovery_states:
+                    break
+                seen_recovery_states.add(recovery_state)
+                retry_count += 1
                 with self._lock:
                     state = self._load_batch(batch_id)
                     item = self._item(state, symbol=symbol, child_run_id=child_run_id)
@@ -595,14 +602,14 @@ class FundHoldingReportService:
                 graph_status = str((detail.get("snapshot") or {}).get("status") or "")
                 reconciled_status = (
                     graph_status
-                    if reconciled_report and graph_status in {"completed", "completed_partial"}
+                    if reconciled_report and graph_status == "completed"
                     else self._detail_status(detail)
                 )
             except Exception:
                 reconciled_status = None
                 reconciled_report = False
                 reconciled_gaps = []
-            if reconciled_report and reconciled_status in {"completed", "completed_partial"}:
+            if reconciled_report and reconciled_status == "completed":
                 final_status = reconciled_status
                 report_available = True
                 data_gap = list(dict.fromkeys(reconciled_gaps))
@@ -624,8 +631,8 @@ class FundHoldingReportService:
             item["report_available"] = report_available
             item["data_gap"] = list(dict.fromkeys(data_gap))
             item["error"] = error
-            if report_available and final_status in {"completed", "completed_partial"}:
-                item["status"] = final_status
+            if report_available and final_status == "completed":
+                item["status"] = "completed"
             elif final_status == "cancelled" or (state.get("cancel_requested") and not report_available):
                 item["status"] = "cancelled"
             else:
@@ -811,16 +818,105 @@ class FundHoldingReportService:
             for row in list(detail.get("artifacts") or [])
             if isinstance(row, dict) and str(row.get("status") or "active") == "active"
         ]
-        types = {str(row.get("artifact_type") or "") for row in active}
-        available = {"research_report", "report_presentation"}.issubset(types)
+        native = next(
+            (row for row in reversed(active) if row.get("artifact_type") == "uzi_native_analysis"),
+            None,
+        )
+        report = next(
+            (row for row in reversed(active) if row.get("artifact_type") == "research_report"),
+            None,
+        )
         gaps: list[str] = []
         for row in active:
-            if row.get("artifact_type") not in {"research_report", "report_presentation"}:
+            if row.get("artifact_type") not in {"uzi_native_analysis", "research_report"}:
                 continue
             gaps.extend(str(item) for item in list(row.get("risk_flags") or []) if str(item).strip())
             content = row.get("content") if isinstance(row.get("content"), dict) else {}
             gaps.extend(str(item) for item in list(content.get("data_gap") or []) if str(item).strip())
+            if row.get("artifact_type") == "uzi_native_analysis":
+                for result in list(content.get("results") or []):
+                    if not isinstance(result, dict):
+                        continue
+                    for issue in list((result.get("self_review") or {}).get("issues") or []):
+                        if isinstance(issue, dict) and issue.get("severity") in {"critical", "warning"}:
+                            gaps.append(str(issue.get("issue") or issue.get("dim") or "uzi_self_review_issue"))
+        native_content = native.get("content") if isinstance(native, dict) and isinstance(native.get("content"), dict) else {}
+        report_content = report.get("content") if isinstance(report, dict) and isinstance(report.get("content"), dict) else {}
+        native_id = str(native.get("artifact_id") or "") if isinstance(native, dict) else ""
+        available = bool(
+            native
+            and report
+            and native_content.get("report_allowed") is True
+            and int(native_content.get("critical_count") or 0) == 0
+            and report_content.get("report_allowed") is True
+            and int(report_content.get("critical_count") or 0) == 0
+            and str(report_content.get("native_analysis_artifact_id") or "") == native_id
+        )
+        if native is None:
+            gaps.append("uzi_native_analysis_missing")
+        elif native_content.get("report_allowed") is not True or int(native_content.get("critical_count") or 0):
+            gaps.append("uzi_critical_quality_gate_blocked")
+        if report is None:
+            gaps.append("uzi_native_research_report_missing")
         return available, list(dict.fromkeys(gaps))
+
+    @staticmethod
+    def _recovery_fingerprint(detail: dict[str, Any]) -> tuple[Any, ...]:
+        """Describe durable recovery progress without timestamps or counters.
+
+        A repeated fingerprint means the same suggested fixes, artifacts and
+        self-review issues were observed after a resume.  This terminates only
+        because no new recovery action is available, never because an
+        arbitrary round limit was reached.
+        """
+
+        artifacts = [
+            row
+            for row in list(detail.get("artifacts") or [])
+            if isinstance(row, dict) and str(row.get("status") or "active") == "active"
+        ]
+        native = next(
+            (row for row in reversed(artifacts) if row.get("artifact_type") == "uzi_native_analysis"),
+            {},
+        )
+        content = native.get("content") if isinstance(native.get("content"), dict) else {}
+        issues = sorted(
+            (
+                str(issue.get("severity") or ""),
+                str(issue.get("dim") or ""),
+                str(issue.get("issue") or ""),
+                str(issue.get("suggested_fix") or ""),
+            )
+            for result in list(content.get("results") or [])
+            if isinstance(result, dict)
+            for issue in list((result.get("self_review") or {}).get("issues") or [])
+            if isinstance(issue, dict)
+        )
+        recovery = sorted(
+            (
+                str(row.get("stage") or ""),
+                str(row.get("symbol") or ""),
+                str(row.get("snapshot_type") or ""),
+                str(row.get("source_id") or row.get("source_ids") or ""),
+                str(row.get("status") or ""),
+            )
+            for row in list(content.get("recovery_history") or [])
+            if isinstance(row, dict)
+        )
+        artifact_signature = sorted(
+            (
+                str(row.get("artifact_id") or ""),
+                str(row.get("artifact_type") or ""),
+                str(row.get("status") or "active"),
+            )
+            for row in artifacts
+        )
+        return (
+            FundHoldingReportService._detail_status(detail),
+            tuple(artifact_signature),
+            tuple(issues),
+            tuple(recovery),
+        )
 
     def _find_existing(self, **criteria) -> dict[str, Any] | None:
         user_id = criteria.pop("user_id", None)

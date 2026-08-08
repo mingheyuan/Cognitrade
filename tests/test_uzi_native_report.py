@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from threading import Lock
+import time
 import unittest
+from unittest.mock import patch
 
 from domain_packs.finance_ashare.reporting import (
     ReportArtifactMissingError,
     render_uzi_native_html,
+    render_uzi_native_pdf,
 )
 
 
@@ -12,121 +18,92 @@ RUN_ID = "01JREPORT000000000000000001"
 
 
 def sample_uzi_artifacts() -> list[dict]:
-    report = {
-        "conclusion": "贵州茅台当前估值需要结合现金流与风险证据复核。",
-        "evidence": [
-            {
-                "evidence_id": "600519-market-1",
-                "source_type": "market",
-                "source_name": "tushare",
-                "title": "600519 市场快照",
-                "summary": "现价 1450.50，PE 22.4。",
-                "published_at": "2026-08-06",
-                "confidence": 0.8,
-                "metadata": {"degraded": False, "source_trace": [{"provider": "tushare"}]},
-            }
-        ],
-        "risk": ["数据时效需要复核"],
-        "follow_up": ["刷新公告"],
-        "uzi_profile": {"selected": "deep", "source_commit": "22e65f2"},
-        "valuation_model": {"models": [{"symbol": "600519", "market_price": 1450.5, "fair_value": 1502.0}]},
-        "investor_panel_review": {},
-        "risk_scan": {},
-        "uzi_dimension_coverage": {"data_gap": []},
+    dim_names = [
+        "basic", "financials", "kline", "macro", "peers", "chain", "research", "industry",
+        "materials", "futures", "valuation", "governance", "capital_flow", "policy", "moat",
+        "events", "lhb", "sentiment", "trap", "contests",
+    ]
+    raw_dims = {f"{index}_{name}": {"data": {}, "source": "test", "fallback": False} for index, name in enumerate(dim_names)}
+    raw_dims["0_basic"]["data"] = {
+        "code": "600519", "name": "贵州茅台 <script>alert(1)</script>", "industry": "白酒",
+        "price": 1450.5, "change_pct": 1.2, "market_cap": "1.82万亿", "pe_ttm": 22.4, "pb": 7.1,
     }
-    presentation = {
-        "version": "2",
-        "profile": "deep",
-        "currency": "CNY",
-        "currency_symbol": "¥",
-        "subject": {
-            "symbol": "600519",
-            "name": "贵州茅台 <script>alert(1)</script>",
-            "sector": "白酒",
-            "as_of": "2026-08-06",
-            "currency": "CNY",
-            "currency_symbol": "¥",
+    raw_dims["1_financials"]["data"] = {"roe": 31.2, "roe_history": [29.0, 30.1, 31.2]}
+    raw_dims["2_kline"]["data"] = {"stage": "Stage 2", "ma_align": "多头排列", "kline_stats": {}}
+    raw_dims["18_trap"]["data"] = {"trap_level": "🟢 安全", "recommendation": "未发现异常推广痕迹"}
+    raw_dims["20_valuation_models"] = {"data": {}, "source": "compute", "fallback": False}
+    raw_dims["21_research_workflow"] = {"data": {}, "source": "compute", "fallback": False}
+    raw_dims["22_deep_methods"] = {"data": {}, "source": "compute", "fallback": False}
+    scores = {
+        f"{index}_{name}": {"score": 6, "weight": 3, "label": "真实证据测试", "reasons_pass": [], "reasons_fail": []}
+        for index, name in enumerate(dim_names) if index > 0
+    }
+    investors = [
+        {
+            "investor_id": "buffett", "name": "沃伦·巴菲特", "group": "A", "avatar": "avatars/buffett.svg",
+            "signal": "bullish", "confidence": 80, "score": 88, "verdict": "买入", "reasoning": "现金流证据支持长期观察。",
+            "comment": "现金流证据支持长期观察。", "headline": "ROE 31.2% 支持质量判断", "pass": [], "fail": [],
         },
-        "hero": {
-            "symbol": "600519",
-            "name": "贵州茅台 <script>alert(1)</script>",
-            "price": 1450.5,
-            "change_pct": 1.2,
-            "score": 78,
-            "verdict": "below_proxy_value",
-            "safety": "attention",
-            "currency": "CNY",
-            "currency_symbol": "¥",
+        {
+            "investor_id": "graham", "name": "本杰明·格雷厄姆", "group": "A", "avatar": "avatars/graham.svg",
+            "signal": "bearish", "confidence": 70, "score": 42, "verdict": "观望", "reasoning": "当前价格下安全边际有限。",
+            "comment": "当前价格下安全边际有限。", "headline": "PE 22.4 倍限制安全边际", "pass": [], "fail": [],
         },
-        "core_conclusion": report["conclusion"],
+    ]
+    panel = {
+        "investors": investors,
+        "signal_distribution": {"bullish": 1, "bearish": 1, "neutral": 0, "skip": 0},
+        "vote_distribution": {"strongly_buy": 0, "buy": 1, "watch": 0, "wait": 1, "avoid": 0},
+        "panel_consensus": 65.0,
+        "school_scores": {},
+    }
+    synthesis = {
+        "ticker": "600519", "name": "贵州茅台 <script>alert(1)</script>", "overall_score": 72.0,
+        "verdict_label": "可以蹲一蹲", "verdict_detail": "基本面 76.0 · 共识 65.0",
         "dashboard": {
-            "price": {"current": 1450.5, "change_pct": 1.2, "as_of": "2026-08-06", "currency": "CNY", "currency_symbol": "¥"},
-            "valuation": {"fair_value": 1502.0, "margin_of_safety": 3.55, "currency": "CNY", "currency_symbol": "¥"},
-            "fundamentals": {"revenue_yi": 1330.0, "net_profit_yi": 650.0, "roe": 31.2},
-            "metrics": [{"key": "pe", "label": "PE (TTM)", "value": 22.4, "unit": "x", "status": "available"}],
-            "risks": [{"summary": "估值波动"}],
-            "catalysts": [],
+            "core_conclusion": "真实数据支持质量优势，但估值安全边际仍需复核。",
+            "data_perspective": {"trend": "Stage 2", "price": "1450.5", "volume": "待复核", "chips": "待复核"},
+            "intelligence": {"news": "暂无重大新闻", "risks": ["估值波动"], "catalysts": []},
+            "battle_plan": {"entry": "观察", "position": "审慎", "stop": "依风险预算", "target": "依估值复核"},
+        },
+        "debate": {
+            "bull": investors[0], "bear": investors[1],
+            "rounds": [
+                {"round": 1, "bull_say": "ROE 31.2% 支持质量判断", "bear_say": "PE 22.4 倍限制安全边际"},
+                {"round": 2, "bull_say": "品牌现金流具备持续性", "bear_say": "价格仍需留出折价"},
+                {"round": 3, "bull_say": "保持看多但控制价格", "bear_say": "等待更好赔率"},
+            ],
         },
         "great_divide": {
-            "bull": {"top_vote": {"perspective_label": "巴菲特视角", "headline": "现金流稳健", "score": 88, "confidence": 0.8}},
-            "bear": {"top_vote": {"perspective_label": "格雷厄姆视角", "headline": "安全边际有限", "score": 42, "confidence": 0.7}},
-            "rounds": [{"label": "经典价值", "average_score": 70, "bullish_count": 3, "bearish_count": 1, "neutral_count": 1}],
-            "punchline": "质量共识较高，价格分歧仍然存在。",
+            "bull_score": 88, "bear_score": 42, "bull_signal": "bullish", "bear_signal": "bearish",
+            "punchline": "好公司与好价格仍是两件事。",
         },
-        "panel": {
-            "registered_seat_count": 66,
-            "average_score": 78,
-            "distribution": {"bullish": 35, "bearish": 12, "neutral": 10, "insufficient_evidence": 9},
-            "votes": [{
-                "perspective_label": "巴菲特视角",
-                "school_label": "经典价值",
-                "signal": "bullish",
-                "score": 88,
-                "confidence": 0.8,
-                "headline": "现金流稳健",
-                "reasoning": "品牌与现金流证据支持长期观察。",
-                "checks": [{"label": "ROE", "passed": True}],
-                "required_dimensions": ["financials", "valuation"],
-            }],
+        "buy_zones": {
+            "value": {"price": 1200, "rationale": "估值折价"}, "growth": {"price": 1350, "rationale": "增长兑现"},
+            "technical": {"price": 1400, "rationale": "技术支撑"}, "youzi": {"price": 1450.5, "rationale": "现价观察"},
         },
-        "deep_scan": [{
-            "dimension_id": "financials",
-            "label": "财报扎实度",
-            "layer": "source",
-            "source_type": "fundamental",
-            "status": "available",
-            "score": 8.5,
-            "weight": 5,
-            "evidence": ["ROE 31.2%"],
-            "source_refs": [{"type": "api", "id": "financial-1"}],
-            "data_gap": [],
+        "risks": ["估值波动", "需求变化", "数据时效"],
+        "panel_insights": "两位测试评委围绕质量与价格形成明确分歧。",
+        "data_gaps": {
+            "coverage_pct": 88, "total_gaps": 1, "unresolved": 0,
+            "tasks": [{"dim": "17_sentiment", "field": "self_review_warning", "label": "sentiment:xueqiu_unavailable", "status": "warning"}],
+        },
+    }
+    native = {
+        "source_commit": "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359",
+        "methodology_version": "3.9.2-source-parity", "profile": "deep",
+        "critical_count": 0, "warning_count": 1, "report_allowed": True, "quality_status": "available",
+        "recovery_history": [],
+        "results": [{
+            "symbol": "600519", "raw": {"ticker": "600519", "market": "A", "fetched_at": "2026-08-06T08:30:00+00:00", "dimensions": raw_dims},
+            "dimensions": {"dimensions": scores, "fundamental_score": 76}, "panel": panel, "synthesis": synthesis,
+            "self_review": {"critical_count": 0, "warning_count": 1, "passed": True, "issues": []},
+            "report_allowed": True,
         }],
-        "institutional_modeling": [{
-            "symbol": "600519",
-            "status": "available",
-            "methods": [{
-                "method_id": "dcf",
-                "label": "DCF",
-                "status": "available",
-                "summary": "每股代理价值 1502.0",
-                "key_outputs": {"fair_value": 1502.0},
-                "assumptions": {"wacc": 0.08},
-                "sensitivity": [],
-                "methodology_log": ["使用已披露现金流"],
-                "data_gap": [],
-                "risk_flags": [],
-            }],
-            "data_gap": [],
-        }],
-        "risk_list": [{"signal_id": "valuation", "status": "attention", "title": "估值波动", "evidence": "PE 分位需复核"}],
-        "buy_zones": [{"label": "现价观察参考", "price": 1450.5, "currency": "CNY", "currency_symbol": "¥", "status": "data_gap", "rationale": "不构成买入区间。"}],
-        "data_gap": ["sentiment:xueqiu_unavailable"],
-        "generated_at": "2026-08-06T08:30:00+00:00",
     }
     return [
-        {"artifact_id": "artifact-report", "artifact_type": "research_report", "status": "active", "confidence": 0.75, "risk_flags": [], "source_refs": [], "content": report},
-        {"artifact_id": "artifact-presentation", "artifact_type": "report_presentation", "status": "active", "confidence": 0.75, "risk_flags": [], "source_refs": [], "content": presentation},
-        {"artifact_id": "artifact-deep", "artifact_type": "deep_analysis", "status": "active", "confidence": 0.7, "risk_flags": ["decision_support_only"], "source_refs": [{"type": "artifact", "id": "source-1"}], "content": {"summary": "完整深度分析", "data_gap": []}},
+        {"artifact_id": "artifact-native", "artifact_type": "uzi_native_analysis", "status": "active", "confidence": 0.86, "risk_flags": [], "source_refs": [], "content": native},
+        {"artifact_id": "artifact-report", "artifact_type": "research_report", "status": "active", "confidence": 0.86, "risk_flags": [], "source_refs": [], "content": {"conclusion": "已通过", "evidence": [], "risk": [], "follow_up": [], "report_allowed": True}},
     ]
 
 
@@ -136,81 +113,96 @@ class UziNativeReportTests(unittest.TestCase):
 
         self.assertEqual(rendered.symbol, "600519")
         self.assertEqual(rendered.filename_stem, f"uzi-report-600519-{RUN_ID}")
-        self.assertIn("UZI RESEARCH TERMINAL", rendered.html)
-        self.assertIn("核心仪表盘", rendered.html)
-        self.assertIn("世纪分歧", rendered.html)
-        self.assertIn("投资方法论评审团", rendered.html)
-        self.assertIn("全维深度扫描", rendered.html)
-        self.assertIn("机构级建模", rendered.html)
-        self.assertIn("ArtifactBoard 审计附录", rendered.html)
+        self.assertIn("游资 SKILLS", rendered.html)
+        self.assertIn("50 INVESTORS", rendered.html)
+        self.assertIn("data-gap-banner", rendered.html)
+        self.assertIn("机构级估值建模", rendered.html)
         self.assertIn("sentiment:xueqiu_unavailable", rendered.html)
         self.assertIn("贵州茅台 &lt;script&gt;alert(1)&lt;/script&gt;", rendered.html)
         self.assertNotIn("贵州茅台 <script>alert(1)</script>", rendered.html)
         self.assertNotRegex(rendered.html, r"\{\{[A-Z0-9_]+\}\}")
+        self.assertNotRegex(rendered.html, r"<!-- INJECT_[A-Z0-9_]+ -->")
+        self.assertIn("data:image/svg+xml;base64,", rendered.html)
         self.assertEqual(
             rendered.source_artifact_ids,
-            ("artifact-report", "artifact-presentation", "artifact-deep"),
+            ("artifact-native", "artifact-report"),
         )
 
-    def test_renders_frozen_fund_holding_context_without_changing_stock_sections(self) -> None:
+    def test_critical_quality_gate_cannot_be_bypassed_by_completed_report(self) -> None:
         artifacts = sample_uzi_artifacts()
-        artifacts[0]["content"]["holding_context"] = {
-            "parent_batch_id": "batch-1",
-            "source_fund_run_id": "fund-run-1",
-            "source_fund_artifact_id": "fund-artifact-1",
-            "fund_code": "020464",
-            "fund_name": "招商中证半导体产业ETF发起式联接A",
-            "fund_type": "指数型-股票",
-            "holding_rank": 1,
-            "symbol": "600519",
-            "security_name": "贵州茅台",
-            "fund_weight_pct": 13.851444,
-            "target_security_weight_pct": 15.02,
-            "holding_source": "target_etf_lookthrough",
-            "disclosure_date": "2026-06-30",
-            "disclosure_age_days": 37,
-            "stale_level": "current",
-            "disclaimer": "基金定期披露持仓不代表当前仍持有该证券。",
-        }
+        native = artifacts[0]["content"]
+        native["report_allowed"] = False
+        native["critical_count"] = 1
+        native["quality_status"] = "quality_gate_blocked"
+        native["results"][0]["report_allowed"] = False
+        native["results"][0]["self_review"]["critical_count"] = 1
+        artifacts[1]["content"]["report_allowed"] = True
+
+        with self.assertRaises(ReportArtifactMissingError):
+            render_uzi_native_html(artifacts, run_id=RUN_ID)
+
+    def test_validated_segmental_artifact_uses_native_uzi_segmental_renderer(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        artifacts.append({
+            "artifact_id": "artifact-segmental",
+            "artifact_type": "uzi_native_command_result",
+            "status": "active",
+            "content": {
+                "command_id": "segmental-model",
+                "phase": "validated",
+                "results": [{
+                    "symbol": "600519",
+                    "data_gap": [],
+                    "result": {
+                        "phase": "validated",
+                        "filled_model": {
+                            "name": "贵州茅台",
+                            "currency": "CNY",
+                            "core_thesis": "核心产品贡献主要收入，系列酒提供增量。",
+                            "total_revenue_latest_yi": 1000.0,
+                            "total_revenue_history_yi": [800.0, 900.0, 1000.0],
+                            "source_notes": ["基金披露与公司年报"],
+                            "segments": [{
+                                "name": "核心产品",
+                                "latest_revenue_yi": 800.0,
+                                "latest_share_pct": 80.0,
+                                "drivers": ["真实披露销量"],
+                                "thesis_tag": "cash_cow",
+                                "bull_growth_3y_cagr": 12.0,
+                                "base_growth_3y_cagr": 8.0,
+                                "bear_growth_3y_cagr": 2.0,
+                                "revenue_history_yi": [650.0, 720.0, 800.0],
+                                "history_periods": ["2023", "2024", "2025"],
+                            }],
+                        },
+                        "validation": {
+                            "passed": True,
+                            "warnings": [],
+                            "summary": {"reconciliation_gap_pct": 0.0, "base_3y_total_growth_pct": 25.97},
+                        },
+                    },
+                }],
+            },
+        })
 
         rendered = render_uzi_native_html(artifacts, run_id=RUN_ID)
 
-        self.assertIn("基金持仓来源", rendered.html)
-        self.assertIn("招商中证半导体产业ETF发起式联接A", rendered.html)
-        self.assertIn("目标 ETF 穿透持仓", rendered.html)
-        self.assertIn("13.85%", rendered.html)
-        self.assertIn("基金定期披露持仓不代表当前仍持有该证券", rendered.html)
+        self.assertIn("SEGMENTAL · 分业务建模", rendered.html)
+        self.assertIn("核心产品", rendered.html)
+        self.assertIn("3 情景 × 3 年营收预测", rendered.html)
 
     def test_renders_hk_currency_without_hardcoded_renminbi_symbol(self) -> None:
         artifacts = sample_uzi_artifacts()
-        presentation = artifacts[1]["content"]
-        presentation["currency"] = "HKD"
-        presentation["currency_symbol"] = "HK$"
-        for key in ("subject", "hero"):
-            presentation[key]["currency"] = "HKD"
-            presentation[key]["currency_symbol"] = "HK$"
-        for key in ("price", "valuation"):
-            presentation["dashboard"][key]["currency"] = "HKD"
-            presentation["dashboard"][key]["currency_symbol"] = "HK$"
-        presentation["buy_zones"][0]["currency"] = "HKD"
-        presentation["buy_zones"][0]["currency_symbol"] = "HK$"
+        result = artifacts[0]["content"]["results"][0]
+        result["raw"]["market"] = "H"
+        result["raw"]["ticker"] = "00700.HK"
 
         rendered = render_uzi_native_html(artifacts, run_id=RUN_ID)
 
-        self.assertIn("HK$1,450.50", rendered.html)
-        self.assertIn("HK$1,502.00", rendered.html)
-        self.assertNotIn("¥1,450.50", rendered.html)
+        self.assertIn("HK$", rendered.html)
+        self.assertNotIn("¥1,450.5", rendered.html)
 
-    def test_numeric_panel_fallback_is_escaped_as_text(self) -> None:
-        artifacts = sample_uzi_artifacts()
-        artifacts[1]["content"]["panel"].pop("registered_seat_count")
-
-        rendered = render_uzi_native_html(artifacts, run_id=RUN_ID)
-
-        self.assertIn("注册席位", rendered.html)
-        self.assertIn("<strong>1</strong>", rendered.html)
-
-    def test_rejects_non_uzi_runs_and_runs_without_research_report(self) -> None:
+    def test_rejects_non_uzi_runs_and_legacy_custom_reports(self) -> None:
         with self.assertRaises(ReportArtifactMissingError):
             render_uzi_native_html([], run_id=RUN_ID)
         with self.assertRaises(ReportArtifactMissingError):
@@ -218,6 +210,76 @@ class UziNativeReportTests(unittest.TestCase):
                 [{"artifact_type": "research_report", "status": "active", "content": {"conclusion": "generic"}}],
                 run_id=RUN_ID,
             )
+
+    def test_single_stock_export_rejects_comparison_analysis(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        second = dict(artifacts[0]["content"]["results"][0])
+        second["symbol"] = "000001"
+        artifacts[0]["content"]["results"].append(second)
+
+        with self.assertRaisesRegex(ReportArtifactMissingError, "exactly one"):
+            render_uzi_native_html(artifacts, run_id=RUN_ID)
+
+    def test_pdf_pool_bounds_ten_concurrent_exports_and_caches_identical_html(self) -> None:
+        state = {"active": 0, "max_active": 0, "renders": 0}
+        lock = Lock()
+
+        class FakeLocator:
+            def evaluate_all(self, _script: str) -> None:
+                return None
+
+        class FakePage:
+            def set_content(self, *_args, **_kwargs) -> None:
+                return None
+
+            def evaluate(self, _script: str) -> None:
+                return None
+
+            def locator(self, _selector: str) -> FakeLocator:
+                return FakeLocator()
+
+            def emulate_media(self, **_kwargs) -> None:
+                return None
+
+            def pdf(self, **_kwargs) -> bytes:
+                with lock:
+                    state["active"] += 1
+                    state["renders"] += 1
+                    state["max_active"] = max(state["max_active"], state["active"])
+                time.sleep(0.02)
+                with lock:
+                    state["active"] -= 1
+                return b"%PDF-1.7\nstrict-uzi-test"
+
+        class FakeBrowser:
+            def new_page(self, **_kwargs) -> FakePage:
+                return FakePage()
+
+            def close(self) -> None:
+                return None
+
+        class FakeChromium:
+            def launch(self, **_kwargs) -> FakeBrowser:
+                return FakeBrowser()
+
+        class FakePlaywright:
+            chromium = FakeChromium()
+
+        @contextmanager
+        def fake_sync_playwright():
+            yield FakePlaywright()
+
+        html = "<html><body>ten-concurrent-uzi-pdf-pool-test</body></html>"
+        with patch("playwright.sync_api.sync_playwright", fake_sync_playwright):
+            with ThreadPoolExecutor(max_workers=10) as pool:
+                payloads = list(pool.map(render_uzi_native_pdf, [html] * 10))
+            cached = render_uzi_native_pdf(html)
+
+        self.assertEqual(len(payloads), 10)
+        self.assertTrue(all(payload.startswith(b"%PDF") for payload in payloads))
+        self.assertEqual(cached, payloads[0])
+        self.assertLessEqual(state["max_active"], 2)
+        self.assertLessEqual(state["renders"], 2)
 
 
 if __name__ == "__main__":

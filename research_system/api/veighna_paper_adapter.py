@@ -158,22 +158,35 @@ class VeighNaPaperAdapter:
             ask_price_1=float(ask),
         )
 
-        events: list[tuple[str, Any]] = []
-
         class _ContractLookup:
             @staticmethod
             def get_contract(_vt_symbol: str):
                 return contract
 
-        # cross_order is deliberately invoked on a tiny, stateless headless
-        # instance. Position and fund state live in Cognitrade's transaction.
-        engine = object.__new__(PaperEngine)
-        engine.main_engine = _ContractLookup()
-        engine.trade_slippage = 0
-        engine.put_event = lambda event_type, data: events.append((event_type, data))
-        engine.update_position = lambda trade, current_contract: None
+        # Use real bound methods on a minimal PaperEngine subclass. Assigning
+        # lambdas to an object created via object.__new__ worked for the
+        # no-fill branch, but VeighNa's filled branch calls both methods as
+        # instance methods and some releases reject the unbound shims.
+        class _HeadlessPaperEngine(PaperEngine):
+            def __init__(self) -> None:
+                self.main_engine = _ContractLookup()
+                self.trade_slippage = 0
+                self.events: list[tuple[str, Any]] = []
+
+            def put_event(self, event_type: str, data: object) -> None:
+                self.events.append((event_type, data))
+
+            def update_position(self, trade: object, current_contract: object) -> None:
+                del trade, current_contract
+
+        # Position and fund state remain in Cognitrade's audited SQLite
+        # transaction; only VeighNa's official crossing function runs here.
+        engine = _HeadlessPaperEngine()
         PaperEngine.cross_order(engine, order, tick)
-        trade = next((data for event_type, data in events if event_type == EVENT_TRADE), None)
+        trade = next(
+            (data for event_type, data in engine.events if event_type == EVENT_TRADE),
+            None,
+        )
         fill = (
             Decimal(str(trade.price)).quantize(_MICRO, rounding=ROUND_HALF_UP)
             if trade is not None

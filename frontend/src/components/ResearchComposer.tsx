@@ -11,6 +11,7 @@ type ResearchComposerProps = {
 const intentLabels = {
   auto: '自动识别',
   stock_check: '个股体检',
+  quick_scan: 'UZI 股票速判',
   stock_compare: '多股比较',
   stock_screen: '股票筛选',
   fund_research: '基金研究',
