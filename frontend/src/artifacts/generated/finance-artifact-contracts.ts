@@ -19,13 +19,17 @@ export const FINANCE_ARTIFACT_TYPES = [
   "valuation_model",
   "investor_panel_review",
   "risk_scan",
-  "report_presentation",
+  "quick_scan",
+  "uzi_native_method_result",
+  "uzi_native_command_result",
+  "uzi_native_analysis",
   "institutional_analysis",
   "research_workflow",
   "deep_analysis",
   "uzi_dimension_coverage",
   "fund_snapshot",
   "fund_analysis",
+  "fund_holding_report_batch",
   "ai_readiness",
   "earnings_preview",
   "model_update",
@@ -68,6 +72,24 @@ export type UserRequestContent = {
   "source_records"?: Array<Record<string, unknown>>;
   "snapshots"?: Array<Record<string, unknown>>;
   "source_refs"?: Array<Record<string, unknown>>;
+  "holding_context"?: {
+    "parent_batch_id": string;
+    "source_fund_run_id": string;
+    "source_fund_artifact_id": string;
+    "fund_code": string;
+    "fund_name": string;
+    "fund_type"?: string | null;
+    "holding_rank": number;
+    "symbol": string;
+    "security_name"?: string;
+    "fund_weight_pct"?: number | null;
+    "target_security_weight_pct"?: number | null;
+    "holding_source": "direct_equity_disclosure" | "target_etf_lookthrough";
+    "disclosure_date"?: string | null;
+    "disclosure_age_days"?: number | null;
+    "stale_level"?: "current" | "warning" | "confirmation_required" | "unknown";
+    "disclaimer"?: string;
+  } | null;
 }
 
 export type NormalizedQueryContent = {
@@ -83,6 +105,24 @@ export type NormalizedQueryContent = {
   "asset_class_targets"?: Record<string, unknown> | null;
   "requested_methods"?: Array<string>;
   "method_assumptions"?: Record<string, unknown> | null;
+  "holding_context"?: {
+    "parent_batch_id"?: string;
+    "source_fund_run_id"?: string;
+    "source_fund_artifact_id"?: string;
+    "fund_code"?: string;
+    "fund_name"?: string;
+    "fund_type"?: string | null;
+    "holding_rank"?: number;
+    "symbol"?: string;
+    "security_name"?: string;
+    "fund_weight_pct"?: number | null;
+    "target_security_weight_pct"?: number | null;
+    "holding_source"?: "direct_equity_disclosure" | "target_etf_lookthrough";
+    "disclosure_date"?: string | null;
+    "disclosure_age_days"?: number | null;
+    "stale_level"?: "current" | "warning" | "confirmation_required" | "unknown";
+    "disclaimer"?: string;
+  } | null;
 }
 
 export type StockSnapshotBundleContent = {
@@ -129,10 +169,14 @@ export type EvidenceSetContent = {
 }
 
 export type FinancialAnalysisContent = {
-  "symbols": Array<unknown>;
-  "methodologies": Array<unknown>;
-  "scorecards": Array<unknown>;
-  "summary": string;
+  "methodology_version": string;
+  "method": "cashflow_resilience";
+  "artifact_type": "financial_analysis";
+  "results": Array<Record<string, unknown>>;
+  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
+  "data_gap": Array<string>;
+  "assumption_flags": Array<string>;
+  "generated_at": string;
 }
 
 export type ScreeningResultContent = {
@@ -723,6 +767,7 @@ export type DistillationReviewContent = {
 export type ResearchReportContent = {
   "conclusion": string;
   "assessment"?: Record<string, unknown> | null;
+  "comparison"?: Record<string, unknown> | null;
   "evidence": Array<unknown>;
   "risk": Array<unknown>;
   "follow_up": Array<unknown>;
@@ -737,9 +782,32 @@ export type ResearchReportContent = {
   "research_workflow"?: Record<string, unknown> | null;
   "deep_analysis"?: Record<string, unknown> | null;
   "uzi_dimension_coverage"?: Record<string, unknown> | null;
+  "uzi_data_pipeline"?: Record<string, unknown> | null;
   "presentation_artifact_type"?: string;
+  "holding_context"?: {
+    "parent_batch_id": string;
+    "source_fund_run_id": string;
+    "source_fund_artifact_id": string;
+    "fund_code": string;
+    "fund_name": string;
+    "fund_type"?: string | null;
+    "holding_rank": number;
+    "symbol": string;
+    "security_name"?: string;
+    "fund_weight_pct"?: number | null;
+    "target_security_weight_pct"?: number | null;
+    "holding_source": "direct_equity_disclosure" | "target_etf_lookthrough";
+    "disclosure_date"?: string | null;
+    "disclosure_age_days"?: number | null;
+    "stale_level"?: "current" | "warning" | "confirmation_required" | "unknown";
+    "disclaimer"?: string;
+  } | null;
   "fund_analysis"?: Record<string, unknown>;
   "quality_status"?: string | null;
+  "native_analysis_artifact_id"?: string;
+  "report_allowed"?: boolean;
+  "critical_count"?: number;
+  "warning_count"?: number;
   "delivery_type"?: string;
   "candidates"?: Array<Record<string, unknown>>;
   "screening"?: Record<string, unknown>;
@@ -754,6 +822,7 @@ export type MainAgentSynthesisContent = {
   "assistant_message": string;
   "follow_up"?: Array<string>;
   "source_artifact_id": string;
+  "source_artifact_ids"?: Array<string>;
   "model_generated"?: boolean;
 }
 
@@ -764,10 +833,16 @@ export type ValuationModelContent = {
     "model": string;
     "methodology_version": string;
     "symbol": string;
+    "currency": string | null;
+    "currency_symbol": string | null;
     "status": string;
     "fair_value": number | null;
     "market_price": number | null;
     "margin_of_safety": number | null;
+    "enterprise_value_yi"?: number | null;
+    "net_debt_yi"?: number | null;
+    "equity_value_yi"?: number | null;
+    "net_debt_bridge_note"?: string | null;
     "assumptions": {
       "wacc"?: number;
       "terminal_growth"?: number;
@@ -819,11 +894,16 @@ export type InvestorPanelReviewContent = {
     "investor_id": string;
     "perspective_id": string;
     "perspective_label": string;
+    "investor_name_en": string | null;
+    "methodology_source": string | null;
+    "avatar_seed": string | null;
+    "tier": string | null;
     "school": string;
     "required_dimensions": Array<string>;
     "signal": string;
     "score": number;
     "confidence": number;
+    "uzi_confidence": number;
     "reasoning": string;
     "headline": string;
     "pass_rules": Array<{
@@ -831,29 +911,23 @@ export type InvestorPanelReviewContent = {
       "name": string;
       "weight": number;
       "msg": string;
-      "missing_fields"?: Array<string>;
     }>;
     "fail_rules": Array<{
       "rule_id": string;
       "name": string;
       "weight": number;
       "msg": string;
-      "missing_fields"?: Array<string>;
     }>;
-    "skipped_rules": Array<{
-      "rule_id": string;
-      "name": string;
-      "weight": number;
-      "msg": string;
-      "missing_fields"?: Array<string>;
-    }>;
-    "data_gap_rules": Array<string>;
     "pass_count": number;
     "fail_count": number;
-    "skipped_count": number;
+    "skipped_rule_count": number;
     "weight_pass": number;
     "weight_total": number;
     "rule_engine_version": string;
+    "skip_reason": string | null;
+    "time_horizon": string | null;
+    "position_sizing": string | null;
+    "what_would_change_my_mind": string | null;
     "checks": Array<{
       "dimension": string;
       "status": string;
@@ -862,16 +936,25 @@ export type InvestorPanelReviewContent = {
     "is_methodology_perspective": boolean;
     "is_real_person_advice": boolean;
     "rule_mode": string;
+    "original_rule_signal"?: string;
+    "original_rule_score"?: number;
+    "agent_roleplay_applied"?: boolean;
+    "override_rule_engine"?: boolean;
+    "override_reason"?: string | null;
+    "roleplay_source"?: string;
+    "comment"?: string | null;
+    "verdict"?: string | null;
   }>;
   "distribution": {
     "bullish"?: number;
     "bearish"?: number;
     "neutral"?: number;
+    "skip"?: number;
     "insufficient_evidence"?: number;
   };
   "average_score"?: number | null;
   "evaluated_rule_count"?: number;
-  "skipped_rule_count"?: number;
+  "skipped_seat_count"?: number;
   "quality_status"?: string;
   "data_gap"?: Array<string>;
   "disagreement": {
@@ -880,6 +963,16 @@ export type InvestorPanelReviewContent = {
   };
   "confidence": number;
   "risk_flags": Array<string>;
+  "per_investor_override"?: Record<string, unknown>;
+  "roleplay"?: {
+    "required": boolean;
+    "status": string;
+    "agent_reviewed": boolean;
+    "source_commit": string;
+    "group_count": number;
+    "completed_group_count": number;
+    "errors": Array<string>;
+  };
 }
 
 export type RiskScanContent = {
@@ -906,59 +999,171 @@ export type RiskScanContent = {
   "risk_flags": Array<string>;
 }
 
-export type ReportPresentationContent = {
-  "version": string;
-  "theme": string;
-  "profile": string;
-  "subject": Record<string, unknown>;
-  "hero": Record<string, unknown>;
-  "core_conclusion": string;
-  "dashboard": Record<string, unknown>;
-  "great_divide": Record<string, unknown>;
-  "panel": Record<string, unknown>;
-  "radar": Array<unknown>;
-  "deep_scan": Array<Record<string, unknown>>;
-  "panel_insights": Array<Record<string, unknown>>;
-  "risk_list": Array<unknown>;
-  "buy_zones": Array<unknown>;
-  "institutional_modeling": Array<Record<string, unknown>>;
-  "advanced_methods"?: {
-    "institutional_analysis"?: Record<string, unknown> | null;
-    "research_workflow"?: Record<string, unknown> | null;
-    "deep_analysis"?: Record<string, unknown> | null;
-    "uzi_dimension_coverage"?: Record<string, unknown> | null;
+export type QuickScanContent = {
+  "command": "quick-scan";
+  "methodology_version": string;
+  "source_commit": string;
+  "symbol": string | null;
+  "required_dimensions": Array<unknown>;
+  "dimension_status": {
+    "1_financials": string;
+    "2_kline": string;
+    "10_valuation": string;
+    "18_trap": string;
   };
-  "source_artifact_ids": Array<string>;
-  "generated_at": string;
+  "investor_ids": Array<string>;
+  "verdict": string;
+  "aggregate_score": number | null;
+  "votes": Array<{
+    "symbol": string;
+    "investor_id": string;
+    "perspective_id": string;
+    "perspective_label": string;
+    "investor_name_en": string | null;
+    "methodology_source": string | null;
+    "avatar_seed": string | null;
+    "tier": string | null;
+    "school": string;
+    "required_dimensions": Array<string>;
+    "signal": string;
+    "score": number;
+    "confidence": number;
+    "uzi_confidence": number;
+    "reasoning": string;
+    "headline": string;
+    "pass_rules": Array<{
+      "rule_id": string;
+      "name": string;
+      "weight": number;
+      "msg": string;
+    }>;
+    "fail_rules": Array<{
+      "rule_id": string;
+      "name": string;
+      "weight": number;
+      "msg": string;
+    }>;
+    "pass_count": number;
+    "fail_count": number;
+    "skipped_rule_count": number;
+    "weight_pass": number;
+    "weight_total": number;
+    "rule_engine_version": string;
+    "skip_reason": string | null;
+    "time_horizon": string | null;
+    "position_sizing": string | null;
+    "what_would_change_my_mind": string | null;
+    "checks": Array<{
+      "dimension": string;
+      "status": string;
+      "feature_names": Array<string>;
+    }>;
+    "is_methodology_perspective": boolean;
+    "is_real_person_advice": boolean;
+    "rule_mode": string;
+  }>;
+  "trap_level": string | null;
+  "trap_signals_hit": number | null;
+  "risks": Array<string>;
+  "markdown": string;
+  "output_format": "markdown";
+  "html_generated": false;
+  "quality_status": "available" | "degraded" | "data_gap";
+  "confidence": number;
   "data_gap": Array<string>;
+  "risk_flags": Array<string>;
+}
+
+export type UziNativeMethodResultContent = {
+  "method_id": "dcf" | "comps" | "three_statement" | "quick_lbo" | "accretion_dilution" | "initiation_report" | "earnings_review" | "catalyst_calendar" | "thesis_tracker" | "morning_note" | "quantitative_screen" | "sector_review" | "ic_memo" | "porter_bcg" | "dd_checklist" | "unit_economics" | "value_creation_plan" | "portfolio_rebalance" | "ai_readiness" | "earnings_preview" | "model_update" | "returns_attribution" | "holding_rebalance";
+  "source_commit": "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359";
+  "implementation": "vendored_uzi_3_9_2_pure_function";
+  "results": Array<{
+    "symbol": string | null;
+    "result": unknown;
+    "data_gap": Array<string>;
+  }>;
+  "quality_status": "available" | "degraded" | "data_gap";
+  "data_gap": Array<string>;
+  "assumptions": Record<string, unknown>;
+}
+
+export type UziNativeCommandResultContent = {
+  "command_id": "analyze-stock" | "quick-scan" | "panel-only" | "scan-trap" | "dcf" | "comps" | "lbo" | "segmental-model" | "initiate" | "earnings" | "catalysts" | "thesis" | "screen" | "dd" | "ic-memo" | "ai-readiness" | "earnings-preview" | "model-update" | "returns" | "rebalance";
+  "source_commit": "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359";
+  "implementation": "vendored_uzi_3_9_2_command_boundary";
+  "phase": string;
+  "results": Array<{
+    "symbol": string | null;
+    "result": unknown;
+    "data_gap": Array<string>;
+  }>;
+  "quality_status": "available" | "degraded" | "data_gap";
+  "data_gap": Array<string>;
+}
+
+export type UziNativeAnalysisContent = {
+  "source_commit": string;
+  "methodology_version": string;
+  "profile": "lite" | "medium" | "deep";
+  "results": Array<Record<string, unknown>>;
+  "critical_count": number;
+  "warning_count": number;
+  "report_allowed": boolean;
+  "quality_status": "available" | "quality_gate_blocked";
+  "recovery_history": Array<Record<string, unknown>>;
+  "holding_context"?: Record<string, unknown> | null;
 }
 
 export type InstitutionalAnalysisContent = {
   "methodology_version": string;
   "profile": string;
+  "status"?: string;
   "methods"?: Array<unknown>;
   "results": Array<unknown>;
   "data_gap"?: Array<unknown>;
   "confidence": number;
   "risk_flags": Array<string>;
+  "summary"?: string;
+  "quality_status"?: string;
 }
 
 export type ResearchWorkflowContent = {
   "methodology_version": string;
   "profile": string;
   "results": Array<unknown>;
+  "status"?: string;
+  "data_gap"?: Array<string>;
   "summary"?: string;
   "confidence": number;
   "risk_flags": Array<string>;
+  "quality_status"?: string;
 }
 
 export type DeepAnalysisContent = {
   "methodology_version": string;
   "profile": string;
   "results": Array<unknown>;
+  "status"?: string;
+  "assumption_flags"?: Array<string>;
   "summary"?: string;
   "confidence": number;
   "risk_flags": Array<string>;
+  "agent_reviewed"?: boolean;
+  "quality_status"?: string;
+  "data_gap"?: Array<string>;
+  "qualitative_deep_dive"?: Record<string, unknown>;
+  "qualitative_agent_execution"?: {
+    "required": boolean;
+    "status": string;
+    "agent_reviewed": boolean;
+    "source_commit": string;
+    "group_count": number;
+    "completed_group_count": number;
+    "evidence_count": number;
+    "association_count": number;
+    "errors": Array<string>;
+  };
 }
 
 export type UziDimensionCoverageContent = {
@@ -1342,6 +1547,58 @@ export type FundAnalysisContent = {
   "generated_at": string;
 }
 
+export type FundHoldingReportBatchContent = {
+  "batch_id": string;
+  "source_run_id": string;
+  "source_artifact_id": string;
+  "fund_code": string;
+  "fund_name": string;
+  "fund_type"?: string | null;
+  "profile": "lite" | "medium" | "deep";
+  "status": "running" | "completed" | "completed_partial" | "failed" | "cancelled";
+  "concurrency": number;
+  "holding_source": "direct_equity_disclosure" | "target_etf_lookthrough";
+  "is_fund_of_funds"?: boolean;
+  "disclosure_date"?: string | null;
+  "disclosure_age_days"?: number | null;
+  "stale_level"?: "current" | "warning" | "confirmation_required" | "unknown";
+  "cancel_requested"?: boolean;
+  "holdings": Array<{
+    "rank": number;
+    "symbol": string;
+    "name": string;
+    "market": string;
+    "supported": boolean;
+    "status": "queued" | "running" | "completed" | "completed_partial" | "failed" | "cancelled" | "unsupported";
+    "fund_weight_pct"?: number | null;
+    "target_security_weight_pct"?: number | null;
+    "holding_source": string;
+    "disclosure_date"?: string | null;
+    "child_run_id"?: string | null;
+    "attempt_run_ids": Array<string>;
+    "report_available": boolean;
+    "retry_count": number;
+    "data_gap": Array<string>;
+    "error"?: string | null;
+    "started_at"?: string | null;
+    "completed_at"?: string | null;
+  }>;
+  "counts": {
+    "total": number;
+    "supported": number;
+    "queued": number;
+    "running": number;
+    "deliverable": number;
+    "failed": number;
+    "cancelled": number;
+    "unsupported": number;
+  };
+  "data_gap": Array<string>;
+  "created_at": string;
+  "updated_at": string;
+  "completed_at"?: string | null;
+}
+
 export type AiReadinessContent = {
   "methodology_version": string;
   "method": "ai_readiness";
@@ -1668,13 +1925,17 @@ export type FinanceArtifactContentMap = {
   "valuation_model": ValuationModelContent
   "investor_panel_review": InvestorPanelReviewContent
   "risk_scan": RiskScanContent
-  "report_presentation": ReportPresentationContent
+  "quick_scan": QuickScanContent
+  "uzi_native_method_result": UziNativeMethodResultContent
+  "uzi_native_command_result": UziNativeCommandResultContent
+  "uzi_native_analysis": UziNativeAnalysisContent
   "institutional_analysis": InstitutionalAnalysisContent
   "research_workflow": ResearchWorkflowContent
   "deep_analysis": DeepAnalysisContent
   "uzi_dimension_coverage": UziDimensionCoverageContent
   "fund_snapshot": FundSnapshotContent
   "fund_analysis": FundAnalysisContent
+  "fund_holding_report_batch": FundHoldingReportBatchContent
   "ai_readiness": AiReadinessContent
   "earnings_preview": EarningsPreviewContent
   "model_update": ModelUpdateContent
@@ -1716,6 +1977,23 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "source_records",
     "snapshots",
     "source_refs",
+    "holding_context",
+    "holding_context.parent_batch_id",
+    "holding_context.source_fund_run_id",
+    "holding_context.source_fund_artifact_id",
+    "holding_context.fund_code",
+    "holding_context.fund_name",
+    "holding_context.fund_type",
+    "holding_context.holding_rank",
+    "holding_context.symbol",
+    "holding_context.security_name",
+    "holding_context.fund_weight_pct",
+    "holding_context.target_security_weight_pct",
+    "holding_context.holding_source",
+    "holding_context.disclosure_date",
+    "holding_context.disclosure_age_days",
+    "holding_context.stale_level",
+    "holding_context.disclaimer",
   ],
   "normalized_query": [
     "query",
@@ -1730,6 +2008,23 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "asset_class_targets",
     "requested_methods",
     "method_assumptions",
+    "holding_context",
+    "holding_context.parent_batch_id",
+    "holding_context.source_fund_run_id",
+    "holding_context.source_fund_artifact_id",
+    "holding_context.fund_code",
+    "holding_context.fund_name",
+    "holding_context.fund_type",
+    "holding_context.holding_rank",
+    "holding_context.symbol",
+    "holding_context.security_name",
+    "holding_context.fund_weight_pct",
+    "holding_context.target_security_weight_pct",
+    "holding_context.holding_source",
+    "holding_context.disclosure_date",
+    "holding_context.disclosure_age_days",
+    "holding_context.stale_level",
+    "holding_context.disclaimer",
   ],
   "stock_snapshot_bundle": [
     "query",
@@ -1771,10 +2066,14 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "query",
   ],
   "financial_analysis": [
-    "symbols",
-    "methodologies",
-    "scorecards",
-    "summary",
+    "methodology_version",
+    "method",
+    "artifact_type",
+    "results",
+    "quality_status",
+    "data_gap",
+    "assumption_flags",
+    "generated_at",
   ],
   "screening_result": [
     "screened_candidates",
@@ -2302,6 +2601,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
   "research_report": [
     "conclusion",
     "assessment",
+    "comparison",
     "evidence",
     "risk",
     "follow_up",
@@ -2316,9 +2616,31 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "research_workflow",
     "deep_analysis",
     "uzi_dimension_coverage",
+    "uzi_data_pipeline",
     "presentation_artifact_type",
+    "holding_context",
+    "holding_context.parent_batch_id",
+    "holding_context.source_fund_run_id",
+    "holding_context.source_fund_artifact_id",
+    "holding_context.fund_code",
+    "holding_context.fund_name",
+    "holding_context.fund_type",
+    "holding_context.holding_rank",
+    "holding_context.symbol",
+    "holding_context.security_name",
+    "holding_context.fund_weight_pct",
+    "holding_context.target_security_weight_pct",
+    "holding_context.holding_source",
+    "holding_context.disclosure_date",
+    "holding_context.disclosure_age_days",
+    "holding_context.stale_level",
+    "holding_context.disclaimer",
     "fund_analysis",
     "quality_status",
+    "native_analysis_artifact_id",
+    "report_allowed",
+    "critical_count",
+    "warning_count",
     "delivery_type",
     "candidates",
     "screening",
@@ -2332,6 +2654,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "assistant_message",
     "follow_up",
     "source_artifact_id",
+    "source_artifact_ids",
     "model_generated",
   ],
   "valuation_model": [
@@ -2341,10 +2664,16 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "models[].model",
     "models[].methodology_version",
     "models[].symbol",
+    "models[].currency",
+    "models[].currency_symbol",
     "models[].status",
     "models[].fair_value",
     "models[].market_price",
     "models[].margin_of_safety",
+    "models[].enterprise_value_yi",
+    "models[].net_debt_yi",
+    "models[].equity_value_yi",
+    "models[].net_debt_bridge_note",
     "models[].assumptions",
     "models[].assumptions.wacc",
     "models[].assumptions.terminal_growth",
@@ -2392,11 +2721,16 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "votes[].investor_id",
     "votes[].perspective_id",
     "votes[].perspective_label",
+    "votes[].investor_name_en",
+    "votes[].methodology_source",
+    "votes[].avatar_seed",
+    "votes[].tier",
     "votes[].school",
     "votes[].required_dimensions",
     "votes[].signal",
     "votes[].score",
     "votes[].confidence",
+    "votes[].uzi_confidence",
     "votes[].reasoning",
     "votes[].headline",
     "votes[].pass_rules",
@@ -2404,26 +2738,21 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "votes[].pass_rules[].name",
     "votes[].pass_rules[].weight",
     "votes[].pass_rules[].msg",
-    "votes[].pass_rules[].missing_fields",
     "votes[].fail_rules",
     "votes[].fail_rules[].rule_id",
     "votes[].fail_rules[].name",
     "votes[].fail_rules[].weight",
     "votes[].fail_rules[].msg",
-    "votes[].fail_rules[].missing_fields",
-    "votes[].skipped_rules",
-    "votes[].skipped_rules[].rule_id",
-    "votes[].skipped_rules[].name",
-    "votes[].skipped_rules[].weight",
-    "votes[].skipped_rules[].msg",
-    "votes[].skipped_rules[].missing_fields",
-    "votes[].data_gap_rules",
     "votes[].pass_count",
     "votes[].fail_count",
-    "votes[].skipped_count",
+    "votes[].skipped_rule_count",
     "votes[].weight_pass",
     "votes[].weight_total",
     "votes[].rule_engine_version",
+    "votes[].skip_reason",
+    "votes[].time_horizon",
+    "votes[].position_sizing",
+    "votes[].what_would_change_my_mind",
     "votes[].checks",
     "votes[].checks[].dimension",
     "votes[].checks[].status",
@@ -2431,14 +2760,23 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "votes[].is_methodology_perspective",
     "votes[].is_real_person_advice",
     "votes[].rule_mode",
+    "votes[].original_rule_signal",
+    "votes[].original_rule_score",
+    "votes[].agent_roleplay_applied",
+    "votes[].override_rule_engine",
+    "votes[].override_reason",
+    "votes[].roleplay_source",
+    "votes[].comment",
+    "votes[].verdict",
     "distribution",
     "distribution.bullish",
     "distribution.bearish",
     "distribution.neutral",
+    "distribution.skip",
     "distribution.insufficient_evidence",
     "average_score",
     "evaluated_rule_count",
-    "skipped_rule_count",
+    "skipped_seat_count",
     "quality_status",
     "data_gap",
     "disagreement",
@@ -2446,6 +2784,15 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "disagreement.summary",
     "confidence",
     "risk_flags",
+    "per_investor_override",
+    "roleplay",
+    "roleplay.required",
+    "roleplay.status",
+    "roleplay.agent_reviewed",
+    "roleplay.source_commit",
+    "roleplay.group_count",
+    "roleplay.completed_group_count",
+    "roleplay.errors",
   ],
   "risk_scan": [
     "methodology_version",
@@ -2468,55 +2815,157 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "confidence",
     "risk_flags",
   ],
-  "report_presentation": [
-    "version",
-    "theme",
-    "profile",
-    "subject",
-    "hero",
-    "core_conclusion",
-    "dashboard",
-    "great_divide",
-    "panel",
-    "radar",
-    "deep_scan",
-    "panel_insights",
-    "risk_list",
-    "buy_zones",
-    "institutional_modeling",
-    "advanced_methods",
-    "advanced_methods.institutional_analysis",
-    "advanced_methods.research_workflow",
-    "advanced_methods.deep_analysis",
-    "advanced_methods.uzi_dimension_coverage",
-    "source_artifact_ids",
-    "generated_at",
+  "quick_scan": [
+    "command",
+    "methodology_version",
+    "source_commit",
+    "symbol",
+    "required_dimensions",
+    "dimension_status",
+    "dimension_status.1_financials",
+    "dimension_status.2_kline",
+    "dimension_status.10_valuation",
+    "dimension_status.18_trap",
+    "investor_ids",
+    "verdict",
+    "aggregate_score",
+    "votes",
+    "votes[].symbol",
+    "votes[].investor_id",
+    "votes[].perspective_id",
+    "votes[].perspective_label",
+    "votes[].investor_name_en",
+    "votes[].methodology_source",
+    "votes[].avatar_seed",
+    "votes[].tier",
+    "votes[].school",
+    "votes[].required_dimensions",
+    "votes[].signal",
+    "votes[].score",
+    "votes[].confidence",
+    "votes[].uzi_confidence",
+    "votes[].reasoning",
+    "votes[].headline",
+    "votes[].pass_rules",
+    "votes[].pass_rules[].rule_id",
+    "votes[].pass_rules[].name",
+    "votes[].pass_rules[].weight",
+    "votes[].pass_rules[].msg",
+    "votes[].fail_rules",
+    "votes[].fail_rules[].rule_id",
+    "votes[].fail_rules[].name",
+    "votes[].fail_rules[].weight",
+    "votes[].fail_rules[].msg",
+    "votes[].pass_count",
+    "votes[].fail_count",
+    "votes[].skipped_rule_count",
+    "votes[].weight_pass",
+    "votes[].weight_total",
+    "votes[].rule_engine_version",
+    "votes[].skip_reason",
+    "votes[].time_horizon",
+    "votes[].position_sizing",
+    "votes[].what_would_change_my_mind",
+    "votes[].checks",
+    "votes[].checks[].dimension",
+    "votes[].checks[].status",
+    "votes[].checks[].feature_names",
+    "votes[].is_methodology_perspective",
+    "votes[].is_real_person_advice",
+    "votes[].rule_mode",
+    "trap_level",
+    "trap_signals_hit",
+    "risks",
+    "markdown",
+    "output_format",
+    "html_generated",
+    "quality_status",
+    "confidence",
     "data_gap",
+    "risk_flags",
+  ],
+  "uzi_native_method_result": [
+    "method_id",
+    "source_commit",
+    "implementation",
+    "results",
+    "results[].symbol",
+    "results[].result",
+    "results[].data_gap",
+    "quality_status",
+    "data_gap",
+    "assumptions",
+  ],
+  "uzi_native_command_result": [
+    "command_id",
+    "source_commit",
+    "implementation",
+    "phase",
+    "results",
+    "results[].symbol",
+    "results[].result",
+    "results[].data_gap",
+    "quality_status",
+    "data_gap",
+  ],
+  "uzi_native_analysis": [
+    "source_commit",
+    "methodology_version",
+    "profile",
+    "results",
+    "critical_count",
+    "warning_count",
+    "report_allowed",
+    "quality_status",
+    "recovery_history",
+    "holding_context",
   ],
   "institutional_analysis": [
     "methodology_version",
     "profile",
+    "status",
     "methods",
     "results",
     "data_gap",
     "confidence",
     "risk_flags",
+    "summary",
+    "quality_status",
   ],
   "research_workflow": [
     "methodology_version",
     "profile",
     "results",
+    "status",
+    "data_gap",
     "summary",
     "confidence",
     "risk_flags",
+    "quality_status",
   ],
   "deep_analysis": [
     "methodology_version",
     "profile",
     "results",
+    "status",
+    "assumption_flags",
     "summary",
     "confidence",
     "risk_flags",
+    "agent_reviewed",
+    "quality_status",
+    "data_gap",
+    "qualitative_deep_dive",
+    "qualitative_agent_execution",
+    "qualitative_agent_execution.required",
+    "qualitative_agent_execution.status",
+    "qualitative_agent_execution.agent_reviewed",
+    "qualitative_agent_execution.source_commit",
+    "qualitative_agent_execution.group_count",
+    "qualitative_agent_execution.completed_group_count",
+    "qualitative_agent_execution.evidence_count",
+    "qualitative_agent_execution.association_count",
+    "qualitative_agent_execution.errors",
   ],
   "uzi_dimension_coverage": [
     "methodology_version",
@@ -2860,6 +3309,55 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "provider_errors[].stage",
     "provider_errors[].error_type",
     "generated_at",
+  ],
+  "fund_holding_report_batch": [
+    "batch_id",
+    "source_run_id",
+    "source_artifact_id",
+    "fund_code",
+    "fund_name",
+    "fund_type",
+    "profile",
+    "status",
+    "concurrency",
+    "holding_source",
+    "is_fund_of_funds",
+    "disclosure_date",
+    "disclosure_age_days",
+    "stale_level",
+    "cancel_requested",
+    "holdings",
+    "holdings[].rank",
+    "holdings[].symbol",
+    "holdings[].name",
+    "holdings[].market",
+    "holdings[].supported",
+    "holdings[].status",
+    "holdings[].fund_weight_pct",
+    "holdings[].target_security_weight_pct",
+    "holdings[].holding_source",
+    "holdings[].disclosure_date",
+    "holdings[].child_run_id",
+    "holdings[].attempt_run_ids",
+    "holdings[].report_available",
+    "holdings[].retry_count",
+    "holdings[].data_gap",
+    "holdings[].error",
+    "holdings[].started_at",
+    "holdings[].completed_at",
+    "counts",
+    "counts.total",
+    "counts.supported",
+    "counts.queued",
+    "counts.running",
+    "counts.deliverable",
+    "counts.failed",
+    "counts.cancelled",
+    "counts.unsupported",
+    "data_gap",
+    "created_at",
+    "updated_at",
+    "completed_at",
   ],
   "ai_readiness": [
     "methodology_version",

@@ -3,10 +3,42 @@ from __future__ import annotations
 import math
 import re
 from datetime import date, datetime
+from threading import Lock
 from time import sleep
 from typing import Any, Callable, TypeVar
 
 T = TypeVar("T")
+
+_AKSHARE_JS_RUNTIME_LOCK = Lock()
+_AKSHARE_JS_RUNTIME_READY = False
+
+
+def initialize_akshare_js_runtime() -> None:
+    """Initialize AKShare's embedded V8 runtime before concurrent collectors run.
+
+    Several AKShare endpoints construct ``py_mini_racer.MiniRacer`` lazily.  The
+    native runtime's first initialization is not thread-safe on macOS, so two
+    snapshot workers reaching it together can terminate the entire process.
+    Warming it once on the caller thread keeps the collectors parallel while
+    making that one-time initialization deterministic.
+    """
+
+    global _AKSHARE_JS_RUNTIME_READY
+    if _AKSHARE_JS_RUNTIME_READY:
+        return
+    with _AKSHARE_JS_RUNTIME_LOCK:
+        if _AKSHARE_JS_RUNTIME_READY:
+            return
+        try:
+            import py_mini_racer
+
+            runtime = py_mini_racer.MiniRacer()
+            runtime.eval("1 + 1")
+        except (ImportError, OSError):
+            # AKShare versions without the optional JS runtime do not need the
+            # warm-up. Endpoint-level errors remain visible to provider traces.
+            pass
+        _AKSHARE_JS_RUNTIME_READY = True
 
 
 def normalize_ashare_symbol(symbol: str) -> str:

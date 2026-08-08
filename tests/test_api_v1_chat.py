@@ -151,7 +151,11 @@ class ApiV1ChatTests(unittest.TestCase):
             (
                 "POST",
                 f"/api/v1/chat/threads/{MISSING_THREAD_ID}/runs",
-                {"intent": "stock_check", "user_query": "Review 600000."},
+                {
+                    "intent": "stock_check",
+                    "user_query": "Review 600000.",
+                    "constraints": {"research_profile": "lite"},
+                },
             ),
         )
 
@@ -184,6 +188,7 @@ class ApiV1ChatTests(unittest.TestCase):
             json={
                 "intent": "stock_check",
                 "user_query": "Review 600000 with supplied evidence.",
+                "constraints": {"research_profile": "lite"},
                 "slots": {"symbols": ["600000"]},
             },
         )

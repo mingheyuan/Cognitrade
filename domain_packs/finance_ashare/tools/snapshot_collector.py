@@ -35,9 +35,15 @@ from domain_packs.finance_ashare.skills.uzi_source_snapshot.skill import (
     TrapSnapshotSkill,
     ValuationSnapshotSkill,
 )
+from domain_packs.finance_ashare.vendor.uzi_3_9_2 import Uzi392FetcherRuntime
 
 from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
+from domain_packs.finance_ashare.tools.uzi_data_recovery import (
+    assess_integrity,
+    recover_suggested_fixes_until_exhausted,
+)
 from research_system.runtime.storage.jsonl import read_json, write_json
+from research_system.adapters.vendors.akshare_utils import initialize_akshare_js_runtime
 from research_system.adapters.vendors.provider_execution import classify_provider_exception, failure_facts
 from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
 from research_system.runtime.platform.settings import Settings
@@ -47,6 +53,7 @@ _SYMBOL_SKILLS = {
     "market": MarketSnapshotSkill,
     "fundamental": FundamentalSnapshotSkill,
     "notice": NoticeSnapshotSkill,
+    "policy": PolicySnapshotSkill,
     "capital_flow": CapitalFlowSnapshotSkill,
     "sentiment": SentimentSnapshotSkill,
     "events": EventsSnapshotSkill,
@@ -67,6 +74,31 @@ _SYMBOL_SKILLS = {
     "fund_holders": FundHoldersSnapshotSkill,
     "similar_stocks": SimilarStocksSnapshotSkill,
 }
+_CANONICAL_SYMBOL_SKILLS = dict(_SYMBOL_SKILLS)
+_UZI_FETCHER_BY_SNAPSHOT_TYPE = {
+    "market": "0_basic",
+    "fundamental": "1_financials",
+    "kline": "2_kline",
+    "macro": "3_macro",
+    "peers": "4_peers",
+    "chain": "5_chain",
+    "research": "6_research",
+    "industry": "7_industry",
+    "materials": "8_materials",
+    "futures": "9_futures",
+    "valuation": "10_valuation",
+    "governance": "11_governance",
+    "capital_flow": "12_capital_flow",
+    "policy": "13_policy",
+    "moat": "14_moat",
+    "events": "15_events",
+    "lhb": "16_lhb",
+    "sentiment": "17_sentiment",
+    "trap": "18_trap",
+    "contests": "19_contests",
+    "fund_holders": "fund_holders",
+    "similar_stocks": "similar_stocks",
+}
 _SCREEN_BASE_TYPES = ("market", "fundamental", "notice")
 _SCREEN_ENRICHMENT_TYPES = ("capital_flow", "sentiment", "events", "lhb")
 _SNAPSHOT_CACHE_TTLS = {
@@ -84,6 +116,14 @@ _SNAPSHOT_CACHE_TTLS = {
     "similar_stocks": 86400,
 }
 _DEFAULT_SNAPSHOT_CACHE_TTL = 43200
+_SNAPSHOT_CACHE_SCHEMA_VERSIONS = {
+    "market": "valuation-history-v2",
+    "fundamental": "financial-history-v3",
+    "kline": "kline-550-v2",
+    "peers": "global-peers-v2",
+    "materials": "uzi-industry-materials-v2",
+    "futures": "materials-linked-v2",
+}
 _UNAVAILABLE_QUALITY_STATUSES = {
     "degraded",
     "data_gap",
@@ -157,10 +197,12 @@ def collect_snapshots(
             profile=research_profile,
         )
         if policy_snapshot is None:
-            policy_snapshot = _instantiate_skill(PolicySnapshotSkill, providers).run(
+            policy_snapshot = _run_uzi_fetcher_snapshot(
                 query=query,
-                sector=sector,
-                constituents=constituents,
+                symbol=None,
+                snapshot_type="policy",
+                provider_registry=providers,
+                industry=sector,
             )
             _save_snapshot_cache(
                 cache_root=cache_root,
@@ -176,11 +218,11 @@ def collect_snapshots(
         for index, (symbol, snapshot_type) in enumerate(
             (pair for symbol in resolved_symbols for pair in ((symbol, item) for item in requested))
         )
-        if snapshot_type in _SYMBOL_SKILLS
+        if snapshot_type in _SYMBOL_SKILLS and not (snapshot_type == "policy" and sector)
     ]
     if not tasks:
         for snapshot_type in requested:
-            if snapshot_type in {"sector", "policy"} and not sector:
+            if snapshot_type == "sector" and not sector:
                 snapshots.append(_missing_scope_snapshot(query=query, snapshot_type=snapshot_type))
         return snapshots
     results: dict[int, dict[str, Any]] = {}
@@ -197,36 +239,113 @@ def collect_snapshots(
         else:
             results[index] = cached
     if pending_tasks:
-        requested_workers = 8 if max_workers is None else max(int(max_workers), 1)
-        executor = ThreadPoolExecutor(
-            max_workers=min(requested_workers, len(pending_tasks)),
-            thread_name_prefix="finance-snapshot",
-        )
-        futures = {
-            executor.submit(_run_snapshot_skill, query, symbol, snapshot_type, providers): (index, symbol, snapshot_type)
-            for index, symbol, snapshot_type in pending_tasks
+        initialize_akshare_js_runtime()
+        # UZI runs dimension 0 first because the dependent macro/industry/
+        # futures/policy dimensions consume the resolved real industry.
+        basic_tasks = [task for task in pending_tasks if task[2] == "market"]
+        for index, symbol, snapshot_type in basic_tasks:
+            result = _run_snapshot_skill(query, symbol, snapshot_type, providers)
+            results[index] = result
+            _save_snapshot_cache(
+                cache_root=cache_root,
+                snapshot_type=snapshot_type,
+                target=symbol,
+                profile=research_profile,
+                snapshot=result,
+            )
+        pending_tasks = [task for task in pending_tasks if task[2] != "market"]
+        basic_by_symbol = {
+            symbol: raw
+            for index, symbol, snapshot_type in tasks
+            if snapshot_type == "market"
+            and index in results
+            and (raw := _uzi_raw_result(results[index])) is not None
         }
-        try:
-            for future in as_completed(futures):
-                index, symbol, snapshot_type = futures[future]
-                if _cancelled(cancellation):
-                    for pending in futures:
-                        pending.cancel()
-                    break
-                result = future.result()
-                results[index] = result
-                _save_snapshot_cache(
-                    cache_root=cache_root,
-                    snapshot_type=snapshot_type,
-                    target=symbol,
-                    profile=research_profile,
-                    snapshot=result,
+        # UZI main makes dimension 9 depend on dimension 8 so the futures
+        # contract is the material actually identified for the company rather
+        # than a generic hard-coded commodity. Material tasks therefore form
+        # a small first wave; all remaining independent tasks stay parallel.
+        material_tasks = [task for task in pending_tasks if task[2] == "materials"]
+        for index, symbol, snapshot_type in material_tasks:
+            dependencies = (
+                {"0_basic": basic_by_symbol[symbol]}
+                if symbol in basic_by_symbol
+                else None
+            )
+            result = _run_snapshot_skill(
+                query,
+                symbol,
+                snapshot_type,
+                providers,
+                dependencies,
+            )
+            results[index] = result
+            _save_snapshot_cache(
+                cache_root=cache_root,
+                snapshot_type=snapshot_type,
+                target=symbol,
+                profile=research_profile,
+                snapshot=result,
+            )
+        pending_tasks = [task for task in pending_tasks if task[2] != "materials"]
+        material_by_symbol = {
+            symbol: raw
+            for index, symbol, snapshot_type in tasks
+            if snapshot_type == "materials"
+            and index in results
+            and (raw := _uzi_raw_result(results[index])) is not None
+        }
+        material_snapshot_by_symbol = {
+            symbol: results[index]
+            for index, symbol, snapshot_type in tasks
+            if snapshot_type == "materials" and index in results
+        }
+        requested_workers = 8 if max_workers is None else max(int(max_workers), 1)
+        if pending_tasks:
+            executor = ThreadPoolExecutor(
+                max_workers=min(requested_workers, len(pending_tasks)),
+                thread_name_prefix="finance-snapshot",
+            )
+            futures = {}
+            for index, symbol, snapshot_type in pending_tasks:
+                dependencies: dict[str, dict[str, Any]] = {}
+                if symbol in basic_by_symbol:
+                    dependencies["0_basic"] = basic_by_symbol[symbol]
+                if snapshot_type == "futures":
+                    if _uses_uzi_fetcher(snapshot_type) and symbol in material_by_symbol:
+                        dependencies["8_materials"] = material_by_symbol[symbol]
+                    elif symbol in material_snapshot_by_symbol:
+                        dependencies["materials"] = material_snapshot_by_symbol[symbol]
+                future = executor.submit(
+                    _run_snapshot_skill,
+                    query,
+                    symbol,
+                    snapshot_type,
+                    providers,
+                    dependencies or None,
                 )
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+                futures[future] = (index, symbol, snapshot_type)
+            try:
+                for future in as_completed(futures):
+                    index, symbol, snapshot_type = futures[future]
+                    if _cancelled(cancellation):
+                        for pending in futures:
+                            pending.cancel()
+                        break
+                    result = future.result()
+                    results[index] = result
+                    _save_snapshot_cache(
+                        cache_root=cache_root,
+                        snapshot_type=snapshot_type,
+                        target=symbol,
+                        profile=research_profile,
+                        snapshot=result,
+                    )
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
     snapshots.extend(results[index] for index, _symbol, _snapshot_type in tasks if index in results)
     for snapshot_type in requested:
-        if snapshot_type in {"sector", "policy"} and not sector:
+        if snapshot_type == "sector" and not sector:
             snapshots.append(_missing_scope_snapshot(query=query, snapshot_type=snapshot_type))
     return snapshots
 
@@ -236,10 +355,26 @@ def _run_snapshot_skill(
     symbol: str,
     snapshot_type: str,
     provider_registry: VendorProviderRegistry | None = None,
+    dependencies: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    if _uses_uzi_fetcher(snapshot_type):
+        raw_basic = (dependencies or {}).get("0_basic") or {}
+        industry = str((raw_basic.get("data") or {}).get("industry") or "").strip() or None
+        return _run_uzi_fetcher_snapshot(
+            query=query,
+            symbol=symbol,
+            snapshot_type=snapshot_type,
+            provider_registry=provider_registry,
+            industry=industry,
+            dependencies=dependencies,
+        )
     skill_cls = _SYMBOL_SKILLS[snapshot_type]
     try:
-        return _instantiate_skill(skill_cls, provider_registry).run(query=query, symbol=symbol)
+        skill = _instantiate_skill(skill_cls, provider_registry)
+        kwargs: dict[str, Any] = {"query": query, "symbol": symbol}
+        if "dependencies" in inspect.signature(skill.run).parameters:
+            kwargs["dependencies"] = dependencies or {}
+        return skill.run(**kwargs)
     except Exception as exc:
         status = classify_provider_exception(exc)
         return {
@@ -251,6 +386,122 @@ def _run_snapshot_skill(
             "degrade_reason": status,
             "source_trace": [{"status": status, "error_type": exc.__class__.__name__}],
         }
+
+
+def _uses_uzi_fetcher(snapshot_type: str) -> bool:
+    return (
+        snapshot_type in _UZI_FETCHER_BY_SNAPSHOT_TYPE
+        and _SYMBOL_SKILLS.get(snapshot_type) is _CANONICAL_SYMBOL_SKILLS.get(snapshot_type)
+    )
+
+
+def _run_uzi_fetcher_snapshot(
+    *,
+    query: str,
+    symbol: str | None,
+    snapshot_type: str,
+    provider_registry: VendorProviderRegistry | None,
+    industry: str | None = None,
+    dependencies: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    fetcher_id = _UZI_FETCHER_BY_SNAPSHOT_TYPE[snapshot_type]
+    settings = (
+        provider_registry.settings
+        if provider_registry is not None
+        else Settings.from_env(Path(__file__).resolve().parents[3])
+    )
+    runtime = Uzi392FetcherRuntime(workspace_root=settings.workspace_root)
+    options: dict[str, Any] | None = None
+    if fetcher_id == "19_contests":
+        allowlist = {str(item).strip().lower() for item in settings.sensitive_source_allowlist}
+        xueqiu_enabled = (
+            settings.sensitive_sources_enabled
+            and "xueqiu" in allowlist
+            and bool(settings.xueqiu_cookie)
+        )
+        options = {
+            "cognitrade_xueqiu_policy": {
+                "enabled": xueqiu_enabled,
+                "cookie": settings.xueqiu_cookie if xueqiu_enabled else None,
+            }
+        }
+    result = runtime.collect(
+        fetcher_id,
+        ticker=str(symbol or "").strip(),
+        industry=industry,
+        dependencies=dependencies,
+        options=options,
+    )
+    data = dict(result.get("data") or {}) if isinstance(result.get("data"), dict) else {}
+    error = str(result.get("error") or "").strip()
+    availability = "available" if data and not error else "data_gap"
+    source_text = str(result.get("source") or f"uzi:{fetcher_id}").strip()
+    facts: dict[str, Any] = {
+        **data,
+        "availability": availability,
+        "_uzi_fetcher_id": fetcher_id,
+        "_uzi_raw_result": result,
+    }
+    # Compatibility projections are derived only from the exact UZI payload;
+    # no values are invented. Downstream UZI parity work reads the raw object.
+    if snapshot_type == "market":
+        facts["market_overview"] = {
+            "security_name": data.get("name"),
+            "industry": data.get("industry"),
+            "latest_bar": {
+                "close": data.get("price"),
+                "pct_change": data.get("change_pct"),
+            },
+            "valuation": {
+                "pe_ttm": data.get("pe_ttm"),
+                "pb": data.get("pb"),
+                "market_cap": data.get("market_cap_raw") or data.get("market_cap"),
+            },
+        }
+    elif snapshot_type == "fundamental":
+        facts["financial_abstract"] = data
+    elif snapshot_type == "kline":
+        facts["history"] = data
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+    target_symbol = str(result.get("ticker") or symbol or "").strip() or None
+    return {
+        "snapshot_type": snapshot_type,
+        "symbol": target_symbol,
+        "sector": industry if snapshot_type in {"macro", "industry", "policy"} else None,
+        "query": query,
+        "snapshot_date": retrieved_at[:10],
+        "retrieved_at": retrieved_at,
+        "facts": facts,
+        "quality_status": availability,
+        "degraded": availability != "available",
+        "degrade_reason": error or (None if data else f"{fetcher_id}_data_missing"),
+        "missing_fields": [] if availability == "available" else [snapshot_type],
+        "fallback_applied": bool(result.get("fallback")),
+        "source": {
+            "skill": f"uzi_{snapshot_type}_snapshot_skill",
+            "vendor": "UZI-Skill",
+            "provider_id": f"uzi_3_9_2.{fetcher_id}",
+            "source_id": source_text,
+            "chain_position": 0,
+            "dim": snapshot_type,
+            "from_cache": False,
+        },
+        "source_trace": [
+            {
+                "source_id": source_text,
+                "provider_id": f"uzi_3_9_2.{fetcher_id}",
+                "status": availability,
+                "fallback": bool(result.get("fallback")),
+                **({"error_type": error.split(":", 1)[0]} if error else {}),
+            }
+        ],
+    }
+
+
+def _uzi_raw_result(snapshot: dict[str, Any]) -> dict[str, Any] | None:
+    facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
+    result = facts.get("_uzi_raw_result")
+    return dict(result) if isinstance(result, dict) else None
 
 
 def _instantiate_skill(skill_cls, provider_registry: VendorProviderRegistry | None):
@@ -298,7 +549,7 @@ def _snapshot_cache_context(
         "artifact_type": "snapshot",
         "snapshot_type": snapshot_type,
         "provider": _SNAPSHOT_PROVIDER_HINTS.get(snapshot_type, snapshot_type),
-        "schema_version": "1",
+        "schema_version": _SNAPSHOT_CACHE_SCHEMA_VERSIONS.get(snapshot_type, "1"),
         "target": str(target).strip(),
         "profile": str(profile or "").strip().lower(),
     }
@@ -495,6 +746,10 @@ def collect_snapshot_bundle(
             universe_rows=universe_rows,
             universe_source=universe_source or "sector_unavailable",
             enrichment_targets=[],
+            query=query,
+            research_profile=research_profile,
+            settings=providers.settings,
+            cancellation=cancellation,
         )
 
     pool_size = max(int(candidate_pool_size), 1)
@@ -556,6 +811,10 @@ def collect_snapshot_bundle(
         universe_rows=universe_rows,
         universe_source=universe_source or ("structured_symbols" if resolved_symbols else "unavailable"),
         enrichment_targets=enrichment_targets,
+        query=query,
+        research_profile=research_profile,
+        settings=providers.settings,
+        cancellation=cancellation,
     )
 
 
@@ -613,8 +872,86 @@ def _bundle_result(
     universe_rows: list[dict[str, Any]],
     universe_source: str,
     enrichment_targets: list[str],
+    query: str,
+    research_profile: str | None,
+    settings: Settings,
+    cancellation: Any | None = None,
 ) -> dict[str, Any]:
+    # Execute the pinned suggested-fix worklist until every real action either
+    # resolves its target or records an explicit exhaustion reason.  There is
+    # deliberately no fixed retry/round count.
     normalized_snapshots = [_normalize_snapshot_quality(snapshot) for snapshot in snapshots]
+    integrity_before = assess_integrity(normalized_snapshots, symbols)
+    selected_profile = str(research_profile or "").strip().lower()
+    if not selected_profile:
+        raise ValueError("research_profile is required; choose lite, medium or deep")
+    if selected_profile in {"lite", "medium", "deep"}:
+        has_native_payload = any(
+            isinstance((snapshot.get("facts") or {}).get("_uzi_raw_result"), dict)
+            for snapshot in normalized_snapshots
+            if isinstance(snapshot, dict) and isinstance(snapshot.get("facts"), dict)
+        )
+        strict_recovery = (
+            recover_suggested_fixes_until_exhausted(
+                normalized_snapshots,
+                query=query,
+                symbols=symbols,
+                profile=selected_profile,
+                settings=settings,
+                cancellation=cancellation,
+            )
+            if has_native_payload
+            else {
+                "schema_version": "uzi-3.9.2-suggested-fix-loop-v1",
+                "profile": selected_profile,
+                "stage_order": [],
+                "attempted": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "attempts": [],
+                "cycles": [],
+                "critical_cleared": False,
+                "exhausted": True,
+                "exhausted_reason": "native_uzi_payload_unavailable",
+                "round_limit": None,
+            }
+        )
+        recovery_attempts = list(strict_recovery.get("attempts") or [])
+        qualitative_recovery = {
+            **strict_recovery,
+            "attempts": [
+                row for row in recovery_attempts
+                if row.get("stage") in {"official_web_ddgs", "mx_api", "qualitative_agent", "qualitative_inference"}
+            ],
+        }
+        playwright_recovery = {
+            **strict_recovery,
+            "attempts": [row for row in recovery_attempts if row.get("stage") == "playwright"],
+        }
+    elif selected_profile == "workspace_market_data":
+        # Non-UZI workspaces (for example the standalone market-data view)
+        # share the collector but must not silently enter an analysis profile.
+        qualitative_recovery = {
+            "schema_version": "uzi-3.9.2-agent-os-v1",
+            "profile": selected_profile,
+            "enabled": False,
+            "attempted": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "attempts": [],
+            "disabled_reason": "non_uzi_collection_profile",
+        }
+        playwright_recovery = dict(qualitative_recovery)
+        strict_recovery = dict(qualitative_recovery)
+    else:
+        raise ValueError("research_profile must be lite, medium or deep")
+    normalized_snapshots = [_normalize_snapshot_quality(snapshot) for snapshot in normalized_snapshots]
+    integrity_after = assess_integrity(normalized_snapshots, symbols)
+    integrity = {
+        **integrity_after,
+        "before_recovery": integrity_before,
+        "after_recovery": integrity_after,
+    }
     collected_types = list(
         dict.fromkeys(
             str(snapshot.get("snapshot_type") or "")
@@ -672,7 +1009,62 @@ def _bundle_result(
                 )
             ),
             "parallelism": "per_snapshot_dimension",
+            "uzi_integrity": integrity,
+            "uzi_recovery": _recovery_summary(
+                normalized_snapshots,
+                qualitative=qualitative_recovery,
+                playwright=playwright_recovery,
+                strict=strict_recovery,
+            ),
         },
+    }
+
+
+def _recovery_summary(
+    snapshots: list[dict[str, Any]],
+    *,
+    qualitative: dict[str, Any] | None = None,
+    playwright: dict[str, Any] | None = None,
+    strict: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    strict_payload = dict(strict or {})
+    if strict_payload:
+        return strict_payload
+    attempts = []
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict):
+            continue
+        facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
+        recovery = facts.get("_uzi_recovery") if isinstance(facts.get("_uzi_recovery"), dict) else None
+        if recovery is not None:
+            attempts.append({
+                "stage": "mx_ddgs",
+                "symbol": snapshot.get("symbol"),
+                "snapshot_type": snapshot.get("snapshot_type"),
+                "status": recovery.get("status"),
+                "source_id": recovery.get("source"),
+                "query": recovery.get("query"),
+            })
+        playwright_fact = facts.get("_uzi_playwright_recovery") if isinstance(facts.get("_uzi_playwright_recovery"), dict) else None
+        if playwright_fact is not None:
+            attempts.append({
+                "stage": "playwright",
+                "symbol": snapshot.get("symbol"),
+                "snapshot_type": snapshot.get("snapshot_type"),
+                "status": playwright_fact.get("status"),
+                "source_ids": playwright_fact.get("source_ids"),
+                "trigger_reason": playwright_fact.get("trigger_reason"),
+            })
+    return {
+        "schema_version": "uzi-3.9.2-agent-os-v1",
+        "stage_order": ["primary_providers", "integrity_check", "mx_api", "ddgs", "playwright", "integrity_recheck"],
+        "order": ["mx_api", "ddgs", "playwright"],
+        "attempted": len(attempts),
+        "succeeded": sum(row.get("status") == "available" for row in attempts),
+        "failed": sum(row.get("status") != "available" for row in attempts),
+        "attempts": attempts,
+        "qualitative_stage": dict(qualitative or {}),
+        "playwright_stage": dict(playwright or {}),
     }
 
 

@@ -7,6 +7,7 @@ from typing import Final
 # upstream registry is deliberately a catalogue (not a claim that every source
 # returned data for a particular run).  Runtime adapters must still emit their
 # actual source trace.
+UZI_SOURCE_CATALOG_SHA256: Final[str] = "b6bb012d75b8a4a254137289011ddb95571da39ee29ba2ec5bf5317c3fcec6bc"
 UZI_DIMENSION_MAP: Final[dict[str, tuple[str, ...]]] = {
     "0_basic": ("market",),
     "1_financials": ("fundamental",),
@@ -36,6 +37,12 @@ UZI_MARKET_MAP: Final[dict[str, tuple[str, ...]]] = {
     "U": ("us_equity",),
 }
 
+GLOBAL_MARKETS: Final[tuple[str, ...]] = (
+    "A", "H", "U", "JP", "KR", "TW", "SG", "IN", "CA", "AU", "GB",
+    "DE", "FR", "NL", "CH", "ES", "IT", "SE", "NO", "DK", "FI",
+    "BE", "PT", "BR", "MX", "TH", "ID", "MY", "NZ", "ZA", "IL", "G",
+)
+
 # id, Chinese name, base URL, markets, upstream dimensions, tier, access,
 # upstream health.  Keep this tuple synchronized with the pinned UZI commit.
 UZI_SOURCE_ROWS: Final[tuple[tuple[object, ...], ...]] = (
@@ -62,6 +69,9 @@ UZI_SOURCE_ROWS: Final[tuple[tuple[object, ...], ...]] = (
     ("yfinance", "Yahoo Finance", "https://finance.yahoo.com/", ("U", "H"), ("0_basic", "1_financials", "2_kline"), 1, "akshare", "known_good"),
     ("ddgs", "DuckDuckGo 搜索", "https://duckduckgo.com/", ("A", "H", "U"), ("3_macro", "13_policy", "14_moat", "15_events", "17_sentiment"), 1, "ddgs", "flaky"),
     ("yahoo_chart_v8", "Yahoo Finance Chart v8 (HTTP)", "https://query1.finance.yahoo.com/v8/finance/chart/", ("U", "H"), ("2_kline",), 1, "http", "known_good"),
+    ("yahoo_equity_screener", "Yahoo Finance 全球股票筛选", "https://query2.finance.yahoo.com/v1/finance/screener", GLOBAL_MARKETS, ("4_peers",), 1, "yfinance", "known_good"),
+    ("yahoo_fundamentals_timeseries", "Yahoo Finance 全球年度财务时序", "https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/", GLOBAL_MARKETS, ("1_financials", "4_peers", "10_valuation"), 1, "http", "known_good"),
+    ("yahoo_fx_chart", "Yahoo Finance 外汇 Chart", "https://query1.finance.yahoo.com/v8/finance/chart/JPYUSD=X", GLOBAL_MARKETS, ("4_peers",), 1, "http", "known_good"),
     ("tencent_hk_quote", "腾讯港股实时 qt.gtimg.cn", "http://qt.gtimg.cn/q=hk00700", ("H",), ("0_basic",), 1, "http", "known_good"),
     ("coingecko_simple_price", "CoinGecko Simple Price", "https://api.coingecko.com/api/v3/simple/price", ("U",), ("3_macro",), 1, "http", "known_good"),
     ("coingecko_markets", "CoinGecko Markets", "https://api.coingecko.com/api/v3/coins/markets", ("U",), ("3_macro",), 1, "http", "known_good"),

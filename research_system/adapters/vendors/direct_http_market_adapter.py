@@ -6,6 +6,7 @@ from typing import Any, Callable
 import requests
 
 from research_system.adapters.vendors.akshare_utils import coerce_numeric
+from research_system.adapters.vendors.market_router import MarketRouter
 
 
 class DirectHttpMarketAdapter:
@@ -35,6 +36,10 @@ class DirectHttpMarketAdapter:
                 lambda: self._tencent_a(symbol, adjust),
             )
         elif market == "hk_equity":
+            loaders = (
+                lambda: self._yahoo_chart(self._yahoo_symbol(symbol), "2y"),
+            )
+        elif market == "global_equity":
             loaders = (
                 lambda: self._yahoo_chart(self._yahoo_symbol(symbol), "2y"),
             )
@@ -222,12 +227,7 @@ class DirectHttpMarketAdapter:
 
     @staticmethod
     def _market(symbol: str) -> str:
-        raw = str(symbol or "").strip().upper()
-        if raw.endswith(".HK") or raw.startswith("HK"):
-            return "hk_equity"
-        if any(char.isalpha() for char in raw) and not raw.endswith((".SH", ".SZ", ".BJ")):
-            return "us_equity"
-        return "cn_equity"
+        return MarketRouter().classify(symbol=symbol).market
 
     @staticmethod
     def _normalized_symbol(symbol: str) -> str:

@@ -166,6 +166,7 @@ class ApiV1RunsTests(unittest.TestCase):
                 "conversation_context": [{"role": "user", "content": "长期视角"}],
                 "constraints": {
                     "symbol": "600519",
+                    "research_profile": "medium",
                     "snapshot_types": ["market", "fundamental", "notice"],
                     "investment_cycle": "long_term",
                 },
@@ -209,7 +210,7 @@ class ApiV1RunsTests(unittest.TestCase):
                         "request_id": REQUEST_ID,
                         "intent": "stock_check",
                         "user_query": "分析 600519",
-                        "constraints": {"symbol": "600519"},
+                        "constraints": {"symbol": "600519", "research_profile": "lite"},
                     },
                 )
                 self.assertEqual(response.status_code, 200)
@@ -241,9 +242,10 @@ class ApiV1RunsTests(unittest.TestCase):
 
         self.assertEqual(html_response.status_code, 200, html_response.text)
         self.assertTrue(html_response.headers["content-type"].startswith("text/html"))
-        self.assertIn("UZI RESEARCH TERMINAL", html_response.text)
+        self.assertIn("游资 SKILLS", html_response.text)
+        self.assertIn("FloatFu-true", html_response.text)
         self.assertIn("uzi-report-600519", html_response.headers["content-disposition"])
-        self.assertEqual(html_response.headers["x-cognitrade-source-artifact-count"], "3")
+        self.assertEqual(html_response.headers["x-cognitrade-source-artifact-count"], "2")
         self.assertIn("default-src 'none'", html_response.headers["content-security-policy"])
 
         with patch(
@@ -366,7 +368,7 @@ class ApiV1RunsTests(unittest.TestCase):
         request_json = {
             "intent": "stock_check",
             "user_query": "分析 600519",
-            "constraints": {"symbol": "600519"},
+            "constraints": {"symbol": "600519", "research_profile": "lite"},
         }
         with ThreadPoolExecutor(max_workers=2) as executor:
             first = executor.submit(
@@ -406,7 +408,7 @@ class ApiV1RunsTests(unittest.TestCase):
         request_json = {
             "intent": "stock_check",
             "user_query": "分析 600519",
-            "constraints": {"symbol": "600519"},
+            "constraints": {"symbol": "600519", "research_profile": "lite"},
         }
         with ThreadPoolExecutor(max_workers=3) as executor:
             run_future = executor.submit(
@@ -447,12 +449,12 @@ class ApiV1RunsTests(unittest.TestCase):
             {
                 "intent": "stock_compare",
                 "user_query": "只比较一个标的",
-                "constraints": {"symbols": ["600519"]},
+                "constraints": {"symbols": ["600519"], "research_profile": "lite"},
             },
             {
                 "intent": "stock_compare",
                 "user_query": "比较重复标的",
-                "constraints": {"symbols": ["600519", "000001", "600519"]},
+                "constraints": {"symbols": ["600519", "000001", "600519"], "research_profile": "lite"},
             },
             {
                 "intent": "methodology_evolution",
@@ -462,7 +464,7 @@ class ApiV1RunsTests(unittest.TestCase):
             {
                 "intent": "stock_check",
                 "user_query": "分析 600519",
-                "constraints": {"symbol": "600519", "unsupported_constraint": True},
+                "constraints": {"symbol": "600519", "research_profile": "lite", "unsupported_constraint": True},
             },
         )
 
@@ -485,7 +487,7 @@ class ApiV1RunsTests(unittest.TestCase):
             json={
                 "intent": "stock_check",
                 "user_query": "分析 600519",
-                "constraints": {"symbol": "600519"},
+                "constraints": {"symbol": "600519", "research_profile": "lite"},
                 "unexpected": "field",
             },
         )

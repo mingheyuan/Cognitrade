@@ -9,7 +9,7 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from api_test_support import API_TOKEN, FakeRunService, FakeRunServiceFactory, auth_headers
+from tests.api_test_support import API_TOKEN, FakeRunService, FakeRunServiceFactory, auth_headers
 from domain_packs.finance_ashare.tools.security_master import SecurityResolution
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
@@ -384,9 +384,9 @@ class ApiV2FinanceTests(unittest.TestCase):
             headers=auth_headers(),
             json={
                 "symbol": "600519",
+                "strategy": "ma_cross",
+                "strategy_parameters": {"fast_period": 2, "slow_period": 3},
                 "initial_cash": 1_000_000,
-                "fast_period": 2,
-                "slow_period": 3,
                 "trade_size": 100,
             },
         )

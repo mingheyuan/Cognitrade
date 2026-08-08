@@ -3,18 +3,63 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "codex/**"
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  backend:
+  finance-contracts:
+    name: Finance chain and scoring contracts
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     env:
       COGNITRADE_API_ALLOW_UNAUTHENTICATED: "true"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt
+      - name: Validate API, planning, fund scoring, artifacts, and frontend contracts
+        run: >-
+          python -m unittest
+          tests.test_api_validation_dynamic
+          tests.test_agent_os_task_intake
+          tests.test_pack_planner_contracts
+          tests.test_finance_pack_migration_completion
+          tests.test_finance_ashare_dashboard_contract
+          tests.test_fund_research
+          tests.test_api_v1_fund_holding_reports
+          tests.test_api_v2_finance
+          tests.test_backtest_strategies
+          tests.test_uzi_method_products
+          tests.test_uzi_392_vendor_runtime
+          tests.test_uzi_source_parity
+          tests.test_uzi_392_commands
+          tests.test_uzi_392_native_methods
+          tests.test_uzi_392_analysis
+          tests.test_uzi_quick_scan
+          tests.test_uzi_strict_recovery
+          tests.test_uzi_native_report
+          tests.test_uzi_provider_smoke
+          tests.test_finance_artifact_ui_contracts
+
+  backend:
+    name: Complete backend suite
+    needs: finance-contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      COGNITRADE_API_ALLOW_UNAUTHENTICATED: "true"
+      PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,7 +70,41 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -p "test_*.py"
 
+  provider-smoke:
+    name: UZI real-provider smoke
+    needs: finance-contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COGNITRADE_API_ALLOW_UNAUTHENTICATED: "true"
+      COGNITRADE_SENSITIVE_SOURCES_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt
+      - name: Probe all 22 UZI dimensions with real configured providers
+        run: >-
+          python -m research_system.runtime.diagnostics.status.uzi_provider_smoke
+          --symbol 600519
+          --sector 白酒
+          --dimension-timeout-seconds 35
+          --output ci-artifacts/uzi-provider-smoke.json
+      - name: Upload redacted provider evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uzi-provider-smoke-${{ github.sha }}
+          path: ci-artifacts/uzi-provider-smoke.json
+          if-no-files-found: error
+          retention-days: 14
+
   frontend:
+    name: Frontend lint, tests, and build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:

@@ -3,10 +3,45 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+import pandas as pd
+
 from research_system.adapters.vendors.akshare_fundamental_adapter import AkShareFundamentalAdapter
 
 
 class AkshareFundamentalAdapterTests(unittest.TestCase):
+    def test_balance_sheet_bridge_uses_real_report_fields_and_marks_liability_proxy(self) -> None:
+        adapter = AkShareFundamentalAdapter()
+        frame = pd.DataFrame([
+            {
+                "REPORT_DATE": "2025-12-31",
+                "MONETARYFUNDS": 3_000_000_000,
+                "TOTAL_LIABILITIES": 8_000_000_000,
+                "TOTAL_PARENT_EQUITY": 12_000_000_000,
+                "TOTAL_ASSETS": 20_000_000_000,
+            },
+            {
+                "REPORT_DATE": "2026-06-30",
+                "MONETARYFUNDS": 4_000_000_000,
+                "TOTAL_LIABILITIES": 9_000_000_000,
+                "TOTAL_PARENT_EQUITY": 13_000_000_000,
+                "TOTAL_ASSETS": 22_000_000_000,
+            },
+        ])
+        with patch.object(
+            __import__("research_system.adapters.vendors.akshare_fundamental_adapter", fromlist=["ak"]).ak,
+            "stock_balance_sheet_by_report_em",
+            return_value=frame,
+        ) as fetch:
+            result, gap = adapter._try_get_balance_sheet("600519")
+
+        self.assertIsNone(gap)
+        self.assertEqual(result["cash"], 4_000_000_000)
+        self.assertEqual(result["total_liabilities"], 9_000_000_000)
+        self.assertEqual(result["total_debt"], 9_000_000_000)
+        self.assertEqual(result["total_debt_basis"], "total_liabilities_proxy")
+        self.assertEqual(result["report_date"], "2026-06-30")
+        fetch.assert_called_once_with(symbol="SH600519")
+
     def test_individual_info_failure_is_a_gap_not_a_fake_info_payload(self) -> None:
         adapter = AkShareFundamentalAdapter()
         with patch(

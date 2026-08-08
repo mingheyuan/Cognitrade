@@ -92,8 +92,10 @@ class FundSnapshotSkill:
         fund_codes: list[str] | None = None,
         fund_category: str | None = None,
         candidate_pool_size: int = 8,
-        investment_cycle: str = "mid_term",
+        investment_cycle: str,
     ) -> dict[str, Any]:
+        if investment_cycle not in {"short_term", "mid_term", "long_term"}:
+            raise ValueError("investment_cycle is required; choose short_term, mid_term or long_term")
         category = self.normalize_category(fund_category)
         requested_codes = self._unique_codes(fund_codes or [])
         analysis_mode = "single_fund" if len(requested_codes) == 1 else "comparison"

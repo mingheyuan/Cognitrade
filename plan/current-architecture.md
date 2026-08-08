@@ -41,6 +41,7 @@ Web
 | `runtime/graph_delivery.py` | Graph 产物到 Main Agent 最终交付 |
 | `runtime/domain_packs` | Pack 加载、完整性和实现解析 |
 | `api` | 鉴权、验证、请求 ID、HTTP/SSE 和版本边界 |
+| `api/fund_holding_report_service.py` | 从冻结基金 Artifact 创建父批次，以独立默认 5 并发执行最多十个 `stock_check` 子运行，并持久化取消、重试、续跑和报告 ZIP 状态 |
 | `api/veighna_paper_adapter.py` | VeighNa PaperAccount 无界面订单建模与 Tick 撮合 |
 | `api/paper_trading_service.py` | SQLite 资金、费用、T+1、FIFO 持仓与挂单冻结账本 |
 | `api/hikyuu_backtest_service.py` | 隔离子进程执行 Hikyuu 策略并持久化结果 |
@@ -57,6 +58,12 @@ workspace/
   backtests/              # Hikyuu 回测结果与隔离运行缓存
   .migrations/            # 已执行的显式迁移标记
 ```
+
+基金持仓股票报告的父批次同样位于 `runs/<batch_id>/`，以
+`fund_holding_report_batch` Artifact 记录进度。其子运行使用标准 Agent OS
+`stock_check`，但由父批次专用执行器恢复和限流，并从顶层运行历史隐藏；每次尝试仍是
+完整独立 Run，可从父批次进入证据链。持仓只从来源 `fund_snapshot` 冻结一次，执行期间
+不会重新采集或推断。
 
 旧工作区一次性迁移：
 

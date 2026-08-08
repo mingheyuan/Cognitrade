@@ -38,6 +38,7 @@ Usage:
   ./scripts/deploy.sh stop [options]           Stop API + frontend web without removing them
   ./scripts/deploy.sh down [options]           Remove containers/network; keep workspace data
   ./scripts/deploy.sh status [options]         Show container and health status
+  ./scripts/deploy.sh runtime-check [options]  Verify all API, browser, paper, and backtest dependencies
   ./scripts/deploy.sh provider-smoke [options] Run explicit UZI real-provider checks
   ./scripts/deploy.sh logs [api|web|all]        Follow deployment logs
   ./scripts/deploy.sh token [options]          Print the generated browser Bearer token
@@ -195,7 +196,7 @@ while (( $# )); do
 done
 
 case "$COMMAND" in
-    deploy|install|init|check|build|migrate|start|restart|stop|down|status|provider-smoke|logs|token) ;;
+    deploy|install|init|check|build|migrate|start|restart|stop|down|status|runtime-check|provider-smoke|logs|token) ;;
     *) fail "unknown command: $COMMAND" ;;
 esac
 
@@ -428,6 +429,22 @@ initialize_environment() {
     fi
     chmod 600 "$ENV_FILE"
 
+    # These exact values were Cognitrade's former defaults. Public ECR is
+    # frequently unreachable on otherwise healthy networks, so migrate only
+    # untouched legacy defaults; custom operator image locations are preserved.
+    if [[ "$(read_env_value COGNITRADE_PYTHON_IMAGE)" == "public.ecr.aws/docker/library/python:3.11-slim-bookworm" ]]; then
+        set_env_value COGNITRADE_PYTHON_IMAGE "python:3.11-slim-bookworm"
+        log "updated the legacy Python base-image default to Docker Hub"
+    fi
+    if [[ "$(read_env_value COGNITRADE_NODE_IMAGE)" == "public.ecr.aws/docker/library/node:22-alpine" ]]; then
+        set_env_value COGNITRADE_NODE_IMAGE "node:22-alpine"
+        log "updated the legacy Node base-image default to Docker Hub"
+    fi
+    if [[ "$(read_env_value COGNITRADE_NGINX_IMAGE)" == "public.ecr.aws/docker/library/nginx:alpine" ]]; then
+        set_env_value COGNITRADE_NGINX_IMAGE "nginx:alpine"
+        log "updated the legacy Nginx base-image default to Docker Hub"
+    fi
+
     local token=""
     token="$(read_env_value COGNITRADE_API_TOKEN)"
     if [[ -z "$token" ]]; then
@@ -566,6 +583,13 @@ wait_for_ready() {
     fail "deployment readiness timed out after ${READY_TIMEOUT}s"
 }
 
+check_runtime_dependencies() {
+    log "verifying API, Playwright Chromium, VeighNa PaperAccount, and Hikyuu runtime"
+    run_compose exec -T api \
+        python -m research_system.runtime.diagnostics.status.deployment_preflight \
+        --workspace /app/workspace
+}
+
 perform_check() {
     ensure_docker 0
     validate_environment
@@ -611,6 +635,7 @@ case "$COMMAND" in
         log "starting API and frontend web containers"
         run_compose up -d --no-build --remove-orphans
         (( DRY_RUN )) || wait_for_ready
+        check_runtime_dependencies
         ;;
     restart)
         ensure_docker "$((1 - SKIP_SYSTEM_INSTALL))"
@@ -619,6 +644,7 @@ case "$COMMAND" in
         log "recreating API and frontend web containers"
         run_compose up -d --no-build --force-recreate --remove-orphans
         (( DRY_RUN )) || wait_for_ready
+        check_runtime_dependencies
         ;;
     stop)
         ensure_docker 0
@@ -636,6 +662,12 @@ case "$COMMAND" in
         ensure_docker 0
         validate_environment
         compose ps
+        ;;
+    runtime-check)
+        ensure_docker 0
+        validate_environment
+        check_compose_configuration
+        check_runtime_dependencies
         ;;
     provider-smoke)
         ensure_docker 0
@@ -683,5 +715,6 @@ case "$COMMAND" in
         log "starting API and frontend web containers"
         run_compose up -d --remove-orphans
         (( DRY_RUN )) || wait_for_ready
+        check_runtime_dependencies
         ;;
 esac

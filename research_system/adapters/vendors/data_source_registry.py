@@ -100,7 +100,7 @@ class DataSourceRegistry:
                 id="direct_http",
                 name_cn="UZI 直连 HTTP 行情链",
                 base_url="https://push2his.eastmoney.com",
-                markets=("cn", "cn_equity", "cn_index", "hk_equity", "us_equity"),
+                markets=("cn", "cn_equity", "cn_index", "hk_equity", "us_equity", "global_equity"),
                 dims=("market", "kline"),
                 tier="tier1",
                 official=False,
@@ -249,6 +249,7 @@ class DataSourceRegistry:
         access_map: dict[str, SourceAccess] = {
             "http": "http",
             "akshare": "sdk",
+            "yfinance": "sdk",
             "mx_api": "api",
             "playwright": "browser",
             "ddgs": "search",
@@ -283,7 +284,7 @@ class DataSourceRegistry:
                     notes="UZI-Skill 3.9.2 source registry parity entry; availability is verified per run.",
                     upstream_dims=upstream_dims,
                     health=str(health),
-                    upstream="UZI-Skill@fce996c33e70eddce8e375f53cd252b549eb3d7c",
+                    upstream="UZI-Skill@22e65f2e0cee2cb41cb40fdbe391c9600b7fe359",
                 )
             )
         return rows

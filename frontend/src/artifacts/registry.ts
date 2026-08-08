@@ -24,13 +24,17 @@ export const FINANCE_ARTIFACT_RENDERERS = {
   valuation_model: Renderers.ValuationModelArtifactRenderer,
   investor_panel_review: Renderers.InvestorPanelReviewArtifactRenderer,
   risk_scan: Renderers.RiskScanArtifactRenderer,
-  report_presentation: Renderers.ReportPresentationArtifactRenderer,
+  quick_scan: Renderers.QuickScanArtifactRenderer,
+  uzi_native_method_result: Renderers.UziNativeMethodResultArtifactRenderer,
+  uzi_native_command_result: Renderers.UziNativeCommandResultArtifactRenderer,
+  uzi_native_analysis: Renderers.UziNativeAnalysisArtifactRenderer,
   institutional_analysis: Renderers.InstitutionalAnalysisArtifactRenderer,
   research_workflow: Renderers.ResearchWorkflowArtifactRenderer,
   deep_analysis: Renderers.DeepAnalysisArtifactRenderer,
   uzi_dimension_coverage: Renderers.UziDimensionCoverageArtifactRenderer,
   fund_snapshot: Renderers.FundSnapshotArtifactRenderer,
   fund_analysis: Renderers.FundAnalysisArtifactRenderer,
+  fund_holding_report_batch: Renderers.FundHoldingReportBatchArtifactRenderer,
   ai_readiness: Renderers.AiReadinessArtifactRenderer,
   earnings_preview: Renderers.EarningsPreviewArtifactRenderer,
   model_update: Renderers.ModelUpdateArtifactRenderer,
@@ -67,4 +71,3 @@ export function financeArtifactTitle(artifactType: FinanceArtifactType): string 
 export function financeArtifactRendererName(artifactType: FinanceArtifactType): string {
   return contractRows[artifactType].renderer
 }
-

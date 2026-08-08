@@ -53,13 +53,14 @@ class AkShareMarketAdapter:
         spot = self._spot_from_latest_bar(normalized_symbol=normalized_symbol, latest_bar=latest_bar)
         if not spot:
             spot = self._get_basic_spot(normalized_symbol)
-        valuation = self._get_latest_valuation(symbol)
+        valuation, valuation_history = self._get_valuation_data(symbol)
         normalized = self._normalize_market_overview(
             symbol=symbol,
             normalized_symbol=normalized_symbol,
             spot=spot,
             valuation=valuation,
         )
+        normalized["valuation_history"] = valuation_history
         normalized["spot_found"] = bool(spot)
         normalized["valuation_found"] = bool(valuation) and str(valuation.get("availability") or "available") == "available"
         return normalized
@@ -114,7 +115,7 @@ class AkShareMarketAdapter:
         cls._spot_cache_at = now
         return spot_df
 
-    def _get_latest_valuation(self, symbol: str) -> dict[str, Any]:
+    def _get_valuation_data(self, symbol: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         try:
             valuation_df = call_with_retry(
                 lambda: ak.stock_value_em(symbol=symbol),
@@ -122,11 +123,36 @@ class AkShareMarketAdapter:
                 delay_seconds=0.5,
             )
         except Exception as exc:
-            return failure_facts(classify_provider_exception(exc))
+            return failure_facts(classify_provider_exception(exc)), []
         if valuation_df.empty:
-            return {}
+            return {}, []
         latest = valuation_df.iloc[-1].to_dict()
-        return {str(k): normalize_value(v) for k, v in latest.items()}
+        latest_payload = {str(k): normalize_value(v) for k, v in latest.items()}
+        try:
+            latest_date = datetime.fromisoformat(str(latest_payload.get("数据日期")))
+        except (TypeError, ValueError):
+            latest_date = datetime.now(UTC).replace(tzinfo=None)
+        cutoff = latest_date - timedelta(days=5 * 366)
+        history = []
+        for row in valuation_df.to_dict("records"):
+            normalized = {str(k): normalize_value(v) for k, v in row.items()}
+            try:
+                row_date = datetime.fromisoformat(str(normalized.get("数据日期")))
+            except (TypeError, ValueError):
+                continue
+            if row_date >= cutoff:
+                history.append(
+                    {
+                        "date": normalized.get("数据日期"),
+                        "close": normalized.get("当日收盘价"),
+                        "market_cap": normalized.get("总市值"),
+                        "pe_ttm": normalized.get("PE(TTM)"),
+                        "pb": normalized.get("市净率"),
+                        "ps": normalized.get("市销率"),
+                        "peg": normalized.get("PEG值"),
+                    }
+                )
+        return latest_payload, history
 
     def _normalize_market_overview(
         self,

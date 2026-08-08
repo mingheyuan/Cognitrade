@@ -46,7 +46,6 @@ import { IntentDeliveryDossier } from '../artifacts/IntentDeliveryDossier'
 import { MethodDeliveryDossier } from '../artifacts/MethodDeliveryDossier'
 import { RunGovernanceDossier } from '../artifacts/RunGovernanceDossier'
 import { ResearchComposer } from './ResearchComposer'
-import { ResearchReportPresentation } from './ResearchReportPresentation'
 
 type WorkbenchProps = {
   onSubmit: (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => void
@@ -210,11 +209,9 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
   const scorecard = asRecord(report.scorecard || report.screening_scorecard)
   const methodologies = Array.isArray(report.methodologies) ? report.methodologies.map(asRecord) : []
   const artifactBackedReport = asString(report.protocol) === 'agent_os' && Array.isArray(report.final_artifact_ids)
-  const hasUziReport = Object.keys(asRecord(report.uzi_profile)).length > 0
-    || Boolean(selectedRun?.replay.artifacts?.some((artifact) => (
-      artifact.artifact_type === 'report_presentation'
-      && asString(asRecord(artifact.content).theme).startsWith('uzi_')
-    )))
+  const hasUziReport = asString(report.delivery_type) === 'uzi_native_3_9_2'
+    && report.report_allowed === true
+    && asNumber(report.critical_count) === 0
   const updatedAt = selectedRun?.events.events.at(-1)?.created_at
   const snapshot = asRecord(selectedRun?.replay.snapshot)
   const isConversation = intent === 'core.conversation.answer' || asString(snapshot.request_kind) === 'conversation'
@@ -479,8 +476,6 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
                   {reportExportError && <p role="alert">{reportExportError}</p>}
                 </section>
               )}
-
-              <ResearchReportPresentation report={report} />
 
               <section className="report-hero live-report-hero">
                 <div className="company-identity">

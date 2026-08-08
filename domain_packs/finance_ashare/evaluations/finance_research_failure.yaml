@@ -1,8 +1,11 @@
 evaluation_id: finance.research.failure.v1
 mode: execution
-objective: Verify a halted Finance Pack analysis failure is observable.
+objective: Verify a halted UZI native report capability failure is observable.
 intent: stock_check
-available_artifact_types: [user_request, snapshot, stock_snapshot_bundle]
+metadata:
+  research_profile: lite
+  intent_inputs: {research_profile: lite}
+available_artifact_types: [user_request, uzi_native_analysis]
 required_artifact_types: [research_report]
 seed_artifacts:
   - artifact_type: user_request
@@ -12,48 +15,30 @@ seed_artifacts:
     source_refs:
       - type: evaluation_fixture
         id: finance-research-failure-request
-  - artifact_type: snapshot
+  - artifact_type: uzi_native_analysis
     content:
-      snapshot_type: market
-      scope: symbol
-      symbol: "600000"
+      source_commit: 22e65f2e0cee2cb41cb40fdbe391c9600b7fe359
+      methodology_version: 3.9.2-source-parity
+      profile: lite
+      results:
+        - symbol: "600000"
+          synthesis:
+            verdict_label: 测试通过
+            dashboard: {core_conclusion: 等待故障注入。}
+          self_review: {critical_count: 0, warning_count: 0, issues: []}
+          report_allowed: true
+      critical_count: 0
+      warning_count: 0
+      report_allowed: true
       quality_status: available
-      facts:
-        market_overview: {latest_price: 10.0}
+      recovery_history: []
     source_refs:
       - type: evaluation_fixture
-        id: finance-research-failure-market
-  - artifact_type: snapshot
-    content:
-      snapshot_type: fundamental
-      scope: symbol
-      symbol: "600000"
-      quality_status: available
-      facts:
-        financial_abstract: {operating_cash_flow: 160.0, revenue: 1000.0}
-    source_refs:
-      - type: evaluation_fixture
-        id: finance-research-failure-fundamental
-  - artifact_type: stock_snapshot_bundle
-    content:
-      query: Evaluation fixture for failure injection.
-      symbols: ["600000"]
-      snapshots: []
-      candidate_universe: []
-      collection:
-        universe_source: evaluation_fixture
-        candidate_count: 1
-        requested_snapshot_types: [market]
-        collected_snapshot_types: []
-        enrichment_targets: []
-        degraded: true
-    source_refs:
-      - type: evaluation_fixture
-        id: finance-research-failure
+        id: finance-uzi-native-analysis-failure
 expected_status: failed
 failure_injections:
   - kind: capability
-    target: finance.uzi.valuation.evaluate
+    target: finance.uzi.native.report.compose
     count: 3
     reason: deterministic Finance capability failure
 required_event_types: [evaluation_failure_injected]

@@ -87,6 +87,7 @@ class PackEvaluationRunner:
             token_budget=manifest.governance.token_budget,
             cost_budget=manifest.governance.cost_budget,
             metadata={
+                **dict(definition.metadata),
                 "entry_protocol": "pack_evaluation",
                 "evaluation_id": definition.evaluation_id,
                 "intent": definition.intent,

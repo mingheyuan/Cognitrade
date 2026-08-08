@@ -59,7 +59,11 @@ class FinanceAshareDashboardContractTests(unittest.TestCase):
                     intent="stock_screen",
                     user_query="Screen the supplied candidate.",
                     slots={"symbols": ["600000"], "snapshots": self._screen_snapshots()},
-                    constraints={"screen_style": "value"},
+                    constraints={
+                        "screen_style": "value",
+                        "research_profile": "lite",
+                        "investment_cycle": "long_term",
+                    },
                 )
             )
             screening_board = ArtifactBoard(root / "runs" / screening.snapshot.run_id / "artifact_board.jsonl")
@@ -89,6 +93,7 @@ class FinanceAshareDashboardContractTests(unittest.TestCase):
                             {"snapshot_type": "market", "symbol": "688001", "facts": {}},
                         ],
                     },
+                    constraints={"research_profile": "medium"},
                 )
             )
             sector_board = ArtifactBoard(root / "runs" / sector.snapshot.run_id / "artifact_board.jsonl")

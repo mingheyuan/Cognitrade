@@ -410,9 +410,15 @@ Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格�
 ## Hikyuu 策略回测
 
 回测与模拟盘完全独立。服务端把 Finance Pack `kline.bars` 转换为 Hikyuu 外部
-`Stock/KRecord`，使用 `SYS_Simple + SG_Cross + MM_FixedCount` 执行双均线策略。
+`Stock/KRecord`，使用 `SYS_Simple + SG_Cross + MM_FixedCount` 执行注册策略。
 每次回测在 120 秒受控子进程中运行，隔离 HOME 已预置本地空策略仓库，因此不会
 自动下载 Hikyuu Hub，也不会影响 API 主进程。
+
+`GET /api/v2/finance/backtests/engine` 的 `strategies` 返回可用策略及其动态参数合同。
+当前包括 `ma_cross`（双均线交叉）和 `price_ma_cross`（价格均线趋势）；前端严格按
+该合同生成参数表单。新增内置策略统一在
+`research_system/api/backtest_strategies.py` 注册，并由隔离 runner 显式实现，不执行
+用户提交的任意 Python 代码。
 
 ### `POST /api/v2/finance/backtests`
 
@@ -420,16 +426,19 @@ Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格�
 {
   "symbol": "600519",
   "strategy": "ma_cross",
+  "strategy_parameters": {
+    "fast_period": 5,
+    "slow_period": 20
+  },
   "initial_cash": 1000000,
-  "fast_period": 5,
-  "slow_period": 20,
   "trade_size": 1000,
   "refresh": false
 }
 ```
 
-约束：`slow_period > fast_period >= 2`，`trade_size` 为 100 股整数倍，并且有效
-K 线至少为 `slow_period + 5` 根。结果包含：
+约束由所选策略的参数合同决定；双均线策略要求 `slow_period > fast_period >= 2`。
+`trade_size` 为 100 股整数倍，有效 K 线至少为策略最长周期加 5 根。未知策略、未知
+参数、越界参数都会以结构化 422 错误拒绝。结果包含：
 
 - 回测 ID、Hikyuu 版本、标的、参数和数据来源；
 - 初始/期末权益、总收益、年化收益、最大回撤、胜率和盈亏比；
@@ -455,3 +464,30 @@ VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
 ```
 
 前端 API Client 对 Finance Workspace 请求自动将同一 host 的 `/api/v1` 替换为 `/api/v2`。Bearer token 与 v1 共用。
+
+## UZI 数据完整性与真实兜底字段
+
+股票研究的完整恢复记录保存在 `stock_snapshot_bundle.collection` 与
+`uzi_native_analysis.recovery_history`，前端从 ArtifactBoard 读取，不重算：
+
+- `uzi_integrity.before_recovery`：主 provider 完成后的 18 项检查、关键/可选缺口、16 个扩展维度缺口与逐项恢复任务；
+- `uzi_integrity.after_recovery`：MX、DDGS、Playwright 全部结束后的复检；顶层覆盖率字段与此一致；
+- `uzi_recovery.stage_order`：固定为 `primary_providers → integrity_check → mx_api → ddgs → playwright → integrity_recheck`；
+- `uzi_recovery.qualitative_stage`：六类定性维度的 MX→DDGS 尝试及完整 `source_trace`；
+- `uzi_recovery.playwright_stage`：按 Lite/Medium/Deep 白名单触发的浏览器最终兜底、质量触发原因、策略来源和解析状态；
+- `uzi_recovery.attempts`：供列表展示的统一摘要。失败保留为 `data_gap`，不生成模拟值。
+
+`investor_panel_review.votes[]` 严格按 UZI 3.9.2 执行 242 条规则，并新增：
+
+- `uzi_confidence`：UZI 原始 0–100 置信度；`confidence` 仍为 Agent OS 的 0–1 归一化值；
+- `investor_name_en`、`methodology_source`、`avatar_seed`、`tier`：上游席位元数据；
+- `skip_reason`：仅用于整席流派锁定、市场不匹配或游资射程不匹配；
+- `time_horizon`、`position_sizing`、`what_would_change_my_mind`：上游决策 profile。
+
+逐规则 `skipped_rules`、`data_gap_rules` 不返回具体规则内容；最新 UZI 语义会将因缺数无法计算的规则排除在通过/失败及评分分母之外，并通过
+`skipped_rule_count` 暴露跳过数量；有真实观测值但未达阈值的规则仍计为失败。
+真实字段缺口同时通过完整性报告与维度 `checks` 单独披露。
+
+Lite/Medium/Deep 必须由用户在研究入口显式选择，后端不会默认选择 Medium；
+旧 `quick` 档位和兼容调用已删除。登录态或浏览器来源仍必须经过总开关、
+敏感源开关、allowlist 与凭据校验，缺少授权时保留真实 `data_gap`。

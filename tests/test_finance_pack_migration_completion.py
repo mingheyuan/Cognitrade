@@ -71,7 +71,10 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
 
         with patch.object(task_intake, "_SECURITY_MASTER", master):
             decision = task_intake.resolve_request(
-                {"user_query": "比较中科曙光和浪潮信息的基本面与估值"}
+                {
+                    "user_query": "比较中科曙光和浪潮信息的基本面与估值",
+                    "constraints": {"research_profile": "medium"},
+                }
             )
 
         self.assertEqual(decision["status"], "accepted")
@@ -93,6 +96,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                 candidate_pool_size=3,
                 enrichment_top_n=1,
                 security_master=_SecurityMaster(),
+                research_profile="deep",
             )
 
         self.assertEqual(result["symbols"], ["600001", "600002", "600003"])
@@ -117,6 +121,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                 symbols=["600750"],
                 snapshot_types=["market", "fundamental", "notice"],
                 intent="stock_check",
+                research_profile="lite",
             )
 
         self.assertEqual(
@@ -160,6 +165,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                 snapshot_types=["sector", "policy"],
                 intent="sector_research",
                 sector="机器人",
+                research_profile="medium",
             )
 
         self.assertEqual(
@@ -211,6 +217,10 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     json={
                         "intent": "stock_check",
                         "user_query": "分析 600000",
+                        "constraints": {
+                            "research_profile": "lite",
+                            "investment_cycle": "short_term",
+                        },
                         "slots": {"snapshots": snapshots},
                     },
                 ).json()
@@ -220,6 +230,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     json={
                         "intent": "review_thesis",
                         "user_query": "复核上一轮研究判断",
+                        "constraints": {"research_profile": "medium"},
                         "slots": {"snapshots": snapshots},
                     },
                 )
@@ -228,7 +239,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     headers=headers,
                 ).json()
 
-            self.assertEqual(prior["status"], "completed_partial")
+            self.assertEqual(prior["status"], "gated")
         self.assertEqual(review_response.status_code, 200, review_response.text)
         self.assertEqual(review_response.json()["status"], "completed_partial")
         review_artifact = next(
@@ -303,6 +314,10 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     json={
                         "intent": "stock_screen",
                         "user_query": "筛选 600000 的现金流和估值",
+                        "constraints": {
+                            "research_profile": "lite",
+                            "investment_cycle": "short_term",
+                        },
                         "slots": {"symbols": ["600000"], "snapshots": snapshots},
                     },
                 )
@@ -314,6 +329,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     json={
                         "intent": "sector_research",
                         "user_query": "研究机器人板块",
+                        "constraints": {"research_profile": "medium"},
                         "slots": {"sector": "机器人", "snapshots": sector_snapshots},
                     },
                 )
@@ -325,6 +341,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     json={
                         "intent": "stock_check",
                         "user_query": "分析 600000",
+                        "constraints": {"research_profile": "lite"},
                         "slots": {"snapshots": snapshots},
                     },
                 )
@@ -335,6 +352,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     json={
                         "intent": "review_thesis",
                         "user_query": "复核上一轮研究判断",
+                        "constraints": {"research_profile": "deep"},
                         "slots": {
                             "review_target_run_id": prior.json()["run_id"],
                             "snapshots": snapshots,

@@ -17,13 +17,13 @@
 | 项目 | 基线 |
 |---|---|
 | 上游仓库 | `https://github.com/wbh604/UZI-Skill` |
-| 迁移提交 | `fce996c33e70eddce8e375f53cd252b549eb3d7c` |
+| 当前核对提交 | `22e65f2e0cee2cb41cb40fdbe391c9600b7fe359` |
 | 上游版本 | `3.9.2` |
-| Cognitrade 适配版本 | `3.9.2-adapted` |
+| Cognitrade 迁入版本 | `3.9.2-source-parity` |
 | 上一版迁移提交 | `775c76101e8890492d21c2e2827692456fcddb58` / `3.9.1` |
 | 上游 3.9.2 差异 | 1 个提交、20 个文件、`+599/-216` |
 | 数据采集器 | 22 个 |
-| 数据源目录 | 70 个（ID、市场、维度、层级、访问方式与上游逐项一致） |
+| 数据源目录 | 73 个（ID、市场、维度、层级、访问方式与上游逐项一致） |
 | 专项命令 | 20 个 |
 | 投资者评审席位 | 66 个、9 个流派 |
 
@@ -122,9 +122,11 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 
 ### 5.2 评审团
 
-- Quick：5 席；Lite：10 席；Medium/Deep：66 席；
-- 66 个稳定 `member_id` 必须全部注册，不按旧版 51 席截断；
-- 规则缺字段时跳过该规则并记录 `data_gap_rules`，不得以默认值判定通过；
+- 只有 Lite / Medium / Deep 三档，必须由用户显式选择；不提供默认 Medium，也不保留本地 Quick 兼容档；
+- Lite：10 席；Medium：51 席；Deep：66 席，与最新上游 `analysis_profile.py` 一致；
+- 66 个稳定 `member_id` 全部注册；Deep 必须完成 66 席 Agent 角色评审，任何一组失败都保留规则基线并将 Deep 结果标记为数据缺口；
+- 严格保留最新 UZI 3.9.2 的来源感知规则语义：真实来源缺失、使规则无法计算时，该规则从通过/失败和评分分母中排除，并统计 `skipped_rule_count`；
+- 整席 `skip` 仍只允许出现在流派锁定、市场不匹配和游资射程不匹配边界；字段缺口同时进入投票前完整性检查和恢复任务，不能把规则排除误读为真实数据已经取得；
 - 每个 vote 必须标明它是方法论视角，不冒充对应人物的现实观点或实时持仓。
 
 ### 5.3 方法与命令
@@ -144,11 +146,12 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 
 ### Phase A：基线、契约和回归修复
 
-- [x] 固定 UZI `fce996c` / 3.9.2；
+- [x] 固定并核对 UZI `22e65f2` / 3.9.2 最新 main；
 - [x] 更新 source mapping、插件与许可证指纹；
-- [x] Medium/Deep 评审团恢复为 66 席；
-- [x] OCF 与 FCF 分离，OCF 缺失规则不再默认通过；
-- [x] 所有评审规则字段均进入证据门，lambda 默认值不再当作观测值参与投票；
+- [x] 三档严格对齐为 10/51/66 席，并保留完整 66 席注册表；Deep 强制执行 66 席 Agent 角色评审；
+- [x] OCF 与 FCF 分离，并严格保留上游 `cash_matches_eps` 的缺键默认语义；
+- [x] 66 席 242 条规则、决策 profile、市场范围、已知持仓、行业偏好与 23 个游资射程/席位关键字逐项对齐；
+- [x] 所有评审输入先进入独立完整性门；规则层仍按 UZI 源码执行，界面同时展示恢复前后覆盖率，避免把默认规则结果误读为真实数据覆盖；
 - [x] 更新 replay fixture 版本与哈希；
 - [x] 将上游 8 个 3.9.2 回归逐个映射为 Pack 原生测试或明确拒绝迁入的运行边界测试。
 
@@ -164,6 +167,7 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 ### Phase C：23 个方法完整能力化
 
 - [x] 按账本逐个实现 Pack-native capability；
+- [x] 删除 `research_system.services.methodologies` 的旧 DCF/Comps/Cashflow 运行链；公开 `cashflow_resilience` 方法名改由 Pack-native capability 承接，缺数不再使用默认压力参数或伪综合分；
 - [x] 每个方法补齐 input contract、quality gate、fixture 和等价性级别；
 - [x] Tier‑1 的逐持仓 rebalance 已与旧组合再平衡语义拆开；旧组合再平衡仍单独保留在账本；
 - [x] Tier‑1 五方法全部提供专属 Capability、Artifact、质量门、测试与 Web 视图；
@@ -171,10 +175,11 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 
 ### Phase D：20 个命令的 Web/Intent 等价交付
 
-- [x] 快速扫描、面板、陷阱、DCF/Comps/LBO 等转为 requested methods；
+- [x] 删除旧 Quick/quick-scan 兼容调用；速判由用户显式选择 `lite`，面板、陷阱、DCF/Comps/LBO 等转为 requested methods；
 - [x] 首次覆盖、财报、催化剂、thesis、DD、IC Memo 等转为独立 Artifact 交付链；
 - [x] 组合、对比、归因与两类再平衡接入 Agent OS 与现有 Web 边界；
 - [x] 不迁入 UZI CLI、缓存、HTML 服务或临时兼容入口；原生报告版式以 Pack-owned 模板迁入，并从 ArtifactBoard 导出 HTML/PDF。
+- [x] 股票权益基金可从冻结的 `fund_snapshot` 显式创建持仓股票报告父批次；普通基金使用直接披露、ETF 联接使用已审计穿透持仓，最多十个独立 `stock_check` 子运行按专用默认 5 并发执行。父批次保留重试、取消、续跑、历史版本与 PDF ZIP，子报告带基金来源上下文且不参与股票评分；基金级持仓综合 HTML/PDF 不在本阶段生成。
 
 ### Phase E：Provider 完整性与敏感源开关
 
@@ -187,6 +192,16 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 - [x] Playwright 及 Chromium 纳入本地安装说明和后端部署镜像，但浏览器抓取仍受显式开关约束；
 - [x] 端到端验证 API、SSE、ArtifactBoard 与 Web 一致；基金 v2 字段已覆盖 API 运行、Artifact、Replay、事件和前端渲染测试。
 
+### Phase F：UZI 真实兜底链
+
+- [x] 主 provider 完成后先执行 UZI 18 项完整性检查，保留恢复前报告和逐字段/逐维恢复任务；
+- [x] 对 6 个定性维度严格执行 MX API → DDGS，垃圾文本过滤与字段写入语义对齐 3.9.2；
+- [x] MX/DDGS 结束后才执行 profile 受控的 Playwright 最终兜底；Lite 关闭、Medium 6 维、Deep 10 维；
+- [x] API、Task Intake、Planner、普通研究和基金持仓子报告均不设置默认研究档位；基金研究和股票筛选也不设置默认投资周期，缺失时统一要求用户显式选择；
+- [x] Playwright 只在解析出 UZI 对应结构化字段时算恢复成功，原始页面证据、strategy id、source trace 和失败原因全部保留；
+- [x] 登录态/浏览器源继续受 Cognitrade 显式总开关、敏感源开关、allowlist 和凭证约束，不自动安装或隐式启用；
+- [x] 报告 Artifact 和 Web 同时展示恢复前后覆盖率、所有恢复任务、每次 MX/DDGS/Playwright 尝试与最终缺口。
+
 ## 8. 完成定义
 
 只有同时满足以下条件才可将 UZI 迁移标记为完成：
@@ -194,7 +209,7 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 1. 账本中 22 fetchers、20 commands、23 methods、66 panel seats 均无未解释缺项；
 2. 所有 `equivalent` 条目有自动测试；所有 `adapted` 条目有差异说明；
 3. 生产代码不依赖 UZI checkout、CLI、缓存目录或报告服务器；
-4. 任意 provider 断网时不产生模拟数据或默认通过的研究结论；
+4. 任意 provider 断网时不产生模拟观测；UZI 规则缺键默认语义必须原样保留，但完整性缺口、恢复失败和置信边界必须同时进入 Artifact 与 Web，不能作为“数据已取得”展示；
 5. 基金与股票代码不会串路由，基金推荐满足同类样本和证据覆盖门槛；
 6. 前端不显示原始 JSON、原始网络异常或未经 gate 的推荐；
 7. migration mapping、fixture hash、DomainPack manifest 与 UI 版本标识一致。

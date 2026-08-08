@@ -6,7 +6,9 @@ import { Topbar } from './components/Topbar'
 import { WorkspaceView } from './components/WorkspaceView'
 import { useViewNavigation } from './hooks/useViewNavigation'
 import type { MarketDataViewState } from './components/MarketData'
+import type { BacktestTarget } from './finance-contracts'
 import type { ResearchIntent } from './research-contracts'
+import type { ViewId } from './data'
 
 function App() {
   const {
@@ -24,6 +26,7 @@ function App() {
     error: '',
   })
   const [selectedEvidence, setSelectedEvidence] = useState('')
+  const [backtestTarget, setBacktestTarget] = useState<BacktestTarget | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [toast, setToast] = useState('')
   const toastTimer = useRef<number | undefined>(undefined)
@@ -66,6 +69,16 @@ function App() {
     [navigate, selectRun],
   )
 
+  const openBacktest = useCallback((target: BacktestTarget) => {
+    setBacktestTarget(target)
+    navigate('backtest')
+  }, [navigate])
+
+  const navigateView = useCallback((view: ViewId) => {
+    if (view === 'backtest') setBacktestTarget(null)
+    navigate(view)
+  }, [navigate])
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
@@ -86,7 +99,7 @@ function App() {
         activeView={activeView}
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed((collapsed) => !collapsed)}
-        onNavigate={navigate}
+        onNavigate={navigateView}
         onNewResearch={focusComposer}
         onOpenRun={openRun}
       />
@@ -102,13 +115,15 @@ function App() {
         <Suspense fallback={<div className="page-loader" role="status"><span /><strong>正在载入研究视图</strong></div>}>
           <WorkspaceView
             activeView={activeView}
-            navigate={navigate}
+            navigate={navigateView}
             marketDataState={marketDataState}
             setMarketDataState={setMarketDataState}
             selectedEvidence={selectedEvidence}
             setSelectedEvidence={setSelectedEvidence}
             onResearch={handleResearch}
             onOpenRun={openRun}
+            backtestTarget={backtestTarget}
+            onOpenBacktest={openBacktest}
           />
         </Suspense>
       </section>

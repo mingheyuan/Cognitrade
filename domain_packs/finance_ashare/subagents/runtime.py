@@ -5,13 +5,16 @@ import re
 from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshot_bundle, collect_snapshots
 from domain_packs.finance_ashare.subagents.fund_methodology import build_fund_analysis
 from domain_packs.finance_ashare.subagents.uzi_methodology import (
-    build_delivery_conclusion,
+    UZI_METHOD_VERSION,
+    build_features,
     build_panel_review,
-    build_presentation,
+    build_quick_scan,
     build_risk_scan,
     build_valuation_model,
     select_profile,
 )
+from domain_packs.finance_ashare.subagents.uzi_agent_roleplay import apply_deep_agent_roleplay
+from domain_packs.finance_ashare.subagents.uzi_qualitative_deep_dive import apply_qualitative_deep_dive
 from domain_packs.finance_ashare.subagents.uzi_advanced_methodology import (
     build_deep_analysis,
     build_dimension_coverage,
@@ -30,12 +33,14 @@ from domain_packs.finance_ashare.subagents.uzi_method_products import (
     METHOD_ARTIFACT_TYPES,
     build_method_product,
 )
-from research_system.adapters.vendors.akshare_utils import coerce_numeric
-from research_system.services.methodologies import (
-    CashflowResilienceService,
-    CompsService,
-    DCFService,
+from domain_packs.finance_ashare.subagents.uzi_392_native_methods import execute_native_method
+from domain_packs.finance_ashare.subagents.uzi_392_native_commands import (
+    execute_panel_only,
+    execute_scan_trap,
+    execute_segmental_model,
 )
+from domain_packs.finance_ashare.subagents.uzi_392_analysis import execute_native_analysis
+from research_system.adapters.vendors.akshare_utils import coerce_numeric
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.schemas.artifacts import ArtifactDraft
 from research_system.schemas.execution_runtime import NodeExecutionOutput
@@ -66,34 +71,6 @@ _SCREEN_STYLE_CRITERIA = {
 }
 _STOCK_CODE_PATTERN = re.compile(r"\b(\d{6})\b")
 _SAFE_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
-_BANK_METRIC_WEIGHTS = {
-    "pb": 0.20,
-    "roe": 0.16,
-    "asset_liability_ratio": 0.08,
-    "capital_adequacy_ratio": 0.05,
-    "core_tier1_capital_adequacy_ratio": 0.05,
-    "net_interest_spread": 0.05,
-    "nonperforming_loan_ratio": 0.07,
-    "provision_coverage_ratio": 0.06,
-    "dividend_yield_proxy": 0.08,
-    "revenue_yoy": 0.04,
-    "net_profit_yoy": 0.06,
-    "interest_margin_proxy": 0.04,
-}
-_BANK_METRIC_DIRECTION = {
-    "pb": "lower",
-    "roe": "higher",
-    "asset_liability_ratio": "lower",
-    "capital_adequacy_ratio": "higher",
-    "core_tier1_capital_adequacy_ratio": "higher",
-    "net_interest_spread": "higher",
-    "nonperforming_loan_ratio": "lower",
-    "provision_coverage_ratio": "higher",
-    "dividend_yield_proxy": "higher",
-    "revenue_yoy": "higher",
-    "net_profit_yoy": "higher",
-    "interest_margin_proxy": "higher",
-}
 
 
 def normalize_query(context):
@@ -162,6 +139,11 @@ def normalize_query(context):
                 or inputs.get("method_assumptions")
                 or {}
             ) or None,
+            "holding_context": dict(
+                request.content.get("holding_context")
+                or inputs.get("holding_context")
+                or {}
+            ) or None,
         },
         source_refs=list(request.source_refs),
         parent_artifact_ids=[request.artifact_id],
@@ -186,7 +168,7 @@ def collect_fund_snapshot(context):
         ).strip()
         or None,
         "candidate_pool_size": int(inputs.get("candidate_pool_size") or 8),
-        "investment_cycle": str(inputs.get("investment_cycle") or "mid_term"),
+        "investment_cycle": _required_investment_cycle(inputs),
     }
     call_tool = getattr(context, "call_tool", None)
     if callable(call_tool):
@@ -725,6 +707,11 @@ def _snapshot_context(context) -> tuple[list[dict], list[str], str, list[dict], 
             **content,
             "snapshot_type": snapshot_type,
             "quality_status": content.get("quality_status") or artifact.metadata.get("quality_status"),
+            "source_refs": list(
+                content.get("source_refs")
+                if isinstance(content.get("source_refs"), list)
+                else artifact.source_refs or []
+            ),
         }
         rows.append(row)
         parent_ids.append(artifact.artifact_id)
@@ -747,67 +734,6 @@ def select_evidence(context):
         source_refs=source_refs,
         parent_artifact_ids=parent_ids,
         confidence=0.8 if rows else 0.0,
-    )
-
-
-def analyze_financials(context):
-    rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
-    inputs = dict(context.node.inputs or {})
-    grouped = _snapshots_by_symbol(rows)
-    candidates = [
-        _analysis_candidate(symbol=symbol, snapshots=grouped.get(symbol, {}))
-        for symbol in symbols
-        if grouped.get(symbol)
-    ]
-    cycle = _investment_cycle(inputs)
-    comps_service = CompsService()
-    dcf_service = DCFService()
-    cashflow_service = CashflowResilienceService()
-    methodologies: list[dict] = []
-    for candidate in candidates:
-        symbol = str(candidate["symbol"])
-        peers = [peer for peer in candidates if peer["symbol"] != symbol]
-        market_snapshot = grouped[symbol].get("market")
-        fundamental_snapshot = grouped[symbol].get("fundamental")
-        methodologies.extend(
-            [
-                comps_service.build_for_candidate(
-                    candidate=candidate,
-                    peers=peers,
-                    cycle=cycle,
-                    sector_context={"sector": candidate.get("sector")},
-                ),
-                dcf_service.build_for_stock(
-                    symbol=symbol,
-                    fundamental_snapshot=fundamental_snapshot,
-                    market_snapshot=market_snapshot,
-                    cycle=cycle,
-                ),
-                cashflow_service.build_for_stock(
-                    symbol=symbol,
-                    fundamental_snapshot=fundamental_snapshot,
-                    market_snapshot=market_snapshot,
-                    cycle=cycle,
-                ),
-            ]
-        )
-    scorecard = _bank_compare_scorecard(candidates)
-    scorecards = [scorecard] if scorecard else []
-    analysis_content = _with_quality_status(
-        {
-            "symbols": [candidate["symbol"] for candidate in candidates],
-            "methodologies": methodologies,
-            "scorecards": scorecards,
-            "summary": _analysis_summary(methodologies=methodologies, scorecards=scorecards),
-        }
-    )
-    return ArtifactDraft(
-        artifact_type="financial_analysis",
-        content=analysis_content,
-        source_refs=source_refs,
-        parent_artifact_ids=parent_ids,
-        confidence=_analysis_confidence(methodologies),
-        risk_flags=["methodology_assumption_driven"] if methodologies else ["financial_evidence_missing"],
     )
 
 
@@ -856,6 +782,14 @@ def evaluate_uzi_panel(context):
         symbols,
         profile,
     )
+    if profile["selected"] == "deep":
+        features = build_features(rows, symbols[0]) if symbols else {}
+        content = apply_deep_agent_roleplay(
+            content,
+            features=features,
+            llm_provider=getattr(context, "llm_provider", None),
+            cancellation=getattr(context, "cancellation", None),
+        )
     content = _with_quality_status(content)
     return ArtifactDraft(
         artifact_type="investor_panel_review",
@@ -865,6 +799,433 @@ def evaluate_uzi_panel(context):
         confidence=float(content.get("confidence") or 0.0),
         risk_flags=list(content.get("risk_flags") or []),
         metadata={"profile": profile, "methodology_version": content["methodology_version"], "source_commit": profile.get("source_commit")},
+    )
+
+
+def compose_uzi_quick_scan(context):
+    rows, symbols, _query, source_refs, parent_ids = _snapshot_context(context)
+    content = build_quick_scan(rows, symbols)
+    return ArtifactDraft(
+        artifact_type="quick_scan",
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=float(content.get("confidence") or 0.0),
+        risk_flags=list(content.get("risk_flags") or []),
+        metadata={
+            "quality_status": content.get("quality_status"),
+            "methodology_version": content.get("methodology_version"),
+            "source_commit": content.get("source_commit"),
+            "output_format": "markdown",
+        },
+    )
+
+
+def execute_uzi_native_full_analysis(context):
+    rows, symbols, _query, source_refs, parent_ids = _snapshot_context(context)
+    inputs = dict(context.node.inputs or {})
+    profile = select_profile(inputs)
+    normalized = (context.artifacts("normalized_query") or [None])[-1]
+    holding_context = (
+        dict((normalized.content or {}).get("holding_context") or {})
+        if normalized is not None
+        else {}
+    )
+    bundle = (context.artifacts("stock_snapshot_bundle") or [None])[-1]
+    recovery_history = []
+    if bundle is not None:
+        recovery = dict((bundle.content or {}).get("collection") or {}).get("uzi_recovery")
+        if isinstance(recovery, dict):
+            recovery_history = list(recovery.get("attempts") or [])
+    content = execute_native_analysis(
+        rows,
+        symbols,
+        profile=str(profile.get("selected") or ""),
+        llm_provider=getattr(context, "llm_provider", None),
+        cancellation=getattr(context, "cancellation", None),
+        recovery_history=recovery_history,
+    )
+    content["holding_context"] = holding_context or None
+    if normalized is not None:
+        parent_ids = list(dict.fromkeys([*parent_ids, normalized.artifact_id]))
+        source_refs = _unique_source_refs([*source_refs, *list(normalized.source_refs)])
+    if holding_context.get("source_fund_artifact_id"):
+        source_refs = _unique_source_refs([
+            *source_refs,
+            {
+                "type": "fund_snapshot_artifact",
+                "id": str(holding_context["source_fund_artifact_id"]),
+                "locator": str(holding_context.get("source_fund_run_id") or ""),
+            },
+        ])
+    critical = int(content.get("critical_count") or 0)
+    return ArtifactDraft(
+        artifact_type="uzi_native_analysis",
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=0.86 if critical == 0 else 0.0,
+        risk_flags=[
+            str(issue.get("issue") or issue.get("dim") or "critical")
+            for result in list(content.get("results") or [])
+            for issue in list((result.get("self_review") or {}).get("issues") or [])
+            if isinstance(issue, dict) and issue.get("severity") == "critical"
+        ],
+        metadata={
+            "quality_status": content.get("quality_status"),
+            "methodology_version": content.get("methodology_version"),
+            "source_commit": content.get("source_commit"),
+            "report_allowed": content.get("report_allowed"),
+        },
+    )
+
+
+def compose_uzi_native_delivery(context):
+    analysis = context.require_artifact("uzi_native_analysis")
+    content = dict(analysis.content or {})
+    results = [row for row in list(content.get("results") or []) if isinstance(row, dict)]
+    first = results[0] if results else {}
+    synthesis = dict(first.get("synthesis") or {})
+    review = dict(first.get("self_review") or {})
+    critical_issues = [
+        row
+        for result in results
+        for row in list((result.get("self_review") or {}).get("issues") or [])
+        if isinstance(row, dict) and row.get("severity") == "critical"
+    ]
+    warning_issues = [
+        row
+        for result in results
+        for row in list((result.get("self_review") or {}).get("issues") or [])
+        if isinstance(row, dict) and row.get("severity") == "warning"
+    ]
+    allowed = content.get("report_allowed") is True
+    holding_context = dict(content.get("holding_context") or {})
+    conclusion = str(
+        (synthesis.get("dashboard") or {}).get("core_conclusion")
+        or synthesis.get("verdict_label")
+        or (
+            "UZI critical 质量门未通过，HTML/PDF 已禁用。"
+            if not allowed
+            else "UZI 原生研究链已通过机械自审。"
+        )
+    )
+    report_content = {
+        "conclusion": conclusion,
+        "assessment": {
+            "status": "uzi_native_passed" if allowed else "uzi_native_quality_gate_blocked",
+            "summary": conclusion,
+            "factors": [
+                {
+                    "symbol": row.get("symbol"),
+                    "overall_score": (row.get("synthesis") or {}).get("overall_score"),
+                    "verdict": (row.get("synthesis") or {}).get("verdict_label"),
+                    "critical_count": (row.get("self_review") or {}).get("critical_count"),
+                    "warning_count": (row.get("self_review") or {}).get("warning_count"),
+                }
+                for row in results
+            ],
+        },
+        "evidence": [
+            {
+                "artifact_id": analysis.artifact_id,
+                "artifact_type": "uzi_native_analysis",
+                "source_refs": list(analysis.source_refs),
+            }
+        ],
+        "risk": [str(row.get("issue") or "") for row in [*critical_issues, *warning_issues]],
+        "follow_up": [str(row.get("suggested_fix") or "") for row in critical_issues],
+        "quality_status": "available" if allowed else "quality_gate_blocked",
+        "delivery_type": "uzi_native_3_9_2",
+        "native_analysis_artifact_id": analysis.artifact_id,
+        "report_allowed": allowed,
+        "critical_count": int(content.get("critical_count") or 0),
+        "warning_count": int(content.get("warning_count") or review.get("warning_count") or 0),
+        "holding_context": holding_context or None,
+    }
+    return ArtifactDraft(
+        artifact_type="research_report",
+        content=report_content,
+        source_refs=list(analysis.source_refs),
+        parent_artifact_ids=[analysis.artifact_id],
+        confidence=analysis.confidence if allowed else 0.0,
+        risk_flags=list(analysis.risk_flags),
+        metadata={
+            "quality_status": report_content["quality_status"],
+            "methodology_version": content.get("methodology_version"),
+            "source_commit": content.get("source_commit"),
+            "report_allowed": allowed,
+        },
+    )
+
+
+def compose_stock_comparison_delivery(context):
+    """Compose a comparison without pretending it is one native UZI report.
+
+    Each symbol is still evaluated by the complete pinned UZI pipeline.  The
+    comparison is a Cognitrade semantic artifact and therefore cannot be
+    exported through the single-stock UZI HTML/PDF endpoint.
+    """
+
+    analysis = context.require_artifact("uzi_native_analysis")
+    content = dict(analysis.content or {})
+    results = [row for row in list(content.get("results") or []) if isinstance(row, dict)]
+    factors = [
+        {
+            "symbol": str(row.get("symbol") or ""),
+            "name": str((row.get("synthesis") or {}).get("name") or ""),
+            "overall_score": (row.get("synthesis") or {}).get("overall_score"),
+            "verdict": (row.get("synthesis") or {}).get("verdict_label"),
+            "critical_count": int((row.get("self_review") or {}).get("critical_count") or 0),
+            "warning_count": int((row.get("self_review") or {}).get("warning_count") or 0),
+            "report_allowed": row.get("report_allowed") is True,
+        }
+        for row in results
+    ]
+    critical_issues = [
+        issue
+        for row in results
+        for issue in list((row.get("self_review") or {}).get("issues") or [])
+        if isinstance(issue, dict) and issue.get("severity") == "critical"
+    ]
+    warning_issues = [
+        issue
+        for row in results
+        for issue in list((row.get("self_review") or {}).get("issues") or [])
+        if isinstance(issue, dict) and issue.get("severity") == "warning"
+    ]
+    critical_count = int(content.get("critical_count") or len(critical_issues))
+    allowed = bool(results) and content.get("report_allowed") is True and critical_count == 0
+    ranked = sorted(
+        factors,
+        key=lambda row: (
+            row.get("overall_score") is not None,
+            float(row.get("overall_score") or 0),
+        ),
+        reverse=True,
+    )
+    if allowed:
+        conclusion = "；".join(
+            f"{row['name'] or row['symbol']}：{row['verdict'] or '未给出结论'}"
+            + (f"（{float(row['overall_score']):g} 分）" if row.get("overall_score") is not None else "")
+            for row in ranked
+        ) or "UZI 比较研究已完成。"
+    else:
+        conclusion = "至少一个比较对象仍有 UZI critical 缺口，比较结果停在质量门。"
+    report_content = {
+        "conclusion": conclusion,
+        "assessment": {
+            "status": "uzi_native_comparison_passed" if allowed else "uzi_native_quality_gate_blocked",
+            "summary": conclusion,
+            "factors": factors,
+        },
+        "evidence": [{
+            "artifact_id": analysis.artifact_id,
+            "artifact_type": "uzi_native_analysis",
+            "source_refs": list(analysis.source_refs),
+        }],
+        "risk": [
+            str(issue.get("message") or issue.get("issue") or "")
+            for issue in [*critical_issues, *warning_issues]
+            if str(issue.get("message") or issue.get("issue") or "").strip()
+        ],
+        "follow_up": [
+            str(issue.get("suggested_fix") or "")
+            for issue in critical_issues
+            if str(issue.get("suggested_fix") or "").strip()
+        ],
+        "delivery_type": "stock_compare_uzi_3_9_2",
+        "quality_status": "available" if allowed else "quality_gate_blocked",
+        "native_analysis_artifact_id": analysis.artifact_id,
+        "report_allowed": allowed,
+        "critical_count": critical_count,
+        "warning_count": int(content.get("warning_count") or len(warning_issues)),
+        "comparison": {"ranked_results": ranked, "source_commit": content.get("source_commit")},
+    }
+    return ArtifactDraft(
+        artifact_type="research_report",
+        content=report_content,
+        source_refs=list(analysis.source_refs),
+        parent_artifact_ids=[analysis.artifact_id],
+        confidence=analysis.confidence if allowed else 0.0,
+        risk_flags=list(analysis.risk_flags),
+        metadata={
+            "quality_status": report_content["quality_status"],
+            "methodology_version": content.get("methodology_version"),
+            "source_commit": content.get("source_commit"),
+            "report_allowed": allowed,
+        },
+    )
+
+
+def _evaluate_uzi_native_method(context, method_id: str) -> ArtifactDraft:
+    inputs = dict(context.node.inputs or {})
+    if method_id in {"returns_attribution", "holding_rebalance", "portfolio_rebalance"}:
+        query = context.require_artifact("normalized_query")
+        native_inputs = {**dict(query.content or {}), **inputs}
+        content = execute_native_method(method_id, [], [], native_inputs)
+        source_refs = list(query.source_refs)
+        parent_ids = [query.artifact_id]
+    else:
+        rows, symbols, _query, source_refs, parent_ids = _snapshot_context(context)
+        content = execute_native_method(method_id, rows, symbols, inputs)
+    quality = str(content.get("quality_status") or "data_gap")
+    return ArtifactDraft(
+        artifact_type="uzi_native_method_result",
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=0.82 if quality == "available" else 0.5 if quality == "degraded" else 0.0,
+        risk_flags=list(content.get("data_gap") or []),
+        metadata={
+            "quality_status": quality,
+            "methodology_version": "3.9.2-source-parity",
+            "source_commit": content.get("source_commit"),
+            "native_method_id": method_id,
+        },
+    )
+
+
+def execute_uzi_native_dcf(context):
+    return _evaluate_uzi_native_method(context, "dcf")
+
+
+def execute_uzi_native_comps(context):
+    return _evaluate_uzi_native_method(context, "comps")
+
+
+def execute_uzi_native_three_statement(context):
+    return _evaluate_uzi_native_method(context, "three_statement")
+
+
+def execute_uzi_native_quick_lbo(context):
+    return _evaluate_uzi_native_method(context, "quick_lbo")
+
+
+def execute_uzi_native_accretion_dilution(context):
+    return _evaluate_uzi_native_method(context, "accretion_dilution")
+
+
+def execute_uzi_native_initiation_report(context):
+    return _evaluate_uzi_native_method(context, "initiation_report")
+
+
+def execute_uzi_native_earnings_review(context):
+    return _evaluate_uzi_native_method(context, "earnings_review")
+
+
+def execute_uzi_native_catalyst_calendar(context):
+    return _evaluate_uzi_native_method(context, "catalyst_calendar")
+
+
+def execute_uzi_native_thesis_tracker(context):
+    return _evaluate_uzi_native_method(context, "thesis_tracker")
+
+
+def execute_uzi_native_morning_note(context):
+    return _evaluate_uzi_native_method(context, "morning_note")
+
+
+def execute_uzi_native_quantitative_screen(context):
+    return _evaluate_uzi_native_method(context, "quantitative_screen")
+
+
+def execute_uzi_native_sector_review(context):
+    return _evaluate_uzi_native_method(context, "sector_review")
+
+
+def execute_uzi_native_ic_memo(context):
+    return _evaluate_uzi_native_method(context, "ic_memo")
+
+
+def execute_uzi_native_porter_bcg(context):
+    return _evaluate_uzi_native_method(context, "porter_bcg")
+
+
+def execute_uzi_native_dd_checklist(context):
+    return _evaluate_uzi_native_method(context, "dd_checklist")
+
+
+def execute_uzi_native_unit_economics(context):
+    return _evaluate_uzi_native_method(context, "unit_economics")
+
+
+def execute_uzi_native_value_creation_plan(context):
+    return _evaluate_uzi_native_method(context, "value_creation_plan")
+
+
+def execute_uzi_native_portfolio_rebalance(context):
+    return _evaluate_uzi_native_method(context, "portfolio_rebalance")
+
+
+def execute_uzi_native_ai_readiness(context):
+    return _evaluate_uzi_native_method(context, "ai_readiness")
+
+
+def execute_uzi_native_earnings_preview(context):
+    return _evaluate_uzi_native_method(context, "earnings_preview")
+
+
+def execute_uzi_native_model_update(context):
+    return _evaluate_uzi_native_method(context, "model_update")
+
+
+def execute_uzi_native_returns_attribution(context):
+    return _evaluate_uzi_native_method(context, "returns_attribution")
+
+
+def execute_uzi_native_holding_rebalance(context):
+    return _evaluate_uzi_native_method(context, "holding_rebalance")
+
+
+def _uzi_native_command_artifact(
+    *,
+    content: dict,
+    source_refs: list[dict],
+    parent_ids: list[str],
+) -> ArtifactDraft:
+    quality = str(content.get("quality_status") or "data_gap")
+    return ArtifactDraft(
+        artifact_type="uzi_native_command_result",
+        content=content,
+        source_refs=source_refs,
+        parent_artifact_ids=parent_ids,
+        confidence=0.82 if quality == "available" else 0.5 if quality == "degraded" else 0.0,
+        risk_flags=list(content.get("data_gap") or []),
+        metadata={
+            "quality_status": quality,
+            "methodology_version": "3.9.2-source-parity",
+            "source_commit": content.get("source_commit"),
+            "native_command_id": content.get("command_id"),
+            "phase": content.get("phase"),
+        },
+    )
+
+
+def execute_uzi_command_panel_only(context):
+    rows, symbols, _query, source_refs, parent_ids = _snapshot_context(context)
+    return _uzi_native_command_artifact(
+        content=execute_panel_only(rows, symbols),
+        source_refs=source_refs,
+        parent_ids=parent_ids,
+    )
+
+
+def execute_uzi_command_scan_trap(context):
+    rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
+    return _uzi_native_command_artifact(
+        content=execute_scan_trap(rows, symbols, query=query),
+        source_refs=source_refs,
+        parent_ids=parent_ids,
+    )
+
+
+def execute_uzi_command_segmental_model(context):
+    rows, symbols, _query, source_refs, parent_ids = _snapshot_context(context)
+    return _uzi_native_command_artifact(
+        content=execute_segmental_model(rows, symbols, dict(context.node.inputs or {})),
+        source_refs=source_refs,
+        parent_ids=parent_ids,
     )
 
 
@@ -900,6 +1261,7 @@ def evaluate_uzi_institutional(context):
         symbols,
         valuation.content if valuation is not None else None,
         profile,
+        inputs,
     )
     content = _with_quality_status(content)
     if valuation is not None:
@@ -926,6 +1288,7 @@ def evaluate_uzi_workflow(context):
         symbols,
         valuation.content if valuation is not None else None,
         profile,
+        inputs,
     )
     content = _with_quality_status(content)
     if valuation is not None:
@@ -946,6 +1309,7 @@ def evaluate_uzi_deep(context):
     rows, symbols, query, source_refs, parent_ids = _snapshot_context(context)
     institutional = context.require_artifact("institutional_analysis")
     workflow = context.require_artifact("research_workflow")
+    risk_scan = (context.artifacts("risk_scan") or [None])[-1]
     inputs = dict(context.node.inputs or {})
     profile = select_profile(inputs)
     content = build_deep_analysis(
@@ -954,6 +1318,14 @@ def evaluate_uzi_deep(context):
         institutional.content,
         workflow.content,
         profile,
+        inputs,
+        risk_scan.content if risk_scan is not None else None,
+    )
+    content = apply_qualitative_deep_dive(
+        content,
+        snapshot_rows=rows,
+        llm_provider=getattr(context, "llm_provider", None),
+        cancellation=getattr(context, "cancellation", None),
     )
     content = _with_quality_status(content)
     return ArtifactDraft(
@@ -980,9 +1352,9 @@ def evaluate_uzi_dimension_coverage(context):
         rows,
         symbols,
         profile,
-        institutional_available=institutional is not None,
-        workflow_available=workflow is not None,
-        deep_available=deep is not None,
+        institutional_available=_artifact_has_usable_result(institutional),
+        workflow_available=_artifact_has_usable_result(workflow),
+        deep_available=_artifact_has_usable_result(deep),
     )
     content = _with_quality_status(content)
     parents = list(parent_ids)
@@ -1067,6 +1439,10 @@ def _evaluate_uzi_method_product(context, method_id: str) -> ArtifactDraft:
         source_refs=source_refs,
         parent_ids=list(dict.fromkeys(parent_ids)),
     )
+
+
+def evaluate_uzi_cashflow_resilience(context):
+    return _evaluate_uzi_method_product(context, "cashflow_resilience")
 
 
 def evaluate_uzi_three_statement(context):
@@ -1234,186 +1610,6 @@ def _tier1_request_artifact(*, artifact_type: str, content: dict, query) -> Arti
     )
 
 
-def compose_uzi_report(context):
-    evidence = context.require_artifact("evidence_set")
-    valuation = context.require_artifact("valuation_model")
-    panel = (context.artifacts("investor_panel_review") or [None])[-1]
-    risk = (context.artifacts("risk_scan") or [None])[-1]
-    institutional = (context.artifacts("institutional_analysis") or [None])[-1]
-    workflow = (context.artifacts("research_workflow") or [None])[-1]
-    deep = (context.artifacts("deep_analysis") or [None])[-1]
-    dimension_coverage = (context.artifacts("uzi_dimension_coverage") or [None])[-1]
-    inputs = dict(context.node.inputs or {})
-    profile = select_profile(inputs)
-    evidence_items = list(evidence.content.get("items") or [])
-    base_content = {
-        "conclusion": "",
-        "assessment": {
-            "status": "pack_methodology",
-            "summary": "UZI Finance Pack methods are presented from the current ArtifactBoard.",
-            "factors": [],
-        },
-        "evidence": [
-            _report_evidence_item(item, index)
-            for index, item in enumerate(evidence_items)
-        ],
-        "methodologies": [],
-        "scorecard": None,
-        "risk": [],
-        "follow_up": [],
-    }
-    base_source_refs = list(evidence.source_refs)
-    base_confidence = evidence.confidence
-    base_risk_flags = ["decision_support_only"]
-    panel_content = (
-        dict(panel.content)
-        if panel is not None
-        else {
-            "methodology_version": UZI_METHOD_VERSION,
-            "profile": profile["selected"],
-            "scope": "not_requested",
-            "panel_version": "uzi-adapted-1",
-            "votes": [],
-            "distribution": {},
-            "average_score": None,
-            "disagreement": {"exists": False, "summary": "本次请求未要求 Panel 方法论视角。"},
-            "confidence": 0.0,
-            "risk_flags": ["panel_not_requested"],
-        }
-    )
-    risk_content = (
-        dict(risk.content)
-        if risk is not None
-        else {
-            "methodology_version": UZI_METHOD_VERSION,
-            "profile": profile["selected"],
-            "risk_level": "data_gap",
-            "signals": [],
-            "signals_hit_count": 0,
-            "recommendation": "本次请求未要求风险扫描，不能据此判断外部风险。",
-            "confidence": 0.0,
-            "risk_flags": ["risk_scan_not_requested"],
-        }
-    )
-    report_content = dict(base_content)
-    report_content.update(
-        {
-            "uzi_profile": profile,
-            "valuation_model": dict(valuation.content),
-            "investor_panel_review": panel_content,
-            "risk_scan": risk_content,
-            "institutional_analysis": dict(institutional.content) if institutional is not None else None,
-            "research_workflow": dict(workflow.content) if workflow is not None else None,
-            "deep_analysis": dict(deep.content) if deep is not None else None,
-            "uzi_dimension_coverage": dict(dimension_coverage.content) if dimension_coverage is not None else None,
-            "presentation_artifact_type": "report_presentation",
-        }
-    )
-    report_content["conclusion"] = build_delivery_conclusion(
-        valuation.content,
-        panel_content,
-        risk_content,
-    )
-    report_content["risk"] = [
-        "证据完整性和时间新鲜度仍需在使用前复核。",
-        str(risk_content.get("recommendation") or "风险扫描未返回建议。"),
-        *[
-            f"模型输入缺口：{warning}"
-            for model in list(valuation.content.get("models") or [])
-            for warning in list(model.get("warnings") or [])
-        ],
-    ]
-    report_content["follow_up"] = [
-        "复核引用的快照、公告和方法论假设后再使用研究结果。",
-        "如需提高结论可靠性，补充同行、公告和外部风险核验数据。",
-    ]
-    source_refs = _unique_source_refs(
-        [
-            *base_source_refs,
-            *list(valuation.source_refs),
-            *(list(panel.source_refs) if panel is not None else []),
-            *(list(risk.source_refs) if risk is not None else []),
-            *(list(institutional.source_refs) if institutional is not None else []),
-            *(list(workflow.source_refs) if workflow is not None else []),
-            *(list(deep.source_refs) if deep is not None else []),
-            *(list(dimension_coverage.source_refs) if dimension_coverage is not None else []),
-        ]
-    )
-    parents = [
-        evidence.artifact_id,
-        valuation.artifact_id,
-        *( [panel.artifact_id] if panel is not None else [] ),
-        *( [risk.artifact_id] if risk is not None else [] ),
-        *( [institutional.artifact_id] if institutional is not None else [] ),
-        *( [workflow.artifact_id] if workflow is not None else [] ),
-        *( [deep.artifact_id] if deep is not None else [] ),
-        *( [dimension_coverage.artifact_id] if dimension_coverage is not None else [] ),
-    ]
-    confidence_values = [
-        _artifact_confidence(base_confidence),
-        _artifact_confidence(valuation.confidence),
-    ]
-    if panel is not None:
-        confidence_values.append(_artifact_confidence(panel.confidence))
-    if risk is not None:
-        confidence_values.append(_artifact_confidence(risk.confidence))
-    if institutional is not None:
-        confidence_values.append(_artifact_confidence(institutional.confidence))
-    if workflow is not None:
-        confidence_values.append(_artifact_confidence(workflow.confidence))
-    if deep is not None:
-        confidence_values.append(_artifact_confidence(deep.confidence))
-    if dimension_coverage is not None:
-        confidence_values.append(_artifact_confidence(dimension_coverage.confidence))
-    report = ArtifactDraft(
-        artifact_type="research_report",
-        content=report_content,
-        source_refs=source_refs,
-        parent_artifact_ids=parents,
-        confidence=min(confidence_values),
-        risk_flags=list(
-            dict.fromkeys(
-                [
-                    *base_risk_flags,
-                    *valuation.risk_flags,
-                    *(list(panel.risk_flags) if panel is not None else ["panel_not_requested"]),
-                    *(list(risk.risk_flags) if risk is not None else ["risk_scan_not_requested"]),
-                    *(list(institutional.risk_flags) if institutional is not None else []),
-                    *(list(workflow.risk_flags) if workflow is not None else []),
-                    *(list(deep.risk_flags) if deep is not None else []),
-                    *(list(dimension_coverage.risk_flags) if dimension_coverage is not None else []),
-                ]
-            )
-        ),
-        metadata={"profile": profile, "methodology_version": "3.9.2-adapted", "source_commit": profile.get("source_commit")},
-    )
-    presentation_content = build_presentation(
-        report_content,
-        valuation.content,
-        panel_content,
-        risk_content,
-        profile,
-        advanced={
-            "institutional_analysis": institutional.content if institutional is not None else None,
-            "research_workflow": workflow.content if workflow is not None else None,
-            "deep_analysis": deep.content if deep is not None else None,
-            "uzi_dimension_coverage": dimension_coverage.content if dimension_coverage is not None else None,
-        },
-        snapshot_rows=evidence_items,
-    )
-    presentation_content["source_artifact_ids"] = parents
-    presentation = ArtifactDraft(
-        artifact_type="report_presentation",
-        content=presentation_content,
-        source_refs=source_refs,
-        parent_artifact_ids=parents,
-        confidence=report.confidence,
-        risk_flags=list(report.risk_flags),
-        metadata={"profile": profile, "methodology_version": "3.9.2-adapted", "source_commit": profile.get("source_commit")},
-    )
-    return [report, presentation]
-
-
 def evaluate_research_safety_gate(context):
     content = context.artifact.content if isinstance(context.artifact.content, dict) else {}
     risk_scan = content.get("risk_scan") if isinstance(content.get("risk_scan"), dict) else {}
@@ -1427,6 +1623,37 @@ def evaluate_research_safety_gate(context):
     return {
         "verdict": "fail" if reasons else "pass",
         "reason": "; ".join(reasons) if reasons else "research delivery passed source and safety checks",
+        "evidence_refs": list(context.artifact.source_refs),
+        "score": float(context.artifact.confidence or 0.0),
+    }
+
+
+def evaluate_uzi_native_report_gate(context):
+    """Fail closed when a native UZI report still has any critical issue."""
+
+    content = context.artifact.content if isinstance(context.artifact.content, dict) else {}
+    if content.get("delivery_type") not in {
+        "uzi_native_3_9_2",
+        "stock_compare_uzi_3_9_2",
+    }:
+        return {
+            "verdict": "pass",
+            "reason": "not a native UZI analyze-stock delivery",
+            "evidence_refs": list(context.artifact.source_refs),
+            "score": float(context.artifact.confidence or 0.0),
+        }
+    critical = int(content.get("critical_count") or 0)
+    allowed = content.get("report_allowed") is True
+    if not allowed or critical:
+        return {
+            "verdict": "fail",
+            "reason": f"UZI native critical gate blocked report export (critical_count={critical})",
+            "evidence_refs": list(context.artifact.source_refs),
+            "score": 0.0,
+        }
+    return {
+        "verdict": "pass",
+        "reason": "UZI native self-review passed with critical_count=0",
         "evidence_refs": list(context.artifact.source_refs),
         "score": float(context.artifact.confidence or 0.0),
     }
@@ -1476,92 +1703,6 @@ def evaluate_methodology_quality_gate(context):
         "evidence_refs": list(context.artifact.source_refs),
         "score": float(context.artifact.confidence or 0.0),
     }
-
-
-def _build_assessment(methodologies: list[dict]) -> dict:
-    """Summarize observable model outputs without turning them into a recommendation."""
-
-    by_symbol: dict[str, dict[str, dict]] = {}
-    for methodology in methodologies:
-        if not isinstance(methodology, dict):
-            continue
-        symbol = str(methodology.get("target_symbol") or "unknown")
-        kind = str(methodology.get("methodology_type") or "methodology")
-        by_symbol.setdefault(symbol, {})[kind] = methodology
-
-    factors: list[dict] = []
-    summaries: list[str] = []
-    for symbol, views in by_symbol.items():
-        signals: list[str] = []
-        dcf = views.get("dcf") or {}
-        dcf_outputs = dcf.get("outputs") if isinstance(dcf.get("outputs"), dict) else {}
-        gap = _number(dcf_outputs.get("market_to_intrinsic_gap"))
-        if gap is not None:
-            if gap <= -0.2:
-                signal = "DCF proxy is above the latest market price"
-            elif gap >= 0.2:
-                signal = "DCF proxy is below the latest market price"
-            else:
-                signal = "DCF proxy is close to the latest market price"
-            signals.append(signal)
-            factors.append({
-                "symbol": symbol,
-                "methodology": "DCF",
-                "signal": signal,
-                "value": gap,
-                "confidence": dcf.get("confidence"),
-                "basis": "market_to_intrinsic_gap",
-                "warnings": list(dcf.get("warnings") or []),
-            })
-
-        resilience = views.get("cashflow_resilience") or {}
-        resilience_outputs = resilience.get("outputs") if isinstance(resilience.get("outputs"), dict) else {}
-        cashflow_state = str(resilience_outputs.get("cashflow_state") or "")
-        debt_state = str(resilience_outputs.get("debt_capacity_state") or "")
-        if cashflow_state or debt_state:
-            signal = ", ".join(
-                value for value in (
-                    f"cashflow {cashflow_state}" if cashflow_state else "",
-                    f"debt capacity {debt_state}" if debt_state else "",
-                ) if value
-            )
-            signals.append(signal)
-            factors.append({
-                "symbol": symbol,
-                "methodology": "Cashflow resilience",
-                "signal": signal,
-                "value": resilience_outputs.get("resilience_score"),
-                "confidence": resilience.get("confidence"),
-                "basis": "cashflow_state/debt_capacity_state",
-                "warnings": list(resilience.get("warnings") or []),
-            })
-
-        comps = views.get("comps") or {}
-        comps_outputs = comps.get("outputs") if isinstance(comps.get("outputs"), dict) else {}
-        relative_view = str(comps_outputs.get("relative_view") or "")
-        if relative_view:
-            signals.append(f"relative view {relative_view}")
-            factors.append({
-                "symbol": symbol,
-                "methodology": "Comps",
-                "signal": relative_view,
-                "value": comps_outputs.get("score_gap_vs_peer_median"),
-                "confidence": comps.get("confidence"),
-                "basis": "relative_view",
-                "warnings": list(comps.get("warnings") or []),
-            })
-
-        if signals:
-            summaries.append(f"{symbol}: " + "; ".join(signals))
-
-    if not summaries:
-        summary = "No methodology-based assessment was available from the collected evidence."
-    else:
-        summary = (
-            "; ".join(summaries)
-            + ". This is a preliminary, assumption-sensitive evidence view, not an investment recommendation."
-        )
-    return {"status": "preliminary", "summary": summary, "factors": factors}
 
 
 def compose_screening_report(context):
@@ -1737,186 +1878,26 @@ def compose_thesis_review_report(context):
     )
 
 
-def _snapshots_by_symbol(rows: list[object]) -> dict[str, dict[str, dict]]:
-    grouped: dict[str, dict[str, dict]] = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        symbol = str(row.get("symbol") or "").strip()
-        snapshot_type = str(row.get("snapshot_type") or "").strip()
-        if symbol and snapshot_type:
-            grouped.setdefault(symbol, {})[snapshot_type] = row
-    return grouped
-
-
-def _analysis_candidate(*, symbol: str, snapshots: dict[str, dict]) -> dict:
-    market_snapshot = snapshots.get("market") or {}
-    fundamental_snapshot = snapshots.get("fundamental") or {}
-    market = _market_overview(market_snapshot)
-    fundamental_facts = _facts(fundamental_snapshot)
-    banking_metrics = fundamental_facts.get("banking_metrics")
-    return {
-        "symbol": symbol,
-        "name": str(market.get("name") or symbol),
-        "sector": str(market.get("sector") or ""),
-        "latest_price": _number(market.get("latest_price")),
-        "latest_pct_change": _number(market.get("pct_change")),
-        "latest_amount": _number(market.get("amount")),
-        "pb": _number(market.get("pb")),
-        "pe_ttm": _number(market.get("pe_ttm")),
-        "market_cap": _number(market.get("market_cap")),
-        "float_market_cap": _number(market.get("float_market_cap")),
-        "market_total_shares": _number(market.get("total_shares")),
-        "revenue_proxy": _revenue_proxy(fundamental_snapshot),
-        "banking_metrics": dict(banking_metrics) if isinstance(banking_metrics, dict) else {},
-    }
-
-
-def _bank_compare_scorecard(candidates: list[dict]) -> dict | None:
-    banks = [candidate for candidate in candidates if _is_bank_candidate(candidate)]
-    if len(banks) < 2:
-        return None
-    metric_series = {
-        metric: [_number(_bank_metrics(candidate).get(metric)) for candidate in banks]
-        for metric in _BANK_METRIC_WEIGHTS
-    }
-    rows: list[dict] = []
-    for candidate in banks:
-        metrics = _bank_metrics(candidate)
-        score = 0.0
-        weight_used = 0.0
-        breakdown: dict[str, float | None] = {}
-        for metric, weight in _BANK_METRIC_WEIGHTS.items():
-            value = _number(metrics.get(metric))
-            breakdown[metric] = value
-            series = [item for item in metric_series[metric] if item is not None]
-            if value is None or len(series) < 2:
-                continue
-            percentile = _bank_percentile(
-                value=value,
-                series=series,
-                preference=_BANK_METRIC_DIRECTION[metric],
-            )
-            if percentile is not None:
-                score += percentile * weight
-                weight_used += weight
-        rows.append(
-            {
-                "symbol": candidate["symbol"],
-                "name": candidate["name"],
-                "score": round(score / weight_used, 4) if weight_used else 0.0,
-                "weight_coverage": round(weight_used, 4),
-                "latest_price": candidate.get("latest_price"),
-                "pb": candidate.get("pb"),
-                "pe_ttm": candidate.get("pe_ttm"),
-                "banking_metrics": breakdown,
-                "missing_metrics": sorted(key for key, value in breakdown.items() if value is None),
-            }
-        )
-    rows.sort(key=lambda row: (row["score"], row["weight_coverage"]), reverse=True)
-    for rank, row in enumerate(rows, start=1):
-        row["rank"] = rank
-    return {
-        "scorecard_type": "bank_compare_scorecard",
-        "candidate_count": len(rows),
-        "ranked_candidates": rows,
-        "metric_weights": _BANK_METRIC_WEIGHTS,
-        "summary": "Bank comparison ranks peers using available same-basis banking metrics and valuation anchors.",
-    }
-
-
-def _bank_metrics(candidate: dict) -> dict:
-    metrics = dict(candidate.get("banking_metrics") or {})
-    metrics["pb"] = _number(candidate.get("pb"))
-    latest_price = _number(candidate.get("latest_price"))
-    total_shares = _number(candidate.get("market_total_shares"))
-    dividend_cash = _number(metrics.get("pay_dividends_profits_interest_cash"))
-    if dividend_cash not in (None, 0) and latest_price not in (None, 0) and total_shares not in (None, 0):
-        metrics["dividend_yield_proxy"] = dividend_cash / total_shares / latest_price
-    return metrics
-
-
-def _is_bank_candidate(candidate: dict) -> bool:
-    metrics = dict(candidate.get("banking_metrics") or {})
-    return bool(metrics.get("is_bank_like")) or any(
-        key in metrics
-        for key in ("roe", "nonperforming_loan_ratio", "net_interest_spread", "capital_adequacy_ratio")
-    )
-
-
-def _bank_percentile(*, value: float, series: list[float], preference: str) -> float | None:
-    if not series:
-        return None
-    percentile = sum(1 for item in sorted(series) if item <= value) / len(series)
-    return round(1.0 - percentile if preference == "lower" else percentile, 4)
-
-
-def _analysis_summary(*, methodologies: list[dict], scorecards: list[dict]) -> str:
-    if not methodologies:
-        return "No methodology model could be built because financial snapshots were unavailable."
-    symbols = {item.get("target_symbol") for item in methodologies}
-    summary = f"Built {len(methodologies)} methodology view(s) across {len(symbols)} symbol(s)."
-    if scorecards:
-        summary += f" {scorecards[0]['summary']}"
-    return summary
-
-
-def _analysis_confidence(methodologies: list[dict]) -> float:
-    values = [_number(item.get("confidence")) for item in methodologies if isinstance(item, dict)]
-    usable = [value for value in values if value is not None]
-    return round(sum(usable) / len(usable), 4) if usable else 0.2
-
-
 def _artifact_confidence(value: object) -> float:
     numeric = _number(value)
     return numeric if numeric is not None else 0.2
 
 
-def _methodology_warnings(methodologies: list[dict]) -> list[str]:
-    warnings: list[str] = []
-    for methodology in methodologies:
-        if not isinstance(methodology, dict):
-            continue
-        for warning in [
-            *list(methodology.get("warnings") or []),
-            *list(methodology.get("data_gap") or []),
-            *list(methodology.get("assumption_flags") or []),
-        ]:
-            text = str(warning)
-            if text and text not in warnings:
-                warnings.append(text)
-    return warnings
+def _artifact_has_usable_result(artifact: object) -> bool:
+    if artifact is None:
+        return False
+    content = getattr(artifact, "content", None)
+    if not isinstance(content, dict):
+        return False
+    quality = str(content.get("quality_status") or content.get("status") or "").strip().lower()
+    return quality in {"available", "degraded", "assumption_only"}
 
 
-def _investment_cycle(inputs: dict) -> str:
-    value = str(inputs.get("investment_cycle") or "mid_term")
-    return value if value in {"short_term", "mid_term", "long_term"} else "mid_term"
-
-
-def _facts(snapshot: dict) -> dict:
-    facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
-    return facts
-
-
-def _market_overview(snapshot: dict) -> dict:
-    overview = _facts(snapshot).get("market_overview")
-    return overview if isinstance(overview, dict) else {}
-
-
-def _revenue_proxy(snapshot: dict) -> float | None:
-    facts = _facts(snapshot)
-    banking = facts.get("banking_metrics") if isinstance(facts.get("banking_metrics"), dict) else {}
-    for key in ("interest_income", "deposits_and_deposits", "customer_loan_advance_net_addition"):
-        value = _number(banking.get(key))
-        if value is not None:
-            return value
-    abstract = facts.get("financial_abstract") if isinstance(facts.get("financial_abstract"), dict) else {}
-    for key, value in abstract.items():
-        if "revenue" in str(key).lower() or "income" in str(key).lower():
-            numeric = _number(value)
-            if numeric is not None:
-                return numeric
-    return None
+def _required_investment_cycle(inputs: dict) -> str:
+    value = str(inputs.get("investment_cycle") or "").strip()
+    if value not in {"short_term", "mid_term", "long_term"}:
+        raise ValueError("investment_cycle is required; choose short_term, mid_term or long_term")
+    return value
 
 
 def _number(value: object) -> float | None:
@@ -1924,6 +1905,37 @@ def _number(value: object) -> float | None:
 
 
 def _requested_snapshot_types(*, inputs: dict, sector: str | None) -> list[str]:
+    intent = str(inputs.get("intent") or "").strip()
+    if intent == "quick_scan":
+        # UZI /quick-scan is a fixed four-dimension command, not a profile.
+        return ["fundamental", "kline", "valuation", "trap"]
+    native_command_snapshot_types: dict[str, tuple[str, ...]] = {
+        "uzi_panel_only": ("market", "fundamental"),
+        "uzi_scan_trap": ("trap",),
+        "uzi_segmental_model": ("market", "fundamental", "chain", "events", "research"),
+        "uzi_dcf": ("market", "fundamental"),
+        "uzi_comps": ("market", "fundamental", "similar_stocks"),
+        "uzi_lbo": ("fundamental",),
+        "uzi_initiate": ("market", "fundamental", "similar_stocks"),
+        "uzi_earnings": ("market", "fundamental"),
+        "uzi_catalysts": ("market", "events"),
+        "uzi_thesis": ("market", "fundamental", "kline", "valuation"),
+        "uzi_screen": ("market", "fundamental", "kline", "valuation"),
+        "uzi_dd": ("market", "fundamental"),
+        "uzi_ic_memo": ("market", "fundamental", "similar_stocks"),
+        "uzi_ai_readiness": ("market", "chain", "industry", "moat", "events"),
+        "uzi_earnings_preview": ("market", "fundamental", "research"),
+        "uzi_model_update": ("market", "fundamental", "similar_stocks"),
+        "uzi_three_statement_method": ("fundamental",),
+        "uzi_accretion_dilution_method": ("market", "fundamental"),
+        "uzi_morning_note_method": ("market", "kline"),
+        "uzi_sector_review_method": ("market", "industry"),
+        "uzi_porter_bcg_method": ("market", "industry"),
+        "uzi_unit_economics_method": ("market", "fundamental"),
+        "uzi_value_creation_plan_method": ("market", "fundamental"),
+    }
+    if intent in native_command_snapshot_types:
+        return list(native_command_snapshot_types[intent])
     requested_methods = _unique_strings(inputs.get("requested_methods") or [])
     method_snapshot_types: dict[str, tuple[str, ...]] = {
         "ai_readiness": ("market", "chain", "industry", "events", "research", "moat"),
@@ -1956,7 +1968,6 @@ def _requested_snapshot_types(*, inputs: dict, sector: str | None) -> list[str]:
     explicit = inputs.get("snapshot_types")
     if isinstance(explicit, list) and explicit:
         return _unique_strings([*explicit, *method_required])
-    intent = str(inputs.get("intent") or "").strip()
     if intent == "sector_research":
         return [
             "sector",
@@ -2244,10 +2255,10 @@ def screen_stocks(context):
             "methodology": methodology,
         })
     candidates.sort(key=lambda item: (item["score"], item.get("latest_amount") or 0.0), reverse=True)
-    cycle = str(inputs.get("investment_cycle") or "mid_term")
-    default_min_score = {"short_term": 0.0, "mid_term": 0.0, "long_term": 0.15}.get(cycle, 0.0)
+    cycle = _required_investment_cycle(inputs)
+    cycle_min_score = {"short_term": 0.0, "mid_term": 0.0, "long_term": 0.15}[cycle]
     min_score = _to_float(inputs.get("min_score"))
-    min_score = default_min_score if min_score is None else min_score
+    min_score = cycle_min_score if min_score is None else min_score
     top_k = max(int(inputs.get("top_k") or 5), 1)
     watchlist_top_k = max(int(inputs.get("watchlist_top_k") or 2), 1)
     watchlist_min_score = _to_float(inputs.get("watchlist_min_score"))
@@ -2262,7 +2273,7 @@ def screen_stocks(context):
         item["candidate_tier"] = "watchlist"
     scorecard = {
         "investment_cycle": cycle,
-        "investment_cycle_assumption": "explicit" if inputs.get("investment_cycle") else "default_mid_term",
+        "investment_cycle_assumption": "explicit",
         "candidate_count": len(candidates),
         "eligible_candidate_count": len(screened),
         "top_candidate_count": len(screened),

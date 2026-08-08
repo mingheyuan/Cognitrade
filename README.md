@@ -9,9 +9,10 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 - 可追踪运行：Turn/Task、ExecutionGraph、事件流、子 Agent、Artifact、指标和重跑。
 - Finance Workspace：证券解析、行情、K 线摘要、基本面、资金流、舆情、公告、事件和龙虎榜。
 - 模拟交易：VeighNa PaperAccount 到价撮合，服务端现金/持仓账本、限价挂单、资金冻结、撤单、费用、T+1 和幂等订单。
-- 策略回测：独立 Hikyuu 回测实验室，使用 Finance Pack 历史 K 线运行双均线策略并持久化资产曲线、绩效和成交记录。
+- 策略回测：独立 Hikyuu 回测实验室，使用 Finance Pack 历史 K 线运行后端注册策略，前端动态配置参数，并持久化资产曲线、绩效和成交记录。
 - DomainPack：`finance_ashare` 与 `legal_contract` 通过声明式能力、工具、Gate 和报告合同接入。
 - UZI 报告：研究工作台可从 ArtifactBoard 直接打开原生风格 HTML 或下载同源 PDF，不依赖旧 UZI CLI、缓存和报告服务。
+- 基金持仓股票报告：从指定基金运行的冻结披露生成最多十份独立 UZI 股票报告，默认 5 并发，支持档位选择、单份/整批重试、续跑、取消、跨页面恢复、单份 HTML/PDF 与整批 PDF ZIP；可将某只冻结持仓带入回测页，但不会把研究评分自动转换为交易信号。ETF 联接仅使用已取得的穿透持仓，不推断缺失数据。
 - 治理：Bearer 鉴权、作用域隔离、高风险审批、质量 Gate、来源引用和分层记忆。
 
 ## 快速部署
@@ -28,9 +29,16 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 ./scripts/deploy.sh status
 ./scripts/deploy.sh token
 ./scripts/deploy.sh logs all
+./scripts/deploy.sh runtime-check
 ./scripts/deploy.sh restart
 ./scripts/deploy.sh down
 ```
+
+完整部署会安装 API、数据源、Playwright Chromium、VeighNa PaperAccount 和
+Hikyuu，不把模拟盘或回测留成运行时可选项。镜像构建阶段会先执行一次无网络运行环境
+检查；`deploy`、`start`、`restart` 完成后还会以实际容器用户再次检查 Python 依赖图、
+API 导入、Chromium、VeighNa/Hikyuu 原生模块以及持久化目录读写权限。任一关键能力
+缺失都会让命令返回非零状态。
 
 部署镜像内可显式核验 UZI 3.9.2 的 22 类真实数据链；该检查不会在启动时自动执行，
 数据源无返回会记录为 `data_gap`，不会生成模拟数据：
@@ -116,6 +124,7 @@ OPENAI_DISABLE_RESPONSE_STORAGE=true
 ```dotenv
 TUSHARE_TOKEN=<runtime-secret>
 MX_APIKEY=<runtime-secret>
+COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY=5
 ```
 
 TuShare 配置 Token 只表示客户端可以鉴权；具体 `daily`、`fina_indicator`、`moneyflow`、
@@ -126,10 +135,18 @@ TuShare 配置 Token 只表示客户端可以鉴权；具体 `daily`、`fina_ind
 镜像源可覆盖：
 
 ```dotenv
-COGNITRADE_PYTHON_IMAGE=public.ecr.aws/docker/library/python:3.11-slim-bookworm
-COGNITRADE_NODE_IMAGE=public.ecr.aws/docker/library/node:22-alpine
-COGNITRADE_NGINX_IMAGE=public.ecr.aws/docker/library/nginx:alpine
+COGNITRADE_PYTHON_IMAGE=python:3.11-slim-bookworm
+COGNITRADE_NODE_IMAGE=node:22-alpine
+COGNITRADE_NGINX_IMAGE=nginx:alpine
+COGNITRADE_PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+COGNITRADE_NPM_REGISTRY=https://registry.npmmirror.com
+COGNITRADE_DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian
+COGNITRADE_DEBIAN_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian-security
 ```
+
+包与 Debian 镜像仅影响构建；不配置时使用 PyPI、npm 与 Debian 官方源。量化依赖集中声明在
+`requirements-quant.txt`，并由主 `requirements.txt` 强制包含，因此容器部署与本地
+`pip install -r requirements.txt` 安装的是同一套完整能力。
 
 完整变量见 [`.env.example`](./.env.example)。
 

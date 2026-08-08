@@ -15,6 +15,7 @@ from research_system.api.chat_service import ChatService
 from research_system.api.agent_os_run_service import AgentOSRunService
 from research_system.api.config import ApiConfig
 from research_system.api.finance_market_data_service import FinanceMarketDataService
+from research_system.api.fund_holding_report_service import FundHoldingReportService
 from research_system.api.hikyuu_backtest_service import HikyuuBacktestService
 from research_system.api.paper_trading_service import PaperTradingService
 from research_system.api.dependencies import (
@@ -22,7 +23,7 @@ from research_system.api.dependencies import (
     require_principal,
 )
 from research_system.api.errors import install_exception_handlers
-from research_system.api.routes import admin, chat, dashboard, finance, runs, system
+from research_system.api.routes import admin, chat, dashboard, finance, fund_holding_reports, runs, system
 from research_system.api.sse import RunEventSource
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.agent_os import AgentOS
@@ -41,6 +42,7 @@ def create_app(
     api_config: ApiConfig | None = None,
     agent_os_factory: Callable[[Settings], AgentOS] | None = None,
     run_service_factory: Callable[[AgentOS], Any] | None = None,
+    fund_holding_report_factory: Callable[[Settings, AgentOS, Any], Any] | None = None,
     chat_service_factory: Callable[[Settings], Any] | None = None,
     event_source_factory: Callable[[Settings, ApiConfig], Any] | None = None,
     finance_market_data_factory: Callable[[Settings], Any] | None = None,
@@ -89,6 +91,17 @@ def create_app(
             if run_service_factory is not None
             else AgentOSRunService(agent_os)
         )
+        fund_holding_report_service = (
+            fund_holding_report_factory(effective_settings, agent_os, run_service)
+            if fund_holding_report_factory is not None
+            else FundHoldingReportService(
+                settings=effective_settings,
+                agent_os=agent_os,
+                run_service=run_service,
+            )
+            if isinstance(run_service, AgentOSRunService)
+            else None
+        )
         memory_scheduler.start()
         try:
             chat_service = build_chat_service(effective_settings)
@@ -104,6 +117,7 @@ def create_app(
                 config=resolved_api_config,
                 agent_os=agent_os,
                 run_service=run_service,
+                fund_holding_reports=fund_holding_report_service,
                 chat_service=chat_service,
                 event_source=build_event_source(effective_settings, resolved_api_config),
                 finance_market_data=finance_market_data,
@@ -118,6 +132,9 @@ def create_app(
         finally:
             application.state.api_runtime = None
             memory_scheduler.stop()
+            close_holding_reports = getattr(fund_holding_report_service, "close", None)
+            if callable(close_holding_reports):
+                close_holding_reports()
             close = getattr(run_service, "close", None)
             if callable(close):
                 close()
@@ -145,6 +162,7 @@ def create_app(
             "X-Request-ID",
             "Content-Disposition",
             "X-Cognitrade-Source-Artifact-Count",
+            "X-Cognitrade-Report-Count",
         ],
     )
 
@@ -166,6 +184,7 @@ def create_app(
         dependencies=[Depends(require_principal)],
     )
     versioned.include_router(runs.router)
+    versioned.include_router(fund_holding_reports.router)
     versioned.include_router(chat.router)
     versioned.include_router(admin.router)
     versioned.include_router(dashboard.router)

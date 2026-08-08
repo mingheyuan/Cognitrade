@@ -25,6 +25,7 @@ _SCREEN_KEYWORDS = ("screen", "watchlist", "candidate", "\u9009\u80a1", "\u7b5b\
 _SECTOR_KEYWORDS = ("sector", "industry", "\u677f\u5757", "\u884c\u4e1a")
 _REVIEW_KEYWORDS = ("review thesis", "thesis review", "\u590d\u6838", "\u4e0a\u4e00\u8f6e\u5224\u65ad")
 _DISTILL_KEYWORDS = ("distill", "kol", "\u84b8\u998f", "\u63d0\u70bc")
+_QUICK_SCAN_KEYWORDS = ("quick-scan", "quick scan", "\u901f\u5224", "\u5feb\u901f\u626b\u63cf")
 _PREVIOUS_RUN_KEYWORDS = ("previous", "prior", "last run", "latest run", "上一轮", "上次", "最近一次")
 _ANALYSIS_KEYWORDS = (
     "analyze",
@@ -76,6 +77,60 @@ _FUND_CATEGORY_ALIASES = {
 }
 _RUN_ID_PATTERN = re.compile(r"(?:run|运行)(?:\s*id)?\s*[#：:=]?\s*([A-Za-z0-9][A-Za-z0-9_-]{5,127})", re.IGNORECASE)
 _CODE_PATTERN = re.compile(r"(?<!\d)(\d{6})(?!\d)")
+_UZI_PROFILE_INTENTS = frozenset({
+    "stock_check",
+    "uzi_analyze_stock",
+    "stock_compare",
+    "stock_screen",
+    "sector_research",
+    "review_thesis",
+})
+_UZI_STOCK_COMMAND_INTENTS = frozenset({
+    "uzi_analyze_stock",
+    "uzi_dcf",
+    "uzi_panel_only",
+    "uzi_scan_trap",
+    "uzi_segmental_model",
+    "uzi_comps",
+    "uzi_lbo",
+    "uzi_initiate",
+    "uzi_earnings",
+    "uzi_catalysts",
+    "uzi_thesis",
+    "uzi_screen",
+    "uzi_dd",
+    "uzi_ic_memo",
+    "uzi_ai_readiness",
+    "uzi_earnings_preview",
+    "uzi_model_update",
+    "uzi_three_statement_method",
+    "uzi_accretion_dilution_method",
+    "uzi_morning_note_method",
+    "uzi_sector_review_method",
+    "uzi_porter_bcg_method",
+    "uzi_unit_economics_method",
+    "uzi_value_creation_plan_method",
+})
+_PROFILE_ALIASES = {
+    "lite": "lite",
+    "速判": "lite",
+    "轻量": "lite",
+    "medium": "medium",
+    "标准": "medium",
+    "deep": "deep",
+    "深度": "deep",
+}
+_INVESTMENT_CYCLE_ALIASES = {
+    "short_term": "short_term",
+    "short term": "short_term",
+    "短期": "short_term",
+    "mid_term": "mid_term",
+    "mid term": "mid_term",
+    "中期": "mid_term",
+    "long_term": "long_term",
+    "long term": "long_term",
+    "长期": "long_term",
+}
 
 
 def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
@@ -104,6 +159,9 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
         "requested_methods",
         "model_updates",
         "method_assumptions",
+        "segmental_model",
+        "accept_uzi_native_fee_schedule",
+        "investment_cycle",
     ):
         if field_name in constraints:
             slots[field_name] = constraints[field_name]
@@ -125,6 +183,15 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
         allow_network=should_resolve_funds,
     )
     fund_codes = list(fund_resolution.fund_codes)
+    # A six-digit code outside the supported A-share equity prefixes is still a
+    # valid fund target when the fund catalog is temporarily unavailable.  The
+    # catalog enriches and verifies the name/type; it must not make a user-
+    # supplied fund code silently fall through into stock research.
+    if should_resolve_funds:
+        for value in [*_CODE_PATTERN.findall(query), *supplied_fund_codes]:
+            normalized = FundSecurityMaster.normalize_code(value)
+            if normalized and not _looks_like_equity_code(normalized) and normalized not in fund_codes:
+                fund_codes.append(normalized)
     if explicit_intent == "fund_research":
         for value in supplied_fund_codes:
             normalized = FundSecurityMaster.normalize_code(value)
@@ -189,7 +256,28 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
                 "provider_error": fund_resolution.provider_error,
             },
         )
-    if intent == "portfolio_research" and not portfolio_holdings:
+    if intent in {"fund_research", "stock_screen"}:
+        investment_cycle = _investment_cycle(query, slots=slots, constraints=constraints)
+        if investment_cycle is None:
+            return _clarify(
+                ["investment_cycle"],
+                query=query,
+                intent=intent,
+                slots=slots,
+                constraints=constraints,
+                context={
+                    "reason": "investment_cycle_required",
+                    "allowed_cycles": ["short_term", "mid_term", "long_term"],
+                    "cycle_labels": {
+                        "short_term": "短期",
+                        "mid_term": "中期",
+                        "long_term": "长期",
+                    },
+                },
+            )
+        slots["investment_cycle"] = investment_cycle
+        constraints["investment_cycle"] = investment_cycle
+    if intent in {"portfolio_research", "uzi_returns", "uzi_rebalance", "uzi_portfolio_rebalance_method"} and not portfolio_holdings:
         return _clarify(
             ["portfolio_holdings"],
             query=query,
@@ -198,7 +286,7 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
             constraints=constraints,
             context={"reason": "portfolio_holdings_missing"},
         )
-    if intent == "stock_check" and not symbols and not slots.get("snapshots"):
+    if intent in {"stock_check", "quick_scan", *_UZI_STOCK_COMMAND_INTENTS} and not symbols and not slots.get("snapshots"):
         if _is_contextual_continuation(query, request, runtime_context):
             constraints["continuation"] = True
         else:
@@ -239,6 +327,26 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
                 context={"reason": "review_target_missing"},
             )
         constraints["review_target_run_id"] = review_target_run_id
+    if intent in _UZI_PROFILE_INTENTS:
+        research_profile = _research_profile(query, slots=slots, constraints=constraints)
+        if research_profile is None:
+            return _clarify(
+                ["research_profile"],
+                query=query,
+                intent=intent,
+                slots=slots,
+                constraints=constraints,
+                context={
+                    "reason": "research_profile_required",
+                    "allowed_profiles": ["lite", "medium", "deep"],
+                    "profile_labels": {
+                        "lite": "速判模式（1-2 分钟）",
+                        "medium": "标准分析（5-8 分钟）",
+                        "deep": "深度研究（15-20 分钟）",
+                    },
+                },
+            )
+        constraints["research_profile"] = research_profile
     return {
         "status": "accepted",
         "intent": intent,
@@ -296,6 +404,52 @@ def _sector(query: str, *, slots: dict[str, Any], constraints: dict[str, Any]) -
     return candidate or None
 
 
+def _research_profile(
+    query: str,
+    *,
+    slots: dict[str, Any],
+    constraints: dict[str, Any],
+) -> str | None:
+    supplied = str(
+        constraints.get("research_profile")
+        or slots.get("research_profile")
+        or ""
+    ).strip().lower()
+    if supplied:
+        return supplied if supplied in {"lite", "medium", "deep"} else None
+    lowered = query.casefold()
+    for alias, profile in _PROFILE_ALIASES.items():
+        if alias.isascii():
+            if re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", lowered):
+                return profile
+        elif alias in query:
+            return profile
+    return None
+
+
+def _investment_cycle(
+    query: str,
+    *,
+    slots: dict[str, Any],
+    constraints: dict[str, Any],
+) -> str | None:
+    supplied = str(
+        constraints.get("investment_cycle")
+        or slots.get("investment_cycle")
+        or ""
+    ).strip().lower()
+    if supplied:
+        return supplied if supplied in {"short_term", "mid_term", "long_term"} else None
+    lowered = query.casefold()
+    for alias, cycle in _INVESTMENT_CYCLE_ALIASES.items():
+        if alias.isascii():
+            if re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", lowered):
+                return cycle
+        elif alias in query:
+            return cycle
+    return None
+
+
 def _contains_sector_alias(query: str, lowered: str, alias: str) -> bool:
     """Match English sector aliases as words, not arbitrary substrings."""
 
@@ -333,7 +487,10 @@ def _review_target_run_id(
         row
         for row in recent_runs
         if str(row.get("run_id") or "").strip()
-        and str(row.get("status") or "") in {"completed", "completed_partial"}
+        # A quality-gated run is still a valid thesis-review target: the
+        # review must expose its critical gaps instead of making the run
+        # disappear from history.
+        and str(row.get("status") or "") in {"completed", "completed_partial", "gated"}
         and str(row.get("intent") or "") != "review_thesis"
     ]
     return str(eligible[0].get("run_id")) if eligible else None
@@ -353,6 +510,8 @@ def _infer_intent(
         return "portfolio_research"
     if fund_codes or fund_category or _contains(query, lowered, _FUND_KEYWORDS):
         return "fund_research"
+    if _contains(query, lowered, _QUICK_SCAN_KEYWORDS):
+        return "quick_scan"
     if _contains(query, lowered, _REVIEW_KEYWORDS):
         return "review_thesis"
     if _contains(query, lowered, _DISTILL_KEYWORDS):

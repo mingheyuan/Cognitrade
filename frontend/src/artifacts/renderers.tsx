@@ -43,7 +43,7 @@ export function EvidenceSetArtifactRenderer({ content }: ArtifactRendererProps) 
 }
 
 export function FinancialAnalysisArtifactRenderer({ content }: ArtifactRendererProps) {
-  return <ArtifactData content={content} priority={['summary', 'symbols', 'scorecards', 'methodologies']} />
+  return <ArtifactData content={content} priority={METHOD_PRIORITY} />
 }
 
 export function ScreeningResultArtifactRenderer({ content }: ArtifactRendererProps) {
@@ -83,15 +83,69 @@ export function ValuationModelArtifactRenderer({ content }: ArtifactRendererProp
 }
 
 export function InvestorPanelReviewArtifactRenderer({ content }: ArtifactRendererProps) {
-  return <ArtifactData content={content} priority={['average_score', 'distribution', 'disagreement', 'votes', 'confidence', 'risk_flags', 'profile', 'scope', 'panel_version']} />
+  return <ArtifactData content={content} priority={['roleplay', 'average_score', 'distribution', 'disagreement', 'votes', 'per_investor_override', 'confidence', 'risk_flags', 'profile', 'scope', 'panel_version']} />
 }
 
 export function RiskScanArtifactRenderer({ content }: ArtifactRendererProps) {
   return <ArtifactData content={content} priority={['symbol', 'risk_level', 'recommendation', 'signals_hit_count', 'signals', 'confidence', 'risk_flags']} />
 }
 
-export function ReportPresentationArtifactRenderer({ content }: ArtifactRendererProps) {
-  return <ArtifactData content={content} priority={['subject', 'hero', 'core_conclusion', 'dashboard', 'great_divide', 'panel', 'radar', 'deep_scan', 'panel_insights', 'risk_list', 'buy_zones', 'institutional_modeling', 'advanced_methods']} />
+export function QuickScanArtifactRenderer({ content }: ArtifactRendererProps) {
+  const votes = Array.isArray(content.votes)
+    ? content.votes.filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value))
+    : []
+  const risks = Array.isArray(content.risks) ? content.risks.map(String) : []
+  const score = typeof content.aggregate_score === 'number' ? content.aggregate_score : null
+  const scoreLabel = score == null
+    ? content.aggregate_score == null ? '未评分' : String(content.aggregate_score)
+    : `${score.toFixed(1)} / 100`
+  const summaryFields = new Set(['verdict', 'aggregate_score', 'votes', 'trap_level', 'risks', 'markdown'])
+  const auditContent = Object.fromEntries(
+    Object.entries(content).filter(([field]) => !summaryFields.has(field)),
+  )
+  return (
+    <section className="quick-scan-artifact" aria-label="UZI 股票速判结果">
+      <header className="quick-scan-artifact__summary">
+        <span><small>一句话定调</small><strong>{String(content.verdict || '证据不足，暂不能形成结论')}</strong></span>
+        <span><small>综合评分</small><strong>{scoreLabel}</strong></span>
+        <span><small>杀猪盘安全等级</small><strong>{String(content.trap_level || '数据缺口，无法判断')}</strong></span>
+      </header>
+      <div className="quick-scan-artifact__votes">
+        {votes.map((vote) => (
+          <article key={String(vote.investor_id)} data-signal={String(vote.signal || 'unknown')}>
+            <span>{String(vote.perspective_label || vote.investor_id || '方法论席位')}</span>
+            <strong>{String(vote.signal || '未知')}</strong>
+            <b>{Number(vote.score) >= 0 ? `${Number(vote.score).toFixed(1)} 分` : '跳过'}</b>
+            <p>{String(vote.headline || vote.reasoning || '无有效规则命中')}</p>
+            <details><summary>查看完整席位审计</summary><BusinessDataView value={vote} compact /></details>
+          </article>
+        ))}
+        {!Array.isArray(content.votes) && content.votes != null && <span>{String(content.votes)}</span>}
+      </div>
+      <section className="quick-scan-artifact__risks">
+        <h4>关键风险</h4>
+        {risks.map((risk) => <p key={risk}>{risk}</p>)}
+        {!Array.isArray(content.risks) && content.risks != null && <p>{String(content.risks)}</p>}
+      </section>
+      <details className="quick-scan-artifact__details">
+        <summary>完整命令产物与审计字段</summary>
+        <pre>{String(content.markdown || '')}</pre>
+        <ArtifactData content={auditContent} priority={['required_dimensions', 'dimension_status', 'investor_ids', 'quality_status', 'confidence', 'data_gap', 'risk_flags', 'methodology_version', 'source_commit']} />
+      </details>
+    </section>
+  )
+}
+
+export function UziNativeAnalysisArtifactRenderer({ content }: ArtifactRendererProps) {
+  return <ArtifactData content={content} priority={['report_allowed', 'quality_status', 'critical_count', 'warning_count', 'profile', 'results', 'recovery_history', 'methodology_version', 'source_commit']} />
+}
+
+export function UziNativeMethodResultArtifactRenderer({ content }: ArtifactRendererProps) {
+  return <ArtifactData content={content} priority={['method_id', 'quality_status', 'results', 'data_gap', 'assumptions', 'source_commit', 'implementation']} />
+}
+
+export function UziNativeCommandResultArtifactRenderer({ content }: ArtifactRendererProps) {
+  return <ArtifactData content={content} priority={['command_id', 'phase', 'quality_status', 'results', 'data_gap', 'source_commit', 'implementation']} />
 }
 
 export function InstitutionalAnalysisArtifactRenderer({ content }: ArtifactRendererProps) {
@@ -116,6 +170,10 @@ export function FundSnapshotArtifactRenderer({ content }: ArtifactRendererProps)
 
 export function FundAnalysisArtifactRenderer({ content }: ArtifactRendererProps) {
   return <ArtifactData content={content} priority={['analysis_mode', 'fund_category', 'investment_cycle', 'candidate_count', 'recommendations', 'candidates', 'selection_policy', 'quality_status', 'data_gap', 'provider_errors', 'methodology_version', 'generated_at']} />
+}
+
+export function FundHoldingReportBatchArtifactRenderer({ content }: ArtifactRendererProps) {
+  return <ArtifactData content={content} priority={['fund_name', 'fund_code', 'profile', 'status', 'counts', 'disclosure_date', 'stale_level', 'holding_source', 'holdings', 'data_gap', 'source_run_id', 'source_artifact_id']} />
 }
 
 export function AiReadinessArtifactRenderer({ content }: ArtifactRendererProps) {

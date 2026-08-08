@@ -1,12 +1,14 @@
-ARG NODE_IMAGE=public.ecr.aws/docker/library/node:22-alpine
-ARG NGINX_IMAGE=public.ecr.aws/docker/library/nginx:alpine
+ARG NODE_IMAGE=node:22-alpine
+ARG NGINX_IMAGE=nginx:alpine
 
 FROM ${NODE_IMAGE} AS build
+
+ARG NPM_CONFIG_REGISTRY=https://registry.npmjs.org
 
 WORKDIR /app
 
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+RUN npm ci --registry="${NPM_CONFIG_REGISTRY}"
 
 COPY frontend/ ./
 

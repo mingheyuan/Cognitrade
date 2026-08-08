@@ -4,7 +4,7 @@ import json
 import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 import unittest
@@ -17,7 +17,6 @@ from fastapi.testclient import TestClient
 from domain_packs.finance_ashare.subagents.uzi_methodology import (
     build_features,
     build_panel_review,
-    build_presentation,
     build_risk_scan,
     build_valuation_model,
     select_profile,
@@ -29,6 +28,7 @@ from domain_packs.finance_ashare.subagents.uzi_advanced_methodology import (
     build_institutional_analysis,
     build_research_workflow,
 )
+from domain_packs.finance_ashare.vendor.uzi_3_9_2 import verify_vendored_uzi_integrity
 from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshots
 import domain_packs.finance_ashare.tools.snapshot_collector as snapshot_collector
 from research_system.api.app import create_app
@@ -46,6 +46,29 @@ def _snapshots() -> list[dict]:
 
 
 class UziFinancePackTests(unittest.TestCase):
+    def test_main_agent_synthesis_contract_accepts_full_artifact_lineage(self) -> None:
+        schema = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "domain_packs"
+                / "finance_ashare"
+                / "artifact_schemas"
+                / "main_agent_synthesis.json"
+            ).read_text(encoding="utf-8")
+        )
+
+        jsonschema.validate(
+            {
+                "conclusion": "结构化结论",
+                "assistant_message": "面向用户的答复",
+                "follow_up": ["复核披露期"],
+                "source_artifact_id": "report-1",
+                "source_artifact_ids": ["report-1", "valuation-1", "risk-1"],
+                "model_generated": True,
+            },
+            schema,
+        )
+
     def test_empty_provider_results_materialize_auditable_gap_snapshots(self) -> None:
         query = SimpleNamespace(
             artifact_id="normalized-query",
@@ -81,7 +104,15 @@ class UziFinancePackTests(unittest.TestCase):
         ]
         self.assertEqual(
             {draft.content["snapshot_type"] for draft in snapshots},
-            {"market", "fundamental", "notice", "capital_flow", "sentiment", "events", "lhb"},
+            {
+                "market",
+                "fundamental",
+                "kline",
+                "valuation",
+                "governance",
+                "events",
+                "lhb",
+            },
         )
         self.assertTrue(all(draft.content["quality_status"] == "data_gap" for draft in snapshots))
         self.assertTrue(
@@ -114,35 +145,22 @@ class UziFinancePackTests(unittest.TestCase):
                 "16_lhb", "17_sentiment", "18_trap", "19_contests", "fund_holders", "similar_stocks",
             },
         )
-        self.assertEqual(mapping["source"]["commit"], "fce996c33e70eddce8e375f53cd252b549eb3d7c")
+        self.assertEqual(mapping["source"]["commit"], "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359")
         self.assertEqual(mapping["profiles"]["lite"]["panel_seats"], 10)
-        self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 66)
+        self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 51)
         self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 66)
-        self.assertEqual(len(mapping["panel"]["member_ids"]), 66)
         required_mapping_fields = {
             "source_commit",
             "source_path",
-            "provider",
-            "field_mapping",
-            "quality_policy",
+            "target_skill",
             "migration_status",
             "result_equivalence",
-            "baseline_fixture",
+            "invocation_acceptance",
         }
-        self.assertTrue(
-            all(
-                required_mapping_fields.issubset(row)
-                for row in [*fetchers, *mapping["derived_methods"]]
-            )
-        )
-        replay = json.loads(
-            (repository_root / "tests" / "fixtures" / "uzi_source_snapshot_replay.json")
-            .read_text(encoding="utf-8")
-        )
-        self.assertEqual(
-            {row["source_id"] for row in replay["records"]},
-            {row["source_id"] for row in fetchers},
-        )
+        self.assertTrue(all(required_mapping_fields.issubset(row) for row in fetchers))
+        self.assertEqual(mapping["source_registry"]["source_count"], 73)
+        self.assertEqual(mapping["contract"]["returned_object"], "exact_upstream_identity")
+        self.assertEqual(mapping["contract"]["external_checkout_runtime"], "forbidden")
 
     def test_uzi_source_and_replay_fingerprints_are_verified(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -155,21 +173,15 @@ class UziFinancePackTests(unittest.TestCase):
         )
         mapping = yaml.safe_load(mapping_path.read_text(encoding="utf-8"))
         source = mapping["source"]
-        self.assertRegex(source["version_file_sha256"], r"^[A-Fa-f0-9]{64}$")
         self.assertRegex(source["license_sha256"], r"^[A-Fa-f0-9]{64}$")
-        fixture_hashes = source["replay_fixture_sha256"]
-        self.assertEqual(set(source["replay_fixtures"]), set(fixture_hashes))
-
-        def sha256(path: Path) -> str:
-            return hashlib.sha256(path.read_bytes()).hexdigest().upper()
-
-        for fixture in source["replay_fixtures"]:
-            fixture_path = repository_root / fixture
-            self.assertTrue(fixture_path.is_file(), fixture)
-            self.assertEqual(sha256(fixture_path), str(fixture_hashes[fixture]).upper())
-
-        for entry in [*mapping["fetchers"], *mapping["derived_methods"]]:
-            self.assertIn(entry["baseline_fixture"], fixture_hashes)
+        vendor_root = repository_root / source["vendored_root"]
+        license_hash = hashlib.sha256((vendor_root / "LICENSE").read_bytes()).hexdigest()
+        self.assertEqual(license_hash, source["license_sha256"])
+        integrity = verify_vendored_uzi_integrity()
+        self.assertTrue(integrity["valid"], integrity)
+        self.assertEqual(integrity["source_commit"], source["commit"])
+        self.assertEqual(integrity["fetcher_count"], 22)
+        self.assertEqual(integrity["command_count"], 20)
 
     def test_unconfigured_uzi_sources_are_explicit_degraded_snapshots(self) -> None:
         class DegradedSkill:
@@ -223,6 +235,9 @@ class UziFinancePackTests(unittest.TestCase):
             universe_rows=[],
             universe_source="structured_symbols",
             enrichment_targets=[],
+            query="分析 300750",
+            research_profile="lite",
+            settings=Settings.from_env(Path(__file__).resolve().parents[1]),
         )
         self.assertEqual(result["collection"]["quality_status"], "degraded")
         self.assertEqual(result["collection"]["quality_counts"], {"available": 1, "data_gap": 1})
@@ -351,92 +366,145 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertEqual(features["total_assets_yi"], 200.0)
         self.assertEqual(features["total_liabilities_yi"], 80.0)
         self.assertEqual(features["cash_yi"], 30.0)
-        self.assertEqual(valuation["status"], "assumption_only")
-        self.assertIn("fcf_approximated_from_revenue_margin", valuation["assumption_flags"])
+        self.assertEqual(valuation["status"], "data_gap")
+        self.assertIn("fcf_missing", valuation["data_gap"])
+        self.assertNotIn("fcf_approximated_from_revenue_margin", valuation["assumption_flags"])
         self.assertEqual(features["operating_cash_flow_yi"], 15.0)
         self.assertIsNone(features["fcf_latest_yi"])
         self.assertNotIn("total_assets_missing", valuation["warnings"])
 
-    def test_report_presentation_exposes_bento_dashboard_sections(self) -> None:
-        rows = _snapshots()
-        profile = select_profile({"research_profile": "lite"})
-        valuation = build_valuation_model(rows, ["600000"], profile)
-        panel = build_panel_review(rows, ["600000"], profile)
-        risk = build_risk_scan("分析 600000", rows, ["600000"], profile)
-
-        presentation = build_presentation(
+    def test_uzi_rule_features_are_derived_from_verified_snapshots(self) -> None:
+        start = date(2025, 1, 1)
+        bars = [
             {
-                "symbols": ["600000"],
-                "risk": ["需要复核数据完整性"],
-                "conclusion": "结构化研究结论",
-            },
-            valuation,
-            panel,
-            risk,
-            profile,
-            snapshot_rows=rows,
-        )
-
-        self.assertEqual(presentation["version"], "2")
-        self.assertEqual(presentation["subject"]["symbol"], "600000")
-        self.assertEqual(len(presentation["subject"]["metrics"]), 6)
-        self.assertIn("fundamentals", presentation["dashboard"])
-        self.assertIn("change_pct", presentation["dashboard"]["price"])
-        self.assertIn("top_vote", presentation["great_divide"]["bull"])
-        self.assertEqual(
-            presentation["panel"]["distribution"],
-            panel["distribution"],
-        )
-
-    def test_report_presentation_exposes_full_scan_panel_and_model_details(self) -> None:
-        rows = _snapshots()
-        profile = select_profile({"research_profile": "medium"})
-        valuation = build_valuation_model(rows, ["600000"], profile)
-        panel = build_panel_review(rows, ["600000"], profile)
-        risk = build_risk_scan("分析 600000", rows, ["600000"], profile)
-        institutional = build_institutional_analysis(rows, ["600000"], valuation, profile)
-        workflow = build_research_workflow(rows, ["600000"], valuation, profile)
-        deep = build_deep_analysis(rows, ["600000"], institutional, workflow, profile)
-        coverage = build_dimension_coverage(
-            rows,
-            ["600000"],
-            profile,
-            institutional_available=True,
-            workflow_available=True,
-            deep_available=True,
-        )
-
-        presentation = build_presentation(
+                "date": (start + timedelta(days=index)).isoformat(),
+                "open": 9.98 + index * 0.05,
+                "high": 10.1 + index * 0.05,
+                "low": 9.9 + index * 0.05,
+                "close": 10 + index * 0.05,
+                "volume": 1_000_000 + index * 1_000,
+            }
+            for index in range(300)
+        ]
+        annual = [
+            {"报告期": year, "营业总收入": f"{revenue}亿", "净利润": f"{profit}亿", "净资产收益率": f"{roe}%"}
+            for year, revenue, profit, roe in (
+                (2021, 80, 8, 12),
+                (2022, 100, 10, 14),
+                (2023, 120, 12, 16),
+                (2024, 150, 15, 18),
+                (2025, 200, 25, 20),
+            )
+        ]
+        valuation_history = [
+            {"数据日期": (start + timedelta(days=index)).isoformat(), "PE(TTM)": 10 + index / 100}
+            for index in range(300)
+        ]
+        rows = [
             {
-                "symbols": ["600000"],
-                "risk": ["需要复核数据完整性"],
-                "conclusion": "结构化研究结论",
+                "snapshot_type": "market",
+                "symbol": "688012",
+                "snapshot_date": "2026-08-07",
+                "facts": {"market_overview": {"latest_price": 25, "market_cap": 50_000_000_000, "pe_ttm": 20, "pb": 2, "ps": 3, "valuation_history": valuation_history}},
+                "source": {"vendor": "fixture"},
             },
-            valuation,
-            panel,
-            risk,
-            profile,
-            advanced={
-                "institutional_analysis": institutional,
-                "research_workflow": workflow,
-                "deep_analysis": deep,
-                "uzi_dimension_coverage": coverage,
+            {
+                "snapshot_type": "fundamental",
+                "symbol": "688012",
+                "snapshot_date": "2026-08-07",
+                "facts": {
+                    "financial_abstract": {"营业总收入": "200亿", "净利润": "25亿", "销售毛利率": "45%", "流动比率": 2.5, "净资产收益率": "20%", "资产负债率": "30%", "基本每股收益": 2},
+                    "financial_abstract_history": annual,
+                    "financial_abstract_new": {"operating_income_total": {"value": 5_000_000_000}},
+                    "financial_benefit_new": {"research_and_development_expenses": {"value": 500_000_000}},
+                    "financial_debt_new": {"assets_total": {"value": 30_000_000_000}, "total_debt": {"value": 9_000_000_000}, "cash": {"value": 5_000_000_000}, "long_term_loan": {"value": 1_000_000_000}, "lease_debt": {"value": 100_000_000}, "bonds_payable": {"value": "", "report_date": "2026-03-31"}},
+                    "financial_cash_new": {"act_cash_flow_net": {"value": 800_000_000}, "pay_fixed_assets_etc_cash": {"value": 200_000_000}},
+                },
+                "source": {"vendor": "fixture"},
             },
-            snapshot_rows=rows,
-        )
+            {"snapshot_type": "kline", "symbol": "688012", "snapshot_date": "2026-08-07", "facts": {"history": {"bars": bars}}, "source": {"vendor": "fixture"}},
+            {"snapshot_type": "sentiment", "symbol": "688012", "snapshot_date": "2026-08-07", "facts": {"availability": "available", "hot_rank_latest": [{"item": "marketAllCount", "value": 1000}, {"item": "calcTime", "value": "2026-08-07 10:00:00"}, {"item": "rank", "value": 100}]}, "source": {"vendor": "fixture"}},
+            {"snapshot_type": "lhb", "symbol": "688012", "snapshot_date": "2026-08-07", "facts": {"availability": "available", "lhb_statistics": [{"上榜次数": 2}]}, "source": {"vendor": "fixture"}},
+            {"snapshot_type": "industry", "symbol": "688012", "snapshot_date": "2026-08-07", "facts": {"availability": "available", "industry": "半导体设备"}, "source": {"vendor": "fixture"}},
+            {"snapshot_type": "research", "symbol": "688012", "snapshot_date": "2026-08-07", "facts": {"availability": "available", "reports": [{"股票简称": "中微公司", "机构": "A", "东财评级": "买入", "2026-盈利预测-收益": 3}, {"股票简称": "中微公司", "机构": "B", "东财评级": "增持", "2026-盈利预测-收益": 3.4}]}, "source": {"vendor": "fixture"}},
+            {"snapshot_type": "notice", "symbol": "688012", "snapshot_date": "2026-08-07", "facts": {"recent_notices": [{"公告标题": "获得重大订单"}], "notice_count": 1}, "source": {"vendor": "fixture"}},
+        ]
 
-        schema = json.loads(
-            (Path(__file__).resolve().parents[1] / "domain_packs" / "finance_ashare" / "artifact_schemas" / "report_presentation.json").read_text(encoding="utf-8")
-        )
-        jsonschema.validate(presentation, schema)
-        self.assertEqual(len(presentation["deep_scan"]), 25)
-        self.assertEqual(len(presentation["panel_insights"]), panel["registered_seat_count"])
-        self.assertTrue(presentation["great_divide"]["rounds"])
-        self.assertTrue(presentation["institutional_modeling"][0]["methods"])
-        self.assertEqual(len(presentation["institutional_modeling"][0]["methods"][0]["sensitivity"]), 25)
-        self.assertTrue(presentation["risk_list"])
-        self.assertEqual(presentation["buy_zones"][0]["status"], "data_gap")
-        self.assertEqual(presentation["buy_zones"][0]["kind"], "observation")
+        features = build_features(rows, "688012")
+
+        self.assertEqual(features["name"], "中微公司")
+        self.assertEqual(features["revenue_latest_yi"], 200)
+        # Latest UZI v3.9.4 uses the reported total-liabilities bridge before
+        # narrower interest-bearing components so DCF does not silently treat
+        # the rest of the balance sheet as zero.
+        self.assertAlmostEqual(features["total_debt_yi"], 90)
+        self.assertEqual(features["stage_num"], 2)
+        self.assertTrue(features["price_above_ma200"])
+        self.assertAlmostEqual(features["sentiment_heat"], 90.09, places=2)
+        self.assertEqual(features["lhb_30d_count"], 2)
+        self.assertEqual(features["research_coverage"], 2)
+        self.assertEqual(features["buy_rating_pct"], 100)
+        self.assertAlmostEqual(features["rd_intensity"], 10)
+        self.assertAlmostEqual(features["fcf_margin"], 12)
+        self.assertTrue(features["fcf_positive"])
+        self.assertIsNotNone(features["revenue_growth_3y_cagr"])
+        self.assertEqual(features["roe_5y_above_15"], 3)
+        self.assertIsNotNone(features["pe_quantile_5y"])
+        self.assertTrue(features["ai_chain_hit"])
+        self.assertIn("stage_num=Weinstein", " ".join(features["feature_derivations"]))
+
+    def test_uzi_market_currency_is_explicit_for_a_h_us_and_global_symbols(self) -> None:
+        cases = {
+            "600519": ("A", "CN", "CNY", "¥"),
+            "00700.HK": ("H", "HK", "HKD", "HK$"),
+            "AAPL": ("U", "US", "USD", "$"),
+            "7203.T": ("JP", "JP", "JPY", "JP¥"),
+        }
+        for symbol, expected in cases.items():
+            features = build_features(
+                [{
+                    "snapshot_type": "market",
+                    "symbol": symbol,
+                    "snapshot_date": "2026-08-07",
+                    "facts": {"market_overview": {"latest_price": 10}},
+                    "source": {"vendor": "fixture"},
+                }],
+                symbol,
+            )
+            self.assertEqual(
+                (features["market"], features["country"], features["currency"], features["currency_symbol"]),
+                expected,
+            )
+
+    def test_uzi_rule_features_do_not_relabel_fund_products_as_managers(self) -> None:
+        rows = _snapshots() + [
+            {"snapshot_type": "fund_holders", "symbol": "600000", "facts": {"availability": "available", "holders": [{"基金名称": "A"}], "active_funds_count": 999}}
+        ]
+
+        features = build_features(rows, "600000")
+
+        self.assertIsNone(features["fund_manager_count"])
+        self.assertIn("fund_manager_count", features["data_gap"])
+
+    def test_uzi_lhb_count_excludes_dated_rows_older_than_30_days(self) -> None:
+        rows = _snapshots() + [
+            {
+                "snapshot_type": "lhb",
+                "symbol": "600000",
+                "snapshot_date": "2026-08-07",
+                "facts": {
+                    "availability": "available",
+                    "lhb_statistics": [
+                        {"trade_date": "20260801"},
+                        {"trade_date": "20260601"},
+                    ],
+                },
+            }
+        ]
+
+        features = build_features(rows, "600000")
+
+        self.assertEqual(features["lhb_30d_count"], 1)
 
     def test_uzi_methodology_replay_matches_versioned_dcf_baseline(self) -> None:
         fixture = json.loads(
@@ -471,24 +539,23 @@ class UziFinancePackTests(unittest.TestCase):
                 domain_id="finance_ashare",
                 objective="只做 300750 的 DCF",
                 available_artifact_types=["user_request"],
-                required_artifact_types=["research_report"],
+                required_artifact_types=["uzi_native_method_result"],
                 metadata={
-                    "intent": "stock_check",
-                    "required_outputs_source": "manifest_report_contract",
+                    "intent": "uzi_dcf",
+                    "required_outputs_source": "intent_output_contract",
                     "intent_inputs": {
-                        "intent": "stock_check",
-                        "research_profile": "lite",
-                        "requested_methods": ["dcf"],
+                        "intent": "uzi_dcf",
+                        "symbols": ["300750"],
                     },
                 },
             )
         )
         capabilities = {node.capability for node in graph.nodes if node.capability}
 
-        self.assertIn("finance.uzi.valuation.evaluate", capabilities)
+        self.assertIn("finance.uzi.native.dcf", capabilities)
+        self.assertNotIn("finance.uzi.valuation.evaluate", capabilities)
         self.assertNotIn("finance.uzi.report.compose", capabilities)
         self.assertNotIn("finance.report.compose", capabilities)
-        self.assertIn("finance.valuation.input", graph.governance.required_gate_ids)
 
     def test_specialized_intents_select_profile_and_quality_gate(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -496,9 +563,9 @@ class UziFinancePackTests(unittest.TestCase):
             DomainPackRegistry.load(repository_root / "domain_packs")
         )
         cases = {
-            "stock_screen": ("quick", "screening_result", "finance.screening.quality", 90.0),
-            "sector_research": ("lite", "sector_analysis", "finance.sector.analysis", 300.0),
-            "review_thesis": ("quick", "thesis_review", "finance.thesis.review", 90.0),
+            "stock_screen": ("lite", "screening_result", "finance.screening.quality", 120.0),
+            "sector_research": ("medium", "sector_analysis", "finance.sector.analysis", 480.0),
+            "review_thesis": ("deep", "thesis_review", "finance.thesis.review", 1200.0),
         }
         for intent, (profile, artifact_type, gate_id, timeout) in cases.items():
             with self.subTest(intent=intent):
@@ -510,7 +577,7 @@ class UziFinancePackTests(unittest.TestCase):
                         required_artifact_types=["research_report"],
                         metadata={
                             "intent": intent,
-                            "intent_inputs": {"intent": intent},
+                            "intent_inputs": {"intent": intent, "research_profile": profile},
                         },
                     )
                 )
@@ -554,20 +621,19 @@ class UziFinancePackTests(unittest.TestCase):
                         "quality_status": "available",
                     },
                 ],
-                required_artifact_types=["valuation_model"],
+                required_artifact_types=["uzi_native_method_result"],
                 metadata={
-                    "intent": "stock_check",
+                    "intent": "uzi_dcf",
                     "intent_inputs": {
-                        "intent": "stock_check",
-                        "research_profile": "lite",
-                        "requested_methods": ["dcf"],
+                        "intent": "uzi_dcf",
+                        "symbols": ["300750"],
                     },
                 },
             )
         )
         valuation = next(
             node for node in graph.nodes
-            if node.capability == "finance.uzi.valuation.evaluate"
+            if node.capability == "finance.uzi.native.dcf"
         )
         self.assertEqual(valuation.consumes[0].artifact_type, "snapshot")
         self.assertTrue(valuation.consumes[0].multiple)
@@ -585,20 +651,20 @@ class UziFinancePackTests(unittest.TestCase):
                 domain_id="finance_ashare",
                 objective="只做 300750 的 LBO",
                 available_artifact_types=["user_request"],
-                required_artifact_types=["research_report"],
+                required_artifact_types=["uzi_native_method_result"],
                 metadata={
-                    "intent": "stock_check",
-                    "required_outputs_source": "manifest_report_contract",
+                    "intent": "uzi_lbo",
+                    "required_outputs_source": "intent_output_contract",
                     "intent_inputs": {
-                        "intent": "stock_check",
-                        "research_profile": "medium",
-                        "requested_methods": ["lbo"],
+                        "intent": "uzi_lbo",
+                        "symbols": ["300750"],
                     },
                 },
             )
         )
         capabilities = {node.capability for node in graph.nodes if node.capability}
-        self.assertIn("finance.uzi.method.quick_lbo", capabilities)
+        self.assertIn("finance.uzi.native.quick_lbo", capabilities)
+        self.assertNotIn("finance.uzi.method.quick_lbo", capabilities)
         self.assertNotIn("finance.uzi.panel.review", capabilities)
         self.assertIn("capability_selections", graph.metadata)
 
@@ -624,37 +690,10 @@ class UziFinancePackTests(unittest.TestCase):
             DomainPackRegistry.load(repository_root / "domain_packs")
         )
 
-        quick = planner.build_graph(
+        lite = planner.build_graph(
             CapabilityPlanningRequest(
                 domain_id="finance_ashare",
-                objective="快速检查 600000",
-                available_artifact_types=["user_request"],
-                required_artifact_types=["research_report"],
-                metadata={
-                    "intent": "stock_check",
-                    "intent_inputs": {
-                        "intent": "stock_check",
-                        "research_profile": "quick",
-                    },
-                },
-            )
-        )
-        quick_capabilities = {node.capability for node in quick.nodes if node.capability}
-        self.assertIn("finance.uzi.valuation.evaluate", quick_capabilities)
-        self.assertIn("finance.uzi.risk.scan", quick_capabilities)
-        self.assertNotIn("finance.uzi.panel.review", quick_capabilities)
-        quick_valuation = next(
-            node for node in quick.nodes if node.capability == "finance.uzi.valuation.evaluate"
-        )
-        quick_methods = {
-            item["method_id"] for item in quick_valuation.metadata["method_contracts"]
-        }
-        self.assertEqual(quick_methods, {"dcf"})
-
-        dcf_only = planner.build_graph(
-            CapabilityPlanningRequest(
-                domain_id="finance_ashare",
-                objective="只做 600000 的 DCF",
+                objective="速判检查 600000",
                 available_artifact_types=["user_request"],
                 required_artifact_types=["research_report"],
                 metadata={
@@ -662,13 +701,34 @@ class UziFinancePackTests(unittest.TestCase):
                     "intent_inputs": {
                         "intent": "stock_check",
                         "research_profile": "lite",
-                        "requested_methods": ["dcf"],
+                    },
+                },
+            )
+        )
+        lite_capabilities = {node.capability for node in lite.nodes if node.capability}
+        self.assertIn("finance.uzi.native.analyze_stock", lite_capabilities)
+        self.assertIn("finance.uzi.native.report.compose", lite_capabilities)
+        self.assertNotIn("finance.uzi.valuation.evaluate", lite_capabilities)
+        self.assertNotIn("finance.uzi.report.compose", lite_capabilities)
+
+        dcf_only = planner.build_graph(
+            CapabilityPlanningRequest(
+                domain_id="finance_ashare",
+                objective="只做 600000 的 DCF",
+                available_artifact_types=["user_request"],
+                required_artifact_types=["uzi_native_method_result"],
+                metadata={
+                    "intent": "uzi_dcf",
+                    "intent_inputs": {
+                        "intent": "uzi_dcf",
+                        "symbols": ["600000"],
                     },
                 },
             )
         )
         dcf_capabilities = {node.capability for node in dcf_only.nodes if node.capability}
-        self.assertIn("finance.uzi.valuation.evaluate", dcf_capabilities)
+        self.assertIn("finance.uzi.native.dcf", dcf_capabilities)
+        self.assertNotIn("finance.uzi.valuation.evaluate", dcf_capabilities)
         self.assertNotIn("finance.uzi.panel.review", dcf_capabilities)
         self.assertNotIn("finance.uzi.risk.scan", dcf_capabilities)
 
@@ -688,9 +748,9 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertTrue(all(vote["is_methodology_perspective"] for vote in panel["votes"]))
         medium_panel = build_panel_review(rows, ["600000"], select_profile({"research_profile": "medium"}))
         deep_panel = build_panel_review(rows, ["600000"], select_profile({"research_profile": "deep"}))
-        self.assertEqual(len(medium_panel["votes"]), 66)
+        self.assertEqual(len(medium_panel["votes"]), 51)
         self.assertEqual(len(deep_panel["votes"]), 66)
-        self.assertEqual(medium_panel["registered_seat_count"], 66)
+        self.assertEqual(medium_panel["registered_seat_count"], 51)
         self.assertEqual(len(risk["signals"]), 8)
         self.assertIn("external_search_not_claimed", risk["risk_flags"])
 
@@ -700,17 +760,20 @@ class UziFinancePackTests(unittest.TestCase):
         valuation = build_valuation_model(rows, ["600000"], medium)
         institutional = build_institutional_analysis(rows, ["600000"], valuation, medium)
         workflow = build_research_workflow(rows, ["600000"], valuation, medium)
-        deep = build_deep_analysis(rows, ["600000"], institutional, workflow, select_profile({"research_profile": "deep"}))
+        deep_profile = select_profile({"research_profile": "deep"})
+        deep_institutional = build_institutional_analysis(rows, ["600000"], valuation, deep_profile)
+        deep = build_deep_analysis(rows, ["600000"], deep_institutional, workflow, deep_profile)
 
         self.assertEqual(institutional["results"][0]["symbol"], "600000")
         self.assertIn("three_statement", institutional["results"][0]["methods"])
         self.assertIn("quick_lbo", institutional["results"][0]["methods"])
+        self.assertNotIn("segmental", institutional["results"][0]["methods"])
         self.assertEqual(workflow["results"][0]["symbol"], "600000")
         self.assertEqual(deep["results"][0]["symbol"], "600000")
         self.assertIn("bull_bear_debate", deep["results"][0])
-        self.assertIn("segment_revenue_missing", institutional["results"][0]["methods"]["segmental"]["data_gap"])
+        self.assertIn("reported_segment_data_missing", deep_institutional["results"][0]["methods"]["segmental"]["data_gap"])
 
-    def test_agent_os_graph_commits_uzi_artifacts_and_presentation(self) -> None:
+    def test_agent_os_graph_commits_native_uzi_analysis_and_gated_delivery(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -739,13 +802,14 @@ class UziFinancePackTests(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 200, response.text)
                 payload = response.json()
-                self.assertEqual(payload["status"], "completed_partial")
+                self.assertEqual(payload["status"], "gated")
                 run_id = payload["run_id"]
                 detail = client.get(
                     f"/api/v1/runs/{run_id}",
                     headers={"Authorization": "Bearer uzi-test"},
                 )
                 self.assertEqual(detail.status_code, 200, detail.text)
+                self.assertEqual(detail.json()["snapshot"]["status"], "gated")
                 self.assertEqual(detail.json()["snapshot"]["graph"]["metadata"]["research_profile"], "lite")
                 steps = client.get(
                     f"/api/v1/runs/{run_id}/steps",
@@ -753,7 +817,9 @@ class UziFinancePackTests(unittest.TestCase):
                 )
                 self.assertEqual(steps.status_code, 200, steps.text)
                 capabilities = {step["capability"] for step in steps.json()["steps"]}
-                self.assertIn("finance.uzi.report.compose", capabilities)
+                self.assertIn("finance.uzi.native.analyze_stock", capabilities)
+                self.assertIn("finance.uzi.native.report.compose", capabilities)
+                self.assertNotIn("finance.uzi.report.compose", capabilities)
                 self.assertNotIn("finance.analysis.evaluate", capabilities)
                 self.assertNotIn("finance.report.compose", capabilities)
                 artifacts = client.get(
@@ -766,13 +832,12 @@ class UziFinancePackTests(unittest.TestCase):
                 self.assertTrue(
                     {
                         "snapshot",
-                        "valuation_model",
-                        "investor_panel_review",
-                        "risk_scan",
-                        "report_presentation",
+                        "uzi_native_analysis",
+                        "research_report",
                         "assistant_message",
                     }.issubset(types)
                 )
+                self.assertNotIn("report_presentation", types)
                 snapshot_rows = [row for row in rows if row["artifact_type"] == "snapshot"]
                 self.assertTrue(snapshot_rows)
                 self.assertTrue(
@@ -791,13 +856,15 @@ class UziFinancePackTests(unittest.TestCase):
                         for row in snapshot_rows
                     )
                 )
-                presentation = next(
-                    row for row in rows if row["artifact_type"] == "report_presentation"
-                )
-                self.assertEqual(presentation["content"]["profile"], "lite")
-                self.assertTrue(presentation["content"]["source_artifact_ids"])
+                native = next(row for row in rows if row["artifact_type"] == "uzi_native_analysis")
+                report = next(row for row in rows if row["artifact_type"] == "research_report")
+                self.assertEqual(native["content"]["profile"], "lite")
+                self.assertFalse(native["content"]["report_allowed"])
+                self.assertGreater(native["content"]["critical_count"], 0)
+                self.assertFalse(report["content"]["report_allowed"])
+                self.assertEqual(report["content"]["native_analysis_artifact_id"], native["artifact_id"])
 
-    def test_medium_agent_os_run_uses_independent_safe_default_artifacts(self) -> None:
+    def test_explicit_medium_agent_os_run_uses_medium_artifact_contract(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -835,17 +902,13 @@ class UziFinancePackTests(unittest.TestCase):
                 types = {row["artifact_type"] for row in artifacts.json()["artifacts"]}
                 self.assertTrue(
                     {
-                        "valuation_model",
-                        "investor_panel_review",
-                        "risk_scan",
-                        "uzi_dimension_coverage",
+                        "uzi_native_analysis",
                         "research_report",
-                        "report_presentation",
                     }.issubset(types)
                 )
-                self.assertTrue(
-                    {"institutional_analysis", "research_workflow", "deep_analysis"}.isdisjoint(types)
-                )
+                self.assertNotIn("report_presentation", types)
+                self.assertNotIn("valuation_model", types)
+                self.assertNotIn("deep_analysis", types)
 
 
 if __name__ == "__main__":

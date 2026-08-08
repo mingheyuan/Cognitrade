@@ -124,6 +124,7 @@ class ExecutionGraphRunner:
         tool_registry: CoreToolRegistry | None = None,
         skill_runtime_factory: Callable[[str, str | None], Any] | None = None,
         settings: Any | None = None,
+        llm_provider: Any | None = None,
         cache_root: Path | None = None,
         failure_injections: list[dict[str, Any]] | None = None,
         progress_observer: Callable[[dict[str, Any]], dict[str, str] | None] | None = None,
@@ -149,6 +150,7 @@ class ExecutionGraphRunner:
         self.tool_registry = tool_registry
         self.skill_runtime_factory = skill_runtime_factory
         self.settings = settings
+        self.llm_provider = llm_provider
         self.progress_observer = progress_observer
         self.cache_root = Path(cache_root) if cache_root is not None else self.run_root / "cache"
         self.scheduler = ExecutionGraphScheduler()
@@ -1301,6 +1303,7 @@ class ExecutionGraphRunner:
                         skill_runtime=self._skill_runtime_for(snapshot, node),
                         memory_store=self.memory_store,
                         settings=self.settings,
+                        llm_provider=self.llm_provider,
                         event_callback=self.event_callback,
                         turn_id=self._turn_id,
                         progress_observer=self.progress_observer,

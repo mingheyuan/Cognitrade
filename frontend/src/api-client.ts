@@ -45,6 +45,62 @@ export type RunReportExport = {
   filename: string
 }
 
+export type HoldingReportProfile = 'lite' | 'medium' | 'deep'
+
+export type FundHoldingReportItem = {
+  rank: number
+  symbol: string
+  name: string
+  market: string
+  supported: boolean
+  status: 'queued' | 'running' | 'completed' | 'completed_partial' | 'failed' | 'cancelled' | 'unsupported'
+  fund_weight_pct: number | null
+  target_security_weight_pct: number | null
+  holding_source: string
+  disclosure_date: string | null
+  child_run_id: string | null
+  attempt_run_ids: string[]
+  report_available: boolean
+  retry_count: number
+  data_gap: string[]
+  error: string | null
+  started_at: string | null
+  completed_at: string | null
+}
+
+export type FundHoldingReportBatch = {
+  batch_id: string
+  source_run_id: string
+  source_artifact_id: string
+  fund_code: string
+  fund_name: string
+  fund_type: string | null
+  profile: HoldingReportProfile
+  status: 'running' | 'completed' | 'completed_partial' | 'failed' | 'cancelled'
+  concurrency: number
+  holding_source: 'direct_equity_disclosure' | 'target_etf_lookthrough'
+  is_fund_of_funds: boolean
+  disclosure_date: string | null
+  disclosure_age_days: number | null
+  stale_level: 'current' | 'warning' | 'confirmation_required' | 'unknown'
+  cancel_requested: boolean
+  holdings: FundHoldingReportItem[]
+  counts: {
+    total: number
+    supported: number
+    queued: number
+    running: number
+    deliverable: number
+    failed: number
+    cancelled: number
+    unsupported: number
+  }
+  data_gap: string[]
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
 export type ChatThreadRecord = {
   thread_id: string
   [key: string]: unknown
@@ -152,6 +208,57 @@ export class CognitradeApiClient {
       `/runs/${encodeURIComponent(runId)}/report?format=${encodeURIComponent(format)}`,
       format === 'pdf' ? 'application/pdf' : 'text/html',
       `uzi-report-${runId}.${format}`,
+    )
+  }
+
+  createFundHoldingReports(
+    sourceRunId: string,
+    payload: {
+      fund_code: string
+      profile: HoldingReportProfile
+      source_artifact_id?: string
+      confirm_stale?: boolean
+      force?: boolean
+    },
+  ): Promise<FundHoldingReportBatch> {
+    return this.request(`/runs/${encodeURIComponent(sourceRunId)}/holding-reports`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  }
+
+  listFundHoldingReportBatches(sourceRunId: string, fundCode?: string): Promise<FundHoldingReportBatch[]> {
+    const query = fundCode ? `?fund_code=${encodeURIComponent(fundCode)}` : ''
+    return this.request(`/runs/${encodeURIComponent(sourceRunId)}/holding-report-batches${query}`)
+  }
+
+  getFundHoldingReportBatch(batchId: string): Promise<FundHoldingReportBatch> {
+    return this.request(`/holding-report-batches/${encodeURIComponent(batchId)}`)
+  }
+
+  cancelFundHoldingReportBatch(batchId: string): Promise<FundHoldingReportBatch> {
+    return this.request(`/holding-report-batches/${encodeURIComponent(batchId)}/cancel`, { method: 'POST' })
+  }
+
+  retryFundHoldingReportBatch(batchId: string, symbols: string[] = []): Promise<FundHoldingReportBatch> {
+    return this.request(`/holding-report-batches/${encodeURIComponent(batchId)}/retry`, {
+      method: 'POST',
+      body: JSON.stringify({ symbols }),
+    })
+  }
+
+  continueFundHoldingReportBatch(batchId: string, symbols: string[] = []): Promise<FundHoldingReportBatch> {
+    return this.request(`/holding-report-batches/${encodeURIComponent(batchId)}/continue`, {
+      method: 'POST',
+      body: JSON.stringify({ symbols }),
+    })
+  }
+
+  getFundHoldingReportZip(batchId: string): Promise<RunReportExport> {
+    return this.requestBlob(
+      `/holding-report-batches/${encodeURIComponent(batchId)}/reports.zip`,
+      'application/zip',
+      `fund-holding-reports-${batchId}.zip`,
     )
   }
 

@@ -18,9 +18,16 @@ class PolicySnapshotSkill:
         self.provider_registry = provider_registry
         self.adapter = AkSharePolicyAdapter()
 
-    def run(self, *, query: str, sector: str | None = None, constituents: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        *,
+        query: str,
+        sector: str | None = None,
+        constituents: list[dict[str, Any]] | None = None,
+        symbol: str | None = None,
+    ) -> dict[str, Any]:
         snapshot_date = date.today().isoformat()
-        theme = str(sector or query or "").strip()
+        theme = str(sector or " ".join(item for item in (symbol, query) if item) or "").strip()
         provider_chain = self.provider_registry.get_provider_chain("policy", "cn_sector") if self.provider_registry else []
         provider_trace = [
             {"provider_id": item.provider_id, "source_id": item.source_id, "status": "configured"}
@@ -38,6 +45,7 @@ class PolicySnapshotSkill:
             )
             return VerifiedSnapshot(
                 snapshot_type="policy",
+                symbol=symbol,
                 query=query,
                 snapshot_date=snapshot_date,
                 facts={**failure_facts("no_data"), "missing_scope": "sector"},
@@ -79,6 +87,7 @@ class PolicySnapshotSkill:
         )
         return VerifiedSnapshot(
             snapshot_type="policy",
+            symbol=symbol,
             query=query,
             snapshot_date=snapshot_date,
             sector=theme,

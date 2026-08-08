@@ -2,22 +2,52 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "required": [
-    "symbols",
-    "methodologies",
-    "scorecards",
-    "summary"
+    "methodology_version",
+    "method",
+    "artifact_type",
+    "results",
+    "quality_status",
+    "data_gap",
+    "assumption_flags",
+    "generated_at"
   ],
   "properties": {
-    "symbols": {
-      "type": "array"
+    "methodology_version": {
+      "type": "string"
     },
-    "methodologies": {
-      "type": "array"
+    "method": {
+      "const": "cashflow_resilience"
     },
-    "scorecards": {
-      "type": "array"
+    "artifact_type": {
+      "const": "financial_analysis"
     },
-    "summary": {
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "quality_status": {
+      "enum": [
+        "available",
+        "degraded",
+        "assumption_only",
+        "data_gap"
+      ]
+    },
+    "data_gap": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "assumption_flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "generated_at": {
       "type": "string"
     }
   },

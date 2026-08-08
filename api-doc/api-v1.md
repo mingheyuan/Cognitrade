@@ -20,7 +20,7 @@ FastAPI owns authentication, validation, CORS, error envelopes, request IDs,
 SSE transport, and mutation serialization. AgentOS owns planning, execution,
 artifacts, gates, replay, and long-term memory.
 
-There are 43 versioned operations. Proposal, dynamic subagent-discovery,
+There are 50 versioned operations. Proposal, dynamic subagent-discovery,
 ActionPlan, Supervisor, Handler, Blackboard, CLI, and unversioned business APIs
 are not part of the current runtime.
 
@@ -64,6 +64,7 @@ Content-Type: application/json
 {
   "intent": "stock_check",
   "user_query": "Review supplied evidence for 600000.",
+  "constraints": {"research_profile": "medium"},
   "slots": {"symbols": ["600000"]}
 }
 ```
@@ -90,6 +91,23 @@ endpoint: `stock_check`, `stock_compare`, `stock_screen`, `fund_research`,
 `distill_kol_logic`. When `intent` is omitted, Pack Task Intake resolves it
 from the query or returns a structured
 clarification instead of silently defaulting to stock analysis.
+
+`stock_check`, `stock_compare`, `stock_screen`, `sector_research`, and
+`review_thesis` require an explicit `constraints.research_profile`. The only
+accepted values are `lite`, `medium`, and `deep`; there is no server default
+and the removed `quick` profile is rejected. Their UZI 3.9.2 execution
+contracts are:
+
+| profile | Fetchers | Panel | Institutional methods | DDGS budget | Playwright fallback |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `lite` | 7 / 20 | 10 | 1 | 0 | off |
+| `medium` | 20 / 20 | 51 | 17 | 30 | opt-in, 6 dimensions |
+| `deep` | 20 / 20 | 66 Agent role-play seats | 18 | 60 | 10 dimensions after explicit sensitive-source enablement; includes Bull-Bear debate |
+
+`stock_screen` additionally requires an explicit
+`constraints.investment_cycle` (`short_term`, `mid_term`, or `long_term`). The
+Web UI leaves both research depth and cycle unselected; no `medium` profile or
+`mid_term` cycle is inferred by the client, Task Intake, API, or Pack runtime.
 
 All declared intents accept the common boolean constraint `background`. When
 `true`, the API reserves the run immediately and executes it asynchronously;
@@ -129,6 +147,16 @@ Fund constraints:
 | `candidate_pool_size` | integer | 1–20; the Web UI uses a minimum of 2 for comparison |
 | `investment_cycle` | string | `short_term`, `mid_term`, or `long_term` |
 
+`investment_cycle` is required. There is no `mid_term` (or any other) server
+default: the Web UI starts with an empty selection and the API returns
+`missing_constraint` until the user explicitly chooses a cycle.
+
+The public `cashflow_resilience` requested-method identifier is retained, but
+its implementation is Pack-native. It reports observed cash-flow, profit,
+revenue, debt and cash fields plus directly derived ratios. Missing fields are
+returned as `data_gap`; the service does not supply default margins, leverage,
+stress scenarios or a synthetic composite score.
+
 The Web UI exposes category selection and explicit-code analysis as separate
 modes. Category mode omits `fund_codes`; explicit-code mode sends
 `fund_category: "全部"` and evaluates every supplied code using its observed
@@ -164,6 +192,72 @@ coverage rather than becoming zero. Manager tenure and scale changes remain
 descriptive evidence and do not receive an automatic positive/negative score.
 Provider errors contain only the failed stage and error class; raw upstream
 exception text is not exposed in Artifacts or the Web UI.
+
+### Fund top-holding stock report batches
+
+After a `fund_research` run has produced an active `fund_snapshot`, the Web UI
+can explicitly fan out one selected equity fund's disclosed holdings into up
+to ten independent A-share `stock_check` runs. This is a managed parent batch,
+not a second fund-data collection:
+
+- normal equity funds use the frozen `top_holdings` rows;
+- ETFs use their own disclosed equity holdings;
+- ETF feeder funds use only the frozen `lookthrough_holdings` rows and their
+  effective feeder-fund weights;
+- unsupported markets remain visible as `unsupported` and are not converted;
+- if an ETF target or look-through disclosure is absent, the batch reports the
+  gap and never guesses the holding;
+- every child report records fund code/name, disclosure date, holding rank,
+  effective fund weight, source Artifact and parent batch, without changing the
+  stock valuation or score.
+
+The batch has a dedicated worker pool controlled by
+`COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY` (default 5, allowed 1–10). It does
+not consume or alter the global Agent OS child-thread limit. Child runs are
+hidden from the top-level run history and appear under the parent batch. Each
+child is automatically attempted up to three times; manual retry creates a new
+child run and retains every previous run ID for audit.
+
+```http
+POST /api/v1/runs/{source_run_id}/holding-reports
+Content-Type: application/json
+
+{
+  "fund_code": "110011",
+  "profile": "lite",
+  "source_artifact_id": "01J...",
+  "confirm_stale": false,
+  "force": false
+}
+```
+
+`profile` is required and must be `lite`, `medium`, or `deep`; the service does
+not choose a default. All children in one batch use the same explicitly selected profile. An equivalent existing batch
+is returned unless `force: true` explicitly creates another historical batch.
+Disclosures 121–180 days old carry a warning. Disclosures older than 180 days
+return `409 stale_holdings_confirmation_required` until `confirm_stale: true`
+is supplied. A missing disclosure date does not block execution, but forces a
+documented partial result.
+
+| Method | Path | Meaning |
+| --- | --- | --- |
+| `POST` | `/runs/{source_run_id}/holding-reports` | Create or reuse a parent batch from a frozen `fund_snapshot` |
+| `GET` | `/runs/{source_run_id}/holding-report-batches?fund_code=110011` | List preserved batches for the source run, optionally filtered by fund |
+| `GET` | `/holding-report-batches/{batch_id}` | Read parent progress, child statuses, gaps and report availability |
+| `POST` | `/holding-report-batches/{batch_id}/cancel` | Best-effort cancel queued/running children; completed reports are retained |
+| `POST` | `/holding-report-batches/{batch_id}/retry` | Retry failed children; optional body `{"symbols":["600519"]}` |
+| `POST` | `/holding-report-batches/{batch_id}/continue` | Continue cancelled/failed children; optional symbol filter |
+| `GET` | `/holding-report-batches/{batch_id}/reports.zip` | Download child PDFs that passed the UZI critical gate plus an audit README |
+
+Parent status is `completed` only when every supported child completes without
+batch-level gaps. A mix of completed, gated, failed, cancelled, or unsupported
+items is `completed_partial`; zero successful execution results with all
+supported items failed is `failed`. A child is deliverable only when its active
+`uzi_native_analysis` has `critical_count=0` and the bound `research_report`
+records `report_allowed=true`. No run status or auxiliary artifact can bypass
+this gate. The ZIP deliberately
+contains individual stock reports only; it does not synthesize a fund-level
+holdings HTML/PDF report.
 
 ### UZI Tier-1 and portfolio research
 
@@ -248,11 +342,11 @@ portfolio: missing classifications or targets produce `data_gap`.
 
 ### UZI native report export
 
-Completed UZI stock runs expose a Pack-owned native-style report derived only
-from immutable ArtifactBoard records. The renderer uses `report_presentation`
-as the visual contract and `research_report` plus the independent UZI method
-Artifacts as the audit source. It never invokes the old UZI CLI, cache,
-report server, or an upstream checkout.
+Completed UZI single-stock runs expose the exact vendored UZI 3.9.2 report
+derived only from immutable `uzi_native_analysis` ArtifactBoard records. HTML
+and PDF share that same visible DOM/CSS/JavaScript. Cognitrade metadata remains
+in API headers and Artifact sidecars. The renderer never invokes the old UZI
+CLI, cache, report server, or an upstream checkout.
 
 ```http
 GET /api/v1/runs/{run_id}/report?format=html

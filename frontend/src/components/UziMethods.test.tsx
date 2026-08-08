@@ -74,12 +74,53 @@ describe('UziMethods', () => {
 
     await waitFor(() => expect(mocks.createRun).toHaveBeenCalledTimes(1))
     const [, intent, constraints = {}] = mocks.createRun.mock.calls[0]
-    expect(intent).toBe('portfolio_research')
+    expect(intent).toBe('uzi_returns')
     expect(constraints).not.toHaveProperty('fee_model')
     expect(constraints).not.toHaveProperty('rebalance_targets')
     expect(constraints.portfolio_holdings).toEqual([
       expect.objectContaining({ ticker: '600519', weight: 60, return_pct: 8 }),
       expect.objectContaining({ ticker: '300750', weight: 40, return_pct: -2 }),
     ])
+  })
+
+  it('dispatches each stock method through its independent Agent OS intent', async () => {
+    render(<UziMethods onOpenRun={mocks.openRun} />)
+    fireEvent.change(screen.getByLabelText('股票代码'), { target: { value: '600519' } })
+    fireEvent.click(screen.getByRole('button', { name: '运行 UZI 原生命令 / 方法' }))
+
+    await waitFor(() => expect(mocks.createRun).toHaveBeenCalledTimes(1))
+    const [, intent, constraints] = mocks.createRun.mock.calls[0]
+    expect(intent).toBe('uzi_ai_readiness')
+    expect(constraints).toEqual({ symbol: '600519' })
+  })
+
+  it('exposes all 20 pinned UZI commands through Web controls', () => {
+    render(<UziMethods onOpenRun={mocks.openRun} />)
+    for (const label of [
+      '完整个股分析', '股票速判', '独立评审团', '杀猪盘扫描', 'DCF 估值', '可比公司',
+      '快速 LBO', '分部模型', '首次覆盖', '财报解读', '催化剂日历', '投资逻辑追踪',
+      '量化筛选', '尽调清单', '投委会备忘录', 'AI 就绪度', '财报前瞻', '模型更新',
+    ]) {
+      expect(screen.getByRole('button', { name: new RegExp(label) })).toBeInTheDocument()
+    }
+    fireEvent.click(screen.getByRole('button', { name: /组合归因与再平衡/ }))
+    const selector = screen.getByLabelText('组合方法')
+    expect(selector).toHaveTextContent('收益归因')
+    expect(selector).toHaveTextContent('持仓再平衡')
+  })
+
+  it('requires an explicit profile for the complete analyze-stock command', async () => {
+    render(<UziMethods onOpenRun={mocks.openRun} />)
+    fireEvent.click(screen.getByRole('button', { name: /完整个股分析/ }))
+    fireEvent.change(screen.getByLabelText('股票代码'), { target: { value: '600519' } })
+    const submit = screen.getByRole('button', { name: '运行 UZI 原生命令 / 方法' })
+    expect(submit).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('研究深度（必须显式选择）'), { target: { value: 'deep' } })
+    fireEvent.click(submit)
+
+    await waitFor(() => expect(mocks.createRun).toHaveBeenCalledTimes(1))
+    const [, intent, constraints] = mocks.createRun.mock.calls[0]
+    expect(intent).toBe('uzi_analyze_stock')
+    expect(constraints).toEqual({ symbol: '600519', research_profile: 'deep' })
   })
 })

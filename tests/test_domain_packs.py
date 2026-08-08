@@ -175,11 +175,8 @@ class DomainPackTests(unittest.TestCase):
             [
                 "query_normalizer",
                 "stock_snapshot_collector",
-                "retrieval_decider",
-                "uzi_valuation_analyst",
-                "uzi_panel_reviewer",
-                "uzi_risk_scanner",
-                "uzi_report_composer",
+                "uzi_native_analyze_stock",
+                "uzi_native_report_composer",
             ],
         )
 

@@ -11,6 +11,50 @@ class MarketRoute:
     security_type: str
     normalized_symbol: str | None
     route_hint: str
+    currency: str = ""
+    country: str = ""
+    market_code: str = ""
+
+
+_GLOBAL_SUFFIXES: dict[str, tuple[str, str, str]] = {
+    ".T": ("JP", "tse", "JPY"),
+    ".KS": ("KR", "krx", "KRW"),
+    ".KQ": ("KR", "kosdaq", "KRW"),
+    ".TW": ("TW", "twse", "TWD"),
+    ".TWO": ("TW", "tpex", "TWD"),
+    ".SI": ("SG", "sgx", "SGD"),
+    ".TO": ("CA", "tsx", "CAD"),
+    ".V": ("CA", "tsxv", "CAD"),
+    ".AX": ("AU", "asx", "AUD"),
+    ".L": ("GB", "lse", "GBP"),
+    ".DE": ("DE", "xetra", "EUR"),
+    ".F": ("DE", "frankfurt", "EUR"),
+    ".PA": ("FR", "euronext_paris", "EUR"),
+    ".AS": ("NL", "euronext_amsterdam", "EUR"),
+    ".SW": ("CH", "six", "CHF"),
+    ".MC": ("ES", "bme", "EUR"),
+    ".MI": ("IT", "borsa_italiana", "EUR"),
+    ".ST": ("SE", "omx_stockholm", "SEK"),
+    ".OL": ("NO", "oslo", "NOK"),
+    ".CO": ("DK", "omx_copenhagen", "DKK"),
+    ".HE": ("FI", "omx_helsinki", "EUR"),
+    ".BR": ("BE", "euronext_brussels", "EUR"),
+    ".LS": ("PT", "euronext_lisbon", "EUR"),
+    ".SA": ("BR", "b3", "BRL"),
+    ".MX": ("MX", "bmv", "MXN"),
+    ".BK": ("TH", "set", "THB"),
+    ".JK": ("ID", "idx", "IDR"),
+    ".KL": ("MY", "bursa_malaysia", "MYR"),
+    ".NZ": ("NZ", "nzx", "NZD"),
+    ".JO": ("ZA", "jse", "ZAR"),
+    ".TA": ("IL", "tase", "ILS"),
+    ".VI": ("AT", "vienna", "EUR"),
+    ".WA": ("PL", "wse", "PLN"),
+    ".PR": ("CZ", "prague", "CZK"),
+    ".BD": ("HU", "budapest", "HUF"),
+    ".NS": ("IN", "nse", "INR"),
+    ".BO": ("IN", "bse", "INR"),
+}
 
 
 class MarketRouter:
@@ -23,6 +67,37 @@ class MarketRouter:
                 security_type="unknown",
                 normalized_symbol=None,
                 route_hint="query_only",
+                currency="CNY",
+                country="CN",
+                market_code="A",
+            )
+
+        if normalized_symbol.startswith("SEHK.") and normalized_symbol.removeprefix("SEHK.").isdigit():
+            code = normalized_symbol.removeprefix("SEHK.").lstrip("0") or "0"
+            return MarketRoute(
+                market="hk_equity",
+                exchange="hkex",
+                security_type="stock",
+                normalized_symbol=f"{code.zfill(5)}.HK",
+                route_hint="stock_snapshot",
+                currency="HKD",
+                country="HK",
+                market_code="H",
+            )
+
+        a_share = re.fullmatch(r"(\d{6})\.(SH|SZ|BJ)", normalized_symbol)
+        if a_share:
+            code, exchange = a_share.groups()
+            security_type = self._infer_security_type(code)
+            return MarketRoute(
+                market=f"cn_{security_type}" if security_type != "stock" else "cn_equity",
+                exchange=exchange.lower(),
+                security_type=security_type,
+                normalized_symbol=code,
+                route_hint=self._route_hint(security_type),
+                currency="CNY",
+                country="CN",
+                market_code="A",
             )
 
         if len(normalized_symbol) == 6 and normalized_symbol.isdigit():
@@ -41,6 +116,9 @@ class MarketRouter:
                 security_type=security_type,
                 normalized_symbol=normalized_symbol,
                 route_hint=route_hint,
+                currency="CNY",
+                country="CN",
+                market_code="A",
             )
 
         hk_match = re.fullmatch(r"(?:HK)?(\d{1,5})(?:\.HK)?", normalized_symbol)
@@ -52,15 +130,47 @@ class MarketRouter:
                 security_type="stock",
                 normalized_symbol=f"{code}.HK",
                 route_hint="stock_snapshot",
+                currency="HKD",
+                country="HK",
+                market_code="H",
             )
 
-        if re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", normalized_symbol):
+        for suffix, (country, exchange, currency) in sorted(
+            _GLOBAL_SUFFIXES.items(), key=lambda item: len(item[0]), reverse=True
+        ):
+            if normalized_symbol.endswith(suffix) and len(normalized_symbol) > len(suffix):
+                return MarketRoute(
+                    market="global_equity",
+                    exchange=exchange,
+                    security_type="stock",
+                    normalized_symbol=normalized_symbol,
+                    route_hint="stock_snapshot",
+                    currency=currency,
+                    country=country,
+                    market_code=country,
+                )
+
+        if re.fullmatch(r"[A-Z][A-Z.\-]{0,5}", normalized_symbol):
             return MarketRoute(
                 market="us_equity",
                 exchange="us",
                 security_type="stock",
                 normalized_symbol=normalized_symbol,
                 route_hint="stock_snapshot",
+                currency="USD",
+                country="US",
+                market_code="U",
+            )
+
+        unknown_global = re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,30}\.([A-Z0-9]{1,5})", normalized_symbol)
+        if unknown_global:
+            return MarketRoute(
+                market="global_equity",
+                exchange=unknown_global.group(1).lower(),
+                security_type="stock",
+                normalized_symbol=normalized_symbol,
+                route_hint="stock_snapshot",
+                market_code="G",
             )
 
         lowered = (query or "").lower()
@@ -71,6 +181,9 @@ class MarketRouter:
                 security_type="mutual_fund",
                 normalized_symbol=normalized_symbol or None,
                 route_hint="fund_like_snapshot",
+                currency="CNY",
+                country="CN",
+                market_code="A",
             )
         if any(token in lowered for token in ("指数", "index", "hs300", "沪深300")):
             return MarketRoute(
@@ -79,6 +192,9 @@ class MarketRouter:
                 security_type="index",
                 normalized_symbol=normalized_symbol or None,
                 route_hint="index_snapshot",
+                currency="CNY",
+                country="CN",
+                market_code="A",
             )
         return MarketRoute(
             market="cn",
@@ -86,7 +202,20 @@ class MarketRouter:
             security_type="unknown",
             normalized_symbol=normalized_symbol or None,
             route_hint="query_only",
+            currency="CNY",
+            country="CN",
+            market_code="A",
         )
+
+    @staticmethod
+    def _route_hint(security_type: str) -> str:
+        if security_type in {"etf", "lof", "mutual_fund"}:
+            return "fund_like_snapshot"
+        if security_type == "convertible_bond":
+            return "bond_like_snapshot"
+        if security_type == "index":
+            return "index_snapshot"
+        return "stock_snapshot"
 
     def _infer_exchange(self, symbol: str) -> str:
         if symbol.startswith(("600", "601", "603", "605", "688", "689", "510", "511", "512", "513", "515")):

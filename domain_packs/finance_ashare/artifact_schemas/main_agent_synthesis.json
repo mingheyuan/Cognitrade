@@ -26,6 +26,13 @@
       "type": "string",
       "minLength": 1
     },
+    "source_artifact_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
     "model_generated": {
       "type": "boolean"
     }

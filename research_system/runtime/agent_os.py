@@ -622,6 +622,7 @@ class AgentOS:
             "source_records",
             "snapshots",
             "source_refs",
+            "holding_context",
         ):
             if key in request.slots and key not in input_payload:
                 input_payload[key] = request.slots[key]
@@ -812,6 +813,15 @@ class AgentOS:
             response_factory = lambda result: self._response_from_graph(resolved_request, result)
         else:
             response_factory = lambda result: self._finalize_core_turn_response(resolved_request, result)
+        turn_config = (
+            self._domain_turn_config(
+                request=resolved_request,
+                decision=decision,
+                execution_mode=execution_mode,
+            )
+            if execution_mode == "graph"
+            else None
+        )
         if execution_mode != "graph":
             paths = self.run_store.load_run_paths(effective_run_id)
             self._prepared_run_ids.discard(effective_run_id)
@@ -840,9 +850,60 @@ class AgentOS:
             run_id=effective_run_id,
             thread_id=thread_id,
             execution_mode=execution_mode,
+            turn_config=turn_config,
             response_factory=response_factory,
             event_callback=event_callback,
         )
+
+    def _domain_turn_config(
+        self,
+        *,
+        request: RequestEnvelope,
+        decision: RequestIntakeDecision,
+        execution_mode: str,
+    ) -> TurnConfig:
+        """Align the root Turn deadline with the selected DomainPack profile.
+
+        Graph governance already carries the profile budget, but the enclosing
+        root Turn is created first.  Without this projection a Medium/Deep UZI
+        run is cut off by the global 120-second default before the graph's own
+        governed deadline can be honored.
+        """
+
+        config = self.turn_runner.resolve_config(
+            request=request,
+            decision=decision,
+            execution_mode=execution_mode,  # type: ignore[arg-type]
+        )
+        explicit_turn_config = (request.constraints or {}).get("turn_config")
+        if isinstance(explicit_turn_config, TurnConfig):
+            if explicit_turn_config.timeout_seconds is not None:
+                return config
+        elif isinstance(explicit_turn_config, dict) and explicit_turn_config.get("timeout_seconds") is not None:
+            return config
+
+        domain_id = str(decision.domain_id or "").strip()
+        if not domain_id:
+            return config
+        manifest = self.registry.get(domain_id)
+        policies = dict(manifest.planner_policies or {})
+        profiles = dict(policies.get("research_profiles") or {})
+        explicit_profile = str(
+            request.constraints.get("research_profile")
+            or request.slots.get("research_profile")
+            or ""
+        ).strip().lower()
+        intent = str(request.intent or decision.intent or "").strip()
+        selected_profile = (
+            explicit_profile
+            if explicit_profile in profiles
+            else str((policies.get("intent_profiles") or {}).get(intent) or "").strip().lower()
+            or str(policies.get("default_profile") or "").strip().lower()
+        )
+        timeout = (profiles.get(selected_profile) or {}).get("max_duration_seconds")
+        if timeout is None:
+            return config
+        return config.model_copy(update={"timeout_seconds": float(timeout)})
 
     def _clarification_path(self, run_id: str) -> Path:
         return self.run_store.load_run_paths(run_id).root / "clarification_pending.json"
@@ -1194,7 +1255,7 @@ class AgentOS:
             intent_outputs = list(intent_definition.output_artifact_types) if intent_definition else []
             if intent_outputs:
                 # Intent-specific delivery contracts must not inherit unrelated
-                # report contracts such as report_presentation. The planner will
+                # report contracts such as research_report. The planner will
                 # add the intent's specialist artifacts and any profile outputs.
                 required = list(dict.fromkeys(str(item).strip() for item in intent_outputs if str(item).strip()))
                 required_outputs_source = "intent_output_contract"
@@ -1474,6 +1535,7 @@ class AgentOS:
                 version=version,
             ),
             settings=self.settings,
+            llm_provider=self.provider,
             cache_root=self.settings.memory_root / "agent_os_cache",
             event_callback=event_callback,
             progress_observer=self.main_agent.observe_graph_progress,

@@ -42,6 +42,34 @@ class MarketRouterTests(unittest.TestCase):
         self.assertEqual(route.security_type, "convertible_bond")
         self.assertEqual(route.route_hint, "bond_like_snapshot")
 
+    def test_market_router_preserves_uzi_global_venue_currency_contract(self) -> None:
+        cases = {
+            "7203.T": ("JP", "tse", "JPY"),
+            "005930.KS": ("KR", "krx", "KRW"),
+            "2330.TW": ("TW", "twse", "TWD"),
+            "D05.SI": ("SG", "sgx", "SGD"),
+            "SHOP.TO": ("CA", "tsx", "CAD"),
+            "BHP.AX": ("AU", "asx", "AUD"),
+            "ASML.AS": ("NL", "euronext_amsterdam", "EUR"),
+            "SHEL.L": ("GB", "lse", "GBP"),
+            "SIE.DE": ("DE", "xetra", "EUR"),
+            "AIR.PA": ("FR", "euronext_paris", "EUR"),
+            "NESN.SW": ("CH", "six", "CHF"),
+            "PETR4.SA": ("BR", "b3", "BRL"),
+            "RELIANCE.NS": ("IN", "nse", "INR"),
+        }
+        router = MarketRouter()
+        for symbol, expected in cases.items():
+            route = router.classify(symbol=symbol)
+            self.assertEqual((route.market_code, route.exchange, route.currency), expected)
+            self.assertEqual(route.market, "global_equity")
+            self.assertEqual(route.normalized_symbol, symbol)
+
+        unknown = router.classify(symbol="EXAMPLE.XX")
+        self.assertEqual(unknown.market, "global_equity")
+        self.assertEqual(unknown.market_code, "G")
+        self.assertEqual(unknown.exchange, "xx")
+
 
 if __name__ == "__main__":
     unittest.main()

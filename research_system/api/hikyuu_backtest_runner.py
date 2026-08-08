@@ -17,9 +17,9 @@ def main() -> int:
         symbol=str(request["symbol"]),
         name=str(request["name"]),
         bars=list(request["bars"]),
+        strategy_id=str(request["strategy_id"]),
+        strategy_parameters=dict(request["strategy_parameters"]),
         initial_cash=float(request["initial_cash"]),
-        fast_period=int(request["fast_period"]),
-        slow_period=int(request["slow_period"]),
         trade_size=int(request["trade_size"]),
     )
     response_path.write_text(

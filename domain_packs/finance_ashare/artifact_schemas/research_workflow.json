@@ -18,6 +18,13 @@
     "results": {
       "type": "array"
     },
+    "status": {
+      "type": "string"
+    },
+    "data_gap": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
     "summary": {
       "type": "string"
     },
@@ -31,6 +38,9 @@
       "items": {
         "type": "string"
       }
+    },
+    "quality_status": {
+      "type": "string"
     }
   },
   "additionalProperties": false

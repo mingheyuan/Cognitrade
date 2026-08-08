@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import importlib
+import hashlib
+import json
 import unittest
 from unittest.mock import patch
 
@@ -11,16 +14,21 @@ from research_system.adapters.vendors.data_source_registry import DataSourceRegi
 from research_system.adapters.vendors.market_router import MarketRouter
 from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
 from research_system.adapters.vendors.uzi_contest_adapter import UziContestAdapter
-from research_system.adapters.vendors.uzi_source_catalog import UZI_SOURCE_ROWS
+from research_system.adapters.vendors.uzi_source_catalog import (
+    UZI_SOURCE_CATALOG_SHA256,
+    UZI_SOURCE_ROWS,
+)
 from research_system.runtime.platform.settings import Settings
 from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
 from domain_packs.finance_ashare.skills.uzi_source_snapshot.skill import IndustrySnapshotSkill
+from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import Uzi392FetcherRuntime
 
 
 EXPECTED_UZI_SOURCE_IDS = {
     "em_push2", "em_quote", "em_data", "xq_api", "tencent_qt", "sina_quote", "cninfo", "hkexnews",
     "aastocks", "cls", "yicai", "wallstreetcn", "cfi", "hexun", "163money", "jrj", "investing",
     "mx_api", "akshare_lhb", "baostock", "yfinance", "ddgs", "yahoo_chart_v8", "tencent_hk_quote",
+    "yahoo_equity_screener", "yahoo_fundamentals_timeseries", "yahoo_fx_chart",
     "coingecko_simple_price", "coingecko_markets", "okx_spot_tickers", "kucoin_stats", "kraken_trades",
     "gemini_ticker", "coinlore_tickers", "geckoterminal_networks", "jin10_flash", "em_kuaixun",
     "em_stock_ann", "qh99_inventory", "cfachina", "ths_news_today", "iwencai", "ths_f10", "xueqiu_f10",
@@ -31,11 +39,41 @@ EXPECTED_UZI_SOURCE_IDS = {
 
 
 class UziSourceParityTests(unittest.TestCase):
-    def test_catalog_matches_all_70_uzi_392_source_ids(self) -> None:
+    def test_catalog_fields_are_deep_equal_to_pinned_upstream_registry(self) -> None:
+        Uzi392FetcherRuntime(workspace_root=Path(__file__).resolve().parents[1] / "workspace")
+        upstream = importlib.import_module("lib.data_source_registry")
+        upstream_rows = tuple(
+            (
+                row.id,
+                row.name_cn,
+                row.base_url,
+                tuple(row.markets),
+                tuple(row.dims),
+                row.tier,
+                row.access,
+                row.health,
+            )
+            for row in upstream.SOURCES
+        )
+        self.assertEqual(UZI_SOURCE_ROWS, upstream_rows)
+
+    def test_catalog_matches_all_73_uzi_392_source_ids(self) -> None:
         catalog_ids = {str(row[0]) for row in UZI_SOURCE_ROWS}
-        self.assertEqual(len(UZI_SOURCE_ROWS), 70)
+        self.assertEqual(len(UZI_SOURCE_ROWS), 73)
         self.assertEqual(catalog_ids, EXPECTED_UZI_SOURCE_IDS)
         self.assertTrue(all(row[3] and row[4] for row in UZI_SOURCE_ROWS))
+        normalized_rows = [
+            [row[0], row[1], row[2], list(row[3]), list(row[4]), row[5], row[6], row[7]]
+            for row in UZI_SOURCE_ROWS
+        ]
+        digest = hashlib.sha256(
+            json.dumps(
+                normalized_rows,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(digest, UZI_SOURCE_CATALOG_SHA256)
         registry_ids = {source.id for source in DataSourceRegistry().list_all() if source.upstream}
         self.assertEqual(registry_ids, EXPECTED_UZI_SOURCE_IDS)
 
@@ -45,7 +83,11 @@ class UziSourceParityTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(config["catalog"]["source_count"], 70)
+        self.assertEqual(config["catalog"]["source_count"], 73)
+        self.assertEqual(
+            config["catalog"]["commit"],
+            "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359",
+        )
         self.assertEqual(config["catalog"]["version"], "3.9.2")
         self.assertEqual(set(config["sources"]), EXPECTED_UZI_SOURCE_IDS)
 

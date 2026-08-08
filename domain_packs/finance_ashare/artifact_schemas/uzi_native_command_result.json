@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "native_result": {"type": "object", "x-business-extensible": true, "additionalProperties": true},
+    "result_row": {
+      "type": "object",
+      "required": ["symbol", "result", "data_gap"],
+      "properties": {
+        "symbol": {"type": ["string", "null"]},
+        "result": {"anyOf": [{"$ref": "#/$defs/native_result"}, {"type": "null"}]},
+        "data_gap": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": ["command_id", "source_commit", "implementation", "phase", "results", "quality_status", "data_gap"],
+  "properties": {
+    "command_id": {
+      "enum": [
+        "analyze-stock", "quick-scan", "panel-only", "scan-trap", "dcf", "comps", "lbo",
+        "segmental-model", "initiate", "earnings", "catalysts", "thesis", "screen", "dd",
+        "ic-memo", "ai-readiness", "earnings-preview", "model-update", "returns", "rebalance"
+      ]
+    },
+    "source_commit": {"const": "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359"},
+    "implementation": {"const": "vendored_uzi_3_9_2_command_boundary"},
+    "phase": {"type": "string"},
+    "results": {"type": "array", "items": {"$ref": "#/$defs/result_row"}},
+    "quality_status": {"enum": ["available", "degraded", "data_gap"]},
+    "data_gap": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

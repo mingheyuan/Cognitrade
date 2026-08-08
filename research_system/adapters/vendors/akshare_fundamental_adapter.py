@@ -26,11 +26,17 @@ class AkShareFundamentalAdapter:
         benefit_new_df = self._try_get_new_metric_frame("stock_financial_benefit_new_ths", symbol)
         debt_new_df = self._try_get_new_metric_frame("stock_financial_debt_new_ths", symbol)
         cash_new_df = self._try_get_new_metric_frame("stock_financial_cash_new_ths", symbol)
+        balance_sheet_payload, balance_sheet_gap = self._try_get_balance_sheet(symbol)
 
         abstract_payload: dict[str, Any] = {}
+        abstract_history: list[dict[str, Any]] = []
         if not abstract_df.empty:
             latest = abstract_df.iloc[-1].to_dict()
             abstract_payload = {str(k): normalize_value(v) for k, v in latest.items()}
+            abstract_history = [
+                {str(k): normalize_value(v) for k, v in row.items()}
+                for row in abstract_df.to_dict("records")
+            ]
 
         info_payload, info_gap = self._try_get_individual_info(symbol)
         analysis_payload = self._latest_record(analysis_df)
@@ -80,15 +86,67 @@ class AkShareFundamentalAdapter:
             "symbol": symbol,
             "info": info_payload,
             "financial_abstract": abstract_payload,
+            "financial_abstract_history": abstract_history,
             "financial_analysis": analysis_payload,
             "financial_abstract_new": abstract_new_payload,
             "financial_benefit_new": benefit_new_payload,
             "financial_debt_new": debt_new_payload,
             "financial_cash_new": cash_new_payload,
+            "financial_health": balance_sheet_payload,
             "banking_metrics": banking_metrics,
             "bank_peer_comparison": dict(bank_peer_comparison.get("comparison") or {}),
-            "data_gap": [info_gap] if info_gap else [],
+            "data_gap": [gap for gap in (info_gap, balance_sheet_gap) if gap],
         }
+
+    def _try_get_balance_sheet(self, symbol: str) -> tuple[dict[str, Any], str | None]:
+        fetcher = getattr(ak, "stock_balance_sheet_by_report_em", None)
+        if not callable(fetcher):
+            return {}, "balance_sheet_provider_missing"
+        try:
+            frame = call_with_retry(
+                lambda: fetcher(symbol=self._comparison_symbol(symbol)),
+                retries=1,
+                delay_seconds=0.5,
+            )
+        except Exception:
+            return {}, "balance_sheet_unavailable"
+        if frame is None or getattr(frame, "empty", True):
+            return {}, "balance_sheet_missing"
+        ordered = frame
+        for date_column in ("REPORT_DATE", "REPORTDATE", "NOTICE_DATE"):
+            if date_column in ordered.columns:
+                ordered = ordered.sort_values(date_column)
+                break
+        latest = ordered.iloc[-1]
+        mapping = {
+            "MONETARYFUNDS": "cash",
+            "TOTAL_LIABILITIES": "total_liabilities",
+            "TOTAL_PARENT_EQUITY": "equity",
+            "TOTAL_ASSETS": "total_assets",
+            "TOTAL_DEBT": "total_debt",
+        }
+        result: dict[str, Any] = {}
+        for source_key, target_key in mapping.items():
+            if source_key not in ordered.columns:
+                continue
+            value = coerce_numeric(latest.get(source_key))
+            if value is not None:
+                result[target_key] = value
+        # UZI's latest upstream bridge uses TOTAL_LIABILITIES when the vendor
+        # does not publish a dedicated interest-bearing TOTAL_DEBT field. Keep
+        # the source fact and disclose the proxy instead of silently treating
+        # missing debt as zero.
+        if result.get("total_debt") is None and result.get("total_liabilities") is not None:
+            result["total_debt"] = result["total_liabilities"]
+            result["total_debt_basis"] = "total_liabilities_proxy"
+        report_date = next(
+            (normalize_value(latest.get(key)) for key in ("REPORT_DATE", "REPORTDATE", "NOTICE_DATE") if key in ordered.columns),
+            None,
+        )
+        if report_date:
+            result["report_date"] = report_date
+        result["source"] = "akshare.stock_balance_sheet_by_report_em"
+        return result, None if result else "balance_sheet_fields_missing"
 
     def _try_get_individual_info(self, symbol: str) -> tuple[dict[str, Any], str | None]:
         try:

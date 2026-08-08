@@ -170,6 +170,17 @@ class FundResearchTests(unittest.TestCase):
         self.assertEqual(request.intent, "fund_research")
         self.assertTrue(request.constraints["background"])
 
+        with self.assertRaises(ApiError) as missing_cycle:
+            validate_research_request(
+                RequestEnvelope(
+                    intent="fund_research",
+                    user_query="分析 110011",
+                    constraints={"fund_codes": ["110011"]},
+                )
+            )
+        self.assertEqual(missing_cycle.exception.code, "missing_constraint")
+        self.assertEqual(missing_cycle.exception.details["field"], "investment_cycle")
+
         with self.assertRaises(ApiError):
             validate_research_request(
                 RequestEnvelope(
@@ -354,13 +365,40 @@ class FundResearchTests(unittest.TestCase):
             "domain_packs.finance_ashare.subagents.task_intake._FUND_MASTER.resolve",
             return_value=resolution,
         ):
-            decision = service.resolve(RequestEnvelope(user_query="分析 110011"))
+            decision = service.resolve(RequestEnvelope(
+                user_query="分析 110011",
+                constraints={"investment_cycle": "long_term"},
+            ))
 
         self.assertEqual(decision.status, "accepted")
         self.assertEqual(decision.intent, "fund_research")
         self.assertEqual(decision.slots["fund_codes"], ["110011"])
         self.assertNotIn("symbols", decision.slots)
         self.assertIn("finance.fund.analyze", decision.candidate_capabilities)
+
+    def test_pack_intake_requires_user_selected_fund_investment_cycle(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
+        resolution = FundResolution(
+            fund_codes=["110011"],
+            matches=[{"fund_code": "110011", "fund_name": "易方达优质精选混合"}],
+            ambiguous_terms=[],
+            source="test_fund_catalog",
+        )
+
+        with patch(
+            "domain_packs.finance_ashare.subagents.task_intake._FUND_MASTER.resolve",
+            return_value=resolution,
+        ):
+            decision = service.resolve(RequestEnvelope(user_query="分析 110011"))
+
+        self.assertEqual(decision.status, "needs_clarification")
+        self.assertEqual(decision.intent, "fund_research")
+        self.assertEqual(decision.clarification.missing_fields, ["investment_cycle"])
+        self.assertEqual(
+            decision.clarification.context["allowed_cycles"],
+            ["short_term", "mid_term", "long_term"],
+        )
 
     def test_fund_snapshot_uses_real_rank_nav_and_holdings_fields(self) -> None:
         skill = FundSnapshotSkill(
@@ -679,7 +717,7 @@ class FundResearchTests(unittest.TestCase):
                 required_artifact_types=[],
                 metadata={
                     "intent": "stock_check",
-                    "intent_inputs": {"symbols": ["600000"]},
+                    "intent_inputs": {"symbols": ["600000"], "research_profile": "lite"},
                 },
             )
         )
@@ -766,6 +804,8 @@ class FundResearchTests(unittest.TestCase):
                 "_industry_context",
                 return_value={"availability": "data_gap", "data_gap": ["industry_missing"]},
             ),
+            patch.object(skill, "_safe_search", return_value={"results": [], "source_trace": []}),
+            patch.object(skill, "_safe_browser", return_value={"evidence": {}, "source_trace": []}),
         ):
             facts = skill._collect(query="分析测试公司", symbol="600000")
 
@@ -807,16 +847,14 @@ class FundResearchTests(unittest.TestCase):
         self.assertIn("cninfo 市场加权均值", facts["valuation"]["industry_pe_fallback_reason"])
         self.assertEqual(facts["valuation"]["industry_pe_source"]["scope"], "market_weighted_average")
 
-    def test_cash_profit_rule_is_skipped_when_ocf_ratio_is_missing(self) -> None:
+    def test_cash_profit_rule_preserves_uzi_392_missing_key_semantics(self) -> None:
         result = evaluate_investor("chanos", {})
 
-        self.assertIn("cash_matches_eps", result["data_gap_rules"])
-        self.assertEqual(result["pass_rules"], [])
-        self.assertEqual(result["fail_rules"], [])
-        self.assertEqual(result["signal"], "insufficient_evidence")
-        self.assertTrue(
-            all(row["rule_id"] != "cash_matches_eps" for row in result["pass_rules"])
-        )
+        self.assertEqual(result["signal"], "bullish")
+        self.assertEqual(result["score"], 100)
+        self.assertEqual(result["pass_count"], 5)
+        self.assertEqual(result["fail_count"], 0)
+        self.assertIn("cash_matches_eps", {row["rule_id"] for row in result["pass_rules"]})
 
 
 if __name__ == "__main__":

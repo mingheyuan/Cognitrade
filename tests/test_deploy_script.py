@@ -13,6 +13,11 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_SCRIPT = REPO_ROOT / "scripts" / "deploy.sh"
 COMPOSE_FILE = REPO_ROOT / "compose.yaml"
+BACKEND_DOCKERFILE = REPO_ROOT / "deploy" / "backend.Dockerfile"
+BACKEND_ENTRYPOINT = REPO_ROOT / "deploy" / "backend-entrypoint.sh"
+FRONTEND_DOCKERFILE = REPO_ROOT / "deploy" / "frontend.Dockerfile"
+REQUIREMENTS_FILE = REPO_ROOT / "requirements.txt"
+QUANT_REQUIREMENTS_FILE = REPO_ROOT / "requirements-quant.txt"
 # Windows' ``bash.exe`` is commonly only the WSL launcher; it cannot execute a
 # Windows path unless the test itself runs inside WSL. Run these POSIX tests in
 # Unix CI (or from a Linux/WSL Python process).
@@ -58,6 +63,38 @@ class DeployScriptTests(unittest.TestCase):
         self.assertIn("start API + frontend web", result.stdout)
         self.assertIn("Start both from existing images", result.stdout)
         self.assertIn("Debian/Ubuntu", result.stdout)
+        self.assertIn("runtime-check", result.stdout)
+
+    def test_full_requirements_include_native_paper_and_backtest_engines(self) -> None:
+        requirements = REQUIREMENTS_FILE.read_text(encoding="utf-8")
+        quant_requirements = QUANT_REQUIREMENTS_FILE.read_text(encoding="utf-8")
+
+        self.assertIn("-r requirements-quant.txt", requirements)
+        self.assertIn("vnpy==3.9.4", quant_requirements)
+        self.assertIn("vnpy_paperaccount==1.0.6", quant_requirements)
+        self.assertIn("hikyuu==2.8.1", quant_requirements)
+
+    def test_images_install_and_verify_complete_runtime(self) -> None:
+        backend = BACKEND_DOCKERFILE.read_text(encoding="utf-8")
+        backend_entrypoint = BACKEND_ENTRYPOINT.read_text(encoding="utf-8")
+        frontend = FRONTEND_DOCKERFILE.read_text(encoding="utf-8")
+
+        self.assertIn("COPY requirements.txt requirements-quant.txt", backend)
+        self.assertIn("python -m playwright install-deps chromium", backend)
+        self.assertIn("python -m playwright install chromium", backend)
+        self.assertIn("deployment_preflight", backend)
+        for runtime_directory in (
+            "workspace/runs",
+            "workspace/chat_runs",
+            "workspace/reports",
+            "workspace/memory",
+            "workspace/cache/finance_ashare",
+            "workspace/paper_trading",
+            "workspace/backtests",
+        ):
+            self.assertIn(runtime_directory, backend)
+            self.assertIn(runtime_directory, backend_entrypoint)
+        self.assertIn("npm ci --registry=", frontend)
 
     def test_compose_starts_frontend_web_after_healthy_api(self) -> None:
         payload = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
@@ -67,6 +104,10 @@ class DeployScriptTests(unittest.TestCase):
         self.assertEqual(services["web"]["depends_on"]["api"]["condition"], "service_healthy")
         self.assertEqual(services["web"]["ports"], ["${COGNITRADE_WEB_HOST:-127.0.0.1}:${COGNITRADE_WEB_PORT:-8080}:8080"])
         self.assertEqual(services["web"]["build"]["args"]["VITE_COGNITRADE_API_BASE_URL"], "/api/v1")
+        self.assertIn("PIP_INDEX_URL", services["api"]["build"]["args"])
+        self.assertIn("DEBIAN_MIRROR", services["api"]["build"]["args"])
+        self.assertIn("DEBIAN_SECURITY_MIRROR", services["api"]["build"]["args"])
+        self.assertIn("NPM_CONFIG_REGISTRY", services["web"]["build"]["args"])
 
     @unittest.skipUnless(HAS_BASH, POSIX_DEPLOY_NOTE)
     def test_init_generates_secure_token_and_runtime_identity(self) -> None:
@@ -115,6 +156,33 @@ class DeployScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(values["COGNITRADE_API_TOKEN"], token)
         self.assertEqual(values["COGNITRADE_API_ALLOW_UNAUTHENTICATED"], "false")
+
+    @unittest.skipUnless(HAS_BASH, POSIX_DEPLOY_NOTE)
+    def test_init_migrates_only_legacy_base_image_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            env_file = Path(temporary) / "deploy.env"
+            env_file.write_text(
+                "\n".join(
+                    (
+                        "COGNITRADE_API_TOKEN=" + "a" * 64,
+                        "COGNITRADE_API_ALLOW_UNAUTHENTICATED=false",
+                        "COGNITRADE_WEB_HOST=127.0.0.1",
+                        "COGNITRADE_WEB_PORT=8080",
+                        "COGNITRADE_PYTHON_IMAGE=public.ecr.aws/docker/library/python:3.11-slim-bookworm",
+                        "COGNITRADE_NODE_IMAGE=registry.example/node:22-alpine",
+                        "COGNITRADE_NGINX_IMAGE=public.ecr.aws/docker/library/nginx:alpine",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            result = self.run_script("init", "--env-file", str(env_file))
+            values = self._env_values(env_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(values["COGNITRADE_PYTHON_IMAGE"], "python:3.11-slim-bookworm")
+        self.assertEqual(values["COGNITRADE_NODE_IMAGE"], "registry.example/node:22-alpine")
+        self.assertEqual(values["COGNITRADE_NGINX_IMAGE"], "nginx:alpine")
 
     @unittest.skipUnless(HAS_BASH, POSIX_DEPLOY_NOTE)
     def test_invalid_web_port_is_rejected(self) -> None:
@@ -178,6 +246,8 @@ class DeployScriptTests(unittest.TestCase):
         self.assertIn("compose", result.stdout)
         self.assertIn("build", result.stdout)
         self.assertIn("starting API and frontend web containers", result.stdout)
+        self.assertIn("VeighNa PaperAccount", result.stdout)
+        self.assertIn("deployment_preflight", result.stdout)
 
     @staticmethod
     def _env_values(payload: str) -> dict[str, str]:

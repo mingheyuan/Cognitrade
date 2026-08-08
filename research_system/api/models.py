@@ -12,6 +12,33 @@ class RerunRequest(ApiRequestModel):
     from_node: str = Field(min_length=1, max_length=128)
 
 
+class FundHoldingReportCreateRequest(ApiRequestModel):
+    fund_code: str = Field(pattern=r"^\d{6}$")
+    profile: Literal["lite", "medium", "deep"]
+    source_artifact_id: str | None = Field(default=None, min_length=1, max_length=128)
+    confirm_stale: bool = False
+    force: bool = False
+
+
+class FundHoldingReportRetryRequest(ApiRequestModel):
+    symbols: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator("symbols", mode="before")
+    @classmethod
+    def normalize_symbols(cls, value: object) -> object:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            return value
+        return list(
+            dict.fromkeys(
+                str(item).strip()
+                for item in value
+                if str(item).strip()
+            )
+        )
+
+
 class RunApprovalRequest(ApiRequestModel):
     node_id: str = Field(min_length=1, max_length=128)
     capability: str = Field(min_length=1, max_length=256)
@@ -61,6 +88,8 @@ __all__ = [
     "ApiRequestModel",
     "ChatResearchRequest",
     "ChatThreadRenameRequest",
+    "FundHoldingReportCreateRequest",
+    "FundHoldingReportRetryRequest",
     "MemoryPromotionRequest",
     "MemoryRevokeRequest",
     "RerunRequest",
