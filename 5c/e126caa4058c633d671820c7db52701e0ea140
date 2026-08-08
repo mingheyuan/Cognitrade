@@ -1,0 +1,21 @@
+domain_packs/finance_ashare/migration/UZI_3_9_2_STRICT_ALIGNMENT_TARGET.md
+  s_a6a8a3a6f43b3c::t_cc71f423266e58 5,177-190,193-208
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "5ce126caa4058c633d671820c7db52701e0ea140",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
