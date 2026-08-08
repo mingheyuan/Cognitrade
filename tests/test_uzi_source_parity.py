@@ -124,7 +124,7 @@ class UziSourceParityTests(unittest.TestCase):
         self.assertEqual(maximum_active, 1)
         self.assertEqual(snapshot_collector._UZI_MAX_WORKERS, 6)
 
-    def test_financial_provider_ceiling_does_not_preempt_uzi_profile_budget(self) -> None:
+    def test_financial_provider_does_not_add_a_timeout_to_uzi_collection(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         tool = yaml.safe_load(
             (
@@ -135,17 +135,7 @@ class UziSourceParityTests(unittest.TestCase):
                 / "financial_data_provider.yaml"
             ).read_text(encoding="utf-8")
         )
-        manifest = yaml.safe_load(
-            (
-                repository_root / "domain_packs" / "finance_ashare" / "domain.yaml"
-            ).read_text(encoding="utf-8")
-        )
-        profile_ceiling = max(
-            int(profile["max_duration_seconds"])
-            for profile in manifest["planner_policies"]["research_profiles"].values()
-        )
-
-        self.assertGreaterEqual(int(tool["timeout_seconds"]), profile_ceiling)
+        self.assertIsNone(tool.get("timeout_seconds"))
 
     def test_catalog_fields_are_deep_equal_to_pinned_upstream_registry(self) -> None:
         Uzi392FetcherRuntime(workspace_root=Path(__file__).resolve().parents[1] / "workspace")
