@@ -6,10 +6,12 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
 import hashlib
+import importlib
 import inspect
 import json
 import math
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from uuid import UUID
 
@@ -137,6 +139,7 @@ _UNAVAILABLE_QUALITY_STATUSES = {
     "rate_limited",
     "parse_failed",
 }
+_UZI_CAPITAL_FLOW_COMPAT_LOCK = Lock()
 _SNAPSHOT_PROVIDER_HINTS = {
     "market": "akshare",
     "fundamental": "akshare",
@@ -483,8 +486,9 @@ def _run_uzi_fetcher_snapshot(
                 "cookie": settings.xueqiu_cookie if xueqiu_enabled else None,
             }
         }
-    result = runtime.collect(
-        fetcher_id,
+    result = _collect_uzi_fetcher(
+        runtime,
+        fetcher_id=fetcher_id,
         ticker=str(symbol or "").strip(),
         industry=industry,
         dependencies=dependencies,
@@ -554,6 +558,80 @@ def _run_uzi_fetcher_snapshot(
             }
         ],
     }
+
+
+def _collect_uzi_fetcher(
+    runtime: Uzi392FetcherRuntime,
+    *,
+    fetcher_id: str,
+    ticker: str,
+    industry: str | None,
+    dependencies: dict[str, dict[str, Any]] | None,
+    options: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Invoke a pinned UZI fetcher through Pack-owned provider compatibility.
+
+    UZI 3.9.2 calls ``stock_zh_a_gdhs(symbol=<stock code>)`` in its capital
+    flow dimension. Current AkShare defines that function's ``symbol`` as a
+    quarter (or ``\"\u6700\u65b0\"``), so a six-digit stock code falls into a full-market
+    quarterly scan. That scan currently spans hundreds of pages and makes a
+    five-stock holding batch hit the Tool Registry's 300-second deadline.
+
+    AkShare exposes the intended stock-scoped endpoint as
+    ``stock_zh_a_gdhs_detail_em``. Route only six-digit stock identifiers to
+    it, add the field alias consumed by UZI's holder-trend calculation, and
+    restore the provider immediately after the call. The lock keeps the
+    temporary compatibility shim isolated from concurrent capital-flow calls.
+    No UZI source file or returned report contract is replaced.
+    """
+
+    def invoke() -> dict[str, Any]:
+        return runtime.collect(
+            fetcher_id,
+            ticker=ticker,
+            industry=industry,
+            dependencies=dependencies,
+            options=options,
+        )
+
+    if fetcher_id != "12_capital_flow":
+        return invoke()
+
+    with _UZI_CAPITAL_FLOW_COMPAT_LOCK:
+        module = importlib.import_module("fetch_capital_flow")
+        akshare = getattr(module, "ak", None)
+        broad_loader = getattr(akshare, "stock_zh_a_gdhs", None)
+        detail_loader = getattr(akshare, "stock_zh_a_gdhs_detail_em", None)
+        if not callable(broad_loader) or not callable(detail_loader):
+            return invoke()
+
+        class StockScopedAkshareProxy:
+            def __getattr__(self, name: str) -> Any:
+                return getattr(akshare, name)
+
+            @staticmethod
+            def stock_zh_a_gdhs(symbol: str = "\u6700\u65b0"):
+                normalized = str(symbol or "").strip()
+                if len(normalized) != 6 or not normalized.isdigit():
+                    return broad_loader(symbol=symbol)
+                frame = detail_loader(symbol=normalized)
+                if frame is None or getattr(frame, "empty", True):
+                    return frame
+                normalized_frame = frame.copy()
+                if (
+                    "\u80a1\u4e1c\u6237\u6570-\u672c\u6b21" in normalized_frame.columns
+                    and "\u80a1\u4e1c\u6237\u6570" not in normalized_frame.columns
+                ):
+                    normalized_frame["\u80a1\u4e1c\u6237\u6570"] = normalized_frame[
+                        "\u80a1\u4e1c\u6237\u6570-\u672c\u6b21"
+                    ]
+                return normalized_frame
+
+        module.ak = StockScopedAkshareProxy()
+        try:
+            return invoke()
+        finally:
+            module.ak = akshare
 
 
 def _uzi_raw_result(snapshot: dict[str, Any]) -> dict[str, Any] | None:
