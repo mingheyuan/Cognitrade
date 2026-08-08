@@ -101,6 +101,50 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported UZI 3.9.2 fetcher"):
             self.runtime.collect("missing", ticker="600519")
 
+    def test_contests_runtime_blocks_xueqiu_at_the_native_boundary(self) -> None:
+        calls = {"xueqiu": 0}
+        module = SimpleNamespace()
+
+        def original_fetch(_ticker_info, limit=50):
+            calls["xueqiu"] += 1
+            return [{"name": "unexpected"}], {"source": "unguarded"}
+
+        def cached(_ticker, _key, fetch_fn, ttl=0):
+            return fetch_fn()
+
+        def main(ticker):
+            cubes, meta = module.fetch_xueqiu_cubes(object())
+            return {
+                "ticker": ticker,
+                "data": {"xueqiu_cubes": cubes, "xueqiu_meta": meta},
+                "source": "xueqiu + public fallbacks",
+                "fallback": not bool(cubes),
+            }
+
+        module.main = main
+        module.fetch_xueqiu_cubes = original_fetch
+        module.cached = cached
+        with patch(
+            "domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime.importlib.import_module",
+            return_value=module,
+        ):
+            result = self.runtime.collect(
+                "19_contests",
+                ticker="600519",
+                options={
+                    "cognitrade_xueqiu_policy": {"enabled": False, "cookie": None}
+                },
+            )
+
+        self.assertEqual(calls["xueqiu"], 0)
+        self.assertEqual(result["data"]["xueqiu_cubes"], [])
+        self.assertEqual(
+            result["data"]["xueqiu_meta"]["policy_status"],
+            "sensitive_source_disabled",
+        )
+        self.assertIs(module.fetch_xueqiu_cubes, original_fetch)
+        self.assertIs(module.cached, cached)
+
     def test_production_snapshot_path_preserves_raw_results_and_dependency_waves(self) -> None:
         calls: list[tuple[str, str | None, dict]] = []
 
@@ -155,6 +199,9 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
 
         def collect(fetcher_id: str, **_kwargs):
             called.append(fetcher_id)
+            if fetcher_id == "19_contests":
+                policy = (_kwargs.get("options") or {}).get("cognitrade_xueqiu_policy")
+                self.assertEqual(policy, {"enabled": False, "cookie": None})
             data = {"observed": fetcher_id}
             if fetcher_id == "0_basic":
                 data.update({"name": "贵州茅台", "industry": "白酒", "price": 1418.2})

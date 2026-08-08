@@ -160,6 +160,7 @@ _FETCHERS: dict[str, _FetcherSpec] = {
 
 
 _IMPORT_LOCK = threading.Lock()
+_CONTEST_POLICY_LOCK = threading.Lock()
 _INITIALIZED_ROOTS: set[Path] = set()
 
 
@@ -190,13 +191,21 @@ class Uzi392FetcherRuntime:
         except KeyError as exc:
             raise ValueError(f"Unsupported UZI 3.9.2 fetcher: {fetcher_id}") from exc
         module = importlib.import_module(spec.module)
-        result = spec.invoke(
-            module.main,
-            str(ticker or "").strip(),
-            str(industry or "综合").strip() or "综合",
-            dict(dependencies or {}),
-            dict(options or {}),
-        )
+        normalized_options = dict(options or {})
+        if fetcher_id == "19_contests" and "cognitrade_xueqiu_policy" in normalized_options:
+            result = _collect_contests_with_policy(
+                module,
+                ticker=str(ticker or "").strip(),
+                policy=dict(normalized_options["cognitrade_xueqiu_policy"] or {}),
+            )
+        else:
+            result = spec.invoke(
+                module.main,
+                str(ticker or "").strip(),
+                str(industry or "综合").strip() or "综合",
+                dict(dependencies or {}),
+                normalized_options,
+            )
         if not isinstance(result, dict):
             raise TypeError(f"UZI fetcher {fetcher_id} returned {type(result).__name__}, expected dict")
         return result
@@ -210,6 +219,84 @@ class Uzi392FetcherRuntime:
                 _INITIALIZED_ROOTS.add(self.scripts_root)
             cache = importlib.import_module("lib.cache")
             cache.CACHE_ROOT = self.workspace_root / "cache" / "uzi_3_9_2"
+
+
+def _collect_contests_with_policy(module: Any, *, ticker: str, policy: dict[str, Any]) -> dict[str, Any]:
+    """Run the pinned contests fetcher without bypassing Cognitrade's source gate.
+
+    Only the Xueqiu branch is wrapped. The upstream function, public Taoguba /
+    10jqka / DPS sources and the returned UZI object shape remain unchanged.
+    """
+
+    enabled = bool(policy.get("enabled"))
+    cookie = str(policy.get("cookie") or "").strip()
+    enabled = enabled and bool(cookie)
+    original_fetch = module.fetch_xueqiu_cubes
+    original_cached = module.cached
+
+    def controlled_fetch(ticker_info: Any, limit: int = 50):
+        if not enabled:
+            return [], {
+                "http_status": None,
+                "source": "cognitrade_policy_disabled",
+                "login_required": True,
+                "policy_status": "sensitive_source_disabled",
+            }
+        session = module.requests.Session()
+        session.headers.update(
+            {
+                "User-Agent": module.UA,
+                "Referer": "https://xueqiu.com/",
+                "Cookie": cookie,
+            }
+        )
+        symbol = module._xq_symbol(ticker_info)
+        url = (
+            "https://xueqiu.com/query/v1/search/cube/stock.json"
+            f"?q={symbol}&count={limit}&page=1"
+        )
+        meta = {
+            "http_status": None,
+            "source": "cognitrade_authenticated_http",
+            "login_required": False,
+            "policy_status": "sensitive_source_enabled",
+        }
+        try:
+            response = session.get(url, timeout=15)
+            meta["http_status"] = response.status_code
+            if response.status_code == 200:
+                payload = response.json()
+                cubes = payload.get("list") or payload.get("cubes") or []
+                normalized = module._normalize_cubes(cubes)
+                if normalized:
+                    return normalized, meta
+            if response.status_code in (400, 401, 403):
+                meta["login_required"] = True
+        except Exception as exc:
+            meta["http_error_type"] = exc.__class__.__name__
+        return [], meta
+
+    def policy_cached(
+        cache_ticker: str,
+        key: str,
+        fetch_fn: Callable[[], Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if str(key).startswith("xq_cubes__"):
+            # Never reuse or persist authenticated Xueqiu observations across
+            # policy/cookie states. Public contest-source caches are untouched.
+            return fetch_fn()
+        return original_cached(cache_ticker, key, fetch_fn, *args, **kwargs)
+
+    with _CONTEST_POLICY_LOCK:
+        module.fetch_xueqiu_cubes = controlled_fetch
+        module.cached = policy_cached
+        try:
+            return module.main(ticker)
+        finally:
+            module.fetch_xueqiu_cubes = original_fetch
+            module.cached = original_cached
 
 
 def verify_vendored_uzi_integrity() -> dict[str, Any]:

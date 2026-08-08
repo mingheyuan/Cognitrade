@@ -104,6 +104,38 @@ class UziProviderSmokeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unknown UZI dimensions"):
                 run_uzi_provider_smoke(settings, dimensions=["made_up"])
 
+    def test_disabled_sensitive_source_observation_fails_contract(self) -> None:
+        def collector(**_kwargs):
+            return [
+                {
+                    "snapshot_type": "contests",
+                    "facts": {
+                        "availability": "available",
+                        "_uzi_raw_result": {
+                            "data": {
+                                "xueqiu_cubes": [{"name": "must not be exposed"}],
+                                "xueqiu_meta": {"source": "authenticated"},
+                            }
+                        },
+                    },
+                    "source": {"source_id": "uzi:19_contests"},
+                }
+            ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report = run_uzi_provider_smoke(
+                Settings.from_env(Path(temp_dir)),
+                dimensions=["19_contests"],
+                collector=collector,
+            )
+
+        self.assertEqual(report["contract_status"], "failed")
+        self.assertEqual(report["contract_failures"], ["19_contests"])
+        audit = report["dimensions"][0]["sensitive_source_audit"]
+        self.assertFalse(audit["configured_enabled"])
+        self.assertTrue(audit["observation_present"])
+        self.assertNotIn("must not be exposed", str(report))
+
     def test_parallel_smoke_is_rejected_before_unsafe_provider_initialization(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = Settings.from_env(Path(temp_dir))

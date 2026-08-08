@@ -411,11 +411,26 @@ def _run_uzi_fetcher_snapshot(
         else Settings.from_env(Path(__file__).resolve().parents[3])
     )
     runtime = Uzi392FetcherRuntime(workspace_root=settings.workspace_root)
+    options: dict[str, Any] | None = None
+    if fetcher_id == "19_contests":
+        allowlist = {str(item).strip().lower() for item in settings.sensitive_source_allowlist}
+        xueqiu_enabled = (
+            settings.sensitive_sources_enabled
+            and "xueqiu" in allowlist
+            and bool(settings.xueqiu_cookie)
+        )
+        options = {
+            "cognitrade_xueqiu_policy": {
+                "enabled": xueqiu_enabled,
+                "cookie": settings.xueqiu_cookie if xueqiu_enabled else None,
+            }
+        }
     result = runtime.collect(
         fetcher_id,
         ticker=str(symbol or "").strip(),
         industry=industry,
         dependencies=dependencies,
+        options=options,
     )
     data = dict(result.get("data") or {}) if isinstance(result.get("data"), dict) else {}
     error = str(result.get("error") or "").strip()

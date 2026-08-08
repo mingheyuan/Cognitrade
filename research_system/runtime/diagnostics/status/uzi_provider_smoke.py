@@ -104,7 +104,12 @@ def run_uzi_provider_smoke(
         if isinstance(snapshot, dict) and snapshot.get("snapshot_type")
     }
     rows = [
-        _summarize_snapshot(fetcher_id, snapshot_type, by_type.get(snapshot_type))
+        _summarize_snapshot(
+            fetcher_id,
+            snapshot_type,
+            by_type.get(snapshot_type),
+            settings=settings,
+        )
         for fetcher_id, snapshot_type in selected
     ]
     return _assemble_report(
@@ -200,7 +205,9 @@ def _assemble_report(
     contract_failures = [
         str(row["fetcher_id"])
         for row in rows
-        if row["status"] == "missing_result" or not row["lineage_ok"]
+        if row["status"] == "missing_result"
+        or not row["lineage_ok"]
+        or row.get("policy_ok") is False
     ]
     incomplete = [fetcher_id for fetcher_id, _snapshot_type in selected[len(rows) :]]
     return {
@@ -322,6 +329,8 @@ def _summarize_snapshot(
     fetcher_id: str,
     snapshot_type: str,
     snapshot: dict[str, Any] | None,
+    *,
+    settings: Settings,
 ) -> dict[str, Any]:
     if snapshot is None:
         return {
@@ -351,7 +360,7 @@ def _summarize_snapshot(
     source_refs = _source_refs(snapshot)
     data_gap = facts.get("data_gap")
     gaps = [str(item) for item in data_gap] if isinstance(data_gap, list) else []
-    return {
+    row = {
         "fetcher_id": fetcher_id,
         "snapshot_type": snapshot_type,
         "status": status,
@@ -360,6 +369,34 @@ def _summarize_snapshot(
         "data_gap": gaps,
         "source_refs": source_refs,
         "lineage_ok": bool(source_refs),
+    }
+    if snapshot_type == "contests":
+        policy_audit = _xueqiu_policy_audit(facts, settings)
+        row["sensitive_source_audit"] = policy_audit
+        row["policy_ok"] = policy_audit["policy_ok"]
+    return row
+
+
+def _xueqiu_policy_audit(facts: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    raw_result = facts.get("_uzi_raw_result")
+    raw_data = raw_result.get("data") if isinstance(raw_result, dict) else None
+    data = raw_data if isinstance(raw_data, dict) else {}
+    cubes = data.get("xueqiu_cubes")
+    observed = bool(cubes) if isinstance(cubes, list) else False
+    meta = data.get("xueqiu_meta") if isinstance(data.get("xueqiu_meta"), dict) else {}
+    allowlist = {str(item).strip().lower() for item in settings.sensitive_source_allowlist}
+    configured = (
+        settings.sensitive_sources_enabled
+        and "xueqiu" in allowlist
+        and bool(settings.xueqiu_cookie)
+    )
+    return {
+        "source_id": "xueqiu",
+        "configured_enabled": configured,
+        "observation_present": observed,
+        "source_mode": str(meta.get("source") or "") or None,
+        "policy_status": str(meta.get("policy_status") or "") or None,
+        "policy_ok": configured or not observed,
     }
 
 
