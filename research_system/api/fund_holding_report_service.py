@@ -105,11 +105,12 @@ class FundHoldingReportService:
                 user_id=user_id,
                 tenant_id=tenant_id,
             )
-            if existing is not None:
-                # Explicit regeneration creates history only after the matching
-                # batch is terminal; it must never duplicate active stock work.
-                if existing.get("status") == "running" or not force:
-                    return existing
+            # Explicit regeneration creates history only after the matching
+            # batch is terminal; it must never duplicate active stock work.
+            if existing is not None and (
+                existing.get("status") == "running" or not force
+            ):
+                return existing
 
             batch_id = generate_ulid()
             request = RequestEnvelope(
@@ -844,9 +845,11 @@ class FundHoldingReportService:
                 for result in list(content.get("results") or []):
                     if not isinstance(result, dict):
                         continue
-                    for issue in list((result.get("self_review") or {}).get("issues") or []):
-                        if isinstance(issue, dict) and issue.get("severity") in {"critical", "warning"}:
-                            gaps.append(str(issue.get("issue") or issue.get("dim") or "uzi_self_review_issue"))
+                    gaps.extend(
+                        str(issue.get("issue") or issue.get("dim") or "uzi_self_review_issue")
+                        for issue in list((result.get("self_review") or {}).get("issues") or [])
+                        if isinstance(issue, dict) and issue.get("severity") in {"critical", "warning"}
+                    )
         native_content = native.get("content") if isinstance(native, dict) and isinstance(native.get("content"), dict) else {}
         report_content = report.get("content") if isinstance(report, dict) and isinstance(report.get("content"), dict) else {}
         native_id = str(native.get("artifact_id") or "") if isinstance(native, dict) else ""
@@ -967,9 +970,7 @@ class FundHoldingReportService:
             return False
         if user_id is not None and request.get("user_id") != user_id:
             return False
-        if tenant_id is not None and request.get("tenant_id") != tenant_id:
-            return False
-        return True
+        return not (tenant_id is not None and request.get("tenant_id") != tenant_id)
 
     def _assert_scope(self, root: Path, *, user_id: str | None = None, tenant_id: str | None = None) -> None:
         if not self._matches_scope(root, user_id=user_id, tenant_id=tenant_id):
@@ -1037,11 +1038,13 @@ class FundHoldingReportService:
             "",
             "报告状态：",
         ]
-        for item in state["holdings"]:
-            lines.append(
+        lines.extend(
+            (
                 f"{int(item['rank']):02d}. {item['symbol']} {item['name']} - {item['status']}"
                 + (f"；缺口：{', '.join(item.get('data_gap') or [])}" if item.get("data_gap") else "")
             )
+            for item in state["holdings"]
+        )
         if zip_errors:
             lines.extend(["", "ZIP生成异常：", *[f"- {error}" for error in zip_errors]])
         return "\n".join(lines) + "\n"

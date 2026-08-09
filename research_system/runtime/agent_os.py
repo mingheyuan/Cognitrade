@@ -22,8 +22,7 @@ from research_system.runtime.planning.capability_planner import (
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import ProviderRegistry
 from research_system.runtime.presentation.display import localize_runtime_error, runtime_status_message
-from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
-from research_system.runtime.storage.jsonl import append_jsonl
+from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.event_store import append_canonical_event
 from research_system.runtime.storage.runs.run_store import RunStore

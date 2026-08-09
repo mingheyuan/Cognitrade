@@ -30,10 +30,8 @@ class TuShareMarketAdapter:
             raise ValueError(f"no market data returned for symbol {symbol}")
         if adjust in {"qfq", "hfq"}:
             frame = self._apply_adjustment(pro, frame, ts_code, start_date, end_date, adjust)
-        bars = []
-        for row in frame.sort_values("trade_date").to_dict("records"):
-            bars.append(
-                {
+        bars = [
+            {
                     "date": self._date(row.get("trade_date")),
                     "open": normalize_value(row.get("open")),
                     "high": normalize_value(row.get("high")),
@@ -43,8 +41,9 @@ class TuShareMarketAdapter:
                     "volume": normalize_value(row.get("vol")),
                     "amount": normalize_value(row.get("amount")),
                     "pct_change": normalize_value(row.get("pct_chg")),
-                }
-            )
+            }
+            for row in frame.sort_values("trade_date").to_dict("records")
+        ]
         return {
             "symbol": symbol,
             "normalized_symbol": ts_code,

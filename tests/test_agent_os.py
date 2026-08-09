@@ -136,23 +136,27 @@ class AgentOSTests(unittest.TestCase):
                 intent="legal_contract_review",
                 user_query="Review this contract.",
             )
-            with patch.object(agent_os.main_agent, "route", return_value=decision):
-                with patch.object(
+            with (
+                patch.object(agent_os.main_agent, "route", return_value=decision),
+                patch.object(
                     agent_os.turn_runner,
                     "run",
                     side_effect=RuntimeError("simulated turn failure"),
-                ):
-                    with self.assertRaisesRegex(RuntimeError, "simulated turn failure"):
-                        agent_os.handle_request(request)
+                ),
+                self.assertRaisesRegex(RuntimeError, "simulated turn failure"),
+            ):
+                agent_os.handle_request(request)
 
             self.assertEqual(agent_os._prepared_run_ids, set())
-            with patch.object(
-                agent_os.main_agent,
-                "route",
-                side_effect=RuntimeError("simulated route failure"),
+            with (
+                patch.object(
+                    agent_os.main_agent,
+                    "route",
+                    side_effect=RuntimeError("simulated route failure"),
+                ),
+                self.assertRaisesRegex(RuntimeError, "simulated route failure"),
             ):
-                with self.assertRaisesRegex(RuntimeError, "simulated route failure"):
-                    agent_os.handle_request(request)
+                agent_os.handle_request(request)
             self.assertEqual(agent_os._prepared_run_ids, set())
             self.assertIsInstance(agent_os.reload_domain_packs(), list)
 

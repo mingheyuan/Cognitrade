@@ -40,14 +40,16 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
 
     def test_profile_is_an_explicit_user_choice(self) -> None:
         for profile in ("", "mid", "automatic"):
-            with self.subTest(profile=profile):
-                with self.assertRaisesRegex(ValueError, "research_profile is required"):
-                    execute_native_analysis(
-                        _snapshots(),
-                        ["600000"],
-                        profile=profile,
-                        llm_provider=None,
-                    )
+            with (
+                self.subTest(profile=profile),
+                self.assertRaisesRegex(ValueError, "research_profile is required"),
+            ):
+                execute_native_analysis(
+                    _snapshots(),
+                    ["600000"],
+                    profile=profile,
+                    llm_provider=None,
+                )
 
     def test_plain_and_exchange_suffixed_symbols_are_analyzed_once(self) -> None:
         rows = _snapshots()

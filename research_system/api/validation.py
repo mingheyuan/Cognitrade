@@ -320,9 +320,7 @@ def validate_research_request(
         _validate_stock_screen_constraints(constraints)
     elif intent == "fund_research":
         _validate_fund_research_constraints(constraints)
-    elif intent == "portfolio_research":
-        _validate_portfolio_research_constraints(constraints)
-    elif intent in {"uzi_returns", "uzi_rebalance", "uzi_portfolio_rebalance_method"}:
+    elif intent in {"portfolio_research", "uzi_returns", "uzi_rebalance", "uzi_portfolio_rebalance_method"}:
         _validate_portfolio_research_constraints(constraints)
     return request.model_copy(update={"intent": intent, "user_query": query, "constraints": constraints})
 

@@ -158,9 +158,12 @@ class AShareSecurityMaster:
             return [self._normalize_row(dict(row)) for row in self.universe_loader()]
         now = datetime.now(UTC)
         with self._cache_lock:
-            if self._cached_rows is not None and self._cached_at is not None:
-                if now - self._cached_at <= self._cache_ttl:
-                    return [dict(row) for row in self._cached_rows]
+            if (
+                self._cached_rows is not None
+                and self._cached_at is not None
+                and now - self._cached_at <= self._cache_ttl
+            ):
+                return [dict(row) for row in self._cached_rows]
         rows = self._load_provider_rows()
         with self._cache_lock:
             type(self)._cached_rows = rows

@@ -13,8 +13,7 @@ from typing import Any, Callable
 
 import jsonschema
 
-from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
-from research_system.runtime.core.id_utils import generate_ulid
+from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.runtime.core.approvals import HumanApprovalStore
 from research_system.runtime.event_store import append_canonical_event
 from research_system.runtime.presentation.display import localize_runtime_error
@@ -400,7 +399,7 @@ class CoreToolRegistry:
         payload = dict(arguments or {})
         try:
             jsonschema.validate(instance=payload, schema=definition.input_schema or {"type": "object"})
-        except jsonschema.ValidationError as exc:
+        except jsonschema.ValidationError:
             return self._rejected(
                 context=context,
                 tool_name=tool_name,

@@ -12,7 +12,6 @@ from typing import Any
 from domain_packs.finance_ashare.subagents.uzi_method_products import build_method_product
 from domain_packs.finance_ashare.subagents.uzi_methodology import (
     UZI_METHOD_VERSION,
-    build_features,
 )
 
 
@@ -285,6 +284,36 @@ def build_dimension_coverage(
     }
 
 
+def _method_result_for_symbol(
+    product: dict[str, Any],
+    method: str,
+    symbol: str,
+) -> dict[str, Any]:
+    return next(
+        (
+            item
+            for item in list(product.get("results") or [])
+            if str(item.get("symbol") or "") == symbol
+        ),
+        {
+            "symbol": symbol,
+            "quality_status": "data_gap",
+            "data_gap": [f"{method}_result_missing"],
+        },
+    )
+
+
+def _method_status(methods: dict[str, Any]) -> str:
+    statuses = [str(value.get("quality_status") or "data_gap") for value in methods.values()]
+    if not statuses or all(status == "data_gap" for status in statuses):
+        return "data_gap"
+    if any(status in {"data_gap", "degraded"} for status in statuses):
+        return "degraded"
+    if any(status == "assumption_only" for status in statuses):
+        return "assumption_only"
+    return "available"
+
+
 def build_research_workflow(
     rows: list[dict[str, Any]],
     symbols: list[str],
@@ -314,35 +343,15 @@ def build_research_workflow(
     for symbol in symbols:
         methods: dict[str, Any] = {}
         for method, product in products.items():
-            result = next(
-                (
-                    item
-                    for item in list(product.get("results") or [])
-                    if str(item.get("symbol") or "") == symbol
-                ),
-                {
-                    "symbol": symbol,
-                    "quality_status": "data_gap",
-                    "data_gap": [f"{method}_result_missing"],
-                },
-            )
+            result = _method_result_for_symbol(product, method, symbol)
             methods[method] = result
             gaps.extend(
                 f"{symbol}:{method}:{gap}"
                 for gap in list(result.get("data_gap") or [])
             )
-        statuses = [str(value.get("quality_status") or "data_gap") for value in methods.values()]
         results.append({
             "symbol": symbol,
-            "status": (
-                "data_gap"
-                if not statuses or all(status == "data_gap" for status in statuses)
-                else "degraded"
-                if any(status in {"data_gap", "degraded"} for status in statuses)
-                else "assumption_only"
-                if any(status == "assumption_only" for status in statuses)
-                else "available"
-            ),
+            "status": _method_status(methods),
             "methods": methods,
         })
     return {
@@ -390,36 +399,16 @@ def build_deep_analysis(
     for symbol in symbols:
         methods: dict[str, Any] = {}
         for method, product in products.items():
-            result = next(
-                (
-                    item
-                    for item in list(product.get("results") or [])
-                    if str(item.get("symbol") or "") == symbol
-                ),
-                {
-                    "symbol": symbol,
-                    "quality_status": "data_gap",
-                    "data_gap": [f"{method}_result_missing"],
-                },
-            )
+            result = _method_result_for_symbol(product, method, symbol)
             methods[method] = result
             gaps.extend(f"{symbol}:{method}:{gap}" for gap in list(result.get("data_gap") or []))
             assumptions.extend(
                 f"{symbol}:{method}:{flag}"
                 for flag in list(result.get("assumption_flags") or [])
             )
-        statuses = [str(value.get("quality_status") or "data_gap") for value in methods.values()]
         results.append({
             "symbol": symbol,
-            "status": (
-                "data_gap"
-                if not statuses or all(status == "data_gap" for status in statuses)
-                else "degraded"
-                if any(status in {"data_gap", "degraded"} for status in statuses)
-                else "assumption_only"
-                if any(status == "assumption_only" for status in statuses)
-                else "available"
-            ),
+            "status": _method_status(methods),
             "methods": methods,
             "institutional_status": (institutional or {}).get("status"),
             "workflow_status": (workflow or {}).get("status"),

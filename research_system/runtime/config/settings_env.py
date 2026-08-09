@@ -12,7 +12,7 @@ SettingsT = TypeVar("SettingsT")
 
 def load_settings_env_values(root: Path) -> dict[str, str]:
     env_path = root / ".env"
-    env_values: dict[str, str] = {key: value for key, value in os.environ.items()}
+    env_values: dict[str, str] = dict(os.environ)
     if env_path.exists():
         for key, value in dotenv_values(env_path).items():
             if key not in env_values and value is not None:

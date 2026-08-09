@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,7 +45,15 @@ class ProviderHealthTests(unittest.TestCase):
                 "COGNITRADE_XUEQIU_COOKIE=test\n",
                 encoding="utf-8",
             )
-            settings = Settings.from_env(root)
+            with patch.dict(
+                os.environ,
+                {
+                    "COGNITRADE_SENSITIVE_SOURCES_ENABLED": "true",
+                    "COGNITRADE_SENSITIVE_SOURCE_ALLOWLIST": "xueqiu",
+                    "COGNITRADE_XUEQIU_COOKIE": "test",
+                },
+            ):
+                settings = Settings.from_env(root)
             chain = VendorProviderRegistry(settings).get_provider_chain("contests", "cn_equity")
 
         self.assertEqual([provider.provider_id for provider in chain], ["uzi_contests_multi", "xueqiu_contests"])

@@ -402,9 +402,7 @@ class DomainPackRegistry:
         candidate = cls._version_key(version)
         if min_version and candidate < cls._version_key(min_version):
             return False
-        if max_version and candidate > cls._version_key(max_version):
-            return False
-        return True
+        return not (max_version and candidate > cls._version_key(max_version))
 
     def _adopt(self, other: "DomainPackRegistry") -> None:
         self.root = other.root

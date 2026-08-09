@@ -37,7 +37,7 @@ from research_system.runtime.execution.core.execution_context import (
     GraphNodeTimeoutError,
     GraphTimedOutError,
 )
-from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
+from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
 from research_system.schemas.artifacts import ArtifactDraft, ArtifactProducer, ArtifactRecord
 from research_system.schemas.core_runtime import PlanDecision
 from research_system.schemas.execution_graph import (
@@ -1056,7 +1056,7 @@ class ExecutionGraphRunner:
         for node in graph.nodes:
             if node.node_kind != "subagent" or not self._node_requires_approval(node):
                 continue
-            if not node.approval_id or not self.approvals.validate(
+            if node.approval_id and not self.approvals.validate(
                 approval_id=node.approval_id,
                 run_id=run_id,
                 node_id=node.node_id,
@@ -1069,8 +1069,7 @@ class ExecutionGraphRunner:
                 policy_fingerprint=approval_policy_fingerprint(graph, node),
                 require_binding=True,
             ):
-                if node.approval_id:
-                    pending.append(node.approval_id)
+                pending.append(node.approval_id)
         return pending
 
     def _pending_approval_ids(self, snapshot: ExecutionRunSnapshot) -> list[str]:
@@ -1199,8 +1198,7 @@ class ExecutionGraphRunner:
             futures: dict[Future[_NodeOutcome], ExecutionNode] = {
                 pool.submit(self._execute_node, snapshot, node): node for node in frontier
             }
-            for future in as_completed(futures):
-                outcomes.append(future.result())
+            outcomes.extend(future.result() for future in as_completed(futures))
         order = {node.node_id: index for index, node in enumerate(frontier)}
         outcomes.sort(key=lambda item: order[item.node.node_id])
         return outcomes
@@ -1609,11 +1607,11 @@ class ExecutionGraphRunner:
                 if isinstance(field, dict)
             ]
             if not candidates:
-                for field in fields:
-                    if bool(field.get("source_required", True)):
-                        missing_fields.append(
-                            f"{artifact_type or 'artifact'}.{field.get('path') or 'required_field'}"
-                        )
+                missing_fields.extend(
+                    f"{artifact_type or 'artifact'}.{field.get('path') or 'required_field'}"
+                    for field in fields
+                    if bool(field.get("source_required", True))
+                )
                 continue
             allowed_quality = {
                 str(item).strip().lower()
@@ -1902,16 +1900,16 @@ class ExecutionGraphRunner:
                 status="active",
             )
             if not artifacts:
-                for gate_id in contract.required_gate_ids or [f"{contract.contract_id}.present"]:
-                    evaluations.append(
-                        GateEvaluation(
-                            gate_id=gate_id,
-                            artifact_id="missing",
-                            verdict="fail",
-                            reason=f"缺少必需交付物：{contract.artifact_type}",
-                            blocking=True,
-                        )
+                evaluations.extend(
+                    GateEvaluation(
+                        gate_id=gate_id,
+                        artifact_id="missing",
+                        verdict="fail",
+                        reason=f"缺少必需交付物：{contract.artifact_type}",
+                        blocking=True,
                     )
+                    for gate_id in contract.required_gate_ids or [f"{contract.contract_id}.present"]
+                )
                 continue
             for artifact in artifacts:
                 missing_sections = [
@@ -2026,16 +2024,16 @@ class ExecutionGraphRunner:
                     )
                 )
         evaluated = {item.gate_id for item in evaluations}
-        for gate_id in sorted(required - evaluated):
-            evaluations.append(
-                GateEvaluation(
-                    gate_id=gate_id,
-                    artifact_id="missing",
-                    verdict="fail",
-                    reason="必需的治理门禁尚未完成评估。",
-                    blocking=True,
-                )
+        evaluations.extend(
+            GateEvaluation(
+                gate_id=gate_id,
+                artifact_id="missing",
+                verdict="fail",
+                reason="必需的治理门禁尚未完成评估。",
+                blocking=True,
             )
+            for gate_id in sorted(required - evaluated)
+        )
         return evaluations
 
     def _run_gate_evaluator(
@@ -2925,7 +2923,7 @@ class ExecutionGraphRunner:
             snapshot.updated_at = utc_now()
             self._persist(snapshot)
             self._emit("graph_run_paused")
-            raise _GraphPaused()
+            raise _GraphPaused
 
     def _write_control(
         self,
@@ -3118,9 +3116,12 @@ class ExecutionGraphRunner:
         except (TypeError, ValueError):
             min_interval = 0.0
         now = perf_counter()
-        if min_interval and self._progress_last_model_at:
-            if now - self._progress_last_model_at < min_interval:
-                return None
+        if (
+            min_interval
+            and self._progress_last_model_at
+            and now - self._progress_last_model_at < min_interval
+        ):
+            return None
         self._progress_model_updates += 1
         self._progress_last_model_at = now
         try:

@@ -175,9 +175,11 @@ class PackEvaluationRunner:
         declared_capabilities = {item.capability for item in manifest.capabilities}
         declared_tools = set(manifest.governance.allowed_tools)
         declared_gates = {item.gate_id: item for item in manifest.quality_gates}
-        for artifact_type in definition.required_artifact_types:
-            if artifact_type not in declared_artifacts:
-                failures.append(f"required artifact is not declared: {artifact_type}")
+        failures.extend(
+            f"required artifact is not declared: {artifact_type}"
+            for artifact_type in definition.required_artifact_types
+            if artifact_type not in declared_artifacts
+        )
         if definition.required_gate_id:
             gate = declared_gates.get(definition.required_gate_id)
             if gate is None:

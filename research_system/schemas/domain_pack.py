@@ -32,11 +32,14 @@ class DomainPackDependency(BaseModel):
         self.domain_id = self.domain_id.strip()
         if not self.domain_id:
             raise ValueError("domain pack dependency requires domain_id")
-        if self.min_version and self.max_version:
-            if _version_key(self.min_version) > _version_key(self.max_version):
-                raise ValueError(
-                    f"domain pack dependency has an inverted version range: {self.domain_id}"
-                )
+        if (
+            self.min_version
+            and self.max_version
+            and _version_key(self.min_version) > _version_key(self.max_version)
+        ):
+            raise ValueError(
+                f"domain pack dependency has an inverted version range: {self.domain_id}"
+            )
         if self.min_version:
             _version_key(self.min_version)
         if self.max_version:
@@ -383,7 +386,6 @@ class DomainPackManifest(BaseModel):
         declared_artifacts = set(artifact_ids)
         capability_ids = {item.capability for item in self.capabilities}
         subagent_types = {item.subagent_type for item in self.capabilities}
-        declared_intents = {item.intent_id for item in self.intake.intents}
         method_catalog = self.planner_policies.get("method_catalog") or {}
         if not isinstance(method_catalog, dict):
             raise ValueError("Pack method_catalog must be a mapping")

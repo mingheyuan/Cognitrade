@@ -1198,7 +1198,7 @@ class CoreLoopExecutor:
             context=governed_context,
             node_id=f"core_tool:{tool_name}",
         )
-        result = result.model_copy(
+        return result.model_copy(
             update={
                 "metadata": {
                     **dict(result.metadata),
@@ -1207,7 +1207,6 @@ class CoreLoopExecutor:
                 }
             }
         )
-        return result
 
     def _emit(self, context: TurnContext, event_type: str, **payload: Any) -> None:
         self.main_agent._emit(

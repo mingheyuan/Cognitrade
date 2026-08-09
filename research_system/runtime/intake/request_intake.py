@@ -266,7 +266,7 @@ class RequestIntakeService:
             return True
         if _STOCK_CODE.search(query):
             return False
-        return query.endswith("?") or query.endswith("？") or query.startswith(("什么", "为什么", "如何", "请问"))
+        return query.endswith(("?", "？")) or query.startswith(("什么", "为什么", "如何", "请问"))
 
     @staticmethod
     def _looks_like_core_task(query: str, request: RequestEnvelope) -> bool:

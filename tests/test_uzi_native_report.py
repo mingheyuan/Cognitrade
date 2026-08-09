@@ -236,15 +236,13 @@ class UziNativeReportTests(unittest.TestCase):
 
         class FakePage:
             def set_content(self, *_args, **_kwargs) -> None:
-                return None
+                pass
 
             def evaluate(self, script: str) -> None:
                 state["evaluations"].append(script)
-                return None
 
             def emulate_media(self, **kwargs) -> None:
                 state["media_options"].append(kwargs)
-                return None
 
             def pdf(self, **_kwargs) -> bytes:
                 with lock:

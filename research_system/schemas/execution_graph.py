@@ -204,7 +204,7 @@ class ExecutionGraph(BaseModel):
 
     @staticmethod
     def _validate_acyclic(*, node_map, edge_resolver, label: str) -> None:
-        indegree = {node_id: 0 for node_id in node_map}
+        indegree = dict.fromkeys(node_map, 0)
         adjacency: dict[str, list[str]] = {node_id: [] for node_id in node_map}
         for node in node_map.values():
             for upstream_id in edge_resolver(node):
@@ -260,9 +260,10 @@ class ExecutionGraphPatchOperation(BaseModel):
     def validate_operation_shape(self) -> "ExecutionGraphPatchOperation":
         if self.op_type == "insert_node" and self.node is None:
             raise ValueError("insert_node requires node")
-        if self.op_type in {"remove_node", "rewire_dependency", "replace_subgraph", "rerun_from", "mark_terminal"}:
-            if not str(self.target_node_id or "").strip():
-                raise ValueError(f"{self.op_type} requires target_node_id")
+        if self.op_type in {
+            "remove_node", "rewire_dependency", "replace_subgraph", "rerun_from", "mark_terminal"
+        } and not str(self.target_node_id or "").strip():
+            raise ValueError(f"{self.op_type} requires target_node_id")
         if self.op_type == "replace_subgraph" and not self.replacement_nodes:
             raise ValueError("replace_subgraph requires replacement_nodes")
         return self

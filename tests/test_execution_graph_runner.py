@@ -15,7 +15,7 @@ from research_system.runtime.planning.capability_planner import (
     CapabilityDynamicPlanner,
     CapabilityPlanner,
 )
-from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
+from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.schemas.artifacts import ArtifactDraft
 from research_system.schemas.domain_pack import CapabilityPlanningRequest
 from research_system.schemas.execution_graph import (

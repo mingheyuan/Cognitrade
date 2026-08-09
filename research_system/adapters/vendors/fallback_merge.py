@@ -11,7 +11,7 @@ def merge_provider_facts(
     fallback_fact_sets: Iterable[tuple[str, dict[str, Any]]],
 ) -> dict[str, Any]:
     merged = deepcopy(primary_facts)
-    field_sources: dict[str, str] = {key: "primary" for key in primary_facts}
+    field_sources: dict[str, str] = dict.fromkeys(primary_facts, "primary")
     fallback_sources: list[str] = []
     missing_fields: list[str] = []
 

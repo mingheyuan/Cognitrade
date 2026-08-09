@@ -109,4 +109,4 @@ class OpenAIResponseSupport:
 
     def looks_like_html(self, text: str) -> bool:
         lowered = text.lstrip().lower()
-        return lowered.startswith("<!doctype html") or lowered.startswith("<html")
+        return lowered.startswith(("<!doctype html", "<html"))

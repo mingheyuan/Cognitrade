@@ -376,9 +376,7 @@ class AgentOSAdminService:
     def _memory_matches_scope(record, *, user_id: str | None, tenant_id: str | None) -> bool:
         if user_id is not None and record.user_id not in {None, user_id}:
             return False
-        if tenant_id is not None and record.tenant_id not in {None, tenant_id}:
-            return False
-        return True
+        return not (tenant_id is not None and record.tenant_id not in {None, tenant_id})
 
     def _assert_run_scope(
         self,

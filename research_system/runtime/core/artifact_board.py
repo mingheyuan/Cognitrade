@@ -4,10 +4,9 @@ import hashlib
 import json
 from pathlib import Path
 from threading import RLock
-from typing import Any
 
 from research_system.runtime.storage.jsonl import read_json, read_jsonl
-from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
+from research_system.schemas.artifacts import ArtifactRecord
 
 
 _LOCKS_GUARD = RLock()

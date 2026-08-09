@@ -26,7 +26,6 @@ from research_system.runtime.execution.core.graph_runner import ExecutionGraphRu
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.storage.jsonl import read_json, read_jsonl
 from research_system.runtime.storage.jsonl import write_json
-from research_system.schemas.artifacts import ArtifactDraft
 from research_system.schemas.execution_graph import ArtifactPort, ExecutionGraph, ExecutionNode, ExecutionGovernance
 from research_system.schemas.core_runtime import CoreToolDefinition
 from research_system.schemas.protocol import RequestEnvelope

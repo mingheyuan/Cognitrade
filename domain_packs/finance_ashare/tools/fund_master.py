@@ -112,9 +112,12 @@ class FundSecurityMaster:
             return self._normalize_catalog(self.catalog_loader())
         now = datetime.now(UTC)
         with self._cache_lock:
-            if self._cached_rows is not None and self._cached_at is not None:
-                if now - self._cached_at <= self._cache_ttl:
-                    return [dict(row) for row in self._cached_rows]
+            if (
+                self._cached_rows is not None
+                and self._cached_at is not None
+                and now - self._cached_at <= self._cache_ttl
+            ):
+                return [dict(row) for row in self._cached_rows]
         frame = call_with_retry(ak.fund_name_em, retries=2, delay_seconds=0.25)
         rows = self._normalize_catalog(frame)
         with self._cache_lock:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
@@ -97,14 +98,12 @@ class FileResourceLeaseStore:
             except FileExistsError:
                 existing = read_json(path)
                 if not isinstance(existing, dict):
-                    raise ResourceLeaseStoreError("resource lease file is invalid")
+                    raise ResourceLeaseStoreError("resource lease file is invalid") from None
                 existing_expiry = _parse_expiry(existing.get("expires_at"))
                 if existing_expiry > utc_now():
                     return None
-                try:
+                with contextlib.suppress(FileNotFoundError):
                     path.unlink()
-                except FileNotFoundError:
-                    pass
             except OSError as exc:
                 raise ResourceLeaseStoreError(
                     "resource lease could not be acquired"

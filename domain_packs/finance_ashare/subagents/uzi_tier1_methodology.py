@@ -540,7 +540,7 @@ def build_portfolio_rebalance(
         return _portfolio_gap("portfolio_rebalance", "asset_class_targets_total_must_be_positive")
     targets = {key: float(value) / target_total for key, value in raw_targets.items() if value is not None}
 
-    current: dict[str, float] = {asset_class: 0.0 for asset_class in classes}
+    current: dict[str, float] = dict.fromkeys(classes, 0.0)
     for holding in normalized:
         current[str(holding["asset_class"]).strip()] += float(holding["normalized_weight"])
     total_value, value_gap = _portfolio_total_value(normalized)
@@ -657,17 +657,16 @@ def _group_contributions(rows: list[dict[str, Any]], key: str) -> list[dict[str,
         else:
             bucket["observed_weight"] += row["normalized_weight"]
             bucket["contribution_pct"] += row["contribution_pct"]
-    output = []
-    for bucket in groups.values():
-        output.append(
-            {
+    output = [
+        {
                 **bucket,
                 "weight": round(bucket["weight"], 8),
                 "observed_weight": round(bucket["observed_weight"], 8),
                 "contribution_pct": round(bucket["contribution_pct"], 8),
                 "status": "available" if not bucket["missing_tickers"] else "degraded",
-            }
-        )
+        }
+        for bucket in groups.values()
+    ]
     return sorted(output, key=lambda row: row["contribution_pct"], reverse=True)
 
 

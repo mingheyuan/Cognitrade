@@ -35,11 +35,7 @@ class DirectHttpMarketAdapter:
                 lambda: self._sina_a(symbol),
                 lambda: self._tencent_a(symbol, adjust),
             )
-        elif market == "hk_equity":
-            loaders = (
-                lambda: self._yahoo_chart(self._yahoo_symbol(symbol), "2y"),
-            )
-        elif market == "global_equity":
+        elif market in {"hk_equity", "global_equity"}:
             loaders = (
                 lambda: self._yahoo_chart(self._yahoo_symbol(symbol), "2y"),
             )

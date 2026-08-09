@@ -140,10 +140,11 @@ def build_uzi_raw(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str,
             }
             recovered_fields: list[str] = []
             for key, value in recovered.items():
-                if key not in native_data or _missing_native_value(native_data.get(key)):
-                    if not _missing_native_value(value):
-                        native_data[key] = value
-                        recovered_fields.append(key)
+                if (
+                    key not in native_data or _missing_native_value(native_data.get(key))
+                ) and not _missing_native_value(value):
+                    native_data[key] = value
+                    recovered_fields.append(key)
             native_result["data"] = native_data
             if recovered_fields:
                 native_result["recovery"] = {
@@ -349,9 +350,11 @@ def _explicit_input_gap(method_id: str, assumptions: dict[str, Any], features: d
     if method_id == "quick_lbo" and not features.get("ebitda_yi"):
         gaps.append("reported_ebitda_missing")
     if method_id == "accretion_dilution" and isinstance(assumptions.get("target"), dict):
-        for key in ("ticker", "name", "shares_yi", "price", "eps", "pe", "net_income_yi"):
-            if assumptions["target"].get(key) is None or assumptions["target"].get(key) == "":
-                gaps.append(f"explicit_assumption_missing:target.{key}")
+        gaps.extend(
+            f"explicit_assumption_missing:target.{key}"
+            for key in ("ticker", "name", "shares_yi", "price", "eps", "pe", "net_income_yi")
+            if assumptions["target"].get(key) is None or assumptions["target"].get(key) == ""
+        )
     if method_id == "thesis_tracker" and assumptions.get("direction") not in {"long", "short"}:
         gaps.append("explicit_assumption_invalid:direction")
     if method_id == "quantitative_screen" and assumptions.get("style") not in {"value", "growth", "quality", "short", "gulp"}:

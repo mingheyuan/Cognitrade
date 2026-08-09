@@ -250,7 +250,6 @@ def collect_snapshots(
                 resolved_symbols.append(symbol)
 
     if "policy" in requested and sector and not _cancelled(cancellation):
-        constituents = _constituents(sector_snapshot)
         policy_snapshot = _load_snapshot_cache(
             cache_root=cache_root,
             snapshot_type="policy",
@@ -282,9 +281,11 @@ def collect_snapshots(
         if snapshot_type in _SYMBOL_SKILLS and not (snapshot_type == "policy" and sector)
     ]
     if not tasks:
-        for snapshot_type in requested:
-            if snapshot_type == "sector" and not sector:
-                snapshots.append(_missing_scope_snapshot(query=query, snapshot_type=snapshot_type))
+        snapshots.extend(
+            _missing_scope_snapshot(query=query, snapshot_type=snapshot_type)
+            for snapshot_type in requested
+            if snapshot_type == "sector" and not sector
+        )
         return snapshots
     results: dict[int, dict[str, Any]] = {}
     pending_tasks: list[tuple[int, str, str]] = []
@@ -407,9 +408,11 @@ def collect_snapshots(
             finally:
                 executor.shutdown(wait=False, cancel_futures=True)
     snapshots.extend(results[index] for index, _symbol, _snapshot_type in tasks if index in results)
-    for snapshot_type in requested:
-        if snapshot_type == "sector" and not sector:
-            snapshots.append(_missing_scope_snapshot(query=query, snapshot_type=snapshot_type))
+    snapshots.extend(
+        _missing_scope_snapshot(query=query, snapshot_type=snapshot_type)
+        for snapshot_type in requested
+        if snapshot_type == "sector" and not sector
+    )
     return snapshots
 
 

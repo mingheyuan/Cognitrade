@@ -320,9 +320,7 @@ class ChatService:
             return user_id == "api_token" and tenant_id == "api_token"
         if user_id is not None and stored_user_id != user_id:
             return False
-        if tenant_id is not None and stored_tenant_id != tenant_id:
-            return False
-        return True
+        return not (tenant_id is not None and stored_tenant_id != tenant_id)
 
     def _ensure_index_record(self, thread_id: str) -> None:
         store = ChatThreadStore(self.settings)

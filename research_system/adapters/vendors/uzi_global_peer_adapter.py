@@ -176,12 +176,13 @@ def _candidate_score(target: dict[str, Any], candidate: dict[str, Any]) -> tuple
         target.get("currency") and candidate.get("currency")
         and target.get("currency") == candidate.get("currency")
     )
-    if (target_has_base and candidate_has_base) or same_currency:
-        if target_cap and target_cap > 0 and candidate_cap and candidate_cap > 0:
-            distance = abs(math.log10(candidate_cap / target_cap))
-            score += max(0.0, 20.0 * (1.0 - distance / 3.0))
-            if distance <= 1:
-                reasons.append("规模可比")
+    if (
+        (target_has_base and candidate_has_base) or same_currency
+    ) and target_cap and target_cap > 0 and candidate_cap and candidate_cap > 0:
+        distance = abs(math.log10(candidate_cap / target_cap))
+        score += max(0.0, 20.0 * (1.0 - distance / 3.0))
+        if distance <= 1:
+            reasons.append("规模可比")
     coverage = _number(candidate.get("data_coverage"))
     if coverage is not None:
         score += max(0.0, min(1.0, coverage)) * 15

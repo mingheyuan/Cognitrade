@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
-from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshot_bundle, collect_snapshots
+from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshots
 from domain_packs.finance_ashare.subagents.fund_methodology import build_fund_analysis
 from domain_packs.finance_ashare.subagents.uzi_methodology import (
-    UZI_METHOD_VERSION,
     build_features,
     build_panel_review,
     build_quick_scan,
@@ -2617,18 +2617,24 @@ def _target_symbols(artifacts) -> list[str]:
     for artifact in artifacts:
         content = artifact.content if isinstance(artifact.content, dict) else {}
         candidates: list[object] = [*(content.get("symbols") or [])]
-        for snapshot in content.get("snapshots") or content.get("items") or []:
-            if isinstance(snapshot, dict):
-                candidates.append(snapshot.get("symbol"))
+        candidates.extend(
+            snapshot.get("symbol")
+            for snapshot in content.get("snapshots") or content.get("items") or []
+            if isinstance(snapshot, dict)
+        )
         for key in ("screened_candidates", "watchlist_candidates"):
-            for candidate in content.get(key) or []:
-                if isinstance(candidate, dict):
-                    candidates.append(candidate.get("symbol") or candidate.get("code"))
+            candidates.extend(
+                candidate.get("symbol") or candidate.get("code")
+                for candidate in content.get(key) or []
+                if isinstance(candidate, dict)
+            )
         screening = content.get("screening") if isinstance(content.get("screening"), dict) else {}
         for key in ("screened_candidates", "watchlist_candidates"):
-            for candidate in screening.get(key) or []:
-                if isinstance(candidate, dict):
-                    candidates.append(candidate.get("symbol") or candidate.get("code"))
+            candidates.extend(
+                candidate.get("symbol") or candidate.get("code")
+                for candidate in screening.get(key) or []
+                if isinstance(candidate, dict)
+            )
         for value in candidates:
             symbol = str(value or "").strip()
             if _STOCK_CODE_PATTERN.fullmatch(symbol) and symbol not in symbols:

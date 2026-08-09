@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -208,10 +209,8 @@ class AgentOSRunService:
             expires_at = self._parse_lease_time(existing.get("expires_at"))
             if expires_at is not None and expires_at > now:
                 return False
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 lease_path.unlink()
-            except FileNotFoundError:
-                pass
         payload = {
             "worker_id": self._worker_id,
             "claimed_at": now.isoformat(),
@@ -1185,9 +1184,7 @@ class AgentOSRunService:
             return True
         if user_id is not None and request.get("user_id") != user_id:
             return False
-        if tenant_id is not None and request.get("tenant_id") != tenant_id:
-            return False
-        return True
+        return not (tenant_id is not None and request.get("tenant_id") != tenant_id)
 
     def _assert_run_scope(
         self,

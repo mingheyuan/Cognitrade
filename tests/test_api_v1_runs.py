@@ -115,9 +115,11 @@ class ApiV1RunsTests(unittest.TestCase):
             repo_root=REPO_ROOT,
         )
 
-        with self.assertRaisesRegex(ValueError, "COGNITRADE_API_TOKEN is required"):
-            with TestClient(app, raise_server_exceptions=False):
-                pass
+        with (
+            self.assertRaisesRegex(ValueError, "COGNITRADE_API_TOKEN is required"),
+            TestClient(app, raise_server_exceptions=False),
+        ):
+            pass
 
     def test_unauthenticated_mode_rejects_non_loopback_binding(self) -> None:
         config = ApiConfig(
@@ -149,9 +151,11 @@ class ApiV1RunsTests(unittest.TestCase):
             repo_root=REPO_ROOT,
         )
 
-        with self.assertRaisesRegex(RuntimeError, "chat startup failed"):
-            with TestClient(app, raise_server_exceptions=False):
-                pass
+        with (
+            self.assertRaisesRegex(RuntimeError, "chat startup failed"),
+            TestClient(app, raise_server_exceptions=False),
+        ):
+            pass
 
         self.assertTrue(run_service.closed)
 
@@ -524,8 +528,8 @@ class ApiV1RunsTests(unittest.TestCase):
 
 
 class _ClosedClientContext:
-    def __exit__(self, exc_type, exc, traceback) -> None:
-        return None
+    def __exit__(self, *_args) -> None:
+        pass
 
 
 if __name__ == "__main__":

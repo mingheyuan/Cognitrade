@@ -788,16 +788,16 @@ class QdrantAdapter:
         return set(self._tokenize_text(query))
 
     def _tokenize_text(self, text: str) -> list[str]:
-        tokens: list[str] = []
         lowered = text.lower()
-        for token in re.findall(r"[a-z0-9]{2,}", lowered):
-            if token not in _SEARCH_STOPWORDS:
-                tokens.append(token)
+        tokens = [
+            token
+            for token in re.findall(r"[a-z0-9]{2,}", lowered)
+            if token not in _SEARCH_STOPWORDS
+        ]
         for token in re.findall(r"[\u4e00-\u9fff]{2,}", text):
             tokens.append(token)
             if len(token) <= 16:
-                for index in range(0, len(token) - 1):
-                    tokens.append(token[index:index + 2])
+                tokens.extend(token[index:index + 2] for index in range(len(token) - 1))
         return [token for token in tokens if token.strip()]
 
     def _source_type(self, artifact: ArtifactRecord) -> str:

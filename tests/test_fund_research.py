@@ -270,78 +270,80 @@ class FundResearchTests(unittest.TestCase):
                     "openai_api_key": None,
                 }
             )
-            with patch(
-                "domain_packs.finance_ashare.skills.fund_snapshot.skill.FundSnapshotSkill.run",
-                return_value=payload,
-            ):
-                with TestClient(
+            with (
+                patch(
+                    "domain_packs.finance_ashare.skills.fund_snapshot.skill.FundSnapshotSkill.run",
+                    return_value=payload,
+                ),
+                TestClient(
                     create_app(settings=settings, api_config=ApiConfig(api_token="fund-test"))
-                ) as client:
-                    response = client.post(
-                        "/api/v1/runs",
-                        headers={"Authorization": "Bearer fund-test"},
-                        json={
-                            "intent": "fund_research",
-                            "user_query": "比较 110011 和 005827",
-                            "constraints": {
-                                "fund_codes": ["110011", "005827"],
-                                "fund_category": "混合型",
-                                "candidate_pool_size": 2,
-                                "investment_cycle": "long_term",
-                            },
+                ) as client,
+            ):
+                response = client.post(
+                    "/api/v1/runs",
+                    headers={"Authorization": "Bearer fund-test"},
+                    json={
+                        "intent": "fund_research",
+                        "user_query": "比较 110011 和 005827",
+                        "constraints": {
+                            "fund_codes": ["110011", "005827"],
+                            "fund_category": "混合型",
+                            "candidate_pool_size": 2,
+                            "investment_cycle": "long_term",
                         },
+                    },
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                run_id = response.json()["run_id"]
+                artifacts = client.get(
+                    f"/api/v1/runs/{run_id}/artifacts",
+                    headers={"Authorization": "Bearer fund-test"},
+                )
+                self.assertEqual(artifacts.status_code, 200, artifacts.text)
+                artifact_types = {
+                    row["artifact_type"]
+                    for row in artifacts.json()["artifacts"]
+                }
+                self.assertTrue(
+                    {"fund_snapshot", "fund_analysis", "research_report"}.issubset(
+                        artifact_types
                     )
-                    self.assertEqual(response.status_code, 200, response.text)
-                    run_id = response.json()["run_id"]
-                    artifacts = client.get(
-                        f"/api/v1/runs/{run_id}/artifacts",
-                        headers={"Authorization": "Bearer fund-test"},
-                    )
-                    self.assertEqual(artifacts.status_code, 200, artifacts.text)
-                    artifact_types = {
-                        row["artifact_type"]
-                        for row in artifacts.json()["artifacts"]
-                    }
-                    self.assertTrue(
-                        {"fund_snapshot", "fund_analysis", "research_report"}.issubset(
-                            artifact_types
-                        )
-                    )
-                    analysis_artifact = next(
-                        row
-                        for row in artifacts.json()["artifacts"]
-                        if row["artifact_type"] == "fund_analysis"
-                    )
-                    first_candidate = analysis_artifact["content"]["candidates"][0]
-                    self.assertEqual(
-                        analysis_artifact["content"]["methodology_version"],
-                        "uzi-3.9.2-fund-selection-v4",
-                    )
-                    self.assertEqual(first_candidate["benchmark_performance"][0]["excess_return_pct"], 12)
-                    self.assertTrue(first_candidate["manager_tenures"][0]["current"])
-                    self.assertEqual(first_candidate["scale_change"]["latest_total_shares_100m"], 10)
+                )
+                analysis_artifact = next(
+                    row
+                    for row in artifacts.json()["artifacts"]
+                    if row["artifact_type"] == "fund_analysis"
+                )
+                first_candidate = analysis_artifact["content"]["candidates"][0]
+                self.assertEqual(
+                    analysis_artifact["content"]["methodology_version"],
+                    "uzi-3.9.2-fund-selection-v4",
+                )
+                self.assertEqual(first_candidate["benchmark_performance"][0]["excess_return_pct"], 12)
+                self.assertTrue(first_candidate["manager_tenures"][0]["current"])
+                self.assertEqual(first_candidate["scale_change"]["latest_total_shares_100m"], 10)
 
-                    replay = client.get(
-                        f"/api/v1/runs/{run_id}/replay",
-                        headers={"Authorization": "Bearer fund-test"},
-                    )
-                    self.assertEqual(replay.status_code, 200, replay.text)
-                    replay_types = {
-                        row["artifact_type"] for row in replay.json()["artifacts"]
-                    }
-                    self.assertIn("fund_analysis", replay_types)
+                replay = client.get(
+                    f"/api/v1/runs/{run_id}/replay",
+                    headers={"Authorization": "Bearer fund-test"},
+                )
+                self.assertEqual(replay.status_code, 200, replay.text)
+                replay_types = {
+                    row["artifact_type"] for row in replay.json()["artifacts"]
+                }
+                self.assertIn("fund_analysis", replay_types)
 
-                    events = client.get(
-                        f"/api/v1/runs/{run_id}/events",
-                        headers={"Authorization": "Bearer fund-test"},
+                events = client.get(
+                    f"/api/v1/runs/{run_id}/events",
+                    headers={"Authorization": "Bearer fund-test"},
+                )
+                self.assertEqual(events.status_code, 200, events.text)
+                self.assertTrue(
+                    any(
+                        row["event_type"] == "artifact_committed"
+                        for row in events.json()["events"]
                     )
-                    self.assertEqual(events.status_code, 200, events.text)
-                    self.assertTrue(
-                        any(
-                            row["event_type"] == "artifact_committed"
-                            for row in events.json()["events"]
-                        )
-                    )
+                )
 
     def test_fund_master_resolves_mutual_fund_before_bond_prefix_routing(self) -> None:
         master = FundSecurityMaster(catalog_loader=_catalog_frame)

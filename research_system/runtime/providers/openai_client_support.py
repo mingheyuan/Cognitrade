@@ -24,7 +24,7 @@ class OpenAIClientSupport:
         normalized = base_url.strip()
         if not normalized:
             return None
-        if normalized.startswith("http://") or normalized.startswith("https://"):
+        if normalized.startswith(("http://", "https://")):
             normalized = normalized.rstrip("/")
             return normalized if normalized.endswith("/v1") else normalized + "/v1"
         return normalized

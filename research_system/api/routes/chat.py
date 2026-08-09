@@ -8,6 +8,10 @@ from starlette.concurrency import run_in_threadpool
 from research_system.api.chat_service import ChatService
 from research_system.api.dependencies import ApiPrincipal, get_chat_service, get_run_service, require_principal
 from research_system.api.models import ChatResearchRequest, ChatThreadRenameRequest
+from research_system.api.route_support import (
+    identity_scope_kwargs,
+    research_validation_capabilities,
+)
 from research_system.api.validation import safe_identifier, validate_research_request
 from research_system.runtime.presentation.display import localize_public_error_fields
 from research_system.schemas.protocol import RequestEnvelope
@@ -21,41 +25,6 @@ async def _public_call(operation, *args, **kwargs):
     return localize_public_error_fields(result)
 
 
-def _scope_kwargs(service, principal: ApiPrincipal | None) -> dict[str, str]:
-    if principal is None or not principal.authenticated:
-        return {}
-    if not getattr(service, "identity_scoped", False):
-        return {}
-    return {
-        "user_id": str(principal.user_id or ""),
-        "tenant_id": str(principal.tenant_id or ""),
-    }
-
-
-def _supported_intents(run_service) -> list[str] | None:
-    agent_os = getattr(run_service, "agent_os", None)
-    resolver = getattr(agent_os, "supported_intents", None)
-    if callable(resolver):
-        return list(resolver())
-    return None
-
-
-def _supported_methods(run_service) -> list[str] | None:
-    agent_os = getattr(run_service, "agent_os", None)
-    resolver = getattr(agent_os, "supported_methods", None)
-    if callable(resolver):
-        return list(resolver())
-    return None
-
-
-def _supported_snapshot_types(run_service) -> list[str] | None:
-    agent_os = getattr(run_service, "agent_os", None)
-    resolver = getattr(agent_os, "supported_snapshot_types", None)
-    if callable(resolver):
-        return list(resolver())
-    return None
-
-
 @router.post("/threads", status_code=status.HTTP_201_CREATED)
 async def create_chat_thread(
     service: Annotated[ChatService, Depends(get_chat_service)],
@@ -63,7 +32,7 @@ async def create_chat_thread(
 ) -> dict:
     return await _public_call(
         service.create_thread,
-        **_scope_kwargs(service, principal),
+        **identity_scope_kwargs(service, principal),
     )
 
 
@@ -78,7 +47,7 @@ async def list_chat_thread_records(
         service.list_threads,
         limit=limit,
         scope=scope,
-        **_scope_kwargs(service, principal),
+        **identity_scope_kwargs(service, principal),
     )
 
 
@@ -92,7 +61,7 @@ async def get_chat_thread(
     return await _public_call(
         service.get_thread,
         resolved_thread_id,
-        **_scope_kwargs(service, principal),
+        **identity_scope_kwargs(service, principal),
     )
 
 
@@ -108,7 +77,7 @@ async def preview_chat_thread(
         service.preview_thread,
         resolved_thread_id,
         turn_limit=turn_limit,
-        **_scope_kwargs(service, principal),
+        **identity_scope_kwargs(service, principal),
     )
 
 
@@ -124,7 +93,7 @@ async def rename_chat_thread(
         service.rename_thread,
         resolved_thread_id,
         thread_label=request.thread_label,
-        **_scope_kwargs(service, principal),
+        **identity_scope_kwargs(service, principal),
     )
 
 
@@ -138,7 +107,7 @@ async def fork_chat_thread(
     return await _public_call(
         service.fork_thread,
         resolved_thread_id,
-        **_scope_kwargs(service, principal),
+        **identity_scope_kwargs(service, principal),
     )
 
 
@@ -152,7 +121,7 @@ async def archive_chat_thread(
     return await _public_call(
         service.archive_thread,
         resolved_thread_id,
-        **_scope_kwargs(service, principal),
+        **identity_scope_kwargs(service, principal),
     )
 
 
@@ -166,7 +135,7 @@ async def unarchive_chat_thread(
     return await _public_call(
         service.unarchive_thread,
         resolved_thread_id,
-        **_scope_kwargs(service, principal),
+        **identity_scope_kwargs(service, principal),
     )
 
 
@@ -180,7 +149,7 @@ async def compact_chat_thread(
     return await _public_call(
         service.compact_thread,
         resolved_thread_id,
-        **_scope_kwargs(service, principal),
+        **identity_scope_kwargs(service, principal),
     )
 
 
@@ -204,16 +173,14 @@ async def submit_chat_research(
         )
     request = validate_research_request(
         request,
-        supported_intents=_supported_intents(run_service),
-        supported_methods=_supported_methods(run_service),
-        supported_snapshot_types=_supported_snapshot_types(run_service),
+        **research_validation_capabilities(run_service),
     )
     response = await run_in_threadpool(
         service.submit_research,
         resolved_thread_id,
         request,
         run_service=run_service,
-        **_scope_kwargs(service, principal),
+        **identity_scope_kwargs(service, principal),
     )
     return localize_public_error_fields(response.model_dump(mode="json"))
 

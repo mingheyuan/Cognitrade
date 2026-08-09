@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import replace
+from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -2182,7 +2181,7 @@ class TurnRunner:
                 root / "task_state.json",
                 {**task_payload, "continuation": continuation, "updated_at": _utc_now().isoformat()},
             )
-        new_turn = self._append_snapshot_event(
+        return self._append_snapshot_event(
             new_turn,
             "turn_recovery_continuation_created",
             operation_id=operation_id,
@@ -2190,7 +2189,6 @@ class TurnRunner:
             parent_status=turn.status,
             continuation_turn_id=continuation_turn_id,
         )
-        return new_turn
 
     def _finish_turn(self, context: TurnContext, outcome: TaskOutcome) -> None:
         target = self._normalize_status(outcome.status)
@@ -3267,10 +3265,8 @@ class TurnRunner:
             )
             self._persist_turn(context.turn)
             if external_callback is not None:
-                try:
+                with suppress(Exception):
                     external_callback(event)
-                except Exception:
-                    pass
 
         return observe
 
@@ -3304,11 +3300,8 @@ class TurnRunner:
         )
         self._persist_turn(context.turn)
         if context.event_callback is not None:
-            try:
+            with suppress(Exception):
                 context.event_callback(event)
-            except Exception:
-                # Observers must not be able to corrupt the persisted Turn.
-                pass
 
 
 def _utc_now() -> datetime:

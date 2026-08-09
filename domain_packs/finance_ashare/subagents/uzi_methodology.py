@@ -1238,7 +1238,9 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
             "cash_to_marketcap_ratio": "+".join(item for item in (cash_source, "market_snapshot") if item),
         })
     field_sources.update(technical_sources)
-    for key, source in {
+    field_sources.update({
+        key: source
+        for key, source in {
         "industry": "industry_snapshot" if industry_facts.get("industry") else "research_snapshot" if reports else None,
         "research_coverage": "research_snapshot.reports" if reports else None,
         "buy_rating_pct": "research_snapshot.reports" if ratings else None,
@@ -1258,9 +1260,9 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         "ai_chain_hit": "industry_snapshot+chain_snapshot+events_snapshot" if ai_chain_hit is not None else None,
         "ai_chain_keywords": "industry_snapshot+chain_snapshot+events_snapshot" if ai_chain_hit is not None else None,
         "ai_smallcap": "market_snapshot" if ai_smallcap is not None else None,
-    }.items():
-        if source:
-            field_sources[key] = source
+        }.items()
+        if source
+    })
     assumptions = [
         item
         for item in (debt_derivation, ocf_ratio_derivation)
@@ -2225,10 +2227,8 @@ def _panel_presentation_data(panel: dict[str, Any]) -> tuple[list[dict[str, Any]
     """Project the persisted panel artifact into readable rounds and insights."""
 
     votes = [vote for vote in list(panel.get("votes") or []) if isinstance(vote, dict)]
-    insights = []
-    for vote in votes:
-        insights.append(
-            {
+    insights = [
+        {
                 "perspective_id": vote.get("perspective_id") or vote.get("investor_id"),
                 "perspective_label": vote.get("perspective_label"),
                 "investor_name_en": vote.get("investor_name_en"),
@@ -2249,8 +2249,9 @@ def _panel_presentation_data(panel: dict[str, Any]) -> tuple[list[dict[str, Any]
                 "checks": list(vote.get("checks") or []),
                 "required_dimensions": list(vote.get("required_dimensions") or []),
                 "is_methodology_perspective": bool(vote.get("is_methodology_perspective", True)),
-            }
-        )
+        }
+        for vote in votes
+    ]
 
     rounds: list[dict[str, Any]] = []
     for school in dict.fromkeys(str(vote.get("school") or "") for vote in votes):
@@ -2462,16 +2463,16 @@ def build_presentation(
     catalysts: list[dict[str, Any]] = []
     for result in list(workflow.get("results") or []):
         calendar = result.get("catalyst_calendar") if isinstance(result, dict) else None
-        for event in list((calendar or {}).get("events") or []) if isinstance(calendar, dict) else []:
-            if isinstance(event, dict) and str(event.get("title") or "").strip():
-                catalysts.append(
-                    {
+        catalysts.extend(
+            {
                         "date": event.get("date"),
                         "title": str(event.get("title")),
                         "impact": str(event.get("impact") or "medium"),
                         "symbol": str(result.get("symbol") or symbol),
-                    }
-                )
+            }
+            for event in list((calendar or {}).get("events") or []) if isinstance(calendar, dict)
+            if isinstance(event, dict) and str(event.get("title") or "").strip()
+        )
     panel_rounds, panel_insights = _panel_presentation_data(panel)
     deep_scan = _deep_scan_data(advanced, valuation, presentation_symbols or ([symbol] if symbol else []), dimensions)
     institutional_modeling = _institutional_modeling_data(

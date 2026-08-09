@@ -30,15 +30,15 @@ PANEL_BY_ID = {str(row["id"]): dict(row) for row in PANEL_REGISTRY}
 
 MARKET_SCOPE: dict[str, str] = {
     **{str(row["id"]): "all" for row in PANEL_REGISTRY},
-    **{
-        investor_id: "A"
-        for investor_id in (
+    **dict.fromkeys(
+        (
             "zhang_mz", "zhao_lg", "fs_wyj", "bj_cj", "yangjia", "sun_ge",
             "chen_xq", "hu_jl", "fang_xx", "zuoshou", "xiao_ey", "jiao_yy",
             "mao_lb", "xiao_xian", "lasa", "chengdu", "sunan", "ningbo_st",
             "liuyi_zl", "liu_sh", "gu_bl", "wang_zr", "xin_dd", "ghzw",
-        )
-    },
+        ),
+        "A",
+    ),
     "thorp": "US",
 }
 

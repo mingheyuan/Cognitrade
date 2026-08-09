@@ -141,7 +141,10 @@ class UziQualitativeDeepDiveTests(unittest.TestCase):
         )
         self.assertEqual(result["quality_status"], "available")
         self.assertTrue(result["agent_reviewed"])
-        self.assertEqual(set(result["qualitative_deep_dive"]), set(dimension for dims in _GROUP_DIMENSIONS.values() for dimension in dims))
+        self.assertEqual(
+            set(result["qualitative_deep_dive"]),
+            {dimension for dims in _GROUP_DIMENSIONS.values() for dimension in dims},
+        )
         self.assertEqual(result["qualitative_agent_execution"]["group_count"], 3)
         self.assertGreaterEqual(result["qualitative_agent_execution"]["association_count"], 3)
         self.assertEqual(len(provider.system_prompts), 3)

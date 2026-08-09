@@ -20,6 +20,7 @@ from research_system.api.models import (
     RunApprovalRejectRequest,
     RunApprovalRequest,
 )
+from research_system.api.route_support import identity_scope_kwargs
 from research_system.api.validation import safe_identifier
 from research_system.runtime.presentation.display import localize_public_error_fields
 
@@ -33,17 +34,6 @@ router = APIRouter(tags=["administration"])
 async def _public_call(operation, *args, **kwargs):
     result = await run_in_threadpool(operation, *args, **kwargs)
     return localize_public_error_fields(result)
-
-
-def _scope_kwargs(service: AgentOSAdminService, principal: ApiPrincipal | None) -> dict[str, str]:
-    if principal is None or not principal.authenticated:
-        return {}
-    if not getattr(service, "identity_scoped", False):
-        return {}
-    return {
-        "user_id": str(principal.user_id or ""),
-        "tenant_id": str(principal.tenant_id or ""),
-    }
 
 
 def _admin_service(agent_os=Depends(get_agent_os)) -> AgentOSAdminService:
@@ -86,7 +76,7 @@ async def list_run_approvals(
             resolved,
             status=status,
             limit=limit,
-            **_scope_kwargs(service, principal),
+            **identity_scope_kwargs(service, principal),
         )
     except FileNotFoundError as exc:
         raise ApiError(
@@ -115,7 +105,7 @@ async def approve_run_node(
                 approval_id=payload.approval_id,
                 approved_by=f"api_v1:{principal.actor_id}",
                 reason=payload.reason,
-                **_scope_kwargs(service, principal),
+                **identity_scope_kwargs(service, principal),
             )
         except FileNotFoundError as exc:
             raise ApiError(
@@ -156,7 +146,7 @@ async def reject_run_approval(
                 approval_id=resolved_approval,
                 rejected_by=f"api_v1:{principal.actor_id}",
                 reason=payload.reason,
-                **_scope_kwargs(service, principal),
+                **identity_scope_kwargs(service, principal),
             )
         except FileNotFoundError as exc:
             raise ApiError(
@@ -193,7 +183,7 @@ async def list_memory(
         domain_id=domain_id,
         status=status,
         limit=limit,
-        **_scope_kwargs(service, principal),
+        **identity_scope_kwargs(service, principal),
     )
 
 
@@ -229,7 +219,7 @@ async def promote_memory(
                 evidence_refs=payload.evidence_refs,
                 notes=payload.notes,
                 content=payload.content,
-                **_scope_kwargs(service, principal),
+                **identity_scope_kwargs(service, principal),
             )
         except KeyError as exc:
             raise ApiError(
@@ -261,7 +251,7 @@ async def revoke_memory(
                 resolved,
                 revoked_by=f"api_v1:{principal.actor_id}",
                 reason=payload.reason,
-                **_scope_kwargs(service, principal),
+                **identity_scope_kwargs(service, principal),
             )
         except KeyError as exc:
             raise ApiError(

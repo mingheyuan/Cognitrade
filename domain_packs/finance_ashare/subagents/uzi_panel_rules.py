@@ -570,12 +570,11 @@ DENGXIAOFENG_RULES = [
 # F 组 · A 股游资派 (23 人) — 规则主要基于射程 + 技术/情绪
 # ═══════════════════════════════════════════════════════════════
 
-def _youzi_base_rules(min_mcap=None, max_mcap=None, need_stage_2=True, need_lhb=False, need_sector_leader=False):
+def _youzi_base_rules(*, need_stage_2=True, need_lhb=False, need_sector_leader=False):
     """Generate standard 游资 rules.
 
-    v2.13.3 · min_mcap/max_mcap 不再作为 Rule 打分（避免"市值超标"反向判看多/看空）。
-    市值射程由 investor_evaluator._is_youzi_out_of_range 前置 skip 处理。
-    这里的 min_mcap/max_mcap 参数保留是为了 seat_db 仍能读取射程定义，不影响规则评分。
+    Market-cap range filtering lives in uzi_panel_context and is intentionally
+    separate from these score rules.
     """
     rules = []
     # v2.13.3 · 移除 min_mcap / max_mcap 作为 Rule
@@ -594,7 +593,7 @@ def _youzi_base_rules(min_mcap=None, max_mcap=None, need_stage_2=True, need_lhb=
             "lhb_hot", "近 30 天龙虎榜有热度",
             3,
             check=lambda f: f.get("lhb_30d_count", 0) >= 1,
-            pass_msg=f"30 天上榜 {{lhb_30d_count:.0f}} 次",
+            pass_msg="30 天上榜 {lhb_30d_count:.0f} 次",
             fail_msg="近 30 天未上榜"
         ))
     if need_sector_leader:
@@ -602,7 +601,7 @@ def _youzi_base_rules(min_mcap=None, max_mcap=None, need_stage_2=True, need_lhb=
             "top_of_sector", "行业领先 (排名前 3)",
             2,
             check=lambda f: 0 < f.get("industry_rank", 99) <= 3,
-            pass_msg=f"行业第 {{industry_rank}}",
+            pass_msg="行业第 {industry_rank}",
             fail_msg="非行业龙头"
         ))
     # Common: sentiment hot
@@ -610,36 +609,36 @@ def _youzi_base_rules(min_mcap=None, max_mcap=None, need_stage_2=True, need_lhb=
         "sentiment_hot", "舆情热度 > 50",
         2,
         check=lambda f: f.get("sentiment_heat", 0) >= 50,
-        pass_msg=f"热度 {{sentiment_heat:.0f}}",
-        fail_msg=f"热度 {{sentiment_heat:.0f}} 不够"
+        pass_msg="热度 {sentiment_heat:.0f}",
+        fail_msg="热度 {sentiment_heat:.0f} 不够"
     ))
     return rules
 
 
 YOUZI_RULES_MAP = {
-    "zhang_mz":  _youzi_base_rules(min_mcap=200, need_stage_2=True, need_lhb=True, need_sector_leader=True),
-    "sun_ge":    _youzi_base_rules(min_mcap=150, need_stage_2=True, need_sector_leader=True),
-    "zhao_lg":   _youzi_base_rules(min_mcap=20,  need_stage_2=True, need_lhb=True,  need_sector_leader=True),
-    "fs_wyj":    _youzi_base_rules(max_mcap=80,  need_stage_2=False, need_lhb=True),
-    "yangjia":   _youzi_base_rules(min_mcap=30,  need_stage_2=True, need_lhb=True),
-    "chen_xq":   _youzi_base_rules(min_mcap=30,  need_stage_2=True, need_lhb=True,  need_sector_leader=True),
-    "hu_jl":     _youzi_base_rules(min_mcap=100, need_stage_2=True, need_lhb=True),
-    "fang_xx":   _youzi_base_rules(min_mcap=100, need_stage_2=True),
-    "zuoshou":   _youzi_base_rules(min_mcap=30,  need_stage_2=True, need_lhb=True,  need_sector_leader=True),
-    "xiao_ey":   _youzi_base_rules(min_mcap=50,  need_stage_2=True),
-    "jiao_yy":   _youzi_base_rules(min_mcap=150, need_stage_2=True, need_sector_leader=True),
-    "mao_lb":    _youzi_base_rules(min_mcap=100, need_stage_2=True),
-    "xiao_xian": _youzi_base_rules(min_mcap=50,  need_stage_2=True, need_sector_leader=True),
+    "zhang_mz":  _youzi_base_rules(need_stage_2=True, need_lhb=True, need_sector_leader=True),
+    "sun_ge":    _youzi_base_rules(need_stage_2=True, need_sector_leader=True),
+    "zhao_lg":   _youzi_base_rules(need_stage_2=True, need_lhb=True, need_sector_leader=True),
+    "fs_wyj":    _youzi_base_rules(need_stage_2=False, need_lhb=True),
+    "yangjia":   _youzi_base_rules(need_stage_2=True, need_lhb=True),
+    "chen_xq":   _youzi_base_rules(need_stage_2=True, need_lhb=True, need_sector_leader=True),
+    "hu_jl":     _youzi_base_rules(need_stage_2=True, need_lhb=True),
+    "fang_xx":   _youzi_base_rules(need_stage_2=True),
+    "zuoshou":   _youzi_base_rules(need_stage_2=True, need_lhb=True, need_sector_leader=True),
+    "xiao_ey":   _youzi_base_rules(need_stage_2=True),
+    "jiao_yy":   _youzi_base_rules(need_stage_2=True, need_sector_leader=True),
+    "mao_lb":    _youzi_base_rules(need_stage_2=True),
+    "xiao_xian": _youzi_base_rules(need_stage_2=True, need_sector_leader=True),
     "lasa":      _youzi_base_rules(need_stage_2=False, need_lhb=True),
-    "chengdu":   _youzi_base_rules(max_mcap=150, need_stage_2=False, need_lhb=True),
-    "sunan":     _youzi_base_rules(max_mcap=50,  need_stage_2=False, need_lhb=True),
+    "chengdu":   _youzi_base_rules(need_stage_2=False, need_lhb=True),
+    "sunan":     _youzi_base_rules(need_stage_2=False, need_lhb=True),
     "ningbo_st": _youzi_base_rules(need_stage_2=False, need_lhb=True),
-    "liuyi_zl":  _youzi_base_rules(min_mcap=50,  need_stage_2=True,  need_sector_leader=True),
+    "liuyi_zl":  _youzi_base_rules(need_stage_2=True, need_sector_leader=True),
     "liu_sh":    _youzi_base_rules(need_stage_2=False, need_lhb=True),
-    "gu_bl":     _youzi_base_rules(min_mcap=150, need_stage_2=True,  need_sector_leader=True),
-    "bj_cj":     _youzi_base_rules(min_mcap=20, max_mcap=80, need_stage_2=False, need_lhb=True),
-    "wang_zr":   _youzi_base_rules(min_mcap=30,  need_stage_2=True),
-    "xin_dd":    _youzi_base_rules(max_mcap=200, need_stage_2=False, need_lhb=True),
+    "gu_bl":     _youzi_base_rules(need_stage_2=True, need_sector_leader=True),
+    "bj_cj":     _youzi_base_rules(need_stage_2=False, need_lhb=True),
+    "wang_zr":   _youzi_base_rules(need_stage_2=True),
+    "xin_dd":    _youzi_base_rules(need_stage_2=False, need_lhb=True),
 }
 
 

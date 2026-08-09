@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -46,10 +47,8 @@ class RunRetentionService:
                     except OSError:
                         skipped_runs.append(run_dir.name)
             for directory in sorted([p for p in artifacts_dir.rglob("*") if p.is_dir()], reverse=True):
-                try:
+                with contextlib.suppress(OSError):
                     directory.rmdir()
-                except OSError:
-                    pass
 
         total_artifact_bytes = self._artifact_bytes(runs_root)
         return {

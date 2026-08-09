@@ -21,6 +21,10 @@ from research_system.api.dependencies import (
 )
 from research_system.api.errors import ApiError
 from research_system.api.models import RerunRequest
+from research_system.api.route_support import (
+    identity_scope_kwargs,
+    research_validation_capabilities,
+)
 from research_system.api.validation import safe_identifier, validate_research_request
 from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
 from research_system.runtime.presentation.display import localize_public_error_fields
@@ -45,42 +49,6 @@ RunStatusFilter = Literal[
 router = APIRouter(tags=["research-runs"])
 
 
-def _scope_kwargs(target, principal: ApiPrincipal | None) -> dict[str, str]:
-    service = getattr(target, "__self__", target)
-    if principal is None or not principal.authenticated:
-        return {}
-    if not getattr(service, "identity_scoped", False):
-        return {}
-    return {
-        "user_id": str(principal.user_id or ""),
-        "tenant_id": str(principal.tenant_id or ""),
-    }
-
-
-def _supported_intents(run_service) -> list[str] | None:
-    agent_os = getattr(run_service, "agent_os", None)
-    resolver = getattr(agent_os, "supported_intents", None)
-    if callable(resolver):
-        return list(resolver())
-    return None
-
-
-def _supported_methods(run_service) -> list[str] | None:
-    agent_os = getattr(run_service, "agent_os", None)
-    resolver = getattr(agent_os, "supported_methods", None)
-    if callable(resolver):
-        return list(resolver())
-    return None
-
-
-def _supported_snapshot_types(run_service) -> list[str] | None:
-    agent_os = getattr(run_service, "agent_os", None)
-    resolver = getattr(agent_os, "supported_snapshot_types", None)
-    if callable(resolver):
-        return list(resolver())
-    return None
-
-
 async def _call_run_resource(
     operation,
     *args,
@@ -92,7 +60,7 @@ async def _call_run_resource(
         result = await run_in_threadpool(
             operation,
             *args,
-            **_scope_kwargs(operation, principal),
+            **identity_scope_kwargs(operation, principal),
             **kwargs,
         )
         return localize_public_error_fields(result)
@@ -144,9 +112,7 @@ async def create_run(
     )
     validated = validate_research_request(
         payload.model_copy(update=identity),
-        supported_intents=_supported_intents(run_service),
-        supported_methods=_supported_methods(run_service),
-        supported_snapshot_types=_supported_snapshot_types(run_service),
+        **research_validation_capabilities(run_service),
     )
     async with mutation_lock:
         response = await run_in_threadpool(run_service.run, validated)
@@ -165,7 +131,7 @@ async def list_runs(
 ) -> list[dict]:
     rows = await run_in_threadpool(
         run_service.history,
-        **_scope_kwargs(run_service, principal),
+        **identity_scope_kwargs(run_service, principal),
     )
     if status is not None:
         rows = [row for row in rows if str(row.get("status") or "") == status]
@@ -310,13 +276,13 @@ async def stream_run_events(
         event_source.prepare,
         resolved,
         last_event_id=last_event_id,
-        **_scope_kwargs(event_source, principal),
+        **identity_scope_kwargs(event_source, principal),
     )
     return StreamingResponse(
         event_source.stream(
             resolved,
             cursor=cursor,
-            **_scope_kwargs(event_source, principal),
+            **identity_scope_kwargs(event_source, principal),
         ),
         media_type="text/event-stream",
         headers={

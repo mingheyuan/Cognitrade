@@ -106,20 +106,22 @@ class UziSourceParityTests(unittest.TestCase):
                     active -= 1
 
         snapshot_types = ("industry", "valuation", "capital_flow")
-        with patch.object(Uzi392FetcherRuntime, "collect", autospec=True, side_effect=collect):
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                futures = [
-                    executor.submit(
-                        snapshot_collector._run_uzi_fetcher_snapshot,
-                        query="分析寒武纪",
-                        symbol="688256",
-                        snapshot_type=snapshot_type,
-                        provider_registry=None,
-                    )
-                    for snapshot_type in snapshot_types
-                ]
-                for future in futures:
-                    future.result()
+        with (
+            patch.object(Uzi392FetcherRuntime, "collect", autospec=True, side_effect=collect),
+            ThreadPoolExecutor(max_workers=3) as executor,
+        ):
+            futures = [
+                executor.submit(
+                    snapshot_collector._run_uzi_fetcher_snapshot,
+                    query="分析寒武纪",
+                    symbol="688256",
+                    snapshot_type=snapshot_type,
+                    provider_registry=None,
+                )
+                for snapshot_type in snapshot_types
+            ]
+            for future in futures:
+                future.result()
 
         self.assertEqual(maximum_active, 1)
         self.assertEqual(snapshot_collector._UZI_MAX_WORKERS, 6)

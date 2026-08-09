@@ -6,6 +6,7 @@ from starlette.concurrency import run_in_threadpool
 from research_system.api.agent_os_dashboard_service import AgentOSDashboardService
 from research_system.api.dependencies import ApiPrincipal, get_agent_os, require_principal
 from research_system.api.errors import ApiError, public_error_message
+from research_system.api.route_support import identity_scope_kwargs
 from research_system.api.validation import safe_identifier
 from research_system.runtime.presentation.display import localize_public_error_fields
 
@@ -15,20 +16,6 @@ router = APIRouter(tags=["dashboards"])
 
 def _dashboard_service(agent_os=Depends(get_agent_os)) -> AgentOSDashboardService:
     return AgentOSDashboardService(agent_os)
-
-
-def _scope_kwargs(
-    service: AgentOSDashboardService,
-    principal: ApiPrincipal | None,
-) -> dict[str, str]:
-    if principal is None or not principal.authenticated:
-        return {}
-    if not getattr(service, "identity_scoped", False):
-        return {}
-    return {
-        "user_id": str(principal.user_id or ""),
-        "tenant_id": str(principal.tenant_id or ""),
-    }
 
 
 @router.get("/dashboard/{domain_id}/{view_id}")
@@ -45,7 +32,7 @@ async def dashboard_view(
             service.view,
             domain_id=resolved_domain,
             view_id=resolved_view,
-            **_scope_kwargs(service, principal),
+            **identity_scope_kwargs(service, principal),
         )
         return localize_public_error_fields(result)
     except KeyError as exc:

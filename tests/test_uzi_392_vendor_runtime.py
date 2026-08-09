@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -219,7 +220,14 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
                 "fallback": False,
             }
 
-        with patch.object(Uzi392FetcherRuntime, "collect", autospec=True) as mocked:
+        with patch.dict(
+            os.environ,
+            {
+                "COGNITRADE_SENSITIVE_SOURCES_ENABLED": "false",
+                "COGNITRADE_SENSITIVE_SOURCE_ALLOWLIST": "",
+                "COGNITRADE_XUEQIU_COOKIE": "",
+            },
+        ), patch.object(Uzi392FetcherRuntime, "collect", autospec=True) as mocked:
             mocked.side_effect = lambda _self, fetcher_id, **kwargs: collect(fetcher_id, **kwargs)
             rows = snapshot_collector.collect_snapshots(
                 query="完整分析贵州茅台",
