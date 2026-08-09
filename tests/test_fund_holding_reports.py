@@ -465,6 +465,102 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         self.assertFalse(available)
         self.assertIn("uzi_critical_quality_gate_blocked", gaps)
 
+    def test_terminal_gate_error_preserves_all_critical_fixes_without_exception_names(self) -> None:
+        detail = {
+            "artifacts": [
+                {
+                    "artifact_type": "uzi_native_analysis",
+                    "status": "active",
+                    "content": {
+                        "results": [
+                            {
+                                "self_review": {
+                                    "issues": [
+                                        {
+                                            "severity": "critical",
+                                            "issue": "所属行业缺失",
+                                            "suggested_fix": "恢复真实行业来源后重算",
+                                        },
+                                        {
+                                            "severity": "critical",
+                                            "dim": "agent_analysis",
+                                            "issue": "Agent 分析生成失败：LLMProviderError",
+                                            "suggested_fix": "CLI 直跑可以忽略；Agent OS 需要生成分析",
+                                        },
+                                        {
+                                            "severity": "warning",
+                                            "issue": "估值样本不足",
+                                            "suggested_fix": "补充同行样本",
+                                        },
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+
+        message = self.service._terminal_report_error(detail, "gated")
+
+        self.assertIn("所属行业缺失（建议：恢复真实行业来源后重算）", message)
+        self.assertIn(
+            "Agent 分析生成失败：运行异常（建议：在 Agent OS 中完成结构化 Agent 分析后重算与自审，不允许忽略该 critical）",
+            message,
+        )
+        self.assertNotIn("估值样本不足", message)
+        self.assertNotIn("LLMProviderError", message)
+        self.assertNotIn("CLI 直跑可以忽略", message)
+
+    def test_terminal_gate_error_has_actionable_fallback_without_native_artifact(self) -> None:
+        message = self.service._terminal_report_error({"artifacts": []}, "gated")
+
+        self.assertIn("未返回具体 critical", message)
+        self.assertIn("打开“证据”", message)
+
+    def test_public_payload_enriches_legacy_generic_gated_error(self) -> None:
+        self.agent_os.details["legacy-child"] = {
+            "turn": {"status": "gated"},
+            "artifacts": [
+                {
+                    "artifact_type": "uzi_native_analysis",
+                    "status": "active",
+                    "content": {
+                        "results": [
+                            {
+                                "self_review": {
+                                    "issues": [
+                                        {
+                                            "severity": "critical",
+                                            "issue": "六维定性研究证据不足",
+                                            "suggested_fix": "补齐每维两个真实 URL 后重算",
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                }
+            ],
+        }
+        state = {
+            "holdings": [
+                {
+                    "child_run_id": "legacy-child",
+                    "error": "子运行以 gated 状态结束，未生成完整报告",
+                }
+            ]
+        }
+
+        public = self.service._public(state)
+
+        self.assertIn("六维定性研究证据不足", public["holdings"][0]["error"])
+        self.assertIn("补齐每维两个真实 URL 后重算", public["holdings"][0]["error"])
+        self.assertEqual(
+            state["holdings"][0]["error"],
+            "子运行以 gated 状态结束，未生成完整报告",
+        )
+
     def test_batch_scope_requires_exact_user_and_tenant_match(self) -> None:
         created = self.service.create_batch(
             "source-run",

@@ -7,6 +7,7 @@ from io import BytesIO
 from pathlib import Path
 from threading import RLock
 from typing import Any, Iterable
+import re
 import zipfile
 
 from domain_packs.finance_ashare.holding_reports import (
@@ -566,6 +567,7 @@ class FundHoldingReportService:
         data_gap: list[str] = []
         error: str | None = None
         retry_count = 0
+        terminal_detail: dict[str, Any] = {}
         try:
             request_payload = read_json(self.agent_os.run_store.load_run_paths(child_run_id).root / "request.json")
             request = RequestEnvelope.model_validate(request_payload or {})
@@ -581,6 +583,7 @@ class FundHoldingReportService:
                 elif current != "completed":
                     break
                 detail = self.agent_os.inspect_run(child_run_id)
+                terminal_detail = detail
                 final_status = self._detail_status(detail) or "failed"
                 report_available, data_gap = self._report_state(detail)
                 if report_available and final_status == "completed":
@@ -606,6 +609,7 @@ class FundHoldingReportService:
             # discarded merely because the outer response could not finalize.
             try:
                 detail = self.agent_os.inspect_run(child_run_id)
+                terminal_detail = detail
                 reconciled_report, reconciled_gaps = self._report_state(detail)
                 graph_status = str((detail.get("snapshot") or {}).get("status") or "")
                 reconciled_status = (
@@ -626,6 +630,9 @@ class FundHoldingReportService:
                 final_status = "failed"
                 error = localize_runtime_error(exc, fallback="持仓股票报告执行失败，请稍后重试。")
                 data_gap = ["holding_stock_report_execution_failed"]
+
+        if not report_available and error is None:
+            error = self._terminal_report_error(terminal_detail, final_status)
 
         with self._lock:
             try:
@@ -871,6 +878,61 @@ class FundHoldingReportService:
         return available, list(dict.fromkeys(gaps))
 
     @staticmethod
+    def _terminal_report_error(detail: dict[str, Any], final_status: str) -> str:
+        """Expose every UZI critical and suggested fix instead of a generic gate label."""
+
+        artifacts = [
+            row
+            for row in list(detail.get("artifacts") or [])
+            if isinstance(row, dict) and str(row.get("status") or "active") == "active"
+        ]
+        native = next(
+            (row for row in reversed(artifacts) if row.get("artifact_type") == "uzi_native_analysis"),
+            None,
+        )
+        content = (
+            native.get("content")
+            if isinstance(native, dict) and isinstance(native.get("content"), dict)
+            else {}
+        )
+        critical_rows: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for result in list(content.get("results") or []):
+            if not isinstance(result, dict):
+                continue
+            for issue in list((result.get("self_review") or {}).get("issues") or []):
+                if not isinstance(issue, dict) or str(issue.get("severity") or "").lower() != "critical":
+                    continue
+                issue_text = FundHoldingReportService._public_gate_text(
+                    issue.get("issue"),
+                    "未说明的质量缺口",
+                )
+                suggested_fix = FundHoldingReportService._public_gate_text(issue.get("suggested_fix"), "")
+                if str(issue.get("dim") or "") == "agent_analysis" and "可以忽略" in suggested_fix:
+                    suggested_fix = "在 Agent OS 中完成结构化 Agent 分析后重算与自审，不允许忽略该 critical"
+                key = (issue_text, suggested_fix)
+                if key not in seen:
+                    seen.add(key)
+                    critical_rows.append(key)
+
+        if critical_rows:
+            details = "；".join(
+                f"{issue}（建议：{suggested_fix}）" if suggested_fix else issue
+                for issue, suggested_fix in critical_rows
+            )
+            return f"UZI 质量门未通过：{details}。补充真实数据或恢复数据源后，可仅重试此项。"
+        if final_status == "gated":
+            return "UZI 质量门未通过，但子运行未返回具体 critical；请打开“证据”查看运行事件后仅重试此项。"
+        return f"子运行以 {final_status} 状态结束，未生成完整报告"
+
+    @staticmethod
+    def _public_gate_text(value: Any, fallback: str) -> str:
+        text = " ".join(str(value or "").split()).strip() or fallback
+        # The UI must retain the business reason without treating an exception
+        # class name as a raw stack-trace diagnostic and hiding the whole gate.
+        return re.sub(r"\b[A-Z][A-Za-z0-9_]*(?:Error|Exception)\b", "运行异常", text)
+
+    @staticmethod
     def _recovery_fingerprint(detail: dict[str, Any]) -> tuple[Any, ...]:
         """Describe durable recovery progress without timestamps or counters.
 
@@ -999,11 +1061,28 @@ class FundHoldingReportService:
             raise ValueError("research_profile 必须是 lite、medium 或 deep")
         return profile
 
-    @staticmethod
-    def _public(state: dict[str, Any]) -> dict[str, Any]:
-        return localize_public_error_fields(
-            {key: value for key, value in state.items() if key not in {"request_id", "source_data_gap"}}
-        )
+    def _public(self, state: dict[str, Any]) -> dict[str, Any]:
+        payload = {
+            key: value
+            for key, value in state.items()
+            if key not in {"request_id", "source_data_gap"}
+        }
+        # Batches written by older coordinators only persisted the word
+        # ``gated``.  Enrich those immutable historical rows on read from the
+        # child ArtifactBoard so users immediately see every critical and fix
+        # without regenerating the whole batch.
+        payload["holdings"] = [dict(item) for item in list(payload.get("holdings") or [])]
+        for item in payload["holdings"]:
+            error = str(item.get("error") or "")
+            child_run_id = str(item.get("child_run_id") or "")
+            if not child_run_id or "子运行以 gated 状态结束" not in error:
+                continue
+            try:
+                detail = self.agent_os.inspect_run(child_run_id)
+            except Exception:
+                continue
+            item["error"] = self._terminal_report_error(detail, "gated")
+        return localize_public_error_fields(payload)
 
     @staticmethod
     def _now() -> str:
