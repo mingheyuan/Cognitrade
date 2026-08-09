@@ -60,6 +60,7 @@ class OpenAIProvider:
         schema: type[SchemaT],
         temperature: float = 0.2,
         reasoning_effort: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> SchemaT:
         raw_text = self.complete(
             system_prompt=system_prompt,
@@ -67,6 +68,7 @@ class OpenAIProvider:
             temperature=temperature,
             reasoning_effort=reasoning_effort,
             force_json=True,
+            timeout_seconds=timeout_seconds,
         )
         try:
             payload = self.response_support.extract_json_object(raw_text)
@@ -82,10 +84,18 @@ class OpenAIProvider:
         temperature: float = 0.2,
         reasoning_effort: str | None = None,
         force_json: bool = False,
+        timeout_seconds: float | None = None,
     ) -> str:
         client = self._client_instance()
         prompt = user_prompt if not force_json else f"{user_prompt}\n\nReturn only a JSON object."
         effective_reasoning_effort = reasoning_effort or self.settings.openai_reasoning_effort
+        request_timeout_seconds = (
+            float(timeout_seconds)
+            if timeout_seconds is not None
+            else self.request_timeout_seconds
+        )
+        if request_timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
         try:
             parts: list[str] = []
             previous_response_id: str | None = None
@@ -99,7 +109,7 @@ class OpenAIProvider:
                     temperature=temperature,
                     reasoning={"effort": effective_reasoning_effort} if effective_reasoning_effort else None,
                     store=not self.settings.openai_disable_response_storage,
-                    timeout=self.request_timeout_seconds,
+                    timeout=request_timeout_seconds,
                 )
                 response_text = self.response_support.coerce_responses_text(response)
                 if response_text:
@@ -114,7 +124,7 @@ class OpenAIProvider:
         except LLMProviderError:
             raise
         except APITimeoutError as exc:
-            raise LLMProviderError(f"llm_request_timeout: {self.request_timeout_seconds}s") from exc
+            raise LLMProviderError(f"llm_request_timeout: {request_timeout_seconds:g}s") from exc
         except Exception as exc:
             raise LLMProviderError(f"llm_request_failed: {exc.__class__.__name__}: {exc}") from exc
 

@@ -18,6 +18,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from domain_packs.finance_ashare.subagents.uzi_agent_roleplay import LATEST_UZI_SOURCE_COMMIT
+from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_structured
 
 
 _DIMENSION_TYPES: dict[str, tuple[str, ...]] = {
@@ -221,7 +222,8 @@ def _evaluate_group(
         "本组证据="
         + json.dumps({key: evidence_bundle[key] for key in dimensions}, ensure_ascii=False, sort_keys=True)
     )
-    return provider.parse(
+    return parse_uzi_structured(
+        provider,
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         schema=QualitativeGroupResult,

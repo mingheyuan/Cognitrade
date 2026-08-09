@@ -4,7 +4,11 @@ import os
 import unittest
 from unittest.mock import patch
 
-from domain_packs.finance_ashare.subagents.uzi_392_analysis import execute_native_analysis
+from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
+    _canonical_evidence_path,
+    _safe_error_detail,
+    execute_native_analysis,
+)
 from tests.test_uzi_392_native_methods import _snapshots
 
 
@@ -64,6 +68,27 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
 
         self.assertEqual(len(result["results"]), 1)
         self.assertEqual(result["results"][0]["raw"]["ticker"], "600000.SH")
+
+    def test_agent_error_detail_is_preserved_without_credentials(self) -> None:
+        detail = _safe_error_detail(
+            RuntimeError("llm_request_timeout: 25s token=super-secret")
+        )
+
+        self.assertIn("llm_request_timeout: 25s", detail)
+        self.assertNotIn("super-secret", detail)
+        self.assertIn("<redacted>", detail)
+
+    def test_model_dot_index_paths_are_canonicalized_before_grounding(self) -> None:
+        self.assertEqual(
+            _canonical_evidence_path(
+                "raw.dimensions.1_financials.data.revenue_history.5"
+            ),
+            "raw.dimensions.1_financials.data.revenue_history[5]",
+        )
+        self.assertEqual(
+            _canonical_evidence_path("recovery_tasks.0.suggested_actions.2"),
+            "recovery_tasks[0].suggested_actions[2]",
+        )
 
 
 if __name__ == "__main__":

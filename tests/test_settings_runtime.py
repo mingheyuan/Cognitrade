@@ -43,6 +43,7 @@ class SettingsRuntimeTests(unittest.TestCase):
                 "OPENAI_REVIEW_MODEL=test-review-model\n"
                 "OPENAI_REASONING_EFFORT=xhigh\n"
                 "OPENAI_DISABLE_RESPONSE_STORAGE=false\n"
+                "UZI_LLM_REQUEST_TIMEOUT_SECONDS=360\n"
                 "DEFAULT_TIMEZONE=UTC\n",
                 encoding="utf-8",
             )
@@ -54,6 +55,7 @@ class SettingsRuntimeTests(unittest.TestCase):
             self.assertEqual(settings.review_model, "test-review-model")
             self.assertEqual(settings.openai_reasoning_effort, "xhigh")
             self.assertFalse(settings.openai_disable_response_storage)
+            self.assertEqual(settings.uzi_llm_request_timeout_seconds, 360)
             self.assertEqual(settings.default_timezone, "UTC")
             self.assertEqual(settings.workspace_root, resolved_root / "workspace")
             self.assertEqual(settings.config_root, resolved_root / "workspace" / "config")

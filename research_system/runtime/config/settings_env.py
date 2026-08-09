@@ -112,6 +112,9 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         in {"1", "true", "yes", "on"},
         "log_level": env_values.get("LOG_LEVEL", "INFO"),
         "llm_request_timeout_seconds": int(env_values.get("LLM_REQUEST_TIMEOUT_SECONDS", "25")),
+        "uzi_llm_request_timeout_seconds": int(
+            env_values.get("UZI_LLM_REQUEST_TIMEOUT_SECONDS", "480")
+        ),
         "max_llm_calls_per_turn": int(env_values.get("MAX_LLM_CALLS_PER_TURN", "1")),
         "max_subagent_calls_per_turn": int(env_values.get("MAX_SUBAGENT_CALLS_PER_TURN", "32")),
         "max_child_threads_per_turn": int(env_values.get("MAX_CHILD_THREADS_PER_TURN", "8")),

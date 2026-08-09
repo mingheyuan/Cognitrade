@@ -12,8 +12,10 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 import importlib
+import json
 import math
 from pathlib import Path
+import re
 from threading import Event
 from typing import Any, Literal
 
@@ -26,6 +28,7 @@ from domain_packs.finance_ashare.subagents.uzi_agent_roleplay import (
 from domain_packs.finance_ashare.subagents.uzi_qualitative_deep_dive import (
     apply_qualitative_deep_dive,
 )
+from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_structured
 from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import (
     UZI_SOURCE_COMMIT,
     Uzi392FetcherRuntime,
@@ -320,7 +323,10 @@ def _execute_symbol(
                 agent_issues = [{
                     "severity": "error",
                     "field": "agent_analysis",
-                    "message": f"Agent 分析生成失败：{exc.__class__.__name__}",
+                    "message": (
+                        f"Agent 分析生成失败：{exc.__class__.__name__}: "
+                        f"{_safe_error_detail(exc)}"
+                    ),
                     "suggestion": "按自审问题修正结构化 Agent 分析后重算",
                 }]
 
@@ -425,32 +431,87 @@ def _generate_agent_analysis(
         for path in allowed_paths
         if _path_number(frozen, path) is not None
     }
+    frozen_json = json.dumps(
+        frozen,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    schema_json = json.dumps(
+        AgentAnalysisPayload.model_json_schema(),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
     system_prompt = (
         "你是 UZI 3.9.2 完整研究链的 Agent 分析阶段。只允许使用 FROZEN_ARTIFACTBOARD_EVIDENCE；"
         "禁止模拟、补造或把缺失值改成中位值。20 个维度必须逐项评论，存在数据时引用精确 evidence_paths，"
-        "不存在时明确说明缺口并引用对应 recovery/data_gap 路径。买入区间只能由 numeric_basis_fields 中真实数值"
+        "不存在时明确说明缺口并引用对应 recovery/data_gap 路径。evidence_paths 使用冻结 JSON 的点号/数组下标"
+        "叶子路径，例如 raw.dimensions.0_basic.data.current_price；返回后会由机械校验逐条核对。买入区间只能由"
+        "冻结 JSON 中真实的数值叶子路径"
         "通过 calculation 明示计算得到；若证据不足，结构化输出应失败并让报告停在质量门。"
         f"UZI_SOURCE_COMMIT={UZI_SOURCE_COMMIT}\n"
-        f"FROZEN_ARTIFACTBOARD_EVIDENCE={frozen}\n"
-        f"ALLOWED_EVIDENCE_PATHS={sorted(allowed_paths)}\n"
-        f"NUMERIC_BASIS_FIELDS={sorted(numeric_paths)}"
+        f"FROZEN_ARTIFACTBOARD_EVIDENCE={frozen_json}\n"
+        f"REQUIRED_OUTPUT_JSON_SCHEMA={schema_json}"
     )
     user_prompt = (
         "生成完整 agent_analysis。dim_commentary 的 key 必须且只能是 0_basic 到 19_contests 的 20 个精确键；"
         "每条至少 20 字。panel_insights 至少 30 字。多空各三轮。至少三条风险。"
-        "buy_zones 必须含 value/growth/technical/youzi，basis_fields 只能取 NUMERIC_BASIS_FIELDS；"
+        "buy_zones 必须含 value/growth/technical/youzi，basis_fields 只能填写冻结 JSON 中真实数值的精确叶子路径；"
         "calculation 写清真实数值如何导出 price。data_gap_acknowledged 只记录已经穷尽的真实恢复尝试，不能写已解决。"
-        f"上一轮机械自审 critical 与 suggested_fix={review_feedback}。必须逐条修复；不得通过改写措辞隐藏问题。"
+        "严格遵守 REQUIRED_OUTPUT_JSON_SCHEMA，只返回一个 JSON 对象。"
+        f"上一轮机械自审 critical 与 suggested_fix="
+        f"{json.dumps(review_feedback, ensure_ascii=False, separators=(',', ':'))}。"
+        "必须逐条修复；不得通过改写措辞隐藏问题。"
     )
-    parsed = llm_provider.parse(
+    parsed = parse_uzi_structured(
+        llm_provider,
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         schema=AgentAnalysisPayload,
         temperature=0.1,
     )
     payload = parsed if isinstance(parsed, AgentAnalysisPayload) else AgentAnalysisPayload.model_validate(parsed)
+    _normalize_payload_paths(payload)
     _validate_grounding(payload, allowed_paths=allowed_paths, numeric_paths=numeric_paths)
     return _to_upstream_agent_analysis(payload)
+
+
+def _normalize_payload_paths(payload: AgentAnalysisPayload) -> None:
+    """Canonicalize equivalent model-emitted array paths before validation."""
+
+    def normalize(paths: list[str]) -> list[str]:
+        return [_canonical_evidence_path(path) for path in paths]
+
+    for row in payload.dim_commentary.values():
+        row.evidence_paths = normalize(row.evidence_paths)
+    payload.panel_evidence_paths = normalize(payload.panel_evidence_paths)
+    payload.narrative_override.conclusion_evidence_paths = normalize(
+        payload.narrative_override.conclusion_evidence_paths
+    )
+    for row in payload.great_divide_override.bull_say_rounds:
+        row.evidence_paths = normalize(row.evidence_paths)
+    for row in payload.great_divide_override.bear_say_rounds:
+        row.evidence_paths = normalize(row.evidence_paths)
+    for row in payload.narrative_override.risks:
+        row.evidence_paths = normalize(row.evidence_paths)
+    for name in ("value", "growth", "technical", "youzi"):
+        zone = getattr(payload.narrative_override.buy_zones, name)
+        zone.basis_fields = normalize(zone.basis_fields)
+
+
+def _canonical_evidence_path(path: str) -> str:
+    return re.sub(r"\.(\d+)(?=\.|$)", r"[\1]", str(path).strip())
+
+
+def _safe_error_detail(exc: Exception) -> str:
+    detail = str(exc).strip() or "no_detail"
+    detail = re.sub(
+        r"(?i)(api[_-]?key|authorization|bearer|token|cookie)(\s*[:=]\s*)[^\s,;]+",
+        r"\1\2<redacted>",
+        detail,
+    )
+    return detail[:600]
 
 
 def _validate_grounding(
