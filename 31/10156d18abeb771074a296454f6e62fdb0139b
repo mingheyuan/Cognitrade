@@ -1,0 +1,31 @@
+domain_packs/finance_ashare/subagents/uzi_392_analysis.py
+  s_a6a8a3a6f43b3c::t_cae897714b9a39 66-71,675,683,707-719,722-741
+domain_packs/finance_ashare/subagents/uzi_llm_support.py
+  s_a6a8a3a6f43b3c::t_cdd59ff1e7bebe 38,40,48-55,58-60
+research_system/api/fund_holding_report_service.py
+  s_a6a8a3a6f43b3c::t_a9a5437655e76e 900-901,914-919,935-936
+tests/test_fund_holding_reports.py
+  s_a6a8a3a6f43b3c::t_21c04123a5eb94 533-571
+tests/test_uzi_392_analysis.py
+  s_a6a8a3a6f43b3c::t_eb48771c8cdf7e 9,11,69,74,154,303-327
+tests/test_uzi_llm_support.py
+  s_a6a8a3a6f43b3c::t_1fbdbbbb7ba73b 46-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "3110156d18abeb771074a296454f6e62fdb0139b",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
