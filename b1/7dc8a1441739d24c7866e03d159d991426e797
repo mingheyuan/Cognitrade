@@ -1,0 +1,43 @@
+.env.example
+  s_a6a8a3a6f43b3c::t_93543b7da31b64 52-53
+README.md
+  s_a6a8a3a6f43b3c::t_60f23a995eccf7 116
+domain_packs/finance_ashare/subagents/uzi_392_analysis.py
+  s_a6a8a3a6f43b3c::t_32bbfc912d0a86 15,18,31,326-329,434-445,449-451,454-455,460,462-465,467-468,475,480-516
+domain_packs/finance_ashare/subagents/uzi_agent_roleplay.py
+  s_a6a8a3a6f43b3c::t_cceb6830a4e123 26,290-291
+domain_packs/finance_ashare/subagents/uzi_llm_support.py
+  s_a6a8a3a6f43b3c::t_a9ed8f525a472b 1-46
+domain_packs/finance_ashare/subagents/uzi_qualitative_deep_dive.py
+  s_a6a8a3a6f43b3c::t_0f28e6d3b71621 21,225-226
+research_system/runtime/config/settings_env.py
+  s_a6a8a3a6f43b3c::t_ac1b600ba60834 115-117
+research_system/runtime/platform/settings.py
+  s_a6a8a3a6f43b3c::t_e639f22248fc12 54,92-93
+research_system/runtime/providers/openai_provider.py
+  s_a6a8a3a6f43b3c::t_96ab6753116e8c 63,71,87,92-98,112,127
+tests/test_settings_runtime.py
+  s_a6a8a3a6f43b3c::t_7db041c1ec086f 46,58
+tests/test_uzi_392_analysis.py
+  s_a6a8a3a6f43b3c::t_6c6cd70328a1a6 7-11,72-92
+tests/test_uzi_llm_support.py
+  s_a6a8a3a6f43b3c::t_3dd6d6d5a2e6ab 1-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "b17dc8a1441739d24c7866e03d159d991426e797",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
