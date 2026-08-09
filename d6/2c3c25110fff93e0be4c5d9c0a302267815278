@@ -1,0 +1,27 @@
+.env.example
+  s_a6a8a3a6f43b3c::t_72699ac622ae85 11-14
+domain_packs/finance_ashare/tools/snapshot_collector.py
+  s_a6a8a3a6f43b3c::t_6d6c794530966f 57-59,490-493
+research_system/adapters/vendors/uzi_shared_source_cache.py
+  s_a6a8a3a6f43b3c::t_e4d764064d2e9c 1-285
+tests/test_uzi_shared_source_cache.py
+  s_a6a8a3a6f43b3c::t_ea16df2d4e6978 1-87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "d62c3c25110fff93e0be4c5d9c0a302267815278",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
