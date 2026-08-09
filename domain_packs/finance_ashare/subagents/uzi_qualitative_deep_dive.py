@@ -11,7 +11,6 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 import json
-import re
 from threading import Event
 from typing import Any, Literal
 
@@ -24,19 +23,16 @@ from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_stru
 _DIMENSION_TYPES: dict[str, tuple[str, ...]] = {
     "3_macro": ("macro",),
     "13_policy": ("policy",),
-    "7_industry": ("industry", "sector"),
-    "15_events": ("events", "notice", "research"),
-    "8_materials": ("materials", "chain", "industry"),
-    "9_futures": ("futures", "materials"),
+    "7_industry": ("industry",),
+    "15_events": ("events",),
+    "8_materials": ("materials",),
+    "9_futures": ("futures",),
 }
 _GROUPS: tuple[tuple[str, tuple[str, str]], ...] = (
     ("A · Macro-Policy", ("3_macro", "13_policy")),
     ("B · Industry-Events", ("7_industry", "15_events")),
     ("C · Cost-Transmission", ("8_materials", "9_futures")),
 )
-_URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+")
-
-
 class QualitativeEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -237,10 +233,11 @@ def _dimension_context(rows: list[dict[str, Any]], dimension: str) -> dict[str, 
         row for row in rows
         if isinstance(row, dict) and str(row.get("snapshot_type") or "") in snapshot_types
     ]
-    urls: list[str] = []
+    evidence_records: list[dict[str, str]] = []
     for row in selected:
-        urls.extend(_extract_urls(row))
-    allowed_urls = list(dict.fromkeys(urls))
+        evidence_records.extend(_extract_evidence_records(row))
+    deduped_records = list({row["url"]: row for row in evidence_records}.values())
+    allowed_urls = [row["url"] for row in deduped_records]
     compact_rows = [
         {
             "snapshot_type": row.get("snapshot_type"),
@@ -253,20 +250,39 @@ def _dimension_context(rows: list[dict[str, Any]], dimension: str) -> dict[str, 
         }
         for row in selected
     ]
-    return {"snapshot_types": sorted(snapshot_types), "allowed_urls": allowed_urls, "snapshots": compact_rows}
+    return {
+        "snapshot_types": sorted(snapshot_types),
+        "allowed_urls": allowed_urls,
+        "evidence_records": deduped_records,
+        "snapshots": compact_rows,
+    }
 
 
-def _extract_urls(value: Any) -> list[str]:
-    urls: list[str] = []
+def _extract_evidence_records(value: Any) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
     if isinstance(value, dict):
+        url = str(value.get("url") or "").strip().rstrip(".,;，。；)")
+        if url.startswith(("http://", "https://")):
+            title = str(value.get("title") or value.get("text") or "").strip()
+            finding = str(
+                value.get("finding")
+                or value.get("body")
+                or value.get("text_excerpt")
+                or value.get("snippet")
+                or ""
+            ).strip()
+            records.append({
+                "url": url,
+                "source": str(value.get("source_id") or value.get("source") or "artifactboard").strip(),
+                "title": title[:300],
+                "finding": finding[:2_000],
+            })
         for item in value.values():
-            urls.extend(_extract_urls(item))
+            records.extend(_extract_evidence_records(item))
     elif isinstance(value, list):
         for item in value:
-            urls.extend(_extract_urls(item))
-    elif isinstance(value, str):
-        urls.extend(match.rstrip(".,;，。；)") for match in _URL_PATTERN.findall(value))
-    return urls
+            records.extend(_extract_evidence_records(item))
+    return records
 
 
 def _compact(value: Any, *, depth: int = 0) -> Any:

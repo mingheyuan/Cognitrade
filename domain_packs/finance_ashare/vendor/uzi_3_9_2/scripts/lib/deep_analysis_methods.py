@@ -180,12 +180,15 @@ def _ic_risks(features: dict, moat: dict) -> list[dict]:
             "severity": "High",
             "mitigant": "要求管理层提供扭转路线图",
         })
-    risks.append({
-        "risk": "行业周期下行",
-        "detail": "需求侧宏观冲击",
-        "severity": "Medium",
-        "mitigant": "行业景气度月度跟踪",
-    })
+    # v3.9.4 · 行业周期下行不再无条件追加（茅台这种消费龙头会被误标周期下行）。
+    # 仅当行业生命周期判定为衰退时才算风险。
+    if features.get("industry_in_decline"):
+        risks.append({
+            "risk": "行业周期下行",
+            "detail": "需求侧宏观冲击",
+            "severity": "Medium",
+            "mitigant": "行业景气度月度跟踪",
+        })
     return risks
 
 

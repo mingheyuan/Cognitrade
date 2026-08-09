@@ -11,11 +11,16 @@ from domain_packs.finance_ashare.subagents.uzi_llm_support import (
 
 class _TimeoutAwareProvider:
     def __init__(self, timeout: int) -> None:
-        self.settings = SimpleNamespace(uzi_llm_request_timeout_seconds=timeout)
+        self.settings = SimpleNamespace(
+            uzi_llm_request_timeout_seconds=timeout,
+            uzi_llm_max_concurrency=3,
+        )
         self.received_timeout: float | None = None
+        self.received_max_retries: int | None = None
 
-    def parse(self, *, timeout_seconds=None, **_kwargs):
+    def parse(self, *, timeout_seconds=None, max_retries=None, **_kwargs):
         self.received_timeout = timeout_seconds
+        self.received_max_retries = max_retries
         return {"ok": True}
 
 
@@ -32,6 +37,7 @@ class UziLlmSupportTests(unittest.TestCase):
 
         self.assertEqual(result, {"ok": True})
         self.assertEqual(provider.received_timeout, 321.0)
+        self.assertEqual(provider.received_max_retries, 0)
 
     def test_legacy_provider_keeps_compatible_parse_signature(self) -> None:
         provider = _LegacyProvider()

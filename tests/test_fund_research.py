@@ -317,7 +317,7 @@ class FundResearchTests(unittest.TestCase):
                 first_candidate = analysis_artifact["content"]["candidates"][0]
                 self.assertEqual(
                     analysis_artifact["content"]["methodology_version"],
-                    "uzi-3.9.2-fund-selection-v4",
+                    "uzi-3.9.4-fund-selection-v4",
                 )
                 self.assertEqual(first_candidate["benchmark_performance"][0]["excess_return_pct"], 12)
                 self.assertTrue(first_candidate["manager_tenures"][0]["current"])
@@ -593,7 +593,7 @@ class FundResearchTests(unittest.TestCase):
         self.assertIn("缺失字段不补 0", analysis["selection_policy"]["non_imputation_rule"])
         self.assertIn("benchmark_excess_1y", analysis["candidates"][0]["metrics"])
         self.assertEqual(analysis["analysis_mode"], "comparison")
-        self.assertEqual(analysis["methodology_version"], "uzi-3.9.2-fund-selection-v4")
+        self.assertEqual(analysis["methodology_version"], "uzi-3.9.4-fund-selection-v4")
 
     def test_fund_without_three_year_return_uses_complete_since_inception_history(self) -> None:
         ranking = _ranking_frame().iloc[[0]].copy()

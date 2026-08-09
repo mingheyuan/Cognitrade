@@ -25,7 +25,7 @@ _GROUP_DIMENSIONS = {
 
 def _deep_base() -> dict:
     return {
-        "methodology_version": "3.9.2-adapted",
+        "methodology_version": "3.9.4-adapted",
         "profile": "deep",
         "results": [],
         "summary": "test",
@@ -130,6 +130,38 @@ class UziQualitativeDeepDiveTests(unittest.TestCase):
             llm_provider=provider,
         )
         self.assertEqual(result["qualitative_agent_execution"]["status"], "evidence_preflight_failed")
+        self.assertEqual(provider.system_prompts, [])
+
+    def test_neighbor_dimension_urls_cannot_satisfy_a_missing_dimension(self) -> None:
+        provider = _Provider()
+        rows = _rows()
+        materials = next(row for row in rows if row["snapshot_type"] == "materials")
+        materials["facts"]["sources"] = []
+        rows.append({
+            "snapshot_type": "industry",
+            "symbol": "600519",
+            "snapshot_date": "2026-08-07",
+            "quality_status": "available",
+            "facts": {
+                "extra_material_like_links": [
+                    {"url": "https://industry.example/not-materials/1"},
+                    {"url": "https://industry.example/not-materials/2"},
+                ]
+            },
+            "source_refs": [],
+        })
+
+        result = apply_qualitative_deep_dive(
+            _deep_base(),
+            snapshot_rows=rows,
+            llm_provider=provider,
+        )
+
+        self.assertEqual(result["qualitative_agent_execution"]["status"], "evidence_preflight_failed")
+        self.assertIn(
+            "8_materials:requires_two_cited_sources",
+            result["qualitative_agent_execution"]["errors"],
+        )
         self.assertEqual(provider.system_prompts, [])
 
     def test_three_parallel_groups_cover_six_dimensions_with_grounded_urls(self) -> None:

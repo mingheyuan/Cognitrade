@@ -1,8 +1,8 @@
 schema_version: "2"
 upstream:
   repository: https://github.com/wbh604/UZI-Skill
-  commit: 22e65f2e0cee2cb41cb40fdbe391c9600b7fe359
-  version: 3.9.2
+  commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
+  version: 3.9.4
   vendored_root: domain_packs/finance_ashare/vendor/uzi_3_9_2
   runtime_boundary: in_process_vendored_pure_capability
 
@@ -25,7 +25,7 @@ invariants:
   recovery_round_limit: none
   html_pdf_visible_source: same_pinned_native_template
 
-# These are upstream 3.9.2 behaviours explicitly preserved or deliberately
+# These are upstream 3.9.4 behaviours explicitly preserved or deliberately
 # bounded by the Agent OS host.  None is an old UZI runtime compatibility path.
 upstream_3_9_2_regressions:
   - {id: direct_report_path_reuse, status: source_parity, target: finance.uzi.native.report.compose}

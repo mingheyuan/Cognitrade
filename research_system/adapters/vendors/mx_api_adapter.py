@@ -6,7 +6,7 @@ import requests
 
 
 class MxApiAdapter:
-    """Authenticated 东方财富妙想 Skills Hub adapter aligned with UZI 3.9.2."""
+    """Authenticated 东方财富妙想 Skills Hub adapter aligned with UZI 3.9.4."""
 
     vendor_name = "mx_api"
     _BASE = "https://mkapi2.dfcfs.com/finskillshub/api/claw"

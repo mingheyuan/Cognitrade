@@ -1079,7 +1079,7 @@ def _evaluate_uzi_native_method(context, method_id: str) -> ArtifactDraft:
         risk_flags=list(content.get("data_gap") or []),
         metadata={
             "quality_status": quality,
-            "methodology_version": "3.9.2-source-parity",
+            "methodology_version": "3.9.4-source-parity",
             "source_commit": content.get("source_commit"),
             "native_method_id": method_id,
         },
@@ -1194,7 +1194,7 @@ def _uzi_native_command_artifact(
         risk_flags=list(content.get("data_gap") or []),
         metadata={
             "quality_status": quality,
-            "methodology_version": "3.9.2-source-parity",
+            "methodology_version": "3.9.4-source-parity",
             "source_commit": content.get("source_commit"),
             "native_command_id": content.get("command_id"),
             "phase": content.get("phase"),

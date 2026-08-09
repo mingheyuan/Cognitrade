@@ -61,6 +61,7 @@ class OpenAIProvider:
         temperature: float = 0.2,
         reasoning_effort: str | None = None,
         timeout_seconds: float | None = None,
+        max_retries: int | None = None,
     ) -> SchemaT:
         raw_text = self.complete(
             system_prompt=system_prompt,
@@ -69,6 +70,7 @@ class OpenAIProvider:
             reasoning_effort=reasoning_effort,
             force_json=True,
             timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
         )
         try:
             payload = self.response_support.extract_json_object(raw_text)
@@ -85,8 +87,10 @@ class OpenAIProvider:
         reasoning_effort: str | None = None,
         force_json: bool = False,
         timeout_seconds: float | None = None,
+        max_retries: int | None = None,
     ) -> str:
         client = self._client_instance()
+        request_client = client.with_options(max_retries=max_retries) if max_retries is not None else client
         prompt = user_prompt if not force_json else f"{user_prompt}\n\nReturn only a JSON object."
         effective_reasoning_effort = reasoning_effort or self.settings.openai_reasoning_effort
         request_timeout_seconds = (
@@ -101,7 +105,7 @@ class OpenAIProvider:
             previous_response_id: str | None = None
             current_input = prompt
             for _ in range(self._MAX_CONTINUATION_ATTEMPTS + 1):
-                response = client.responses.create(
+                response = request_client.responses.create(
                     model=self.settings.default_model,
                     instructions=system_prompt,
                     input=current_input,

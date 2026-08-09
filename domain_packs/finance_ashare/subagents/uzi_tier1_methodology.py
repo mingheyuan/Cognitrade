@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-UZI_TIER1_METHOD_VERSION = "3.9.2-adapted-tier1-v1"
+UZI_TIER1_METHOD_VERSION = "3.9.4-adapted-tier1-v1"
 
 _QUALITY_STATUSES = {"available", "degraded", "data_gap", "assumption_only"}
 _AI_LEVERAGE_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (

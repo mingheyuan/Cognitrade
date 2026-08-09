@@ -25,8 +25,8 @@ from research_system.adapters.vendors.uzi_global_peer_adapter import global_peer
 from research_system.adapters.vendors.market_router import MarketRouter
 
 
-UZI_METHOD_VERSION = "3.9.2-adapted"
-UZI_SOURCE_COMMIT = "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359"
+UZI_METHOD_VERSION = "3.9.4-adapted"
+UZI_SOURCE_COMMIT = "0acf25122cabf493e7bc442faff62ceceb7f2f02"
 
 _PROFILES: dict[str, dict[str, Any]] = {
     "lite": {
@@ -1879,7 +1879,7 @@ def _quick_scan_dimension_data(
 
 
 def build_quick_scan(snapshot_rows: list[dict[str, Any]], symbols: list[str]) -> dict[str, Any]:
-    """Implement UZI 3.9.2 `/quick-scan` as its own delivery contract.
+    """Implement UZI 3.9.4 `/quick-scan` as its own delivery contract.
 
     The command is deliberately not an alias for Cognitrade's historical
     ``lite`` profile: it consumes exactly dimensions 1/2/10/18, evaluates the

@@ -1,9 +1,7 @@
 """Pinned UZI-Skill capability and report-presentation migration.
 
-The analysis capability remains fixed to UZI 3.9.2 commit
-``22e65f2e0cee2cb41cb40fdbe391c9600b7fe359``. The visible report template and
-its rendering helpers track UZI 3.9.4 commit
-``0acf25122cabf493e7bc442faff62ceceb7f2f02``. Runtime access is provided by
+The analysis capability and visible report presentation are fixed to UZI
+3.9.4 commit ``0acf25122cabf493e7bc442faff62ceceb7f2f02``. Runtime access is provided by
 ``runtime.Uzi392FetcherRuntime``; callers must not execute the upstream CLI.
 """
 

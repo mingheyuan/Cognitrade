@@ -1,8 +1,8 @@
 # Vendored UZI source
 
 - Repository: `https://github.com/wbh604/UZI-Skill`
-- Analysis commit: `22e65f2e0cee2cb41cb40fdbe391c9600b7fe359`
-- Analysis version: `3.9.2`
+- Analysis commit: `0acf25122cabf493e7bc442faff62ceceb7f2f02`
+- Analysis version: `3.9.4`
 - Report presentation commit: `0acf25122cabf493e7bc442faff62ceceb7f2f02`
 - Report presentation version: `3.9.4`
 - License: MIT; see `LICENSE`
@@ -16,8 +16,7 @@
   - `skills/deep-analysis/{SKILL.md,references/**,personas/**}`
   - `agents/investor-panel.md`
 
-Except for the explicitly listed report presentation overlay, the files under
-`scripts/`, `commands/`, `assets/`, `skill/`, and `agents/` are pinned to the
-analysis commit. Cognitrade integrates them through an in-process DomainPack
+The files under `scripts/`, `commands/`, `assets/`, and `skill/` are pinned to
+the same upstream commit. Cognitrade integrates them through an in-process DomainPack
 boundary and never requires an external UZI checkout, CLI, cache, or plugin
 installation at runtime.

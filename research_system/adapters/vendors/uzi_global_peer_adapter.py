@@ -1,4 +1,4 @@
-"""UZI 3.9.2 global peer discovery and comparable-financial adapter.
+"""UZI 3.9.4 global peer discovery and comparable-financial adapter.
 
 This is a Pack-owned adaptation of the pure capability introduced by UZI at
 ``22e65f2``.  It has no import or runtime dependency on the external UZI
@@ -24,7 +24,7 @@ import requests
 from research_system.adapters.vendors.market_router import MarketRouter
 
 
-UZI_GLOBAL_PEER_SOURCE_COMMIT = "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359"
+UZI_GLOBAL_PEER_SOURCE_COMMIT = "0acf25122cabf493e7bc442faff62ceceb7f2f02"
 
 _YAHOO_FACTS = {
     "annualTotalRevenue": "revenue",
@@ -327,7 +327,7 @@ class YahooGlobalPeerProvider:
                 "period1": now - max(2, min(years, 10)) * 366 * 86400,
                 "period2": now,
             },
-            headers={"User-Agent": "Cognitrade/UZI-3.9.2 global-peer-comparison"},
+            headers={"User-Agent": "Cognitrade/UZI-3.9.4 global-peer-comparison"},
             timeout=self.timeout,
         )
         response.raise_for_status()
@@ -352,7 +352,7 @@ class YahooFxProvider:
                 "interval": "1d",
                 "events": "history",
             },
-            headers={"User-Agent": "Cognitrade/UZI-3.9.2 global-peer-comparison"},
+            headers={"User-Agent": "Cognitrade/UZI-3.9.4 global-peer-comparison"},
             timeout=self.timeout,
         )
         response.raise_for_status()

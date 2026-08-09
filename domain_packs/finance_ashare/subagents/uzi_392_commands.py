@@ -1,4 +1,4 @@
-"""Auditable command-to-Agent-OS map for the pinned UZI 3.9.2 command set."""
+"""Auditable command-to-Agent-OS map for the pinned UZI 3.9.4 command set."""
 
 from __future__ import annotations
 

@@ -33,7 +33,7 @@ def is_junk_fallback_text(text: str) -> bool:
 
 
 class UziQualitativeFallback:
-    """Pack-native UZI 3.9.2 MX → DDGS qualitative fallback stage.
+    """Pack-native UZI 3.9.4 MX → DDGS qualitative fallback stage.
 
     Every stage returns only real provider output.  Playwright is deliberately
     a separate final pipeline stage so it cannot run before the integrity

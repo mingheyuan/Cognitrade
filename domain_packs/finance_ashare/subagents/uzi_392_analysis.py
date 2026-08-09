@@ -1,4 +1,4 @@
-"""Complete in-memory UZI 3.9.2 analysis on ArtifactBoard evidence.
+"""Complete in-memory UZI 3.9.4 analysis on ArtifactBoard evidence.
 
 The module executes the pinned upstream scoring, panel, synthesis, institutional
 methods and mechanical self-review functions.  It does not read or write an
@@ -192,7 +192,7 @@ def execute_native_analysis(
     ]
     return {
         "source_commit": UZI_SOURCE_COMMIT,
-        "methodology_version": "3.9.2-source-parity",
+        "methodology_version": "3.9.4-source-parity",
         "profile": selected_profile,
         "results": results,
         "critical_count": critical,
@@ -422,7 +422,7 @@ def _generate_agent_analysis(
     frozen = {
         "raw": _compact(raw),
         "dimension_scores": _compact(dimensions),
-        "panel": _compact(panel),
+        "panel": _compact_panel_for_agent(panel),
         "recovery_tasks": _compact(recovery_tasks),
     }
     allowed_paths = set(_leaf_paths(frozen))
@@ -444,7 +444,7 @@ def _generate_agent_analysis(
         sort_keys=True,
     )
     system_prompt = (
-        "你是 UZI 3.9.2 完整研究链的 Agent 分析阶段。只允许使用 FROZEN_ARTIFACTBOARD_EVIDENCE；"
+        "你是 UZI 3.9.4 完整研究链的 Agent 分析阶段。只允许使用 FROZEN_ARTIFACTBOARD_EVIDENCE；"
         "禁止模拟、补造或把缺失值改成中位值。20 个维度必须逐项评论，存在数据时引用精确 evidence_paths，"
         "不存在时明确说明缺口并引用对应 recovery/data_gap 路径。evidence_paths 使用冻结 JSON 的点号/数组下标"
         "叶子路径，例如 raw.dimensions.0_basic.data.current_price；返回后会由机械校验逐条核对。买入区间只能由"
@@ -618,13 +618,30 @@ def _agent_repairable(
 
     if llm_provider is None or not bool(getattr(llm_provider, "available", True)):
         return False
-    repairable_dims = {"agent_analysis", "panel", "qualitative_deep_dive"}
-    repairable_categories = {"self-check", "consistency", "agent-os-boundary"}
-    return any(
-        str(row.get("dim") or "") in repairable_dims
-        or str(row.get("category") or "") in repairable_categories
-        for row in critical_rows
-    )
+    for row in critical_rows:
+        dim = str(row.get("dim") or "")
+        category = str(row.get("category") or "")
+        evidence = str(row.get("evidence") or "")
+        issue = str(row.get("issue") or "")
+        if dim == "qualitative_deep_dive":
+            # A model retry cannot create URLs that were absent from the
+            # frozen ArtifactBoard.  UZI requires returning to real-source
+            # recovery for these states, not regenerating the same narrative.
+            if any(
+                marker in evidence
+                for marker in (
+                    "evidence_preflight_failed",
+                    "requires_two_cited_sources",
+                    "required_but_unavailable",
+                )
+            ):
+                continue
+            return True
+        if dim in {"agent_analysis", "panel"}:
+            return True
+        if category == "consistency" and "数据" not in issue:
+            return True
+    return False
 
 
 def run_native_self_review(
@@ -799,6 +816,62 @@ def _compact(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, list):
         return [_compact(item, depth=depth + 1) for item in value[:30]]
     return str(value)[:500]
+
+
+def _compact_panel_for_agent(panel: dict[str, Any]) -> dict[str, Any]:
+    """Keep every UZI seat while removing duplicated rule prose.
+
+    The generic list compactor intentionally caps arbitrary arrays, but UZI's
+    panel is a completeness contract: truncating at 30 silently drops valid
+    investors.  Preserve all seats and their auditable decision fields while
+    reducing pass/fail rule objects to stable rule identifiers.
+    """
+
+    member_key = "investors" if isinstance(panel.get("investors"), list) else "votes"
+    compact = {
+        str(key): _compact(value)
+        for key, value in panel.items()
+        if key not in {"votes", "investors", "per_investor_override"}
+    }
+    votes = []
+    for row in list(panel.get(member_key) or []):
+        if not isinstance(row, dict):
+            continue
+        vote = {
+            key: _compact(row.get(key))
+            for key in (
+                "investor_id", "name", "perspective_label", "school", "group",
+                "signal", "confidence", "score", "verdict", "headline",
+                "weight_pass", "weight_total", "pass_count", "fail_count",
+                "skipped_rule_count", "skip_reason",
+                "ideal_price", "period", "time_horizon", "position_sizing",
+            )
+            if key in row
+        }
+        for source_keys, target_key in (
+            (("pass_rules", "pass"), "pass_rule_ids"),
+            (("fail_rules", "fail"), "fail_rule_ids"),
+        ):
+            source_rows = next(
+                (list(row.get(source_key) or []) for source_key in source_keys if row.get(source_key)),
+                [],
+            )
+            vote[target_key] = [
+                str(item.get("rule_id") or item.get("id") or item.get("name") or "")
+                for item in source_rows
+                if isinstance(item, dict)
+                and str(item.get("rule_id") or item.get("id") or item.get("name") or "")
+            ]
+        votes.append(vote)
+    compact[member_key] = votes
+    overrides = panel.get("per_investor_override")
+    if isinstance(overrides, dict):
+        compact["per_investor_override"] = {
+            str(key): _compact(value)
+            for key, value in overrides.items()
+        }
+    compact["seat_count"] = len(votes)
+    return compact
 
 
 def _leaf_paths(value: Any, prefix: str = "") -> list[str]:

@@ -1,6 +1,6 @@
 {
-  "source_commit": "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359",
-  "adapted_methodology_version": "3.9.2-adapted-tier1-v1",
+  "source_commit": "0acf25122cabf493e7bc442faff62ceceb7f2f02",
+  "adapted_methodology_version": "3.9.4-adapted-tier1-v1",
   "quality_invariants": {
     "missing_ai_source": "data_gap",
     "earnings_scenario": "assumption_only",

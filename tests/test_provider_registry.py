@@ -54,6 +54,11 @@ class _FakeResponsesClient:
 class _FakeClient:
     def __init__(self, responses) -> None:
         self.responses = responses
+        self.with_options_calls: list[dict] = []
+
+    def with_options(self, **kwargs):
+        self.with_options_calls.append(kwargs)
+        return self
 
 
 class ProviderRegistryTests(unittest.TestCase):
@@ -112,6 +117,27 @@ class ProviderRegistryTests(unittest.TestCase):
             responses.create_calls[1].get("input"),
             OpenAIProvider._CONTINUATION_PROMPT,
         )
+
+    def test_complete_can_disable_sdk_retries_for_uzi_owned_recovery(self) -> None:
+        final = SimpleNamespace(
+            id="resp_1",
+            status="completed",
+            incomplete_details=None,
+            output_text="done",
+        )
+        responses = _FakeResponsesClient(create_responses=[final])
+        client = _FakeClient(responses)
+        provider = OpenAIProvider(self._settings())
+        provider._client = client  # type: ignore[assignment]
+
+        text = provider.complete(
+            system_prompt="sys",
+            user_prompt="user",
+            max_retries=0,
+        )
+
+        self.assertEqual(text, "done")
+        self.assertEqual(client.with_options_calls, [{"max_retries": 0}])
 
     def test_provider_registry_wires_default_provider(self) -> None:
         registry = ProviderRegistry(self._settings())

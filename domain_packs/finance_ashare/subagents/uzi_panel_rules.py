@@ -1,4 +1,4 @@
-"""Quantified evaluation criteria for the UZI 3.9.2 66-seat investor panel.
+"""Quantified evaluation criteria for the UZI 3.9.4 66-seat investor panel.
 
 Each investor has a list of `Rule` objects with:
   - rule_id: stable identifier
@@ -1171,7 +1171,7 @@ def coverage_stats() -> dict:
 def _safe_check(rule: Rule, features: dict[str, Any]) -> bool | None:
     """Evaluate one source rule without turning absent evidence into a failure.
 
-    UZI 3.9.2 main (22e65f2) treats comparison/format errors caused by missing
+    UZI 3.9.4 main (22e65f2) treats comparison/format errors caused by missing
     observations as an unevaluated rule.  The rule is therefore excluded from
     both the pass/fail lists and the score denominator.  A real ``False``
     result still means the observation was present and the rule failed.
@@ -1184,7 +1184,7 @@ def _safe_check(rule: Rule, features: dict[str, Any]) -> bool | None:
 
 
 def _format_rule_message(template: str, features: dict[str, Any]) -> str:
-    """Match UZI 3.9.2's best-effort rule message formatter."""
+    """Match UZI 3.9.4's best-effort rule message formatter."""
 
     if not template:
         return ""
@@ -1207,7 +1207,7 @@ BEARISH_THRESHOLD = 35
 
 
 def evaluate_investor(investor_id: str, features: dict[str, Any]) -> dict[str, Any]:
-    """Evaluate one seat with UZI 3.9.2's three-layer execution semantics."""
+    """Evaluate one seat with UZI 3.9.4's three-layer execution semantics."""
 
     investor_id = str(investor_id)
     locked = get_locked_school()
@@ -1313,7 +1313,7 @@ def evaluate_investor(investor_id: str, features: dict[str, Any]) -> dict[str, A
         "time_horizon": profile["time_horizon"],
         "position_sizing": profile["position_sizing"],
         "what_would_change_my_mind": profile["what_would_change_my_mind"],
-        "rule_engine_version": "uzi-3.9.2-source-parity",
+        "rule_engine_version": "uzi-3.9.4-source-parity",
     }
 
 
@@ -1361,7 +1361,7 @@ def _skip_result(investor_id: str, reason: str) -> dict[str, Any]:
         "time_horizon": profile["time_horizon"],
         "position_sizing": profile["position_sizing"],
         "what_would_change_my_mind": profile["what_would_change_my_mind"],
-        "rule_engine_version": "uzi-3.9.2-source-parity",
+        "rule_engine_version": "uzi-3.9.4-source-parity",
     }
 
 
@@ -1383,7 +1383,7 @@ def _unknown_result(investor_id: str) -> dict[str, Any]:
         "time_horizon": profile["time_horizon"],
         "position_sizing": profile["position_sizing"],
         "what_would_change_my_mind": profile["what_would_change_my_mind"],
-        "rule_engine_version": "uzi-3.9.2-source-parity",
+        "rule_engine_version": "uzi-3.9.4-source-parity",
     }
 
 

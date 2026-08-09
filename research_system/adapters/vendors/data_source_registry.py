@@ -281,10 +281,10 @@ class DataSourceRegistry:
                     requires_key=str(source_id) == "mx_api",
                     stability=stability_map.get(str(health), "medium"),
                     latency_level="high" if str(access) == "playwright" else "medium",
-                    notes="UZI-Skill 3.9.2 source registry parity entry; availability is verified per run.",
+                    notes="UZI-Skill 3.9.4 source registry parity entry; availability is verified per run.",
                     upstream_dims=upstream_dims,
                     health=str(health),
-                    upstream="UZI-Skill@22e65f2e0cee2cb41cb40fdbe391c9600b7fe359",
+                    upstream="UZI-Skill@0acf25122cabf493e7bc442faff62ceceb7f2f02",
                 )
             )
         return rows

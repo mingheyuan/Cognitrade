@@ -1,11 +1,11 @@
-# UZI 3.9.2 严格对齐目标与验收矩阵
+# UZI 3.9.4 严格对齐目标与验收矩阵
 
 ## 1. 文档状态
 
 - 目标状态：完成；固定提交差异测试、全量回归与真实 provider smoke 均已由 GitHub Actions 验收
 - 上游仓库：`https://github.com/wbh604/UZI-Skill`
-- 唯一基准提交：`22e65f2e0cee2cb41cb40fdbe391c9600b7fe359`
-- 上游版本：`3.9.2`
+- 唯一基准提交：`0acf25122cabf493e7bc442faff62ceceb7f2f02`
+- 上游版本：`3.9.4`
 - 迁移边界：实现迁入 Finance DomainPack；生产环境不得依赖外部 UZI checkout、CLI、缓存目录或运行时
 - 保留边界：Agent OS API/Web、ArtifactBoard、运行溯源与鉴权
 - 公开方法边界：23 个 UZI 方法只能通过各自的 `finance.uzi.native.*` intent 触发；旧 `requested_methods`/`method_catalog` 入口已删除
@@ -29,7 +29,7 @@
 | 资产 | 上游路径 | 固定证据 | 目标 |
 |---|---|---|---|
 | 许可证 | `LICENSE` | SHA-256 `78bebb5232741327c31b0da4f5bbd570dc59ab3c3230582a4d1b4650238a7d58` | 保留 MIT notice 与来源提交 |
-| 原生报告呈现层 | `skills/deep-analysis/assets/report-template.html` + 4 个 `lib/report` helper | v3.9.4 commit `0acf25122cabf493e7bc442faff62ceceb7f2f02`；模板 3615 行；SHA-256 `1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8` | 原样迁入并加逐文件哈希测试；分析方法仍固定在 3.9.2 |
+| 原生报告呈现层 | `skills/deep-analysis/assets/report-template.html` + 4 个 `lib/report` helper | v3.9.4 commit `0acf25122cabf493e7bc442faff62ceceb7f2f02`；模板 3615 行；SHA-256 `1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8` | 原样迁入并加逐文件哈希测试；分析方法仍固定在 3.9.4 |
 | 来源注册表 | `skills/deep-analysis/scripts/lib/data_source_registry.py` | 73 个 source ID | 目标目录和运行注册表均为 73 项 |
 | 命令目录 | `commands/*.md` | 20 个命令 | 20 个独立 Agent OS/API/Web 能力 |
 | Fetcher | `skills/deep-analysis/scripts/fetch_*.py` | 22 个 fetcher | 调用链与结果契约逐项等价 |
@@ -217,4 +217,4 @@
 6. 报告相关能力通过 HTML/PDF 视觉和并发验证。
 7. 本文验收矩阵填写实际测试命令、产物路径和提交证据。
 
-在全部条件满足前，项目不得声明“与 UZI 3.9.2 完全对齐”。
+在全部条件满足前，项目不得声明“与 UZI 3.9.4 完全对齐”。

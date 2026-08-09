@@ -1,8 +1,8 @@
 schema_version: "3"
 source:
   repository: https://github.com/wbh604/UZI-Skill
-  commit: 22e65f2e0cee2cb41cb40fdbe391c9600b7fe359
-  version: 3.9.2
+  commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
+  version: 3.9.4
   license: MIT
   license_sha256: 78bebb5232741327c31b0da4f5bbd570dc59ab3c3230582a4d1b4650238a7d58
   vendored_root: domain_packs/finance_ashare/vendor/uzi_3_9_2
@@ -18,7 +18,7 @@ contract:
   external_checkout_runtime: forbidden
 
 defaults: &defaults
-  source_commit: 22e65f2e0cee2cb41cb40fdbe391c9600b7fe359
+  source_commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
   migration_status: source_parity
   result_equivalence: exact
   invocation_acceptance: tests.test_uzi_392_vendor_runtime.Uzi392VendorRuntimeTests.test_all_22_fetcher_dispatches_preserve_upstream_results_and_call_contracts

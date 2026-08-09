@@ -406,7 +406,7 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
         self.assertNotIn("methodology_outputs", policies)
         self.assertNotIn("retired_method_catalog", policies)
         self.assertNotIn("retired_methodology_outputs", policies)
-        self.assertNotIn("3.9.2-adapted", (repository_root / "domain_packs/finance_ashare/domain.yaml").read_text(encoding="utf-8"))
+        self.assertNotIn("3.9.4-adapted", (repository_root / "domain_packs/finance_ashare/domain.yaml").read_text(encoding="utf-8"))
 
     def test_portfolio_method_adds_asset_class_artifact_to_intent_outputs(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]

@@ -9,7 +9,7 @@ import threading
 from typing import Any, Callable
 
 
-UZI_SOURCE_COMMIT = "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359"
+UZI_SOURCE_COMMIT = "0acf25122cabf493e7bc442faff62ceceb7f2f02"
 UZI_REPORT_SOURCE_COMMIT = "0acf25122cabf493e7bc442faff62ceceb7f2f02"
 UZI_REPORT_VERSION = "3.9.4"
 UZI_REPORT_TEMPLATE_SHA256 = "1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8"
@@ -19,9 +19,9 @@ UZI_REPORT_RENDERER_SHA256 = {
     "lib/report/panel_cards.py": "0b21aefb50d87dc992a378cbe8e50eef9988e0d69147d9956db759858ec666ce",
     "lib/report/svg_primitives.py": "2b13c6fdc9bfc1a5182a39c74d75d8c14ce1d52c26b7e88ae32975d1b547f93e",
 }
-UZI_PURE_PYTHON_TREE_SHA256 = "127fd378e71c098691e5573bd860455bc181cbb664cc9443e010ce284d245051"
+UZI_PURE_PYTHON_TREE_SHA256 = "dae53a8de9c31ec7fa9d057f954ac61c6a53d2c907ca9517be40ead873ef1905"
 UZI_COMMAND_TREE_SHA256 = "18a54c151139e8cfe50ffa093035bf90ebbf3bd6327248adc5b5bfdbda7ccc61"
-UZI_ANALYST_ASSET_TREE_SHA256 = "876a9e4714ba2894454195f3bc06b9326938bc243a7531848536129addc4da85"
+UZI_ANALYST_ASSET_TREE_SHA256 = "c5afcc7f7266ba7932195c4ee0534d6eb17707f11052bbf1bd5ce9a3c30b0396"
 
 UZI_FETCHER_IDS: tuple[str, ...] = (
     "0_basic",
@@ -197,7 +197,7 @@ class Uzi392FetcherRuntime:
         try:
             spec = _FETCHERS[fetcher_id]
         except KeyError as exc:
-            raise ValueError(f"Unsupported UZI 3.9.2 fetcher: {fetcher_id}") from exc
+            raise ValueError(f"Unsupported UZI 3.9.4 fetcher: {fetcher_id}") from exc
         module = importlib.import_module(spec.module)
         normalized_options = dict(options or {})
         if fetcher_id == "19_contests" and "cognitrade_xueqiu_policy" in normalized_options:

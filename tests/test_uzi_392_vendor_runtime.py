@@ -104,7 +104,7 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
         main.assert_called_once_with("白酒", dependencies["8_materials"]["data"]["materials_detail"])
 
     def test_unknown_fetcher_is_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Unsupported UZI 3.9.2 fetcher"):
+        with self.assertRaisesRegex(ValueError, "Unsupported UZI 3.9.4 fetcher"):
             self.runtime.collect("missing", ticker="600519")
 
     def test_contests_runtime_blocks_xueqiu_at_the_native_boundary(self) -> None:
@@ -255,7 +255,7 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
                     target="600519",
                     profile="medium",
                 )
-                self.assertIn("uzi-3.9.2-native-raw-v1", context["schema_version"])
+                self.assertIn("uzi-3.9.4-native-raw-v1", context["schema_version"])
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""ArtifactBoard adapter for UZI 3.9.2 analysis and exact 3.9.4 report presentation.
+"""ArtifactBoard adapter for UZI 3.9.4 analysis and exact 3.9.4 report presentation.
 
 Visible DOM, CSS and JavaScript come from the pinned upstream template and
 renderer helpers.  Cognitrade metadata is deliberately kept out of the visible
@@ -228,7 +228,7 @@ def _render_segmental_in_memory(
     # another report's ArtifactBoard payload.
     with _SEGMENTAL_RENDER_LOCK:
         cache_module.read_task_output = read_task_output
-        # UZI 3.9.2's segmental module calls the native primitive but omitted
+        # UZI 3.9.4's segmental module calls the native primitive but omitted
         # its import.  Inject that exact upstream function at the adapter
         # boundary without modifying the pinned vendored source/hash.
         segmental.svg_sparkline = svg_primitives.svg_sparkline

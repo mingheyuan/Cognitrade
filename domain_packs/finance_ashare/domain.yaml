@@ -181,7 +181,7 @@ intake:
   minimum_confidence: 0.65
   intents:
     - intent_id: stock_check
-      description: Run the complete pinned UZI 3.9.2 analysis and strict quality gate on one or more companies.
+      description: Run the complete pinned UZI 3.9.4 analysis and strict quality gate on one or more companies.
       required_slots: [symbols, research_profile]
       candidate_capabilities:
         - finance.query.normalize
@@ -199,7 +199,7 @@ intake:
         - finance.uzi.native.report.compose
       output_artifact_types: [research_report]
     - intent_id: quick_scan
-      description: Run the pinned UZI 3.9.2 four-dimension stock quick scan and return concise Markdown.
+      description: Run the pinned UZI 3.9.4 four-dimension stock quick scan and return concise Markdown.
       required_slots: [symbols]
       candidate_capabilities:
         - finance.query.normalize
@@ -460,7 +460,7 @@ capabilities:
   - subagent_type: fund_research_analyst
     capability: finance.fund.analyze
     capability_version: "1"
-    methodology_version: "uzi-3.9.2-fund-selection-v4"
+    methodology_version: "uzi-3.9.4-fund-selection-v4"
     implementation: subagents.runtime:analyze_funds
     consumes:
       - artifact_type: fund_snapshot
@@ -475,7 +475,7 @@ capabilities:
   - subagent_type: fund_report_composer
     capability: finance.fund.report.compose
     capability_version: "1"
-    methodology_version: "uzi-3.9.2-fund-selection-v4"
+    methodology_version: "uzi-3.9.4-fund-selection-v4"
     implementation: subagents.runtime:compose_fund_report
     consumes:
       - artifact_type: fund_analysis
@@ -506,7 +506,7 @@ capabilities:
   - subagent_type: uzi_quick_scan_composer
     capability: finance.uzi.quick_scan.compose
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:compose_uzi_quick_scan
     consumes:
       - *finance_snapshot_input
@@ -521,7 +521,7 @@ capabilities:
   - subagent_type: uzi_native_analyze_stock
     capability: finance.uzi.native.analyze_stock
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_full_analysis
     consumes:
       - *finance_snapshot_input
@@ -536,7 +536,7 @@ capabilities:
   - subagent_type: uzi_native_report_composer
     capability: finance.uzi.native.report.compose
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:compose_uzi_native_delivery
     consumes:
       - artifact_type: uzi_native_analysis
@@ -550,7 +550,7 @@ capabilities:
   - subagent_type: stock_comparison_report_composer
     capability: finance.stock.compare.report.compose
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:compose_stock_comparison_delivery
     consumes:
       - artifact_type: uzi_native_analysis
@@ -564,7 +564,7 @@ capabilities:
   - subagent_type: uzi_native_dcf_analyst
     capability: finance.uzi.native.dcf
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_dcf
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -574,7 +574,7 @@ capabilities:
   - subagent_type: uzi_native_panel_only_command
     capability: finance.uzi.command.panel_only
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_command_panel_only
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_command_result}]
@@ -584,7 +584,7 @@ capabilities:
   - subagent_type: uzi_native_scan_trap_command
     capability: finance.uzi.command.scan_trap
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_command_scan_trap
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_command_result}]
@@ -594,7 +594,7 @@ capabilities:
   - subagent_type: uzi_native_segmental_model_command
     capability: finance.uzi.command.segmental_model
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_command_segmental_model
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_command_result}]
@@ -604,7 +604,7 @@ capabilities:
   - subagent_type: uzi_native_comps_analyst
     capability: finance.uzi.native.comps
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_comps
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -614,7 +614,7 @@ capabilities:
   - subagent_type: uzi_native_three_statement_analyst
     capability: finance.uzi.native.three_statement
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_three_statement
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -624,7 +624,7 @@ capabilities:
   - subagent_type: uzi_native_quick_lbo_analyst
     capability: finance.uzi.native.quick_lbo
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_quick_lbo
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -634,7 +634,7 @@ capabilities:
   - subagent_type: uzi_native_accretion_dilution_analyst
     capability: finance.uzi.native.accretion_dilution
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_accretion_dilution
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -644,7 +644,7 @@ capabilities:
   - subagent_type: uzi_native_initiation_report_analyst
     capability: finance.uzi.native.initiation_report
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_initiation_report
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -654,7 +654,7 @@ capabilities:
   - subagent_type: uzi_native_earnings_review_analyst
     capability: finance.uzi.native.earnings_review
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_earnings_review
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -664,7 +664,7 @@ capabilities:
   - subagent_type: uzi_native_catalyst_calendar_analyst
     capability: finance.uzi.native.catalyst_calendar
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_catalyst_calendar
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -674,7 +674,7 @@ capabilities:
   - subagent_type: uzi_native_thesis_tracker_analyst
     capability: finance.uzi.native.thesis_tracker
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_thesis_tracker
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -684,7 +684,7 @@ capabilities:
   - subagent_type: uzi_native_morning_note_analyst
     capability: finance.uzi.native.morning_note
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_morning_note
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -694,7 +694,7 @@ capabilities:
   - subagent_type: uzi_native_quantitative_screen_analyst
     capability: finance.uzi.native.quantitative_screen
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_quantitative_screen
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -704,7 +704,7 @@ capabilities:
   - subagent_type: uzi_native_sector_review_analyst
     capability: finance.uzi.native.sector_review
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_sector_review
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -714,7 +714,7 @@ capabilities:
   - subagent_type: uzi_native_ic_memo_analyst
     capability: finance.uzi.native.ic_memo
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_ic_memo
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -724,7 +724,7 @@ capabilities:
   - subagent_type: uzi_native_porter_bcg_analyst
     capability: finance.uzi.native.porter_bcg
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_porter_bcg
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -734,7 +734,7 @@ capabilities:
   - subagent_type: uzi_native_dd_checklist_analyst
     capability: finance.uzi.native.dd_checklist
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_dd_checklist
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -744,7 +744,7 @@ capabilities:
   - subagent_type: uzi_native_unit_economics_analyst
     capability: finance.uzi.native.unit_economics
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_unit_economics
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -754,7 +754,7 @@ capabilities:
   - subagent_type: uzi_native_value_creation_plan_analyst
     capability: finance.uzi.native.value_creation_plan
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_value_creation_plan
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -764,7 +764,7 @@ capabilities:
   - subagent_type: uzi_native_ai_readiness_analyst
     capability: finance.uzi.native.ai_readiness
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_ai_readiness
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -774,7 +774,7 @@ capabilities:
   - subagent_type: uzi_native_earnings_preview_analyst
     capability: finance.uzi.native.earnings_preview
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_earnings_preview
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -784,7 +784,7 @@ capabilities:
   - subagent_type: uzi_native_model_update_analyst
     capability: finance.uzi.native.model_update
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_model_update
     consumes: [*finance_snapshot_input]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -794,7 +794,7 @@ capabilities:
   - subagent_type: uzi_native_returns_attribution_analyst
     capability: finance.uzi.native.returns_attribution
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_returns_attribution
     consumes: [{artifact_type: normalized_query}]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -804,7 +804,7 @@ capabilities:
   - subagent_type: uzi_native_holding_rebalance_analyst
     capability: finance.uzi.native.holding_rebalance
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_holding_rebalance
     consumes: [{artifact_type: normalized_query}]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -814,7 +814,7 @@ capabilities:
   - subagent_type: uzi_native_portfolio_rebalance_analyst
     capability: finance.uzi.native.portfolio_rebalance
     capability_version: "1"
-    methodology_version: "3.9.2-source-parity"
+    methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_portfolio_rebalance
     consumes: [{artifact_type: normalized_query}]
     produces: [{artifact_type: uzi_native_method_result}]
@@ -1665,8 +1665,8 @@ metadata:
     uzi_source_mapping: migration/uzi_source_mapping.yaml
     uzi_source_mapping_schema: migration/uzi_source_mapping.schema.json
     uzi_source_mapping_schema_version: "3"
-    source_commit: 22e65f2e0cee2cb41cb40fdbe391c9600b7fe359
-    methodology_version: 3.9.2-source-parity
+    source_commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
+    methodology_version: 3.9.4-source-parity
   dashboard_views:
     overview:
       resources:

@@ -1,4 +1,4 @@
-"""Pinned UZI 3.9.2 pure-method execution inside the Finance DomainPack.
+"""Pinned UZI 3.9.4 pure-method execution inside the Finance DomainPack.
 
 The upstream functions are called without rewriting their formulas.  Agent OS
 adds only the outer result envelope, source lineage, explicit-input gates and
@@ -179,7 +179,7 @@ def execute_native_method(
     inputs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if method_id not in UZI_NATIVE_METHOD_IDS:
-        raise ValueError(f"Unsupported UZI 3.9.2 native method: {method_id}")
+        raise ValueError(f"Unsupported UZI 3.9.4 native method: {method_id}")
     inputs = dict(inputs or {})
     if method_id in {"returns_attribution", "holding_rebalance", "portfolio_rebalance"}:
         return _execute_portfolio_method(method_id, inputs)

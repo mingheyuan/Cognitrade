@@ -1,6 +1,6 @@
-"""Exact investor metadata vendored from UZI 3.9.2.
+"""Exact investor metadata vendored from UZI 3.9.4.
 
-Source commit: 22e65f2e0cee2cb41cb40fdbe391c9600b7fe359
+Source commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
 The metadata is descriptive methodology lineage, not live investor advice.
 """
 

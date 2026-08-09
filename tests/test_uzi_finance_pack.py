@@ -145,7 +145,7 @@ class UziFinancePackTests(unittest.TestCase):
                 "16_lhb", "17_sentiment", "18_trap", "19_contests", "fund_holders", "similar_stocks",
             },
         )
-        self.assertEqual(mapping["source"]["commit"], "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359")
+        self.assertEqual(mapping["source"]["commit"], "0acf25122cabf493e7bc442faff62ceceb7f2f02")
         self.assertEqual(mapping["profiles"]["lite"]["panel_seats"], 10)
         self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 51)
         self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 66)

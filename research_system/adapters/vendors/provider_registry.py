@@ -140,7 +140,7 @@ class VendorProviderRegistry:
                 access="sdk",
                 dependency="efinance",
                 priority=20,
-                notes="Zero-key A/H/US market fallback aligned with UZI 3.9.2.",
+                notes="Zero-key A/H/US market fallback aligned with UZI 3.9.4.",
             ),
             ProviderSpec(
                 provider_id="tushare_market",

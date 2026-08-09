@@ -52,6 +52,7 @@ class Settings(BaseModel):
     log_level: str = "INFO"
     llm_request_timeout_seconds: int = 25
     uzi_llm_request_timeout_seconds: int = 480
+    uzi_llm_max_concurrency: int = 3
     max_llm_calls_per_turn: int = 1
     max_agent_tool_loop_turns: int = 4
     max_subagent_calls_per_turn: int = 32
@@ -91,6 +92,8 @@ class Settings(BaseModel):
             raise ValueError("llm_request_timeout_seconds must be positive")
         if self.uzi_llm_request_timeout_seconds <= 0:
             raise ValueError("uzi_llm_request_timeout_seconds must be positive")
+        if self.uzi_llm_max_concurrency <= 0:
+            raise ValueError("uzi_llm_max_concurrency must be positive")
         if self.qdrant_hybrid_candidate_limit <= 0:
             raise ValueError("qdrant_hybrid_candidate_limit must be positive")
         if self.max_llm_calls_per_turn <= 0:

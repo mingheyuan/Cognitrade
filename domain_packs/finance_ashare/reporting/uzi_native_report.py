@@ -1,4 +1,4 @@
-"""Strict ArtifactBoard boundary for UZI 3.9.2 analysis and 3.9.4 presentation."""
+"""Strict ArtifactBoard boundary for UZI 3.9.4 analysis and 3.9.4 presentation."""
 
 from __future__ import annotations
 

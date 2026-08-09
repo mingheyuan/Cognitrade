@@ -45,6 +45,9 @@ from domain_packs.finance_ashare.vendor.uzi_3_9_2 import Uzi392FetcherRuntime
 from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
 from domain_packs.finance_ashare.tools.uzi_data_recovery import (
     assess_integrity,
+    collect_qualitative_agent_evidence,
+    recover_playwright_snapshots,
+    recover_qualitative_snapshots,
     recover_suggested_fixes_until_exhausted,
 )
 from research_system.runtime.storage.jsonl import read_json, write_json
@@ -129,7 +132,7 @@ _SNAPSHOT_CACHE_SCHEMA_VERSIONS = {
     "materials": "uzi-industry-materials-v2",
     "futures": "materials-linked-v2",
 }
-_UZI_NATIVE_SNAPSHOT_CACHE_SCHEMA_VERSION = "uzi-3.9.2-native-raw-v1"
+_UZI_NATIVE_SNAPSHOT_CACHE_SCHEMA_VERSION = "uzi-3.9.4-native-raw-v1"
 _UNAVAILABLE_QUALITY_STATUSES = {
     "degraded",
     "data_gap",
@@ -996,7 +999,7 @@ def _bundle_result(
             )
             if has_native_payload
             else {
-                "schema_version": "uzi-3.9.2-suggested-fix-loop-v1",
+                "schema_version": "uzi-3.9.4-suggested-fix-loop-v1",
                 "profile": selected_profile,
                 "stage_order": [],
                 "attempted": 0,
@@ -1010,23 +1013,53 @@ def _bundle_result(
                 "round_limit": None,
             }
         )
-        recovery_attempts = list(strict_recovery.get("attempts") or [])
-        qualitative_recovery = {
-            **strict_recovery,
-            "attempts": [
-                row for row in recovery_attempts
-                if row.get("stage") in {"official_web_ddgs", "mx_api", "qualitative_agent", "qualitative_inference"}
-            ],
-        }
-        playwright_recovery = {
-            **strict_recovery,
-            "attempts": [row for row in recovery_attempts if row.get("stage") == "playwright"],
-        }
+        if has_native_payload:
+            # Exact UZI 3.9.4 Stage 1 order: integrity/suggested-fix worklist,
+            # six-dimension MX→DDGS empty-field autofill, then the
+            # profile-scoped Playwright fallback.  Agent task2.5 evidence is
+            # collected afterwards in three parallel groups and frozen for
+            # the analysis node.
+            qualitative_recovery = recover_qualitative_snapshots(
+                normalized_snapshots,
+                query=query,
+                symbols=symbols,
+                profile=selected_profile,
+                settings=settings,
+            )
+            playwright_recovery = recover_playwright_snapshots(
+                normalized_snapshots,
+                query=query,
+                symbols=symbols,
+                profile=selected_profile,
+                settings=settings,
+            )
+            qualitative_agent_evidence = collect_qualitative_agent_evidence(
+                normalized_snapshots,
+                query=query,
+                symbols=symbols,
+                profile=selected_profile,
+                settings=settings,
+                cancellation=cancellation,
+            )
+        else:
+            stage_disabled = {
+                "schema_version": "uzi-3.9.4-agent-os-v1",
+                "profile": selected_profile,
+                "enabled": False,
+                "attempted": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "attempts": [],
+                "disabled_reason": "native_uzi_payload_unavailable",
+            }
+            qualitative_recovery = dict(stage_disabled)
+            playwright_recovery = dict(stage_disabled)
+            qualitative_agent_evidence = dict(stage_disabled)
     elif selected_profile == "workspace_market_data":
         # Non-UZI workspaces (for example the standalone market-data view)
         # share the collector but must not silently enter an analysis profile.
         qualitative_recovery = {
-            "schema_version": "uzi-3.9.2-agent-os-v1",
+            "schema_version": "uzi-3.9.4-agent-os-v1",
             "profile": selected_profile,
             "enabled": False,
             "attempted": 0,
@@ -1036,6 +1069,7 @@ def _bundle_result(
             "disabled_reason": "non_uzi_collection_profile",
         }
         playwright_recovery = dict(qualitative_recovery)
+        qualitative_agent_evidence = dict(qualitative_recovery)
         strict_recovery = dict(qualitative_recovery)
     else:
         raise ValueError("research_profile must be lite, medium or deep")
@@ -1108,6 +1142,7 @@ def _bundle_result(
                 normalized_snapshots,
                 qualitative=qualitative_recovery,
                 playwright=playwright_recovery,
+                agent_evidence=qualitative_agent_evidence,
                 strict=strict_recovery,
             ),
         },
@@ -1119,11 +1154,10 @@ def _recovery_summary(
     *,
     qualitative: dict[str, Any] | None = None,
     playwright: dict[str, Any] | None = None,
+    agent_evidence: dict[str, Any] | None = None,
     strict: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     strict_payload = dict(strict or {})
-    if strict_payload:
-        return strict_payload
     attempts = []
     for snapshot in snapshots:
         if not isinstance(snapshot, dict):
@@ -1150,15 +1184,21 @@ def _recovery_summary(
                 "trigger_reason": playwright_fact.get("trigger_reason"),
             })
     return {
-        "schema_version": "uzi-3.9.2-agent-os-v1",
-        "stage_order": ["primary_providers", "integrity_check", "mx_api", "ddgs", "playwright", "integrity_recheck"],
+        "schema_version": "uzi-3.9.4-agent-os-v1",
+        "stage_order": [
+            "primary_providers", "integrity_check", "suggested_fix_loop",
+            "mx_api", "ddgs", "playwright", "qualitative_agent_evidence",
+            "integrity_recheck",
+        ],
         "order": ["mx_api", "ddgs", "playwright"],
-        "attempted": len(attempts),
-        "succeeded": sum(row.get("status") == "available" for row in attempts),
-        "failed": sum(row.get("status") != "available" for row in attempts),
-        "attempts": attempts,
+        "attempted": int(strict_payload.get("attempted") or 0) + len(attempts),
+        "succeeded": int(strict_payload.get("succeeded") or 0) + sum(row.get("status") == "available" for row in attempts),
+        "failed": int(strict_payload.get("failed") or 0) + sum(row.get("status") != "available" for row in attempts),
+        "attempts": [*list(strict_payload.get("attempts") or []), *attempts],
+        "strict_stage": strict_payload,
         "qualitative_stage": dict(qualitative or {}),
         "playwright_stage": dict(playwright or {}),
+        "qualitative_agent_evidence_stage": dict(agent_evidence or {}),
     }
 
 

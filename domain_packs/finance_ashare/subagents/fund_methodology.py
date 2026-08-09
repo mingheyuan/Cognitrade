@@ -6,7 +6,7 @@ import math
 from typing import Any
 
 
-FUND_METHODOLOGY_VERSION = "uzi-3.9.2-fund-selection-v4"
+FUND_METHODOLOGY_VERSION = "uzi-3.9.4-fund-selection-v4"
 
 _COMPONENTS: tuple[tuple[str, float, bool], ...] = (
     ("return_1y", 0.20, True),
