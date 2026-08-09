@@ -1,0 +1,149 @@
+.gitignore
+  s_b50dd23690b4b9::t_88bfdb857b3a00 5
+domain_packs/finance_ashare/skills/fund_snapshot/skill.py
+  s_b50dd23690b4b9::t_cc6817549d3a4d 718-720,986-990,1348
+domain_packs/finance_ashare/skills/notice_snapshot/skill.py
+  s_b50dd23690b4b9::t_99c5516982b14b 4
+domain_packs/finance_ashare/subagents/runtime.py
+  s_b50dd23690b4b9::t_c4df2fbabf31d8 4,6,2620-2624,2626-2630,2633-2637
+domain_packs/finance_ashare/subagents/uzi_392_native_methods.py
+  s_b50dd23690b4b9::t_274605f4de7e01 143-147,353-357
+domain_packs/finance_ashare/subagents/uzi_advanced_methodology.py
+  s_b50dd23690b4b9::t_de320dedf98323 287-316,346,354,402,411
+domain_packs/finance_ashare/subagents/uzi_methodology.py
+  s_b50dd23690b4b9::t_60225d8870eceb 1241-1243,1263-1265,2230-2231,2252-2254,2466-2467,2472-2475
+domain_packs/finance_ashare/subagents/uzi_panel_context.py
+  s_b50dd23690b4b9::t_e3911030c548bb 33-34,39-41
+domain_packs/finance_ashare/subagents/uzi_panel_rules.py
+  s_b50dd23690b4b9::t_d40a53c1bf6f72 573,576-577,596,604,612-613,619-631,633-634,636,638-641
+domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py
+  s_b50dd23690b4b9::t_21de1ed830c57c 543,660-661,667-669
+domain_packs/finance_ashare/tools/fund_master.py
+  s_b50dd23690b4b9::t_56668ac912823d 115-120
+domain_packs/finance_ashare/tools/security_master.py
+  s_b50dd23690b4b9::t_46eb0582d013e2 161-166
+domain_packs/finance_ashare/tools/snapshot_collector.py
+  s_b50dd23690b4b9::t_da28569b93fd68 284-288,411-415
+research_system/adapters/storage/qdrant_adapter.py
+  s_b50dd23690b4b9::t_a1a7f9c7321650 792-796,800
+research_system/adapters/storage/resource_lease.py
+  s_b50dd23690b4b9::t_b26ce161958454 3,101,105
+research_system/adapters/vendors/akshare_catalyst_adapter.py
+  s_b50dd23690b4b9::t_09e09b7c0932ad 404-406,445
+research_system/adapters/vendors/akshare_fundamental_adapter.py
+  s_b50dd23690b4b9::t_b880cfb2c5b4e6 250-251,260-262
+research_system/adapters/vendors/akshare_market_adapter.py
+  s_b50dd23690b4b9::t_b52aad5cb33b5e 110-115,178
+research_system/adapters/vendors/direct_http_market_adapter.py
+  s_b50dd23690b4b9::t_8087ec8c9ab0b1 38
+research_system/adapters/vendors/fallback_merge.py
+  s_b50dd23690b4b9::t_32a1b99667af85 14
+research_system/adapters/vendors/tushare_market_adapter.py
+  s_b50dd23690b4b9::t_1b156c5d27f8a1 33-34,44-46
+research_system/adapters/vendors/uzi_global_peer_adapter.py
+  s_b50dd23690b4b9::t_a8c3d84fd4ec5a 179-185
+research_system/api/agent_os_admin_service.py
+  s_b50dd23690b4b9::t_8bc63f8872d6b5 379
+research_system/api/agent_os_dashboard_service.py
+  s_b50dd23690b4b9::t_537f874bd36e3f 215-223,247
+research_system/api/agent_os_run_service.py
+  s_b50dd23690b4b9::t_0d5218d3783aa8 3,212,1187
+research_system/api/chat_service.py
+  s_b50dd23690b4b9::t_1aa48d05e889ac 323
+research_system/api/fund_holding_report_service.py
+  s_b50dd23690b4b9::t_1ff3645cf3a558 108-113,848-852,973,1041-1042,1046-1047
+research_system/api/route_support.py
+  s_b50dd23690b4b9::t_fcf0a6943502e7 5,8-19,22-30,33
+research_system/api/routes/admin.py
+  s_b50dd23690b4b9::t_87c11bdba72723 23,79,108,149,186,222,254
+research_system/api/routes/chat.py
+  s_b50dd23690b4b9::t_072d8d662cc51b 11-14,35,50,64,80,96,110,124,138,152,176,183
+research_system/api/routes/dashboard.py
+  s_b50dd23690b4b9::t_52dc7801c6e126 9,35
+research_system/api/routes/runs.py
+  s_b50dd23690b4b9::t_1efa47149c1745 24-27,63,115,134,279,285
+research_system/api/validation.py
+  s_b50dd23690b4b9::t_9860b76cbdfa0e 323
+research_system/runtime/agent_os.py
+  s_b50dd23690b4b9::t_bda5c81de07227 25
+research_system/runtime/config/settings_env.py
+  s_b50dd23690b4b9::t_3ffe4465b8e62f 15
+research_system/runtime/core/approvals.py
+  s_b50dd23690b4b9::t_fe523aaca85c3b 242-247,290-293,296-298
+research_system/runtime/core/artifact_board.py
+  s_b50dd23690b4b9::t_d3161e6739d353 9
+research_system/runtime/core/core_loop.py
+  s_b50dd23690b4b9::t_e0cd98dfe5f9af 1201
+research_system/runtime/core/tool_registry.py
+  s_b50dd23690b4b9::t_b24e796f8f4c8e 16,402
+research_system/runtime/diagnostics/doctoring/doctor_provider_checks.py
+  s_b50dd23690b4b9::t_273e42f8f6a7ad 5-6,13-15
+research_system/runtime/domain_packs/registry.py
+  s_b50dd23690b4b9::t_4fb5a450348711 405
+research_system/runtime/evaluation/pack_runner.py
+  s_b50dd23690b4b9::t_1a57f8d0ffe755 178-182
+research_system/runtime/event_store.py
+  s_b50dd23690b4b9::t_927c48529f8bd9 21-33
+research_system/runtime/execution/core/graph_runner.py
+  s_b50dd23690b4b9::t_7a90eda9a18283 40,1059,1072,1201,1610-1614,1903-1909,1911-1912,2027-2033,2035-2036,2926,3119-3124
+research_system/runtime/follow_up.py
+  s_b50dd23690b4b9::t_5832bdee21e99c 504,518-539,541-555,608
+research_system/runtime/intake/request_intake.py
+  s_b50dd23690b4b9::t_d60f2d36c5a08c 269
+research_system/runtime/providers/openai_client_support.py
+  s_b50dd23690b4b9::t_813b37d7ac4799 27
+research_system/runtime/providers/openai_response_support.py
+  s_b50dd23690b4b9::t_71cb4b898e69ba 112
+research_system/runtime/storage/runs/retention.py
+  s_b50dd23690b4b9::t_2aec37366a989a 3,50
+research_system/runtime/turn_runner.py
+  s_b50dd23690b4b9::t_b27a7ec4e374f1 3,2184,3268,3303
+research_system/schemas/domain_pack.py
+  s_b50dd23690b4b9::t_f9bed28efccf87 35-42
+research_system/schemas/execution_graph.py
+  s_b50dd23690b4b9::t_a41f32641ce6e1 207,263-266
+scripts/generate_finance_artifact_contracts.py
+  s_b50dd23690b4b9::t_a697b02fc8c64b 206-209
+tests/test_agent_os.py
+  s_b50dd23690b4b9::t_0e1fa414229c0a 139-141,145-148,151-157,159
+tests/test_api_v1_runs.py
+  s_b50dd23690b4b9::t_ca94e199957fb9 118-122,154-158,531-532
+tests/test_execution_graph_runner.py
+  s_b50dd23690b4b9::t_30394894ad50f2 18
+tests/test_fund_research.py
+  s_b50dd23690b4b9::t_557254709c2c4e 273-278,280-292,294-309,311-324,326-334,336-344,346
+tests/test_provider_health.py
+  s_b50dd23690b4b9::t_6ec5960bb94539 3,48-56
+tests/test_provider_registry.py
+  s_b50dd23690b4b9::t_d02d02944b43c1 23
+tests/test_uzi_392_analysis.py
+  s_b50dd23690b4b9::t_069f8d22a31038 43-52
+tests/test_uzi_392_vendor_runtime.py
+  s_b50dd23690b4b9::t_9364b838380176 3,223-230
+tests/test_uzi_method_products.py
+  s_b50dd23690b4b9::t_cfe969f07e4704 3,8,245-249,438-446,466-474
+tests/test_uzi_native_report.py
+  s_b50dd23690b4b9::t_052a9b20dd730c 239
+tests/test_uzi_qualitative_deep_dive.py
+  s_b50dd23690b4b9::t_51d7bc28a72484 144-147
+tests/test_uzi_source_parity.py
+  s_b50dd23690b4b9::t_a3a2993b15b45a 109-124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "e26a8387701369f52b29f46b074aa7ddf67206f1",
+  "prompts": {},
+  "sessions": {
+    "s_b50dd23690b4b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe341-6a16-7f11-b28e-8f8b8ba2549b",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
