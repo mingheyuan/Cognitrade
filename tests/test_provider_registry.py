@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from pydantic import BaseModel
+
 from research_system.runtime.providers.openai_client_support import OpenAIClientSupport
 from research_system.runtime.providers.openai_response_support import OpenAIResponseSupport
 from research_system.runtime.providers.provider_registry import OpenAIProvider, ProviderRegistry
@@ -31,10 +33,12 @@ class _FakeStreamContext:
 
 
 class _FakeResponsesClient:
-    def __init__(self, *, create_responses=None, stream_parts=None) -> None:
+    def __init__(self, *, create_responses=None, parse_responses=None, stream_parts=None) -> None:
         self._create_responses = list(create_responses or [])
+        self._parse_responses = list(parse_responses or [])
         self._stream_parts = list(stream_parts or [])
         self.create_calls: list[dict] = []
+        self.parse_calls: list[dict] = []
         self.stream_calls: list[dict] = []
 
     def create(self, **kwargs):
@@ -42,6 +46,12 @@ class _FakeResponsesClient:
         if not self._create_responses:
             raise AssertionError("unexpected create call")
         return self._create_responses.pop(0)
+
+    def parse(self, **kwargs):
+        self.parse_calls.append(kwargs)
+        if not self._parse_responses:
+            raise AssertionError("unexpected parse call")
+        return self._parse_responses.pop(0)
 
     def stream(self, **kwargs):
         self.stream_calls.append(kwargs)
@@ -59,6 +69,10 @@ class _FakeClient:
     def with_options(self, **kwargs):
         self.with_options_calls.append(kwargs)
         return self
+
+
+class _StructuredPayload(BaseModel):
+    value: str
 
 
 class ProviderRegistryTests(unittest.TestCase):
@@ -138,6 +152,35 @@ class ProviderRegistryTests(unittest.TestCase):
 
         self.assertEqual(text, "done")
         self.assertEqual(client.with_options_calls, [{"max_retries": 0}])
+
+    def test_parse_uses_responses_json_schema_protocol(self) -> None:
+        payload = _StructuredPayload(value="grounded")
+        response = SimpleNamespace(
+            id="resp_structured",
+            status="completed",
+            incomplete_details=None,
+            output_parsed=payload,
+        )
+        responses = _FakeResponsesClient(parse_responses=[response])
+        client = _FakeClient(responses)
+        provider = OpenAIProvider(self._settings())
+        provider._client = client  # type: ignore[assignment]
+
+        result = provider.parse(
+            system_prompt="sys",
+            user_prompt="user",
+            schema=_StructuredPayload,
+            reasoning_effort="low",
+            timeout_seconds=321,
+            max_retries=0,
+        )
+
+        self.assertEqual(result, payload)
+        self.assertEqual(client.with_options_calls, [{"max_retries": 0}])
+        self.assertEqual(responses.parse_calls[0]["text_format"], _StructuredPayload)
+        self.assertEqual(responses.parse_calls[0]["reasoning"], {"effort": "low"})
+        self.assertEqual(responses.parse_calls[0]["timeout"], 321.0)
+        self.assertFalse(responses.parse_calls[0]["store"])
 
     def test_provider_registry_wires_default_provider(self) -> None:
         registry = ProviderRegistry(self._settings())

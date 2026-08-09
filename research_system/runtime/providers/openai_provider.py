@@ -63,16 +63,61 @@ class OpenAIProvider:
         timeout_seconds: float | None = None,
         max_retries: int | None = None,
     ) -> SchemaT:
-        raw_text = self.complete(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            temperature=temperature,
-            reasoning_effort=reasoning_effort,
-            force_json=True,
-            timeout_seconds=timeout_seconds,
-            max_retries=max_retries,
+        client = self._client_instance()
+        request_client = (
+            client.with_options(max_retries=max_retries)
+            if max_retries is not None
+            else client
         )
+        effective_reasoning_effort = (
+            reasoning_effort or self.settings.openai_reasoning_effort
+        )
+        request_timeout_seconds = (
+            float(timeout_seconds)
+            if timeout_seconds is not None
+            else self.request_timeout_seconds
+        )
+        if request_timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
         try:
+            response = request_client.responses.parse(
+                model=self.settings.default_model,
+                instructions=system_prompt,
+                input=user_prompt,
+                text_format=schema,
+                temperature=temperature,
+                reasoning=(
+                    {"effort": effective_reasoning_effort}
+                    if effective_reasoning_effort
+                    else None
+                ),
+                store=not self.settings.openai_disable_response_storage,
+                timeout=request_timeout_seconds,
+            )
+        except LLMProviderError:
+            raise
+        except APITimeoutError as exc:
+            raise LLMProviderError(
+                f"llm_request_timeout: {request_timeout_seconds:g}s"
+            ) from exc
+        except Exception as exc:
+            raise LLMProviderError(
+                f"llm_request_failed: {exc.__class__.__name__}: {exc}"
+            ) from exc
+
+        try:
+            parsed = getattr(response, "output_parsed", None)
+            if isinstance(parsed, schema):
+                return parsed
+            if parsed is not None:
+                return schema.model_validate(parsed)
+            status = self.response_support.response_status(response)
+            reason = self.response_support.incomplete_reason(response)
+            if status == "incomplete":
+                raise ValueError(
+                    f"structured response incomplete: {reason or 'unknown_reason'}"
+                )
+            raw_text = self.response_support.coerce_responses_text(response)
             payload = self.response_support.extract_json_object(raw_text)
             return schema.model_validate(payload)
         except Exception as exc:

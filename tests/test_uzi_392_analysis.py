@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
     AgentAnalysisPayload,
+    AgentDimensionPayload,
+    AgentNarrativePayload,
     _canonical_evidence_path,
     _normalize_payload_paths,
     _safe_error_detail,
@@ -75,7 +77,7 @@ class _LiteAgentProvider:
         if self.timeout:
             raise RuntimeError("llm_request_timeout: 480s")
         evidence_path = "raw.dimensions.0_basic.data.price"
-        return {
+        payload = {
             "agent_reviewed": True,
             "dim_commentary": {
                 key: {
@@ -108,6 +110,27 @@ class _LiteAgentProvider:
             },
             "data_gap_acknowledged": {},
         }
+        schema = kwargs.get("schema")
+        if schema is AgentDimensionPayload:
+            return {
+                "agent_reviewed": True,
+                "dimensions": [
+                    {
+                        "dimension_id": key,
+                        "commentary": commentary,
+                    }
+                    for key, commentary in payload["dim_commentary"].items()
+                ],
+                "data_gaps": [],
+            }
+        if schema is AgentNarrativePayload:
+            return {
+                "panel_insights": payload["panel_insights"],
+                "panel_evidence_paths": payload["panel_evidence_paths"],
+                "great_divide_override": payload.get("great_divide_override"),
+                "narrative_override": payload["narrative_override"],
+            }
+        return payload
 
 
 class Uzi392AnalysisGateTests(unittest.TestCase):
@@ -150,8 +173,8 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
             _LITE_DIMENSIONS,
         )
         self.assertNotIn("great_divide_override", analysis["agent_analysis"])
-        self.assertEqual(provider.calls, 1)
-        self.assertEqual(provider.reasoning_efforts, ["low"])
+        self.assertEqual(provider.calls, 2)
+        self.assertEqual(provider.reasoning_efforts, ["low", "low"])
 
     def test_native_panel_obeys_all_profile_seat_counts(self) -> None:
         for profile, expected in (("lite", 10), ("medium", 51), ("deep", 66)):
@@ -197,6 +220,25 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         ]
         self.assertEqual(len(timeout_issues), 1)
         self.assertFalse(result["report_allowed"])
+
+    def test_medium_transport_timeout_does_not_retry_for_downstream_qualitative_stage(self) -> None:
+        provider = _LiteAgentProvider(timeout=True)
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="medium",
+            llm_provider=provider,
+        )
+
+        analysis = result["results"][0]
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(provider.reasoning_efforts, ["low"])
+        self.assertEqual(len(analysis["recovery_history"]), 1)
+        self.assertEqual(
+            analysis["recovery_history"][0]["exhausted_reason"],
+            "no_remaining_agent_recovery_action",
+        )
 
     def test_enabled_empty_dimension_remains_a_non_bypassable_critical(self) -> None:
         rows = _lite_snapshots()
@@ -298,6 +340,28 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         self.assertEqual(
             _canonical_evidence_path("recovery_tasks.0.suggested_actions.2"),
             "recovery_tasks[0].suggested_actions[2]",
+        )
+        self.assertEqual(
+            _canonical_evidence_path("0_basic.data.price"),
+            "raw.dimensions.0_basic.data.price",
+        )
+        self.assertEqual(
+            _canonical_evidence_path("dimensions.10_valuation.data.pe"),
+            "raw.dimensions.10_valuation.data.pe",
+        )
+        self.assertEqual(
+            _canonical_evidence_path(
+                "raw.dimensions.10_valuation_models.data.dcf.intrinsic_per_share"
+            ),
+            "raw.dimensions.20_valuation_models.data.dcf.intrinsic_per_share",
+        )
+        self.assertEqual(
+            _canonical_evidence_path("20_valuation_models.data.dcf.safety_margin_pct"),
+            "raw.dimensions.20_valuation_models.data.dcf.safety_margin_pct",
+        )
+        self.assertEqual(
+            _canonical_evidence_path("2_kline.data.indicators.ma_align"),
+            "raw.dimensions.2_kline.data.ma_align",
         )
 
     def test_real_container_evidence_paths_expand_to_frozen_leaf_paths(self) -> None:

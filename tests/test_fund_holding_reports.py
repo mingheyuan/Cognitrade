@@ -567,6 +567,8 @@ class FundHoldingReportServiceTests(unittest.TestCase):
 
         self.assertIn("模型服务响应超时", message)
         self.assertIn("模型请求已超时", message)
+        self.assertNotIn("agent_analysis.json 不存在", message)
+        self.assertNotIn("Agent 分析缺失或未确认", message)
         self.assertNotIn("补充真实数据或恢复数据源", message)
 
     def test_terminal_upstream_502_does_not_claim_a_data_source_gap(self) -> None:

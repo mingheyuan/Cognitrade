@@ -59,13 +59,21 @@ _DIMENSION_KEYS = tuple(f"{index}_{name}" for index, name in enumerate((
     "trap",
     "contests",
 )))
+_DERIVED_DIMENSION_KEYS = (
+    "20_valuation_models",
+    "21_research_workflow",
+    "22_deep_methods",
+)
 _QUALITATIVE_KEYS = frozenset({
     "3_macro", "7_industry", "8_materials", "9_futures", "13_policy", "15_events",
 })
 
 _PROFILE_REASONING_EFFORT = {
     "lite": "low",
-    "medium": "high",
+    # Medium depth is defined by its 20 dimensions, 51 seats and qualitative
+    # stage.  Raising hidden model reasoning here only exhausts the gateway
+    # timeout; it must not silently redefine the user's selected profile.
+    "medium": "low",
     "deep": "xhigh",
 }
 
@@ -87,14 +95,22 @@ class GroundedText(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(min_length=20, max_length=2_000)
-    evidence_paths: list[str] = Field(min_length=1, max_length=8)
+    evidence_paths: list[str] = Field(
+        min_length=1,
+        max_length=8,
+        description="Exact full paths copied from ALLOWED_LEAF_EVIDENCE_PATHS.",
+    )
 
 
 class GroundedRound(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(min_length=10, max_length=1_000)
-    evidence_paths: list[str] = Field(min_length=1, max_length=6)
+    evidence_paths: list[str] = Field(
+        min_length=1,
+        max_length=6,
+        description="Exact full paths copied from ALLOWED_LEAF_EVIDENCE_PATHS.",
+    )
 
 
 class AgentGreatDivide(BaseModel):
@@ -109,7 +125,11 @@ class GroundedRisk(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(min_length=10, max_length=800)
-    evidence_paths: list[str] = Field(min_length=1, max_length=6)
+    evidence_paths: list[str] = Field(
+        min_length=1,
+        max_length=6,
+        description="Exact full paths copied from ALLOWED_LEAF_EVIDENCE_PATHS.",
+    )
 
 
 class AgentBuyZone(BaseModel):
@@ -117,7 +137,11 @@ class AgentBuyZone(BaseModel):
 
     price: float = Field(gt=0)
     rationale: str = Field(min_length=8, max_length=800)
-    basis_fields: list[str] = Field(min_length=1, max_length=6)
+    basis_fields: list[str] = Field(
+        min_length=1,
+        max_length=6,
+        description="Exact full numeric paths copied from ALLOWED_NUMERIC_BASIS_PATHS.",
+    )
     calculation: str = Field(min_length=8, max_length=500)
 
 
@@ -134,7 +158,11 @@ class AgentNarrative(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     core_conclusion: str = Field(min_length=20, max_length=2_000)
-    conclusion_evidence_paths: list[str] = Field(min_length=1, max_length=10)
+    conclusion_evidence_paths: list[str] = Field(
+        min_length=1,
+        max_length=10,
+        description="Exact full paths copied from ALLOWED_LEAF_EVIDENCE_PATHS.",
+    )
     risks: list[GroundedRisk] = Field(min_length=3, max_length=12)
     buy_zones: AgentBuyZones
 
@@ -145,7 +173,11 @@ class AgentAnalysisPayload(BaseModel):
     agent_reviewed: Literal[True]
     dim_commentary: dict[str, GroundedText] = Field(min_length=1)
     panel_insights: str = Field(min_length=30, max_length=2_000)
-    panel_evidence_paths: list[str] = Field(min_length=1, max_length=10)
+    panel_evidence_paths: list[str] = Field(
+        min_length=1,
+        max_length=10,
+        description="Exact full paths copied from ALLOWED_LEAF_EVIDENCE_PATHS.",
+    )
     great_divide_override: AgentGreatDivide | None = None
     narrative_override: AgentNarrative
     data_gap_acknowledged: dict[str, str]
@@ -159,6 +191,55 @@ class AgentAnalysisPayload(BaseModel):
                 f"dim_commentary contains unknown dimensions: {sorted(unknown)}"
             )
         return self
+
+
+class AgentDimensionCommentary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dimension_id: str = Field(min_length=1, max_length=100)
+    commentary: GroundedText
+
+
+class AgentDataGapAcknowledgement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dimension_id: str = Field(min_length=1, max_length=100)
+    reason: str = Field(min_length=10, max_length=1_200)
+
+
+class AgentDimensionPayload(BaseModel):
+    """Gateway-safe transport contract for UZI dimension commentary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_reviewed: Literal[True]
+    dimensions: list[AgentDimensionCommentary] = Field(min_length=1)
+    data_gaps: list[AgentDataGapAcknowledgement]
+
+    @model_validator(mode="after")
+    def reject_duplicate_dimensions(self) -> "AgentDimensionPayload":
+        dimension_ids = [row.dimension_id for row in self.dimensions]
+        if len(dimension_ids) != len(set(dimension_ids)):
+            raise ValueError("dimensions contains duplicate dimension_id values")
+        gap_ids = [row.dimension_id for row in self.data_gaps]
+        if len(gap_ids) != len(set(gap_ids)):
+            raise ValueError("data_gaps contains duplicate dimension_id values")
+        return self
+
+
+class AgentNarrativePayload(BaseModel):
+    """Gateway-safe transport contract for UZI synthesis fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    panel_insights: str = Field(min_length=30, max_length=2_000)
+    panel_evidence_paths: list[str] = Field(
+        min_length=1,
+        max_length=10,
+        description="Exact full paths copied from ALLOWED_LEAF_EVIDENCE_PATHS.",
+    )
+    great_divide_override: AgentGreatDivide | None = None
+    narrative_override: AgentNarrative
 
 
 def _profile_native_panel(panel: dict[str, Any], profile: str) -> dict[str, Any]:
@@ -631,11 +712,15 @@ def _generate_agent_analysis(
         separators=(",", ":"),
         sort_keys=True,
     )
-    schema_json = json.dumps(
-        AgentAnalysisPayload.model_json_schema(),
+    allowed_path_json = json.dumps(
+        sorted(allowed_paths),
         ensure_ascii=False,
         separators=(",", ":"),
-        sort_keys=True,
+    )
+    numeric_path_json = json.dumps(
+        sorted(numeric_paths),
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
     system_prompt = (
         "你是 UZI 3.9.4 完整研究链的 Agent 分析阶段。只允许使用 FROZEN_ARTIFACTBOARD_EVIDENCE；"
@@ -647,7 +732,8 @@ def _generate_agent_analysis(
         "通过 calculation 明示计算得到；若证据不足，结构化输出应失败并让报告停在质量门。"
         f"UZI_SOURCE_COMMIT={UZI_SOURCE_COMMIT}\n"
         f"FROZEN_ARTIFACTBOARD_EVIDENCE={frozen_json}\n"
-        f"REQUIRED_OUTPUT_JSON_SCHEMA={schema_json}"
+        f"ALLOWED_LEAF_EVIDENCE_PATHS={allowed_path_json}\n"
+        f"ALLOWED_NUMERIC_BASIS_PATHS={numeric_path_json}"
     )
     expected_dimension_text = ",".join(expected_dimensions)
     debate_instruction = (
@@ -655,26 +741,68 @@ def _generate_agent_analysis(
         if native_profile.enable_bull_bear_debate
         else "当前档位不启用结构化多空辩论，不要返回 great_divide_override。"
     )
-    user_prompt = (
-        "生成当前档位完整 agent_analysis。dim_commentary 的 key 必须且只能是："
-        f"{expected_dimension_text}；每条至少 20 字。panel_insights 至少 30 字。"
-        f"{debate_instruction}至少三条风险。"
-        "buy_zones 必须含 value/growth/technical/youzi，basis_fields 只能填写冻结 JSON 中真实数值的精确叶子路径；"
-        "calculation 写清真实数值如何导出 price。data_gap_acknowledged 只记录已经穷尽的真实恢复尝试，不能写已解决。"
-        "严格遵守 REQUIRED_OUTPUT_JSON_SCHEMA，只返回一个 JSON 对象。"
-        f"上一轮机械自审 critical 与 suggested_fix="
-        f"{json.dumps(review_feedback, ensure_ascii=False, separators=(',', ':'))}。"
+    review_feedback_json = json.dumps(
+        review_feedback,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    dimension_prompt = (
+        "生成当前档位 agent_analysis 的逐维评论部分。dimensions 中的 dimension_id 必须且只能是："
+        f"{expected_dimension_text}；每个维度恰好一条、commentary.text 至少 20 字，并引用真实叶子路径。"
+        "data_gaps 只记录已经穷尽的真实恢复尝试，不能把缺口写成已解决。"
+        f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
         "必须逐条修复；不得通过改写措辞隐藏问题。"
     )
-    parsed = parse_uzi_structured(
+    narrative_prompt = (
+        "生成当前档位 agent_analysis 的评委洞察、结论、风险和买入区间部分。"
+        "panel_insights 至少 30 字。"
+        f"{debate_instruction}至少三条风险。"
+        "buy_zones 必须含 value/growth/technical/youzi，basis_fields 只能填写冻结 JSON 中真实数值的精确叶子路径；"
+        "calculation 写清真实数值如何导出 price。"
+        f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
+        "必须逐条修复；不得通过改写措辞隐藏问题。"
+    )
+    dimension_result = parse_uzi_structured(
         llm_provider,
         system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        schema=AgentAnalysisPayload,
+        user_prompt=dimension_prompt,
+        schema=AgentDimensionPayload,
         temperature=0.1,
         reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
     )
-    payload = parsed if isinstance(parsed, AgentAnalysisPayload) else AgentAnalysisPayload.model_validate(parsed)
+    dimensions_payload = (
+        dimension_result
+        if isinstance(dimension_result, AgentDimensionPayload)
+        else AgentDimensionPayload.model_validate(dimension_result)
+    )
+    narrative_result = parse_uzi_structured(
+        llm_provider,
+        system_prompt=system_prompt,
+        user_prompt=narrative_prompt,
+        schema=AgentNarrativePayload,
+        temperature=0.1,
+        reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
+    )
+    narrative_payload = (
+        narrative_result
+        if isinstance(narrative_result, AgentNarrativePayload)
+        else AgentNarrativePayload.model_validate(narrative_result)
+    )
+    payload = AgentAnalysisPayload(
+        agent_reviewed=True,
+        dim_commentary={
+            row.dimension_id: row.commentary
+            for row in dimensions_payload.dimensions
+        },
+        panel_insights=narrative_payload.panel_insights,
+        panel_evidence_paths=narrative_payload.panel_evidence_paths,
+        great_divide_override=narrative_payload.great_divide_override,
+        narrative_override=narrative_payload.narrative_override,
+        data_gap_acknowledged={
+            row.dimension_id: row.reason
+            for row in dimensions_payload.data_gaps
+        },
+    )
     _validate_profile_payload(
         payload,
         expected_dimensions=expected_dimensions,
@@ -759,7 +887,30 @@ def _normalize_payload_paths(
 
 
 def _canonical_evidence_path(path: str) -> str:
-    return re.sub(r"\.(\d+)(?=\.|$)", r"[\1]", str(path).strip())
+    normalized = re.sub(r"\.(\d+)(?=\.|$)", r"[\1]", str(path).strip())
+    if normalized.startswith("10_valuation_models."):
+        normalized = "20_valuation_models." + normalized.removeprefix(
+            "10_valuation_models."
+        )
+    if normalized.startswith("dimensions."):
+        normalized = f"raw.{normalized}"
+    elif any(
+        normalized.startswith(f"{key}.")
+        for key in (*_DIMENSION_KEYS, *_DERIVED_DIMENSION_KEYS)
+    ):
+        normalized = f"raw.dimensions.{normalized}"
+    if normalized.startswith("raw.dimensions.10_valuation_models."):
+        normalized = "raw.dimensions.20_valuation_models." + normalized.removeprefix(
+            "raw.dimensions.10_valuation_models."
+        )
+    return {
+        "raw.dimensions.2_kline.data.indicators.ma_align": (
+            "raw.dimensions.2_kline.data.ma_align"
+        ),
+        "raw.dimensions.2_kline.data.indicators.macd": (
+            "raw.dimensions.2_kline.data.macd"
+        ),
+    }.get(normalized, normalized)
 
 
 def _safe_error_detail(exc: Exception) -> str:
@@ -912,6 +1063,12 @@ def _agent_repairable(
         for row in critical_rows
         if str(row.get("dim") or "") == "agent_analysis"
     )
+    if terminal_provider_failure:
+        # The qualitative stage is downstream of agent_analysis.  When the
+        # provider has already timed out or gone unavailable, its
+        # ``not_requested`` critical is a consequence, not a new repair action.
+        # Re-running the same request here only spends another full timeout.
+        return False
     for row in critical_rows:
         dim = str(row.get("dim") or "")
         category = str(row.get("category") or "")
@@ -931,8 +1088,6 @@ def _agent_repairable(
             ):
                 continue
             return True
-        if dim == "agent_analysis" and terminal_provider_failure:
-            continue
         if dim in {"agent_analysis", "panel"}:
             return True
         if category == "consistency" and "数据" not in issue:

@@ -895,41 +895,68 @@ class FundHoldingReportService:
             if isinstance(native, dict) and isinstance(native.get("content"), dict)
             else {}
         )
+        issue_rows = [
+            issue
+            for result in list(content.get("results") or [])
+            if isinstance(result, dict)
+            for issue in list((result.get("self_review") or {}).get("issues") or [])
+            if isinstance(issue, dict) and str(issue.get("severity") or "").lower() == "critical"
+        ]
+        terminal_agent_failure = any(
+            str(issue.get("dim") or "") == "agent_analysis"
+            and str(issue.get("evidence") or "")
+            in {"llm_transport_timeout", "llm_provider_unavailable"}
+            for issue in issue_rows
+        )
         critical_rows: list[tuple[str, str]] = []
         seen: set[tuple[str, str]] = set()
         has_non_agent_critical = False
         has_transport_timeout = False
         has_provider_unavailable = False
-        for result in list(content.get("results") or []):
-            if not isinstance(result, dict):
-                continue
-            for issue in list((result.get("self_review") or {}).get("issues") or []):
-                if not isinstance(issue, dict) or str(issue.get("severity") or "").lower() != "critical":
-                    continue
-                issue_text = FundHoldingReportService._public_gate_text(
-                    issue.get("issue"),
-                    "未说明的质量缺口",
+        for issue in issue_rows:
+            dimension = str(issue.get("dim") or "")
+            failure_kind = str(issue.get("evidence") or "")
+            raw_issue = str(issue.get("issue") or "")
+            if terminal_agent_failure and (
+                (
+                    dimension == "agent_analysis"
+                    and (
+                        failure_kind in {"file not found", "agent_reviewed!=true"}
+                        or "agent_analysis.json 不存在" in raw_issue
+                        or "Agent 分析缺失或未确认" in raw_issue
+                    )
                 )
-                suggested_fix = FundHoldingReportService._public_gate_text(issue.get("suggested_fix"), "")
-                dimension = str(issue.get("dim") or "")
-                failure_kind = str(issue.get("evidence") or "")
-                has_non_agent_critical = has_non_agent_critical or dimension != "agent_analysis"
-                if failure_kind == "llm_transport_timeout":
-                    has_transport_timeout = True
-                    suggested_fix = "模型服务响应超时；请稍后仅重试此项，系统会按当前研究档位重新生成结构化分析"
-                elif failure_kind == "llm_provider_unavailable":
-                    has_provider_unavailable = True
-                    suggested_fix = "模型上游服务暂时不可用；系统已完成短退避重试，可稍后仅重试此项"
-                elif dimension == "agent_analysis" and "可以忽略" in suggested_fix:
-                    suggested_fix = "在 Agent OS 中完成结构化 Agent 分析后重算与自审，不允许忽略该 critical"
-                elif "run.py" in suggested_fix or "fetch_X" in suggested_fix:
-                    suggested_fix = "通过 Agent OS 仅重试该持仓，系统会按当前研究档位重新执行启用的数据源"
-                elif "stage2" in suggested_fix:
-                    suggested_fix = "通过 Agent OS 重新合成并执行 UZI 质量自审"
-                key = (issue_text, suggested_fix)
-                if key not in seen:
-                    seen.add(key)
-                    critical_rows.append(key)
+                or (
+                    dimension == "qualitative_deep_dive"
+                    and "not_requested" in failure_kind
+                )
+            ):
+                continue
+            issue_text = FundHoldingReportService._public_gate_text(
+                issue.get("issue"),
+                "未说明的质量缺口",
+            )
+            suggested_fix = FundHoldingReportService._public_gate_text(
+                issue.get("suggested_fix"),
+                "",
+            )
+            has_non_agent_critical = has_non_agent_critical or dimension != "agent_analysis"
+            if failure_kind == "llm_transport_timeout":
+                has_transport_timeout = True
+                suggested_fix = "模型服务响应超时；请稍后仅重试此项，系统会按当前研究档位重新生成结构化分析"
+            elif failure_kind == "llm_provider_unavailable":
+                has_provider_unavailable = True
+                suggested_fix = "模型上游服务暂时不可用；系统已完成短退避重试，可稍后仅重试此项"
+            elif dimension == "agent_analysis" and "可以忽略" in suggested_fix:
+                suggested_fix = "在 Agent OS 中完成结构化 Agent 分析后重算与自审，不允许忽略该 critical"
+            elif "run.py" in suggested_fix or "fetch_X" in suggested_fix:
+                suggested_fix = "通过 Agent OS 仅重试该持仓，系统会按当前研究档位重新执行启用的数据源"
+            elif "stage2" in suggested_fix:
+                suggested_fix = "通过 Agent OS 重新合成并执行 UZI 质量自审"
+            key = (issue_text, suggested_fix)
+            if key not in seen:
+                seen.add(key)
+                critical_rows.append(key)
 
         if critical_rows:
             details = "；".join(
