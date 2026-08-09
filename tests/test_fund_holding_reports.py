@@ -492,6 +492,12 @@ class FundHoldingReportServiceTests(unittest.TestCase):
                                             "issue": "估值样本不足",
                                             "suggested_fix": "补充同行样本",
                                         },
+                                        {
+                                            "severity": "critical",
+                                            "dim": "3_",
+                                            "issue": "应跑的维度 3 完全缺失",
+                                            "suggested_fix": "重跑 run.py <ticker> --no-resume 或手动 fetch_X",
+                                        },
                                     ]
                                 }
                             }
@@ -511,6 +517,12 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         self.assertNotIn("估值样本不足", message)
         self.assertNotIn("LLMProviderError", message)
         self.assertNotIn("CLI 直跑可以忽略", message)
+        self.assertIn(
+            "应跑的维度 3 完全缺失（建议：通过 Agent OS 仅重试该持仓，系统会按当前研究档位重新执行启用的数据源）",
+            message,
+        )
+        self.assertNotIn("run.py", message)
+        self.assertNotIn("fetch_X", message)
 
     def test_terminal_gate_error_has_actionable_fallback_without_native_artifact(self) -> None:
         message = self.service._terminal_report_error({"artifacts": []}, "gated")

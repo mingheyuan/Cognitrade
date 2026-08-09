@@ -908,8 +908,13 @@ class FundHoldingReportService:
                     "未说明的质量缺口",
                 )
                 suggested_fix = FundHoldingReportService._public_gate_text(issue.get("suggested_fix"), "")
-                if str(issue.get("dim") or "") == "agent_analysis" and "可以忽略" in suggested_fix:
+                dimension = str(issue.get("dim") or "")
+                if dimension == "agent_analysis" and "可以忽略" in suggested_fix:
                     suggested_fix = "在 Agent OS 中完成结构化 Agent 分析后重算与自审，不允许忽略该 critical"
+                elif "run.py" in suggested_fix or "fetch_X" in suggested_fix:
+                    suggested_fix = "通过 Agent OS 仅重试该持仓，系统会按当前研究档位重新执行启用的数据源"
+                elif "stage2" in suggested_fix:
+                    suggested_fix = "通过 Agent OS 重新合成并执行 UZI 质量自审"
                 key = (issue_text, suggested_fix)
                 if key not in seen:
                     seen.add(key)
