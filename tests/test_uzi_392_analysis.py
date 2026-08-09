@@ -6,7 +6,9 @@ import unittest
 from unittest.mock import patch
 
 from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
+    AgentAnalysisPayload,
     _canonical_evidence_path,
+    _normalize_payload_paths,
     _safe_error_detail,
     execute_native_analysis,
 )
@@ -64,10 +66,12 @@ class _LiteAgentProvider:
         self.timeout = timeout
         self.calls = 0
         self.user_prompts: list[str] = []
+        self.reasoning_efforts: list[str | None] = []
 
     def parse(self, **kwargs):
         self.calls += 1
         self.user_prompts.append(str(kwargs.get("user_prompt") or ""))
+        self.reasoning_efforts.append(kwargs.get("reasoning_effort"))
         if self.timeout:
             raise RuntimeError("llm_request_timeout: 480s")
         evidence_path = "raw.dimensions.0_basic.data.price"
@@ -147,6 +151,7 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         )
         self.assertNotIn("great_divide_override", analysis["agent_analysis"])
         self.assertEqual(provider.calls, 1)
+        self.assertEqual(provider.reasoning_efforts, ["low"])
 
     def test_native_panel_obeys_all_profile_seat_counts(self) -> None:
         for profile, expected in (("lite", 10), ("medium", 51), ("deep", 66)):
@@ -293,6 +298,31 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         self.assertEqual(
             _canonical_evidence_path("recovery_tasks.0.suggested_actions.2"),
             "recovery_tasks[0].suggested_actions[2]",
+        )
+
+    def test_real_container_evidence_paths_expand_to_frozen_leaf_paths(self) -> None:
+        payload = AgentAnalysisPayload.model_validate(
+            _LiteAgentProvider().parse()
+        )
+        payload.dim_commentary["0_basic"].evidence_paths = [
+            "raw.dimensions.0_basic.data.history"
+        ]
+
+        _normalize_payload_paths(
+            payload,
+            allowed_paths={
+                "raw.dimensions.0_basic.data.history[0].date",
+                "raw.dimensions.0_basic.data.history[0].value",
+                "raw.dimensions.0_basic.data.price",
+            },
+        )
+
+        self.assertEqual(
+            payload.dim_commentary["0_basic"].evidence_paths,
+            [
+                "raw.dimensions.0_basic.data.history[0].date",
+                "raw.dimensions.0_basic.data.history[0].value",
+            ],
         )
 
 

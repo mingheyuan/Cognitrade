@@ -63,6 +63,12 @@ _QUALITATIVE_KEYS = frozenset({
     "3_macro", "7_industry", "8_materials", "9_futures", "13_policy", "15_events",
 })
 
+_PROFILE_REASONING_EFFORT = {
+    "lite": "low",
+    "medium": "high",
+    "deep": "xhigh",
+}
+
 
 def _profile_dimension_keys(profile: str) -> tuple[str, ...]:
     """Return the exact upstream fetcher contract for one explicit profile.
@@ -666,6 +672,7 @@ def _generate_agent_analysis(
         user_prompt=user_prompt,
         schema=AgentAnalysisPayload,
         temperature=0.1,
+        reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
     )
     payload = parsed if isinstance(parsed, AgentAnalysisPayload) else AgentAnalysisPayload.model_validate(parsed)
     _validate_profile_payload(
@@ -673,7 +680,7 @@ def _generate_agent_analysis(
         expected_dimensions=expected_dimensions,
         debate_required=bool(native_profile.enable_bull_bear_debate),
     )
-    _normalize_payload_paths(payload)
+    _normalize_payload_paths(payload, allowed_paths=allowed_paths)
     _validate_grounding(payload, allowed_paths=allowed_paths, numeric_paths=numeric_paths)
     return _to_upstream_agent_analysis(payload)
 
@@ -697,11 +704,41 @@ def _validate_profile_payload(
         raise ValueError("great_divide_override is disabled for this UZI profile")
 
 
-def _normalize_payload_paths(payload: AgentAnalysisPayload) -> None:
-    """Canonicalize equivalent model-emitted array paths before validation."""
+def _normalize_payload_paths(
+    payload: AgentAnalysisPayload,
+    *,
+    allowed_paths: set[str] | None = None,
+) -> None:
+    """Canonicalize paths and expand real JSON containers to leaf evidence.
+
+    Structured models occasionally cite a real list/dict container such as
+    ``roe_history`` instead of one of its concrete children.  UZI's evidence
+    contract remains leaf-only, so mechanically replace only those ancestors
+    that have real descendants in the frozen ArtifactBoard payload.  Unknown
+    paths are preserved and still fail the grounding gate.
+    """
 
     def normalize(paths: list[str]) -> list[str]:
-        return [_canonical_evidence_path(path) for path in paths]
+        normalized: list[str] = []
+        for raw_path in paths:
+            path = _canonical_evidence_path(raw_path)
+            if allowed_paths is None or path in allowed_paths:
+                candidates = [path]
+            else:
+                object_prefix = f"{path}."
+                array_prefix = f"{path}["
+                candidates = sorted(
+                    candidate
+                    for candidate in allowed_paths
+                    if candidate.startswith(object_prefix)
+                    or candidate.startswith(array_prefix)
+                )
+                if not candidates:
+                    candidates = [path]
+            for candidate in candidates:
+                if candidate not in normalized:
+                    normalized.append(candidate)
+        return normalized[:12]
 
     for row in payload.dim_commentary.values():
         row.evidence_paths = normalize(row.evidence_paths)

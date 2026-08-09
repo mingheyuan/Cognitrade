@@ -35,8 +35,9 @@ def parse_uzi_structured(provider: Any, **kwargs: Any) -> Any:
     )
     if max_concurrency <= 0:
         raise ValueError("uzi_llm_max_concurrency must be positive")
+    parameters: tuple[inspect.Parameter, ...] = ()
     try:
-        parameters = inspect.signature(parse).parameters.values()
+        parameters = tuple(inspect.signature(parse).parameters.values())
         supports_timeout = any(
             parameter.name == "timeout_seconds"
             or parameter.kind is inspect.Parameter.VAR_KEYWORD
@@ -44,13 +45,19 @@ def parse_uzi_structured(provider: Any, **kwargs: Any) -> Any:
         )
     except (TypeError, ValueError):
         supports_timeout = False
+
+    def supports(parameter_name: str) -> bool:
+        return any(
+            parameter.name == parameter_name
+            or parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+
     if supports_timeout:
         kwargs["timeout_seconds"] = timeout_seconds
-    supports_max_retries = any(
-        parameter.name == "max_retries"
-        or parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters
-    ) if "parameters" in locals() else False
+    if "reasoning_effort" in kwargs and not supports("reasoning_effort"):
+        kwargs.pop("reasoning_effort")
+    supports_max_retries = supports("max_retries")
     if supports_max_retries:
         # UZI owns recovery through suggested_fix → recompute → self-review.
         # Hidden SDK retries would multiply the 480s request budget and make a

@@ -43,7 +43,11 @@ class UziLlmSupportTests(unittest.TestCase):
     def test_legacy_provider_keeps_compatible_parse_signature(self) -> None:
         provider = _LegacyProvider()
 
-        result = parse_uzi_structured(provider, schema=dict)
+        result = parse_uzi_structured(
+            provider,
+            schema=dict,
+            reasoning_effort="low",
+        )
 
         self.assertEqual(result, {"schema": dict})
 

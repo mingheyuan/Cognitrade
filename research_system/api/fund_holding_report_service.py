@@ -897,6 +897,8 @@ class FundHoldingReportService:
         )
         critical_rows: list[tuple[str, str]] = []
         seen: set[tuple[str, str]] = set()
+        has_non_agent_critical = False
+        has_transport_timeout = False
         for result in list(content.get("results") or []):
             if not isinstance(result, dict):
                 continue
@@ -909,7 +911,12 @@ class FundHoldingReportService:
                 )
                 suggested_fix = FundHoldingReportService._public_gate_text(issue.get("suggested_fix"), "")
                 dimension = str(issue.get("dim") or "")
-                if dimension == "agent_analysis" and "可以忽略" in suggested_fix:
+                failure_kind = str(issue.get("evidence") or "")
+                has_non_agent_critical = has_non_agent_critical or dimension != "agent_analysis"
+                if failure_kind == "llm_transport_timeout":
+                    has_transport_timeout = True
+                    suggested_fix = "模型服务响应超时；请稍后仅重试此项，系统会按当前研究档位重新生成结构化分析"
+                elif dimension == "agent_analysis" and "可以忽略" in suggested_fix:
                     suggested_fix = "在 Agent OS 中完成结构化 Agent 分析后重算与自审，不允许忽略该 critical"
                 elif "run.py" in suggested_fix or "fetch_X" in suggested_fix:
                     suggested_fix = "通过 Agent OS 仅重试该持仓，系统会按当前研究档位重新执行启用的数据源"
@@ -925,6 +932,8 @@ class FundHoldingReportService:
                 f"{issue}（建议：{suggested_fix}）" if suggested_fix else issue
                 for issue, suggested_fix in critical_rows
             )
+            if has_transport_timeout and not has_non_agent_critical:
+                return f"UZI 质量门未通过：{details}。模型请求已超时，可稍后仅重试此项。"
             return f"UZI 质量门未通过：{details}。补充真实数据或恢复数据源后，可仅重试此项。"
         if final_status == "gated":
             return "UZI 质量门未通过，但子运行未返回具体 critical；请打开“证据”查看运行事件后仅重试此项。"
