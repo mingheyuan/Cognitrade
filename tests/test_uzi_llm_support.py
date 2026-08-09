@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import unittest
 
 from domain_packs.finance_ashare.subagents.uzi_llm_support import (
+    DEFAULT_UZI_LLM_MAX_CONCURRENCY,
     DEFAULT_UZI_LLM_REQUEST_TIMEOUT_SECONDS,
     parse_uzi_structured,
 )
@@ -48,6 +49,7 @@ class UziLlmSupportTests(unittest.TestCase):
 
     def test_default_budget_matches_medium_uzi_profile(self) -> None:
         self.assertEqual(DEFAULT_UZI_LLM_REQUEST_TIMEOUT_SECONDS, 480.0)
+        self.assertEqual(DEFAULT_UZI_LLM_MAX_CONCURRENCY, 5)
 
 
 if __name__ == "__main__":
