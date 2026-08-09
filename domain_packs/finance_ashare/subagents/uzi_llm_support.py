@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import inspect
 from threading import BoundedSemaphore, Lock
+from time import sleep
 from typing import Any
 
 
 DEFAULT_UZI_LLM_REQUEST_TIMEOUT_SECONDS = 480.0
 DEFAULT_UZI_LLM_MAX_CONCURRENCY = 5
+DEFAULT_UZI_LLM_TRANSIENT_RETRIES = 2
+_TRANSIENT_RETRY_DELAYS_SECONDS = (1.0, 3.0)
 _SEMAPHORE_LOCK = Lock()
 _SEMAPHORES: dict[int, BoundedSemaphore] = {}
 
@@ -63,8 +66,42 @@ def parse_uzi_structured(provider: Any, **kwargs: Any) -> Any:
         # Hidden SDK retries would multiply the 480s request budget and make a
         # failed request look like a stalled graph.
         kwargs["max_retries"] = 0
-    with _uzi_semaphore(max_concurrency):
-        return parse(**kwargs)
+    semaphore = _uzi_semaphore(max_concurrency)
+    for attempt in range(DEFAULT_UZI_LLM_TRANSIENT_RETRIES + 1):
+        try:
+            with semaphore:
+                return parse(**kwargs)
+        except Exception as exc:
+            if (
+                attempt >= DEFAULT_UZI_LLM_TRANSIENT_RETRIES
+                or not _is_transient_upstream_failure(exc)
+            ):
+                raise
+            # Do not occupy a scarce UZI model slot while backing off.  The
+            # SDK itself remains max_retries=0 so timeouts are never silently
+            # multiplied by the 480-second request budget.
+            sleep(_TRANSIENT_RETRY_DELAYS_SECONDS[attempt])
+    raise AssertionError("unreachable UZI request retry state")
+
+
+def _is_transient_upstream_failure(exc: Exception) -> bool:
+    detail = f"{exc.__class__.__name__}: {exc}".lower()
+    if any(
+        code in detail
+        for code in ("error code: 502", "error code: 503", "error code: 504")
+    ):
+        return True
+    if "timeout" in detail or "timed out" in detail:
+        return False
+    return any(
+        marker in detail
+        for marker in (
+            "bad gateway",
+            "service unavailable",
+            "upstream_error",
+            "upstream request failed",
+        )
+    )
 
 
 def _uzi_semaphore(limit: int) -> BoundedSemaphore:
@@ -79,5 +116,6 @@ def _uzi_semaphore(limit: int) -> BoundedSemaphore:
 __all__ = [
     "DEFAULT_UZI_LLM_REQUEST_TIMEOUT_SECONDS",
     "DEFAULT_UZI_LLM_MAX_CONCURRENCY",
+    "DEFAULT_UZI_LLM_TRANSIENT_RETRIES",
     "parse_uzi_structured",
 ]

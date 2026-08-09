@@ -569,6 +569,39 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         self.assertIn("模型请求已超时", message)
         self.assertNotIn("补充真实数据或恢复数据源", message)
 
+    def test_terminal_upstream_502_does_not_claim_a_data_source_gap(self) -> None:
+        detail = {
+            "artifacts": [
+                {
+                    "artifact_type": "uzi_native_analysis",
+                    "status": "active",
+                    "content": {
+                        "results": [
+                            {
+                                "self_review": {
+                                    "issues": [
+                                        {
+                                            "severity": "critical",
+                                            "dim": "agent_analysis",
+                                            "issue": "Agent 分析生成失败：502 Upstream request failed",
+                                            "evidence": "llm_provider_unavailable",
+                                            "suggested_fix": "按自审问题修正后重算",
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+
+        message = self.service._terminal_report_error(detail, "gated")
+
+        self.assertIn("模型上游服务暂时不可用", message)
+        self.assertIn("模型上游暂时不可用", message)
+        self.assertNotIn("补充真实数据或恢复数据源", message)
+
     def test_public_payload_enriches_legacy_generic_gated_error(self) -> None:
         self.agent_os.details["legacy-child"] = {
             "turn": {"status": "gated"},
