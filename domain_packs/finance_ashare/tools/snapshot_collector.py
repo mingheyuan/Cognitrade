@@ -54,6 +54,9 @@ from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.adapters.vendors.akshare_utils import initialize_akshare_js_runtime
 from research_system.adapters.vendors.provider_execution import classify_provider_exception, failure_facts
 from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
+from research_system.adapters.vendors.uzi_shared_source_cache import (
+    install_uzi_shared_source_cache,
+)
 from research_system.runtime.platform.settings import Settings
 
 
@@ -484,6 +487,10 @@ def _run_uzi_fetcher_snapshot(
         else Settings.from_env(Path(__file__).resolve().parents[3])
     )
     runtime = Uzi392FetcherRuntime(workspace_root=settings.workspace_root)
+    # The pinned UZI fetchers remain unchanged.  Only their exact high-cost
+    # AkShare transport results are shared across concurrent holding runs so
+    # one real full-market response is downloaded once per cache key.
+    install_uzi_shared_source_cache(settings.workspace_root)
     options: dict[str, Any] | None = None
     if fetcher_id == "19_contests":
         allowlist = {str(item).strip().lower() for item in settings.sensitive_source_allowlist}
