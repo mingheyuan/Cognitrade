@@ -1,0 +1,27 @@
+research_system/api/fund_holding_report_service.py
+  s_a6a8a3a6f43b3c::t_cf8a499f9d31ec 898-910,916-927,929-959
+research_system/runtime/providers/openai_provider.py
+  s_a6a8a3a6f43b3c::t_8a5e890bcb17e6 66-73,75-107,109-120
+tests/test_fund_holding_reports.py
+  s_a6a8a3a6f43b3c::t_e11958b66a0a36 570-571
+tests/test_provider_registry.py
+  s_a6a8a3a6f43b3c::t_c5e029c0c829c0 9-10,36,38,41,50-55,74-77,156-184
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "12963e673e425916848c887fba2b7940b9535982",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
