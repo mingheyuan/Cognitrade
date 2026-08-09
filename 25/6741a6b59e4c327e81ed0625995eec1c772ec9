@@ -1,0 +1,27 @@
+domain_packs/finance_ashare/subagents/uzi_llm_support.py
+  s_a6a8a3a6f43b3c::t_d4bc1e1136b13c 7,13-14,69-104,119
+research_system/api/fund_holding_report_service.py
+  s_a6a8a3a6f43b3c::t_74d1466aeb777b 902,920-922,941-942
+tests/test_fund_holding_reports.py
+  s_a6a8a3a6f43b3c::t_e364c243f194ac 572-604
+tests/test_uzi_llm_support.py
+  s_a6a8a3a6f43b3c::t_c224d7be370e35 5,10,35-48,73-99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "256741a6b59e4c327e81ed0625995eec1c772ec9",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
