@@ -1,0 +1,21 @@
+frontend/src/artifacts/generated/finance-artifact-contracts.ts
+  s_a6a8a3a6f43b3c::t_2fe616d1d2ff60 1079,1093
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "505017a7a92507b1ed738662f1d78f4e8857fc75",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
