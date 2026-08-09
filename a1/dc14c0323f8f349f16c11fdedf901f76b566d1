@@ -1,0 +1,29 @@
+.env.example
+  s_a6a8a3a6f43b3c::t_40147c241619fa 60-63
+domain_packs/finance_ashare/subagents/uzi_llm_support.py
+  s_a6a8a3a6f43b3c::t_69c985ef75546b 11
+research_system/runtime/config/settings_env.py
+  s_a6a8a3a6f43b3c::t_fc97c90ab05f00 118
+research_system/runtime/platform/settings.py
+  s_a6a8a3a6f43b3c::t_0fcf7095b68e76 55
+tests/test_uzi_llm_support.py
+  s_a6a8a3a6f43b3c::t_b5c6fc657f4a5f 7,52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "a1dc14c0323f8f349f16c11fdedf901f76b566d1",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
