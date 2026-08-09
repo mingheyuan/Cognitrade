@@ -233,7 +233,7 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
 
         analysis = result["results"][0]
         self.assertEqual(provider.calls, 1)
-        self.assertEqual(provider.reasoning_efforts, ["low"])
+        self.assertEqual(provider.reasoning_efforts, ["high"])
         self.assertEqual(len(analysis["recovery_history"]), 1)
         self.assertEqual(
             analysis["recovery_history"][0]["exhausted_reason"],

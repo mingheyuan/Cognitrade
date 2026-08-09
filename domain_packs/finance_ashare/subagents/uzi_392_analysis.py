@@ -70,10 +70,7 @@ _QUALITATIVE_KEYS = frozenset({
 
 _PROFILE_REASONING_EFFORT = {
     "lite": "low",
-    # Medium depth is defined by its 20 dimensions, 51 seats and qualitative
-    # stage.  Raising hidden model reasoning here only exhausts the gateway
-    # timeout; it must not silently redefine the user's selected profile.
-    "medium": "low",
+    "medium": "high",
     "deep": "xhigh",
 }
 
