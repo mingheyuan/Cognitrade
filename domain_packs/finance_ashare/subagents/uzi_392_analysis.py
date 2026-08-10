@@ -12,13 +12,15 @@ from __future__ import annotations
 from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timezone
+from difflib import get_close_matches
+from hashlib import sha256
 import importlib
 import json
 import logging
 import math
 from pathlib import Path
 import re
-from threading import Event
+from threading import Event, get_ident
 from time import monotonic
 from typing import Any, Literal
 
@@ -76,6 +78,7 @@ _PROFILE_REASONING_EFFORT = {
     "deep": "xhigh",
 }
 _LOGGER = logging.getLogger("uvicorn.error")
+_AGENT_STAGE_CACHE_SCHEMA_VERSION = "uzi-3.9.4-agent-stage-v1"
 
 
 def _profile_dimension_keys(profile: str) -> tuple[str, ...]:
@@ -836,7 +839,7 @@ def _generate_agent_analysis(
         dimension_evidence = {
             "raw": {
                 key: frozen["raw"].get(key)
-                for key in ("ticker", "market", "fetched_at")
+                for key in ("ticker", "market")
                 if key in frozen["raw"]
             },
             # The score envelope is already small and its dimension rows live
@@ -870,55 +873,109 @@ def _generate_agent_analysis(
             f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
             "必须逐条修复；不得通过改写措辞隐藏问题。"
         )
-        dimension_result = _parse_agent_stage(
+        stage_name = f"dimensions_{offset + 1}_{offset + len(dimension_batch)}"
+        stage_cache_path = _agent_stage_cache_path(
             llm_provider,
-            stage=f"dimensions_{offset + 1}_{offset + len(dimension_batch)}",
-            symbol=str(raw.get("ticker") or ""),
             profile=profile,
+            stage=stage_name,
             system_prompt=dimension_system_prompt,
-            user_prompt=dimension_prompt,
-            schema=AgentDimensionPayload,
-            temperature=0.1,
-            reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
-            progress_callback=progress_callback,
-            stage_index=stage_index,
-            stage_total=stage_total,
-            analysis_cycle=analysis_cycle,
-        )
-        dimensions_payload = (
-            dimension_result
-            if isinstance(dimension_result, AgentDimensionPayload)
-            else AgentDimensionPayload.model_validate(dimension_result)
-        )
-        actual_batch = {row.dimension_id for row in dimensions_payload.dimensions}
-        expected_batch = set(dimension_batch)
-        if actual_batch != expected_batch:
-            raise ValueError(
-                "dimension transport batch does not match the selected UZI profile; "
-                f"missing={sorted(expected_batch - actual_batch)}, "
-                f"extra={sorted(actual_batch - expected_batch)}"
+        ) if not review_feedback else None
+        stage_retry_feedback = ""
+        seen_stage_failure_signatures: set[tuple[str, ...]] = set()
+        while True:
+            dimension_result = _load_agent_stage_cache(
+                stage_cache_path,
+                schema=AgentDimensionPayload,
+            ) if not stage_retry_feedback else None
+            loaded_from_cache = dimension_result is not None
+            if loaded_from_cache:
+                _notify_stage_cache_hit(
+                    progress_callback,
+                    symbol=str(raw.get("ticker") or ""),
+                    profile=profile,
+                    stage=stage_name,
+                    stage_index=stage_index,
+                    stage_total=stage_total,
+                    analysis_cycle=analysis_cycle,
+                )
+            else:
+                dimension_result = _parse_agent_stage(
+                    llm_provider,
+                    stage=stage_name,
+                    symbol=str(raw.get("ticker") or ""),
+                    profile=profile,
+                    system_prompt=dimension_system_prompt,
+                    user_prompt=f"{stage_retry_feedback}{dimension_prompt}",
+                    schema=AgentDimensionPayload,
+                    temperature=0.1,
+                    reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
+                    progress_callback=progress_callback,
+                    stage_index=stage_index,
+                    stage_total=stage_total,
+                    analysis_cycle=analysis_cycle,
+                )
+            dimensions_payload = (
+                dimension_result
+                if isinstance(dimension_result, AgentDimensionPayload)
+                else AgentDimensionPayload.model_validate(dimension_result)
             )
-        invalid_gap_ids = {
-            row.dimension_id for row in dimensions_payload.data_gaps
-        } - expected_batch
-        if invalid_gap_ids:
-            raise ValueError(
-                "dimension transport batch contains data gaps for other dimensions: "
-                f"{sorted(invalid_gap_ids)}"
+            actual_batch = {row.dimension_id for row in dimensions_payload.dimensions}
+            expected_batch = set(dimension_batch)
+            if actual_batch != expected_batch:
+                raise ValueError(
+                    "dimension transport batch does not match the selected UZI profile; "
+                    f"missing={sorted(expected_batch - actual_batch)}, "
+                    f"extra={sorted(actual_batch - expected_batch)}"
+                )
+            invalid_gap_ids = {
+                row.dimension_id for row in dimensions_payload.data_gaps
+            } - expected_batch
+            if invalid_gap_ids:
+                raise ValueError(
+                    "dimension transport batch contains data gaps for other dimensions: "
+                    f"{sorted(invalid_gap_ids)}"
+                )
+            unknown_rows: dict[str, list[str]] = {}
+            for row in dimensions_payload.dimensions:
+                row.commentary.evidence_paths = _normalize_evidence_paths(
+                    row.commentary.evidence_paths,
+                    allowed_paths=dimension_allowed_paths,
+                )
+                unknown_paths = sorted(
+                    set(row.commentary.evidence_paths) - dimension_allowed_paths
+                )
+                if unknown_paths:
+                    unknown_rows[row.dimension_id] = unknown_paths
+            if not unknown_rows:
+                if not loaded_from_cache:
+                    _write_agent_stage_cache(stage_cache_path, dimensions_payload)
+                break
+            signature = tuple(
+                f"{dimension_id}:{path}"
+                for dimension_id, paths in sorted(unknown_rows.items())
+                for path in paths
             )
-        for row in dimensions_payload.dimensions:
-            row.commentary.evidence_paths = _normalize_evidence_paths(
-                row.commentary.evidence_paths,
+            if signature in seen_stage_failure_signatures:
+                raise ValueError(
+                    "dimension stage repeated unknown evidence paths after targeted repair: "
+                    f"{list(signature)[:20]}"
+                )
+            seen_stage_failure_signatures.add(signature)
+            stage_retry_feedback = _evidence_path_retry_feedback(
+                unknown_rows,
                 allowed_paths=dimension_allowed_paths,
             )
-            unknown_paths = (
-                set(row.commentary.evidence_paths) - dimension_allowed_paths
+            _notify_progress(
+                progress_callback,
+                current_action=(
+                    f"UZI 第 {analysis_cycle} 轮：证据路径校验未通过，"
+                    f"仅重试 {stage_name}"
+                ),
+                next_action="从冻结证据候选中逐字符复制合法叶子路径",
+                progress_percent=min(78, 5 + stage_index * 8),
+                stage=f"{stage_name}_repair",
+                cycle=analysis_cycle,
             )
-            if unknown_paths:
-                raise ValueError(
-                    f"dimension {row.dimension_id} cited unknown evidence paths: "
-                    f"{sorted(unknown_paths)[:20]}"
-                )
         dimension_rows.extend(dimensions_payload.dimensions)
         gap_rows.extend(dimensions_payload.data_gaps)
 
@@ -962,21 +1019,43 @@ def _generate_agent_analysis(
         "必须逐条修复；不得通过改写措辞隐藏问题。"
     )
     stage_index += 1
-    narrative_core_result = _parse_agent_stage(
+    narrative_cache_path = _agent_stage_cache_path(
         llm_provider,
-        stage="narrative_core",
-        symbol=str(raw.get("ticker") or ""),
         profile=profile,
+        stage="narrative_core",
         system_prompt=narrative_system_prompt,
-        user_prompt=narrative_core_prompt,
+    ) if not review_feedback else None
+    narrative_core_result = _load_agent_stage_cache(
+        narrative_cache_path,
         schema=AgentNarrativeCorePayload,
-        temperature=0.1,
-        reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
-        progress_callback=progress_callback,
-        stage_index=stage_index,
-        stage_total=stage_total,
-        analysis_cycle=analysis_cycle,
     )
+    narrative_loaded_from_cache = narrative_core_result is not None
+    if narrative_loaded_from_cache:
+        _notify_stage_cache_hit(
+            progress_callback,
+            symbol=str(raw.get("ticker") or ""),
+            profile=profile,
+            stage="narrative_core",
+            stage_index=stage_index,
+            stage_total=stage_total,
+            analysis_cycle=analysis_cycle,
+        )
+    else:
+        narrative_core_result = _parse_agent_stage(
+            llm_provider,
+            stage="narrative_core",
+            symbol=str(raw.get("ticker") or ""),
+            profile=profile,
+            system_prompt=narrative_system_prompt,
+            user_prompt=narrative_core_prompt,
+            schema=AgentNarrativeCorePayload,
+            temperature=0.1,
+            reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
+            progress_callback=progress_callback,
+            stage_index=stage_index,
+            stage_total=stage_total,
+            analysis_cycle=analysis_cycle,
+        )
     narrative_core_payload = (
         narrative_core_result
         if isinstance(narrative_core_result, AgentNarrativeCorePayload)
@@ -986,6 +1065,8 @@ def _generate_agent_analysis(
         narrative_core_payload,
         allowed_paths=narrative_allowed_paths,
     )
+    if not narrative_loaded_from_cache:
+        _write_agent_stage_cache(narrative_cache_path, narrative_core_payload)
     zone_dimension_keys = {
         "value": (
             "0_basic", "1_financials", "4_peers", "10_valuation",
@@ -1042,21 +1123,44 @@ def _generate_agent_analysis(
             "必须让结构化输出失败并停在质量门。"
             f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
         )
-        buy_zone_result = _parse_agent_stage(
+        zone_stage = f"buy_zone_{zone_name}"
+        zone_cache_path = _agent_stage_cache_path(
             llm_provider,
-            stage=f"buy_zone_{zone_name}",
-            symbol=str(raw.get("ticker") or ""),
             profile=profile,
+            stage=zone_stage,
             system_prompt=numeric_system_prompt,
-            user_prompt=buy_zone_prompt,
+        ) if not review_feedback else None
+        buy_zone_result = _load_agent_stage_cache(
+            zone_cache_path,
             schema=AgentBuyZonePayload,
-            temperature=0.1,
-            reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
-            progress_callback=progress_callback,
-            stage_index=stage_index,
-            stage_total=stage_total,
-            analysis_cycle=analysis_cycle,
         )
+        zone_loaded_from_cache = buy_zone_result is not None
+        if zone_loaded_from_cache:
+            _notify_stage_cache_hit(
+                progress_callback,
+                symbol=str(raw.get("ticker") or ""),
+                profile=profile,
+                stage=zone_stage,
+                stage_index=stage_index,
+                stage_total=stage_total,
+                analysis_cycle=analysis_cycle,
+            )
+        else:
+            buy_zone_result = _parse_agent_stage(
+                llm_provider,
+                stage=zone_stage,
+                symbol=str(raw.get("ticker") or ""),
+                profile=profile,
+                system_prompt=numeric_system_prompt,
+                user_prompt=buy_zone_prompt,
+                schema=AgentBuyZonePayload,
+                temperature=0.1,
+                reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
+                progress_callback=progress_callback,
+                stage_index=stage_index,
+                stage_total=stage_total,
+                analysis_cycle=analysis_cycle,
+            )
         buy_zone_payload = (
             buy_zone_result
             if isinstance(buy_zone_result, AgentBuyZonePayload)
@@ -1074,6 +1178,8 @@ def _generate_agent_analysis(
                 f"buy_zone_{zone_name} cited numeric evidence outside its frozen projection: "
                 f"{sorted(unknown_zone_paths)[:20]}"
             )
+        if not zone_loaded_from_cache:
+            _write_agent_stage_cache(zone_cache_path, buy_zone_payload)
         zone_payloads[zone_name] = buy_zone_payload.zone
     payload = AgentAnalysisPayload(
         agent_reviewed=True,
@@ -1113,6 +1219,109 @@ def _compact_json(value: Any) -> str:
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=isinstance(value, dict),
+    )
+
+
+def _agent_stage_cache_path(
+    llm_provider: Any,
+    *,
+    profile: str,
+    stage: str,
+    system_prompt: str,
+) -> Path | None:
+    settings = getattr(llm_provider, "settings", None)
+    workspace_root = getattr(settings, "workspace_root", None)
+    if workspace_root is None:
+        return None
+    identity = {
+        "schema_version": _AGENT_STAGE_CACHE_SCHEMA_VERSION,
+        "uzi_source_commit": UZI_SOURCE_COMMIT,
+        "profile": profile,
+        "stage": stage,
+        "model_provider": str(getattr(settings, "provider_name", "")),
+        "model": str(getattr(settings, "default_model", "")),
+        "system_prompt": system_prompt,
+    }
+    digest = sha256(_compact_json(identity).encode("utf-8")).hexdigest()
+    return Path(workspace_root) / "cache" / "uzi_agent_stages" / f"{digest}.json"
+
+
+def _load_agent_stage_cache(
+    path: Path | None,
+    *,
+    schema: type[BaseModel],
+) -> BaseModel | None:
+    if path is None or not path.exists():
+        return None
+    try:
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        if envelope.get("schema_version") != _AGENT_STAGE_CACHE_SCHEMA_VERSION:
+            return None
+        return schema.model_validate(envelope.get("payload"))
+    except Exception as exc:
+        _LOGGER.warning(
+            "Ignoring invalid UZI agent stage cache: path=%s error=%s:%s",
+            path,
+            exc.__class__.__name__,
+            _safe_error_detail(exc),
+        )
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+
+
+def _write_agent_stage_cache(path: Path | None, payload: BaseModel) -> None:
+    if path is None:
+        return
+    envelope = {
+        "schema_version": _AGENT_STAGE_CACHE_SCHEMA_VERSION,
+        "payload": payload.model_dump(mode="json"),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{get_ident()}.tmp")
+        temporary.write_text(
+            json.dumps(envelope, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    except OSError as exc:
+        _LOGGER.warning(
+            "Unable to persist UZI agent stage cache: path=%s error=%s:%s",
+            path,
+            exc.__class__.__name__,
+            _safe_error_detail(exc),
+        )
+
+
+def _notify_stage_cache_hit(
+    progress_callback,
+    *,
+    symbol: str,
+    profile: str,
+    stage: str,
+    stage_index: int,
+    stage_total: int,
+    analysis_cycle: int,
+) -> None:
+    _LOGGER.info(
+        "UZI agent analysis stage cache hit: symbol=%s profile=%s stage=%s",
+        symbol,
+        profile,
+        stage,
+    )
+    _notify_progress(
+        progress_callback,
+        current_action=f"UZI 第 {analysis_cycle} 轮：已恢复缓存阶段 {stage}",
+        next_action="继续校验后续结构化阶段",
+        progress_percent=8 + round(stage_index / max(stage_total, 1) * 70),
+        stage=stage,
+        stage_index=stage_index,
+        stage_total=stage_total,
+        cycle=analysis_cycle,
+        cache_hit=True,
     )
 
 
@@ -1361,6 +1570,56 @@ def _normalize_evidence_paths(
             if candidate not in normalized:
                 normalized.append(candidate)
     return normalized[:12]
+
+
+def _evidence_path_retry_feedback(
+    unknown_rows: dict[str, list[str]],
+    *,
+    allowed_paths: set[str],
+) -> str:
+    """Build deterministic repair guidance without accepting an unknown path.
+
+    UZI's quality gate still rejects every model-invented leaf.  This guidance
+    only makes the closest frozen candidates explicit so the model can repair
+    the failed stage instead of regenerating all previously valid stages.
+    """
+
+    allowed = sorted(allowed_paths)
+    rows: list[dict[str, Any]] = []
+    for dimension_id, paths in sorted(unknown_rows.items()):
+        for raw_path in paths:
+            path = _canonical_evidence_path(raw_path)
+            candidates: list[str] = []
+            scalar_parent = re.sub(r"\[\d+\]$", "", path)
+            if scalar_parent in allowed_paths:
+                candidates.append(scalar_parent)
+            dimension_prefix = f"raw.dimensions.{dimension_id}."
+            dimension_paths = [
+                candidate
+                for candidate in allowed
+                if candidate.startswith(dimension_prefix)
+            ]
+            for candidate in get_close_matches(
+                path,
+                dimension_paths or allowed,
+                n=6,
+                cutoff=0.25,
+            ):
+                if candidate not in candidates:
+                    candidates.append(candidate)
+            rows.append({
+                "dimension_id": dimension_id,
+                "rejected_path": raw_path,
+                "closest_frozen_leaf_candidates": candidates[:6],
+            })
+    feedback = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+    return (
+        "上一尝试被机械证据门拒绝。不得再次返回 rejected_path，也不得自行改造候选路径。"
+        "请根据评论事实，从 closest_frozen_leaf_candidates 或完整 "
+        "ALLOWED_LEAF_EVIDENCE_PATHS 中逐字符复制真实叶子；若事实没有对应证据，"
+        "应改写为真实数据缺口并引用已有 recovery/data_gap 叶子。"
+        f"MECHANICAL_EVIDENCE_REPAIR={feedback}\n"
+    )
 
 
 def _resolve_evidence_path(

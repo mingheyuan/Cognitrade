@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import re
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -164,7 +166,67 @@ class _LiteAgentProvider:
         return payload
 
 
+class _RepairingEvidenceProvider(_LiteAgentProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.dimension_calls = 0
+
+    def parse(self, **kwargs):
+        result = super().parse(**kwargs)
+        if kwargs.get("schema") is AgentDimensionPayload:
+            self.dimension_calls += 1
+            if self.dimension_calls == 1:
+                result["dimensions"][0]["commentary"]["evidence_paths"] = [
+                    "raw.dimensions.0_basic.data.price[0]"
+                ]
+        return result
+
+
 class Uzi392AnalysisGateTests(unittest.TestCase):
+    def test_unknown_dimension_evidence_retries_only_the_failed_stage(self) -> None:
+        provider = _RepairingEvidenceProvider()
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="lite",
+            llm_provider=provider,
+        )
+
+        self.assertTrue(result["report_allowed"])
+        self.assertEqual(provider.dimension_calls, 3)
+        self.assertTrue(
+            any(
+                "MECHANICAL_EVIDENCE_REPAIR=" in prompt
+                for prompt in provider.user_prompts
+            )
+        )
+
+    def test_validated_agent_stages_resume_from_persistent_cache(self) -> None:
+        snapshots = _lite_snapshots()
+        with TemporaryDirectory() as temporary:
+            first_provider = _LiteAgentProvider()
+            first_provider.settings.workspace_root = Path(temporary)
+            first = execute_native_analysis(
+                snapshots,
+                ["600000"],
+                profile="lite",
+                llm_provider=first_provider,
+            )
+            second_provider = _LiteAgentProvider()
+            second_provider.settings.workspace_root = Path(temporary)
+            second = execute_native_analysis(
+                snapshots,
+                ["600000"],
+                profile="lite",
+                llm_provider=second_provider,
+            )
+
+        self.assertTrue(first["report_allowed"])
+        self.assertTrue(second["report_allowed"])
+        self.assertGreater(first_provider.calls, 0)
+        self.assertEqual(second_provider.calls, 0)
+
     def test_lite_profile_drives_native_panel_agent_schema_and_self_review(self) -> None:
         provider = _LiteAgentProvider()
         progress: list[dict] = []
