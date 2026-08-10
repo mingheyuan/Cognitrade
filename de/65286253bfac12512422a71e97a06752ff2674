@@ -1,0 +1,25 @@
+frontend/src/components/FundAnalysisDossier.tsx
+  s_a6a8a3a6f43b3c::t_187fcacffba12f 40,53-59,221,224-227,270-306,417,451,464,508-518,695-718,729-731,734,746-751,753,826-867
+frontend/src/components/Funds.test.tsx
+  s_a6a8a3a6f43b3c::t_28a0dc263d39ba 256-311
+frontend/src/styles/finance-components.css
+  s_a6a8a3a6f43b3c::t_2c755e1a69b461 2206-2265,2269-2270,2273-2282,2285-2325,2402,2421-2469,2830-2841
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "de65286253bfac12512422a71e97a06752ff2674",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
