@@ -1,0 +1,41 @@
+.env.example
+  s_a6a8a3a6f43b3c::t_fa3206e469b2e9 64-66,71
+README.md
+  s_a6a8a3a6f43b3c::t_ca52ab7b06843a 118,130
+api-doc/api-v1.md
+  s_a6a8a3a6f43b3c::t_04d01671db5d76 215
+domain_packs/finance_ashare/subagents/uzi_llm_support.py
+  s_a6a8a3a6f43b3c::t_6441f1861d1ce4 12
+frontend/src/components/FundAnalysisDossier.tsx
+  s_a6a8a3a6f43b3c::t_06df7238035568 645
+research_system/api/fund_holding_report_service.py
+  s_a6a8a3a6f43b3c::t_bbf8d732e60b70 61
+research_system/runtime/config/settings_env.py
+  s_a6a8a3a6f43b3c::t_3bd910a122a8f0 122,127
+research_system/runtime/platform/settings.py
+  s_a6a8a3a6f43b3c::t_1837515bf4392a 60,65
+tests/test_fund_holding_reports.py
+  s_a6a8a3a6f43b3c::t_cd7ffc86103592 266,298
+tests/test_uzi_392_analysis.py
+  s_a6a8a3a6f43b3c::t_f651f84fa91576 68
+tests/test_uzi_llm_support.py
+  s_a6a8a3a6f43b3c::t_c8ae64fc80b11a 72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "95fcf1b73c374e4f101ad87804106651ce6b5efb",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
