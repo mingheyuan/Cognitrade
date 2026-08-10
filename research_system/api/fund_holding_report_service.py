@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import zipfile
 from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -7,22 +9,25 @@ from io import BytesIO
 from pathlib import Path
 from threading import RLock
 from typing import Any, Iterable
-import re
-import zipfile
 
 from domain_packs.finance_ashare.holding_reports import (
     StaleHoldingsConfirmationRequired,
     freeze_fund_holdings,
     require_stale_confirmation,
 )
-from domain_packs.finance_ashare.reporting import render_uzi_native_html, render_uzi_native_pdf
+from domain_packs.finance_ashare.reporting import (
+    render_uzi_native_html,
+    render_uzi_native_pdf,
+)
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.core.id_utils import generate_ulid
-from research_system.runtime.presentation.display import localize_public_error_fields, localize_runtime_error
+from research_system.runtime.presentation.display import (
+    localize_public_error_fields,
+    localize_runtime_error,
+)
 from research_system.runtime.storage.jsonl import append_jsonl, read_json, write_json
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.schemas.protocol import RequestEnvelope
-
 
 _BATCH_FILE = "fund_holding_batch.json"
 _TERMINAL_ITEM_STATUSES = {
@@ -551,7 +556,7 @@ class FundHoldingReportService:
             item = self._item(state, symbol=symbol, child_run_id=child_run_id)
             if item is None or item["status"] not in {"queued", "running"}:
                 return
-            if state.get("cancel_requested") and item["status"] == "queued":
+            if state.get("cancel_requested") and item["status"] in {"queued", "running"}:
                 item["status"] = "cancelled"
                 item["completed_at"] = self._now()
                 self._refresh_parent_status(state)

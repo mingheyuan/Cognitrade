@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 import json
+import os
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -58,6 +58,9 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
             field_name="DOMAIN_PACK_TRUSTED_DIGESTS",
         ),
         "provider_probe_timeout_seconds": float(env_values.get("PROVIDER_PROBE_TIMEOUT_SECONDS", "1.0")),
+        "baostock_socket_timeout_seconds": float(
+            env_values.get("COGNITRADE_BAOSTOCK_SOCKET_TIMEOUT_SECONDS", "15")
+        ),
         "provider_policy_path": config_root / "provider_policy.yml",
         "data_sources_path": config_root / "data_sources.yml",
         "http_json_sources_path": config_root / "http_json_sources.yml",

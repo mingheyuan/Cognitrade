@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from research_system.runtime.config.settings_env import build_settings_from_env
-from research_system.runtime.workspace.layout import ensure_workspace_layout as ensure_workspace_layout_impl
+from research_system.runtime.workspace.layout import (
+    ensure_workspace_layout as ensure_workspace_layout_impl,
+)
 
 
 class Settings(BaseModel):
@@ -36,6 +39,7 @@ class Settings(BaseModel):
     domain_pack_require_integrity: bool = False
     domain_pack_trusted_digests: dict[str, list[str]] = Field(default_factory=dict)
     provider_probe_timeout_seconds: float = 1.0
+    baostock_socket_timeout_seconds: float = 15.0
     provider_policy_path: Path
     data_sources_path: Path
     http_json_sources_path: Path
@@ -125,6 +129,8 @@ class Settings(BaseModel):
                     )
         if self.provider_probe_timeout_seconds <= 0:
             raise ValueError("provider_probe_timeout_seconds must be positive")
+        if self.baostock_socket_timeout_seconds <= 0:
+            raise ValueError("baostock_socket_timeout_seconds must be positive")
         if self.qdrant_vector_weight < 0 or self.qdrant_lexical_weight < 0:
             raise ValueError("qdrant hybrid weights must be non-negative")
         if self.qdrant_vector_weight == 0 and self.qdrant_lexical_weight == 0:

@@ -1,28 +1,35 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
-from enum import Enum
 import hashlib
 import inspect
 import json
 import math
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
+from enum import Enum
 from pathlib import Path
 from threading import Lock
 from typing import Any
 from uuid import UUID
 
-from domain_packs.finance_ashare.skills.capital_flow_snapshot.skill import CapitalFlowSnapshotSkill
+from domain_packs.finance_ashare.skills.capital_flow_snapshot.skill import (
+    CapitalFlowSnapshotSkill,
+)
 from domain_packs.finance_ashare.skills.events_snapshot.skill import EventsSnapshotSkill
-from domain_packs.finance_ashare.skills.fundamental_snapshot.skill import FundamentalSnapshotSkill
+from domain_packs.finance_ashare.skills.fundamental_snapshot.skill import (
+    FundamentalSnapshotSkill,
+)
 from domain_packs.finance_ashare.skills.lhb_snapshot.skill import LHBSnapshotSkill
 from domain_packs.finance_ashare.skills.market_snapshot.skill import MarketSnapshotSkill
 from domain_packs.finance_ashare.skills.notice_snapshot.skill import NoticeSnapshotSkill
 from domain_packs.finance_ashare.skills.policy_snapshot.skill import PolicySnapshotSkill
 from domain_packs.finance_ashare.skills.sector_snapshot.skill import SectorSnapshotSkill
-from domain_packs.finance_ashare.skills.sentiment_snapshot.skill import SentimentSnapshotSkill
+from domain_packs.finance_ashare.skills.sentiment_snapshot.skill import (
+    SentimentSnapshotSkill,
+)
 from domain_packs.finance_ashare.skills.uzi_source_snapshot.skill import (
     ChainSnapshotSkill,
     ContestsSnapshotSkill,
@@ -40,8 +47,6 @@ from domain_packs.finance_ashare.skills.uzi_source_snapshot.skill import (
     TrapSnapshotSkill,
     ValuationSnapshotSkill,
 )
-from domain_packs.finance_ashare.vendor.uzi_3_9_2 import Uzi392FetcherRuntime
-
 from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
 from domain_packs.finance_ashare.tools.uzi_data_recovery import (
     assess_integrity,
@@ -50,15 +55,22 @@ from domain_packs.finance_ashare.tools.uzi_data_recovery import (
     recover_qualitative_snapshots,
     recover_suggested_fixes_until_exhausted,
 )
-from research_system.runtime.storage.jsonl import read_json, write_json
+from domain_packs.finance_ashare.vendor.uzi_3_9_2 import Uzi392FetcherRuntime
 from research_system.adapters.vendors.akshare_utils import initialize_akshare_js_runtime
-from research_system.adapters.vendors.provider_execution import classify_provider_exception, failure_facts
+from research_system.adapters.vendors.baostock_socket_safety import (
+    DEFAULT_BAOSTOCK_SOCKET_TIMEOUT_SECONDS,
+    install_baostock_socket_safety,
+)
+from research_system.adapters.vendors.provider_execution import (
+    classify_provider_exception,
+    failure_facts,
+)
 from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
 from research_system.adapters.vendors.uzi_shared_source_cache import (
     install_uzi_shared_source_cache,
 )
 from research_system.runtime.platform.settings import Settings
-
+from research_system.runtime.storage.jsonl import read_json, write_json
 
 _SYMBOL_SKILLS = {
     "market": MarketSnapshotSkill,
@@ -150,6 +162,10 @@ _UZI_MINI_RACER_FETCHERS = frozenset(
 )
 _UZI_MINI_RACER_LOCK = Lock()
 _UZI_MAX_WORKERS = 6
+# Pinned UZI run_real_test.py gives its parallel fetcher wave a five-minute
+# hard ceiling.  Keep that native boundary inside the Pack instead of applying
+# a Tool Registry timeout to the whole Agent OS capability.
+_UZI_FETCHER_WAVE_TIMEOUT_SECONDS = 300.0
 _SNAPSHOT_PROVIDER_HINTS = {
     "market": "akshare",
     "fundamental": "akshare",
@@ -396,21 +412,47 @@ def collect_snapshots(
                 )
                 futures[future] = (index, symbol, snapshot_type)
             try:
-                for future in as_completed(futures):
-                    index, symbol, snapshot_type = futures[future]
-                    if _cancelled(cancellation):
-                        for pending in futures:
-                            pending.cancel()
-                        break
-                    result = future.result()
-                    results[index] = result
-                    _save_snapshot_cache(
-                        cache_root=cache_root,
-                        snapshot_type=snapshot_type,
-                        target=symbol,
-                        profile=research_profile,
-                        snapshot=result,
-                    )
+                try:
+                    for future in as_completed(
+                        futures,
+                        timeout=_UZI_FETCHER_WAVE_TIMEOUT_SECONDS,
+                    ):
+                        index, symbol, snapshot_type = futures[future]
+                        if _cancelled(cancellation):
+                            for pending in futures:
+                                pending.cancel()
+                            break
+                        result = future.result()
+                        results[index] = result
+                        _save_snapshot_cache(
+                            cache_root=cache_root,
+                            snapshot_type=snapshot_type,
+                            target=symbol,
+                            profile=research_profile,
+                            snapshot=result,
+                        )
+                except FutureTimeoutError:
+                    for future, (index, symbol, snapshot_type) in futures.items():
+                        if index in results:
+                            continue
+                        if future.done() and not future.cancelled():
+                            result = future.result()
+                        else:
+                            future.cancel()
+                            result = _fetcher_timeout_snapshot(
+                                query=query,
+                                symbol=symbol,
+                                snapshot_type=snapshot_type,
+                                timeout_seconds=_UZI_FETCHER_WAVE_TIMEOUT_SECONDS,
+                            )
+                        results[index] = result
+                        _save_snapshot_cache(
+                            cache_root=cache_root,
+                            snapshot_type=snapshot_type,
+                            target=symbol,
+                            profile=research_profile,
+                            snapshot=result,
+                        )
             finally:
                 executor.shutdown(wait=False, cancel_futures=True)
     snapshots.extend(results[index] for index, _symbol, _snapshot_type in tasks if index in results)
@@ -487,6 +529,13 @@ def _run_uzi_fetcher_snapshot(
         else Settings.from_env(Path(__file__).resolve().parents[3])
     )
     runtime = Uzi392FetcherRuntime(workspace_root=settings.workspace_root)
+    install_baostock_socket_safety(
+        timeout_seconds=getattr(
+            settings,
+            "baostock_socket_timeout_seconds",
+            DEFAULT_BAOSTOCK_SOCKET_TIMEOUT_SECONDS,
+        )
+    )
     # The pinned UZI fetchers remain unchanged.  Only their exact high-cost
     # AkShare transport results are shared across concurrent holding runs so
     # one real full-market response is downloaded once per cache key.
@@ -586,6 +635,64 @@ def _run_uzi_fetcher_snapshot(
                 "status": availability,
                 "fallback": bool(result.get("fallback")),
                 **({"error_type": error.split(":", 1)[0]} if error else {}),
+            }
+        ],
+    }
+
+
+def _fetcher_timeout_snapshot(
+    *,
+    query: str,
+    symbol: str,
+    snapshot_type: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    fetcher_id = _UZI_FETCHER_BY_SNAPSHOT_TYPE.get(snapshot_type)
+    reason = f"fetcher wave timeout > {timeout_seconds:g}s"
+    raw_result = {
+        "ticker": symbol,
+        "data": {},
+        "_timeout": True,
+        "fallback": True,
+        "error": reason,
+        "source": "timeout",
+    }
+    facts: dict[str, Any] = {
+        "availability": "data_gap",
+        "_uzi_raw_result": raw_result,
+    }
+    if fetcher_id:
+        facts["_uzi_fetcher_id"] = fetcher_id
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+    provider_id = f"uzi_3_9_2.{fetcher_id}" if fetcher_id else snapshot_type
+    return {
+        "snapshot_type": snapshot_type,
+        "symbol": symbol,
+        "query": query,
+        "snapshot_date": retrieved_at[:10],
+        "retrieved_at": retrieved_at,
+        "facts": facts,
+        "quality_status": "data_gap",
+        "degraded": True,
+        "degrade_reason": reason,
+        "missing_fields": [snapshot_type],
+        "fallback_applied": True,
+        "source": {
+            "skill": f"uzi_{snapshot_type}_snapshot_skill",
+            "vendor": "UZI-Skill",
+            "provider_id": provider_id,
+            "source_id": "timeout",
+            "chain_position": 0,
+            "dim": snapshot_type,
+            "from_cache": False,
+        },
+        "source_trace": [
+            {
+                "source_id": "timeout",
+                "provider_id": provider_id,
+                "status": "data_gap",
+                "fallback": True,
+                "error_type": "fetcher_wave_timeout",
             }
         ],
     }

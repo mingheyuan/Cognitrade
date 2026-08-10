@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 
@@ -44,6 +44,7 @@ class SettingsRuntimeTests(unittest.TestCase):
                 "OPENAI_REASONING_EFFORT=xhigh\n"
                 "OPENAI_DISABLE_RESPONSE_STORAGE=false\n"
                 "UZI_LLM_REQUEST_TIMEOUT_SECONDS=360\n"
+                "COGNITRADE_BAOSTOCK_SOCKET_TIMEOUT_SECONDS=9\n"
                 "DEFAULT_TIMEZONE=UTC\n",
                 encoding="utf-8",
             )
@@ -56,6 +57,7 @@ class SettingsRuntimeTests(unittest.TestCase):
             self.assertEqual(settings.openai_reasoning_effort, "xhigh")
             self.assertFalse(settings.openai_disable_response_storage)
             self.assertEqual(settings.uzi_llm_request_timeout_seconds, 360)
+            self.assertEqual(settings.baostock_socket_timeout_seconds, 9)
             self.assertEqual(settings.default_timezone, "UTC")
             self.assertEqual(settings.workspace_root, resolved_root / "workspace")
             self.assertEqual(settings.config_root, resolved_root / "workspace" / "config")

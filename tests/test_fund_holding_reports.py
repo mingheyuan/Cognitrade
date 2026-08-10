@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from datetime import date
 import json
-from pathlib import Path
-from types import SimpleNamespace
-from tempfile import TemporaryDirectory
-from threading import Lock
 import time
 import unittest
+from datetime import date
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Lock
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import jsonschema
@@ -18,14 +18,13 @@ from domain_packs.finance_ashare.holding_reports import (
     freeze_fund_holdings,
     require_stale_confirmation,
 )
+from research_system.api.agent_os_run_service import AgentOSRunService
 from research_system.api.fund_holding_report_service import (
     FundHoldingBatchNotFound,
     FundHoldingReportService,
 )
 from research_system.api.sse import RunEventSource
-from research_system.api.agent_os_run_service import AgentOSRunService
-from research_system.runtime.storage.jsonl import read_json
-from research_system.runtime.storage.jsonl import read_jsonl
+from research_system.runtime.storage.jsonl import read_json, read_jsonl
 from research_system.runtime.storage.runs.run_store import RunStore
 
 
@@ -396,6 +395,40 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         final = self.wait_terminal(created["batch_id"])
         self.assertEqual(final["status"], "completed_partial")
         self.assertGreater(final["counts"]["cancelled"], 0)
+
+    def test_recovered_running_item_honors_persisted_batch_cancellation(self) -> None:
+        self.run_service.source_artifacts = [
+            snapshot_artifact(funds=[equity_fund(count=1)])
+        ]
+        with patch.object(self.service, "_submit_item"):
+            created = self.service.create_batch(
+                "source-run",
+                fund_code="110011",
+                profile="medium",
+            )
+        state = self.service._load_batch(created["batch_id"])
+        item = state["holdings"][0]
+        item["status"] = "running"
+        state["cancel_requested"] = True
+        self.service._refresh_parent_status(state)
+        self.service._write_batch(
+            state,
+            event_type="fund_holding_batch_cancel_requested",
+        )
+
+        self.service._execute_item(
+            created["batch_id"],
+            str(item["symbol"]),
+            str(item["child_run_id"]),
+        )
+
+        final = self.service.detail(created["batch_id"])
+        self.assertEqual(final["status"], "completed_partial")
+        self.assertEqual(final["counts"]["cancelled"], 1)
+        self.assertEqual(
+            self.agent_os.details[str(item["child_run_id"])]["mode"],
+            "pending",
+        )
 
     def test_zip_contains_each_deliverable_pdf_and_readme(self) -> None:
         fund = equity_fund(count=2)
