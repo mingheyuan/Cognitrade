@@ -89,6 +89,11 @@ class _LegalLazyPlanner:
         )
 
 
+class _FailingEpisodeStore:
+    def add_episode(self, **kwargs) -> None:
+        raise RuntimeError("episodic store unavailable")
+
+
 class ExecutionGraphRunnerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.registry = DomainPackRegistry.load(Path(__file__).resolve().parents[1] / "domain_packs")
@@ -185,6 +190,41 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
                 self.assertTrue(artifact.schema_version)
                 self.assertIsNotNone(artifact.confidence)
                 self.assertTrue(artifact.producer.responsibility_node_id)
+
+    def test_post_completion_observer_failure_preserves_durable_result(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            events: list[dict] = []
+            runner = ExecutionGraphRunner(
+                registry=self.registry,
+                run_root=Path(temporary_directory),
+                event_callback=events.append,
+                memory_store=_FailingEpisodeStore(),
+            )
+
+            result = runner.run(
+                graph=self._legal_graph(),
+                run_id="post-completion-run",
+                thread_id="post-completion-thread",
+                request_id="post-completion-request",
+                seed_artifacts=[
+                    ArtifactDraft(
+                        artifact_type="contract_document",
+                        content={"text": "Supplier shall deliver monthly."},
+                        source_refs=[{"type": "uploaded_contract", "id": "contract-1"}],
+                    )
+                ],
+            )
+
+            self.assertEqual(result.snapshot.status, "completed")
+            self.assertTrue(result.final_artifact_ids)
+            self.assertEqual(runner.replay().status, "completed")
+            self.assertTrue(
+                any(
+                    event["event_type"] == "graph_post_completion_error"
+                    and "episodic store unavailable" in str(event.get("error") or "")
+                    for event in events
+                )
+            )
 
     def test_progress_model_updates_respect_graph_budget(self) -> None:
         with TemporaryDirectory() as temporary_directory:

@@ -83,6 +83,10 @@ class DeployScriptTests(unittest.TestCase):
         self.assertIn("python -m playwright install-deps chromium", backend)
         self.assertIn("python -m playwright install chromium", backend)
         self.assertIn("deployment_preflight", backend)
+        self.assertIn("USER root", backend)
+        self.assertIn("chown -R 10001:10001 /app/workspace", backend_entrypoint)
+        self.assertIn("--reuid=10001", backend_entrypoint)
+        self.assertIn("--no-new-privs", backend_entrypoint)
         for runtime_directory in (
             "workspace/runs",
             "workspace/chat_runs",

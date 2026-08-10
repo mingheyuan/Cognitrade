@@ -394,6 +394,7 @@ class ExecutionGraphRunner:
         self._persist(snapshot)
         started = perf_counter()
         step_count = 0
+        terminal_snapshot_persisted = False
         self._emit(
             "main_agent_plan_started",
             actor="main_agent.plan_agent",
@@ -589,6 +590,7 @@ class ExecutionGraphRunner:
             self._set_run_status(snapshot, "gated" if blocking else "completed")
             snapshot.updated_at = utc_now()
             self._persist(snapshot)
+            terminal_snapshot_persisted = True
             if snapshot.status == "completed":
                 self._record_episodic_memory(snapshot)
             self._emit(
@@ -625,8 +627,22 @@ class ExecutionGraphRunner:
             return self._result(snapshot)
         except _GraphPaused:
             return self._result(snapshot)
-        except Exception:
-            if snapshot.status not in {"failed", "cancelled", "paused"}:
+        except Exception as exc:
+            if terminal_snapshot_persisted and snapshot.status in RUN_TERMINAL_STATUSES:
+                # The graph result and its artifacts are already durable. A
+                # best-effort observer (for example episodic memory or final
+                # event publication) must not retroactively turn a completed
+                # research run into a failure.
+                try:
+                    self._emit(
+                        "graph_post_completion_error",
+                        status=snapshot.status,
+                        error=f"{exc.__class__.__name__}: {str(exc)[:500]}",
+                    )
+                except Exception:
+                    pass
+                return self._result(snapshot)
+            if snapshot.status not in RUN_TERMINAL_STATUSES | {"paused"}:
                 self._set_run_status(snapshot, "failed")
                 snapshot.updated_at = utc_now()
                 self._persist(snapshot)

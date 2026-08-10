@@ -54,6 +54,10 @@ USER 10001:10001
 RUN python -m research_system.runtime.diagnostics.status.deployment_preflight \
     --workspace /app/workspace
 
+# The entrypoint needs one short root phase to repair persistent named-volume
+# ownership, then uses setpriv to run the API as the unprivileged runtime UID.
+USER root
+
 EXPOSE 8000
 
 ENTRYPOINT ["/usr/local/bin/cognitrade-entrypoint"]
