@@ -1,0 +1,29 @@
+deploy/backend-entrypoint.sh
+  s_a6a8a3a6f43b3c::t_7459ba998e4ef1 16-28
+deploy/backend.Dockerfile
+  s_a6a8a3a6f43b3c::t_9d0b9f4c971cf1 57-60
+research_system/runtime/execution/core/graph_runner.py
+  s_a6a8a3a6f43b3c::t_7f1449f2b4fb7f 397,593,630-645
+tests/test_deploy_script.py
+  s_a6a8a3a6f43b3c::t_2cf3755e197c36 86-89
+tests/test_execution_graph_runner.py
+  s_a6a8a3a6f43b3c::t_1f5934a290ddcb 92-96,194-228
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "5c8a2e326096428dd0d5df8214adad562c959f65",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
