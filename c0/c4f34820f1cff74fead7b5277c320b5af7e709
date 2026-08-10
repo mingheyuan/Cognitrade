@@ -1,0 +1,23 @@
+research_system/api/fund_holding_report_service.py
+  s_a6a8a3a6f43b3c::t_770b65efca3c6d 428-431
+tests/test_fund_holding_reports.py
+  s_a6a8a3a6f43b3c::t_433b0a902d76ac 358-363,366
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "c0c4f34820f1cff74fead7b5277c320b5af7e709",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
