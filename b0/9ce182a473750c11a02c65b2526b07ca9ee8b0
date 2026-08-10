@@ -1,0 +1,23 @@
+domain_packs/finance_ashare/subagents/uzi_392_analysis.py
+  s_a6a8a3a6f43b3c::t_02426029dc909d 227-228,239-253,736,739-741,744-752,765-811,817,819-821,825-828,830-837,839-841,845-848,854,856-866,869,919-934
+tests/test_uzi_392_analysis.py
+  s_a6a8a3a6f43b3c::t_eb3e5f4b1b906a 10,12,127,132-140,185-186,401-439
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "b09ce182a473750c11a02c65b2526b07ca9ee8b0",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
