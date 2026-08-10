@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from random import random
 from threading import BoundedSemaphore, Lock
 from time import sleep
 from typing import Any
@@ -10,8 +11,9 @@ from typing import Any
 
 DEFAULT_UZI_LLM_REQUEST_TIMEOUT_SECONDS = 480.0
 DEFAULT_UZI_LLM_MAX_CONCURRENCY = 2
-DEFAULT_UZI_LLM_TRANSIENT_RETRIES = 2
-_TRANSIENT_RETRY_DELAYS_SECONDS = (1.0, 3.0)
+DEFAULT_UZI_LLM_TRANSIENT_RETRIES = 6
+DEFAULT_UZI_LLM_RETRY_BASE_SECONDS = 2.0
+DEFAULT_UZI_LLM_RETRY_MAX_SECONDS = 60.0
 _SEMAPHORE_LOCK = Lock()
 _SEMAPHORES: dict[int, BoundedSemaphore] = {}
 
@@ -36,8 +38,35 @@ def parse_uzi_structured(provider: Any, **kwargs: Any) -> Any:
     max_concurrency = int(
         getattr(settings, "uzi_llm_max_concurrency", DEFAULT_UZI_LLM_MAX_CONCURRENCY)
     )
+    transient_retries = int(
+        getattr(
+            settings,
+            "uzi_llm_transient_retries",
+            DEFAULT_UZI_LLM_TRANSIENT_RETRIES,
+        )
+    )
+    retry_base_seconds = float(
+        getattr(
+            settings,
+            "uzi_llm_retry_base_seconds",
+            DEFAULT_UZI_LLM_RETRY_BASE_SECONDS,
+        )
+    )
+    retry_max_seconds = float(
+        getattr(
+            settings,
+            "uzi_llm_retry_max_seconds",
+            DEFAULT_UZI_LLM_RETRY_MAX_SECONDS,
+        )
+    )
     if max_concurrency <= 0:
         raise ValueError("uzi_llm_max_concurrency must be positive")
+    if transient_retries < 0:
+        raise ValueError("uzi_llm_transient_retries must not be negative")
+    if retry_base_seconds <= 0 or retry_max_seconds < retry_base_seconds:
+        raise ValueError(
+            "UZI retry delays require 0 < base_seconds <= max_seconds"
+        )
     parameters: tuple[inspect.Parameter, ...] = ()
     try:
         parameters = tuple(inspect.signature(parse).parameters.values())
@@ -67,20 +96,24 @@ def parse_uzi_structured(provider: Any, **kwargs: Any) -> Any:
         # failed request look like a stalled graph.
         kwargs["max_retries"] = 0
     semaphore = _uzi_semaphore(max_concurrency)
-    for attempt in range(DEFAULT_UZI_LLM_TRANSIENT_RETRIES + 1):
+    for attempt in range(transient_retries + 1):
         try:
             with semaphore:
                 return parse(**kwargs)
         except Exception as exc:
             if (
-                attempt >= DEFAULT_UZI_LLM_TRANSIENT_RETRIES
+                attempt >= transient_retries
                 or not _is_transient_upstream_failure(exc)
             ):
                 raise
             # Do not occupy a scarce UZI model slot while backing off.  The
             # SDK itself remains max_retries=0 so timeouts are never silently
             # multiplied by the 480-second request budget.
-            sleep(_TRANSIENT_RETRY_DELAYS_SECONDS[attempt])
+            delay = min(retry_max_seconds, retry_base_seconds * (2**attempt))
+            # Desynchronise concurrent holding workers after a provider-wide
+            # overload without obscuring the bounded retry budget.
+            jitter = min(delay * 0.25, 5.0) * random()
+            sleep(delay + jitter)
     raise AssertionError("unreachable UZI request retry state")
 
 
@@ -117,5 +150,7 @@ __all__ = [
     "DEFAULT_UZI_LLM_REQUEST_TIMEOUT_SECONDS",
     "DEFAULT_UZI_LLM_MAX_CONCURRENCY",
     "DEFAULT_UZI_LLM_TRANSIENT_RETRIES",
+    "DEFAULT_UZI_LLM_RETRY_BASE_SECONDS",
+    "DEFAULT_UZI_LLM_RETRY_MAX_SECONDS",
     "parse_uzi_structured",
 ]

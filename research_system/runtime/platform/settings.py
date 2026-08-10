@@ -58,6 +58,9 @@ class Settings(BaseModel):
     llm_request_timeout_seconds: int = 25
     uzi_llm_request_timeout_seconds: int = 480
     uzi_llm_max_concurrency: int = 2
+    uzi_llm_transient_retries: int = 6
+    uzi_llm_retry_base_seconds: float = 2.0
+    uzi_llm_retry_max_seconds: float = 60.0
     max_llm_calls_per_turn: int = 1
     max_agent_tool_loop_turns: int = 4
     max_subagent_calls_per_turn: int = 32
@@ -101,6 +104,15 @@ class Settings(BaseModel):
             raise ValueError("uzi_llm_request_timeout_seconds must be positive")
         if self.uzi_llm_max_concurrency <= 0:
             raise ValueError("uzi_llm_max_concurrency must be positive")
+        if self.uzi_llm_transient_retries < 0:
+            raise ValueError("uzi_llm_transient_retries must not be negative")
+        if (
+            self.uzi_llm_retry_base_seconds <= 0
+            or self.uzi_llm_retry_max_seconds < self.uzi_llm_retry_base_seconds
+        ):
+            raise ValueError(
+                "UZI retry delays require 0 < base_seconds <= max_seconds"
+            )
         if self.qdrant_hybrid_candidate_limit <= 0:
             raise ValueError("qdrant_hybrid_candidate_limit must be positive")
         if self.max_llm_calls_per_turn <= 0:

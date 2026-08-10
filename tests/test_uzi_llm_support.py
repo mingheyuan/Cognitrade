@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 from domain_packs.finance_ashare.subagents.uzi_llm_support import (
     DEFAULT_UZI_LLM_MAX_CONCURRENCY,
+    DEFAULT_UZI_LLM_RETRY_BASE_SECONDS,
+    DEFAULT_UZI_LLM_RETRY_MAX_SECONDS,
     DEFAULT_UZI_LLM_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_UZI_LLM_TRANSIENT_RETRIES,
     parse_uzi_structured,
@@ -70,20 +72,30 @@ class UziLlmSupportTests(unittest.TestCase):
     def test_default_budget_matches_medium_uzi_profile(self) -> None:
         self.assertEqual(DEFAULT_UZI_LLM_REQUEST_TIMEOUT_SECONDS, 480.0)
         self.assertEqual(DEFAULT_UZI_LLM_MAX_CONCURRENCY, 2)
-        self.assertEqual(DEFAULT_UZI_LLM_TRANSIENT_RETRIES, 2)
+        self.assertEqual(DEFAULT_UZI_LLM_TRANSIENT_RETRIES, 6)
+        self.assertEqual(DEFAULT_UZI_LLM_RETRY_BASE_SECONDS, 2.0)
+        self.assertEqual(DEFAULT_UZI_LLM_RETRY_MAX_SECONDS, 60.0)
 
+    @patch("domain_packs.finance_ashare.subagents.uzi_llm_support.random", return_value=0.0)
     @patch("domain_packs.finance_ashare.subagents.uzi_llm_support.sleep")
-    def test_transient_upstream_502_retries_with_short_backoff(self, sleep_mock) -> None:
+    def test_transient_upstream_502_retries_with_bounded_exponential_backoff(
+        self,
+        sleep_mock,
+        _random_mock,
+    ) -> None:
         provider = _TransientProvider(
-            failures=2,
+            failures=6,
             message="Error code: 502 - upstream_error: Upstream request failed",
         )
 
         result = parse_uzi_structured(provider, schema=dict)
 
         self.assertEqual(result, {"ok": True})
-        self.assertEqual(provider.calls, 3)
-        self.assertEqual([call.args[0] for call in sleep_mock.call_args_list], [1.0, 3.0])
+        self.assertEqual(provider.calls, 7)
+        self.assertEqual(
+            [call.args[0] for call in sleep_mock.call_args_list],
+            [2.0, 4.0, 8.0, 16.0, 32.0, 60.0],
+        )
 
     @patch("domain_packs.finance_ashare.subagents.uzi_llm_support.sleep")
     def test_timeout_is_not_retried(self, sleep_mock) -> None:

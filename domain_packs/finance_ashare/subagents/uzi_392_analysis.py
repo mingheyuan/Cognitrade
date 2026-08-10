@@ -541,7 +541,9 @@ def _execute_symbol(
     synthesis: dict[str, Any] = {}
     review: dict[str, Any] = {}
     review_feedback: list[dict[str, Any]] = []
-    seen_critical_signatures: set[tuple[tuple[str, str, str], ...]] = set()
+    seen_critical_signatures: set[
+        tuple[tuple[str, str, str, str, str], ...]
+    ] = set()
     reusable_agent_analysis: dict[str, Any] | None = None
     reusable_roleplay: dict[str, Any] | None = None
     analysis_cycle = 0
@@ -687,6 +689,8 @@ def _execute_symbol(
             (
                 str(row.get("category") or ""),
                 str(row.get("dim") or ""),
+                str(row.get("issue") or ""),
+                str(row.get("evidence") or ""),
                 str(row.get("suggested_fix") or ""),
             )
             for row in critical_rows
@@ -1218,40 +1222,81 @@ def _normalize_evidence_paths(
 ) -> list[str]:
     normalized: list[str] = []
     for raw_path in paths:
-        path = _canonical_evidence_path(raw_path)
-        if allowed_paths is not None and path not in allowed_paths:
-            exact_prefixes = [
-                candidate
-                for candidate in allowed_paths
-                if path.startswith(candidate)
-                and len(path) > len(candidate)
-                and re.match(
-                    r"[\s:：;；,，。()（）`'\"—-]",
-                    path[len(candidate)],
+        candidates: list[str]
+        resolved = False
+        raw_text = str(raw_path).strip()
+        fragments = [
+            fragment.strip()
+            for fragment in re.split(r"(?:、|，|,|；|;|\n)+", raw_text)
+            if fragment.strip()
+        ]
+        if allowed_paths is not None and len(fragments) > 1:
+            split_candidates: list[str] = []
+            split_resolved = True
+            for fragment in fragments:
+                fragment_candidates, fragment_resolved = _resolve_evidence_path(
+                    fragment,
+                    allowed_paths=allowed_paths,
                 )
-            ]
-            if exact_prefixes:
-                # Recover only an exact frozen leaf followed by prose or
-                # punctuation.  A dotted/bracketed unknown child remains
-                # invalid and is still rejected by the grounding gate.
-                path = max(exact_prefixes, key=len)
-        if allowed_paths is None or path in allowed_paths:
-            candidates = [path]
-        else:
-            object_prefix = f"{path}."
-            array_prefix = f"{path}["
-            candidates = sorted(
-                candidate
-                for candidate in allowed_paths
-                if candidate.startswith(object_prefix)
-                or candidate.startswith(array_prefix)
+                if not fragment_resolved:
+                    split_resolved = False
+                    break
+                split_candidates.extend(fragment_candidates)
+            if split_resolved:
+                candidates = split_candidates
+                resolved = True
+        if not resolved:
+            candidates, _resolved = _resolve_evidence_path(
+                raw_text,
+                allowed_paths=allowed_paths,
             )
-            if not candidates:
-                candidates = [path]
         for candidate in candidates:
             if candidate not in normalized:
                 normalized.append(candidate)
     return normalized[:12]
+
+
+def _resolve_evidence_path(
+    raw_path: str,
+    *,
+    allowed_paths: set[str] | None,
+) -> tuple[list[str], bool]:
+    """Resolve only exact frozen leaves or their real JSON containers.
+
+    Models occasionally place two valid paths in one array element.  Splitting
+    is accepted only when every fragment resolves mechanically against the
+    frozen allowlist.  Any unknown child remains untouched and fails the
+    grounding gate; this helper never guesses a sibling field.
+    """
+
+    path = _canonical_evidence_path(raw_path)
+    if allowed_paths is None or path in allowed_paths:
+        return [path], True
+    exact_prefixes = [
+        candidate
+        for candidate in allowed_paths
+        if path.startswith(candidate)
+        and len(path) > len(candidate)
+        # A real child path can only continue with ``.`` or ``[``. Any other
+        # directly appended suffix is transport/prose noise after an exact
+        # frozen leaf and can be removed without guessing another field.
+        and path[len(candidate)] not in ".["
+    ]
+    if exact_prefixes:
+        # Recover only an exact frozen leaf followed by prose or punctuation.
+        # A dotted/bracketed unknown child remains invalid.
+        return [max(exact_prefixes, key=len)], True
+    object_prefix = f"{path}."
+    array_prefix = f"{path}["
+    descendants = sorted(
+        candidate
+        for candidate in allowed_paths
+        if candidate.startswith(object_prefix)
+        or candidate.startswith(array_prefix)
+    )
+    if descendants:
+        return descendants, True
+    return [path], False
 
 
 def _canonical_evidence_path(path: str) -> str:

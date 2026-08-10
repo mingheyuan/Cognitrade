@@ -120,6 +120,15 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
             env_values.get("UZI_LLM_REQUEST_TIMEOUT_SECONDS", "480")
         ),
         "uzi_llm_max_concurrency": int(env_values.get("UZI_LLM_MAX_CONCURRENCY", "2")),
+        "uzi_llm_transient_retries": int(
+            env_values.get("UZI_LLM_TRANSIENT_RETRIES", "6")
+        ),
+        "uzi_llm_retry_base_seconds": float(
+            env_values.get("UZI_LLM_RETRY_BASE_SECONDS", "2")
+        ),
+        "uzi_llm_retry_max_seconds": float(
+            env_values.get("UZI_LLM_RETRY_MAX_SECONDS", "60")
+        ),
         "max_llm_calls_per_turn": int(env_values.get("MAX_LLM_CALLS_PER_TURN", "1")),
         "max_subagent_calls_per_turn": int(env_values.get("MAX_SUBAGENT_CALLS_PER_TURN", "32")),
         "max_child_threads_per_turn": int(env_values.get("MAX_CHILD_THREADS_PER_TURN", "8")),

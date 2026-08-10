@@ -12,6 +12,7 @@ from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
     AgentDimensionPayload,
     AgentNarrativeCorePayload,
     _canonical_evidence_path,
+    _normalize_evidence_paths,
     _normalize_payload_paths,
     _safe_error_detail,
     execute_native_analysis,
@@ -365,6 +366,43 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         self.assertTrue(history[1]["reused_agent_analysis"])
         self.assertTrue(result["report_allowed"])
 
+    def test_content_repair_continues_when_the_exact_critical_changes(self) -> None:
+        def critical(issue: str) -> dict[str, object]:
+            return {
+                "severity": "critical",
+                "category": "agent-os-boundary",
+                "dim": "agent_analysis",
+                "issue": issue,
+                "evidence": "agent_content_invalid",
+                "suggested_fix": "按自审问题修正结构化 Agent 分析后重算",
+            }
+
+        reviews = [
+            {"issues": [critical("unknown evidence path A")], "critical_count": 1, "warning_count": 0, "info_count": 0},
+            {"issues": [critical("unknown evidence path B")], "critical_count": 1, "warning_count": 0, "info_count": 0},
+            {"issues": [], "critical_count": 0, "warning_count": 0, "info_count": 0},
+        ]
+        with (
+            patch(
+                "domain_packs.finance_ashare.subagents.uzi_392_analysis._generate_agent_analysis",
+                return_value=None,
+            ) as generate_mock,
+            patch(
+                "domain_packs.finance_ashare.subagents.uzi_392_analysis.run_native_self_review",
+                side_effect=reviews,
+            ),
+        ):
+            result = execute_native_analysis(
+                _lite_snapshots(),
+                ["600000"],
+                profile="lite",
+                llm_provider=_LiteAgentProvider(),
+            )
+
+        self.assertEqual(generate_mock.call_count, 3)
+        self.assertEqual(len(result["results"][0]["recovery_history"]), 3)
+        self.assertTrue(result["report_allowed"])
+
     def test_enabled_empty_dimension_remains_a_non_bypassable_critical(self) -> None:
         rows = _lite_snapshots()
         governance = next(
@@ -514,6 +552,22 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
             ],
         )
 
+    def test_multiple_paths_in_one_model_element_are_split_only_when_grounded(self) -> None:
+        allowed = {
+            "raw.dimensions.0_basic.data.market_overview.latest_bar.close",
+            "raw.dimensions.0_basic.data.market_overview.valuation.pe",
+        }
+
+        normalized = _normalize_evidence_paths(
+            [
+                "raw.dimensions.0_basic.data.market_overview.latest_bar、"
+                "raw.dimensions.0_basic.data.market_overview.valuation"
+            ],
+            allowed_paths=allowed,
+        )
+
+        self.assertEqual(normalized, sorted(allowed))
+
     def test_explanatory_suffix_after_exact_leaf_path_is_removed(self) -> None:
         payload = AgentAnalysisPayload.model_validate(
             _LiteAgentProvider().parse()
@@ -534,6 +588,14 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
             payload.panel_evidence_paths,
             ["panel.signal_distribution.bearish"],
         )
+
+    def test_non_path_suffix_after_exact_leaf_path_is_removed(self) -> None:
+        normalized = _normalize_evidence_paths(
+            ["panel.school_scores.C.verdictลง"],
+            allowed_paths={"panel.school_scores.C.verdict"},
+        )
+
+        self.assertEqual(normalized, ["panel.school_scores.C.verdict"])
 
     def test_unknown_child_path_is_not_silently_rewritten(self) -> None:
         payload = AgentAnalysisPayload.model_validate(
