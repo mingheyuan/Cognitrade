@@ -248,12 +248,12 @@ class AgentNarrativeCorePayload(BaseModel):
     risks: list[GroundedRisk] = Field(min_length=3, max_length=12)
 
 
-class AgentBuyZonesPayload(BaseModel):
-    """Gateway-safe transport contract for the four grounded UZI price zones."""
+class AgentBuyZonePayload(BaseModel):
+    """Gateway-safe transport contract for one grounded UZI price zone."""
 
     model_config = ConfigDict(extra="forbid")
 
-    buy_zones: AgentBuyZones
+    zone: AgentBuyZone
 
 
 def _profile_native_panel(panel: dict[str, Any], profile: str) -> dict[str, Any]:
@@ -893,38 +893,90 @@ def _generate_agent_analysis(
         narrative_core_payload,
         allowed_paths=narrative_allowed_paths,
     )
-    numeric_values_by_path = {
-        path: _path_number(frozen, path)
-        for path in sorted(numeric_paths)
+    zone_dimension_keys = {
+        "value": (
+            "0_basic", "1_financials", "4_peers", "10_valuation",
+            "20_valuation_models",
+        ),
+        "growth": (
+            "0_basic", "1_financials", "5_chain", "6_research", "14_moat",
+            "20_valuation_models",
+        ),
+        "technical": (
+            "0_basic", "2_kline", "12_capital_flow", "16_lhb", "17_sentiment",
+        ),
+        "youzi": (
+            "0_basic", "2_kline", "12_capital_flow", "15_events", "16_lhb",
+            "17_sentiment", "18_trap", "19_contests",
+        ),
     }
-    numeric_system_prompt = (
-        f"{base_system_prompt}买入区间只能由以下真实数值叶子路径通过 calculation 明示计算得到。"
-        "对象的键就是必须原样返回的 basis_fields 路径；不得引用对象之外的值。"
-        f"ALLOWED_NUMERIC_BASIS_VALUES={_compact_json(numeric_values_by_path)}"
-    )
-    buy_zones_prompt = (
-        "只生成当前档位 agent_analysis 的四类买入区间。buy_zones 必须含 "
-        "value/growth/technical/youzi；basis_fields 只能填写 "
-        "ALLOWED_NUMERIC_BASIS_VALUES 中真实数值的精确叶子路径，calculation 写清真实数值如何导出 price。"
-        "证据不足时不得猜测或使用中位值，必须让结构化输出失败并停在质量门。"
-        f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
-    )
-    buy_zones_result = _parse_agent_stage(
-        llm_provider,
-        stage="buy_zones",
-        symbol=str(raw.get("ticker") or ""),
-        profile=profile,
-        system_prompt=numeric_system_prompt,
-        user_prompt=buy_zones_prompt,
-        schema=AgentBuyZonesPayload,
-        temperature=0.1,
-        reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
-    )
-    buy_zones_payload = (
-        buy_zones_result
-        if isinstance(buy_zones_result, AgentBuyZonesPayload)
-        else AgentBuyZonesPayload.model_validate(buy_zones_result)
-    )
+    zone_payloads: dict[str, AgentBuyZone] = {}
+    for zone_name, dimension_keys in zone_dimension_keys.items():
+        raw_prefixes = tuple(
+            f"raw.dimensions.{dimension_key}."
+            for dimension_key in dimension_keys
+        )
+        score_prefixes = tuple(
+            f"dimension_scores.dimensions.{dimension_key}."
+            for dimension_key in dimension_keys
+        )
+        zone_numeric_paths = {
+            path
+            for path in numeric_paths
+            if path.startswith(raw_prefixes)
+            or path == "dimension_scores.fundamental_score"
+            or path.startswith(score_prefixes)
+            or (
+                path.startswith("panel.")
+                and not path.startswith("panel.investors[")
+            )
+        }
+        numeric_values_by_path = {
+            path: _path_number(frozen, path)
+            for path in sorted(zone_numeric_paths)
+        }
+        numeric_system_prompt = (
+            f"{base_system_prompt}本片段只生成 {zone_name} 买入区间。买入区间只能由以下真实数值叶子路径"
+            "通过 calculation 明示计算得到。对象的键就是必须原样返回的 basis_fields 路径；"
+            "不得引用对象之外的值。"
+            f"ALLOWED_NUMERIC_BASIS_VALUES={_compact_json(numeric_values_by_path)}"
+        )
+        buy_zone_prompt = (
+            f"只生成当前档位 agent_analysis 的 {zone_name} 买入区间，返回 zone。"
+            "basis_fields 只能填写 ALLOWED_NUMERIC_BASIS_VALUES 中真实数值的精确叶子路径；"
+            "calculation 写清真实数值如何导出 price。证据不足时不得猜测或使用中位值，"
+            "必须让结构化输出失败并停在质量门。"
+            f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
+        )
+        buy_zone_result = _parse_agent_stage(
+            llm_provider,
+            stage=f"buy_zone_{zone_name}",
+            symbol=str(raw.get("ticker") or ""),
+            profile=profile,
+            system_prompt=numeric_system_prompt,
+            user_prompt=buy_zone_prompt,
+            schema=AgentBuyZonePayload,
+            temperature=0.1,
+            reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
+        )
+        buy_zone_payload = (
+            buy_zone_result
+            if isinstance(buy_zone_result, AgentBuyZonePayload)
+            else AgentBuyZonePayload.model_validate(buy_zone_result)
+        )
+        buy_zone_payload.zone.basis_fields = _normalize_evidence_paths(
+            buy_zone_payload.zone.basis_fields,
+            allowed_paths=zone_numeric_paths,
+        )
+        unknown_zone_paths = (
+            set(buy_zone_payload.zone.basis_fields) - zone_numeric_paths
+        )
+        if unknown_zone_paths:
+            raise ValueError(
+                f"buy_zone_{zone_name} cited numeric evidence outside its frozen projection: "
+                f"{sorted(unknown_zone_paths)[:20]}"
+            )
+        zone_payloads[zone_name] = buy_zone_payload.zone
     payload = AgentAnalysisPayload(
         agent_reviewed=True,
         dim_commentary={
@@ -940,7 +992,7 @@ def _generate_agent_analysis(
                 narrative_core_payload.conclusion_evidence_paths
             ),
             risks=narrative_core_payload.risks,
-            buy_zones=buy_zones_payload.buy_zones,
+            buy_zones=AgentBuyZones(**zone_payloads),
         ),
         data_gap_acknowledged={
             row.dimension_id: row.reason

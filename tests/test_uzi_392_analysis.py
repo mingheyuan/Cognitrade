@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
     AgentAnalysisPayload,
-    AgentBuyZonesPayload,
+    AgentBuyZonePayload,
     AgentDimensionPayload,
     AgentNarrativeCorePayload,
     _canonical_evidence_path,
@@ -150,9 +150,15 @@ class _LiteAgentProvider:
                 ],
                 "risks": payload["narrative_override"]["risks"],
             }
-        if schema is AgentBuyZonesPayload:
+        if schema is AgentBuyZonePayload:
+            prompt = str(kwargs.get("user_prompt") or "")
+            zone_name = next(
+                name
+                for name in ("value", "growth", "technical", "youzi")
+                if f" {name} 买入区间" in prompt
+            )
             return {
-                "buy_zones": payload["narrative_override"]["buy_zones"],
+                "zone": payload["narrative_override"]["buy_zones"][zone_name],
             }
         return payload
 
@@ -197,16 +203,32 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
             _LITE_DIMENSIONS,
         )
         self.assertNotIn("great_divide_override", analysis["agent_analysis"])
-        self.assertEqual(provider.calls, 4)
-        self.assertEqual(provider.reasoning_efforts, ["low"] * 4)
+        self.assertEqual(provider.calls, 7)
+        self.assertEqual(provider.reasoning_efforts, ["low"] * 7)
         self.assertNotIn('"panel":', provider.system_prompts[0])
         self.assertIn(
             "cited_real_evidence_values_by_original_path",
-            provider.system_prompts[-2],
+            provider.system_prompts[-5],
         )
         self.assertIn(
             "ALLOWED_NUMERIC_BASIS_VALUES",
-            provider.system_prompts[-1],
+            provider.system_prompts[-4],
+        )
+        self.assertIn(
+            "raw.dimensions.1_financials.",
+            provider.system_prompts[-4],
+        )
+        self.assertNotIn(
+            "raw.dimensions.16_lhb.",
+            provider.system_prompts[-4],
+        )
+        self.assertIn(
+            "raw.dimensions.16_lhb.",
+            provider.system_prompts[-2],
+        )
+        self.assertNotIn(
+            "raw.dimensions.1_financials.",
+            provider.system_prompts[-2],
         )
         self.assertLess(max(map(len, provider.system_prompts)), 100_000)
 
