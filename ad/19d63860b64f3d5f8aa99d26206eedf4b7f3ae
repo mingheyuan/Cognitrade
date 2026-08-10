@@ -1,0 +1,37 @@
+tests/test_settings_runtime.py
+  s_b50dd23690b4b9::t_f5d859752728d8 41
+tests/test_root_packages_runtime.py
+  s_b50dd23690b4b9::t_ca4f4f588cdb11 6
+tests/test_uzi_392_commands.py
+  s_a6a8a3a6f43b3c::t_69eb4ab4a07663 32-53,79-80,88
+research_system/runtime/turn_runner.py
+  s_b50dd23690b4b9::t_06d9da30500cc1 18
+research_system/adapters/vendors/provider_registry.py
+  s_b50dd23690b4b9::t_6b022166fd3990 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "ad19d63860b64f3d5f8aa99d26206eedf4b7f3ae",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_b50dd23690b4b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe341-6a16-7f11-b28e-8f8b8ba2549b",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
