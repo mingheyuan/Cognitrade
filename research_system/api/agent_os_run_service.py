@@ -685,6 +685,23 @@ class AgentOSRunService:
                 "task_selection": turn.get("task_selection") or {},
             }
         snapshot = self._snapshot(run_id)
+        live_node_status: dict[str, str] = {}
+        live_node_progress: dict[str, dict[str, Any]] = {}
+        for event in self._execution_events(run_id):
+            node_id = str(event.get("node_id") or "").strip()
+            if not node_id:
+                continue
+            event_type = str(event.get("event_type") or "")
+            if event_type == "graph_node_started":
+                live_node_status[node_id] = "running"
+            elif event_type == "graph_node_completed":
+                live_node_status[node_id] = "completed"
+            elif event_type == "graph_node_failed":
+                live_node_status[node_id] = "failed"
+            elif event_type == "graph_node_blocked":
+                live_node_status[node_id] = "blocked"
+            if event_type == "agent_progress":
+                live_node_progress[node_id] = event
         rows = [
             {
                 "step_index": index,
@@ -694,9 +711,12 @@ class AgentOSRunService:
                 "executor": node.executor,
                 "objective": node.objective,
                 "status": (
-                    snapshot.node_states[node.node_id].status
-                    if node.node_id in snapshot.node_states
-                    else node.status
+                    live_node_status.get(node.node_id)
+                    or (
+                        snapshot.node_states[node.node_id].status
+                        if node.node_id in snapshot.node_states
+                        else node.status
+                    )
                 ),
                 "depends_on": list(node.depends_on),
                 "tags": list(node.tags),
@@ -705,6 +725,18 @@ class AgentOSRunService:
                 "turn_id": (detail.get("turn") or {}).get("turn_id"),
                 "task_type": (detail.get("turn") or {}).get("task_type") or "regular",
                 "execution_mode": (detail.get("turn") or {}).get("execution_mode") or "graph",
+                **(
+                    {
+                        "current_action": live_node_progress[node.node_id].get("current_action"),
+                        "next_action": live_node_progress[node.node_id].get("next_action"),
+                        "progress_phase": live_node_progress[node.node_id].get("phase"),
+                        "progress_percent": live_node_progress[node.node_id].get("progress_percent"),
+                        "stage_index": live_node_progress[node.node_id].get("stage_index"),
+                        "stage_total": live_node_progress[node.node_id].get("stage_total"),
+                    }
+                    if node.node_id in live_node_progress
+                    else {}
+                ),
             }
             for index, node in enumerate(snapshot.graph.nodes, start=1)
         ]

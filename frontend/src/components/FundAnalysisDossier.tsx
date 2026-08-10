@@ -830,10 +830,12 @@ function holdingProgressFromSteps(payload: RunStepsPayload): HoldingRunProgress 
   const activeSteps = steps.filter((step) => step.status === 'running')
   const currentStep = activeSteps[0] || steps.find((step) => ['pending', 'waiting'].includes(String(step.status || '')))
   const totalNodes = steps.length
+  const nodeProgress = Math.max(0, Math.min(100, Number(currentStep?.progress_percent) || 0))
+  const effectiveCompleted = settledNodes + (currentStep?.status === 'running' ? nodeProgress / 100 : 0)
   return {
     currentNodeId: String(currentStep?.node_id || ''),
-    currentObjective: String(currentStep?.objective || '正在推进当前执行节点'),
-    percent: totalNodes > 0 ? Math.min(96, Math.round(settledNodes / totalNodes * 100)) : null,
+    currentObjective: String(currentStep?.current_action || currentStep?.objective || '正在推进当前执行节点'),
+    percent: totalNodes > 0 ? Math.min(96, Math.round(effectiveCompleted / totalNodes * 100)) : null,
     settledNodes,
     totalNodes,
   }

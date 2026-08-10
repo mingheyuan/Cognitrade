@@ -423,6 +423,7 @@ def execute_native_analysis(
     llm_provider: Any | None,
     cancellation: Event | None = None,
     recovery_history: list[dict[str, Any]] | None = None,
+    progress_callback=None,
 ) -> dict[str, Any]:
     """Run the complete pinned pipeline for each requested symbol."""
 
@@ -445,17 +446,26 @@ def execute_native_analysis(
             continue
         seen_symbols.add(canonical)
         unique_symbols.append(normalized)
-    results = [
-        _execute_symbol(
+    results = []
+    for symbol_index, symbol in enumerate(unique_symbols, start=1):
+        _notify_progress(
+            progress_callback,
+            current_action=f"正在准备第 {symbol_index}/{len(unique_symbols)} 只股票的 UZI 证据",
+            next_action="执行分段结构化分析",
+            progress_percent=2,
+            stage="prepare",
+            stage_index=symbol_index,
+            stage_total=len(unique_symbols),
+        )
+        results.append(_execute_symbol(
             snapshot_rows,
             symbol,
             profile=selected_profile,
             llm_provider=llm_provider,
             cancellation=cancellation,
             recovery_history=list(recovery_history or []),
-        )
-        for symbol in unique_symbols
-    ]
+            progress_callback=progress_callback,
+        ))
     critical = sum(int((row.get("self_review") or {}).get("critical_count") or 0) for row in results)
     warnings = sum(int((row.get("self_review") or {}).get("warning_count") or 0) for row in results)
     combined_recovery_history = [
@@ -485,6 +495,7 @@ def _execute_symbol(
     llm_provider: Any | None,
     cancellation: Event | None,
     recovery_history: list[dict[str, Any]],
+    progress_callback=None,
 ) -> dict[str, Any]:
     _initialize_native_imports()
     raw = build_uzi_raw(snapshot_rows, symbol)
@@ -549,6 +560,14 @@ def _execute_symbol(
     analysis_cycle = 0
     while True:
         analysis_cycle += 1
+        _notify_progress(
+            progress_callback,
+            current_action=f"UZI 第 {analysis_cycle} 轮：生成结构化 Agent 分析",
+            next_action="逐批生成维度评论、结论和买入区间",
+            progress_percent=5,
+            stage="analysis_cycle",
+            cycle=analysis_cycle,
+        )
         reused_agent_analysis = reusable_agent_analysis is not None
         agent_analysis = None
         agent_issues = []
@@ -565,6 +584,8 @@ def _execute_symbol(
                         llm_provider=llm_provider,
                         recovery_tasks=recovery_tasks,
                         review_feedback=review_feedback,
+                        progress_callback=progress_callback,
+                        analysis_cycle=analysis_cycle,
                     )
                     if narrative is not None:
                         agent_analysis = narrative
@@ -602,6 +623,14 @@ def _execute_symbol(
                         reusable_roleplay = deepcopy(roleplay)
                     if profile in {"medium", "deep"}:
                         try:
+                            _notify_progress(
+                                progress_callback,
+                                current_action=f"UZI 第 {analysis_cycle} 轮：正在执行六维定性研究",
+                                next_action="合并定性研究并执行机械自审",
+                                progress_percent=82,
+                                stage="qualitative_deep_dive",
+                                cycle=analysis_cycle,
+                            )
                             qualitative = apply_qualitative_deep_dive(
                                 {},
                                 snapshot_rows=snapshot_rows,
@@ -613,6 +642,14 @@ def _execute_symbol(
                                 qualitative.get("qualitative_deep_dive") or {}
                             )
                             _apply_qualitative_commentary(agent_analysis)
+                            _notify_progress(
+                                progress_callback,
+                                current_action=f"UZI 第 {analysis_cycle} 轮：六维定性研究已完成",
+                                next_action="执行证据路径校验与机械自审",
+                                progress_percent=90,
+                                stage="qualitative_deep_dive",
+                                cycle=analysis_cycle,
+                            )
                         except Exception as exc:
                             qualitative_execution = {
                                 "required": True,
@@ -669,6 +706,14 @@ def _execute_symbol(
             roleplay=roleplay,
             qualitative_execution=qualitative_execution,
             computation_error=computation_error,
+        )
+        _notify_progress(
+            progress_callback,
+            current_action=f"UZI 第 {analysis_cycle} 轮机械自审完成：{int(review.get('critical_count') or 0)} 个 critical",
+            next_action="通过质量门后生成报告；仍有 critical 时按 suggested_fix 恢复重算",
+            progress_percent=96 if int(review.get("critical_count") or 0) == 0 else 92,
+            stage="self_review",
+            cycle=analysis_cycle,
         )
         critical_rows = [
             row for row in list(review.get("issues") or [])
@@ -736,6 +781,8 @@ def _generate_agent_analysis(
     llm_provider: Any | None,
     recovery_tasks: list[dict[str, Any]],
     review_feedback: list[dict[str, Any]],
+    progress_callback=None,
+    analysis_cycle: int = 1,
 ) -> dict[str, Any] | None:
     if llm_provider is None or not bool(getattr(llm_provider, "available", True)):
         return None
@@ -774,7 +821,11 @@ def _generate_agent_analysis(
     dimension_rows: list[AgentDimensionCommentary] = []
     gap_rows: list[AgentDataGapAcknowledgement] = []
     dimension_batch_size = 5
+    dimension_batch_count = math.ceil(len(expected_dimensions) / dimension_batch_size)
+    stage_total = dimension_batch_count + 5
+    stage_index = 0
     for offset in range(0, len(expected_dimensions), dimension_batch_size):
+        stage_index += 1
         dimension_batch = expected_dimensions[offset : offset + dimension_batch_size]
         included_raw_dimensions = list(dimension_batch)
         if "0_basic" not in included_raw_dimensions:
@@ -829,6 +880,10 @@ def _generate_agent_analysis(
             schema=AgentDimensionPayload,
             temperature=0.1,
             reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
+            progress_callback=progress_callback,
+            stage_index=stage_index,
+            stage_total=stage_total,
+            analysis_cycle=analysis_cycle,
         )
         dimensions_payload = (
             dimension_result
@@ -906,6 +961,7 @@ def _generate_agent_analysis(
         f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
         "必须逐条修复；不得通过改写措辞隐藏问题。"
     )
+    stage_index += 1
     narrative_core_result = _parse_agent_stage(
         llm_provider,
         stage="narrative_core",
@@ -916,6 +972,10 @@ def _generate_agent_analysis(
         schema=AgentNarrativeCorePayload,
         temperature=0.1,
         reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
+        progress_callback=progress_callback,
+        stage_index=stage_index,
+        stage_total=stage_total,
+        analysis_cycle=analysis_cycle,
     )
     narrative_core_payload = (
         narrative_core_result
@@ -945,6 +1005,7 @@ def _generate_agent_analysis(
     }
     zone_payloads: dict[str, AgentBuyZone] = {}
     for zone_name, dimension_keys in zone_dimension_keys.items():
+        stage_index += 1
         raw_prefixes = tuple(
             f"raw.dimensions.{dimension_key}."
             for dimension_key in dimension_keys
@@ -991,6 +1052,10 @@ def _generate_agent_analysis(
             schema=AgentBuyZonePayload,
             temperature=0.1,
             reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
+            progress_callback=progress_callback,
+            stage_index=stage_index,
+            stage_total=stage_total,
+            analysis_cycle=analysis_cycle,
         )
         buy_zone_payload = (
             buy_zone_result
@@ -1057,6 +1122,10 @@ def _parse_agent_stage(
     stage: str,
     symbol: str,
     profile: str,
+    progress_callback=None,
+    stage_index: int | None = None,
+    stage_total: int | None = None,
+    analysis_cycle: int = 1,
     **kwargs: Any,
 ) -> Any:
     started_at = monotonic()
@@ -1066,6 +1135,19 @@ def _parse_agent_stage(
         profile,
         stage,
         len(str(kwargs.get("system_prompt") or "")) + len(str(kwargs.get("user_prompt") or "")),
+    )
+    percent = (
+        8 + round(max((stage_index or 1) - 1, 0) / max(stage_total or 1, 1) * 70)
+    )
+    _notify_progress(
+        progress_callback,
+        current_action=f"UZI 第 {analysis_cycle} 轮：正在生成 {stage}",
+        next_action="校验结构化输出与冻结证据路径",
+        progress_percent=percent,
+        stage=stage,
+        stage_index=stage_index,
+        stage_total=stage_total,
+        cycle=analysis_cycle,
     )
     try:
         result = parse_uzi_structured(llm_provider, **kwargs)
@@ -1079,6 +1161,16 @@ def _parse_agent_stage(
             exc.__class__.__name__,
             _safe_error_detail(exc),
         )
+        _notify_progress(
+            progress_callback,
+            current_action=f"UZI 第 {analysis_cycle} 轮阶段 {stage} 失败，正在进入恢复判定",
+            next_action="按 suggested_fix 重算或停在质量门",
+            progress_percent=percent,
+            stage=stage,
+            stage_index=stage_index,
+            stage_total=stage_total,
+            cycle=analysis_cycle,
+        )
         raise
     _LOGGER.info(
         "UZI agent analysis stage completed: symbol=%s profile=%s stage=%s elapsed=%.1fs",
@@ -1087,7 +1179,22 @@ def _parse_agent_stage(
         stage,
         monotonic() - started_at,
     )
+    _notify_progress(
+        progress_callback,
+        current_action=f"UZI 第 {analysis_cycle} 轮已完成 {stage_index or 1}/{stage_total or 1}：{stage}",
+        next_action="继续下一个结构化分析阶段",
+        progress_percent=8 + round((stage_index or 1) / max(stage_total or 1, 1) * 70),
+        stage=stage,
+        stage_index=stage_index,
+        stage_total=stage_total,
+        cycle=analysis_cycle,
+    )
     return result
+
+
+def _notify_progress(progress_callback, **payload: Any) -> None:
+    if callable(progress_callback):
+        progress_callback(payload)
 
 
 def _normalize_narrative_core_paths(

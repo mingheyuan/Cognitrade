@@ -263,7 +263,10 @@ describe('Funds', () => {
           steps: [
             { node_id: 'collect-market', objective: '采集市场行情', status: 'completed' },
             { node_id: 'collect-finance', objective: '采集财务快照', status: 'completed' },
-            { node_id: 'uzi-analysis', objective: '生成 UZI 结构化股票分析', status: 'running' },
+            {
+              node_id: 'uzi-analysis', objective: '生成 UZI 结构化股票分析', status: 'running',
+              current_action: 'UZI 第 1 轮已完成 4/9：dimensions_16_20', progress_percent: 50,
+            },
             { node_id: 'quality-gate', objective: '执行质量门', status: 'pending' },
             { node_id: 'report', objective: '生成最终报告', status: 'pending' },
           ],
@@ -302,11 +305,11 @@ describe('Funds', () => {
 
     render(<Funds onOpenRun={mocks.openRun} />)
 
-    await waitFor(() => expect(screen.getByText('生成 UZI 结构化股票分析')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('UZI 第 1 轮已完成 4/9：dimensions_16_20')).toBeInTheDocument())
     expect(screen.getByText('实时执行进度')).toBeInTheDocument()
     expect(screen.getByText('2 / 5 节点')).toBeInTheDocument()
     expect(screen.getByText('等待可用并发槽位')).toBeInTheDocument()
-    expect(screen.getByRole('progressbar', { name: '持仓分析任务处理进度 20%' })).toHaveAttribute('aria-valuenow', '20')
+    expect(screen.getByRole('progressbar', { name: '持仓分析任务处理进度 25%' })).toHaveAttribute('aria-valuenow', '25')
   })
 
   it('restores a persisted batch, retries one failed report and opens its backtest', async () => {

@@ -242,6 +242,7 @@ def collect_snapshots(
     research_profile: str | None = None,
     max_workers: int | None = None,
     provider_registry: VendorProviderRegistry | None = None,
+    progress_callback=None,
 ) -> list[dict[str, Any]]:
     """Collect the Finance Pack's declared snapshots through shared vendor adapters."""
     requested = list(dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip()))
@@ -311,6 +312,18 @@ def collect_snapshots(
         return snapshots
     results: dict[int, dict[str, Any]] = {}
     pending_tasks: list[tuple[int, str, str]] = []
+    total_tasks = len(tasks)
+
+    def emit_progress(*, phase: str, snapshot_type: str, completed: int | None = None) -> None:
+        if not callable(progress_callback):
+            return
+        progress_callback({
+            "phase": phase,
+            "snapshot_type": snapshot_type,
+            "completed": len(results) if completed is None else completed,
+            "total": total_tasks,
+        })
+
     for index, symbol, snapshot_type in tasks:
         cached = _load_snapshot_cache(
             cache_root=cache_root,
@@ -322,12 +335,14 @@ def collect_snapshots(
             pending_tasks.append((index, symbol, snapshot_type))
         else:
             results[index] = cached
+            emit_progress(phase="cache_hit", snapshot_type=snapshot_type)
     if pending_tasks:
         initialize_akshare_js_runtime()
         # UZI runs dimension 0 first because the dependent macro/industry/
         # futures/policy dimensions consume the resolved real industry.
         basic_tasks = [task for task in pending_tasks if task[2] == "market"]
         for index, symbol, snapshot_type in basic_tasks:
+            emit_progress(phase="collecting", snapshot_type=snapshot_type)
             result = _run_snapshot_skill(query, symbol, snapshot_type, providers)
             results[index] = result
             _save_snapshot_cache(
@@ -337,6 +352,7 @@ def collect_snapshots(
                 profile=research_profile,
                 snapshot=result,
             )
+            emit_progress(phase="completed", snapshot_type=snapshot_type)
         pending_tasks = [task for task in pending_tasks if task[2] != "market"]
         basic_by_symbol = {
             symbol: raw
@@ -351,6 +367,7 @@ def collect_snapshots(
         # a small first wave; all remaining independent tasks stay parallel.
         material_tasks = [task for task in pending_tasks if task[2] == "materials"]
         for index, symbol, snapshot_type in material_tasks:
+            emit_progress(phase="collecting", snapshot_type=snapshot_type)
             dependencies = (
                 {"0_basic": basic_by_symbol[symbol]}
                 if symbol in basic_by_symbol
@@ -371,6 +388,7 @@ def collect_snapshots(
                 profile=research_profile,
                 snapshot=result,
             )
+            emit_progress(phase="completed", snapshot_type=snapshot_type)
         pending_tasks = [task for task in pending_tasks if task[2] != "materials"]
         material_by_symbol = {
             symbol: raw
@@ -411,6 +429,8 @@ def collect_snapshots(
                     dependencies or None,
                 )
                 futures[future] = (index, symbol, snapshot_type)
+            if pending_tasks:
+                emit_progress(phase="collecting", snapshot_type=pending_tasks[0][2])
             try:
                 try:
                     for future in as_completed(
@@ -431,6 +451,7 @@ def collect_snapshots(
                             profile=research_profile,
                             snapshot=result,
                         )
+                        emit_progress(phase="completed", snapshot_type=snapshot_type)
                 except FutureTimeoutError:
                     for future, (index, symbol, snapshot_type) in futures.items():
                         if index in results:
@@ -453,6 +474,7 @@ def collect_snapshots(
                             profile=research_profile,
                             snapshot=result,
                         )
+                        emit_progress(phase="completed", snapshot_type=snapshot_type)
             finally:
                 executor.shutdown(wait=False, cancel_futures=True)
     snapshots.extend(results[index] for index, _symbol, _snapshot_type in tasks if index in results)
@@ -892,6 +914,7 @@ def collect_snapshot_bundle(
     cache_root: Path | None = None,
     research_profile: str | None = None,
     provider_registry: VendorProviderRegistry | None = None,
+    progress_callback=None,
 ) -> dict[str, Any]:
     """Build a traceable candidate universe and its staged snapshot collection."""
     requested = list(dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip()))
@@ -995,6 +1018,7 @@ def collect_snapshot_bundle(
                 cache_root=cache_root,
                 research_profile=research_profile,
                 provider_registry=providers,
+                progress_callback=progress_callback,
             )
         )
 
@@ -1012,6 +1036,7 @@ def collect_snapshot_bundle(
                     cache_root=cache_root,
                     research_profile=research_profile,
                     provider_registry=providers,
+                    progress_callback=progress_callback,
                 )
             )
 

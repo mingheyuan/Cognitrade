@@ -243,6 +243,31 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertEqual(result["collection"]["quality_counts"], {"available": 1, "data_gap": 1})
         self.assertEqual(result["snapshots"][1]["quality_status"], "data_gap")
 
+    def test_snapshot_collection_reports_cache_and_live_dimension_progress(self) -> None:
+        progress: list[dict] = []
+
+        def fake_run(_query, symbol, snapshot_type, _providers, _dependencies=None):
+            return {
+                "snapshot_type": snapshot_type,
+                "symbol": symbol,
+                "facts": {"availability": "available"},
+                "source": {"provider_id": "test_provider"},
+            }
+
+        with patch.object(snapshot_collector, "_run_snapshot_skill", side_effect=fake_run):
+            rows = collect_snapshots(
+                query="分析 300750",
+                symbols=["300750"],
+                snapshot_types=["market", "fundamental"],
+                max_workers=1,
+                progress_callback=progress.append,
+            )
+
+        self.assertEqual([row["snapshot_type"] for row in rows], ["market", "fundamental"])
+        completed = [row for row in progress if row["phase"] == "completed"]
+        self.assertEqual([row["completed"] for row in completed], [1, 2])
+        self.assertTrue(all(row["total"] == 2 for row in progress))
+
     def test_snapshot_cache_reuses_dimensions_and_refreshes_only_expired_one(self) -> None:
         calls = {"market": 0, "fundamental": 0}
 

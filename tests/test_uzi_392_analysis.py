@@ -167,6 +167,7 @@ class _LiteAgentProvider:
 class Uzi392AnalysisGateTests(unittest.TestCase):
     def test_lite_profile_drives_native_panel_agent_schema_and_self_review(self) -> None:
         provider = _LiteAgentProvider()
+        progress: list[dict] = []
 
         with patch.dict(os.environ, {"UZI_DEPTH": "medium", "UZI_LITE": "0"}):
             result = execute_native_analysis(
@@ -174,6 +175,7 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
                 ["600000"],
                 profile="lite",
                 llm_provider=provider,
+                progress_callback=progress.append,
             )
 
         analysis = result["results"][0]
@@ -232,6 +234,9 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
             provider.system_prompts[-2],
         )
         self.assertLess(max(map(len, provider.system_prompts)), 100_000)
+        self.assertTrue(any(row.get("stage") == "dimensions_1_5" for row in progress))
+        self.assertTrue(any(row.get("stage") == "self_review" for row in progress))
+        self.assertTrue(all(0 <= int(row.get("progress_percent") or 0) <= 100 for row in progress))
 
     def test_native_panel_obeys_all_profile_seat_counts(self) -> None:
         for profile, expected in (("lite", 10), ("medium", 51), ("deep", 66)):

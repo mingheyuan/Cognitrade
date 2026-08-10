@@ -61,6 +61,7 @@ class CoreToolContext:
     request_intake_supplier: Callable[..., Any] | None = None
     cancellation: Event | None = None
     event_callback: Callable[[dict[str, Any]], None] | None = None
+    progress_emitter: Callable[[dict[str, Any]], None] | None = None
     allowed_tools: frozenset[str] | None = None
     allowed_permissions: frozenset[str] | None = None
     authorize_call: Callable[[], bool] | None = None

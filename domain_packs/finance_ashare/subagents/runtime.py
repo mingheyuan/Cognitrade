@@ -837,6 +837,29 @@ def execute_uzi_native_full_analysis(context):
         recovery = dict((bundle.content or {}).get("collection") or {}).get("uzi_recovery")
         if isinstance(recovery, dict):
             recovery_history = list(recovery.get("attempts") or [])
+    progress_emitter = getattr(context, "progress_emitter", None)
+    highest_progress = 0
+
+    def emit_progress(progress: dict[str, Any]) -> None:
+        nonlocal highest_progress
+        if not callable(progress_emitter):
+            return
+        requested_percent = max(0, min(99, int(progress.get("progress_percent") or 0)))
+        highest_progress = max(highest_progress, requested_percent)
+        progress_emitter({
+            "node_id": context.node.node_id,
+            "phase": "uzi_native_analysis",
+            "status": "running",
+            "progress_source": "runtime",
+            "current_action": str(progress.get("current_action") or "正在执行 UZI 结构化分析"),
+            "next_action": str(progress.get("next_action") or "继续重算并执行机械自审"),
+            "progress_percent": highest_progress,
+            "stage_index": progress.get("stage_index"),
+            "stage_total": progress.get("stage_total"),
+            "uzi_stage": progress.get("stage"),
+            "analysis_cycle": progress.get("cycle"),
+        })
+
     content = execute_native_analysis(
         rows,
         symbols,
@@ -844,6 +867,7 @@ def execute_uzi_native_full_analysis(context):
         llm_provider=getattr(context, "llm_provider", None),
         cancellation=getattr(context, "cancellation", None),
         recovery_history=recovery_history,
+        progress_callback=emit_progress,
     )
     content["holding_context"] = holding_context or None
     if normalized is not None:

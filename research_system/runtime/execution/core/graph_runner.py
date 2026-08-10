@@ -3068,10 +3068,20 @@ class ExecutionGraphRunner:
         status: str = "running",
         source: str = "runtime",
         node_id: str | None = None,
+        progress_percent: int | float | None = None,
+        stage_index: int | None = None,
+        stage_total: int | None = None,
+        progress_details: dict[str, Any] | None = None,
     ) -> None:
         """Publish a factual or Main Agent-generated graph update."""
         current = str(current_action).strip()
         next_step = str(next_action).strip()
+        details = {
+            "progress_percent": progress_percent,
+            "stage_index": stage_index,
+            "stage_total": stage_total,
+            **dict(progress_details or {}),
+        }
         self._emit(
             "agent_progress",
             actor="main_agent",
@@ -3083,6 +3093,7 @@ class ExecutionGraphRunner:
             current_action=current,
             next_action=next_step,
             message=f"当前：{current}；下一步：{next_step}",
+            **{key: value for key, value in details.items() if value is not None},
         )
 
     def _emit_observer_progress(self, payload: dict[str, Any]) -> None:
@@ -3093,6 +3104,18 @@ class ExecutionGraphRunner:
             node_id=str(payload.get("node_id") or "") or None,
             current_action=str(payload.get("current_action") or ""),
             next_action=str(payload.get("next_action") or ""),
+            progress_percent=payload.get("progress_percent"),
+            stage_index=payload.get("stage_index"),
+            stage_total=payload.get("stage_total"),
+            progress_details={
+                key: value
+                for key, value in payload.items()
+                if key not in {
+                    "node_id", "phase", "status", "progress_source",
+                    "current_action", "next_action", "progress_percent",
+                    "stage_index", "stage_total",
+                }
+            },
         )
 
     def _observe_main_agent_progress(self, facts: dict[str, Any]) -> dict[str, str] | None:
