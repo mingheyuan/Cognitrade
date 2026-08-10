@@ -263,7 +263,7 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         self.run_service = FakeRunService(self.artifacts, self.agent_os)
         self.settings = SimpleNamespace(
             runs_root=self.runs_root,
-            fund_holding_report_concurrency=5,
+            fund_holding_report_concurrency=2,
         )
         self.service = FundHoldingReportService(
             settings=self.settings,
@@ -295,7 +295,7 @@ class FundHoldingReportServiceTests(unittest.TestCase):
 
         self.assertEqual(final["status"], "completed")
         self.assertEqual(final["counts"]["deliverable"], 10)
-        self.assertEqual(self.agent_os.max_active, 5)
+        self.assertEqual(self.agent_os.max_active, 2)
         events = read_jsonl(self.agent_os.run_store.load_run_paths(final["batch_id"]).root / "execution_events.jsonl")
         self.assertTrue(any(row.get("event_type") == "assistant_message_ready" for row in events))
         self.assertTrue(RunEventSource._is_terminal(self.agent_os.run_store.load_run_paths(final["batch_id"]).root))

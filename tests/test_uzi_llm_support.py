@@ -69,7 +69,7 @@ class UziLlmSupportTests(unittest.TestCase):
 
     def test_default_budget_matches_medium_uzi_profile(self) -> None:
         self.assertEqual(DEFAULT_UZI_LLM_REQUEST_TIMEOUT_SECONDS, 480.0)
-        self.assertEqual(DEFAULT_UZI_LLM_MAX_CONCURRENCY, 5)
+        self.assertEqual(DEFAULT_UZI_LLM_MAX_CONCURRENCY, 2)
         self.assertEqual(DEFAULT_UZI_LLM_TRANSIENT_RETRIES, 2)
 
     @patch("domain_packs.finance_ashare.subagents.uzi_llm_support.sleep")

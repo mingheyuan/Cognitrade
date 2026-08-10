@@ -119,12 +119,12 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "uzi_llm_request_timeout_seconds": int(
             env_values.get("UZI_LLM_REQUEST_TIMEOUT_SECONDS", "480")
         ),
-        "uzi_llm_max_concurrency": int(env_values.get("UZI_LLM_MAX_CONCURRENCY", "5")),
+        "uzi_llm_max_concurrency": int(env_values.get("UZI_LLM_MAX_CONCURRENCY", "2")),
         "max_llm_calls_per_turn": int(env_values.get("MAX_LLM_CALLS_PER_TURN", "1")),
         "max_subagent_calls_per_turn": int(env_values.get("MAX_SUBAGENT_CALLS_PER_TURN", "32")),
         "max_child_threads_per_turn": int(env_values.get("MAX_CHILD_THREADS_PER_TURN", "8")),
         "fund_holding_report_concurrency": int(
-            env_values.get("COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY", "5")
+            env_values.get("COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY", "2")
         ),
         "artifacts_retention_days": int(env_values.get("ARTIFACTS_RETENTION_DAYS", "30")),
         "max_artifacts_size_mb": int(env_values.get("MAX_ARTIFACTS_SIZE_MB", "1024")),

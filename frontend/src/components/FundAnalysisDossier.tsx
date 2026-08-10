@@ -642,7 +642,7 @@ function FundCandidateDossier({
           <header>
             <div>
               <FileText size={16} />
-              <div><h4>前十大持仓股票报告</h4><small>从本次基金快照冻结持仓，最多 5 个股票研究并行执行；不重新猜测或抓取基金持仓。</small></div>
+              <div><h4>前十大持仓股票报告</h4><small>从本次基金快照冻结持仓，最多 2 个股票研究并行执行；不重新猜测或抓取基金持仓。</small></div>
             </div>
             <span className={`quality-pill ${reportEligibility.eligible ? 'quality-pill--available' : 'quality-pill--data_gap'}`}>
               {reportEligibility.eligible ? `${reportHoldings.length} 项可编排` : '当前不可编排'}

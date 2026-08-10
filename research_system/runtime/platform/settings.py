@@ -57,12 +57,12 @@ class Settings(BaseModel):
     log_level: str = "INFO"
     llm_request_timeout_seconds: int = 25
     uzi_llm_request_timeout_seconds: int = 480
-    uzi_llm_max_concurrency: int = 5
+    uzi_llm_max_concurrency: int = 2
     max_llm_calls_per_turn: int = 1
     max_agent_tool_loop_turns: int = 4
     max_subagent_calls_per_turn: int = 32
     max_child_threads_per_turn: int = 8
-    fund_holding_report_concurrency: int = 5
+    fund_holding_report_concurrency: int = 2
     artifacts_retention_days: int = 30
     max_artifacts_size_mb: int = 1024
     memory_expiration_interval_seconds: float = 300.0

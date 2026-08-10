@@ -65,7 +65,7 @@ class _LiteAgentProvider:
     def __init__(self, *, timeout: bool = False) -> None:
         self.settings = SimpleNamespace(
             uzi_llm_request_timeout_seconds=480,
-            uzi_llm_max_concurrency=5,
+            uzi_llm_max_concurrency=2,
         )
         self.timeout = timeout
         self.calls = 0
