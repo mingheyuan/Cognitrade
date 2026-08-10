@@ -184,9 +184,6 @@ class FollowUpRuntime:
             )
             return self._persist_unlocked()
 
-    def has_current_inputs(self) -> bool:
-        return bool(self.current_inputs())
-
     def _increment_follow_up(self) -> None:
         if self.state.follow_up_count >= self.config.max_follow_up_count:
             raise RuntimeError("follow-up limit exceeded")

@@ -125,11 +125,6 @@ class FundSecurityMaster:
             type(self)._cached_at = now
         return [dict(row) for row in rows]
 
-    @classmethod
-    def is_known_fund_code(cls, code: object, rows: Iterable[dict[str, Any]]) -> bool:
-        normalized = cls.normalize_code(code)
-        return bool(normalized and any(str(row.get("fund_code") or "") == normalized for row in rows))
-
     @staticmethod
     def normalize_code(value: object) -> str:
         text = str(value or "").strip().upper()

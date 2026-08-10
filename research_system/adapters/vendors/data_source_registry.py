@@ -46,14 +46,6 @@ class DataSourceRegistry:
     def list_all(self) -> list[DataSource]:
         return list(self._sources.values())
 
-    def list_for_dim(self, dim: str, market: str | None = None) -> list[DataSource]:
-        normalized_dim = dim.strip().lower()
-        normalized_market = (market or "").strip().lower()
-        rows = [item for item in self._sources.values() if normalized_dim in item.dims]
-        if normalized_market:
-            rows = [item for item in rows if normalized_market in item.markets or "cn" in item.markets and normalized_market.startswith("cn_")]
-        return rows
-
     def _default_sources(self) -> list[DataSource]:
         sources = self._uzi_sources()
         local_sources = [

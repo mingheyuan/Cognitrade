@@ -10,7 +10,6 @@ __all__ = [
     "runtime",
     "schemas",
     "services",
-    "subagents",
 ]
 
 _EXPORTS = {
@@ -18,7 +17,6 @@ _EXPORTS = {
     "runtime": "research_system.runtime",
     "schemas": "research_system.schemas",
     "services": "research_system.services",
-    "subagents": "research_system.subagents",
 }
 
 

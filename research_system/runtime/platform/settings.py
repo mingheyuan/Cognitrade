@@ -15,7 +15,6 @@ class Settings(BaseModel):
 
     provider_name: str = "openai"
     default_model: str = "gpt-5.6-luna"
-    review_model: str = "gpt-5.4"
     openai_reasoning_effort: str | None = None
     openai_service_tier: str = "default"
     openai_disable_response_storage: bool = True
@@ -43,40 +42,31 @@ class Settings(BaseModel):
     baostock_socket_timeout_seconds: float = 15.0
     provider_policy_path: Path
     data_sources_path: Path
-    http_json_sources_path: Path
     mcp_servers_path: Path
-    openapi_sources_path: Path
-    skill_sources_path: Path
     provider_policy_overrides: dict[str, str] = Field(default_factory=dict)
     sensitive_sources_enabled: bool = False
     sensitive_source_allowlist: list[str] = Field(default_factory=list)
     xueqiu_cookie: str | None = None
     browser_sources_enabled: bool = False
-    default_timezone: str = "Asia/Shanghai"
     paper_trading_enforce_market_hours: bool = True
-    log_level: str = "INFO"
     llm_request_timeout_seconds: int = 25
     uzi_llm_request_timeout_seconds: int = 480
     uzi_llm_max_concurrency: int = 2
     uzi_llm_transient_retries: int = 6
     uzi_llm_retry_base_seconds: float = 2.0
     uzi_llm_retry_max_seconds: float = 60.0
-    max_llm_calls_per_turn: int = 1
     max_agent_tool_loop_turns: int = 4
-    max_subagent_calls_per_turn: int = 32
     max_child_threads_per_turn: int = 8
     fund_holding_report_concurrency: int = 2
     artifacts_retention_days: int = 30
     max_artifacts_size_mb: int = 1024
     memory_expiration_interval_seconds: float = 300.0
     run_timeout_seconds: int = 120
-    external_wait_timeout_seconds: int = 30
     workspace_root: Path
     runs_root: Path
     reports_root: Path
     memory_root: Path
     config_root: Path
-    scraper_root: Path
     domain_packs_root: Path
 
     @classmethod
@@ -94,8 +84,6 @@ class Settings(BaseModel):
             raise ValueError("run_timeout_seconds must be positive")
         if self.embedding_dimensions <= 0:
             raise ValueError("embedding_dimensions must be positive")
-        if self.external_wait_timeout_seconds <= 0:
-            raise ValueError("external_wait_timeout_seconds must be positive")
         if self.memory_expiration_interval_seconds <= 0:
             raise ValueError("memory_expiration_interval_seconds must be positive")
         if self.llm_request_timeout_seconds <= 0:
@@ -115,12 +103,8 @@ class Settings(BaseModel):
             )
         if self.qdrant_hybrid_candidate_limit <= 0:
             raise ValueError("qdrant_hybrid_candidate_limit must be positive")
-        if self.max_llm_calls_per_turn <= 0:
-            raise ValueError("max_llm_calls_per_turn must be positive")
         if self.max_agent_tool_loop_turns <= 0:
             raise ValueError("max_agent_tool_loop_turns must be positive")
-        if self.max_subagent_calls_per_turn <= 0:
-            raise ValueError("max_subagent_calls_per_turn must be positive")
         if self.max_child_threads_per_turn <= 0:
             raise ValueError("max_child_threads_per_turn must be positive")
         if not 1 <= self.fund_holding_report_concurrency <= 10:

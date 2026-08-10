@@ -1391,46 +1391,6 @@ def evaluate_all(features: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {investor_id: evaluate_investor(investor_id, features) for investor_id in INVESTOR_RULES}
 
 
-def panel_summary(results: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    if not results:
-        return {"bullish": 0, "bearish": 0, "neutral": 0, "skip": 0, "avg_score": 50.0}
-    active = {key: value for key, value in results.items() if value["signal"] != "skip"}
-    skipped = {key: value for key, value in results.items() if value["signal"] == "skip"}
-    bullish = sum(1 for row in active.values() if row["signal"] == "bullish")
-    bearish = sum(1 for row in active.values() if row["signal"] == "bearish")
-    neutral = sum(1 for row in active.values() if row["signal"] == "neutral")
-    active_scores = [float(row["score"]) for row in active.values() if float(row["score"]) >= 0]
-    average_score = round(sum(active_scores) / len(active_scores), 1) if active_scores else 50.0
-    average_confidence = round(
-        sum(float(row["confidence"]) for row in active.values()) / max(len(active), 1),
-        0,
-    )
-    sorted_bull = sorted(active.items(), key=lambda item: -float(item[1]["score"]))[:5]
-    sorted_bear = sorted(active.items(), key=lambda item: float(item[1]["score"]))[:5]
-    active_count = len(active)
-    return {
-        "total": len(results),
-        "active": active_count,
-        "skip": len(skipped),
-        "skip_names": [row.get("skip_reason", "") for row in skipped.values()],
-        "bullish": bullish,
-        "bearish": bearish,
-        "neutral": neutral,
-        "avg_score": average_score,
-        "avg_confidence": average_confidence,
-        "bullish_pct": round(bullish / active_count * 100, 0) if active_count else 0,
-        "bearish_pct": round(bearish / active_count * 100, 0) if active_count else 0,
-        "top_bulls": [
-            {"id": key, "score": row["score"], "headline": row["headline"]}
-            for key, row in sorted_bull
-        ],
-        "top_bears": [
-            {"id": key, "score": row["score"], "headline": row["headline"]}
-            for key, row in sorted_bear
-        ],
-    }
-
-
 if __name__ == "__main__":
     import json
     print(json.dumps(coverage_stats(), indent=2))

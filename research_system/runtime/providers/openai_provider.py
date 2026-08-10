@@ -390,9 +390,3 @@ class OpenAIProvider:
             raise LLMProviderError(f"llm_request_timeout: {self.request_timeout_seconds}s") from exc
         except Exception as exc:
             raise LLMProviderError(f"embedding_request_failed: {exc.__class__.__name__}: {exc}") from exc
-
-    def _normalize_base_url(self, base_url: str | None) -> str | None:
-        return self.client_support.normalize_base_url(base_url)
-
-    def _looks_like_html(self, text: str) -> bool:
-        return self.response_support.looks_like_html(text)

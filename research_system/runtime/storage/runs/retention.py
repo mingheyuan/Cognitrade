@@ -11,16 +11,6 @@ class RunRetentionService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    def apply_on_success(self, run_root: Path) -> None:
-        checkpoint_path = run_root / "checkpoint.json"
-        if checkpoint_path.exists():
-            checkpoint_path.unlink()
-
-    def apply_on_terminal_failure(self, run_root: Path) -> None:
-        # Phase 0 only fixes checkpoint retention semantics.
-        # Artifact pruning is intentionally conservative and remains a manual operation for now.
-        _ = run_root
-
     def cleanup_artifacts(self, runs_root: Path) -> dict:
         cutoff = datetime.now(timezone.utc) - timedelta(days=self.settings.artifacts_retention_days)
         removed_files: list[str] = []

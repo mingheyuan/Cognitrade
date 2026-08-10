@@ -16,10 +16,6 @@ class MxApiAdapter:
         if not self.api_key:
             raise ValueError("MX_APIKEY is required")
 
-    def resolve_entity(self, name: str) -> list[dict[str, Any]]:
-        payload = self._query(f"{name} 股票代码 所属行业")
-        return self._entities(payload)
-
     def get_fundamental_snapshot(self, *, symbol: str) -> dict[str, Any]:
         payload = self._query(f"{symbol} 最新价 总市值 PE PB 所属行业 主营业务 财务指标")
         row = self._first_table_row(payload)
@@ -80,23 +76,6 @@ class MxApiAdapter:
         data = payload.get("data") or {}
         inner = data.get("data") or {}
         return dict(inner.get("searchDataResultDTO") or {})
-
-    @classmethod
-    def _entities(cls, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        result = cls._search_result(payload)
-        rows = []
-        seen: set[str] = set()
-        for item in result.get("entityTagDTOList") or []:
-            code = str(item.get("secuCode") or item.get("code") or "").strip()
-            if code and code not in seen:
-                seen.add(code)
-                rows.append({"fullName": item.get("fullName") or item.get("shortName"), "secuCode": code, "entityType": item.get("entityTypeName") or item.get("entityType")})
-        for item in result.get("dataTableDTOList") or []:
-            code = str(item.get("code") or "").strip()
-            if code and code not in seen:
-                seen.add(code)
-                rows.append({"fullName": item.get("entityName"), "secuCode": code, "entityType": item.get("dataType") or "股票"})
-        return rows
 
     @classmethod
     def _first_table_row(cls, payload: dict[str, Any]) -> dict[str, Any]:

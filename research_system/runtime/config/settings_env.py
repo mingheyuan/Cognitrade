@@ -26,7 +26,6 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
     return {
         "provider_name": env_values.get("PROVIDER_NAME", "openai"),
         "default_model": env_values.get("OPENAI_MODEL", "gpt-5.6-luna"),
-        "review_model": env_values.get("OPENAI_REVIEW_MODEL", "gpt-5.4"),
         "openai_reasoning_effort": env_values.get("OPENAI_REASONING_EFFORT") or None,
         "openai_service_tier": env_values.get("OPENAI_SERVICE_TIER", "default").strip().lower(),
         "openai_disable_response_storage": env_values.get("OPENAI_DISABLE_RESPONSE_STORAGE", "true").strip().lower()
@@ -64,10 +63,7 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         ),
         "provider_policy_path": config_root / "provider_policy.yml",
         "data_sources_path": config_root / "data_sources.yml",
-        "http_json_sources_path": config_root / "http_json_sources.yml",
         "mcp_servers_path": config_root / "mcp_servers.yml",
-        "openapi_sources_path": config_root / "openapi_sources.yml",
-        "skill_sources_path": config_root / "skill_sources.yml",
         "provider_policy_overrides": {
             "market": env_values.get("COGNITRADE_PROVIDERS_MARKET", ""),
             "fundamental": env_values.get("COGNITRADE_PROVIDERS_FUNDAMENTAL", ""),
@@ -109,12 +105,10 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
             "COGNITRADE_BROWSER_SOURCES_ENABLED", "false"
         ).strip().lower()
         in {"1", "true", "yes", "on"},
-        "default_timezone": env_values.get("DEFAULT_TIMEZONE", "Asia/Shanghai"),
         "paper_trading_enforce_market_hours": env_values.get(
             "COGNITRADE_PAPER_ENFORCE_MARKET_HOURS", "true"
         ).strip().lower()
         in {"1", "true", "yes", "on"},
-        "log_level": env_values.get("LOG_LEVEL", "INFO"),
         "llm_request_timeout_seconds": int(env_values.get("LLM_REQUEST_TIMEOUT_SECONDS", "25")),
         "uzi_llm_request_timeout_seconds": int(
             env_values.get("UZI_LLM_REQUEST_TIMEOUT_SECONDS", "480")
@@ -129,8 +123,6 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "uzi_llm_retry_max_seconds": float(
             env_values.get("UZI_LLM_RETRY_MAX_SECONDS", "60")
         ),
-        "max_llm_calls_per_turn": int(env_values.get("MAX_LLM_CALLS_PER_TURN", "1")),
-        "max_subagent_calls_per_turn": int(env_values.get("MAX_SUBAGENT_CALLS_PER_TURN", "32")),
         "max_child_threads_per_turn": int(env_values.get("MAX_CHILD_THREADS_PER_TURN", "8")),
         "fund_holding_report_concurrency": int(
             env_values.get("COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY", "2")
@@ -141,13 +133,11 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
             env_values.get("MEMORY_EXPIRATION_INTERVAL_SECONDS", "300")
         ),
         "run_timeout_seconds": int(env_values.get("RUN_TIMEOUT_SECONDS", "120")),
-        "external_wait_timeout_seconds": int(env_values.get("EXTERNAL_WAIT_TIMEOUT_SECONDS", "30")),
         "workspace_root": workspace_root,
         "runs_root": workspace_root / "runs",
         "reports_root": workspace_root / "reports",
         "memory_root": workspace_root / "memory",
         "config_root": config_root,
-        "scraper_root": root / "scraper",
         "domain_packs_root": root / "domain_packs",
     }
 

@@ -285,17 +285,6 @@ def _metric_number(mapping: dict[str, Any], keys: tuple[str, ...]) -> float | No
     return None
 
 
-def _first_metric_number(
-    sections: list[dict[str, Any]],
-    keys: tuple[str, ...],
-) -> tuple[float | None, str | None]:
-    for index, section in enumerate(sections):
-        value = _metric_number(section, keys)
-        if value is not None:
-            return value, str(index)
-    return None, None
-
-
 def _amount_yi(value: Any) -> float | None:
     """Normalize financial amounts to the Pack's 亿元 unit when needed."""
 
@@ -504,17 +493,6 @@ def _item_value_map(rows: Any) -> dict[str, Any]:
         for row in rows
         if isinstance(row, dict) and str(row.get("item") or "").strip()
     }
-
-
-def _first_amount_yi(
-    sections: list[dict[str, Any]],
-    keys: tuple[str, ...],
-) -> tuple[float | None, str | None]:
-    for index, section in enumerate(sections):
-        value = _metric_number(section, keys)
-        if value is not None:
-            return _amount_yi(value), str(index)
-    return None, None
 
 
 def _facts(snapshot: dict[str, Any] | None) -> dict[str, Any]:
@@ -1734,51 +1712,6 @@ def build_valuation_model(snapshot_rows: list[dict[str, Any]], symbols: list[str
         "dimensions": dimensions,
         "primary_symbol": symbols[0] if symbols else None,
         "methodologies": list(profile.get("methods") or ["dcf"]),
-    }
-
-
-def _signal(score: float) -> str:
-    if score >= 65:
-        return "bullish"
-    if score < 35:
-        return "bearish"
-    return "neutral"
-
-
-def _panel_vote(perspective: tuple[str, str, str, tuple[str, ...]], features: dict[str, Any]) -> dict[str, Any]:
-    perspective_id, label, purpose, _ = perspective
-    checks: list[tuple[str, bool | None]] = [
-        ("估值或盈利证据", features.get("pe") is not None or features.get("pb") is not None),
-        ("现金流证据", features.get("fcf_latest_yi") is not None),
-        ("经营质量证据", features.get("roe") is not None or features.get("net_margin") is not None),
-        ("价格与流动性证据", features.get("price") is not None and features.get("amount") is not None),
-    ]
-    if perspective_id == "growth":
-        checks[0] = ("增长证据", features.get("revenue_growth") is not None or features.get("profit_growth") is not None)
-    if perspective_id == "trend":
-        checks[0] = ("趋势证据", features.get("pct_change") is not None)
-    if perspective_id == "risk":
-        checks[0] = ("负债约束证据", features.get("debt_ratio") is not None)
-    available = [item for item in checks if item[1] is not None]
-    passed = sum(1 for _, value in available if value)
-    score = round(50 + (passed - max(len(available) - passed, 0)) * 12.5, 1) if available else 0.0
-    confidence = round(min(0.9, 0.25 + len(available) * 0.15), 4)
-    signal = _signal(score) if available else "insufficient_evidence"
-    reason = (
-        f"{label}基于{purpose}，可验证指标 {passed}/{len(available)} 项通过。"
-        if available
-        else f"{label}缺少可验证的专业输入，暂不形成方向判断。"
-    )
-    return {
-        "perspective_id": perspective_id,
-        "perspective_label": label,
-        "methodology_purpose": purpose,
-        "signal": signal,
-        "score": score,
-        "confidence": confidence,
-        "reasoning": reason,
-        "checks": [{"name": name, "status": "pass" if value else "fail"} for name, value in available],
-        "is_methodology_perspective": True,
     }
 
 

@@ -53,15 +53,6 @@ UZI_DIMENSIONS: tuple[tuple[str, str, str], ...] = (
 )
 
 
-def _num(value: Any, default: float = 0.0) -> float:
-    if value is None or isinstance(value, bool):
-        return default
-    try:
-        return float(str(value).replace(",", "").replace("%", "").strip())
-    except (TypeError, ValueError):
-        return default
-
-
 def _facts(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     value = snapshot.get("facts") if isinstance(snapshot, dict) else None
     return value if isinstance(value, dict) else {}

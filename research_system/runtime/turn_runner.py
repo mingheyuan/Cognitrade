@@ -15,7 +15,7 @@ from research_system.runtime.core.approvals import HumanApprovalStore
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.core.tool_registry import CoreToolContext, build_core_tool_registry
 from research_system.runtime.event_store import append_canonical_event
-from research_system.runtime.follow_up import FollowUpRuntime, mailbox_lease
+from research_system.runtime.follow_up import FollowUpRuntime
 from research_system.runtime.hooks import HookRuntime, LifecycleInput, StopHookInput
 from research_system.runtime.roles import ChildTurnRuntime, RoleRegistry
 from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
@@ -2269,13 +2269,6 @@ class TurnRunner:
         root = self.run_store.load_run_paths(turn.run_id).root
         payload = turn.model_dump(mode="json")
         write_json(root / "turn_state.json", payload)
-
-    @contextmanager
-    def _mailbox_lease(self, run_id: str):
-        """Serialize mailbox writers without blocking the active Turn worker."""
-        root = self.run_store.load_run_paths(run_id).root
-        with mailbox_lease(root, run_id):
-            yield
 
     @contextmanager
     def _execution_lease(self, run_id: str):

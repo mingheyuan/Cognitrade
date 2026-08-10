@@ -2047,42 +2047,6 @@ def _collect_provider_snapshots(
     )
 
 
-def _collect_missing_snapshot_types(
-    *,
-    query: str,
-    symbols: list[str],
-    sector: str | None,
-    snapshots: list[object],
-    requested_types: list[str],
-    cancellation,
-) -> list[object]:
-    available = {
-        (str(row.get("snapshot_type") or ""), str(row.get("symbol") or ""))
-        for row in snapshots
-        if isinstance(row, dict)
-    }
-    missing = [
-        snapshot_type
-        for snapshot_type in requested_types
-        if snapshot_type in {"sector", "policy"}
-        and (snapshot_type, "") not in available
-        or snapshot_type not in {"sector", "policy"}
-        and any((snapshot_type, symbol) not in available for symbol in symbols)
-    ]
-    if not missing:
-        return snapshots
-    return [
-        *snapshots,
-        *_collect_provider_snapshots(
-            query=query,
-            symbols=symbols,
-            snapshot_types=missing,
-            sector=sector,
-            cancellation=cancellation,
-        ),
-    ]
-
-
 def _snapshot_source_refs(snapshots: list[object]) -> list[dict[str, str]]:
     refs: list[dict[str, str]] = []
     seen: set[str] = set()

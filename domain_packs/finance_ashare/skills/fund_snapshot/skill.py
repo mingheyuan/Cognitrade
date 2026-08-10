@@ -880,14 +880,6 @@ class FundSnapshotSkill:
         }
 
     @staticmethod
-    def _report_section(text: str, start_marker: str, end_marker: str) -> str:
-        start = text.find(start_marker)
-        if start < 0:
-            return ""
-        end = text.find(end_marker, start + len(start_marker))
-        return text[start : end if end >= 0 else len(text)]
-
-    @staticmethod
     def _load_overview(code: str):
         return call_with_retry(
             lambda: ak.fund_individual_basic_info_xq(symbol=code, timeout=15),
