@@ -1,0 +1,23 @@
+domain_packs/finance_ashare/subagents/uzi_qualitative_deep_dive.py
+  s_a6a8a3a6f43b3c::t_70947f40b6accf 194-208,446-470
+tests/test_uzi_qualitative_deep_dive.py
+  s_a6a8a3a6f43b3c::t_43ccd4ff0858b7 232,238,248-253
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "a6fad7bf441d5dd8ce65b0a5c237014a571f5d02",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
