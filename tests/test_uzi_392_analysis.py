@@ -16,6 +16,7 @@ from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
     _canonical_evidence_path,
     _normalize_evidence_paths,
     _normalize_payload_paths,
+    _native_self_review_check_failure_issue,
     _safe_error_detail,
     execute_native_analysis,
 )
@@ -183,6 +184,45 @@ class _RepairingEvidenceProvider(_LiteAgentProvider):
 
 
 class Uzi392AnalysisGateTests(unittest.TestCase):
+    def test_industry_self_review_failure_uses_data_gap_language(self) -> None:
+        issue = _native_self_review_check_failure_issue(
+            check_name="check_industry_mapping_sanity",
+            exc=TypeError("argument of type 'NoneType' is not iterable"),
+            ctx={
+                "dims": {
+                    "0_basic": {"data": {"industry": None}},
+                    "7_industry": {
+                        "data": {"cninfo_metrics": {"industry_name_match": None}}
+                    },
+                }
+            },
+        )
+
+        self.assertEqual(issue["severity"], "warning")
+        self.assertEqual(issue["category"], "self-check")
+        self.assertEqual(issue["dim"], "review-engine")
+        self.assertEqual(
+            issue["issue"],
+            "基础行业信息、行业映射结果未取得，行业映射一致性检查未执行",
+        )
+        self.assertNotIn("NoneType", issue["issue"])
+        self.assertIn("TypeError", issue["evidence"])
+
+    def test_materials_self_review_failure_does_not_claim_materials_are_missing(self) -> None:
+        issue = _native_self_review_check_failure_issue(
+            check_name="check_metals_materials_populated",
+            exc=TypeError("argument of type 'NoneType' is not iterable"),
+            ctx={"dims": {"0_basic": {"data": {"industry": None}}}},
+        )
+
+        self.assertEqual(issue["severity"], "warning")
+        self.assertEqual(
+            issue["issue"],
+            "基础行业信息未取得，无法判断是否需要执行金属原材料数据检查",
+        )
+        self.assertIn("不判定为原材料数据异常", issue["suggested_fix"])
+        self.assertNotIn("NoneType", issue["issue"])
+
     def test_unknown_dimension_evidence_retries_only_the_failed_stage(self) -> None:
         provider = _RepairingEvidenceProvider()
 

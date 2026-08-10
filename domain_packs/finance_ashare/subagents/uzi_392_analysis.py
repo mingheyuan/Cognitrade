@@ -2038,6 +2038,86 @@ def _profile_empty_dimension_issues(
     return issues
 
 
+def _native_self_review_check_failure_issue(
+    *,
+    check_name: str,
+    exc: Exception,
+    ctx: dict[str, Any],
+) -> dict[str, Any]:
+    """Translate native check failures without changing UZI gate semantics.
+
+    The pinned UZI checks intentionally downgrade their own exceptions to a
+    warning.  Agent OS preserves that behavior, but keeps Python implementation
+    details in evidence instead of presenting them as the user-facing issue.
+    """
+
+    issue = f"自审检查 {check_name} 未完成"
+    suggested_fix = "修复自审函数或恢复缺失输入后重新运行"
+    evidence_parts = [
+        f"check={check_name}",
+        f"exception={exc.__class__.__name__}: {str(exc)[:100]}",
+    ]
+
+    is_non_iterable_type_error = isinstance(exc, TypeError) and "not iterable" in str(exc)
+    dimensions_value = ctx.get("dims")
+    dimensions = dimensions_value if isinstance(dimensions_value, dict) else {}
+    basic_dimension = dimensions.get("0_basic")
+    basic_data = (
+        basic_dimension.get("data") if isinstance(basic_dimension, dict) else None
+    )
+    basic = basic_data if isinstance(basic_data, dict) else {}
+    industry = basic.get("industry")
+
+    if check_name == "check_industry_mapping_sanity" and is_non_iterable_type_error:
+        industry_dimension = dimensions.get("7_industry")
+        industry_data_value = (
+            industry_dimension.get("data")
+            if isinstance(industry_dimension, dict)
+            else None
+        )
+        industry_data = (
+            industry_data_value if isinstance(industry_data_value, dict) else {}
+        )
+        industry_metrics_value = industry_data.get("cninfo_metrics")
+        industry_metrics = (
+            industry_metrics_value if isinstance(industry_metrics_value, dict) else {}
+        )
+        industry_name_match = industry_metrics.get("industry_name_match")
+        missing_inputs: list[str] = []
+        if not isinstance(industry, str):
+            missing_inputs.append("基础行业信息")
+        if not isinstance(industry_name_match, str):
+            missing_inputs.append("行业映射结果")
+        missing_label = "、".join(missing_inputs) or "行业检查输入"
+        issue = f"{missing_label}未取得，行业映射一致性检查未执行"
+        suggested_fix = (
+            "恢复基础行业信息与行业映射结果后重新自审；"
+            "缺失期间不判断行业映射是否异常"
+        )
+        evidence_parts.extend(
+            (
+                f"industry_type={type(industry).__name__}",
+                f"industry_name_match_type={type(industry_name_match).__name__}",
+            )
+        )
+    elif check_name == "check_metals_materials_populated" and is_non_iterable_type_error:
+        issue = "基础行业信息未取得，无法判断是否需要执行金属原材料数据检查"
+        suggested_fix = (
+            "恢复基础行业信息后重新自审；"
+            "缺失期间不判定为原材料数据异常"
+        )
+        evidence_parts.append(f"industry_type={type(industry).__name__}")
+
+    return {
+        "severity": "warning",
+        "category": "self-check",
+        "dim": "review-engine",
+        "issue": issue,
+        "evidence": "; ".join(evidence_parts),
+        "suggested_fix": suggested_fix,
+    }
+
+
 def run_native_self_review(
     *,
     symbol: str,
@@ -2102,14 +2182,13 @@ def run_native_self_review(
                 ]
             issues.extend(rows)
         except Exception as exc:
-            issues.append({
-                "severity": "warning",
-                "category": "self-check",
-                "dim": "review-engine",
-                "issue": f"check {check.__name__} 自身失败: {exc.__class__.__name__}: {str(exc)[:100]}",
-                "evidence": "",
-                "suggested_fix": "修复自审函数后重新运行",
-            })
+            issues.append(
+                _native_self_review_check_failure_issue(
+                    check_name=check.__name__,
+                    exc=exc,
+                    ctx=ctx,
+                )
+            )
 
     def add_critical(dim: str, issue: str, evidence: str, fix: str) -> None:
         issues.append({
