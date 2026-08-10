@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
+from hashlib import sha256
 import json
 import logging
-from threading import Event
+from pathlib import Path
+from threading import Event, get_ident
 from time import monotonic
 from typing import Any, Literal
 
@@ -23,6 +25,7 @@ from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_stru
 
 
 _LOGGER = logging.getLogger("uvicorn.error")
+_QUALITATIVE_STAGE_CACHE_SCHEMA_VERSION = "uzi-3.9.4-qualitative-stage-v1"
 
 _DIMENSION_TYPES: dict[str, tuple[str, ...]] = {
     "3_macro": ("macro",),
@@ -85,6 +88,8 @@ def apply_qualitative_deep_dive(
     snapshot_rows: list[dict[str, Any]],
     llm_provider: Any | None,
     cancellation: Event | None = None,
+    progress_callback=None,
+    analysis_cycle: int | None = None,
 ) -> dict[str, Any]:
     result = deepcopy(deep_analysis)
     provider_available = llm_provider is not None and bool(getattr(llm_provider, "available", True))
@@ -122,6 +127,38 @@ def apply_qualitative_deep_dive(
     )
     completed: list[QualitativeGroupResult] = []
     errors: list[str] = []
+    pending_groups: list[tuple[str, tuple[str, str], str, Path | None]] = []
+    for label, dimensions in _GROUPS:
+        user_prompt = _group_user_prompt(
+            group_label=label,
+            dimensions=dimensions,
+            evidence_bundle=evidence_bundle,
+        )
+        cache_path = _qualitative_stage_cache_path(
+            llm_provider,
+            group_label=label,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        cached = _load_qualitative_stage_cache(cache_path)
+        if cached is None:
+            pending_groups.append((label, dimensions, user_prompt, cache_path))
+            continue
+        try:
+            _validate_group(cached, dimensions, evidence_bundle)
+        except Exception as exc:
+            _discard_qualitative_stage_cache(cache_path, exc)
+            pending_groups.append((label, dimensions, user_prompt, cache_path))
+            continue
+        completed.append(cached)
+        _LOGGER.info("UZI qualitative stage cache hit: group=%s", label)
+        _notify_qualitative_progress(
+            progress_callback,
+            analysis_cycle=analysis_cycle,
+            completed=len(completed),
+            group_label=label,
+            cache_hit=True,
+        )
     with ThreadPoolExecutor(max_workers=3, thread_name_prefix="uzi-qualitative") as pool:
         futures = {
             pool.submit(
@@ -131,19 +168,28 @@ def apply_qualitative_deep_dive(
                 group_label=label,
                 dimensions=dimensions,
                 evidence_bundle=evidence_bundle,
-            ): (label, dimensions)
-            for label, dimensions in _GROUPS
+                user_prompt=user_prompt,
+            ): (label, dimensions, cache_path)
+            for label, dimensions, user_prompt, cache_path in pending_groups
         }
         for future in as_completed(futures):
             if cancellation is not None and cancellation.is_set():
                 for pending in futures:
                     pending.cancel()
                 raise RuntimeError("qualitative_deep_dive_cancelled")
-            label, expected_dimensions = futures[future]
+            label, expected_dimensions, cache_path = futures[future]
             try:
                 group = future.result()
                 _validate_group(group, expected_dimensions, evidence_bundle)
                 completed.append(group)
+                _write_qualitative_stage_cache(cache_path, group)
+                _notify_qualitative_progress(
+                    progress_callback,
+                    analysis_cycle=analysis_cycle,
+                    completed=len(completed),
+                    group_label=label,
+                    cache_hit=False,
+                )
             except Exception as exc:
                 errors.append(f"{label}:{exc.__class__.__name__}:{str(exc)[:300]}")
 
@@ -208,19 +254,12 @@ def _evaluate_group(
     group_label: str,
     dimensions: tuple[str, str],
     evidence_bundle: dict[str, dict[str, Any]],
+    user_prompt: str | None = None,
 ) -> QualitativeGroupResult:
-    prompts = {
-        "A · Macro-Policy": "分析增长/通胀/利率/流动性向公司与行业的传导，以及政策目标、实施工具、受益与约束。",
-        "B · Industry-Events": "分析行业生命周期、供需和竞争格局，并区分公告/事件的时间、确定性与财务传导。",
-        "C · Cost-Transmission": "从已识别原材料映射到相关期货，分析成本变动、价格传导、毛利率时滞与对冲条件。",
-    }
-    user_prompt = (
-        f"负责分组：{group_label}\n"
-        f"必须且只能返回维度 {list(dimensions)}。{prompts[group_label]}"
-        "每维 evidence 至少两条且 URL 必须原样取自冻结包；六维总体需要至少三条跨域 associations，"
-        "本组至少提供一条。缺失事实只能写缺口，不能猜测。\n"
-        "本组证据="
-        + json.dumps({key: evidence_bundle[key] for key in dimensions}, ensure_ascii=False, sort_keys=True)
+    user_prompt = user_prompt or _group_user_prompt(
+        group_label=group_label,
+        dimensions=dimensions,
+        evidence_bundle=evidence_bundle,
     )
     started_at = monotonic()
     _LOGGER.info(
@@ -254,6 +293,140 @@ def _evaluate_group(
         monotonic() - started_at,
     )
     return result
+
+
+def _group_user_prompt(
+    *,
+    group_label: str,
+    dimensions: tuple[str, str],
+    evidence_bundle: dict[str, dict[str, Any]],
+) -> str:
+    prompts = {
+        "A · Macro-Policy": "分析增长/通胀/利率/流动性向公司与行业的传导，以及政策目标、实施工具、受益与约束。",
+        "B · Industry-Events": "分析行业生命周期、供需和竞争格局，并区分公告/事件的时间、确定性与财务传导。",
+        "C · Cost-Transmission": "从已识别原材料映射到相关期货，分析成本变动、价格传导、毛利率时滞与对冲条件。",
+    }
+    return (
+        f"负责分组：{group_label}\n"
+        f"必须且只能返回维度 {list(dimensions)}。{prompts[group_label]}"
+        "每维 evidence 至少两条且 URL 必须原样取自冻结包；六维总体需要至少三条跨域 associations，"
+        "本组至少提供一条。缺失事实只能写缺口，不能猜测。\n"
+        "本组证据="
+        + json.dumps({key: evidence_bundle[key] for key in dimensions}, ensure_ascii=False, sort_keys=True)
+    )
+
+
+def _qualitative_stage_cache_path(
+    provider: Any,
+    *,
+    group_label: str,
+    system_prompt: str,
+    user_prompt: str,
+) -> Path | None:
+    settings = getattr(provider, "settings", None)
+    workspace_root = getattr(settings, "workspace_root", None)
+    if workspace_root is None:
+        return None
+    identity = {
+        "schema_version": _QUALITATIVE_STAGE_CACHE_SCHEMA_VERSION,
+        "uzi_source_commit": LATEST_UZI_SOURCE_COMMIT,
+        "group_label": group_label,
+        "model_provider": str(getattr(settings, "provider_name", "")),
+        "model": str(getattr(settings, "default_model", "")),
+        "reasoning_effort": str(getattr(settings, "openai_reasoning_effort", "")),
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+    }
+    encoded = json.dumps(
+        identity,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    digest = sha256(encoded).hexdigest()
+    return Path(workspace_root) / "cache" / "uzi_qualitative_stages" / f"{digest}.json"
+
+
+def _load_qualitative_stage_cache(path: Path | None) -> QualitativeGroupResult | None:
+    if path is None or not path.exists():
+        return None
+    try:
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        if envelope.get("schema_version") != _QUALITATIVE_STAGE_CACHE_SCHEMA_VERSION:
+            return None
+        return QualitativeGroupResult.model_validate(envelope.get("payload"))
+    except Exception as exc:
+        _discard_qualitative_stage_cache(path, exc)
+        return None
+
+
+def _discard_qualitative_stage_cache(path: Path | None, exc: Exception) -> None:
+    _LOGGER.warning(
+        "Ignoring invalid UZI qualitative stage cache: path=%s error=%s:%s",
+        path,
+        exc.__class__.__name__,
+        str(exc)[:300],
+    )
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _write_qualitative_stage_cache(
+    path: Path | None,
+    payload: QualitativeGroupResult,
+) -> None:
+    if path is None:
+        return
+    envelope = {
+        "schema_version": _QUALITATIVE_STAGE_CACHE_SCHEMA_VERSION,
+        "payload": payload.model_dump(mode="json"),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{get_ident()}.tmp")
+        temporary.write_text(
+            json.dumps(envelope, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    except OSError as exc:
+        _LOGGER.warning(
+            "Unable to persist UZI qualitative stage cache: path=%s error=%s:%s",
+            path,
+            exc.__class__.__name__,
+            str(exc)[:300],
+        )
+
+
+def _notify_qualitative_progress(
+    progress_callback,
+    *,
+    analysis_cycle: int | None,
+    completed: int,
+    group_label: str,
+    cache_hit: bool,
+) -> None:
+    if not callable(progress_callback):
+        return
+    cycle = int(analysis_cycle or 1)
+    verb = "已恢复" if cache_hit else "已完成"
+    progress_callback({
+        "current_action": (
+            f"UZI 第 {cycle} 轮：六维定性研究 {completed}/3，"
+            f"{verb} {group_label}"
+        ),
+        "next_action": "继续完成剩余定性研究组并执行机械自审",
+        "progress_percent": min(90, 82 + completed * 2),
+        "stage": "qualitative_deep_dive",
+        "stage_index": completed,
+        "stage_total": 3,
+        "cycle": cycle,
+        "cache_hit": cache_hit,
+    })
 
 
 def _dimension_context(rows: list[dict[str, Any]], dimension: str) -> dict[str, Any]:

@@ -639,6 +639,8 @@ def _execute_symbol(
                                 snapshot_rows=snapshot_rows,
                                 llm_provider=llm_provider,
                                 cancellation=cancellation,
+                                progress_callback=progress_callback,
+                                analysis_cycle=analysis_cycle,
                             )
                             qualitative_execution = dict(qualitative.get("qualitative_agent_execution") or {})
                             agent_analysis["qualitative_deep_dive"] = dict(

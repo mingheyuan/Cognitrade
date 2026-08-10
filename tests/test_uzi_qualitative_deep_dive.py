@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from threading import Lock
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 
 import jsonschema
@@ -108,6 +110,32 @@ class _Provider:
         return QualitativeGroupResult(agent_reviewed=True, group_label=label, dimensions=dimensions)
 
 
+class _FlakyCachedProvider(_Provider):
+    def __init__(self, workspace_root: Path) -> None:
+        super().__init__()
+        self.settings = SimpleNamespace(
+            workspace_root=workspace_root,
+            provider_name="openai",
+            default_model="test-model",
+            openai_reasoning_effort="high",
+        )
+        self.calls: dict[str, int] = {}
+
+    def parse(self, *, system_prompt, user_prompt, schema, temperature=0.2):
+        label = user_prompt.splitlines()[0].split("：", 1)[1]
+        with self._lock:
+            self.calls[label] = self.calls.get(label, 0) + 1
+            attempt = self.calls[label]
+        if label.startswith("C") and attempt == 1:
+            raise RuntimeError("temporary connection failure")
+        return super().parse(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema=schema,
+            temperature=temperature,
+        )
+
+
 class UziQualitativeDeepDiveTests(unittest.TestCase):
     def test_provider_unavailable_is_a_blocking_deep_gap(self) -> None:
         result = apply_qualitative_deep_dive(
@@ -197,6 +225,33 @@ class UziQualitativeDeepDiveTests(unittest.TestCase):
         self.assertEqual(result["quality_status"], "data_gap")
         self.assertFalse(result["agent_reviewed"])
         self.assertEqual(result["qualitative_agent_execution"]["status"], "incomplete")
+
+    def test_successful_groups_are_cached_and_only_failed_group_is_retried(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            provider = _FlakyCachedProvider(Path(temporary_directory))
+
+            first = apply_qualitative_deep_dive(
+                _deep_base(),
+                snapshot_rows=_rows(),
+                llm_provider=provider,
+            )
+            second = apply_qualitative_deep_dive(
+                _deep_base(),
+                snapshot_rows=_rows(),
+                llm_provider=provider,
+            )
+
+        self.assertEqual(first["qualitative_agent_execution"]["status"], "incomplete")
+        self.assertEqual(first["qualitative_agent_execution"]["completed_group_count"], 2)
+        self.assertEqual(second["qualitative_agent_execution"]["status"], "completed")
+        self.assertEqual(
+            provider.calls,
+            {
+                "A · Macro-Policy": 1,
+                "B · Industry-Events": 1,
+                "C · Cost-Transmission": 2,
+            },
+        )
 
 
 if __name__ == "__main__":
