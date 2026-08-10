@@ -253,6 +253,62 @@ describe('Funds', () => {
     }))
   })
 
+  it('shows live holding progress from real child execution nodes', async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/runs/child-running/steps')) {
+        return new Response(JSON.stringify({
+          run_id: 'child-running',
+          status: 'running',
+          steps: [
+            { node_id: 'collect-market', objective: '采集市场行情', status: 'completed' },
+            { node_id: 'collect-finance', objective: '采集财务快照', status: 'completed' },
+            { node_id: 'uzi-analysis', objective: '生成 UZI 结构化股票分析', status: 'running' },
+            { node_id: 'quality-gate', objective: '执行质量门', status: 'pending' },
+            { node_id: 'report', objective: '生成最终报告', status: 'pending' },
+          ],
+          step_counts: { total: 5, active: 1, completed: 2, pending: 2 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.endsWith('/holding-report-batches')) {
+        return new Response(JSON.stringify([{
+          batch_id: 'batch-running', source_run_id: 'run-fund', source_artifact_id: 'artifact-fund',
+          fund_code: '110011', fund_name: '易方达优质精选混合', fund_type: 'ETF联接',
+          profile: 'medium', status: 'running', concurrency: 1,
+          holding_source: 'target_etf_lookthrough', is_fund_of_funds: true,
+          disclosure_date: '2026-06-30', disclosure_age_days: 38, stale_level: 'current', cancel_requested: false,
+          holdings: [
+            {
+              rank: 1, symbol: '688012', name: '中微公司', market: 'SH', supported: true,
+              status: 'running', fund_weight_pct: 13.85, target_security_weight_pct: 15.02,
+              holding_source: 'target_etf_lookthrough', disclosure_date: '2026-06-30',
+              child_run_id: 'child-running', attempt_run_ids: ['child-running'], report_available: false,
+              retry_count: 0, data_gap: [], error: null, started_at: '2026-08-10T00:00:00Z', completed_at: null,
+            },
+            {
+              rank: 2, symbol: '002371', name: '北方华创', market: 'SZ', supported: true,
+              status: 'queued', fund_weight_pct: 13.01, target_security_weight_pct: 14.11,
+              holding_source: 'target_etf_lookthrough', disclosure_date: '2026-06-30',
+              child_run_id: 'child-queued', attempt_run_ids: ['child-queued'], report_available: false,
+              retry_count: 0, data_gap: [], error: null, started_at: null, completed_at: null,
+            },
+          ],
+          counts: { total: 2, supported: 2, queued: 1, running: 1, deliverable: 0, failed: 0, cancelled: 0, unsupported: 0 },
+          data_gap: [], created_at: '2026-08-10T00:00:00Z', updated_at: '2026-08-10T00:01:00Z', completed_at: null,
+        }]), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+
+    render(<Funds onOpenRun={mocks.openRun} />)
+
+    await waitFor(() => expect(screen.getByText('生成 UZI 结构化股票分析')).toBeInTheDocument())
+    expect(screen.getByText('实时执行进度')).toBeInTheDocument()
+    expect(screen.getByText('2 / 5 节点')).toBeInTheDocument()
+    expect(screen.getByText('等待可用并发槽位')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: '持仓分析任务处理进度 20%' })).toHaveAttribute('aria-valuenow', '20')
+  })
+
   it('restores a persisted batch, retries one failed report and opens its backtest', async () => {
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)

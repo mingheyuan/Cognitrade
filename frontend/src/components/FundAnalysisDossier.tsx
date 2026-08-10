@@ -37,6 +37,7 @@ import {
   type RunReportFormat,
 } from '../api-client'
 import type { BacktestTarget } from '../finance-contracts'
+import type { RunStepsPayload } from '../research-contracts'
 import { errorMessageWithRequestId, localizeErrorMessage } from '../utils/error-message'
 
 type FundAnalysisDossierProps = {
@@ -49,6 +50,13 @@ type FundAnalysisDossierProps = {
 
 type RecordValue = Record<string, unknown>
 type TrendRange = '1y' | '3y' | 'all'
+type HoldingRunProgress = {
+  currentNodeId: string
+  currentObjective: string
+  percent: number | null
+  settledNodes: number
+  totalNodes: number
+}
 
 const RETURN_FIELDS = [
   ['daily', '当日'],
@@ -210,11 +218,13 @@ export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun,
   const [holdingBatchesLoading, setHoldingBatchesLoading] = useState(Boolean(sourceRunId))
   const [holdingAction, setHoldingAction] = useState('')
   const [holdingError, setHoldingError] = useState('')
+  const [holdingRunProgress, setHoldingRunProgress] = useState<Record<string, HoldingRunProgress>>({})
   const holdingBatchLoadSequence = useRef(0)
   const sourceRunIdRef = useRef(sourceRunId)
-  const holdingBatches = holdingBatchSnapshot.sourceRunId === sourceRunId
-    ? holdingBatchSnapshot.rows
-    : []
+  const holdingBatches = useMemo(
+    () => holdingBatchSnapshot.sourceRunId === sourceRunId ? holdingBatchSnapshot.rows : [],
+    [holdingBatchSnapshot, sourceRunId],
+  )
   const holdingBatchesRestoring = holdingBatchesLoading
     || Boolean(sourceRunId && holdingBatchSnapshot.sourceRunId !== sourceRunId)
 
@@ -256,6 +266,43 @@ export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun,
     const timer = window.setInterval(() => void refreshHoldingBatches(true), 2000)
     return () => window.clearInterval(timer)
   }, [hasRunningBatch, refreshHoldingBatches])
+
+  const activeHoldingRunIdsKey = useMemo(() => Array.from(new Set(
+    holdingBatches.flatMap((batch) => batch.holdings
+      .filter((item) => item.status === 'running' && item.child_run_id)
+      .map((item) => item.child_run_id || '')),
+  )).filter(Boolean).sort().join(','), [holdingBatches])
+
+  useEffect(() => {
+    const runIds = activeHoldingRunIdsKey.split(',').filter(Boolean)
+    if (!runIds.length) return
+    let cancelled = false
+    let refreshing = false
+    const refresh = async () => {
+      if (refreshing) return
+      refreshing = true
+      try {
+        const results = await Promise.allSettled(runIds.map(async (runId) => ({
+          progress: holdingProgressFromSteps(await client.getSteps(runId)),
+          runId,
+        })))
+        if (cancelled) return
+        const next: Record<string, HoldingRunProgress> = {}
+        results.forEach((result) => {
+          if (result.status === 'fulfilled') next[result.value.runId] = result.value.progress
+        })
+        setHoldingRunProgress(next)
+      } finally {
+        refreshing = false
+      }
+    }
+    void refresh()
+    const timer = window.setInterval(() => void refresh(), 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [activeHoldingRunIdsKey, client])
 
   const runHoldingAction = useCallback(async (
     key: string,
@@ -367,6 +414,7 @@ export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun,
           holdingBatches={holdingBatches.filter((row) => row.fund_code === String(candidate.fund_code || ''))}
           holdingBatchesLoading={holdingBatchesRestoring}
           holdingAction={holdingAction}
+          holdingRunProgress={holdingRunProgress}
           onCreateHoldingBatch={createHoldingBatch}
           onMutateHoldingBatch={mutateHoldingBatch}
           onDownloadZip={(batchId) => downloadHoldingExport(`zip:${batchId}`, () => client.getFundHoldingReportZip(batchId))}
@@ -400,6 +448,7 @@ function FundCandidateDossier({
   holdingBatches,
   holdingBatchesLoading,
   holdingAction,
+  holdingRunProgress,
   onCreateHoldingBatch,
   onMutateHoldingBatch,
   onDownloadZip,
@@ -412,6 +461,7 @@ function FundCandidateDossier({
   holdingBatches: FundHoldingReportBatch[]
   holdingBatchesLoading: boolean
   holdingAction: string
+  holdingRunProgress: Record<string, HoldingRunProgress>
   onCreateHoldingBatch: (fundCode: string, profile: HoldingReportProfile, confirmStale: boolean, force: boolean) => void
   onMutateHoldingBatch: (batchId: string, action: 'cancel' | 'retry' | 'continue' | 'regenerate', symbols?: string[]) => void
   onDownloadZip: (batchId: string) => void
@@ -455,6 +505,17 @@ function FundCandidateDossier({
   const effectiveReportProfile = reportProfile || preferredBatch?.profile || ''
   const profileBatches = sortedBatches.filter((row) => row.profile === effectiveReportProfile)
   const currentBatch = profileBatches.find((row) => row.batch_id === selectedBatchId) || profileBatches[0]
+  const currentBatchStatus = currentBatch?.status
+  const [progressClock, setProgressClock] = useState(() => Date.now())
+  useEffect(() => {
+    if (currentBatchStatus !== 'running') return
+    const timer = window.setInterval(() => setProgressClock(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [currentBatchStatus])
+  const batchProgress = currentBatch ? holdingBatchProgress(currentBatch, holdingRunProgress) : 0
+  const settledItems = currentBatch
+    ? currentBatch.counts.supported - currentBatch.counts.running - currentBatch.counts.queued
+    : 0
   const reportHoldings = isFundOfFunds ? lookthroughHoldings : holdings
   const reportEligibility = holdingReportEligibility(candidate, reportHoldings)
   const reportDisclosureDate = firstDisclosureDate(
@@ -631,8 +692,30 @@ function FundCandidateDossier({
                     <div><span>执行中</span><strong>{currentBatch.counts.running + currentBatch.counts.queued}</strong><small>并发上限 {currentBatch.concurrency}</small></div>
                     <div><span>失败 / 不支持</span><strong>{currentBatch.counts.failed} / {currentBatch.counts.unsupported}</strong><small>不支持项仍保留审计记录</small></div>
                   </div>
-                  <div className="fund-holding-progress" aria-label={`持仓报告完成 ${currentBatch.counts.deliverable} / ${Math.max(1, currentBatch.counts.supported)}`}>
-                    <i style={{ width: `${Math.min(100, currentBatch.counts.deliverable / Math.max(1, currentBatch.counts.supported) * 100)}%` }} />
+                  <div className={`fund-holding-live-progress ${currentBatch.status === 'running' ? 'is-live' : ''}`}>
+                    <div className="fund-holding-live-progress-head">
+                      <div>
+                        {currentBatch.status === 'running' ? <LoaderCircle size={15} className="is-spinning" /> : <CheckCircle2 size={15} />}
+                        <span><strong>{currentBatch.status === 'running' ? '实时执行进度' : '任务处理进度'}</strong><small>按真实任务终态与子运行节点折算，不代表剩余时间</small></span>
+                      </div>
+                      <strong>{batchProgress}%</strong>
+                    </div>
+                    <div
+                      className="fund-holding-progress"
+                      role="progressbar"
+                      aria-label={`持仓分析任务处理进度 ${batchProgress}%`}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={batchProgress}
+                    >
+                      <i style={{ width: `${batchProgress}%` }} />
+                    </div>
+                    <div className="fund-holding-live-stats">
+                      <span><i className="is-complete" />已处理 {Math.max(0, settledItems)}</span>
+                      <span><i className="is-running" />研究中 {currentBatch.counts.running}</span>
+                      <span><i className="is-queued" />排队 {currentBatch.counts.queued}</span>
+                      <span>每 2–3 秒同步</span>
+                    </div>
                   </div>
                   <div className="fund-holding-batch-actions">
                     {currentBatch.status === 'running' && <button type="button" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'cancel')} disabled={holdingAction === holdingMutationKey('cancel', currentBatch.batch_id)}><Square size={13} />取消未完成任务</button>}
@@ -643,10 +726,12 @@ function FundCandidateDossier({
                   </div>
 
                   <div className="fund-holding-report-list">
-                    {currentBatch.holdings.map((item) => <article key={`${item.rank}-${item.symbol}`} className={`is-${item.status}`}>
+                    {currentBatch.holdings.map((item) => {
+                      const progress = item.child_run_id ? holdingRunProgress[item.child_run_id] : undefined
+                      return <article key={`${item.rank}-${item.symbol}`} className={`is-${item.status}`}>
                       <div className="fund-holding-report-rank">{String(item.rank).padStart(2, '0')}</div>
                       <div className="fund-holding-report-name"><strong>{item.name}</strong><small>{item.symbol} · {item.market} · 基金权重 {percent(item.fund_weight_pct, false)}</small></div>
-                      <span className="fund-holding-report-status">{holdingItemStatusLabel(item.status)}</span>
+                      <span className="fund-holding-report-status">{item.status === 'running' && <LoaderCircle size={12} className="is-spinning" />}{holdingItemStatusLabel(item.status)}</span>
                       <div className="fund-holding-report-actions">
                         <button type="button" title="使用该持仓股票打开策略回测" onClick={() => onOpenBacktest({ symbol: item.symbol, name: item.name, fundCode: String(candidate.fund_code || ''), fundName: String(candidate.fund_name || '') })}><LineChartIcon size={13} />回测</button>
                         {item.status === 'failed' && <button type="button" title="只重试这一只股票，其他持仓报告不重新执行" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'retry', [item.symbol])} disabled={holdingAction === holdingMutationKey('retry', currentBatch.batch_id, [item.symbol])}><RefreshCw size={13} />仅重试此项</button>}
@@ -658,8 +743,14 @@ function FundCandidateDossier({
                           <button type="button" onClick={() => onDownloadReport(item.child_run_id || '', 'pdf')} disabled={holdingAction === `pdf:${item.child_run_id}`}><Download size={13} />PDF</button>
                         </>}
                       </div>
+                      {item.status === 'running' && <div className="fund-holding-item-progress" role="status">
+                        <div><span>{progress?.currentObjective || '正在初始化执行图并读取冻结持仓证据'}</span><strong>{progress?.totalNodes ? `${progress.settledNodes} / ${progress.totalNodes} 节点` : '准备中'}</strong></div>
+                        <div className="fund-holding-item-progress-track"><i style={{ width: `${progress?.percent ?? 0}%` }} /></div>
+                        <small>{progress?.currentNodeId ? `当前节点 ${progress.currentNodeId} · ` : ''}已运行 {elapsedText(item.started_at, progressClock)}{progress ? ' · 刚刚同步' : ' · 等待首个节点状态'}</small>
+                      </div>}
+                      {item.status === 'queued' && <div className="fund-holding-item-queued"><span>等待可用并发槽位</span><small>当前并发上限 {currentBatch.concurrency}，启动后将显示真实节点进度</small></div>}
                       {(item.data_gap.length > 0 || item.error) && <p>{item.error ? localizeErrorMessage(item.error, '持仓股票报告执行失败，请稍后重试。') : item.data_gap.map(dataGapLabel).join('；')}</p>}
-                    </article>)}
+                    </article>})}
                   </div>
 
                   {currentBatch.data_gap.length > 0 && <div className="fund-holding-batch-gaps"><AlertCircle size={14} /><span>{currentBatch.data_gap.map(dataGapLabel).join('；')}</span></div>}
@@ -730,6 +821,48 @@ function firstDisclosureDate(...values: unknown[]): string {
     if (parsed) return parsed
   }
   return ''
+}
+
+function holdingProgressFromSteps(payload: RunStepsPayload): HoldingRunProgress {
+  const steps = Array.isArray(payload.steps) ? payload.steps : []
+  const terminalStatuses = new Set(['completed', 'failed', 'skipped', 'cancelled'])
+  const settledNodes = steps.filter((step) => terminalStatuses.has(String(step.status || ''))).length
+  const activeSteps = steps.filter((step) => step.status === 'running')
+  const currentStep = activeSteps[0] || steps.find((step) => ['pending', 'waiting'].includes(String(step.status || '')))
+  const totalNodes = steps.length
+  return {
+    currentNodeId: String(currentStep?.node_id || ''),
+    currentObjective: String(currentStep?.objective || '正在推进当前执行节点'),
+    percent: totalNodes > 0 ? Math.min(96, Math.round(settledNodes / totalNodes * 100)) : null,
+    settledNodes,
+    totalNodes,
+  }
+}
+
+function holdingBatchProgress(
+  batch: FundHoldingReportBatch,
+  progressByRun: Record<string, HoldingRunProgress>,
+): number {
+  const supported = batch.holdings.filter((item) => item.supported)
+  if (!supported.length) return 100
+  const terminalStatuses = new Set(['completed', 'completed_partial', 'failed', 'cancelled'])
+  const total = supported.reduce((sum, item) => {
+    if (terminalStatuses.has(item.status)) return sum + 100
+    if (item.status !== 'running' || !item.child_run_id) return sum
+    return sum + (progressByRun[item.child_run_id]?.percent || 0)
+  }, 0)
+  return Math.min(100, Math.round(total / supported.length))
+}
+
+function elapsedText(startedAt: string | null, now: number): string {
+  const started = Date.parse(String(startedAt || ''))
+  if (!Number.isFinite(started)) return '不到 1 分钟'
+  const seconds = Math.max(0, Math.floor((now - started) / 1000))
+  if (seconds < 60) return `${seconds} 秒`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} 分钟`
+  const hours = Math.floor(minutes / 60)
+  return `${hours} 小时 ${minutes % 60} 分钟`
 }
 
 function holdingBatchStatusLabel(value: FundHoldingReportBatch['status']): string {
