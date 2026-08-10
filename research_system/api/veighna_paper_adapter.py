@@ -7,6 +7,8 @@ from importlib import metadata
 from importlib.util import find_spec
 from typing import Any
 
+from research_system.runtime.presentation.display import localize_runtime_error
+
 
 _MICRO = Decimal("0.000001")
 _DEFAULT_HALF_SPREAD = Decimal("0.0005")
@@ -96,7 +98,7 @@ class VeighNaPaperAdapter:
                 # A framework import/runtime issue must not make the paper
                 # account unusable. The status endpoint exposes the fallback.
                 self._available = False
-                self._load_error = f"{type(exc).__name__}: {exc}"
+                self._load_error = localize_runtime_error(exc, fallback="VeighNa 撮合依赖加载失败。")
 
         return self._compatible_match(
             side=side,
@@ -237,7 +239,7 @@ class VeighNaPaperAdapter:
     def _decimal(value: Any) -> Decimal:
         result = Decimal(str(value))
         if not result.is_finite() or result <= 0:
-            raise ValueError("latest quote price must be positive")
+            raise ValueError("latest quote price 必须大于 0")
         return result
 
     @staticmethod

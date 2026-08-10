@@ -147,9 +147,6 @@ class HookRuntime:
         runtime._hooks = list(self._hooks)
         return runtime
 
-    def preview_stop(self, *, target: str = "stop") -> bool:
-        return any(item.event == target for item in self._hooks)
-
     def run_stop(
         self,
         hook_input: StopHookInput,

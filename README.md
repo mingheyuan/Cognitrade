@@ -11,7 +11,7 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 - 模拟交易：VeighNa PaperAccount 到价撮合，服务端现金/持仓账本、限价挂单、资金冻结、撤单、费用、T+1 和幂等订单。
 - 策略回测：独立 Hikyuu 回测实验室，使用 Finance Pack 历史 K 线运行后端注册策略，前端动态配置参数，并持久化资产曲线、绩效和成交记录。
 - DomainPack：`finance_ashare` 与 `legal_contract` 通过声明式能力、工具、Gate 和报告合同接入。
-- UZI 报告：研究工作台可从 ArtifactBoard 直接打开原生风格 HTML 或下载同源 PDF，不依赖旧 UZI CLI、缓存和报告服务。
+- UZI 报告：研究工作台可从 ArtifactBoard 直接打开与上游 v3.9.4 分析及呈现层逐文件对齐的原生 HTML，或下载同源 PDF；不依赖旧 UZI CLI、缓存和报告服务。
 - 基金持仓股票报告：从指定基金运行的冻结披露生成最多十份独立 UZI 股票报告，默认 5 并发，支持档位选择、单份/整批重试、续跑、取消、跨页面恢复、单份 HTML/PDF 与整批 PDF ZIP；可将某只冻结持仓带入回测页，但不会把研究评分自动转换为交易信号。ETF 联接仅使用已取得的穿透持仓，不推断缺失数据。
 - 治理：Bearer 鉴权、作用域隔离、高风险审批、质量 Gate、来源引用和分层记忆。
 
@@ -40,7 +40,7 @@ Hikyuu，不把模拟盘或回测留成运行时可选项。镜像构建阶段�
 API 导入、Chromium、VeighNa/Hikyuu 原生模块以及持久化目录读写权限。任一关键能力
 缺失都会让命令返回非零状态。
 
-部署镜像内可显式核验 UZI 3.9.2 的 22 类真实数据链；该检查不会在启动时自动执行，
+部署镜像内可显式核验 UZI 3.9.4 的 22 类真实数据链；该检查不会在启动时自动执行，
 数据源无返回会记录为 `data_gap`，不会生成模拟数据：
 
 ```bash
@@ -50,7 +50,7 @@ COGNITRADE_PROVIDER_SMOKE_SECTOR=白酒 \
 ```
 
 可用 `COGNITRADE_PROVIDER_SMOKE_DIMENSIONS=market,kline,events` 只检查指定维度。
-来源目录与 UZI 3.9.2 固定提交逐项对齐，共 70 个候选来源；“已登记”不等于本次
+来源目录与 UZI 3.9.4 固定提交逐项对齐，共 73 个候选来源；“已登记”不等于本次
 “已取到”，运行结果以各 Snapshot 的 `source_trace` 为准。雪球组合来源仍需同时显式
 开启敏感来源、加入 `xueqiu` allowlist 并配置 Cookie；淘股吧、同花顺模拟盘等公开比赛
 证据可以独立降级运行。
@@ -109,10 +109,15 @@ COGNITRADE_API_TOKEN=<high-entropy-token>
 ```dotenv
 OPENAI_API_KEY=<key>
 OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-5.5
-OPENAI_REVIEW_MODEL=gpt-5.5
+OPENAI_MODEL=gpt-5.6-luna
 OPENAI_REASONING_EFFORT=xhigh
+OPENAI_SERVICE_TIER=default
 OPENAI_DISABLE_RESPONSE_STORAGE=true
+UZI_LLM_REQUEST_TIMEOUT_SECONDS=480
+UZI_LLM_MAX_CONCURRENCY=2
+UZI_LLM_TRANSIENT_RETRIES=6
+UZI_LLM_RETRY_BASE_SECONDS=2
+UZI_LLM_RETRY_MAX_SECONDS=60
 ```
 
 没有模型 Key 时，系统仍可执行确定性 Pack 能力，但需要模型合成的最终答复可能以
@@ -124,7 +129,7 @@ OPENAI_DISABLE_RESPONSE_STORAGE=true
 ```dotenv
 TUSHARE_TOKEN=<runtime-secret>
 MX_APIKEY=<runtime-secret>
-COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY=5
+COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY=2
 ```
 
 TuShare 配置 Token 只表示客户端可以鉴权；具体 `daily`、`fina_indicator`、`moneyflow`、

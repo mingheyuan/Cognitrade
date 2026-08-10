@@ -46,7 +46,14 @@ def render_jury_seat(inv: dict) -> str:
 def _li(items: list) -> str:
     if not items:
         return ""
-    return "".join(f"<li>{x}</li>" for x in items)
+    out = []
+    for x in items:
+        # v3.9.4 · pass/fail item 是 dict {'name','msg','weight'} · 不能整 dict str()
+        if isinstance(x, dict):
+            out.append(f"<li>{x.get('msg') or x.get('name') or ''}</li>")
+        else:
+            out.append(f"<li>{x}</li>")
+    return "".join(out)
 
 
 def render_chat_message(inv: dict) -> str:

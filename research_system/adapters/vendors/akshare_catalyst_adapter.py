@@ -401,9 +401,9 @@ class AkShareCatalystAdapter:
         matched_terms: list[str] = []
         matched_scope = "broad"
 
-        for term in self._policy_keywords(theme):
-            if term and term in text:
-                matched_terms.append(term)
+        matched_terms.extend(
+            term for term in self._policy_keywords(theme) if term and term in text
+        )
 
         for term in theme_terms:
             if term and term in text:
@@ -442,9 +442,7 @@ class AkShareCatalystAdapter:
             return True
         if any(term in text for term in ("创新药", "新药", "药品", "医药", "临床", "药监", "医保", "集采", "出海", "授权", "BD", "CRO", "CDMO")):
             return True
-        if any(term in matched_terms for term in ("创新药", "新药", "药品", "医药", "医保", "药监", "集采", "出海", "授权", "合作", "临床")):
-            return True
-        return False
+        return any(term in matched_terms for term in ("创新药", "新药", "药品", "医药", "医保", "药监", "集采", "出海", "授权", "合作", "临床"))
 
     def _policy_noise_keywords(self) -> tuple[str, ...]:
         return (

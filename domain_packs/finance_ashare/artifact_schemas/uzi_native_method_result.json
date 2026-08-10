@@ -43,7 +43,7 @@
         "holding_rebalance"
       ]
     },
-    "source_commit": {"const": "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359"},
+    "source_commit": {"const": "0acf25122cabf493e7bc442faff62ceceb7f2f02"},
     "implementation": {"const": "vendored_uzi_3_9_2_pure_function"},
     "results": {"type": "array", "items": {"$ref": "#/$defs/result_row"}},
     "quality_status": {"enum": ["available", "degraded", "data_gap"]},

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 
-UZI_METHOD_PRODUCT_VERSION = "3.9.2-adapted-products-v1"
+UZI_METHOD_PRODUCT_VERSION = "3.9.4-adapted-products-v1"
 
 METHOD_ARTIFACT_TYPES: dict[str, str] = {
     "cashflow_resilience": "financial_analysis",

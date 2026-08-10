@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -8,6 +9,8 @@ from unittest.mock import Mock, patch
 from domain_packs.finance_ashare.vendor.uzi_3_9_2 import (
     UZI_COMMAND_IDS,
     UZI_FETCHER_IDS,
+    UZI_REPORT_SOURCE_COMMIT,
+    UZI_REPORT_VERSION,
     Uzi392FetcherRuntime,
     verify_vendored_uzi_integrity,
 )
@@ -29,6 +32,9 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
         self.assertTrue(report["python_tree_matches"])
         self.assertTrue(report["command_tree_matches"])
         self.assertTrue(report["report_template_matches"])
+        self.assertTrue(report["report_renderer_matches"])
+        self.assertEqual(report["report_source_commit"], UZI_REPORT_SOURCE_COMMIT)
+        self.assertEqual(report["report_version"], UZI_REPORT_VERSION)
         self.assertEqual(report["analyst_asset_file_count"], 138)
         self.assertTrue(report["analyst_asset_tree_matches"])
         self.assertIn("quick-scan", UZI_COMMAND_IDS)
@@ -98,7 +104,7 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
         main.assert_called_once_with("白酒", dependencies["8_materials"]["data"]["materials_detail"])
 
     def test_unknown_fetcher_is_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Unsupported UZI 3.9.2 fetcher"):
+        with self.assertRaisesRegex(ValueError, "Unsupported UZI 3.9.4 fetcher"):
             self.runtime.collect("missing", ticker="600519")
 
     def test_contests_runtime_blocks_xueqiu_at_the_native_boundary(self) -> None:
@@ -214,7 +220,14 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
                 "fallback": False,
             }
 
-        with patch.object(Uzi392FetcherRuntime, "collect", autospec=True) as mocked:
+        with patch.dict(
+            os.environ,
+            {
+                "COGNITRADE_SENSITIVE_SOURCES_ENABLED": "false",
+                "COGNITRADE_SENSITIVE_SOURCE_ALLOWLIST": "",
+                "COGNITRADE_XUEQIU_COOKIE": "",
+            },
+        ), patch.object(Uzi392FetcherRuntime, "collect", autospec=True) as mocked:
             mocked.side_effect = lambda _self, fetcher_id, **kwargs: collect(fetcher_id, **kwargs)
             rows = snapshot_collector.collect_snapshots(
                 query="完整分析贵州茅台",
@@ -226,12 +239,23 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
         self.assertEqual(set(called), set(UZI_FETCHER_IDS))
         self.assertEqual(len(called), 22)
         self.assertEqual(len(rows), 22)
+        self.assertEqual({row.get("symbol") for row in rows}, {"600519"})
         self.assertTrue(
             all(
                 isinstance((row.get("facts") or {}).get("_uzi_raw_result"), dict)
                 for row in rows
             )
         )
+
+    def test_native_snapshot_cache_version_rejects_pre_raw_payload_entries(self) -> None:
+        for snapshot_type in snapshot_collector._UZI_FETCHER_BY_SNAPSHOT_TYPE:
+            with self.subTest(snapshot_type=snapshot_type):
+                context = snapshot_collector._snapshot_cache_context(
+                    snapshot_type=snapshot_type,
+                    target="600519",
+                    profile="medium",
+                )
+                self.assertIn("uzi-3.9.4-native-raw-v1", context["schema_version"])
 
 
 if __name__ == "__main__":

@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from pydantic import BaseModel
+
 from research_system.runtime.providers.openai_client_support import OpenAIClientSupport
 from research_system.runtime.providers.openai_response_support import OpenAIResponseSupport
 from research_system.runtime.providers.provider_registry import OpenAIProvider, ProviderRegistry
@@ -20,7 +22,7 @@ class _FakeStreamContext:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc, tb):
+    def __exit__(self, *_args):
         return False
 
     def __iter__(self):
@@ -31,10 +33,12 @@ class _FakeStreamContext:
 
 
 class _FakeResponsesClient:
-    def __init__(self, *, create_responses=None, stream_parts=None) -> None:
+    def __init__(self, *, create_responses=None, parse_responses=None, stream_parts=None) -> None:
         self._create_responses = list(create_responses or [])
+        self._parse_responses = list(parse_responses or [])
         self._stream_parts = list(stream_parts or [])
         self.create_calls: list[dict] = []
+        self.parse_calls: list[dict] = []
         self.stream_calls: list[dict] = []
 
     def create(self, **kwargs):
@@ -42,6 +46,12 @@ class _FakeResponsesClient:
         if not self._create_responses:
             raise AssertionError("unexpected create call")
         return self._create_responses.pop(0)
+
+    def parse(self, **kwargs):
+        self.parse_calls.append(kwargs)
+        if not self._parse_responses:
+            raise AssertionError("unexpected parse call")
+        return self._parse_responses.pop(0)
 
     def stream(self, **kwargs):
         self.stream_calls.append(kwargs)
@@ -54,6 +64,15 @@ class _FakeResponsesClient:
 class _FakeClient:
     def __init__(self, responses) -> None:
         self.responses = responses
+        self.with_options_calls: list[dict] = []
+
+    def with_options(self, **kwargs):
+        self.with_options_calls.append(kwargs)
+        return self
+
+
+class _StructuredPayload(BaseModel):
+    value: str
 
 
 class ProviderRegistryTests(unittest.TestCase):
@@ -112,6 +131,56 @@ class ProviderRegistryTests(unittest.TestCase):
             responses.create_calls[1].get("input"),
             OpenAIProvider._CONTINUATION_PROMPT,
         )
+
+    def test_complete_can_disable_sdk_retries_for_uzi_owned_recovery(self) -> None:
+        final = SimpleNamespace(
+            id="resp_1",
+            status="completed",
+            incomplete_details=None,
+            output_text="done",
+        )
+        responses = _FakeResponsesClient(create_responses=[final])
+        client = _FakeClient(responses)
+        provider = OpenAIProvider(self._settings())
+        provider._client = client  # type: ignore[assignment]
+
+        text = provider.complete(
+            system_prompt="sys",
+            user_prompt="user",
+            max_retries=0,
+        )
+
+        self.assertEqual(text, "done")
+        self.assertEqual(client.with_options_calls, [{"max_retries": 0}])
+
+    def test_parse_uses_responses_json_schema_protocol(self) -> None:
+        payload = _StructuredPayload(value="grounded")
+        response = SimpleNamespace(
+            id="resp_structured",
+            status="completed",
+            incomplete_details=None,
+            output_parsed=payload,
+        )
+        responses = _FakeResponsesClient(parse_responses=[response])
+        client = _FakeClient(responses)
+        provider = OpenAIProvider(self._settings())
+        provider._client = client  # type: ignore[assignment]
+
+        result = provider.parse(
+            system_prompt="sys",
+            user_prompt="user",
+            schema=_StructuredPayload,
+            reasoning_effort="low",
+            timeout_seconds=321,
+            max_retries=0,
+        )
+
+        self.assertEqual(result, payload)
+        self.assertEqual(client.with_options_calls, [{"max_retries": 0}])
+        self.assertEqual(responses.parse_calls[0]["text_format"], _StructuredPayload)
+        self.assertEqual(responses.parse_calls[0]["reasoning"], {"effort": "low"})
+        self.assertEqual(responses.parse_calls[0]["timeout"], 321.0)
+        self.assertFalse(responses.parse_calls[0]["store"])
 
     def test_provider_registry_wires_default_provider(self) -> None:
         registry = ProviderRegistry(self._settings())
@@ -209,6 +278,7 @@ class ProviderRegistryTests(unittest.TestCase):
 
         self.assertEqual(provider.complete(system_prompt="sys", user_prompt="user"), "done")
         self.assertEqual(responses.create_calls[0]["reasoning"], {"effort": "xhigh"})
+        self.assertEqual(responses.create_calls[0]["service_tier"], "default")
 
     def test_public_progress_block_is_extracted_without_leaking_into_answer_text(self) -> None:
         text = (

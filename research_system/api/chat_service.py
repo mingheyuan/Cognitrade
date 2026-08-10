@@ -7,6 +7,7 @@ from typing import Any
 from research_system.api.chat_store import ChatThreadStore
 from research_system.api.errors import ApiError
 from research_system.runtime.platform.settings import Settings
+from research_system.runtime.presentation.display import localize_public_error_fields
 from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
 
 
@@ -52,8 +53,8 @@ class ChatService:
                 scope=scope,
             )
             if user_id is None and tenant_id is None:
-                return rows
-            return [
+                return localize_public_error_fields(rows)
+            return localize_public_error_fields([
                 row
                 for row in rows
                 if self._metadata_matches_scope(
@@ -61,7 +62,7 @@ class ChatService:
                     user_id=user_id,
                     tenant_id=tenant_id,
                 )
-            ]
+            ])
 
     def get_thread(
         self,
@@ -72,7 +73,9 @@ class ChatService:
     ) -> dict[str, Any]:
         with self._lock:
             self._assert_thread_scope(thread_id, user_id=user_id, tenant_id=tenant_id)
-            return ChatThreadStore(self.settings).thread_detail(thread_id)
+            return localize_public_error_fields(
+                ChatThreadStore(self.settings).thread_detail(thread_id)
+            )
 
     def preview_thread(
         self,
@@ -84,9 +87,11 @@ class ChatService:
     ) -> dict[str, Any]:
         with self._lock:
             self._assert_thread_scope(thread_id, user_id=user_id, tenant_id=tenant_id)
-            return ChatThreadStore(self.settings).preview_thread(
-                thread_id,
-                turn_limit=turn_limit,
+            return localize_public_error_fields(
+                ChatThreadStore(self.settings).preview_thread(
+                    thread_id,
+                    turn_limit=turn_limit,
+                )
             )
 
     def rename_thread(
@@ -152,7 +157,9 @@ class ChatService:
     ) -> dict[str, Any]:
         with self._lock:
             self._assert_thread_scope(thread_id, user_id=user_id, tenant_id=tenant_id)
-            return ChatThreadStore(self.settings).compact_thread(thread_id)
+            return localize_public_error_fields(
+                ChatThreadStore(self.settings).compact_thread(thread_id)
+            )
 
     def submit_research(
         self,
@@ -184,6 +191,9 @@ class ChatService:
                 response = run_service.run(effective_request, run_id=pending_run_id)
             else:
                 response = run_service.run(effective_request)
+            response = ResponseEnvelope.model_validate(
+                localize_public_error_fields(response.model_dump(mode="json"))
+            )
             recorded_at = response.updated_at.isoformat()
             store.append_turn(
                 thread_id=thread_id,
@@ -220,6 +230,9 @@ class ChatService:
         response: ResponseEnvelope,
     ) -> None:
         """Append the final result of a background Agent OS run to its thread."""
+        response = ResponseEnvelope.model_validate(
+            localize_public_error_fields(response.model_dump(mode="json"))
+        )
         if response.status == "running":
             return
         with self._lock:
@@ -307,9 +320,7 @@ class ChatService:
             return user_id == "api_token" and tenant_id == "api_token"
         if user_id is not None and stored_user_id != user_id:
             return False
-        if tenant_id is not None and stored_tenant_id != tenant_id:
-            return False
-        return True
+        return not (tenant_id is not None and stored_tenant_id != tenant_id)
 
     def _ensure_index_record(self, thread_id: str) -> None:
         store = ChatThreadStore(self.settings)
@@ -332,7 +343,7 @@ class ChatService:
         return ApiError(
             status_code=404,
             code="chat_thread_not_found",
-            message=f"chat thread not found: {thread_id}",
+            message=f"未找到聊天任务：{thread_id}",
         )
 
 

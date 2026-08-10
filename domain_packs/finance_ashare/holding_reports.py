@@ -55,7 +55,7 @@ def freeze_fund_holdings(
         )
     ]
     if not snapshots:
-        raise FundSnapshotUnavailableError("active fund_snapshot artifact is unavailable")
+        raise FundSnapshotUnavailableError("没有可用的 active fund_snapshot artifact")
     snapshot = snapshots[-1]
     content = _record(snapshot.get("content"))
     normalized_code = _normalize_code(fund_code)
@@ -68,14 +68,14 @@ def freeze_fund_holdings(
         None,
     )
     if candidate is None:
-        raise FundCandidateUnavailableError(f"fund {normalized_code or fund_code} is absent from the snapshot")
+        raise FundCandidateUnavailableError(f"snapshot 中不存在基金 {normalized_code or fund_code}")
 
     fund_name = str(candidate.get("fund_name") or normalized_code or fund_code).strip()
     fund_type = str(candidate.get("fund_type") or "").strip() or None
     coverage = _record(candidate.get("holdings_coverage"))
     is_fund_of_funds = coverage.get("is_fund_of_funds") is True
     if not _is_equity_fund(fund_name=fund_name, fund_type=fund_type, candidate=candidate):
-        raise FundTypeUnsupportedError("holding reports are limited to equity-focused funds")
+        raise FundTypeUnsupportedError("持仓报告仅支持权益类基金")
 
     if is_fund_of_funds:
         raw_holdings = list(candidate.get("lookthrough_holdings") or [])

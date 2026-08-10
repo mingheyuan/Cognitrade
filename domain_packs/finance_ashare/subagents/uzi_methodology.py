@@ -25,15 +25,16 @@ from research_system.adapters.vendors.uzi_global_peer_adapter import global_peer
 from research_system.adapters.vendors.market_router import MarketRouter
 
 
-UZI_METHOD_VERSION = "3.9.2-adapted"
-UZI_SOURCE_COMMIT = "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359"
+UZI_METHOD_VERSION = "3.9.4-adapted"
+UZI_SOURCE_COMMIT = "0acf25122cabf493e7bc442faff62ceceb7f2f02"
 
 _PROFILES: dict[str, dict[str, Any]] = {
     "lite": {
         "depth": "lite",
         "label_cn": "速判模式",
         "estimated_minutes": "1-2 分钟",
-        "max_duration_seconds": 120,
+        "estimated_duration_seconds": 120,
+        "deadline_policy": "unbounded",
         "ddg_budget": 0,
         "industry_dynamic_lookup": False,
         "playwright_mode": "off",
@@ -68,7 +69,8 @@ _PROFILES: dict[str, dict[str, Any]] = {
         "depth": "medium",
         "label_cn": "标准分析",
         "estimated_minutes": "5-8 分钟",
-        "max_duration_seconds": 480,
+        "estimated_duration_seconds": 480,
+        "deadline_policy": "unbounded",
         "ddg_budget": 30,
         "industry_dynamic_lookup": True,
         "playwright_mode": "opt-in",
@@ -128,7 +130,8 @@ _PROFILES: dict[str, dict[str, Any]] = {
         "depth": "deep",
         "label_cn": "深度研究",
         "estimated_minutes": "15-20 分钟",
-        "max_duration_seconds": 1200,
+        "estimated_duration_seconds": 1200,
+        "deadline_policy": "unbounded",
         "ddg_budget": 60,
         "industry_dynamic_lookup": True,
         "playwright_mode": "default_subject_to_sensitive_source_policy",
@@ -280,17 +283,6 @@ def _metric_number(mapping: dict[str, Any], keys: tuple[str, ...]) -> float | No
         if number is not None:
             return number
     return None
-
-
-def _first_metric_number(
-    sections: list[dict[str, Any]],
-    keys: tuple[str, ...],
-) -> tuple[float | None, str | None]:
-    for index, section in enumerate(sections):
-        value = _metric_number(section, keys)
-        if value is not None:
-            return value, str(index)
-    return None, None
 
 
 def _amount_yi(value: Any) -> float | None:
@@ -501,17 +493,6 @@ def _item_value_map(rows: Any) -> dict[str, Any]:
         for row in rows
         if isinstance(row, dict) and str(row.get("item") or "").strip()
     }
-
-
-def _first_amount_yi(
-    sections: list[dict[str, Any]],
-    keys: tuple[str, ...],
-) -> tuple[float | None, str | None]:
-    for index, section in enumerate(sections):
-        value = _metric_number(section, keys)
-        if value is not None:
-            return _amount_yi(value), str(index)
-    return None, None
 
 
 def _facts(snapshot: dict[str, Any] | None) -> dict[str, Any]:
@@ -1235,7 +1216,9 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
             "cash_to_marketcap_ratio": "+".join(item for item in (cash_source, "market_snapshot") if item),
         })
     field_sources.update(technical_sources)
-    for key, source in {
+    field_sources.update({
+        key: source
+        for key, source in {
         "industry": "industry_snapshot" if industry_facts.get("industry") else "research_snapshot" if reports else None,
         "research_coverage": "research_snapshot.reports" if reports else None,
         "buy_rating_pct": "research_snapshot.reports" if ratings else None,
@@ -1255,9 +1238,9 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         "ai_chain_hit": "industry_snapshot+chain_snapshot+events_snapshot" if ai_chain_hit is not None else None,
         "ai_chain_keywords": "industry_snapshot+chain_snapshot+events_snapshot" if ai_chain_hit is not None else None,
         "ai_smallcap": "market_snapshot" if ai_smallcap is not None else None,
-    }.items():
-        if source:
-            field_sources[key] = source
+        }.items()
+        if source
+    })
     assumptions = [
         item
         for item in (debt_derivation, ocf_ratio_derivation)
@@ -1732,51 +1715,6 @@ def build_valuation_model(snapshot_rows: list[dict[str, Any]], symbols: list[str
     }
 
 
-def _signal(score: float) -> str:
-    if score >= 65:
-        return "bullish"
-    if score < 35:
-        return "bearish"
-    return "neutral"
-
-
-def _panel_vote(perspective: tuple[str, str, str, tuple[str, ...]], features: dict[str, Any]) -> dict[str, Any]:
-    perspective_id, label, purpose, _ = perspective
-    checks: list[tuple[str, bool | None]] = [
-        ("估值或盈利证据", features.get("pe") is not None or features.get("pb") is not None),
-        ("现金流证据", features.get("fcf_latest_yi") is not None),
-        ("经营质量证据", features.get("roe") is not None or features.get("net_margin") is not None),
-        ("价格与流动性证据", features.get("price") is not None and features.get("amount") is not None),
-    ]
-    if perspective_id == "growth":
-        checks[0] = ("增长证据", features.get("revenue_growth") is not None or features.get("profit_growth") is not None)
-    if perspective_id == "trend":
-        checks[0] = ("趋势证据", features.get("pct_change") is not None)
-    if perspective_id == "risk":
-        checks[0] = ("负债约束证据", features.get("debt_ratio") is not None)
-    available = [item for item in checks if item[1] is not None]
-    passed = sum(1 for _, value in available if value)
-    score = round(50 + (passed - max(len(available) - passed, 0)) * 12.5, 1) if available else 0.0
-    confidence = round(min(0.9, 0.25 + len(available) * 0.15), 4)
-    signal = _signal(score) if available else "insufficient_evidence"
-    reason = (
-        f"{label}基于{purpose}，可验证指标 {passed}/{len(available)} 项通过。"
-        if available
-        else f"{label}缺少可验证的专业输入，暂不形成方向判断。"
-    )
-    return {
-        "perspective_id": perspective_id,
-        "perspective_label": label,
-        "methodology_purpose": purpose,
-        "signal": signal,
-        "score": score,
-        "confidence": confidence,
-        "reasoning": reason,
-        "checks": [{"name": name, "status": "pass" if value else "fail"} for name, value in available],
-        "is_methodology_perspective": True,
-    }
-
-
 def build_panel_review(snapshot_rows: list[dict[str, Any]], symbols: list[str], profile: dict[str, Any]) -> dict[str, Any]:
     votes: list[dict[str, Any]] = []
     panel_seats = panel_for_profile(str(profile["selected"]))
@@ -1874,7 +1812,7 @@ def _quick_scan_dimension_data(
 
 
 def build_quick_scan(snapshot_rows: list[dict[str, Any]], symbols: list[str]) -> dict[str, Any]:
-    """Implement UZI 3.9.2 `/quick-scan` as its own delivery contract.
+    """Implement UZI 3.9.4 `/quick-scan` as its own delivery contract.
 
     The command is deliberately not an alias for Cognitrade's historical
     ``lite`` profile: it consumes exactly dimensions 1/2/10/18, evaluates the
@@ -2222,10 +2160,8 @@ def _panel_presentation_data(panel: dict[str, Any]) -> tuple[list[dict[str, Any]
     """Project the persisted panel artifact into readable rounds and insights."""
 
     votes = [vote for vote in list(panel.get("votes") or []) if isinstance(vote, dict)]
-    insights = []
-    for vote in votes:
-        insights.append(
-            {
+    insights = [
+        {
                 "perspective_id": vote.get("perspective_id") or vote.get("investor_id"),
                 "perspective_label": vote.get("perspective_label"),
                 "investor_name_en": vote.get("investor_name_en"),
@@ -2246,8 +2182,9 @@ def _panel_presentation_data(panel: dict[str, Any]) -> tuple[list[dict[str, Any]
                 "checks": list(vote.get("checks") or []),
                 "required_dimensions": list(vote.get("required_dimensions") or []),
                 "is_methodology_perspective": bool(vote.get("is_methodology_perspective", True)),
-            }
-        )
+        }
+        for vote in votes
+    ]
 
     rounds: list[dict[str, Any]] = []
     for school in dict.fromkeys(str(vote.get("school") or "") for vote in votes):
@@ -2459,16 +2396,16 @@ def build_presentation(
     catalysts: list[dict[str, Any]] = []
     for result in list(workflow.get("results") or []):
         calendar = result.get("catalyst_calendar") if isinstance(result, dict) else None
-        for event in list((calendar or {}).get("events") or []) if isinstance(calendar, dict) else []:
-            if isinstance(event, dict) and str(event.get("title") or "").strip():
-                catalysts.append(
-                    {
+        catalysts.extend(
+            {
                         "date": event.get("date"),
                         "title": str(event.get("title")),
                         "impact": str(event.get("impact") or "medium"),
                         "symbol": str(result.get("symbol") or symbol),
-                    }
-                )
+            }
+            for event in list((calendar or {}).get("events") or []) if isinstance(calendar, dict)
+            if isinstance(event, dict) and str(event.get("title") or "").strip()
+        )
     panel_rounds, panel_insights = _panel_presentation_data(panel)
     deep_scan = _deep_scan_data(advanced, valuation, presentation_symbols or ([symbol] if symbol else []), dimensions)
     institutional_modeling = _institutional_modeling_data(

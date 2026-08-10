@@ -112,20 +112,18 @@ class FundSecurityMaster:
             return self._normalize_catalog(self.catalog_loader())
         now = datetime.now(UTC)
         with self._cache_lock:
-            if self._cached_rows is not None and self._cached_at is not None:
-                if now - self._cached_at <= self._cache_ttl:
-                    return [dict(row) for row in self._cached_rows]
+            if (
+                self._cached_rows is not None
+                and self._cached_at is not None
+                and now - self._cached_at <= self._cache_ttl
+            ):
+                return [dict(row) for row in self._cached_rows]
         frame = call_with_retry(ak.fund_name_em, retries=2, delay_seconds=0.25)
         rows = self._normalize_catalog(frame)
         with self._cache_lock:
             type(self)._cached_rows = rows
             type(self)._cached_at = now
         return [dict(row) for row in rows]
-
-    @classmethod
-    def is_known_fund_code(cls, code: object, rows: Iterable[dict[str, Any]]) -> bool:
-        normalized = cls.normalize_code(code)
-        return bool(normalized and any(str(row.get("fund_code") or "") == normalized for row in rows))
 
     @staticmethod
     def normalize_code(value: object) -> str:

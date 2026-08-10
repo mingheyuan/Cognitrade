@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -9,16 +10,6 @@ from research_system.runtime.platform.settings import Settings
 class RunRetentionService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-
-    def apply_on_success(self, run_root: Path) -> None:
-        checkpoint_path = run_root / "checkpoint.json"
-        if checkpoint_path.exists():
-            checkpoint_path.unlink()
-
-    def apply_on_terminal_failure(self, run_root: Path) -> None:
-        # Phase 0 only fixes checkpoint retention semantics.
-        # Artifact pruning is intentionally conservative and remains a manual operation for now.
-        _ = run_root
 
     def cleanup_artifacts(self, runs_root: Path) -> dict:
         cutoff = datetime.now(timezone.utc) - timedelta(days=self.settings.artifacts_retention_days)
@@ -46,10 +37,8 @@ class RunRetentionService:
                     except OSError:
                         skipped_runs.append(run_dir.name)
             for directory in sorted([p for p in artifacts_dir.rglob("*") if p.is_dir()], reverse=True):
-                try:
+                with contextlib.suppress(OSError):
                     directory.rmdir()
-                except OSError:
-                    pass
 
         total_artifact_bytes = self._artifact_bytes(runs_root)
         return {

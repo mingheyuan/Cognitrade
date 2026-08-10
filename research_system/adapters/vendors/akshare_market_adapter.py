@@ -107,9 +107,12 @@ class AkShareMarketAdapter:
     @classmethod
     def _spot_dataframe(cls):
         now = datetime.now(UTC)
-        if cls._spot_cache_df is not None and cls._spot_cache_at is not None:
-            if now - cls._spot_cache_at <= cls._spot_cache_ttl:
-                return cls._spot_cache_df
+        if (
+            cls._spot_cache_df is not None
+            and cls._spot_cache_at is not None
+            and now - cls._spot_cache_at <= cls._spot_cache_ttl
+        ):
+            return cls._spot_cache_df
         spot_df = call_with_retry(ak.stock_zh_a_spot)
         cls._spot_cache_df = spot_df
         cls._spot_cache_at = now
@@ -172,7 +175,7 @@ class AkShareMarketAdapter:
             valuation.get("当日涨跌幅"),
         )
         amount = self._first_numeric(spot.get("成交额"))
-        overview = {
+        return {
             "symbol": symbol,
             "normalized_symbol": normalized_symbol,
             "latest_price": latest_price,
@@ -192,7 +195,6 @@ class AkShareMarketAdapter:
             "spot": spot,
             "valuation": valuation,
         }
-        return overview
 
     def _pct_change_from_latest_bar(self, latest_bar: dict[str, Any]) -> float | None:
         close_price = self._first_numeric(latest_bar.get("close"))

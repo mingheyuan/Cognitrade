@@ -98,7 +98,7 @@ def _run_probe(
         return {
             "name": name,
             "passed": False,
-            "detail": f"probe timed out after {timeout_seconds} seconds",
+            "detail": f"探测在 {timeout_seconds} 秒后超时",
         }
     detail = (process.stdout if process.returncode == 0 else process.stderr).strip()
     return {

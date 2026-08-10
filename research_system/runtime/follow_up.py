@@ -184,9 +184,6 @@ class FollowUpRuntime:
             )
             return self._persist_unlocked()
 
-    def has_current_inputs(self) -> bool:
-        return bool(self.current_inputs())
-
     def _increment_follow_up(self) -> None:
         if self.state.follow_up_count >= self.config.max_follow_up_count:
             raise RuntimeError("follow-up limit exceeded")
@@ -340,21 +337,21 @@ class FollowUpRuntime:
                     target_child_turn_id=request.target_child_turn_id,
                     accepted=False,
                     delivery="rejected",
-                    reason="child follow-up task is disabled for this Turn",
+                    reason="当前 Turn 已禁用子任务追问。",
                 )
             if request.target_child_turn_id == self.turn_id:
                 return FollowupTaskResult(
                     target_child_turn_id=request.target_child_turn_id,
                     accepted=False,
                     delivery="rejected",
-                    reason="followup_task cannot target the root Turn",
+                    reason="followup_task 不能以根 Turn 为目标",
                 )
             if known_child_turn_ids is not None and request.target_child_turn_id not in known_child_turn_ids:
                 return FollowupTaskResult(
                     target_child_turn_id=request.target_child_turn_id,
                     accepted=False,
                     delivery="rejected",
-                    reason="target child Turn is not known to the parent",
+                    reason="父 Turn 中不存在目标子 Turn。",
                 )
             existing = next(
                 (
@@ -388,7 +385,7 @@ class FollowUpRuntime:
                         target_child_turn_id=request.target_child_turn_id,
                         accepted=False,
                         delivery="rejected",
-                        reason="operation_id belongs to another follow-up operation",
+                        reason="operation_id 已属于另一个追问操作。",
                     )
                 stored = FollowupTaskResult.model_validate(receipt["result"])
                 duplicate = stored.model_copy(update={"duplicate": True})
@@ -501,35 +498,7 @@ class FollowUpRuntime:
     def deliver_current(self) -> list[PendingInputItem]:
         with mailbox_lease(self.root, self.run_id):
             self._refresh_unlocked()
-            items = self.current_inputs()
-            if not items:
-                return []
-            ids = {item.input_id for item in items}
-            self._increment_follow_up()
-            self.state = self.state.model_copy(
-                update={
-                    "pending_inputs": [
-                        item for item in self.state.pending_inputs if item.input_id not in ids
-                    ],
-                    "operation_receipts": {
-                        **dict(self.state.operation_receipts),
-                        **{
-                            item.operation_id: self._delivery_receipt_unlocked(item)
-                            for item in items
-                        },
-                    },
-                }
-            )
-            self._persist_unlocked()
-            for item in items:
-                self._emit(
-                    "followup_delivered",
-                    input_id=item.input_id,
-                    operation_id=item.operation_id,
-                    source=item.source,
-                    delivery_phase="current_turn",
-                )
-            return items
+            return self._deliver_unlocked(self.current_inputs())
 
     def deliver_for_turn(self, target_turn_id: str) -> list[PendingInputItem]:
         """Deliver only mailbox items addressed to a projected ChildTurn."""
@@ -543,35 +512,44 @@ class FollowUpRuntime:
                 for item in self.state.pending_inputs
                 if item.delivery_phase == "current_turn" and item.target_turn_id == target
             ]
-            if not items:
-                return []
-            ids = {item.input_id for item in items}
-            self._increment_follow_up()
-            self.state = self.state.model_copy(
-                update={
-                    "pending_inputs": [
-                        item for item in self.state.pending_inputs if item.input_id not in ids
-                    ],
-                    "operation_receipts": {
-                        **dict(self.state.operation_receipts),
-                        **{
-                            item.operation_id: self._delivery_receipt_unlocked(item)
-                            for item in items
-                        },
+            return self._deliver_unlocked(items, target_turn_id=target)
+
+    def _deliver_unlocked(
+        self,
+        items: list[PendingInputItem],
+        *,
+        target_turn_id: str | None = None,
+    ) -> list[PendingInputItem]:
+        if not items:
+            return []
+        ids = {item.input_id for item in items}
+        self._increment_follow_up()
+        self.state = self.state.model_copy(
+            update={
+                "pending_inputs": [
+                    item for item in self.state.pending_inputs if item.input_id not in ids
+                ],
+                "operation_receipts": {
+                    **dict(self.state.operation_receipts),
+                    **{
+                        item.operation_id: self._delivery_receipt_unlocked(item)
+                        for item in items
                     },
-                }
-            )
-            self._persist_unlocked()
-            for item in items:
-                self._emit(
-                    "followup_delivered",
-                    input_id=item.input_id,
-                    operation_id=item.operation_id,
-                    source=item.source,
-                    delivery_phase="current_turn",
-                    target_turn_id=target,
-                )
-            return items
+                },
+            }
+        )
+        self._persist_unlocked()
+        for item in items:
+            payload = {
+                "input_id": item.input_id,
+                "operation_id": item.operation_id,
+                "source": item.source,
+                "delivery_phase": "current_turn",
+            }
+            if target_turn_id is not None:
+                payload["target_turn_id"] = target_turn_id
+            self._emit("followup_delivered", **payload)
+        return items
 
     def update_transcript(self, transcript: list[dict[str, Any]], *, message: str | None = None) -> TaskSnapshot:
         with mailbox_lease(self.root, self.run_id):
@@ -624,9 +602,7 @@ class FollowUpRuntime:
         }
 
 
-def _now():
-    from datetime import datetime, timezone
-
+def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 

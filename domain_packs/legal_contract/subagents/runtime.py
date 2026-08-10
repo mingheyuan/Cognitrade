@@ -105,7 +105,7 @@ def verify_citations(context):
     if missing:
         return {
             "verdict": "fail",
-            "reason": f"{missing} material legal finding or obligation has no clause citation.",
+            "reason": f"有 {missing} 项重大法律发现或义务缺少条款引用。",
             "evidence_refs": list(report.source_refs),
         }
     return {

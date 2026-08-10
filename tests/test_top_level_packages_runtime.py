@@ -10,7 +10,6 @@ from research_system import adapters, runtime, services
 
 class TopLevelPackagesRuntimeTests(unittest.TestCase):
     def test_adapters_package_exports_domain_modules(self) -> None:
-        self.assertIs(adapters_package.sources, adapters.sources)
         self.assertIs(adapters_package.storage, adapters.storage)
         self.assertIs(adapters_package.vendors, adapters.vendors)
 

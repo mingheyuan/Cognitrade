@@ -763,12 +763,6 @@ class TurnExtensionTests(unittest.TestCase):
             run_store = RunStore(Path(temporary_directory) / "runs")
             request = RequestEnvelope(user_query="graph")
             run_id, _, _ = run_store.create_run(request, "domain:test")
-            decision = RequestIntakeDecision(
-                status="accepted",
-                request_kind="domain_task",
-                recommended_mode="graph",
-                intent="domain:test",
-            )
             runner = TurnRunner(
                 run_store=run_store,
                 main_agent=object(),

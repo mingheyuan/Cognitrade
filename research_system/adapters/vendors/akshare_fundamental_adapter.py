@@ -247,10 +247,8 @@ class AkShareFundamentalAdapter:
         response = requests.get(url, params=params, timeout=20)
         response.raise_for_status()
         rows = response.json().get("result", {}).get("data") or []
-        normalized_rows: list[dict[str, Any]] = []
-        for row in rows:
-            normalized_rows.append(
-                {
+        normalized_rows = [
+            {
                     self._COMPARISON_CODE_LABEL: normalize_value(row.get("CORRE_SECURITY_CODE")),
                     self._COMPARISON_NAME_LABEL: normalize_value(row.get("CORRE_SECURITY_NAME")),
                     self._PEER_VALUATION_RANK_LABEL: normalize_value(row.get("PAIMING")),
@@ -259,8 +257,9 @@ class AkShareFundamentalAdapter:
                     "PEG": normalize_value(row.get("PEG")),
                     "PB_24A": normalize_value(row.get("PB")),
                     "TOTAL_COUNT": normalize_value(row.get("TOTAL_COUNT")),
-                }
-            )
+            }
+            for row in rows
+        ]
         return pd.DataFrame(normalized_rows)
 
     def _fetch_bank_special_indicators(self, symbol: str) -> dict[str, Any]:

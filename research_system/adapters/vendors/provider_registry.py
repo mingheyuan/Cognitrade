@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib.util import find_spec
-from typing import Any, Literal
+from typing import Literal
 
 from research_system.adapters.vendors.data_source_registry import DataSourceRegistry
 from research_system.runtime.platform.settings import Settings
@@ -92,15 +92,6 @@ class VendorProviderRegistry:
             return bool(self.settings.mx_api_key)
         return False
 
-    def describe_dim(self, dim: str, market: str) -> dict[str, Any]:
-        chain = self.get_provider_chain(dim, market)
-        return {
-            "dim": dim,
-            "market": market,
-            "provider_ids": [item.provider_id for item in chain],
-            "source_ids": [item.source_id for item in chain],
-        }
-
     def _env_override(self, dim: str) -> list[str]:
         env_map = self.settings.provider_policy_overrides
         value = env_map.get(dim.strip().lower())
@@ -140,7 +131,7 @@ class VendorProviderRegistry:
                 access="sdk",
                 dependency="efinance",
                 priority=20,
-                notes="Zero-key A/H/US market fallback aligned with UZI 3.9.2.",
+                notes="Zero-key A/H/US market fallback aligned with UZI 3.9.4.",
             ),
             ProviderSpec(
                 provider_id="tushare_market",

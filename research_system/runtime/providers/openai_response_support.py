@@ -34,6 +34,7 @@ class OpenAIResponseSupport:
                 if reasoning_effort
                 else {"summary": "concise"}
             ),
+            service_tier=self.host.settings.openai_service_tier,
             timeout=self.host.request_timeout_seconds,
         ) as stream:
             for event in stream:
@@ -109,4 +110,4 @@ class OpenAIResponseSupport:
 
     def looks_like_html(self, text: str) -> bool:
         lowered = text.lstrip().lower()
-        return lowered.startswith("<!doctype html") or lowered.startswith("<html")
+        return lowered.startswith(("<!doctype html", "<html"))

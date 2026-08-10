@@ -21,8 +21,13 @@ from research_system.api.dependencies import (
 )
 from research_system.api.errors import ApiError
 from research_system.api.models import RerunRequest
+from research_system.api.route_support import (
+    identity_scope_kwargs,
+    research_validation_capabilities,
+)
 from research_system.api.validation import safe_identifier, validate_research_request
 from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
+from research_system.runtime.presentation.display import localize_public_error_fields
 
 
 RunStatusFilter = Literal[
@@ -44,42 +49,6 @@ RunStatusFilter = Literal[
 router = APIRouter(tags=["research-runs"])
 
 
-def _scope_kwargs(target, principal: ApiPrincipal | None) -> dict[str, str]:
-    service = getattr(target, "__self__", target)
-    if principal is None or not principal.authenticated:
-        return {}
-    if not getattr(service, "identity_scoped", False):
-        return {}
-    return {
-        "user_id": str(principal.user_id or ""),
-        "tenant_id": str(principal.tenant_id or ""),
-    }
-
-
-def _supported_intents(run_service) -> list[str] | None:
-    agent_os = getattr(run_service, "agent_os", None)
-    resolver = getattr(agent_os, "supported_intents", None)
-    if callable(resolver):
-        return list(resolver())
-    return None
-
-
-def _supported_methods(run_service) -> list[str] | None:
-    agent_os = getattr(run_service, "agent_os", None)
-    resolver = getattr(agent_os, "supported_methods", None)
-    if callable(resolver):
-        return list(resolver())
-    return None
-
-
-def _supported_snapshot_types(run_service) -> list[str] | None:
-    agent_os = getattr(run_service, "agent_os", None)
-    resolver = getattr(agent_os, "supported_snapshot_types", None)
-    if callable(resolver):
-        return list(resolver())
-    return None
-
-
 async def _call_run_resource(
     operation,
     *args,
@@ -88,17 +57,18 @@ async def _call_run_resource(
     **kwargs,
 ):
     try:
-        return await run_in_threadpool(
+        result = await run_in_threadpool(
             operation,
             *args,
-            **_scope_kwargs(operation, principal),
+            **identity_scope_kwargs(operation, principal),
             **kwargs,
         )
+        return localize_public_error_fields(result)
     except FileNotFoundError as exc:
         raise ApiError(
             status_code=404,
             code="resource_not_found",
-            message="The requested run was not found",
+            message="未找到请求的运行记录",
         ) from exc
     except KeyError as exc:
         if not nested:
@@ -106,7 +76,7 @@ async def _call_run_resource(
         raise ApiError(
             status_code=404,
             code="nested_resource_not_found",
-            message="The requested nested run resource was not found",
+            message="未找到请求的运行子资源",
         ) from exc
     except ValueError as exc:
         message = str(exc).lower()
@@ -114,7 +84,7 @@ async def _call_run_resource(
             raise ApiError(
                 status_code=422,
                 code="unknown_rerun_node",
-                message="The requested rerun node is not part of the source plan",
+                message="请求的重跑节点不在原执行计划中",
             ) from exc
         if (
             "missing_request_payload" in message
@@ -123,7 +93,7 @@ async def _call_run_resource(
             raise ApiError(
                 status_code=409,
                 code="source_run_incomplete",
-                message="The source run does not contain the data required for rerun",
+                message="原运行缺少重跑所需的数据",
             ) from exc
         raise
 
@@ -142,12 +112,13 @@ async def create_run(
     )
     validated = validate_research_request(
         payload.model_copy(update=identity),
-        supported_intents=_supported_intents(run_service),
-        supported_methods=_supported_methods(run_service),
-        supported_snapshot_types=_supported_snapshot_types(run_service),
+        **research_validation_capabilities(run_service),
     )
     async with mutation_lock:
-        return await run_in_threadpool(run_service.run, validated)
+        response = await run_in_threadpool(run_service.run, validated)
+        return ResponseEnvelope.model_validate(
+            localize_public_error_fields(response.model_dump(mode="json"))
+        )
 
 
 @router.get("/runs")
@@ -160,11 +131,11 @@ async def list_runs(
 ) -> list[dict]:
     rows = await run_in_threadpool(
         run_service.history,
-        **_scope_kwargs(run_service, principal),
+        **identity_scope_kwargs(run_service, principal),
     )
     if status is not None:
         rows = [row for row in rows if str(row.get("status") or "") == status]
-    return rows[offset:offset + limit]
+    return localize_public_error_fields(rows[offset:offset + limit])
 
 
 @router.get("/runs/{run_id}")
@@ -234,7 +205,7 @@ async def export_run_report(
         raise ApiError(
             status_code=409,
             code="uzi_report_unavailable",
-            message="The run does not contain an exportable UZI report",
+            message="该运行不包含可导出的 UZI 报告",
         ) from exc
 
     common_headers = {
@@ -261,7 +232,7 @@ async def export_run_report(
         raise ApiError(
             status_code=503,
             code="uzi_pdf_renderer_unavailable",
-            message="The UZI PDF renderer is unavailable",
+            message="UZI PDF 渲染器暂不可用",
         ) from exc
     return Response(
         pdf,
@@ -305,13 +276,13 @@ async def stream_run_events(
         event_source.prepare,
         resolved,
         last_event_id=last_event_id,
-        **_scope_kwargs(event_source, principal),
+        **identity_scope_kwargs(event_source, principal),
     )
     return StreamingResponse(
         event_source.stream(
             resolved,
             cursor=cursor,
-            **_scope_kwargs(event_source, principal),
+            **identity_scope_kwargs(event_source, principal),
         ),
         media_type="text/event-stream",
         headers={

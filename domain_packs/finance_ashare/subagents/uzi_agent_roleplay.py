@@ -23,9 +23,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 import yaml
 
 from domain_packs.finance_ashare.subagents.uzi_panel_profiles import get_profile
+from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_structured
 
 
-LATEST_UZI_SOURCE_COMMIT = "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359"
+LATEST_UZI_SOURCE_COMMIT = "0acf25122cabf493e7bc442faff62ceceb7f2f02"
 PERSONAS_DIR = (
     Path(__file__).resolve().parents[1]
     / "vendor"
@@ -286,7 +287,8 @@ def _evaluate_batch(
         + "\n\nRULE_ENGINE_REFERENCE:\n"
         + json.dumps(rule_reference, ensure_ascii=False, sort_keys=True)
     )
-    return provider.parse(
+    return parse_uzi_structured(
+        provider,
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         schema=AgentRoleplayBatch,

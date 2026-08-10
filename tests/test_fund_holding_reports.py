@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from datetime import date
 import json
-from pathlib import Path
-from types import SimpleNamespace
-from tempfile import TemporaryDirectory
-from threading import Lock
 import time
 import unittest
+from datetime import date
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Lock
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import jsonschema
@@ -18,14 +18,13 @@ from domain_packs.finance_ashare.holding_reports import (
     freeze_fund_holdings,
     require_stale_confirmation,
 )
+from research_system.api.agent_os_run_service import AgentOSRunService
 from research_system.api.fund_holding_report_service import (
     FundHoldingBatchNotFound,
     FundHoldingReportService,
 )
 from research_system.api.sse import RunEventSource
-from research_system.api.agent_os_run_service import AgentOSRunService
-from research_system.runtime.storage.jsonl import read_json
-from research_system.runtime.storage.jsonl import read_jsonl
+from research_system.runtime.storage.jsonl import read_json, read_jsonl
 from research_system.runtime.storage.runs.run_store import RunStore
 
 
@@ -85,6 +84,7 @@ class FakeAgentOS:
         self.delay = delay
         self.fail_symbols: set[str] = set()
         self.partial_symbols: set[str] = set()
+        self.partial_terminal_symbols: set[str] = set()
         self.raise_after_completion_symbols: set[str] = set()
         self.active = 0
         self.max_active = 0
@@ -116,7 +116,7 @@ class FakeAgentOS:
                     "artifacts": [],
                 }
             else:
-                status = "completed"
+                status = "completed_partial" if symbol in self.partial_terminal_symbols else "completed"
                 risks = ["quote_data_gap"] if symbol in self.partial_symbols else []
                 native_id = f"native-{symbol}"
                 self.details[run_id] = {
@@ -264,7 +264,7 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         self.run_service = FakeRunService(self.artifacts, self.agent_os)
         self.settings = SimpleNamespace(
             runs_root=self.runs_root,
-            fund_holding_report_concurrency=5,
+            fund_holding_report_concurrency=2,
         )
         self.service = FundHoldingReportService(
             settings=self.settings,
@@ -296,7 +296,7 @@ class FundHoldingReportServiceTests(unittest.TestCase):
 
         self.assertEqual(final["status"], "completed")
         self.assertEqual(final["counts"]["deliverable"], 10)
-        self.assertEqual(self.agent_os.max_active, 5)
+        self.assertEqual(self.agent_os.max_active, 2)
         events = read_jsonl(self.agent_os.run_store.load_run_paths(final["batch_id"]).root / "execution_events.jsonl")
         self.assertTrue(any(row.get("event_type") == "assistant_message_ready" for row in events))
         self.assertTrue(RunEventSource._is_terminal(self.agent_os.run_store.load_run_paths(final["batch_id"]).root))
@@ -356,8 +356,15 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         self.assertTrue(partial["report_available"])
         self.assertIn("quote_data_gap", partial["data_gap"])
 
+        legacy_state = self.service._load_batch(final["batch_id"])
+        legacy_state["concurrency"] = 5
+        self.service._write_batch(
+            legacy_state,
+            event_type="fund_holding_batch_legacy_concurrency",
+        )
         self.agent_os.fail_symbols.clear()
         retried = self.service.retry(final["batch_id"], symbols=["600001"])
+        self.assertEqual(retried["concurrency"], 2)
         recovered = self.wait_terminal(retried["batch_id"])
         self.assertEqual(recovered["counts"]["deliverable"], 10)
         self.assertEqual(len(recovered["holdings"][0]["attempt_run_ids"]), 2)
@@ -387,6 +394,20 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         self.assertTrue(final["holdings"][0]["report_available"])
         self.assertIsNone(final["holdings"][0]["error"])
 
+    def test_quality_gated_report_survives_partial_chat_synthesis(self) -> None:
+        self.run_service.source_artifacts = [snapshot_artifact(funds=[equity_fund(count=1)])]
+        self.agent_os.partial_terminal_symbols.add("600001")
+
+        created = self.service.create_batch("source-run", fund_code="110011", profile="lite")
+        final = self.wait_terminal(created["batch_id"])
+
+        self.assertEqual(final["status"], "completed")
+        self.assertEqual(final["counts"]["deliverable"], 1)
+        self.assertEqual(final["counts"]["failed"], 0)
+        self.assertEqual(final["holdings"][0]["status"], "completed")
+        self.assertTrue(final["holdings"][0]["report_available"])
+        self.assertIsNone(final["holdings"][0]["error"])
+
     def test_cancel_preserves_completed_and_marks_unfinished(self) -> None:
         self.agent_os.delay = 0.08
         created = self.service.create_batch("source-run", fund_code="110011", profile="medium")
@@ -396,6 +417,40 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         final = self.wait_terminal(created["batch_id"])
         self.assertEqual(final["status"], "completed_partial")
         self.assertGreater(final["counts"]["cancelled"], 0)
+
+    def test_recovered_running_item_honors_persisted_batch_cancellation(self) -> None:
+        self.run_service.source_artifacts = [
+            snapshot_artifact(funds=[equity_fund(count=1)])
+        ]
+        with patch.object(self.service, "_submit_item"):
+            created = self.service.create_batch(
+                "source-run",
+                fund_code="110011",
+                profile="medium",
+            )
+        state = self.service._load_batch(created["batch_id"])
+        item = state["holdings"][0]
+        item["status"] = "running"
+        state["cancel_requested"] = True
+        self.service._refresh_parent_status(state)
+        self.service._write_batch(
+            state,
+            event_type="fund_holding_batch_cancel_requested",
+        )
+
+        self.service._execute_item(
+            created["batch_id"],
+            str(item["symbol"]),
+            str(item["child_run_id"]),
+        )
+
+        final = self.service.detail(created["batch_id"])
+        self.assertEqual(final["status"], "completed_partial")
+        self.assertEqual(final["counts"]["cancelled"], 1)
+        self.assertEqual(
+            self.agent_os.details[str(item["child_run_id"])]["mode"],
+            "pending",
+        )
 
     def test_zip_contains_each_deliverable_pdf_and_readme(self) -> None:
         fund = equity_fund(count=2)
@@ -464,6 +519,188 @@ class FundHoldingReportServiceTests(unittest.TestCase):
 
         self.assertFalse(available)
         self.assertIn("uzi_critical_quality_gate_blocked", gaps)
+
+    def test_terminal_gate_error_preserves_all_critical_fixes_without_exception_names(self) -> None:
+        detail = {
+            "artifacts": [
+                {
+                    "artifact_type": "uzi_native_analysis",
+                    "status": "active",
+                    "content": {
+                        "results": [
+                            {
+                                "self_review": {
+                                    "issues": [
+                                        {
+                                            "severity": "critical",
+                                            "issue": "所属行业缺失",
+                                            "suggested_fix": "恢复真实行业来源后重算",
+                                        },
+                                        {
+                                            "severity": "critical",
+                                            "dim": "agent_analysis",
+                                            "issue": "Agent 分析生成失败：LLMProviderError",
+                                            "suggested_fix": "CLI 直跑可以忽略；Agent OS 需要生成分析",
+                                        },
+                                        {
+                                            "severity": "warning",
+                                            "issue": "估值样本不足",
+                                            "suggested_fix": "补充同行样本",
+                                        },
+                                        {
+                                            "severity": "critical",
+                                            "dim": "3_",
+                                            "issue": "应跑的维度 3 完全缺失",
+                                            "suggested_fix": "重跑 run.py <ticker> --no-resume 或手动 fetch_X",
+                                        },
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+
+        message = self.service._terminal_report_error(detail, "gated")
+
+        self.assertIn("所属行业缺失（建议：恢复真实行业来源后重算）", message)
+        self.assertIn(
+            "Agent 分析生成失败：运行异常（建议：在 Agent OS 中完成结构化 Agent 分析后重算与自审，不允许忽略该 critical）",
+            message,
+        )
+        self.assertNotIn("估值样本不足", message)
+        self.assertNotIn("LLMProviderError", message)
+        self.assertNotIn("CLI 直跑可以忽略", message)
+        self.assertIn(
+            "应跑的维度 3 完全缺失（建议：通过 Agent OS 仅重试该持仓，系统会按当前研究档位重新执行启用的数据源）",
+            message,
+        )
+        self.assertNotIn("run.py", message)
+        self.assertNotIn("fetch_X", message)
+
+    def test_terminal_gate_error_has_actionable_fallback_without_native_artifact(self) -> None:
+        message = self.service._terminal_report_error({"artifacts": []}, "gated")
+
+        self.assertIn("未返回具体 critical", message)
+        self.assertIn("打开“证据”", message)
+
+    def test_terminal_agent_timeout_does_not_claim_a_data_source_gap(self) -> None:
+        detail = {
+            "artifacts": [
+                {
+                    "artifact_type": "uzi_native_analysis",
+                    "status": "active",
+                    "content": {
+                        "results": [
+                            {
+                                "self_review": {
+                                    "issues": [
+                                        {
+                                            "severity": "critical",
+                                            "dim": "agent_analysis",
+                                            "issue": "agent_analysis.json 不存在",
+                                            "suggested_fix": "完成 Agent 分析后重算",
+                                        },
+                                        {
+                                            "severity": "critical",
+                                            "dim": "agent_analysis",
+                                            "issue": "Agent 分析生成失败：llm_request_timeout: 480s",
+                                            "evidence": "llm_transport_timeout",
+                                            "suggested_fix": "按自审问题修正后重算",
+                                        },
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+
+        message = self.service._terminal_report_error(detail, "gated")
+
+        self.assertIn("模型服务响应超时", message)
+        self.assertIn("模型请求已超时", message)
+        self.assertNotIn("agent_analysis.json 不存在", message)
+        self.assertNotIn("Agent 分析缺失或未确认", message)
+        self.assertNotIn("补充真实数据或恢复数据源", message)
+
+    def test_terminal_upstream_502_does_not_claim_a_data_source_gap(self) -> None:
+        detail = {
+            "artifacts": [
+                {
+                    "artifact_type": "uzi_native_analysis",
+                    "status": "active",
+                    "content": {
+                        "results": [
+                            {
+                                "self_review": {
+                                    "issues": [
+                                        {
+                                            "severity": "critical",
+                                            "dim": "agent_analysis",
+                                            "issue": "Agent 分析生成失败：502 Upstream request failed",
+                                            "evidence": "llm_provider_unavailable",
+                                            "suggested_fix": "按自审问题修正后重算",
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                }
+            ]
+        }
+
+        message = self.service._terminal_report_error(detail, "gated")
+
+        self.assertIn("模型上游服务暂时不可用", message)
+        self.assertIn("模型上游暂时不可用", message)
+        self.assertNotIn("补充真实数据或恢复数据源", message)
+
+    def test_public_payload_enriches_legacy_generic_gated_error(self) -> None:
+        self.agent_os.details["legacy-child"] = {
+            "turn": {"status": "gated"},
+            "artifacts": [
+                {
+                    "artifact_type": "uzi_native_analysis",
+                    "status": "active",
+                    "content": {
+                        "results": [
+                            {
+                                "self_review": {
+                                    "issues": [
+                                        {
+                                            "severity": "critical",
+                                            "issue": "六维定性研究证据不足",
+                                            "suggested_fix": "补齐每维两个真实 URL 后重算",
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    },
+                }
+            ],
+        }
+        state = {
+            "holdings": [
+                {
+                    "child_run_id": "legacy-child",
+                    "error": "子运行以 gated 状态结束，未生成完整报告",
+                }
+            ]
+        }
+
+        public = self.service._public(state)
+
+        self.assertIn("六维定性研究证据不足", public["holdings"][0]["error"])
+        self.assertIn("补齐每维两个真实 URL 后重算", public["holdings"][0]["error"])
+        self.assertEqual(
+            state["holdings"][0]["error"],
+            "子运行以 gated 状态结束，未生成完整报告",
+        )
 
     def test_batch_scope_requires_exact_user_and_tenant_match(self) -> None:
         created = self.service.create_batch(

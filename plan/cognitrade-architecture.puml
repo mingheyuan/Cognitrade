@@ -1,0 +1,225 @@
+@startuml CognitradeArchitecture
+title Cognitrade - Overall Architecture
+
+left to right direction
+skinparam shadowing false
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam componentStyle rectangle
+skinparam defaultFontName "Microsoft YaHei"
+skinparam ArrowColor #53657A
+skinparam PackageBorderColor #53657A
+skinparam ComponentBorderColor #53657A
+skinparam DatabaseBorderColor #53657A
+skinparam ActorBorderColor #53657A
+skinparam noteBackgroundColor #FFF8DC
+skinparam noteBorderColor #B7950B
+
+legend right
+  == Cognitrade architecture ==
+  Solid arrow: synchronous dependency or request flow
+  Dashed arrow: optional, fallback, or asynchronous flow
+  ArtifactBoard: run-scoped canonical evidence and output data plane
+  DomainPack: declarative business capability boundary
+endlegend
+
+actor "Researcher" as user
+
+package "Client and delivery" as client {
+  component "React + Vite\nWeb Workbench" as frontend
+  component "CognitradeContext\nAPI client / polling / SSE cursor" as context
+  component "Research views\nWorkbench / Overview / Market / Funds\nScreening / Methodology / Runs" as views
+  component "Finance views\nPaper Trading / Backtesting" as financeViews
+  component "GitHub Pages or Nginx static files" as staticWeb
+}
+
+package "Edge and HTTP transport" as transport {
+  component "Nginx reverse proxy\n/api -> FastAPI\nSSE buffering disabled" as nginx
+  component "FastAPI app\n/api/v1 + /api/v2\nCORS + Bearer auth\nrequest id + error handlers" as fastapi
+  component "API routes\nresearch runs / chat / dashboard\nfinance / fund reports / admin / system" as routes
+  component "RunEventSource\nSSE event adapter" as sse
+}
+
+package "Application services" as services {
+  component "AgentOSRunService\nrun lifecycle / artifacts / replay\nsteps / metrics / cancel / rerun" as runService
+  component "ChatService + ChatThreadStore\nthread profile / completion record" as chatService
+  component "FundHoldingReportService\nfreeze disclosure / fan-out reports\nretry / cancel / export" as fundReportService
+  component "FinanceMarketDataService\nquote / market snapshot / K-line\ncache facade" as marketService
+  component "PaperTradingService\naccount / orders / cash / T+1\nledger and audit" as paperService
+  component "HikyuuBacktestService\nstrategy catalog / result persistence" as backtestService
+  component "Hikyuu isolated subprocess" as hikyuu
+  component "VeighNa PaperAccount adapter" as veighna
+}
+
+package "Agent OS runtime" as runtime {
+  component "RequestIntakeService\nintent / slots / clarification" as intake
+  component "DomainPackRegistry\nload / validate / install / reload" as packRegistry
+  component "CapabilityPlanner\nstatic + dynamic planning" as planner
+  component "CoreToolRegistry\nbuilt-in + Pack + MCP tools" as toolRegistry
+  component "MainAgent + PlanRole\nLLM orchestration / synthesis" as mainAgent
+  component "TurnRunner\ntimeouts / checkpoints / mailbox\nworker restart recovery" as turnRunner
+  component "ExecutionGraphRunner\nDAG node scheduling / gates\npartial completion / rerun" as graphRunner
+  component "ArtifactBoard\ncanonical run-scoped artifacts\nsource refs / quality / data gaps" as artifactBoard
+  component "RunStore + EventStore\nexecution graph / state / events\nreplay and history" as runStore
+  component "LayeredMemoryStore\nworking / episodic / semantic memory" as memory
+  component "MemoryExpirationScheduler" as memoryScheduler
+}
+
+package "Finance DomainPack" as financePack {
+  component "finance_ashare/domain.yaml\nintents / capabilities / gates\ncontracts / policies" as financeManifest
+  component "Query normalizer" as queryNormalizer
+  component "Snapshot collector\nmarket / K-line / fundamental\ncapital flow / events / LHB\nsector / policy / UZI dimensions" as snapshotCollector
+  component "Fund snapshot + fund analysis\nNAV / benchmark / disclosed holdings\nETF look-through / manager / scale" as fundPipeline
+  component "UZI native analysis\ncommands / methods / panel / Tier1" as uziMethods
+  component "Report composers\nstock / fund / comparison / screening\nHTML / PDF delivery" as reportComposer
+  component "Quality gates\nsources / safety / methodology\nUZI native report gate" as qualityGates
+  component "Vendored UZI 3.9.2 runtime\nfetchers / scoring / report assets\nsource-parity boundary" as uziVendor
+  component "Fund holding report freezer\nlatest disclosed top holdings\nFOF/ETF look-through" as holdingFreezer
+}
+
+package "Other DomainPack" as otherPack {
+  component "legal_contract/domain.yaml\ncontract intake / clause extraction\nrisk / obligation / citation / report" as legalPack
+}
+
+package "Provider and data plane" as dataPlane {
+  component "VendorProviderRegistry\npriority chain / credentials\nprovider policy overrides" as providerRegistry
+  component "Snapshot skills\nprovider adapters / fallback merge\nquality status / source trace" as snapshotSkills
+  component "AkShare / efinance / BaoStock\nTuShare / yfinance" as sdkProviders
+  component "EastMoney / Danjuan / CNInfo\ndirect HTTP and official disclosure" as httpProviders
+  component "Browser / search / optional sensitive sources\nPlaywright / Xueqiu policy gate" as browserProviders
+  component "OpenAI Provider\nResponses API / model calls" as llmProvider
+}
+
+package "Persistent storage" as storage {
+  database "workspace/runs\nrun state / graph / events\nArtifactBoard / reports" as runsStore
+  database "workspace/chat_runs\nchat and background task state" as chatStore
+  database "workspace/cache\nmarket and snapshot cache\nfund holdings cache" as cacheStore
+  database "workspace/memory\nlayered memory and proposals" as memoryStore
+  database "workspace/backtests\nHikyuu result JSON + isolated runtime" as backtestStore
+  database "workspace/paper_trading\nSQLite account / order ledger" as paperStore
+  database "Qdrant\noptional vector + lexical retrieval" as qdrant
+}
+
+package "External systems" as external {
+  cloud "OpenAI / compatible LLM endpoint" as openai
+  cloud "Public market and fund data\nEastMoney / Danjuan / CNInfo\nAkShare upstream" as publicData
+  cloud "Optional Redis\nresource leases" as redis
+  cloud "Optional browser runtime\nChromium" as chromium
+}
+
+package "Deployment" as deployment {
+  component "Docker Compose" as compose
+  component "api container\nFastAPI + Python dependencies" as apiContainer
+  component "web container\nNginx + built frontend" as webContainer
+  folder "cognitrade_workspace\nDocker named volume" as workspaceVolume
+}
+
+user --> staticWeb : HTTPS
+staticWeb --> frontend : serve assets
+frontend --> context : UI events
+context --> views : state and data
+context --> financeViews : finance state
+frontend --> nginx : API requests
+nginx --> fastapi : /api/v1, /api/v2
+fastapi --> routes
+routes --> runService
+routes --> chatService
+routes --> fundReportService
+routes --> marketService
+routes --> paperService
+routes --> backtestService
+routes --> sse
+
+runService --> intake : create research run
+runService --> turnRunner : execute / resume / rerun
+turnRunner --> graphRunner : graph step
+graphRunner --> planner : materialize frontier
+planner --> packRegistry : capabilities and contracts
+intake --> packRegistry : intent resolution
+mainAgent --> llmProvider : plan / synthesize / fallback
+mainAgent --> toolRegistry : governed tool calls
+toolRegistry --> providerRegistry : Pack data tools
+graphRunner --> artifactBoard : produce / consume artifacts
+graphRunner --> qualityGates : blocking gates
+turnRunner --> runStore : checkpoint / events
+runService --> artifactBoard : query artifacts and replay
+sse --> runStore : read event stream
+memoryScheduler --> memory
+mainAgent --> memory : recall / persist memory
+memory --> memoryStore
+runStore --> runsStore
+chatService --> chatStore
+
+packRegistry --> financeManifest : load finance pack
+packRegistry --> legalPack : load legal pack
+financeManifest --> queryNormalizer
+financeManifest --> snapshotCollector
+financeManifest --> fundPipeline
+financeManifest --> uziMethods
+financeManifest --> reportComposer
+financeManifest --> qualityGates
+snapshotCollector --> snapshotSkills
+snapshotCollector --> uziVendor : UZI 3.9.2 fetchers
+fundPipeline --> holdingFreezer : freeze disclosed holdings
+holdingFreezer --> reportComposer : stock report fan-out
+uziMethods --> uziVendor : native commands and methods
+reportComposer --> uziVendor : exact report/template boundary
+qualityGates --> artifactBoard : quality verdict / source refs
+
+snapshotSkills --> providerRegistry
+providerRegistry --> sdkProviders
+providerRegistry --> httpProviders
+providerRegistry --> browserProviders
+sdkProviders --> publicData
+httpProviders --> publicData
+browserProviders --> chromium
+llmProvider --> openai
+marketService --> snapshotCollector : market and K-line snapshots
+marketService --> cacheStore
+snapshotCollector --> cacheStore
+fundReportService --> artifactBoard : source fund snapshot
+fundReportService --> runsStore : batch state / child runs
+paperService --> marketService : quote and valuation
+paperService --> paperStore
+paperService --> financeViews : API response
+backtestService --> marketService : historical K-line
+backtestService --> backtestStore
+backtestService ..> hikyuu : strategy execution
+paperService ..> veighna : optional matching engine
+
+qdrant ..> memory : optional retrieval backend
+memory ..> qdrant : vector / lexical search
+toolRegistry ..> redis : optional resource leases
+
+compose --> apiContainer
+compose --> webContainer
+apiContainer --> workspaceVolume
+webContainer --> nginx
+workspaceVolume --> runsStore
+workspaceVolume --> chatStore
+workspaceVolume --> cacheStore
+workspaceVolume --> memoryStore
+workspaceVolume --> backtestStore
+workspaceVolume --> paperStore
+
+note right of artifactBoard
+  Canonical data plane:
+  - ArtifactRecord
+  - source_refs / source_trace
+  - quality_status
+  - data_gap / missing_fields
+  - provenance and version
+end note
+
+note bottom of fundPipeline
+  Fund holdings are periodic disclosures, not real-time holdings.
+  ETF/FOF reports use target-fund look-through when available.
+end note
+
+note bottom of backtestService
+  Current project adapter is K-line driven.
+  A future score-based strategy should provide
+  point-in-time historical score snapshots to avoid look-ahead bias.
+end note
+
+@enduml

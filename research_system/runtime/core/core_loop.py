@@ -11,6 +11,7 @@ from typing import Any
 from research_system.runtime.core.approvals import HumanApprovalStore
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.core.tool_registry import CoreToolContext
+from research_system.runtime.presentation.display import localize_runtime_error
 from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.runtime.turn_context import TurnContext
 from research_system.schemas.core_runtime import (
@@ -66,7 +67,7 @@ class CoreLoopExecutor:
                 session.state.status,
                 session.state.assistant_message
                 or session.state.error
-                or "Turn already reached a terminal state.",
+                or "当前 Turn 已进入终态。",
             )
         try:
             # RegularExecutor owns the only loop.  One call here is exactly
@@ -169,9 +170,7 @@ class CoreLoopExecutor:
                     run_id=context.run_id,
                     node_id=f"child_role:{context.child_role_id or context.role_contract.role_id}",
                     capability=context.role_contract.role_id,
-                    reason=(
-                        f"Child role {context.role_contract.role_id} requires human approval."
-                    ),
+                    reason=f"子角色 {context.role_contract.role_id} 需要人工审批。",
                     approval_id=context.role_approval_id,
                     user_id=context.request.user_id,
                     tenant_id=context.request.tenant_id,
@@ -360,7 +359,7 @@ class CoreLoopExecutor:
         if context.role_contract is not None:
             limit = min(limit, context.role_contract.max_model_turns)
         if session.state.turn_count >= limit and not recoverable_checkpoint:
-            message = "Agent OS Core Agent Loop reached its Tool-loop limit before producing a final answer."
+            message = "Agent OS Core Agent Loop 已达到 Tool 循环上限，未能生成完整答复。"
             return self._complete_answer(context, session, message, status="completed_partial")
 
         recovered_response = None
@@ -465,7 +464,7 @@ class CoreLoopExecutor:
 
         if response.kind == "clarification":
             question = str(response.question or response.message or "").strip()
-            question = question or "Please clarify the request before I continue."
+            question = question or "请补充请求信息后再继续。"
             session.transcript.append({"role": "assistant", "content": question})
             composed = self._invoke_tool(
                 context,
@@ -517,8 +516,8 @@ class CoreLoopExecutor:
                 context,
                 phase="clarification",
                 turn=turn_index,
-                current_action=f"Model requested clarification: {question[:240]}",
-                next_action="Wait for the user response before resuming this Turn",
+                current_action=f"模型请求补充信息：{question[:240]}",
+                next_action="等待用户回复后恢复当前 Turn",
                 status="paused",
             )
             self._write_provider_checkpoint(
@@ -739,7 +738,7 @@ class CoreLoopExecutor:
                         context,
                         session,
                         "gated",
-                        result.error or "Tool approval was rejected.",
+                        result.error or "Tool 审批已被拒绝。",
                     )
             if result.status == "waiting_approval":
                 approval_id = str(result.metadata.get("approval_id") or "")
@@ -764,7 +763,7 @@ class CoreLoopExecutor:
                     approval_id=approval_id,
                     operation_id=requested.call_id,
                 )
-                return self._result(context, session, "waiting_approval", result.error or "Tool approval required.")
+                return self._result(context, session, "waiting_approval", result.error or "当前 Tool 调用需要审批。")
             self._emit_progress(
                 context,
                 phase="tool_result",
@@ -774,10 +773,10 @@ class CoreLoopExecutor:
                     + (
                         f": {self.main_agent._tool_output_summary(result)[:240]}"
                         if result.status == "completed"
-                        else f": {result.error or result.status}"
+                        else f"：{localize_runtime_error(result.error, fallback='Tool 执行失败。')}"
                     )
                 ),
-                next_action=f"Write the Tool {result.tool_name} result into the next Main Agent turn",
+                next_action=f"将 Tool {result.tool_name} 的结果写入 Main Agent 下一轮",
                 status=result.status,
             )
         if follow_up is not None:
@@ -795,7 +794,7 @@ class CoreLoopExecutor:
                     update={"status": "gated", "error": str(exc), "updated_at": _utc_now()}
                 )
                 self._persist(context, session)
-                return self._result(context, session, "gated", "Agent OS follow-up limit exceeded.")
+                return self._result(context, session, "gated", "Agent OS follow-up 次数已达到上限。")
         self._write_provider_checkpoint(
             context,
             status="handled",
@@ -934,13 +933,13 @@ class CoreLoopExecutor:
             )
             self._persist(context, session)
             self._emit(context, "child_role_waiting_approval", approval_id=approval_id)
-            return self._result(context, session, "waiting_approval", "Child role is waiting for human approval.")
+            return self._result(context, session, "waiting_approval", "子角色正在等待人工审批。")
         if approval.status != "approved":
             session.state = session.state.model_copy(
                 update={
                     "status": "gated",
                     "pending_approval_ids": [],
-                    "error": f"Child role approval was {approval.status}.",
+                    "error": f"子角色审批状态为 {approval.status}。",
                     "continuation": {
                         "source": "child_role_approval",
                         "approval_id": approval_id,
@@ -950,7 +949,7 @@ class CoreLoopExecutor:
                 }
             )
             self._persist(context, session)
-            return self._result(context, session, "gated", session.state.error or "Child role approval was rejected.")
+            return self._result(context, session, "gated", session.state.error or "子角色审批已被拒绝。")
         if approval_id in session.state.pending_approval_ids:
             session.state = session.state.model_copy(
                 update={
@@ -995,11 +994,11 @@ class CoreLoopExecutor:
             context,
             session,
             "failed",
-            "Agent OS Core Agent Loop failed to complete the request.",
+            "Agent OS Core Agent Loop 未能完成请求。",
         )
 
     def _timed_out(self, context: TurnContext, session: _CoreLoopSession) -> TaskOutcome:
-        message = "Turn exceeded its configured timeout at a Core safe point."
+        message = "Turn 在 Core 安全点超过了配置的超时时间。"
         session.state = session.state.model_copy(
             update={
                 "status": "timed_out",
@@ -1199,7 +1198,7 @@ class CoreLoopExecutor:
             context=governed_context,
             node_id=f"core_tool:{tool_name}",
         )
-        result = result.model_copy(
+        return result.model_copy(
             update={
                 "metadata": {
                     **dict(result.metadata),
@@ -1208,7 +1207,6 @@ class CoreLoopExecutor:
                 }
             }
         )
-        return result
 
     def _emit(self, context: TurnContext, event_type: str, **payload: Any) -> None:
         self.main_agent._emit(

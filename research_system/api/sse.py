@@ -9,6 +9,7 @@ from typing import Any, AsyncIterator
 from research_system.api.config import ApiConfig
 from research_system.api.errors import ApiError
 from research_system.runtime.platform.settings import Settings
+from research_system.runtime.presentation.display import localize_runtime_event
 from research_system.runtime.storage.jsonl import read_json
 
 
@@ -59,7 +60,7 @@ class RunEventSource:
         raise ApiError(
             status_code=409,
             code="event_cursor_not_found",
-            message=f"Last-Event-ID was not found for run {run_id}",
+            message=f"运行 {run_id} 中未找到 Last-Event-ID",
         )
 
     async def stream(
@@ -116,7 +117,7 @@ class RunEventSource:
             raise ApiError(
                 status_code=404,
                 code="resource_not_found",
-                message="The requested run was not found",
+                message="未找到请求的运行记录",
             )
         return root
 
@@ -138,7 +139,7 @@ class RunEventSource:
             raise ApiError(
                 status_code=404,
                 code="resource_not_found",
-                message="The requested run was not found",
+                message="未找到请求的运行记录",
             )
         if (
             request.get("user_id") in (None, "")
@@ -151,13 +152,13 @@ class RunEventSource:
             raise ApiError(
                 status_code=404,
                 code="resource_not_found",
-                message="The requested run was not found",
+                message="未找到请求的运行记录",
             )
         if tenant_id is not None and request.get("tenant_id") != tenant_id:
             raise ApiError(
                 status_code=404,
                 code="resource_not_found",
-                message="The requested run was not found",
+                message="未找到请求的运行记录",
             )
 
     @staticmethod
@@ -177,7 +178,7 @@ class RunEventSource:
                     continue
                 raise
             if isinstance(payload, dict):
-                rows.append(payload)
+                rows.append(localize_runtime_event(payload))
         return rows
 
     @staticmethod

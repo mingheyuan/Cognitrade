@@ -224,7 +224,7 @@ def safe_identifier(value: str, *, field_name: str) -> str:
         raise ApiError(
             status_code=400,
             code="invalid_identifier",
-            message=f"{field_name} contains unsupported characters or has an invalid length",
+            message=f"{field_name} 包含不支持的字符或长度不符合要求",
             details={"field": field_name},
         )
     return normalized
@@ -242,14 +242,14 @@ def validate_research_request(
         raise ApiError(
             status_code=422,
             code="invalid_query",
-            message="user_query must not be empty",
+            message="user_query 不能为空",
             details={"field": "user_query"},
         )
     if len(query) > 20_000:
         raise ApiError(
             status_code=422,
             code="invalid_query",
-            message="user_query must not exceed 20000 characters",
+            message="user_query 不能超过 20000 个字符",
             details={"field": "user_query"},
         )
 
@@ -273,7 +273,7 @@ def validate_research_request(
         raise ApiError(
             status_code=422,
             code="invalid_intent",
-            message=f"Unsupported research intent: {intent}",
+            message=f"不支持的研究 intent：{intent}",
             details={"intent": intent, "supported_intents": sorted(allowed_intents)},
         )
 
@@ -291,21 +291,21 @@ def validate_research_request(
         raise ApiError(
             status_code=422,
             code="unknown_constraint",
-            message="Request contains constraints that are not available for this intent",
+            message="请求包含当前 intent 不支持的约束字段",
             details={"intent": intent, "fields": unknown_fields},
         )
     if intent in _UZI_PROFILE_INTENTS and not str(constraints.get("research_profile") or "").strip():
         raise ApiError(
             status_code=422,
             code="missing_constraint",
-            message="research_profile is required; choose lite, medium or deep",
+            message="research_profile 为必填字段，可选值为 lite、medium 或 deep",
             details={"intent": intent, "field": "research_profile", "allowed": sorted(_RESEARCH_PROFILES)},
         )
     if intent in _INVESTMENT_CYCLE_INTENTS and not str(constraints.get("investment_cycle") or "").strip():
         raise ApiError(
             status_code=422,
             code="missing_constraint",
-            message="investment_cycle is required; choose short_term, mid_term or long_term",
+            message="investment_cycle 为必填字段，可选值为 short_term、mid_term 或 long_term",
             details={"intent": intent, "field": "investment_cycle", "allowed": sorted(_INVESTMENT_CYCLES)},
         )
 
@@ -320,9 +320,7 @@ def validate_research_request(
         _validate_stock_screen_constraints(constraints)
     elif intent == "fund_research":
         _validate_fund_research_constraints(constraints)
-    elif intent == "portfolio_research":
-        _validate_portfolio_research_constraints(constraints)
-    elif intent in {"uzi_returns", "uzi_rebalance", "uzi_portfolio_rebalance_method"}:
+    elif intent in {"portfolio_research", "uzi_returns", "uzi_rebalance", "uzi_portfolio_rebalance_method"}:
         _validate_portfolio_research_constraints(constraints)
     return request.model_copy(update={"intent": intent, "user_query": query, "constraints": constraints})
 
@@ -874,12 +872,73 @@ def _require_finite_number(value: Any, *, field_name: str) -> float:
 
 
 def _invalid_constraint(field_name: str, reason: str) -> None:
+    localized_reason = _constraint_reason_zh(reason)
     raise ApiError(
         status_code=422,
         code="invalid_constraint",
-        message=f"Invalid constraint {field_name}: {reason}",
-        details={"field": field_name, "reason": reason},
+        message=f"约束字段 {field_name} 无效：{localized_reason}",
+        details={"field": field_name, "reason": localized_reason},
     )
+
+
+def _constraint_reason_zh(reason: str) -> str:
+    fixed = {
+        "must be an object": "必须是对象",
+        "must be a boolean": "必须是布尔值",
+        "must not contain duplicate values": "不能包含重复值",
+        "must be between 0 and 1": "必须在 0 到 1 之间",
+        "must identify at least two distinct symbols": "必须至少包含两个不同的 symbol",
+        "must not exceed candidate_pool_size": "不能超过 candidate_pool_size",
+        "must contain six-digit fund codes": "必须包含六位基金代码",
+        "must not exceed 20 for fund research": "基金研究时不能超过 20",
+        "must be a non-empty object": "必须是非空对象",
+        "must be a non-empty array": "必须是非空数组",
+        "must contain at most 100 items": "最多只能包含 100 项",
+        "must be non-negative": "不能为负数",
+        "must not contain duplicate tickers": "不能包含重复的 ticker",
+        "weight total must be positive": "weight 总和必须大于 0",
+        "must be between 0 and 100": "必须在 0 到 100 之间",
+        "must contain exactly one target for each holding": "每个 holding 必须且只能有一个 target",
+        "target total must be positive": "target 总和必须大于 0",
+        "must contain exactly one target for each observed asset class": "每个已观测的 asset_class 必须且只能有一个 target",
+        "must match the asset_class values in portfolio_holdings": "必须与 portfolio_holdings 中的 asset_class 值一致",
+        "must not contain an empty array": "不能包含空数组",
+        "must not contain an empty object": "不能包含空对象",
+        "must not contain an empty key": "不能包含空键名",
+        "contains an unsupported value type": "包含不支持的值类型",
+        "must be a positive integer": "必须是正整数",
+        "must contain exactly a consensus object": "必须且只能包含 consensus 对象",
+        "must contain exactly direction": "必须且只能包含 direction",
+        "must contain exactly style": "必须且只能包含 style",
+        "must explicitly set accept_uzi_native_defaults=true": "必须明确设置 accept_uzi_native_defaults=true",
+        "must be greater than -1": "必须大于 -1",
+        "entry_multiple and exit_multiple must be positive": "entry_multiple 和 exit_multiple 必须大于 0",
+        "must be a non-empty string": "必须是非空字符串",
+        "must be an array of strings": "必须是字符串数组",
+        "must contain only non-empty strings": "只能包含非空字符串",
+        "must be an integer": "必须是整数",
+        "must be a number": "必须是数字",
+        "must be finite": "必须是有限数值",
+    }
+    normalized = str(reason or "").strip()
+    if normalized in fixed:
+        return fixed[normalized]
+    replacements = (
+        (r"^contains unsupported values: (.+)$", r"包含不支持的值：\1"),
+        (r"^contains unsupported fields: (.+)$", r"包含不支持的字段：\1"),
+        (r"^contains unsupported methods: (.+)$", r"包含不支持的方法：\1"),
+        (r"^missing required fields: (.+)$", r"缺少必填字段：\1"),
+        (r"^item (\d+) must be an object$", r"第 \1 项必须是对象"),
+        (r"^must contain at least (\d+) item\(s\)$", r"至少必须包含 \1 项"),
+        (r"^must contain at most (\d+) item\(s\)$", r"最多只能包含 \1 项"),
+        (r"^must be one of: (.+)$", r"必须是以下值之一：\1"),
+        (r"^must be greater than or equal to (.+)$", r"必须大于或等于 \1"),
+        (r"^must be less than or equal to (.+)$", r"必须小于或等于 \1"),
+    )
+    for pattern, replacement in replacements:
+        if re.fullmatch(pattern, normalized):
+            return re.sub(pattern, replacement, normalized)
+    return "字段值不符合要求"
 
 
 __all__ = ["SUPPORTED_RESEARCH_INTENTS", "safe_identifier", "validate_research_request"]

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import zipfile
 from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -7,20 +9,25 @@ from io import BytesIO
 from pathlib import Path
 from threading import RLock
 from typing import Any, Iterable
-import zipfile
 
 from domain_packs.finance_ashare.holding_reports import (
     StaleHoldingsConfirmationRequired,
     freeze_fund_holdings,
     require_stale_confirmation,
 )
-from domain_packs.finance_ashare.reporting import render_uzi_native_html, render_uzi_native_pdf
+from domain_packs.finance_ashare.reporting import (
+    render_uzi_native_html,
+    render_uzi_native_pdf,
+)
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.core.id_utils import generate_ulid
+from research_system.runtime.presentation.display import (
+    localize_public_error_fields,
+    localize_runtime_error,
+)
 from research_system.runtime.storage.jsonl import append_jsonl, read_json, write_json
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.schemas.protocol import RequestEnvelope
-
 
 _BATCH_FILE = "fund_holding_batch.json"
 _TERMINAL_ITEM_STATUSES = {
@@ -51,7 +58,7 @@ class FundHoldingReportService:
         self.run_service = run_service
         self.max_concurrency = max(
             1,
-            min(int(getattr(settings, "fund_holding_report_concurrency", 5)), 10),
+            min(int(getattr(settings, "fund_holding_report_concurrency", 2)), 10),
         )
         self._lock = RLock()
         self._executor = ThreadPoolExecutor(
@@ -104,11 +111,12 @@ class FundHoldingReportService:
                 user_id=user_id,
                 tenant_id=tenant_id,
             )
-            if existing is not None:
-                # Explicit regeneration creates history only after the matching
-                # batch is terminal; it must never duplicate active stock work.
-                if existing.get("status") == "running" or not force:
-                    return existing
+            # Explicit regeneration creates history only after the matching
+            # batch is terminal; it must never duplicate active stock work.
+            if existing is not None and (
+                existing.get("status") == "running" or not force
+            ):
+                return existing
 
             batch_id = generate_ulid()
             request = RequestEnvelope(
@@ -415,8 +423,12 @@ class FundHoldingReportService:
                 scheduled.append((str(item["symbol"]), child_run_id))
             if not scheduled:
                 raise FundHoldingBatchConflict(
-                    "no eligible terminal holding report matched the retry request"
+                    "没有符合重试条件的终态持仓报告"
                 )
+            # A persisted batch may have been created under an older worker
+            # limit. Retries use the current service pool, so keep the public
+            # batch contract aligned with the concurrency actually enforced.
+            state["concurrency"] = self.max_concurrency
             state["cancel_requested"] = False
             state["status"] = "running"
             state["completed_at"] = None
@@ -440,7 +452,7 @@ class FundHoldingReportService:
             if item.get("report_available") and item.get("child_run_id")
         ]
         if not deliverable:
-            raise FundHoldingReportsUnavailable("the batch has no deliverable stock reports")
+            raise FundHoldingReportsUnavailable("该批次没有可交付的股票报告")
         buffer = BytesIO()
         included = 0
         zip_errors: list[str] = []
@@ -454,6 +466,7 @@ class FundHoldingReportService:
                         user_id=user_id,
                         tenant_id=tenant_id,
                     )
+                    payload = localize_public_error_fields(payload)
                     rendered = render_uzi_native_html(
                         list(payload.get("artifacts") or []),
                         run_id=str(item["child_run_id"]),
@@ -462,11 +475,11 @@ class FundHoldingReportService:
                     filename = self._report_filename(item)
                     archive.writestr(filename, pdf)
                     included += 1
-                except Exception as exc:
-                    zip_errors.append(f"{item['symbol']} {item['name']}: {exc.__class__.__name__}")
+                except Exception:
+                    zip_errors.append(f"{item['symbol']} {item['name']}：PDF 打包失败")
             archive.writestr("README.txt", self._zip_readme(state, included=included, zip_errors=zip_errors))
         if included == 0:
-            raise FundHoldingReportsUnavailable("PDF rendering failed for every deliverable report")
+            raise FundHoldingReportsUnavailable("所有可交付报告的 PDF 渲染均失败")
         filename = f"fund-{state['fund_code']}-holding-reports-{state['profile']}.zip"
         return buffer.getvalue(), filename, included
 
@@ -547,7 +560,7 @@ class FundHoldingReportService:
             item = self._item(state, symbol=symbol, child_run_id=child_run_id)
             if item is None or item["status"] not in {"queued", "running"}:
                 return
-            if state.get("cancel_requested") and item["status"] == "queued":
+            if state.get("cancel_requested") and item["status"] in {"queued", "running"}:
                 item["status"] = "cancelled"
                 item["completed_at"] = self._now()
                 self._refresh_parent_status(state)
@@ -563,6 +576,7 @@ class FundHoldingReportService:
         data_gap: list[str] = []
         error: str | None = None
         retry_count = 0
+        terminal_detail: dict[str, Any] = {}
         try:
             request_payload = read_json(self.agent_os.run_store.load_run_paths(child_run_id).root / "request.json")
             request = RequestEnvelope.model_validate(request_payload or {})
@@ -578,9 +592,10 @@ class FundHoldingReportService:
                 elif current != "completed":
                     break
                 detail = self.agent_os.inspect_run(child_run_id)
+                terminal_detail = detail
                 final_status = self._detail_status(detail) or "failed"
                 report_available, data_gap = self._report_state(detail)
-                if report_available and final_status == "completed":
+                if report_available and final_status in {"completed", "completed_partial"}:
                     break
                 if final_status not in _RECOVERABLE_RUN_STATUSES:
                     break
@@ -603,6 +618,7 @@ class FundHoldingReportService:
             # discarded merely because the outer response could not finalize.
             try:
                 detail = self.agent_os.inspect_run(child_run_id)
+                terminal_detail = detail
                 reconciled_report, reconciled_gaps = self._report_state(detail)
                 graph_status = str((detail.get("snapshot") or {}).get("status") or "")
                 reconciled_status = (
@@ -621,8 +637,11 @@ class FundHoldingReportService:
                 error = None
             else:
                 final_status = "failed"
-                error = f"{exc.__class__.__name__}: {exc}"
+                error = localize_runtime_error(exc, fallback="持仓股票报告执行失败，请稍后重试。")
                 data_gap = ["holding_stock_report_execution_failed"]
+
+        if not report_available and error is None:
+            error = self._terminal_report_error(terminal_detail, final_status)
 
         with self._lock:
             try:
@@ -636,13 +655,14 @@ class FundHoldingReportService:
             item["report_available"] = report_available
             item["data_gap"] = list(dict.fromkeys(data_gap))
             item["error"] = error
-            if report_available and final_status == "completed":
+            if report_available and final_status in {"completed", "completed_partial"}:
                 item["status"] = "completed"
+                item["error"] = None
             elif final_status == "cancelled" or (state.get("cancel_requested") and not report_available):
                 item["status"] = "cancelled"
             else:
                 item["status"] = "failed"
-                item["error"] = item["error"] or f"child run ended as {final_status} without a complete report"
+                item["error"] = item["error"] or f"子运行以 {final_status} 状态结束，未生成完整报告"
             item["completed_at"] = self._now()
             self._refresh_parent_status(state)
             self._write_batch(state, event_type="fund_holding_child_finished")
@@ -791,7 +811,7 @@ class FundHoldingReportService:
             "phase": "holding_reports",
             "actor": "fund_holding_report_coordinator",
             "agent": "fund_holding_report_coordinator",
-            "message": f"Fund holding report batch is {state['status']}",
+            "message": f"基金持仓报告批次状态：{state['status']}",
             "payload": {"status": state["status"], "counts": state["counts"]},
             "artifacts": [],
             "created_at": state["updated_at"],
@@ -842,9 +862,11 @@ class FundHoldingReportService:
                 for result in list(content.get("results") or []):
                     if not isinstance(result, dict):
                         continue
-                    for issue in list((result.get("self_review") or {}).get("issues") or []):
-                        if isinstance(issue, dict) and issue.get("severity") in {"critical", "warning"}:
-                            gaps.append(str(issue.get("issue") or issue.get("dim") or "uzi_self_review_issue"))
+                    gaps.extend(
+                        str(issue.get("issue") or issue.get("dim") or "uzi_self_review_issue")
+                        for issue in list((result.get("self_review") or {}).get("issues") or [])
+                        if isinstance(issue, dict) and issue.get("severity") in {"critical", "warning"}
+                    )
         native_content = native.get("content") if isinstance(native, dict) and isinstance(native.get("content"), dict) else {}
         report_content = report.get("content") if isinstance(report, dict) and isinstance(report.get("content"), dict) else {}
         native_id = str(native.get("artifact_id") or "") if isinstance(native, dict) else ""
@@ -864,6 +886,108 @@ class FundHoldingReportService:
         if report is None:
             gaps.append("uzi_native_research_report_missing")
         return available, list(dict.fromkeys(gaps))
+
+    @staticmethod
+    def _terminal_report_error(detail: dict[str, Any], final_status: str) -> str:
+        """Expose every UZI critical and suggested fix instead of a generic gate label."""
+
+        artifacts = [
+            row
+            for row in list(detail.get("artifacts") or [])
+            if isinstance(row, dict) and str(row.get("status") or "active") == "active"
+        ]
+        native = next(
+            (row for row in reversed(artifacts) if row.get("artifact_type") == "uzi_native_analysis"),
+            None,
+        )
+        content = (
+            native.get("content")
+            if isinstance(native, dict) and isinstance(native.get("content"), dict)
+            else {}
+        )
+        issue_rows = [
+            issue
+            for result in list(content.get("results") or [])
+            if isinstance(result, dict)
+            for issue in list((result.get("self_review") or {}).get("issues") or [])
+            if isinstance(issue, dict) and str(issue.get("severity") or "").lower() == "critical"
+        ]
+        terminal_agent_failure = any(
+            str(issue.get("dim") or "") == "agent_analysis"
+            and str(issue.get("evidence") or "")
+            in {"llm_transport_timeout", "llm_provider_unavailable"}
+            for issue in issue_rows
+        )
+        critical_rows: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        has_non_agent_critical = False
+        has_transport_timeout = False
+        has_provider_unavailable = False
+        for issue in issue_rows:
+            dimension = str(issue.get("dim") or "")
+            failure_kind = str(issue.get("evidence") or "")
+            raw_issue = str(issue.get("issue") or "")
+            if terminal_agent_failure and (
+                (
+                    dimension == "agent_analysis"
+                    and (
+                        failure_kind in {"file not found", "agent_reviewed!=true"}
+                        or "agent_analysis.json 不存在" in raw_issue
+                        or "Agent 分析缺失或未确认" in raw_issue
+                    )
+                )
+                or (
+                    dimension == "qualitative_deep_dive"
+                    and "not_requested" in failure_kind
+                )
+            ):
+                continue
+            issue_text = FundHoldingReportService._public_gate_text(
+                issue.get("issue"),
+                "未说明的质量缺口",
+            )
+            suggested_fix = FundHoldingReportService._public_gate_text(
+                issue.get("suggested_fix"),
+                "",
+            )
+            has_non_agent_critical = has_non_agent_critical or dimension != "agent_analysis"
+            if failure_kind == "llm_transport_timeout":
+                has_transport_timeout = True
+                suggested_fix = "模型服务响应超时；请稍后仅重试此项，系统会按当前研究档位重新生成结构化分析"
+            elif failure_kind == "llm_provider_unavailable":
+                has_provider_unavailable = True
+                suggested_fix = "模型上游服务暂时不可用；系统已完成短退避重试，可稍后仅重试此项"
+            elif dimension == "agent_analysis" and "可以忽略" in suggested_fix:
+                suggested_fix = "在 Agent OS 中完成结构化 Agent 分析后重算与自审，不允许忽略该 critical"
+            elif "run.py" in suggested_fix or "fetch_X" in suggested_fix:
+                suggested_fix = "通过 Agent OS 仅重试该持仓，系统会按当前研究档位重新执行启用的数据源"
+            elif "stage2" in suggested_fix:
+                suggested_fix = "通过 Agent OS 重新合成并执行 UZI 质量自审"
+            key = (issue_text, suggested_fix)
+            if key not in seen:
+                seen.add(key)
+                critical_rows.append(key)
+
+        if critical_rows:
+            details = "；".join(
+                f"{issue}（建议：{suggested_fix}）" if suggested_fix else issue
+                for issue, suggested_fix in critical_rows
+            )
+            if has_transport_timeout and not has_non_agent_critical:
+                return f"UZI 质量门未通过：{details}。模型请求已超时，可稍后仅重试此项。"
+            if has_provider_unavailable and not has_non_agent_critical:
+                return f"UZI 质量门未通过：{details}。模型上游暂时不可用，可稍后仅重试此项。"
+            return f"UZI 质量门未通过：{details}。补充真实数据或恢复数据源后，可仅重试此项。"
+        if final_status == "gated":
+            return "UZI 质量门未通过，但子运行未返回具体 critical；请打开“证据”查看运行事件后仅重试此项。"
+        return f"子运行以 {final_status} 状态结束，未生成完整报告"
+
+    @staticmethod
+    def _public_gate_text(value: Any, fallback: str) -> str:
+        text = " ".join(str(value or "").split()).strip() or fallback
+        # The UI must retain the business reason without treating an exception
+        # class name as a raw stack-trace diagnostic and hiding the whole gate.
+        return re.sub(r"\b[A-Z][A-Za-z0-9_]*(?:Error|Exception)\b", "运行异常", text)
 
     @staticmethod
     def _recovery_fingerprint(detail: dict[str, Any]) -> tuple[Any, ...]:
@@ -965,9 +1089,7 @@ class FundHoldingReportService:
             return False
         if user_id is not None and request.get("user_id") != user_id:
             return False
-        if tenant_id is not None and request.get("tenant_id") != tenant_id:
-            return False
-        return True
+        return not (tenant_id is not None and request.get("tenant_id") != tenant_id)
 
     def _assert_scope(self, root: Path, *, user_id: str | None = None, tenant_id: str | None = None) -> None:
         if not self._matches_scope(root, user_id=user_id, tenant_id=tenant_id):
@@ -993,12 +1115,31 @@ class FundHoldingReportService:
     def _profile(value: str) -> str:
         profile = str(value or "").strip().lower()
         if profile not in {"lite", "medium", "deep"}:
-            raise ValueError("research profile must be lite, medium or deep")
+            raise ValueError("research_profile 必须是 lite、medium 或 deep")
         return profile
 
-    @staticmethod
-    def _public(state: dict[str, Any]) -> dict[str, Any]:
-        return {key: value for key, value in state.items() if key not in {"request_id", "source_data_gap"}}
+    def _public(self, state: dict[str, Any]) -> dict[str, Any]:
+        payload = {
+            key: value
+            for key, value in state.items()
+            if key not in {"request_id", "source_data_gap"}
+        }
+        # Batches written by older coordinators only persisted the word
+        # ``gated``.  Enrich those immutable historical rows on read from the
+        # child ArtifactBoard so users immediately see every critical and fix
+        # without regenerating the whole batch.
+        payload["holdings"] = [dict(item) for item in list(payload.get("holdings") or [])]
+        for item in payload["holdings"]:
+            error = str(item.get("error") or "")
+            child_run_id = str(item.get("child_run_id") or "")
+            if not child_run_id or "子运行以 gated 状态结束" not in error:
+                continue
+            try:
+                detail = self.agent_os.inspect_run(child_run_id)
+            except Exception:
+                continue
+            item["error"] = self._terminal_report_error(detail, "gated")
+        return localize_public_error_fields(payload)
 
     @staticmethod
     def _now() -> str:
@@ -1033,11 +1174,13 @@ class FundHoldingReportService:
             "",
             "报告状态：",
         ]
-        for item in state["holdings"]:
-            lines.append(
+        lines.extend(
+            (
                 f"{int(item['rank']):02d}. {item['symbol']} {item['name']} - {item['status']}"
                 + (f"；缺口：{', '.join(item.get('data_gap') or [])}" if item.get("data_gap") else "")
             )
+            for item in state["holdings"]
+        )
         if zip_errors:
             lines.extend(["", "ZIP生成异常：", *[f"- {error}" for error in zip_errors]])
         return "\n".join(lines) + "\n"

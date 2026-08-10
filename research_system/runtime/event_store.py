@@ -18,20 +18,19 @@ def append_canonical_event(path: Path, event: dict) -> dict:
     resolved = Path(path).resolve()
     with _LOCK_GUARD:
         lock = _EVENT_LOCKS.setdefault(resolved, RLock())
-    with lock:
-        with _file_lock(resolved.with_name(f".{resolved.name}.lock")):
-            payload = dict(event)
-            # Re-read while holding the OS lock. A process-local cache cannot
-            # observe events appended by another API worker.
-            existing = read_jsonl(resolved)
-            current = max(
-                (int(item.get("sequence") or 0) for item in existing),
-                default=0,
-            )
-            next_sequence = current + 1
-            payload["sequence"] = next_sequence
-            append_jsonl(resolved, payload)
-            return payload
+    with lock, _file_lock(resolved.with_name(f".{resolved.name}.lock")):
+        payload = dict(event)
+        # Re-read while holding the OS lock. A process-local cache cannot
+        # observe events appended by another API worker.
+        existing = read_jsonl(resolved)
+        current = max(
+            (int(item.get("sequence") or 0) for item in existing),
+            default=0,
+        )
+        next_sequence = current + 1
+        payload["sequence"] = next_sequence
+        append_jsonl(resolved, payload)
+        return payload
 
 
 @contextmanager

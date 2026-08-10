@@ -13,10 +13,10 @@ from typing import Any, Callable
 
 import jsonschema
 
-from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
-from research_system.runtime.core.id_utils import generate_ulid
+from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.runtime.core.approvals import HumanApprovalStore
 from research_system.runtime.event_store import append_canonical_event
+from research_system.runtime.presentation.display import localize_runtime_error
 from research_system.adapters.storage.resource_lease import (
     FileResourceLeaseStore,
     ResourceLease,
@@ -61,6 +61,7 @@ class CoreToolContext:
     request_intake_supplier: Callable[..., Any] | None = None
     cancellation: Event | None = None
     event_callback: Callable[[dict[str, Any]], None] | None = None
+    progress_emitter: Callable[[dict[str, Any]], None] | None = None
     allowed_tools: frozenset[str] | None = None
     allowed_permissions: frozenset[str] | None = None
     authorize_call: Callable[[], bool] | None = None
@@ -254,7 +255,7 @@ class CoreToolRegistry:
                 arguments=arguments or {},
                 graph_revision=graph_revision,
                 node_id=node_id,
-                error="tool is outside the current caller policy",
+                error="Tool 不在当前调用方策略允许范围内",
             )
         caller_kind = "subagent" if context.actor.startswith("subagent:") else context.actor
         if caller_kind not in definition.allowed_callers:
@@ -264,7 +265,7 @@ class CoreToolRegistry:
                 arguments=arguments or {},
                 graph_revision=graph_revision,
                 node_id=node_id,
-                error=f"tool is not available to caller kind: {caller_kind}",
+                error=f"Tool 不适用于当前调用方类型：{caller_kind}",
             )
         if (
             context.allowed_permissions is not None
@@ -276,7 +277,7 @@ class CoreToolRegistry:
                 arguments=arguments or {},
                 graph_revision=graph_revision,
                 node_id=node_id,
-                error="tool permissions are outside the current caller policy",
+                error="Tool 权限超出当前调用方策略范围",
             )
         if context.authorize_call is not None and not context.authorize_call():
             return self._rejected(
@@ -285,7 +286,7 @@ class CoreToolRegistry:
                 arguments=arguments or {},
                 graph_revision=graph_revision,
                 node_id=node_id,
-                error="run Tool call budget exceeded",
+                error="当前运行的 Tool 调用预算已耗尽",
             )
         if definition.requires_approval:
             if context.hook_runtime is not None:
@@ -308,7 +309,7 @@ class CoreToolRegistry:
                         arguments=arguments or {},
                         graph_revision=graph_revision,
                         node_id=node_id,
-                        error="PermissionRequest hook blocked the Tool call",
+                        error="PermissionRequest hook 已阻止 Tool 调用",
                     )
             if not context.approval_id:
                 if context.approval_store is None:
@@ -318,7 +319,7 @@ class CoreToolRegistry:
                         arguments=arguments or {},
                         graph_revision=graph_revision,
                         node_id=node_id,
-                        error="Tool requires human approval before execution",
+                        error="Tool 执行前需要人工审批",
                     )
                 approval_id = self._request_tool_approval(
                     context=context,
@@ -342,7 +343,7 @@ class CoreToolRegistry:
                     arguments=arguments or {},
                     graph_revision=graph_revision,
                     node_id=node_id,
-                    error="Tool approval authorizer is not configured",
+                    error="未配置 Tool 审批授权器",
                 )
             if not context.authorize_approval(context.approval_id):
                 return self._rejected(
@@ -351,7 +352,7 @@ class CoreToolRegistry:
                     arguments=arguments or {},
                     graph_revision=graph_revision,
                     node_id=node_id,
-                    error="Tool approval is invalid or revoked",
+                error="Tool 审批无效或已被撤销",
                 )
         if definition.idempotency_required and not context.idempotency_key:
             return self._rejected(
@@ -360,7 +361,7 @@ class CoreToolRegistry:
                 arguments=arguments or {},
                 graph_revision=graph_revision,
                 node_id=node_id,
-                error="Tool requires an idempotency key",
+                error="Tool 调用需要 idempotency_key",
             )
         if context.cancellation is not None and context.cancellation.is_set():
             return self._rejected(
@@ -369,7 +370,7 @@ class CoreToolRegistry:
                 arguments=arguments or {},
                 graph_revision=graph_revision,
                 node_id=node_id,
-                error="tool call cancelled before execution",
+                error="Tool 调用已在执行前取消",
                 status="cancelled",
             )
 
@@ -392,21 +393,21 @@ class CoreToolRegistry:
                     arguments=arguments or {},
                     graph_revision=graph_revision,
                     node_id=node_id,
-                    error="PreToolUse hook blocked the Tool call",
+                    error="PreToolUse hook 已阻止 Tool 调用",
                 )
             if isinstance(rewritten.get("arguments"), dict):
                 arguments = dict(rewritten["arguments"])
         payload = dict(arguments or {})
         try:
             jsonschema.validate(instance=payload, schema=definition.input_schema or {"type": "object"})
-        except jsonschema.ValidationError as exc:
+        except jsonschema.ValidationError:
             return self._rejected(
                 context=context,
                 tool_name=tool_name,
                 arguments=payload,
                 graph_revision=graph_revision,
                 node_id=node_id,
-                error=f"tool input schema validation failed: {exc.message}",
+                    error="Tool 输入 schema 校验失败，请检查参数格式。",
             )
 
         if not self._acquire_rate_slot(tool_name, definition, context):
@@ -416,7 +417,7 @@ class CoreToolRegistry:
                 arguments=payload,
                 graph_revision=graph_revision,
                 node_id=node_id,
-                error="Tool rate limit exceeded",
+                error="Tool 调用频率已超过限制",
             )
 
         receipt = self._load_idempotency_receipt(context, tool_name)
@@ -453,7 +454,7 @@ class CoreToolRegistry:
                 arguments=payload,
                 graph_revision=graph_revision,
                 node_id=node_id,
-                error="tool concurrency limit reached or call cancelled",
+                error="已达到 Tool 并发上限，或调用已取消",
                 status="cancelled" if context.cancellation and context.cancellation.is_set() else "rejected",
             )
         semaphore = self._semaphores.get(tool_name)
@@ -466,7 +467,7 @@ class CoreToolRegistry:
                 arguments=payload,
                 graph_revision=graph_revision,
                 node_id=node_id,
-                error="tool concurrency limit reached or call cancelled",
+                error="已达到 Tool 并发上限，或调用已取消",
                 status="cancelled" if context.cancellation and context.cancellation.is_set() else "rejected",
             )
 
@@ -513,7 +514,7 @@ class CoreToolRegistry:
                 arguments=payload,
                 graph_revision=graph_revision,
                 node_id=node_id,
-                error="Tool resource lease is currently held by another Worker",
+                error="Tool 资源租约当前由另一个 Worker 持有",
                 retryable=True,
                 metadata={"resource_key_fields": list(definition.resource_key_fields)},
             )
@@ -593,7 +594,7 @@ class CoreToolRegistry:
                     call_id=call.call_id,
                     tool_name=tool_name,
                     status="failed",
-                    error=f"{exc.__class__.__name__}: {exc}",
+                    error=localize_runtime_error(exc, fallback="Tool 执行失败，请稍后重试。"),
                     started_at=started_at,
                     completed_at=utc_now(),
                 )
@@ -698,7 +699,7 @@ class CoreToolRegistry:
             call_id=call.call_id,
             tool_name=tool_name,
             status=status,
-            error=error,
+            error=localize_runtime_error(error, fallback="Tool 调用被拒绝。"),
             retryable=retryable,
             metadata=dict(metadata or {}),
         )
@@ -740,7 +741,7 @@ class CoreToolRegistry:
                 run_id=context.run_id,
                 node_id=approval_node_id,
                 capability=tool_name,
-                reason=f"Core Tool {tool_name} requires human approval.",
+                reason=f"Core Tool {tool_name} 需要人工审批。",
                 approval_id=approval_id,
                 graph_revision=graph_revision,
                 user_id=context.user_id,
@@ -773,7 +774,7 @@ class CoreToolRegistry:
             call_id=call.call_id,
             tool_name=tool_name,
             status="waiting_approval",
-            error="Tool is waiting for human approval",
+            error="Tool 正在等待人工审批",
             retryable=True,
             metadata={"approval_id": approval_id},
         )
@@ -1203,7 +1204,7 @@ def _invoke_skill(arguments: dict[str, Any], context: CoreToolContext) -> dict[s
     runtime = context.skill_runtime
     if runtime is None:
         raise CoreToolError(
-            "no Core Skill runtime is registered; install or explicitly inject a governed Skill"
+            "未注册 Core Skill runtime；请安装或显式注入受治理的 Skill"
         )
     result = runtime.run(skill_name, **dict(arguments.get("arguments") or {}))
     return {

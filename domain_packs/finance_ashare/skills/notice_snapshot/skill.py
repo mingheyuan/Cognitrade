@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 from research_system.adapters.vendors.cninfo_notice_adapter import CninfoNoticeAdapter
 from research_system.adapters.vendors.fallback_merge import merge_provider_facts

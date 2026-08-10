@@ -37,7 +37,7 @@ from research_system.runtime.execution.core.execution_context import (
     GraphNodeTimeoutError,
     GraphTimedOutError,
 )
-from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
+from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
 from research_system.schemas.artifacts import ArtifactDraft, ArtifactProducer, ArtifactRecord
 from research_system.schemas.core_runtime import PlanDecision
 from research_system.schemas.execution_graph import (
@@ -180,7 +180,7 @@ class ExecutionGraphRunner:
                 "kind": str(row.get("kind") or "").strip(),
                 "target": str(row.get("target") or "").strip(),
                 "count": max(int(row.get("count") or 1), 0),
-                "reason": str(row.get("reason") or "evaluation failure injection").strip(),
+                "reason": str(row.get("reason") or "评估失败注入").strip(),
             }
             for row in list(failure_injections or [])
             if isinstance(row, dict)
@@ -233,7 +233,7 @@ class ExecutionGraphRunner:
                     patch_id=patch.patch_id,
                     base_revision=patch.base_revision,
                     current_revision=snapshot.graph.revision,
-                    reason="stale graph revision",
+                    reason="ExecutionGraph 版本已过期。",
                 )
                 raise GraphExecutionError(
                     f"stale graph patch: {patch.base_revision}!={snapshot.graph.revision}"
@@ -261,7 +261,7 @@ class ExecutionGraphRunner:
                     "graph_patch_rejected",
                     patch_id=patch.patch_id,
                     base_revision=patch.base_revision,
-                    reason="cancellation target is not running",
+                    reason="取消目标当前未在运行。",
                     node_ids=missing_cancellations,
                 )
                 raise GraphGovernanceError(
@@ -328,7 +328,7 @@ class ExecutionGraphRunner:
             if snapshot.status == "waiting_approval" and cancel_requested:
                 self._set_run_status(snapshot, "cancelled")
                 self._persist(snapshot)
-                self._emit("graph_run_cancelled", reason="run cancellation requested")
+                self._emit("graph_run_cancelled", reason="已请求取消运行。")
                 return self._result(snapshot)
             if snapshot.status == "waiting_approval":
                 self._persist(snapshot)
@@ -362,7 +362,7 @@ class ExecutionGraphRunner:
             if snapshot.status == "waiting_approval" and cancel_requested:
                 self._set_run_status(snapshot, "cancelled")
                 self._persist(snapshot)
-                self._emit("graph_run_cancelled", reason="run cancellation requested")
+                self._emit("graph_run_cancelled", reason="已请求取消运行。")
                 return self._result(snapshot)
             if snapshot.status == "waiting_approval" and self._pending_approval_ids(snapshot):
                 self._persist(snapshot)
@@ -382,7 +382,7 @@ class ExecutionGraphRunner:
                 self._set_run_status(snapshot, "cancelled")
                 snapshot.updated_at = utc_now()
                 self._persist(snapshot)
-                self._emit("graph_run_cancelled", reason="run cancellation requested")
+                self._emit("graph_run_cancelled", reason="已请求取消运行。")
             return self._result(snapshot)
         self.board.bind_invalidated_artifacts(snapshot.invalidated_artifact_ids)
         self._set_run_status(snapshot, "running")
@@ -394,6 +394,7 @@ class ExecutionGraphRunner:
         self._persist(snapshot)
         started = perf_counter()
         step_count = 0
+        terminal_snapshot_persisted = False
         self._emit(
             "main_agent_plan_started",
             actor="main_agent.plan_agent",
@@ -589,6 +590,7 @@ class ExecutionGraphRunner:
             self._set_run_status(snapshot, "gated" if blocking else "completed")
             snapshot.updated_at = utc_now()
             self._persist(snapshot)
+            terminal_snapshot_persisted = True
             if snapshot.status == "completed":
                 self._record_episodic_memory(snapshot)
             self._emit(
@@ -625,8 +627,22 @@ class ExecutionGraphRunner:
             return self._result(snapshot)
         except _GraphPaused:
             return self._result(snapshot)
-        except Exception:
-            if snapshot.status not in {"failed", "cancelled", "paused"}:
+        except Exception as exc:
+            if terminal_snapshot_persisted and snapshot.status in RUN_TERMINAL_STATUSES:
+                # The graph result and its artifacts are already durable. A
+                # best-effort observer (for example episodic memory or final
+                # event publication) must not retroactively turn a completed
+                # research run into a failure.
+                try:
+                    self._emit(
+                        "graph_post_completion_error",
+                        status=snapshot.status,
+                        error=f"{exc.__class__.__name__}: {str(exc)[:500]}",
+                    )
+                except Exception:
+                    pass
+                return self._result(snapshot)
+            if snapshot.status not in RUN_TERMINAL_STATUSES | {"paused"}:
                 self._set_run_status(snapshot, "failed")
                 snapshot.updated_at = utc_now()
                 self._persist(snapshot)
@@ -985,8 +1001,8 @@ class ExecutionGraphRunner:
                     node_id=node.node_id,
                     capability=str(node.capability),
                     reason=(
-                        f"Approval required for high-risk Agent OS node "
-                        f"{node.node_id} ({node.capability})."
+                        f"高风险 Agent OS 节点 {node.node_id} "
+                        f"({node.capability}) 需要审批。"
                     ),
                     graph_revision=graph.revision,
                     domain_id=graph.domain_id,
@@ -1002,8 +1018,8 @@ class ExecutionGraphRunner:
                     node_id=node.node_id,
                     capability=str(node.capability),
                     reason=(
-                        f"Approval required for high-risk Agent OS node "
-                        f"{node.node_id} ({node.capability})."
+                        f"高风险 Agent OS 节点 {node.node_id} "
+                        f"({node.capability}) 需要审批。"
                     ),
                     graph_revision=graph.revision,
                     domain_id=graph.domain_id,
@@ -1024,8 +1040,8 @@ class ExecutionGraphRunner:
                     node_id=node.node_id,
                     capability=str(node.capability),
                     reason=(
-                        f"Fresh approval required after governed context changed "
-                        f"for {node.node_id} ({node.capability})."
+                        f"节点 {node.node_id} ({node.capability}) 的治理上下文已变更，"
+                        "需要重新审批。"
                     ),
                     graph_revision=graph.revision,
                     domain_id=graph.domain_id,
@@ -1056,7 +1072,7 @@ class ExecutionGraphRunner:
         for node in graph.nodes:
             if node.node_kind != "subagent" or not self._node_requires_approval(node):
                 continue
-            if not node.approval_id or not self.approvals.validate(
+            if node.approval_id and not self.approvals.validate(
                 approval_id=node.approval_id,
                 run_id=run_id,
                 node_id=node.node_id,
@@ -1069,8 +1085,7 @@ class ExecutionGraphRunner:
                 policy_fingerprint=approval_policy_fingerprint(graph, node),
                 require_binding=True,
             ):
-                if node.approval_id:
-                    pending.append(node.approval_id)
+                pending.append(node.approval_id)
         return pending
 
     def _pending_approval_ids(self, snapshot: ExecutionRunSnapshot) -> list[str]:
@@ -1106,7 +1121,7 @@ class ExecutionGraphRunner:
                     gate_id=gate_id,
                     artifact_id="approval",
                     verdict="fail",
-                    reason="Human approval was rejected, revoked, or expired.",
+                    reason="人工审批已被拒绝、撤销或过期。",
                     blocking=True,
                 )
             )
@@ -1199,8 +1214,7 @@ class ExecutionGraphRunner:
             futures: dict[Future[_NodeOutcome], ExecutionNode] = {
                 pool.submit(self._execute_node, snapshot, node): node for node in frontier
             }
-            for future in as_completed(futures):
-                outcomes.append(future.result())
+            outcomes.extend(future.result() for future in as_completed(futures))
         order = {node.node_id: index for index, node in enumerate(frontier)}
         outcomes.sort(key=lambda item: order[item.node.node_id])
         return outcomes
@@ -1408,7 +1422,7 @@ class ExecutionGraphRunner:
                 "agent_progress",
                 node_id=node.node_id,
                 actor=f"subagent:{node.node_id}",
-                message=f"Subagent {node.capability} failed: {state.error}",
+                message=f"子 Agent {node.capability} 执行失败。",
             )
             return _NodeOutcome(node=node, state=state, error=last_error)
         except GraphCancelledError as exc:
@@ -1609,11 +1623,11 @@ class ExecutionGraphRunner:
                 if isinstance(field, dict)
             ]
             if not candidates:
-                for field in fields:
-                    if bool(field.get("source_required", True)):
-                        missing_fields.append(
-                            f"{artifact_type or 'artifact'}.{field.get('path') or 'required_field'}"
-                        )
+                missing_fields.extend(
+                    f"{artifact_type or 'artifact'}.{field.get('path') or 'required_field'}"
+                    for field in fields
+                    if bool(field.get("source_required", True))
+                )
                 continue
             allowed_quality = {
                 str(item).strip().lower()
@@ -1902,16 +1916,16 @@ class ExecutionGraphRunner:
                 status="active",
             )
             if not artifacts:
-                for gate_id in contract.required_gate_ids or [f"{contract.contract_id}.present"]:
-                    evaluations.append(
-                        GateEvaluation(
-                            gate_id=gate_id,
-                            artifact_id="missing",
-                            verdict="fail",
-                            reason=f"required deliverable is missing: {contract.artifact_type}",
-                            blocking=True,
-                        )
+                evaluations.extend(
+                    GateEvaluation(
+                        gate_id=gate_id,
+                        artifact_id="missing",
+                        verdict="fail",
+                        reason=f"缺少必需交付物：{contract.artifact_type}",
+                        blocking=True,
                     )
+                    for gate_id in contract.required_gate_ids or [f"{contract.contract_id}.present"]
+                )
                 continue
             for artifact in artifacts:
                 missing_sections = [
@@ -1923,11 +1937,11 @@ class ExecutionGraphRunner:
                     gate = gates[gate_id]
                     reasons: list[str] = []
                     if missing_sections:
-                        reasons.append(f"missing sections: {','.join(missing_sections)}")
+                        reasons.append(f"缺少章节：{','.join(missing_sections)}")
                     if contract.required_source_refs and not artifact.source_refs:
-                        reasons.append("missing source references")
+                        reasons.append("缺少来源引用")
                     if artifact.status in {"needs_review", "rejected"}:
-                        reasons.append(f"artifact status is {artifact.status}")
+                        reasons.append(f"artifact 状态为 {artifact.status}")
                     evaluator_result = None
                     if not reasons and gate.evaluator_capability:
                         evaluator_result = self._run_gate_evaluator(
@@ -1947,7 +1961,7 @@ class ExecutionGraphRunner:
                                 "; ".join(reasons)
                                 or (evaluator_result.reason if evaluator_result else None)
                                 or gate.description
-                                or "gate passed"
+                                or "质量门禁已通过"
                             ),
                             blocking=gate.blocking,
                             evidence_refs=(
@@ -1972,7 +1986,7 @@ class ExecutionGraphRunner:
                         gate_id=gate_id,
                         artifact_id="missing",
                         verdict="fail",
-                        reason="required quality gate is not declared by the Pack",
+                        reason="Pack 未声明必需的质量门禁。",
                         blocking=True,
                     )
                 )
@@ -1988,7 +2002,7 @@ class ExecutionGraphRunner:
                         gate_id=gate_id,
                         artifact_id="missing",
                         verdict="fail",
-                        reason=f"required gated artifact is missing: {gate.artifact_type}",
+                        reason=f"缺少质量门禁所需的 artifact：{gate.artifact_type}",
                         blocking=gate.blocking,
                     )
                 )
@@ -2006,7 +2020,7 @@ class ExecutionGraphRunner:
                 )
                 reasons: list[str] = []
                 if artifact.status in {"needs_review", "rejected"}:
-                    reasons.append(f"artifact status is {artifact.status}")
+                    reasons.append(f"artifact 状态为 {artifact.status}")
                 if evaluator_result is not None and evaluator_result.verdict != "pass":
                     reasons.append(evaluator_result.reason)
                 evaluations.append(
@@ -2014,7 +2028,7 @@ class ExecutionGraphRunner:
                         gate_id=gate_id,
                         artifact_id=artifact.artifact_id,
                         verdict="fail" if reasons else "pass",
-                        reason="; ".join(reasons) or (evaluator_result.reason if evaluator_result else gate.description or "gate passed"),
+                        reason="；".join(reasons) or (evaluator_result.reason if evaluator_result else gate.description or "质量门禁已通过"),
                         blocking=gate.blocking,
                         evidence_refs=(
                             list(evaluator_result.evidence_refs)
@@ -2026,16 +2040,16 @@ class ExecutionGraphRunner:
                     )
                 )
         evaluated = {item.gate_id for item in evaluations}
-        for gate_id in sorted(required - evaluated):
-            evaluations.append(
-                GateEvaluation(
-                    gate_id=gate_id,
-                    artifact_id="missing",
-                    verdict="fail",
-                    reason="required governance gate was not evaluated",
-                    blocking=True,
-                )
+        evaluations.extend(
+            GateEvaluation(
+                gate_id=gate_id,
+                artifact_id="missing",
+                verdict="fail",
+                reason="必需的治理门禁尚未完成评估。",
+                blocking=True,
             )
+            for gate_id in sorted(required - evaluated)
+        )
         return evaluations
 
     def _run_gate_evaluator(
@@ -2061,7 +2075,7 @@ class ExecutionGraphRunner:
                 )
                 return GateEvaluationResult(
                     verdict="fail",
-                    reason=f"injected quality-gate failure: {injected_reason}",
+                    reason=f"已注入质量门禁失败：{injected_reason}",
                     evidence_refs=list(artifact.source_refs),
                 )
             evaluator = self.registry.resolve_executor(
@@ -2101,7 +2115,7 @@ class ExecutionGraphRunner:
             )
             return GateEvaluationResult(
                 verdict="needs_review",
-                reason=f"quality-gate evaluator failed closed: {exc.__class__.__name__}: {exc}",
+                reason="质量门禁评估器执行失败，已按不通过处理。",
             )
 
     def _consume_failure_injection(self, kind: str, target: str) -> str | None:
@@ -2925,7 +2939,7 @@ class ExecutionGraphRunner:
             snapshot.updated_at = utc_now()
             self._persist(snapshot)
             self._emit("graph_run_paused")
-            raise _GraphPaused()
+            raise _GraphPaused
 
     def _write_control(
         self,
@@ -3070,10 +3084,20 @@ class ExecutionGraphRunner:
         status: str = "running",
         source: str = "runtime",
         node_id: str | None = None,
+        progress_percent: int | float | None = None,
+        stage_index: int | None = None,
+        stage_total: int | None = None,
+        progress_details: dict[str, Any] | None = None,
     ) -> None:
         """Publish a factual or Main Agent-generated graph update."""
         current = str(current_action).strip()
         next_step = str(next_action).strip()
+        details = {
+            "progress_percent": progress_percent,
+            "stage_index": stage_index,
+            "stage_total": stage_total,
+            **dict(progress_details or {}),
+        }
         self._emit(
             "agent_progress",
             actor="main_agent",
@@ -3085,6 +3109,7 @@ class ExecutionGraphRunner:
             current_action=current,
             next_action=next_step,
             message=f"当前：{current}；下一步：{next_step}",
+            **{key: value for key, value in details.items() if value is not None},
         )
 
     def _emit_observer_progress(self, payload: dict[str, Any]) -> None:
@@ -3095,6 +3120,18 @@ class ExecutionGraphRunner:
             node_id=str(payload.get("node_id") or "") or None,
             current_action=str(payload.get("current_action") or ""),
             next_action=str(payload.get("next_action") or ""),
+            progress_percent=payload.get("progress_percent"),
+            stage_index=payload.get("stage_index"),
+            stage_total=payload.get("stage_total"),
+            progress_details={
+                key: value
+                for key, value in payload.items()
+                if key not in {
+                    "node_id", "phase", "status", "progress_source",
+                    "current_action", "next_action", "progress_percent",
+                    "stage_index", "stage_total",
+                }
+            },
         )
 
     def _observe_main_agent_progress(self, facts: dict[str, Any]) -> dict[str, str] | None:
@@ -3118,9 +3155,12 @@ class ExecutionGraphRunner:
         except (TypeError, ValueError):
             min_interval = 0.0
         now = perf_counter()
-        if min_interval and self._progress_last_model_at:
-            if now - self._progress_last_model_at < min_interval:
-                return None
+        if (
+            min_interval
+            and self._progress_last_model_at
+            and now - self._progress_last_model_at < min_interval
+        ):
+            return None
         self._progress_model_updates += 1
         self._progress_last_model_at = now
         try:

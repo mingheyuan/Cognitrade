@@ -212,7 +212,7 @@ not a second fund-data collection:
   stock valuation or score.
 
 The batch has a dedicated worker pool controlled by
-`COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY` (default 5, allowed 1–10). It does
+`COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY` (default 2, allowed 1–10). It does
 not consume or alter the global Agent OS child-thread limit. Child runs are
 hidden from the top-level run history and appear under the parent batch. Each
 child is automatically attempted up to three times; manual retry creates a new

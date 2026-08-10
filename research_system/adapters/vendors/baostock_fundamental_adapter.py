@@ -5,6 +5,9 @@ from importlib import import_module
 from typing import Any, Callable
 
 from research_system.adapters.vendors.akshare_utils import normalize_value
+from research_system.adapters.vendors.baostock_socket_safety import (
+    install_baostock_socket_safety,
+)
 
 
 class BaoStockFundamentalAdapter:
@@ -13,6 +16,7 @@ class BaoStockFundamentalAdapter:
     vendor_name = "baostock"
 
     def get_fundamental_snapshot(self, *, symbol: str) -> dict[str, Any]:
+        install_baostock_socket_safety()
         bs = import_module("baostock")
         login = bs.login()
         if str(getattr(login, "error_code", "0")) != "0":

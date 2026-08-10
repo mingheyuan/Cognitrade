@@ -2,18 +2,17 @@ from __future__ import annotations
 
 
 def build_provider_checks(provider_health: dict) -> list[dict]:
-    checks: list[dict] = []
-    for row in provider_health.get("provider_rows", []):
-        checks.append(
-            {
+    checks = [
+        {
                 "name": f"provider_chain_{row.get('dim')}",
                 "status": "passed" if row.get("provider_count", 0) >= 1 else "failed",
                 "detail": (
                     f"providers={','.join(row.get('provider_ids') or [])}; "
                     f"fallback={'yes' if row.get('has_fallback') else 'no'}"
                 ),
-            }
-        )
+        }
+        for row in provider_health.get("provider_rows", [])
+    ]
     network_profile = provider_health.get("network_profile") or {}
     checks.extend(
         [

@@ -1,4 +1,4 @@
-"""Pinned UZI 3.9.2 pure-method execution inside the Finance DomainPack.
+"""Pinned UZI 3.9.4 pure-method execution inside the Finance DomainPack.
 
 The upstream functions are called without rewriting their formulas.  Agent OS
 adds only the outer result envelope, source lineage, explicit-input gates and
@@ -95,9 +95,22 @@ _REQUIRED_DIMENSIONS: dict[str, tuple[str, ...]] = {
 
 
 def build_uzi_raw(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str, Any]:
+    _initialize_native_imports()
+    market_router = importlib.import_module("lib.market_router")
+    target_info = market_router.parse_ticker(symbol)
+    target_symbol = target_info.full
     dimensions: dict[str, dict[str, Any]] = {}
     for row in snapshot_rows:
-        if not isinstance(row, dict) or str(row.get("symbol") or "") != symbol:
+        if not isinstance(row, dict):
+            continue
+        row_symbol = str(row.get("symbol") or "").strip()
+        if not row_symbol:
+            continue
+        try:
+            row_target = market_router.parse_ticker(row_symbol).full
+        except (TypeError, ValueError):
+            row_target = row_symbol
+        if row_target != target_symbol:
             continue
         snapshot_type = str(row.get("snapshot_type") or "").strip()
         fetcher_id = _FETCHER_BY_SNAPSHOT_TYPE.get(snapshot_type)
@@ -127,10 +140,11 @@ def build_uzi_raw(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str,
             }
             recovered_fields: list[str] = []
             for key, value in recovered.items():
-                if key not in native_data or _missing_native_value(native_data.get(key)):
-                    if not _missing_native_value(value):
-                        native_data[key] = value
-                        recovered_fields.append(key)
+                if (
+                    key not in native_data or _missing_native_value(native_data.get(key))
+                ) and not _missing_native_value(value):
+                    native_data[key] = value
+                    recovered_fields.append(key)
             native_result["data"] = native_data
             if recovered_fields:
                 native_result["recovery"] = {
@@ -139,11 +153,9 @@ def build_uzi_raw(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str,
                     "source_trace": list(row.get("source_trace") or []),
                 }
             dimensions[fetcher_id] = native_result
-    _initialize_native_imports()
-    ticker_info = importlib.import_module("lib.market_router").parse_ticker(symbol)
     raw: dict[str, Any] = {
-        "ticker": ticker_info.full,
-        "market": ticker_info.market,
+        "ticker": target_info.full,
+        "market": target_info.market,
         "dimensions": dimensions,
     }
     holders = (dimensions.get("fund_holders") or {}).get("data") or {}
@@ -167,7 +179,7 @@ def execute_native_method(
     inputs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if method_id not in UZI_NATIVE_METHOD_IDS:
-        raise ValueError(f"Unsupported UZI 3.9.2 native method: {method_id}")
+        raise ValueError(f"Unsupported UZI 3.9.4 native method: {method_id}")
     inputs = dict(inputs or {})
     if method_id in {"returns_attribution", "holding_rebalance", "portfolio_rebalance"}:
         return _execute_portfolio_method(method_id, inputs)
@@ -338,9 +350,11 @@ def _explicit_input_gap(method_id: str, assumptions: dict[str, Any], features: d
     if method_id == "quick_lbo" and not features.get("ebitda_yi"):
         gaps.append("reported_ebitda_missing")
     if method_id == "accretion_dilution" and isinstance(assumptions.get("target"), dict):
-        for key in ("ticker", "name", "shares_yi", "price", "eps", "pe", "net_income_yi"):
-            if assumptions["target"].get(key) is None or assumptions["target"].get(key) == "":
-                gaps.append(f"explicit_assumption_missing:target.{key}")
+        gaps.extend(
+            f"explicit_assumption_missing:target.{key}"
+            for key in ("ticker", "name", "shares_yi", "price", "eps", "pe", "net_income_yi")
+            if assumptions["target"].get(key) is None or assumptions["target"].get(key) == ""
+        )
     if method_id == "thesis_tracker" and assumptions.get("direction") not in {"long", "short"}:
         gaps.append("explicit_assumption_invalid:direction")
     if method_id == "quantitative_screen" and assumptions.get("style") not in {"value", "growth", "quality", "short", "gulp"}:

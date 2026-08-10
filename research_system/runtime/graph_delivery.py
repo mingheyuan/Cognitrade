@@ -4,6 +4,7 @@ from typing import Any
 
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.storage.jsonl import read_json
+from research_system.runtime.presentation.display import runtime_status_message
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.schemas.execution_runtime import ExecutionRunResult
 
@@ -114,12 +115,19 @@ def ensure_graph_assistant_message(
     synthesis = None
     synthesis_artifact = None
     synthesis_unavailable = False
+    synthesis_model_generated = True
     if (
         result.snapshot.status == "completed"
         and (report is not None or delivery_artifacts)
         and result.snapshot.graph.domain_id == "finance_ashare"
     ):
         request_payload = read_json(runner.run_root / "request.json") or {}
+        request_constraints = (
+            request_payload.get("constraints")
+            if isinstance(request_payload, dict)
+            and isinstance(request_payload.get("constraints"), dict)
+            else {}
+        )
         request_text = str(
             request_payload.get("user_query")
             or request_payload.get("query")
@@ -127,14 +135,32 @@ def ensure_graph_assistant_message(
             or ""
         )
         board_facts = [artifact.model_dump(mode="json") for artifact in delivery_artifacts]
-        synthesis = agent_os.main_agent.compose_research_synthesis(
-            request=request_text,
-            report=dict(report.content) if report is not None else {
-                "delivery_mode": "method_specific",
-                "artifact_types": [artifact.artifact_type for artifact in delivery_artifacts],
-            },
-            artifacts=board_facts,
-        )
+        if request_constraints.get("fund_holding_report_child") is True and report is not None:
+            # Holding-report children are hidden orchestration Runs. Their
+            # deliverable is the already quality-gated UZI report, so a second
+            # model call merely to compose a chat sentence must not turn a
+            # complete report into completed_partial when the provider is busy.
+            report_content = dict(report.content)
+            conclusion = str(
+                report_content.get("conclusion")
+                or report_content.get("summary")
+                or "UZI 股票研究报告已完成并通过质量门。"
+            ).strip()
+            synthesis = {
+                "conclusion": conclusion[:2_000],
+                "assistant_message": "持仓股票的 UZI 研究报告已生成并通过质量门，可在基金研究页查看或导出。",
+                "follow_up": [],
+            }
+            synthesis_model_generated = False
+        else:
+            synthesis = agent_os.main_agent.compose_research_synthesis(
+                request=request_text,
+                report=dict(report.content) if report is not None else {
+                    "delivery_mode": "method_specific",
+                    "artifact_types": [artifact.artifact_type for artifact in delivery_artifacts],
+                },
+                artifacts=board_facts,
+            )
         if synthesis:
             source_refs: list[dict] = []
             for artifact in delivery_artifacts:
@@ -164,7 +190,7 @@ def ensure_graph_assistant_message(
                             else delivery_artifacts[0].artifact_id
                         ),
                         "source_artifact_ids": [artifact.artifact_id for artifact in delivery_artifacts],
-                        "model_generated": True,
+                        "model_generated": synthesis_model_generated,
                     },
                     source_refs=source_refs,
                     parent_artifact_ids=[artifact.artifact_id for artifact in delivery_artifacts],
@@ -215,12 +241,12 @@ def ensure_graph_assistant_message(
         source_refs = [{"type": "request", "id": result.snapshot.request_id}]
     else:
         message = {
-            "gated": "Agent OS produced professional artifacts, but delivery is blocked by a quality gate or approval.",
-            "waiting_approval": "Agent OS is waiting for the required approval before delivery.",
-            "failed": "Agent OS could not complete the professional run; produced artifacts remain available for inspection.",
+            "gated": "Agent OS 已生成专业产物，但交付被质量门禁或审批阻止。",
+            "waiting_approval": "Agent OS 正在等待所需审批，审批通过后才能交付。",
+            "failed": "Agent OS 未能完成专业运行，已生成的产物仍可查看。",
         }.get(
             result.snapshot.status,
-            f"Agent OS graph run {result.snapshot.status}.",
+            runtime_status_message(result.snapshot.status, subject="Agent OS 图运行"),
         )
         source_refs = [{"type": "request", "id": result.snapshot.request_id}]
     delivery_status = (

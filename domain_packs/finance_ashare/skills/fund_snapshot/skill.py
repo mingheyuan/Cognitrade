@@ -715,7 +715,9 @@ class FundSnapshotSkill:
             text = response.text
             start = text.find("{")
             if start < 0:
-                raise ValueError("EastMoney holdings response did not contain a data object")
+                raise ValueError(
+                    "EastMoney holdings response did not contain a data object"
+                ) from None
             payload = demjson.decode(text[start:-1])
             content = str(payload.get("content") or "")
             if not content:
@@ -878,14 +880,6 @@ class FundSnapshotSkill:
         }
 
     @staticmethod
-    def _report_section(text: str, start_marker: str, end_marker: str) -> str:
-        start = text.find(start_marker)
-        if start < 0:
-            return ""
-        end = text.find(end_marker, start + len(start_marker))
-        return text[start : end if end >= 0 else len(text)]
-
-    @staticmethod
     def _load_overview(code: str):
         return call_with_retry(
             lambda: ak.fund_individual_basic_info_xq(symbol=code, timeout=15),
@@ -981,9 +975,11 @@ class FundSnapshotSkill:
                 ("stage_performance_list", "stage"),
                 ("annual_performance_list", "annual"),
             ):
-                for item in list(payload.get(group) or []):
-                    if isinstance(item, dict):
-                        raw_rows.append({**item, "period_group": label})
+                raw_rows.extend(
+                    {**item, "period_group": label}
+                    for item in list(payload.get(group) or [])
+                    if isinstance(item, dict)
+                )
         else:
             raw_rows = cls._rows(payload)
         output: list[dict[str, Any]] = []
@@ -1341,8 +1337,7 @@ class FundSnapshotSkill:
         if value is None:
             return None
         text = str(normalize_value(value)).strip()
-        number = cls._numeric(text.replace("%", ""))
-        return number
+        return cls._numeric(text.replace("%", ""))
 
     @staticmethod
     def _date_value(value: Any) -> str | None:

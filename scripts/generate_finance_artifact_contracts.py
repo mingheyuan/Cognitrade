@@ -203,8 +203,10 @@ def generate() -> str:
     )
     for artifact_type in artifact_types:
         lines.append(f"  {json.dumps(artifact_type)}: [")
-        for field in _field_paths(schemas[artifact_type], root=schemas[artifact_type]):
-            lines.append(f"    {json.dumps(field)},")
+        lines.extend(
+            f"    {json.dumps(field)},"
+            for field in _field_paths(schemas[artifact_type], root=schemas[artifact_type])
+        )
         lines.append("  ],")
     lines.extend(
         [

@@ -14,6 +14,8 @@ class UziBrowserAdapter:
         "iwencai": lambda symbol, query: f"https://www.iwencai.com/unifiedwap/result?w={quote(query or symbol)}",
         "ths_f10": lambda symbol, _query: f"https://stockpage.10jqka.com.cn/{_digits(symbol)}/",
         "xueqiu_f10": lambda symbol, _query: f"https://xueqiu.com/S/{_xueqiu_symbol(symbol)}",
+        "xueqiu_industry": lambda symbol, _query: f"https://xueqiu.com/S/{_xueqiu_symbol(symbol)}/F10/industry",
+        "xueqiu_announcements": lambda symbol, _query: f"https://xueqiu.com/S/{_xueqiu_symbol(symbol)}/announcements",
         "xueqiu_posts": lambda symbol, _query: f"https://xueqiu.com/S/{_xueqiu_symbol(symbol)}/POST",
         "xueqiu_contests": lambda _symbol, _query: "https://xueqiu.com/cube/rank/list",
         "legulegu": lambda symbol, query: f"https://legulegu.com/search?q={quote(query or symbol)}",
@@ -23,9 +25,21 @@ class UziBrowserAdapter:
         "em_data": lambda symbol, _query: f"https://emweb.securities.eastmoney.com/PC_HSF10/BusinessAnalysis/Index?type=web&code={_digits(symbol)}",
         "cninfo": lambda symbol, _query: f"http://www.cninfo.com.cn/new/disclosure/stock?stockCode={_digits(symbol)}",
         "stats_gov": lambda _symbol, _query: "https://www.stats.gov.cn/sj/sjjd/",
+        "em_pmi": lambda _symbol, _query: "https://data.eastmoney.com/cjsj/pmi.html",
+        "pbc_macro": lambda _symbol, _query: "https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html",
+        "gov_policy": lambda _symbol, _query: "https://www.gov.cn/zhengce/",
+        "miit_policy": lambda _symbol, _query: "https://www.miit.gov.cn/",
+        "em_board": lambda _symbol, _query: "https://data.eastmoney.com/bkzj/",
+        "sina_announcements": lambda symbol, _query: (
+            "http://vip.stock.finance.sina.com.cn/corp/go.php/vCB_AllBulletin/"
+            f"stockid/{_digits(symbol)}.phtml"
+        ),
+        "ppi100": lambda _symbol, _query: "https://www.100ppi.com/",
+        "em_futures": lambda _symbol, _query: "https://data.eastmoney.com/futures/index.html",
         "baidu_search": lambda _symbol, query: f"https://www.baidu.com/s?wd={quote(query)}",
         "baidu_baike": lambda _symbol, query: f"https://baike.baidu.com/item/{quote(query)}",
         "csrc": lambda _symbol, _query: "http://www.csrc.gov.cn/csrc/c100028/common_list.shtml",
+        "shfe": lambda _symbol, _query: "https://www.shfe.com.cn/data/dailydata/",
         "xiaohongshu": lambda _symbol, query: f"https://www.xiaohongshu.com/search_result?keyword={quote(query)}",
     }
 
@@ -71,11 +85,17 @@ class UziBrowserAdapter:
         if not self.settings.sensitive_sources_enabled:
             return "sensitive_sources_disabled"
         aliases = {source_id, self._canonical_source_id(source_id)}
-        if source_id in {"xueqiu_f10", "xueqiu_posts", "xueqiu_contests"}:
+        if source_id in {
+            "xueqiu_f10", "xueqiu_industry", "xueqiu_announcements",
+            "xueqiu_posts", "xueqiu_contests",
+        }:
             aliases.add("xueqiu")
         if not aliases.intersection(self.settings.sensitive_source_allowlist):
             return "source_not_allowlisted"
-        if source_id in {"xueqiu_f10", "xueqiu_posts", "xueqiu_contests"} and not self.settings.xueqiu_cookie:
+        if source_id in {
+            "xueqiu_f10", "xueqiu_industry", "xueqiu_announcements",
+            "xueqiu_posts", "xueqiu_contests",
+        } and not self.settings.xueqiu_cookie:
             return "credentials_missing"
         return None
 
@@ -91,10 +111,13 @@ class UziBrowserAdapter:
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
             )
-            if source_id in {"xueqiu_f10", "xueqiu_posts", "xueqiu_contests"} and self.settings.xueqiu_cookie:
+            if source_id in {
+                "xueqiu_f10", "xueqiu_industry", "xueqiu_announcements",
+                "xueqiu_posts", "xueqiu_contests",
+            } and self.settings.xueqiu_cookie:
                 context.add_cookies(_cookies(self.settings.xueqiu_cookie, ".xueqiu.com"))
             page = context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+            page.goto(url, wait_until="domcontentloaded", timeout=15_000)
             title = page.title()
             text = " ".join(page.locator("body").inner_text(timeout=5_000).split())[:8_000]
             links = page.locator("a[href]").evaluate_all(
@@ -106,11 +129,21 @@ class UziBrowserAdapter:
     @staticmethod
     def _canonical_source_id(source_id: str) -> str:
         return {
+            "xueqiu_industry": "xueqiu_f10",
+            "xueqiu_announcements": "xueqiu_f10",
             "xueqiu_posts": "xueqiu_f10",
             "xueqiu_contests": "xueqiu_f10",
             "baidu_search": "ddgs",
             "baidu_baike": "ddgs",
             "xiaohongshu": "ddgs",
+            "pbc_macro": "pbc",
+            "em_pmi": "em_data",
+            "gov_policy": "gov_cn",
+            "miit_policy": "miit",
+            "em_board": "em_data",
+            "sina_announcements": "sina_finance",
+            "ppi100": "100ppi",
+            "em_futures": "em_data",
         }.get(source_id, source_id)
 
 

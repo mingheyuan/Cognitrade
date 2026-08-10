@@ -1,7 +1,7 @@
-"""UZI 3.9.2 reality-check and A-share seat-range capability.
+"""UZI 3.9.4 reality-check and A-share seat-range capability.
 
 This is a pure DomainPack migration of the logic from UZI source commit
-``22e65f2e0cee2cb41cb40fdbe391c9600b7fe359``.  It intentionally has no
+``0acf25122cabf493e7bc442faff62ceceb7f2f02``.  It intentionally has no
 dependency on an installed UZI runtime.
 """
 
@@ -30,15 +30,15 @@ PANEL_BY_ID = {str(row["id"]): dict(row) for row in PANEL_REGISTRY}
 
 MARKET_SCOPE: dict[str, str] = {
     **{str(row["id"]): "all" for row in PANEL_REGISTRY},
-    **{
-        investor_id: "A"
-        for investor_id in (
+    **dict.fromkeys(
+        (
             "zhang_mz", "zhao_lg", "fs_wyj", "bj_cj", "yangjia", "sun_ge",
             "chen_xq", "hu_jl", "fang_xx", "zuoshou", "xiao_ey", "jiao_yy",
             "mao_lb", "xiao_xian", "lasa", "chengdu", "sunan", "ningbo_st",
             "liuyi_zl", "liu_sh", "gu_bl", "wang_zr", "xin_dd", "ghzw",
-        )
-    },
+        ),
+        "A",
+    ),
     "thorp": "US",
 }
 
@@ -296,7 +296,7 @@ def is_youzi_out_of_range(investor_id: str, features: dict[str, Any]) -> tuple[b
 
 
 def match_youzi_seats(records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """Mirror UZI 3.9.2's substring matching for disclosed LHB seats."""
+    """Mirror UZI 3.9.4's substring matching for disclosed LHB seats."""
 
     matches: dict[str, list[dict[str, Any]]] = {}
     for nickname, keywords in YOUZI_SEAT_KEYWORDS.items():

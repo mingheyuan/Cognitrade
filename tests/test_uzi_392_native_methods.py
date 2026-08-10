@@ -209,6 +209,17 @@ class Uzi392NativeMethodTests(unittest.TestCase):
         actual = execute_native_method("dcf", rows, ["600000"], {})
         self.assertEqual(actual["results"][0]["result"], expected)
 
+    def test_raw_builder_joins_suffixed_and_plain_a_share_symbols(self) -> None:
+        rows = _snapshots()
+        rows[0]["symbol"] = "600000.SH"
+        rows[1]["symbol"] = "600000"
+
+        raw = build_uzi_raw(rows, "600000")
+
+        self.assertIn("0_basic", raw["dimensions"])
+        self.assertIn("1_financials", raw["dimensions"])
+        self.assertEqual(raw["ticker"], "600000.SH")
+
     def test_adapter_preserves_workflow_decision_and_tier1_results(self) -> None:
         rows = _snapshots()
         raw = build_uzi_raw(rows, "600000")

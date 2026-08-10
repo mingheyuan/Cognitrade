@@ -20,9 +20,14 @@ from research_system.api.finance_market_data_service import (
 )
 from research_system.api.paper_trading_service import PaperTradingError, PaperTradingService
 from research_system.api.hikyuu_backtest_service import BacktestError, HikyuuBacktestService
+from research_system.runtime.presentation.display import localize_public_error_fields
 
 
 router = APIRouter(prefix="/finance", tags=["finance workspace"])
+
+
+def _public(value):
+    return localize_public_error_fields(value)
 
 
 class PaperOrderRequest(BaseModel):
@@ -61,7 +66,7 @@ async def search_securities(
 ) -> dict:
     try:
         results = await run_in_threadpool(service.search_securities, query, limit=limit)
-        return {"query": query, "results": results}
+        return _public({"query": query, "results": results})
     except FinanceMarketDataError as exc:
         raise _market_error(exc) from exc
 
@@ -73,7 +78,7 @@ async def market_data(
     service: FinanceMarketDataService = Depends(get_finance_market_data),
 ) -> dict:
     try:
-        return await run_in_threadpool(service.get_market_data, symbol, refresh=refresh)
+        return _public(await run_in_threadpool(service.get_market_data, symbol, refresh=refresh))
     except FinanceMarketDataError as exc:
         raise _market_error(exc) from exc
 
@@ -85,7 +90,7 @@ async def market_quote(
     service: FinanceMarketDataService = Depends(get_finance_market_data),
 ) -> dict:
     try:
-        return await run_in_threadpool(service.get_quote, symbol, refresh=refresh)
+        return _public(await run_in_threadpool(service.get_quote, symbol, refresh=refresh))
     except FinanceMarketDataError as exc:
         raise _market_error(exc) from exc
 
@@ -96,14 +101,14 @@ async def paper_account(
     service: PaperTradingService = Depends(get_paper_trading),
 ) -> dict:
     tenant_id, user_id = _owner(principal)
-    return await run_in_threadpool(service.get_account, tenant_id=tenant_id, user_id=user_id)
+    return _public(await run_in_threadpool(service.get_account, tenant_id=tenant_id, user_id=user_id))
 
 
 @router.get("/paper/engine")
 async def paper_engine(
     service: PaperTradingService = Depends(get_paper_trading),
 ) -> dict:
-    return await run_in_threadpool(service.engine_status)
+    return _public(await run_in_threadpool(service.engine_status))
 
 
 @router.post("/paper/account/reset")
@@ -114,12 +119,12 @@ async def reset_paper_account(
 ) -> dict:
     tenant_id, user_id = _owner(principal)
     try:
-        return await run_in_threadpool(
+        return _public(await run_in_threadpool(
             service.reset_account,
             tenant_id=tenant_id,
             user_id=user_id,
             initial_cash=request.initial_cash,
-        )
+        ))
     except PaperTradingError as exc:
         raise _paper_error(exc) from exc
 
@@ -130,7 +135,7 @@ async def paper_portfolio(
     service: PaperTradingService = Depends(get_paper_trading),
 ) -> dict:
     tenant_id, user_id = _owner(principal)
-    return await run_in_threadpool(service.get_portfolio, tenant_id=tenant_id, user_id=user_id)
+    return _public(await run_in_threadpool(service.get_portfolio, tenant_id=tenant_id, user_id=user_id))
 
 
 @router.get("/paper/orders")
@@ -153,7 +158,7 @@ async def paper_orders(
         tenant_id=tenant_id,
         user_id=user_id,
     )
-    return {"orders": orders, "total_count": total_count, "limit": limit, "offset": offset}
+    return _public({"orders": orders, "total_count": total_count, "limit": limit, "offset": offset})
 
 
 @router.post("/paper/orders", status_code=status.HTTP_201_CREATED)
@@ -164,7 +169,7 @@ async def place_paper_order(
 ) -> dict:
     tenant_id, user_id = _owner(principal)
     try:
-        return await run_in_threadpool(
+        return _public(await run_in_threadpool(
             service.place_order,
             tenant_id=tenant_id,
             user_id=user_id,
@@ -174,7 +179,7 @@ async def place_paper_order(
             client_order_id=request.client_order_id,
             order_type=request.order_type,
             limit_price=request.limit_price,
-        )
+        ))
     except FinanceMarketDataError as exc:
         raise _market_error(exc) from exc
     except PaperTradingError as exc:
@@ -189,12 +194,12 @@ async def match_paper_orders(
 ) -> dict:
     tenant_id, user_id = _owner(principal)
     try:
-        return await run_in_threadpool(
+        return _public(await run_in_threadpool(
             service.match_open_orders,
             tenant_id=tenant_id,
             user_id=user_id,
             refresh=refresh,
-        )
+        ))
     except PaperTradingError as exc:
         raise _paper_error(exc) from exc
 
@@ -207,12 +212,12 @@ async def cancel_paper_order(
 ) -> dict:
     tenant_id, user_id = _owner(principal)
     try:
-        return await run_in_threadpool(
+        return _public(await run_in_threadpool(
             service.cancel_order,
             tenant_id=tenant_id,
             user_id=user_id,
             order_id=order_id,
-        )
+        ))
     except PaperTradingError as exc:
         raise _paper_error(exc) from exc
 
@@ -221,7 +226,7 @@ async def cancel_paper_order(
 async def backtest_engine(
     service: HikyuuBacktestService = Depends(get_backtesting),
 ) -> dict:
-    return await run_in_threadpool(service.engine_status)
+    return _public(await run_in_threadpool(service.engine_status))
 
 
 @router.get("/backtests")
@@ -232,7 +237,7 @@ async def list_backtests(
 ) -> dict:
     results = await run_in_threadpool(service.list_results, limit=limit, offset=offset)
     total_count = await run_in_threadpool(service.count_results)
-    return {"results": results, "total_count": total_count, "limit": limit, "offset": offset}
+    return _public({"results": results, "total_count": total_count, "limit": limit, "offset": offset})
 
 
 @router.post("/backtests", status_code=status.HTTP_201_CREATED)
@@ -241,7 +246,7 @@ async def run_backtest(
     service: HikyuuBacktestService = Depends(get_backtesting),
 ) -> dict:
     try:
-        return await run_in_threadpool(
+        return _public(await run_in_threadpool(
             service.run,
             symbol=request.symbol,
             strategy_id=request.strategy,
@@ -249,7 +254,7 @@ async def run_backtest(
             initial_cash=request.initial_cash,
             trade_size=request.trade_size,
             refresh=request.refresh,
-        )
+        ))
     except FinanceMarketDataError as exc:
         raise _market_error(exc) from exc
     except BacktestError as exc:
@@ -262,7 +267,7 @@ async def get_backtest(
     service: HikyuuBacktestService = Depends(get_backtesting),
 ) -> dict:
     try:
-        return await run_in_threadpool(service.get_result, backtest_id)
+        return _public(await run_in_threadpool(service.get_result, backtest_id))
     except BacktestError as exc:
         raise _backtest_error(exc) from exc
 

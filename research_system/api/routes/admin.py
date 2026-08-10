@@ -13,14 +13,16 @@ from research_system.api.dependencies import (
     require_principal,
     require_role,
 )
-from research_system.api.errors import ApiError
+from research_system.api.errors import ApiError, public_error_message
 from research_system.api.models import (
     MemoryPromotionRequest,
     MemoryRevokeRequest,
     RunApprovalRejectRequest,
     RunApprovalRequest,
 )
+from research_system.api.route_support import identity_scope_kwargs
 from research_system.api.validation import safe_identifier
+from research_system.runtime.presentation.display import localize_public_error_fields
 
 
 ApprovalStatus = Literal["pending", "approved", "rejected", "revoked", "expired"]
@@ -29,15 +31,9 @@ MemoryLayer = Literal["episodic", "domain", "policy"]
 router = APIRouter(tags=["administration"])
 
 
-def _scope_kwargs(service: AgentOSAdminService, principal: ApiPrincipal | None) -> dict[str, str]:
-    if principal is None or not principal.authenticated:
-        return {}
-    if not getattr(service, "identity_scoped", False):
-        return {}
-    return {
-        "user_id": str(principal.user_id or ""),
-        "tenant_id": str(principal.tenant_id or ""),
-    }
+async def _public_call(operation, *args, **kwargs):
+    result = await run_in_threadpool(operation, *args, **kwargs)
+    return localize_public_error_fields(result)
 
 
 def _admin_service(agent_os=Depends(get_agent_os)) -> AgentOSAdminService:
@@ -46,7 +42,7 @@ def _admin_service(agent_os=Depends(get_agent_os)) -> AgentOSAdminService:
 
 @router.get("/admin/domain-packs")
 async def list_domain_packs(service: AgentOSAdminService = Depends(_admin_service)) -> list[dict]:
-    return await run_in_threadpool(service.list_domain_packs)
+    return await _public_call(service.list_domain_packs)
 
 
 @router.get("/admin/domain-packs/{domain_id}")
@@ -56,12 +52,12 @@ async def show_domain_pack(
 ) -> dict:
     resolved = safe_identifier(domain_id, field_name="domain_id")
     try:
-        return await run_in_threadpool(service.domain_pack, resolved)
+        return await _public_call(service.domain_pack, resolved)
     except KeyError as exc:
         raise ApiError(
             status_code=404,
             code="resource_not_found",
-            message="The requested domain pack was not found",
+            message="未找到请求的 DomainPack",
         ) from exc
 
 
@@ -75,18 +71,18 @@ async def list_run_approvals(
 ) -> list[dict]:
     resolved = safe_identifier(run_id, field_name="run_id")
     try:
-        return await run_in_threadpool(
+        return await _public_call(
             service.list_approvals,
             resolved,
             status=status,
             limit=limit,
-            **_scope_kwargs(service, principal),
+            **identity_scope_kwargs(service, principal),
         )
     except FileNotFoundError as exc:
         raise ApiError(
             status_code=404,
             code="resource_not_found",
-            message="The requested run was not found",
+            message="未找到请求的运行记录",
         ) from exc
 
 
@@ -101,7 +97,7 @@ async def approve_run_node(
     resolved = safe_identifier(run_id, field_name="run_id")
     async with mutation_lock:
         try:
-            return await run_in_threadpool(
+            return await _public_call(
                 service.approve,
                 resolved,
                 node_id=payload.node_id,
@@ -109,25 +105,25 @@ async def approve_run_node(
                 approval_id=payload.approval_id,
                 approved_by=f"api_v1:{principal.actor_id}",
                 reason=payload.reason,
-                **_scope_kwargs(service, principal),
+                **identity_scope_kwargs(service, principal),
             )
         except FileNotFoundError as exc:
             raise ApiError(
                 status_code=404,
                 code="resource_not_found",
-                message="The requested run was not found",
+                message="未找到请求的运行记录",
             ) from exc
         except KeyError as exc:
             raise ApiError(
                 status_code=404,
                 code="nested_resource_not_found",
-                message="The requested execution graph node was not found",
+                message="未找到请求的 ExecutionGraph 节点",
             ) from exc
         except ValueError as exc:
             raise ApiError(
                 status_code=409,
                 code="approval_conflict",
-                message=str(exc),
+                message=public_error_message(exc, fallback="审批状态与当前执行上下文冲突"),
             ) from exc
 
 
@@ -144,31 +140,31 @@ async def reject_run_approval(
     resolved_approval = safe_identifier(approval_id, field_name="approval_id")
     async with mutation_lock:
         try:
-            return await run_in_threadpool(
+            return await _public_call(
                 service.reject,
                 resolved,
                 approval_id=resolved_approval,
                 rejected_by=f"api_v1:{principal.actor_id}",
                 reason=payload.reason,
-                **_scope_kwargs(service, principal),
+                **identity_scope_kwargs(service, principal),
             )
         except FileNotFoundError as exc:
             raise ApiError(
                 status_code=404,
                 code="resource_not_found",
-                message="The requested run was not found",
+                message="未找到请求的运行记录",
             ) from exc
         except KeyError as exc:
             raise ApiError(
                 status_code=404,
                 code="nested_resource_not_found",
-                message="The requested approval was not found",
+                message="未找到请求的审批记录",
             ) from exc
         except ValueError as exc:
             raise ApiError(
                 status_code=409,
                 code="approval_conflict",
-                message=str(exc),
+                message=public_error_message(exc, fallback="审批状态与当前执行上下文冲突"),
             ) from exc
 
 
@@ -181,13 +177,13 @@ async def list_memory(
     principal: ApiPrincipal = Depends(require_role("admin")),
     service: AgentOSAdminService = Depends(_admin_service),
 ) -> list[dict]:
-    return await run_in_threadpool(
+    return await _public_call(
         service.list_memory,
         layer=layer,
         domain_id=domain_id,
         status=status,
         limit=limit,
-        **_scope_kwargs(service, principal),
+        **identity_scope_kwargs(service, principal),
     )
 
 
@@ -198,7 +194,7 @@ async def expire_memory(
     mutation_lock=Depends(get_mutation_lock),
 ) -> dict:
     async with mutation_lock:
-        return await run_in_threadpool(service.expire_memory)
+        return await _public_call(service.expire_memory)
 
 
 @router.post("/admin/memory/{memory_id}/promote")
@@ -212,7 +208,7 @@ async def promote_memory(
     resolved = safe_identifier(memory_id, field_name="memory_id")
     async with mutation_lock:
         try:
-            return await run_in_threadpool(
+            return await _public_call(
                 service.promote_memory,
                 resolved,
                 target_layer=payload.target_layer,
@@ -223,19 +219,19 @@ async def promote_memory(
                 evidence_refs=payload.evidence_refs,
                 notes=payload.notes,
                 content=payload.content,
-                **_scope_kwargs(service, principal),
+                **identity_scope_kwargs(service, principal),
             )
         except KeyError as exc:
             raise ApiError(
                 status_code=404,
                 code="resource_not_found",
-                message="The requested memory record was not found",
+                message="未找到请求的记忆记录",
             ) from exc
         except ValueError as exc:
             raise ApiError(
                 status_code=409,
                 code="memory_promotion_conflict",
-                message=str(exc),
+                message=public_error_message(exc, fallback="记忆提升请求与当前记录状态冲突"),
             ) from exc
 
 
@@ -250,18 +246,18 @@ async def revoke_memory(
     resolved = safe_identifier(memory_id, field_name="memory_id")
     async with mutation_lock:
         try:
-            return await run_in_threadpool(
+            return await _public_call(
                 service.revoke_memory,
                 resolved,
                 revoked_by=f"api_v1:{principal.actor_id}",
                 reason=payload.reason,
-                **_scope_kwargs(service, principal),
+                **identity_scope_kwargs(service, principal),
             )
         except KeyError as exc:
             raise ApiError(
                 status_code=404,
                 code="resource_not_found",
-                message="The requested memory record was not found",
+                message="未找到请求的记忆记录",
             ) from exc
 
 
@@ -272,7 +268,7 @@ async def cleanup_artifacts(
     mutation_lock=Depends(get_mutation_lock),
 ) -> dict:
     async with mutation_lock:
-        return await run_in_threadpool(service.cleanup_artifacts)
+        return await _public_call(service.cleanup_artifacts)
 
 
 @router.post("/admin/qdrant/reindex")
@@ -282,7 +278,7 @@ async def reindex_qdrant(
     mutation_lock=Depends(get_mutation_lock),
 ) -> dict:
     async with mutation_lock:
-        return await run_in_threadpool(service.rebuild_qdrant)
+        return await _public_call(service.rebuild_qdrant)
 
 
 __all__ = ["router"]

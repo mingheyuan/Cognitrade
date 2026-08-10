@@ -60,15 +60,65 @@ class OpenAIProvider:
         schema: type[SchemaT],
         temperature: float = 0.2,
         reasoning_effort: str | None = None,
+        timeout_seconds: float | None = None,
+        max_retries: int | None = None,
     ) -> SchemaT:
-        raw_text = self.complete(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            temperature=temperature,
-            reasoning_effort=reasoning_effort,
-            force_json=True,
+        client = self._client_instance()
+        request_client = (
+            client.with_options(max_retries=max_retries)
+            if max_retries is not None
+            else client
         )
+        effective_reasoning_effort = (
+            reasoning_effort or self.settings.openai_reasoning_effort
+        )
+        request_timeout_seconds = (
+            float(timeout_seconds)
+            if timeout_seconds is not None
+            else self.request_timeout_seconds
+        )
+        if request_timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
         try:
+            response = request_client.responses.parse(
+                model=self.settings.default_model,
+                instructions=system_prompt,
+                input=user_prompt,
+                text_format=schema,
+                temperature=temperature,
+                reasoning=(
+                    {"effort": effective_reasoning_effort}
+                    if effective_reasoning_effort
+                    else None
+                ),
+                service_tier=self.settings.openai_service_tier,
+                store=not self.settings.openai_disable_response_storage,
+                timeout=request_timeout_seconds,
+            )
+        except LLMProviderError:
+            raise
+        except APITimeoutError as exc:
+            raise LLMProviderError(
+                f"llm_request_timeout: {request_timeout_seconds:g}s"
+            ) from exc
+        except Exception as exc:
+            raise LLMProviderError(
+                f"llm_request_failed: {exc.__class__.__name__}: {exc}"
+            ) from exc
+
+        try:
+            parsed = getattr(response, "output_parsed", None)
+            if isinstance(parsed, schema):
+                return parsed
+            if parsed is not None:
+                return schema.model_validate(parsed)
+            status = self.response_support.response_status(response)
+            reason = self.response_support.incomplete_reason(response)
+            if status == "incomplete":
+                raise ValueError(
+                    f"structured response incomplete: {reason or 'unknown_reason'}"
+                )
+            raw_text = self.response_support.coerce_responses_text(response)
             payload = self.response_support.extract_json_object(raw_text)
             return schema.model_validate(payload)
         except Exception as exc:
@@ -82,24 +132,35 @@ class OpenAIProvider:
         temperature: float = 0.2,
         reasoning_effort: str | None = None,
         force_json: bool = False,
+        timeout_seconds: float | None = None,
+        max_retries: int | None = None,
     ) -> str:
         client = self._client_instance()
+        request_client = client.with_options(max_retries=max_retries) if max_retries is not None else client
         prompt = user_prompt if not force_json else f"{user_prompt}\n\nReturn only a JSON object."
         effective_reasoning_effort = reasoning_effort or self.settings.openai_reasoning_effort
+        request_timeout_seconds = (
+            float(timeout_seconds)
+            if timeout_seconds is not None
+            else self.request_timeout_seconds
+        )
+        if request_timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
         try:
             parts: list[str] = []
             previous_response_id: str | None = None
             current_input = prompt
             for _ in range(self._MAX_CONTINUATION_ATTEMPTS + 1):
-                response = client.responses.create(
+                response = request_client.responses.create(
                     model=self.settings.default_model,
                     instructions=system_prompt,
                     input=current_input,
                     previous_response_id=previous_response_id,
                     temperature=temperature,
                     reasoning={"effort": effective_reasoning_effort} if effective_reasoning_effort else None,
+                    service_tier=self.settings.openai_service_tier,
                     store=not self.settings.openai_disable_response_storage,
-                    timeout=self.request_timeout_seconds,
+                    timeout=request_timeout_seconds,
                 )
                 response_text = self.response_support.coerce_responses_text(response)
                 if response_text:
@@ -114,7 +175,7 @@ class OpenAIProvider:
         except LLMProviderError:
             raise
         except APITimeoutError as exc:
-            raise LLMProviderError(f"llm_request_timeout: {self.request_timeout_seconds}s") from exc
+            raise LLMProviderError(f"llm_request_timeout: {request_timeout_seconds:g}s") from exc
         except Exception as exc:
             raise LLMProviderError(f"llm_request_failed: {exc.__class__.__name__}: {exc}") from exc
 
@@ -156,6 +217,7 @@ class OpenAIProvider:
                 tools=provider_tools,
                 temperature=temperature,
                 reasoning={"effort": effective_reasoning_effort} if effective_reasoning_effort else None,
+                service_tier=self.settings.openai_service_tier,
                 store=not self.settings.openai_disable_response_storage,
                 timeout=self.request_timeout_seconds,
             )
@@ -328,9 +390,3 @@ class OpenAIProvider:
             raise LLMProviderError(f"llm_request_timeout: {self.request_timeout_seconds}s") from exc
         except Exception as exc:
             raise LLMProviderError(f"embedding_request_failed: {exc.__class__.__name__}: {exc}") from exc
-
-    def _normalize_base_url(self, base_url: str | None) -> str | None:
-        return self.client_support.normalize_base_url(base_url)
-
-    def _looks_like_html(self, text: str) -> bool:
-        return self.response_support.looks_like_html(text)

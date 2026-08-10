@@ -8,7 +8,7 @@ import requests
 
 
 class UziNewsAdapter:
-    """UZI 3.9.2 direct news sources: Jin10, EastMoney and THS."""
+    """UZI 3.9.4 direct news sources: Jin10, EastMoney and THS."""
 
     vendor_name = "uzi_news_http"
     _UA = "Mozilla/5.0 (compatible; Cognitrade/1.0)"

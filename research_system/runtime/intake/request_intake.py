@@ -175,26 +175,6 @@ class RequestIntakeService:
             trace={"source": "core_fallback"},
         )
 
-    def _pack_candidates(self, request: RequestEnvelope, *, runtime_context: dict[str, Any] | None) -> list[Any]:
-        candidates: list[Any] = []
-        for manifest in self.registry.list():
-            supported = {
-                *(item.intent_id for item in manifest.intake.intents),
-            }
-            if not supported:
-                continue
-            decision = self.pack_intake.resolve(
-                request.model_copy(update={"intent": None}),
-                runtime_context=runtime_context,
-            )
-            if decision.status == "accepted" and decision.domain_id == manifest.domain_id:
-                candidates.append(decision)
-        unique: dict[str, Any] = {}
-        for decision in candidates:
-            if decision.domain_id:
-                unique[decision.domain_id] = decision
-        return list(unique.values())
-
     def _supported_intents(self) -> set[str]:
         return {
             str(intent)
@@ -266,7 +246,7 @@ class RequestIntakeService:
             return True
         if _STOCK_CODE.search(query):
             return False
-        return query.endswith("?") or query.endswith("？") or query.startswith(("什么", "为什么", "如何", "请问"))
+        return query.endswith(("?", "？")) or query.startswith(("什么", "为什么", "如何", "请问"))
 
     @staticmethod
     def _looks_like_core_task(query: str, request: RequestEnvelope) -> bool:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -11,6 +12,11 @@ from typing import Any
 from research_system.runtime.agent_os import AgentOS
 from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
 from research_system.runtime.core.id_utils import generate_ulid
+from research_system.runtime.presentation.display import (
+    localize_runtime_error,
+    localize_runtime_event,
+    runtime_status_message,
+)
 from research_system.schemas.core_runtime import MainAgentState
 from research_system.schemas.execution_runtime import ExecutionRunResult, ExecutionRunSnapshot
 from research_system.schemas.protocol import ProgressState, RequestEnvelope, ResponseEnvelope
@@ -65,12 +71,12 @@ class AgentOSRunService:
             mode="core",
             intent=request.intent,
             status="running",
-            message="Agent OS accepted the request and started a background run.",
+            message="Agent OS 已接受请求并启动后台运行。",
             progress=ProgressState(
                 current_phase="request_intake",
                 active_agent="main_agent",
                 latest_event="run_accepted",
-                status_message="Agent OS run accepted; follow execution events for progress.",
+                status_message="Agent OS 已接受运行，请通过执行事件查看进度。",
                 percent=0,
             ),
             result={
@@ -124,7 +130,7 @@ class AgentOSRunService:
                 self._mark_background_failed(
                     run_root.name,
                     request_id=str((request_payload or {}).get("request_id") or "unknown"),
-                    error="background reservation could not be recovered",
+                    error="后台运行预留记录无法恢复",
                 )
 
     def _run_background(self, run_id: str, request: RequestEnvelope):
@@ -203,10 +209,8 @@ class AgentOSRunService:
             expires_at = self._parse_lease_time(existing.get("expires_at"))
             if expires_at is not None and expires_at > now:
                 return False
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 lease_path.unlink()
-            except FileNotFoundError:
-                pass
         payload = {
             "worker_id": self._worker_id,
             "claimed_at": now.isoformat(),
@@ -305,6 +309,7 @@ class AgentOSRunService:
             root = self.agent_os.run_store.load_run_paths(run_id).root
         except FileNotFoundError:
             return
+        public_error = localize_runtime_error(error, fallback="Agent OS 后台运行未能完成。")
         write_json(
             root / "run_state.json",
             {
@@ -320,15 +325,15 @@ class AgentOSRunService:
                 request_id=request_id,
                 run_id=run_id,
                 status="failed",
-                message="Agent OS background execution failed before completion.",
+                message="Agent OS 后台运行未能完成。",
                 progress=ProgressState(
                     current_phase="background_recovery",
                     active_agent="main_agent",
                     latest_event="background_failed",
-                    status_message=error,
+                    status_message=public_error,
                     percent=100,
                 ),
-                errors=[error],
+                errors=[public_error],
             ).model_dump(mode="json"),
         )
 
@@ -680,6 +685,23 @@ class AgentOSRunService:
                 "task_selection": turn.get("task_selection") or {},
             }
         snapshot = self._snapshot(run_id)
+        live_node_status: dict[str, str] = {}
+        live_node_progress: dict[str, dict[str, Any]] = {}
+        for event in self._execution_events(run_id):
+            node_id = str(event.get("node_id") or "").strip()
+            if not node_id:
+                continue
+            event_type = str(event.get("event_type") or "")
+            if event_type == "graph_node_started":
+                live_node_status[node_id] = "running"
+            elif event_type == "graph_node_completed":
+                live_node_status[node_id] = "completed"
+            elif event_type == "graph_node_failed":
+                live_node_status[node_id] = "failed"
+            elif event_type == "graph_node_blocked":
+                live_node_status[node_id] = "blocked"
+            if event_type == "agent_progress":
+                live_node_progress[node_id] = event
         rows = [
             {
                 "step_index": index,
@@ -689,9 +711,12 @@ class AgentOSRunService:
                 "executor": node.executor,
                 "objective": node.objective,
                 "status": (
-                    snapshot.node_states[node.node_id].status
-                    if node.node_id in snapshot.node_states
-                    else node.status
+                    live_node_status.get(node.node_id)
+                    or (
+                        snapshot.node_states[node.node_id].status
+                        if node.node_id in snapshot.node_states
+                        else node.status
+                    )
                 ),
                 "depends_on": list(node.depends_on),
                 "tags": list(node.tags),
@@ -700,6 +725,18 @@ class AgentOSRunService:
                 "turn_id": (detail.get("turn") or {}).get("turn_id"),
                 "task_type": (detail.get("turn") or {}).get("task_type") or "regular",
                 "execution_mode": (detail.get("turn") or {}).get("execution_mode") or "graph",
+                **(
+                    {
+                        "current_action": live_node_progress[node.node_id].get("current_action"),
+                        "next_action": live_node_progress[node.node_id].get("next_action"),
+                        "progress_phase": live_node_progress[node.node_id].get("phase"),
+                        "progress_percent": live_node_progress[node.node_id].get("progress_percent"),
+                        "stage_index": live_node_progress[node.node_id].get("stage_index"),
+                        "stage_total": live_node_progress[node.node_id].get("stage_total"),
+                    }
+                    if node.node_id in live_node_progress
+                    else {}
+                ),
             }
             for index, node in enumerate(snapshot.graph.nodes, start=1)
         ]
@@ -1061,7 +1098,7 @@ class AgentOSRunService:
                 "run_id": run_id,
                 "mode": "fund_holding_batch",
                 "status": state["status"],
-                "message": "Cancellation requested",
+                "message": "已请求取消运行",
                 "cancellation_requested": True,
             }
         cancelled = self.agent_os.cancel(run_id)
@@ -1072,14 +1109,14 @@ class AgentOSRunService:
                 "run_id": run_id,
                 "mode": "core",
                 "status": state.status,
-                "message": "Cancellation requested" if cancelled else "Run is not active",
+                "message": "已请求取消运行" if cancelled else "运行当前不处于活动状态",
                 "cancellation_requested": cancelled,
             }
         snapshot = self._snapshot(run_id)
         return {
             "run_id": run_id,
             "status": snapshot.status,
-            "message": "Cancellation requested" if cancelled else "Run is not active",
+            "message": "已请求取消运行" if cancelled else "运行当前不处于活动状态",
             "cancellation_requested": cancelled,
         }
 
@@ -1097,7 +1134,7 @@ class AgentOSRunService:
         return {
             "run_id": run_id,
             "status": turn.get("status") or (detail.get("snapshot") or {}).get("status"),
-            "message": "Pause requested" if paused else "Run is not active",
+            "message": "已请求暂停运行" if paused else "运行当前不处于活动状态",
             "pause_requested": paused,
         }
 
@@ -1127,11 +1164,11 @@ class AgentOSRunService:
             run_id=snapshot.run_id,
             intent=self._intent(snapshot),
             status=response_status,
-            message=f"Agent OS run {snapshot.status}",
+            message=runtime_status_message(snapshot.status),
             progress=ProgressState(
                 current_phase="execution_graph",
                 latest_event=f"graph_run_{snapshot.status}",
-                status_message=f"Agent OS run {snapshot.status}",
+                status_message=runtime_status_message(snapshot.status),
                 percent=100 if snapshot.status in {"completed", "completed_partial", "failed", "cancelled", "timed_out", "gated"} else 0,
             ),
             result={
@@ -1179,9 +1216,7 @@ class AgentOSRunService:
             return True
         if user_id is not None and request.get("user_id") != user_id:
             return False
-        if tenant_id is not None and request.get("tenant_id") != tenant_id:
-            return False
-        return True
+        return not (tenant_id is not None and request.get("tenant_id") != tenant_id)
 
     def _assert_run_scope(
         self,
@@ -1208,7 +1243,7 @@ class AgentOSRunService:
     def _execution_events(self, run_id: str) -> list[dict[str, Any]]:
         root = self.agent_os.run_store.load_run_paths(run_id).root
         return [
-            row for row in read_jsonl(root / "execution_events.jsonl")
+            localize_runtime_event(row) for row in read_jsonl(root / "execution_events.jsonl")
             if isinstance(row, dict)
         ]
 

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import get_args
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 import jsonschema
 import yaml
 
@@ -241,9 +242,11 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
             if "migration" in relative_parts or "vendor" in relative_parts:
                 continue
             content = path.read_text(encoding="utf-8")
-            for marker in forbidden:
-                if marker in content:
-                    violations.append(f"{path.relative_to(repository_root)}:{marker}")
+            violations.extend(
+                f"{path.relative_to(repository_root)}:{marker}"
+                for marker in forbidden
+                if marker in content
+            )
 
         self.assertEqual(violations, [])
 
@@ -403,7 +406,7 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
         self.assertNotIn("methodology_outputs", policies)
         self.assertNotIn("retired_method_catalog", policies)
         self.assertNotIn("retired_methodology_outputs", policies)
-        self.assertNotIn("3.9.2-adapted", (repository_root / "domain_packs/finance_ashare/domain.yaml").read_text(encoding="utf-8"))
+        self.assertNotIn("3.9.4-adapted", (repository_root / "domain_packs/finance_ashare/domain.yaml").read_text(encoding="utf-8"))
 
     def test_portfolio_method_adds_asset_class_artifact_to_intent_outputs(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -432,7 +435,15 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
     def test_contests_source_is_disabled_by_default_and_uses_real_payload_when_enabled(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            disabled = Settings.from_env(root)
+            with patch.dict(
+                os.environ,
+                {
+                    "COGNITRADE_SENSITIVE_SOURCES_ENABLED": "false",
+                    "COGNITRADE_SENSITIVE_SOURCE_ALLOWLIST": "",
+                    "COGNITRADE_XUEQIU_COOKIE": "",
+                },
+            ):
+                disabled = Settings.from_env(root)
             with patch(
                 "research_system.adapters.vendors.uzi_contest_adapter.UziContestAdapter._taoguba",
                 return_value=[],
@@ -452,7 +463,15 @@ class UziMethodProductIntegrationTests(unittest.TestCase):
                 "COGNITRADE_XUEQIU_COOKIE=test\n",
                 encoding="utf-8",
             )
-            enabled = Settings.from_env(root)
+            with patch.dict(
+                os.environ,
+                {
+                    "COGNITRADE_SENSITIVE_SOURCES_ENABLED": "true",
+                    "COGNITRADE_SENSITIVE_SOURCE_ALLOWLIST": "xueqiu",
+                    "COGNITRADE_XUEQIU_COOKIE": "test",
+                },
+            ):
+                enabled = Settings.from_env(root)
             with patch(
                 "research_system.adapters.vendors.uzi_contest_adapter.UziContestAdapter._xueqiu_http",
                 return_value=[{"name": "真实接口组合", "symbol": "ZH001", "owner": "接口用户", "total_gain": 61.2}],

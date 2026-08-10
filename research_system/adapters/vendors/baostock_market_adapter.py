@@ -4,7 +4,13 @@ from datetime import datetime
 from importlib import import_module
 from typing import Any
 
-from research_system.adapters.vendors.akshare_utils import coerce_numeric, normalize_value
+from research_system.adapters.vendors.akshare_utils import (
+    coerce_numeric,
+    normalize_value,
+)
+from research_system.adapters.vendors.baostock_socket_safety import (
+    install_baostock_socket_safety,
+)
 
 
 class BaoStockMarketAdapter:
@@ -20,6 +26,7 @@ class BaoStockMarketAdapter:
         end_date: str,
         adjust: str = "",
     ) -> dict[str, Any]:
+        install_baostock_socket_safety()
         bs = import_module("baostock")
         login = bs.login()
         if str(getattr(login, "error_code", "0")) != "0":

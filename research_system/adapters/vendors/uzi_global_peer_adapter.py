@@ -1,4 +1,4 @@
-"""UZI 3.9.2 global peer discovery and comparable-financial adapter.
+"""UZI 3.9.4 global peer discovery and comparable-financial adapter.
 
 This is a Pack-owned adaptation of the pure capability introduced by UZI at
 ``22e65f2``.  It has no import or runtime dependency on the external UZI
@@ -24,7 +24,7 @@ import requests
 from research_system.adapters.vendors.market_router import MarketRouter
 
 
-UZI_GLOBAL_PEER_SOURCE_COMMIT = "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359"
+UZI_GLOBAL_PEER_SOURCE_COMMIT = "0acf25122cabf493e7bc442faff62ceceb7f2f02"
 
 _YAHOO_FACTS = {
     "annualTotalRevenue": "revenue",
@@ -176,12 +176,13 @@ def _candidate_score(target: dict[str, Any], candidate: dict[str, Any]) -> tuple
         target.get("currency") and candidate.get("currency")
         and target.get("currency") == candidate.get("currency")
     )
-    if (target_has_base and candidate_has_base) or same_currency:
-        if target_cap and target_cap > 0 and candidate_cap and candidate_cap > 0:
-            distance = abs(math.log10(candidate_cap / target_cap))
-            score += max(0.0, 20.0 * (1.0 - distance / 3.0))
-            if distance <= 1:
-                reasons.append("规模可比")
+    if (
+        (target_has_base and candidate_has_base) or same_currency
+    ) and target_cap and target_cap > 0 and candidate_cap and candidate_cap > 0:
+        distance = abs(math.log10(candidate_cap / target_cap))
+        score += max(0.0, 20.0 * (1.0 - distance / 3.0))
+        if distance <= 1:
+            reasons.append("规模可比")
     coverage = _number(candidate.get("data_coverage"))
     if coverage is not None:
         score += max(0.0, min(1.0, coverage)) * 15
@@ -326,7 +327,7 @@ class YahooGlobalPeerProvider:
                 "period1": now - max(2, min(years, 10)) * 366 * 86400,
                 "period2": now,
             },
-            headers={"User-Agent": "Cognitrade/UZI-3.9.2 global-peer-comparison"},
+            headers={"User-Agent": "Cognitrade/UZI-3.9.4 global-peer-comparison"},
             timeout=self.timeout,
         )
         response.raise_for_status()
@@ -351,7 +352,7 @@ class YahooFxProvider:
                 "interval": "1d",
                 "events": "history",
             },
-            headers={"User-Agent": "Cognitrade/UZI-3.9.2 global-peer-comparison"},
+            headers={"User-Agent": "Cognitrade/UZI-3.9.4 global-peer-comparison"},
             timeout=self.timeout,
         )
         response.raise_for_status()

@@ -22,6 +22,7 @@ import type {
   BacktestTarget,
   QuantEngineStatus,
 } from '../finance-contracts'
+import { errorMessageWithRequestId, localizeErrorMessage } from '../utils/error-message'
 
 type BacktestingProps = {
   initialTarget?: BacktestTarget | null
@@ -391,6 +392,6 @@ function backtestParameterSummary(parameters: BacktestResult['parameters']): str
 }
 
 function apiErrorMessage(error: unknown): string {
-  if (error instanceof CognitradeApiError) return `${error.message}${error.requestId ? ` · request ${error.requestId}` : ''}`
-  return error instanceof Error ? error.message : String(error)
+  if (error instanceof CognitradeApiError) return errorMessageWithRequestId(error.message, error.requestId)
+  return localizeErrorMessage(error)
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -50,6 +51,7 @@ class ApiV1ErrorTests(unittest.TestCase):
         self.assertTrue(error["code"])
         self.assertIsInstance(error.get("message"), str)
         self.assertTrue(error["message"])
+        self.assertRegex(error["message"], r"[\u3400-\u9fff]")
         return error
 
     def test_missing_run_maps_file_not_found_to_404(self) -> None:
@@ -160,6 +162,17 @@ class ApiV1ErrorTests(unittest.TestCase):
                 self.assert_error_envelope(response, status_code=422)
 
         self.assertEqual(self.run_service.calls_for("history"), [])
+
+    def test_validation_details_are_also_localized(self) -> None:
+        response = self.client.get(
+            "/api/v1/runs?limit=0",
+            headers=auth_headers(),
+        )
+
+        error = self.assert_error_envelope(response, status_code=422)
+        detail_messages = [item["message"] for item in error["details"]["errors"]]
+        self.assertTrue(detail_messages)
+        self.assertTrue(all(re.search(r"[\u3400-\u9fff]", message) for message in detail_messages))
 
     def test_path_traversal_identifier_is_rejected_before_storage_access(self) -> None:
         paths = (

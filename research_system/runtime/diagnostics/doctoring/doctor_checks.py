@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 
 from research_system.runtime.diagnostics.doctoring.doctor_environment_checks import build_environment_checks
 from research_system.runtime.diagnostics.doctoring.doctor_provider_checks import build_provider_checks

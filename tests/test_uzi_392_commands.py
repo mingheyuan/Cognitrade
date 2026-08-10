@@ -11,7 +11,6 @@ import yaml
 
 from domain_packs.finance_ashare.subagents.runtime import _requested_snapshot_types
 from domain_packs.finance_ashare.subagents.task_intake import resolve_request
-from domain_packs.finance_ashare.subagents.uzi_392_commands import UZI_392_COMMAND_MAP
 from domain_packs.finance_ashare.subagents.uzi_392_native_commands import (
     execute_panel_only,
     execute_scan_trap,
@@ -30,6 +29,28 @@ ROOT = Path(__file__).resolve().parents[1]
 COMMAND_SCHEMA = json.loads(
     (ROOT / "domain_packs/finance_ashare/artifact_schemas/uzi_native_command_result.json").read_text(encoding="utf-8")
 )
+EXPECTED_COMMAND_PLANS = {
+    "analyze-stock": ("uzi_analyze_stock", "finance.uzi.native.analyze_stock"),
+    "quick-scan": ("quick_scan", "finance.uzi.quick_scan.compose"),
+    "panel-only": ("uzi_panel_only", "finance.uzi.command.panel_only"),
+    "scan-trap": ("uzi_scan_trap", "finance.uzi.command.scan_trap"),
+    "dcf": ("uzi_dcf", "finance.uzi.native.dcf"),
+    "comps": ("uzi_comps", "finance.uzi.native.comps"),
+    "lbo": ("uzi_lbo", "finance.uzi.native.quick_lbo"),
+    "segmental-model": ("uzi_segmental_model", "finance.uzi.command.segmental_model"),
+    "initiate": ("uzi_initiate", "finance.uzi.native.initiation_report"),
+    "earnings": ("uzi_earnings", "finance.uzi.native.earnings_review"),
+    "catalysts": ("uzi_catalysts", "finance.uzi.native.catalyst_calendar"),
+    "thesis": ("uzi_thesis", "finance.uzi.native.thesis_tracker"),
+    "screen": ("uzi_screen", "finance.uzi.native.quantitative_screen"),
+    "dd": ("uzi_dd", "finance.uzi.native.dd_checklist"),
+    "ic-memo": ("uzi_ic_memo", "finance.uzi.native.ic_memo"),
+    "ai-readiness": ("uzi_ai_readiness", "finance.uzi.native.ai_readiness"),
+    "earnings-preview": ("uzi_earnings_preview", "finance.uzi.native.earnings_preview"),
+    "model-update": ("uzi_model_update", "finance.uzi.native.model_update"),
+    "returns": ("uzi_returns", "finance.uzi.native.returns_attribution"),
+    "rebalance": ("uzi_rebalance", "finance.uzi.native.holding_rebalance"),
+}
 
 
 def _row(snapshot_type: str, data: dict) -> dict:
@@ -55,8 +76,8 @@ class Uzi392CommandTests(unittest.TestCase):
         Uzi392FetcherRuntime(workspace_root=ROOT / "workspace")
 
     def test_command_inventory_is_exact_and_each_row_has_an_independent_intent(self) -> None:
-        self.assertEqual(set(UZI_392_COMMAND_MAP), set(UZI_COMMAND_IDS))
-        intents = [str(row["intent"]) for row in UZI_392_COMMAND_MAP.values()]
+        self.assertEqual(set(EXPECTED_COMMAND_PLANS), set(UZI_COMMAND_IDS))
+        intents = [intent for intent, _capability in EXPECTED_COMMAND_PLANS.values()]
         self.assertEqual(len(intents), len(set(intents)))
 
     def test_all_source_parity_method_commands_have_manifest_intents_and_plans(self) -> None:
@@ -64,11 +85,7 @@ class Uzi392CommandTests(unittest.TestCase):
         intent_rows = {str(row["intent_id"]): row for row in manifest["intake"]["intents"]}
         declared_intents = set(intent_rows)
         planner = CapabilityPlanner(DomainPackRegistry.load(ROOT / "domain_packs"))
-        for command_id, row in UZI_392_COMMAND_MAP.items():
-            if not str(row["status"]).startswith("source_parity"):
-                continue
-            intent = str(row["intent"])
-            capability = str(row["capability"])
+        for command_id, (intent, capability) in EXPECTED_COMMAND_PLANS.items():
             with self.subTest(command_id=command_id):
                 self.assertIn(intent, declared_intents)
                 intent_inputs = {
@@ -98,14 +115,6 @@ class Uzi392CommandTests(unittest.TestCase):
         )
         self.assertEqual(intake["status"], "accepted")
         self.assertEqual(_requested_snapshot_types(inputs={"intent": "uzi_dcf"}, sector=None), ["market", "fundamental"])
-
-    def test_each_unfinished_command_remains_explicitly_visible(self) -> None:
-        unfinished = {
-            command
-            for command, row in UZI_392_COMMAND_MAP.items()
-            if not str(row["status"]).startswith("source_parity")
-        }
-        self.assertEqual(unfinished, set())
 
     def test_panel_only_uses_the_exact_upstream_scoring_and_panel_functions(self) -> None:
         rows = _command_snapshots()

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import importlib
 import hashlib
 import json
+from threading import Lock
+from time import sleep
 import unittest
 from unittest.mock import patch
 
@@ -20,6 +23,7 @@ from research_system.adapters.vendors.uzi_source_catalog import (
 )
 from research_system.runtime.platform.settings import Settings
 from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
+from domain_packs.finance_ashare.tools import snapshot_collector
 from domain_packs.finance_ashare.skills.uzi_source_snapshot.skill import IndustrySnapshotSkill
 from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import Uzi392FetcherRuntime
 
@@ -39,6 +43,97 @@ EXPECTED_UZI_SOURCE_IDS = {
 
 
 class UziSourceParityTests(unittest.TestCase):
+    def test_capital_flow_fetcher_is_the_exact_pinned_uzi_source(self) -> None:
+        source_path = (
+            Path(__file__).resolve().parents[1]
+            / "domain_packs"
+            / "finance_ashare"
+            / "vendor"
+            / "uzi_3_9_2"
+            / "scripts"
+            / "fetch_capital_flow.py"
+        )
+        self.assertEqual(
+            hashlib.sha256(source_path.read_bytes()).hexdigest(),
+            "d92fdac22e1fee2363e27e21984aa98159969eef1b5a8bf5fc9f48546b8ecfbe",
+        )
+
+    def test_capital_flow_snapshot_invokes_uzi_without_provider_substitution(self) -> None:
+        upstream = {
+            "ticker": "688256.SH",
+            "data": {"holder_count_history": [{"股东户数": 12345}]},
+            "source": "akshare:multi",
+            "fallback": False,
+        }
+
+        with patch.object(Uzi392FetcherRuntime, "collect", return_value=upstream) as collect:
+            snapshot = snapshot_collector._run_uzi_fetcher_snapshot(
+                query="分析寒武纪",
+                symbol="688256",
+                snapshot_type="capital_flow",
+                provider_registry=None,
+            )
+
+        collect.assert_called_once_with(
+            "12_capital_flow",
+            ticker="688256",
+            industry=None,
+            dependencies=None,
+            options=None,
+        )
+        self.assertEqual(snapshot["facts"]["_uzi_raw_result"], upstream)
+
+    def test_uzi_resource_sensitive_fetchers_share_one_serial_execution_lane(self) -> None:
+        state_lock = Lock()
+        active = 0
+        maximum_active = 0
+
+        def collect(_runtime, fetcher_id: str, **kwargs):
+            nonlocal active, maximum_active
+            with state_lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            try:
+                sleep(0.03)
+                return {
+                    "ticker": kwargs["ticker"],
+                    "data": {"fetcher_id": fetcher_id},
+                    "source": f"uzi:{fetcher_id}",
+                    "fallback": False,
+                }
+            finally:
+                with state_lock:
+                    active -= 1
+
+        snapshot_types = ("industry", "valuation", "capital_flow")
+        with (
+            patch.object(Uzi392FetcherRuntime, "collect", autospec=True, side_effect=collect),
+            ThreadPoolExecutor(max_workers=3) as executor,
+        ):
+            futures = [
+                executor.submit(
+                    snapshot_collector._run_uzi_fetcher_snapshot,
+                    query="分析寒武纪",
+                    symbol="688256",
+                    snapshot_type=snapshot_type,
+                    provider_registry=None,
+                )
+                for snapshot_type in snapshot_types
+            ]
+            for future in futures:
+                future.result()
+
+        self.assertEqual(maximum_active, 1)
+        self.assertEqual(snapshot_collector._UZI_MAX_WORKERS, 6)
+
+    def test_uzi_providers_do_not_add_an_aggregate_collection_timeout(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        tools_root = repository_root / "domain_packs" / "finance_ashare" / "tools"
+        for filename in ("financial_data_provider.yaml", "fund_data_provider.yaml"):
+            with self.subTest(filename=filename):
+                tool = yaml.safe_load((tools_root / filename).read_text(encoding="utf-8"))
+                self.assertIsNone(tool.get("timeout_seconds"))
+
     def test_catalog_fields_are_deep_equal_to_pinned_upstream_registry(self) -> None:
         Uzi392FetcherRuntime(workspace_root=Path(__file__).resolve().parents[1] / "workspace")
         upstream = importlib.import_module("lib.data_source_registry")
@@ -86,9 +181,9 @@ class UziSourceParityTests(unittest.TestCase):
         self.assertEqual(config["catalog"]["source_count"], 73)
         self.assertEqual(
             config["catalog"]["commit"],
-            "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359",
+            "0acf25122cabf493e7bc442faff62ceceb7f2f02",
         )
-        self.assertEqual(config["catalog"]["version"], "3.9.2")
+        self.assertEqual(config["catalog"]["version"], "3.9.4")
         self.assertEqual(set(config["sources"]), EXPECTED_UZI_SOURCE_IDS)
 
         provider_policy = yaml.safe_load(

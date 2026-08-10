@@ -36,6 +36,17 @@ _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+class LocalizedCORSMiddleware(CORSMiddleware):
+    """Keep Starlette's CORS failures consistent with the Chinese API surface."""
+
+    def preflight_response(self, request_headers):
+        response = super().preflight_response(request_headers)
+        if response.status_code >= 400:
+            response.body = "CORS 预检请求不符合允许策略".encode("utf-8")
+            response.headers["content-length"] = str(len(response.body))
+        return response
+
+
 def create_app(
     *,
     settings: Settings | None = None,
@@ -146,7 +157,7 @@ def create_app(
         lifespan=lifespan,
     )
     application.add_middleware(
-        CORSMiddleware,
+        LocalizedCORSMiddleware,
         allow_origins=list(resolved_api_config.cors_origins),
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "OPTIONS"],

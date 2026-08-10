@@ -18,7 +18,7 @@
       "properties": {
         "repository": {"type": "string", "format": "uri"},
         "commit": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
-        "version": {"const": "3.9.2"},
+        "version": {"const": "3.9.4"},
         "license": {"const": "MIT"},
         "license_sha256": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
         "vendored_root": {"type": "string", "minLength": 1}

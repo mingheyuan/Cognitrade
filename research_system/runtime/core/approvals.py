@@ -239,9 +239,12 @@ class HumanApprovalStore:
         require_binding: bool = False,
     ) -> bool:
         approval = self.get(approval_id)
-        if approval is not None and approval.expires_at is not None:
-            if approval.expires_at <= datetime.now(timezone.utc):
-                return False
+        if (
+            approval is not None
+            and approval.expires_at is not None
+            and approval.expires_at <= datetime.now(timezone.utc)
+        ):
+            return False
         return bool(
             approval is not None
             and approval.status == "approved"
@@ -284,12 +287,15 @@ class HumanApprovalStore:
             field: getattr(approval, field)
             for field in expected
         }
-        if require_binding and any(value is not None for value in expected.values()):
-            if any(
+        if (
+            require_binding
+            and any(value is not None for value in expected.values())
+            and any(
                 expected[field] is not None and bound[field] is None
                 for field in expected
-            ):
-                return False
+            )
+        ):
+            return False
         return all(
             expected_value is None or bound[field] == expected_value
             for field, expected_value in expected.items()

@@ -115,9 +115,11 @@ class ApiV1RunsTests(unittest.TestCase):
             repo_root=REPO_ROOT,
         )
 
-        with self.assertRaisesRegex(ValueError, "COGNITRADE_API_TOKEN is required"):
-            with TestClient(app, raise_server_exceptions=False):
-                pass
+        with (
+            self.assertRaisesRegex(ValueError, "COGNITRADE_API_TOKEN is required"),
+            TestClient(app, raise_server_exceptions=False),
+        ):
+            pass
 
     def test_unauthenticated_mode_rejects_non_loopback_binding(self) -> None:
         config = ApiConfig(
@@ -149,9 +151,11 @@ class ApiV1RunsTests(unittest.TestCase):
             repo_root=REPO_ROOT,
         )
 
-        with self.assertRaisesRegex(RuntimeError, "chat startup failed"):
-            with TestClient(app, raise_server_exceptions=False):
-                pass
+        with (
+            self.assertRaisesRegex(RuntimeError, "chat startup failed"),
+            TestClient(app, raise_server_exceptions=False),
+        ):
+            pass
 
         self.assertTrue(run_service.closed)
 
@@ -215,6 +219,32 @@ class ApiV1RunsTests(unittest.TestCase):
                 )
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.json()["status"], status)
+
+    def test_failed_run_and_history_messages_are_localized_at_api_boundary(self) -> None:
+        self.run_service.outputs["run"] = completed_response(status="failed")
+        self.run_service.outputs["history"] = [
+            {
+                "run_id": RUN_ID,
+                "status": "failed",
+                "message": "provider execution failed",
+                "error": "RemoteDisconnected",
+            }
+        ]
+
+        created = self.client.post(
+            "/api/v1/runs",
+            headers=auth_headers(),
+            json={"user_query": "分析 600519"},
+        )
+        history = self.client.get("/api/v1/runs", headers=auth_headers())
+
+        self.assertEqual(created.status_code, 200, created.text)
+        self.assertRegex(created.json()["message"], r"[\u3400-\u9fff]")
+        self.assertRegex(created.json()["progress"]["status_message"], r"[\u3400-\u9fff]")
+        self.assertRegex(created.json()["errors"][0], r"[\u3400-\u9fff]")
+        self.assertEqual(history.status_code, 200, history.text)
+        self.assertRegex(history.json()[0]["message"], r"[\u3400-\u9fff]")
+        self.assertNotIn("RemoteDisconnected", history.json()[0]["error"])
 
     def test_history_filters_before_applying_limit(self) -> None:
         response = self.client.get(
@@ -498,8 +528,8 @@ class ApiV1RunsTests(unittest.TestCase):
 
 
 class _ClosedClientContext:
-    def __exit__(self, exc_type, exc, traceback) -> None:
-        return None
+    def __exit__(self, *_args) -> None:
+        pass
 
 
 if __name__ == "__main__":

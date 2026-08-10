@@ -87,6 +87,71 @@ class AgentOSApiTests(unittest.TestCase):
             self.assertFalse(any(event["event_type"] == "assistant_message_ready" for event in events))
             self.assertTrue(any(event["event_type"] == "assistant_message_status" for event in events))
 
+    def test_holding_report_child_uses_durable_report_without_second_model_call(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            settings = Settings.from_env(repository_root).model_copy(
+                update={
+                    "runs_root": root / "runs",
+                    "memory_root": root / "memory",
+                    "domain_packs_root": repository_root / "domain_packs",
+                }
+            )
+            agent_os = AgentOS(settings)
+            agent_os.main_agent.llm_provider = None
+            request = RequestEnvelope(
+                intent="stock_check",
+                user_query="分析 600000",
+                constraints={"fund_holding_report_child": True},
+            )
+            run_id, paths, _ = agent_os.run_store.create_run(request, "stock_check")
+            graph = ExecutionGraph(
+                domain_id="finance_ashare",
+                objective=request.user_query,
+                metadata={"intent": "stock_check"},
+            )
+            snapshot = ExecutionRunSnapshot(
+                run_id=run_id,
+                thread_id="holding:batch:600000:1",
+                request_id=request.request_id,
+                graph=graph,
+                status="completed",
+            )
+            runner = agent_os._runner(run_id)
+            runner.board.add(
+                ArtifactRecord(
+                    artifact_type="research_report",
+                    run_id=run_id,
+                    thread_id=snapshot.thread_id,
+                    request_id=request.request_id,
+                    producer=ArtifactProducer(
+                        executor="uzi_report_composer",
+                        capability="finance.uzi.native.report.compose",
+                        node_id="report",
+                        domain_id="finance_ashare",
+                    ),
+                    content={"conclusion": "UZI 报告结论", "report_allowed": True},
+                    source_refs=[{"type": "test", "id": "source-1"}],
+                    confidence=0.8,
+                )
+            )
+
+            result = agent_os._ensure_graph_assistant_message(
+                ExecutionRunResult(snapshot=snapshot)
+            )
+            artifacts = runner.board.list_artifacts(run_id=run_id, status="active")
+            synthesis = next(row for row in artifacts if row.artifact_type == "main_agent_synthesis")
+            assistant = next(row for row in artifacts if row.artifact_type == "assistant_message")
+            events = read_jsonl(paths.root / "execution_events.jsonl")
+
+            self.assertEqual(result.snapshot.status, "completed")
+            self.assertFalse(synthesis.content["model_generated"])
+            self.assertEqual(assistant.content["delivery_status"], "completed")
+            self.assertFalse(assistant.content["synthesis_unavailable"])
+            self.assertTrue(any(event["event_type"] == "assistant_message_ready" for event in events))
+            self.assertFalse(any(event["event_type"] == "graph_run_partial" for event in events))
+
     def test_gated_graph_response_preserves_gated_status(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary_directory:

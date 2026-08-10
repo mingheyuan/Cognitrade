@@ -21,8 +21,8 @@ from research_system.runtime.planning.capability_planner import (
 )
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.providers.provider_registry import ProviderRegistry
-from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
-from research_system.runtime.storage.jsonl import append_jsonl
+from research_system.runtime.presentation.display import localize_runtime_error, runtime_status_message
+from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.event_store import append_canonical_event
 from research_system.runtime.storage.runs.run_store import RunStore
@@ -377,7 +377,10 @@ class AgentOS:
                 },
             )
         )
-        if graph.governance.timeout_seconds is None:
+        if (
+            graph.governance.timeout_seconds is None
+            and str(graph.metadata.get("deadline_policy") or "default") != "unbounded"
+        ):
             graph.governance.timeout_seconds = float(self.settings.run_timeout_seconds)
         thread_id = str(request.thread_id or request.slots.get("chat_thread_id") or graph.graph_id)
         decision = RequestIntakeDecision(
@@ -748,15 +751,15 @@ class AgentOS:
             ),
             status=status,  # type: ignore[arg-type]
             message=(
-                "This idempotent Run is already in progress."
+                "该幂等 Run 已在执行中。"
                 if status == "running"
-                else f"Agent OS Run is {status}."
+                else runtime_status_message(status, subject="Agent OS Run ")
             ),
             progress=ProgressState(
                 current_phase="turn",
                 active_agent="main_agent",
                 latest_event="turn_replayed_for_idempotency",
-                status_message=f"Agent OS Run is {status}.",
+                status_message=runtime_status_message(status, subject="Agent OS Run "),
                 percent=100 if status in RUN_TERMINAL_STATUSES else 0,
             ),
             continuation=continuation if isinstance(continuation, dict) else None,
@@ -862,12 +865,12 @@ class AgentOS:
         decision: RequestIntakeDecision,
         execution_mode: str,
     ) -> TurnConfig:
-        """Align the root Turn deadline with the selected DomainPack profile.
+        """Align the root Turn deadline policy with the selected DomainPack profile.
 
-        Graph governance already carries the profile budget, but the enclosing
-        root Turn is created first.  Without this projection a Medium/Deep UZI
-        run is cut off by the global 120-second default before the graph's own
-        governed deadline can be honored.
+        UZI research profiles describe depth and expected latency; upstream
+        waits for submitted fetchers instead of enforcing a wall-clock cutoff.
+        The enclosing root Turn must therefore opt out of the Agent OS default
+        deadline whenever the selected profile declares unbounded execution.
         """
 
         config = self.turn_runner.resolve_config(
@@ -900,7 +903,12 @@ class AgentOS:
             else str((policies.get("intent_profiles") or {}).get(intent) or "").strip().lower()
             or str(policies.get("default_profile") or "").strip().lower()
         )
-        timeout = (profiles.get(selected_profile) or {}).get("max_duration_seconds")
+        profile_policy = dict(profiles.get(selected_profile) or {})
+        if str(profile_policy.get("deadline_policy") or "default").strip().lower() == "unbounded":
+            return config.model_copy(
+                update={"deadline_policy": "unbounded", "timeout_seconds": None}
+            )
+        timeout = profile_policy.get("max_duration_seconds")
         if timeout is None:
             return config
         return config.model_copy(update={"timeout_seconds": float(timeout)})
@@ -1165,7 +1173,7 @@ class AgentOS:
                 current_phase="request_intake",
                 active_agent="main_agent",
                 latest_event="clarification_requested",
-                status_message="RequestIntake requires more information.",
+                status_message="RequestIntake 需要补充信息。",
                 percent=0,
             ),
             result={
@@ -1210,7 +1218,7 @@ class AgentOS:
                 "thread_id": str(request.thread_id or f"run:{effective_run_id}"),
                 "request_id": request.request_id,
                 "actor": "agent_os",
-                "message": "Agent OS run accepted for background execution.",
+                "message": "Agent OS 已接受后台运行请求。",
             },
         )
         return effective_run_id
@@ -1455,7 +1463,7 @@ class AgentOS:
         status = str(turn_payload.get("status") or "")
         if status in RUN_TERMINAL_STATUSES or status in {"paused", "waiting_approval"}:
             return False
-        self.turn_runner.pause(run_id, reason="pause requested by caller")
+        self.turn_runner.pause(run_id, reason="调用方已请求暂停运行。")
         return True
 
     def cancel(self, run_id: str) -> bool:
@@ -1471,7 +1479,7 @@ class AgentOS:
         status = str(turn_payload.get("status") or "")
         if status in RUN_TERMINAL_STATUSES or status == "cancelled":
             return False
-        self.turn_runner.cancel(run_id, reason="cancel requested by caller")
+        self.turn_runner.cancel(run_id, reason="调用方已请求取消运行。")
         return True
 
     def enqueue_turn_follow_up(
@@ -1812,6 +1820,11 @@ class AgentOS:
             )
         if snapshot.clarification_question:
             message = snapshot.clarification_question
+        elif status not in {"completed", "completed_partial"}:
+            message = localize_runtime_error(
+                message,
+                fallback=runtime_status_message(status),
+            )
         return ResponseEnvelope(
             mode="graph",
             request_id=snapshot.request_id,
@@ -1836,7 +1849,7 @@ class AgentOS:
                 current_phase="execution_graph",
                 active_agent="main_agent",
                 latest_event=f"graph_run_{snapshot.status}",
-                status_message=f"Agent OS run {snapshot.status}",
+                status_message=runtime_status_message(snapshot.status),
                 percent=100 if status in {"completed", "completed_partial", "failed", "cancelled", "timed_out", "gated"} else 0,
             ),
             result={
@@ -1875,6 +1888,12 @@ class AgentOS:
             if result.clarification_question
             else result.status
         )
+        response_message = result.message
+        if result.status not in {"completed", "completed_partial"} and not result.clarification_question:
+            response_message = localize_runtime_error(
+                result.message,
+                fallback=runtime_status_message(result.status, subject="Main Agent 运行"),
+            )
         return ResponseEnvelope(
             mode=result.mode,
             request_id=result.request_id,
@@ -1884,7 +1903,7 @@ class AgentOS:
             task_type=str(turn_payload.get("task_type") or "regular"),
             intent=result.intent,
             status=response_status,
-            message=result.message,
+            message=response_message,
             clarification=(
                 {
                     "question": result.clarification_question,
@@ -1897,13 +1916,13 @@ class AgentOS:
                 current_phase=f"{result.mode}_agent_loop",
                 active_agent="main_agent",
                 latest_event=f"main_agent_{result.status}",
-                status_message=f"Main Agent {result.mode} loop {result.status}",
+                status_message=runtime_status_message(result.status, subject=f"Main Agent {result.mode} loop "),
                 percent=100 if result.status in {"completed", "failed", "cancelled"} else 0,
             ),
             result={
                 "protocol": "agent_os",
                 "mode": result.mode,
-                "message": result.message,
+                "message": response_message,
                 "artifact_ids": list(result.artifact_ids),
                 "pending_approval_ids": list(result.pending_approval_ids),
                 "tool_calls": [item.model_dump(mode="json") for item in result.tool_calls],
@@ -1926,6 +1945,12 @@ class AgentOS:
 
     def _write_core_summary(self, result: MainAgentRunResult) -> None:
         root = self.run_store.load_run_paths(result.run_id).root
+        summary_message = result.message
+        if result.status not in {"completed", "completed_partial"}:
+            summary_message = localize_runtime_error(
+                result.message,
+                fallback=runtime_status_message(result.status, subject="Main Agent 运行"),
+            )
         run_state = read_json(root / "run_state.json") or {}
         run_state.update(
             {
@@ -1946,7 +1971,7 @@ class AgentOS:
                 "intent": result.intent or "core.conversation.answer",
                 "mode": result.mode,
                 "status": result.status,
-                "message": result.message,
+                "message": summary_message,
                 "artifact_ids": list(result.artifact_ids),
                 "tool_call_ids": [item.call_id for item in result.tool_calls],
             },
@@ -2054,7 +2079,7 @@ class AgentOS:
                 "intent": intent or f"domain:{result.snapshot.graph.domain_id}",
                 "domain_id": result.snapshot.graph.domain_id,
                 "status": result.snapshot.status,
-                "message": f"Agent OS run {result.snapshot.status}",
+                "message": runtime_status_message(result.snapshot.status),
                 "graph_id": result.snapshot.graph.graph_id,
                 "graph_revision": result.snapshot.graph.revision,
                 "artifact_ids": result.artifact_ids,

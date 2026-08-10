@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Final
 
 
-# Exact source identifiers and metadata shipped by UZI-Skill 3.9.2.  The
+# Exact source identifiers and metadata shipped by UZI-Skill 3.9.4.  The
 # upstream registry is deliberately a catalogue (not a claim that every source
 # returned data for a particular run).  Runtime adapters must still emit their
 # actual source trace.

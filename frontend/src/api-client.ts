@@ -26,6 +26,7 @@ import type {
   QuantEngineStatus,
   SecuritySearchResponse,
 } from './finance-contracts'
+import { localizeErrorMessage } from './utils/error-message'
 
 export const API_BASE_STORAGE_KEY = 'cognitrade.api.base-url'
 export const API_TOKEN_STORAGE_KEY = 'cognitrade.api.token'
@@ -112,7 +113,7 @@ export class CognitradeApiError extends Error {
   readonly requestId?: string
 
   constructor(message: string, status: number, code?: string, requestId?: string) {
-    super(message)
+    super(localizeErrorMessage(message, `API 请求失败${status ? `（HTTP ${status}）` : ''}。`))
     this.name = 'CognitradeApiError'
     this.status = status
     this.code = code
@@ -283,13 +284,12 @@ export class CognitradeApiClient {
       )
     } catch (error) {
       if (signal?.aborted) return
-      const reason = error instanceof Error ? error.message : String(error)
-      throw new CognitradeApiError(`无法连接 Cognitrade API：${reason}`, 0, 'network_error')
+      throw new CognitradeApiError(localizeErrorMessage(error, '无法连接 Cognitrade API，请确认后端服务和网络连接正常。'), 0, 'network_error')
     }
     if (!response.ok) {
       const body = await response.text()
       throw new CognitradeApiError(
-        body || `API 请求失败（HTTP ${response.status}）`,
+        apiErrorMessageFromText(body) || `API 请求失败（HTTP ${response.status}）`,
         response.status,
         undefined,
       )
@@ -432,8 +432,7 @@ export class CognitradeApiClient {
     try {
       response = await fetch(`${this.settings.baseUrl}${path}`, { headers })
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error)
-      throw new CognitradeApiError(`无法连接 Cognitrade API：${reason}`, 0, 'network_error')
+      throw new CognitradeApiError(localizeErrorMessage(error, '无法连接 Cognitrade API，请确认后端服务和网络连接正常。'), 0, 'network_error')
     }
     if (!response.ok) {
       const contentType = response.headers.get('content-type') || ''
@@ -465,8 +464,7 @@ export class CognitradeApiClient {
     try {
       response = await fetch(`${baseUrl}${path}`, { ...init, headers })
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error)
-      throw new CognitradeApiError(`无法连接 Cognitrade API：${reason}`, 0, 'network_error')
+      throw new CognitradeApiError(localizeErrorMessage(error, '无法连接 Cognitrade API，请确认后端服务和网络连接正常。'), 0, 'network_error')
     }
 
     const contentType = response.headers.get('content-type') || ''
@@ -483,6 +481,17 @@ export class CognitradeApiClient {
       body?.error?.code,
       body?.error?.request_id || response.headers.get('X-Request-ID') || undefined,
     )
+  }
+}
+
+function apiErrorMessageFromText(value: string): string {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  try {
+    const payload = JSON.parse(text) as ApiErrorBody
+    return payload?.error?.message || (typeof payload?.detail === 'string' ? payload.detail : '')
+  } catch {
+    return localizeErrorMessage(text)
   }
 }
 

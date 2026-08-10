@@ -91,7 +91,7 @@ def run_uzi_provider_smoke(
     snapshot_types = [snapshot_type for _fetcher_id, snapshot_type in selected]
     started = time.monotonic()
     snapshots = collector(
-        query=f"UZI 3.9.2 provider smoke for {symbol}",
+        query=f"UZI 3.9.4 provider smoke for {symbol}",
         symbols=[symbol],
         snapshot_types=snapshot_types,
         sector=sector,
@@ -212,7 +212,7 @@ def _assemble_report(
     incomplete = [fetcher_id for fetcher_id, _snapshot_type in selected[len(rows) :]]
     return {
         "schema_version": "1",
-        "uzi_version": "3.9.2",
+        "uzi_version": "3.9.4",
         "symbol": symbol,
         "sector": sector,
         "requested_count": len(selected),
@@ -433,7 +433,7 @@ def _parse_dimensions(value: str) -> list[str]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run explicit real-provider smoke checks for UZI 3.9.2 dimensions."
+        description="Run explicit real-provider smoke checks for UZI 3.9.4 dimensions."
     )
     parser.add_argument("--symbol", default="600519", help="A-share security code")
     parser.add_argument("--sector", default=None, help="Optional sector needed by policy data")

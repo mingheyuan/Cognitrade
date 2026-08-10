@@ -1395,8 +1395,11 @@ body::after {
 }
 .conc-block ul { margin-left: 16px; color: var(--text-main); font-size: 11px; line-height: 1.5; }
 .conc-block li { margin-bottom: 2px; }
-.conc-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 11px; }
+.conc-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 4px 0; font-size: 11px; }
 .conc-row strong { color: var(--neon-gold); }
+/* v3.9.4 · 方法论行 · 标签不换行 + 与正文留距，正文右对齐可读 */
+.conc-row span { flex-shrink: 0; color: var(--text-dim); white-space: nowrap; }
+.conc-row em { font-style: normal; color: var(--text-main); text-align: right; line-height: 1.5; min-width: 0; }
 
 /* Highlight target message after seat click */
 .chat-msg.flash-highlight {
@@ -1758,7 +1761,21 @@ body::after {
   transition: all .2s ease;
   box-shadow: var(--shadow-sm);
 }
+/* v3.9.4 · 顶部彩色分级条（按分数档次着色） */
+.dim-card::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  border-radius: 14px 14px 0 0;
+  background: var(--border);
+  opacity: .0;
+  transition: opacity .2s ease;
+}
 .dim-card:hover { border-color: var(--neon-cyan); box-shadow: var(--shadow-md); transform: translateY(-2px); }
+.dim-card:hover::before { opacity: 1; background: linear-gradient(90deg, var(--neon-cyan), var(--accent-indigo)); }
+/* 常驻分级色条：与右上角分数同色系 */
+.dim-card:has(.dim-score .num.high)::before { opacity: 1; background: linear-gradient(90deg, var(--bull-green), transparent); }
+.dim-card:has(.dim-score .num.mid)::before  { opacity: 1; background: linear-gradient(90deg, var(--neon-gold), transparent); }
+.dim-card:has(.dim-score .num.low)::before  { opacity: 1; background: linear-gradient(90deg, var(--bear-red), transparent); }
 .dim-card .dim-head {
   display: flex; align-items: flex-start; justify-content: space-between;
   margin-bottom: 10px;
@@ -1992,6 +2009,28 @@ footer {
   line-height: 1.7;
 }
 footer strong { color: var(--text-dim); }
+
+/* ═══════════════ v3.9.4 · 全局体验增强 ═══════════════ */
+/* 平滑锚点滚动 + 滚动条精细 + 文本选择色 + 键盘聚焦可见 */
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+::selection { background: var(--neon-cyan); color: #fff; }
+[data-theme="dark"] ::selection { background: var(--neon-cyan); color: #06121a; }
+:focus-visible { outline: 2px solid var(--neon-cyan); outline-offset: 2px; border-radius: 4px; }
+/* 细滚动条（桌面 webkit） */
+* { scrollbar-width: thin; scrollbar-color: var(--border-hot) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: var(--border-hot); border-radius: 8px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--text-ghost); }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* section-head 进入视口时的轻浮现（尊重 reduced-motion） */
+@media (prefers-reduced-motion: no-preference) {
+  .section-head, .dim-card, .fighter, .zone { animation: rise-in .5s ease both; }
+  @keyframes rise-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+}
+/* TOC 锚点不被 sticky 顶栏遮挡 */
+section[id], div[id^="dim-"], .dim-card[id] { scroll-margin-top: 20px; }
 
 /* ═══════════════ O.o LOGO EYE ═══════════════ */
 .oo-eye {
@@ -2460,6 +2499,14 @@ footer strong { color: var(--text-dim); }
   .zone .zone-label { font-size: 9px; }
   .zone .zone-price { font-size: 30px; }
   .zone .zone-rationale { font-size: 10px; }
+
+  /* v3.9.4 · 机构建模移动端适配 · LBO 迷你图堆叠 + 敏感性表横向滚动 */
+  .lbo-block { padding: 14px !important; }
+  .lbo-block .lbo-spark-grid { grid-template-columns: 1fr !important; gap: 12px !important; }
+  .lbo-block > div[style*="repeat(4"], .dcf-summary { grid-template-columns: 1fr 1fr !important; gap: 10px !important; }
+  .sens-heatmap { overflow-x: auto; -webkit-overflow-scrolling: touch; font-size: 11px !important; max-width: 100%; }
+  .sens-heatmap th, .sens-heatmap td { padding: 5px 6px !important; white-space: nowrap; font-size: 11px !important; }
+  .inst-modeling-wrap table { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
 
   /* footer */
   footer { font-size: 10px; padding: 24px 0 8px; }

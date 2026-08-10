@@ -212,13 +212,15 @@ class AgentOSDashboardService:
             board_path = paths.artifact_board
             if not board_path.exists():
                 continue
-            for artifact in ArtifactBoard(board_path).list_artifacts(
-                thread_id=None,
-                artifact_type=artifact_type,
-                status="active",
-            ):
-                if artifact.producer.domain_id == domain_id:
-                    artifacts.append(artifact)
+            artifacts.extend(
+                artifact
+                for artifact in ArtifactBoard(board_path).list_artifacts(
+                    thread_id=None,
+                    artifact_type=artifact_type,
+                    status="active",
+                )
+                if artifact.producer.domain_id == domain_id
+            )
         return sorted(artifacts, key=lambda artifact: artifact.created_at, reverse=True)
 
     @staticmethod
@@ -242,9 +244,7 @@ class AgentOSDashboardService:
             return True
         if user_id is not None and request.get("user_id") != user_id:
             return False
-        if tenant_id is not None and request.get("tenant_id") != tenant_id:
-            return False
-        return True
+        return not (tenant_id is not None and request.get("tenant_id") != tenant_id)
 
     @staticmethod
     def _content_value(value: Any, path: str) -> Any:

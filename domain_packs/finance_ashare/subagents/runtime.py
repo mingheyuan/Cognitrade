@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
-from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshot_bundle, collect_snapshots
+from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshots
 from domain_packs.finance_ashare.subagents.fund_methodology import build_fund_analysis
 from domain_packs.finance_ashare.subagents.uzi_methodology import (
-    UZI_METHOD_VERSION,
     build_features,
     build_panel_review,
     build_quick_scan,
@@ -837,6 +837,29 @@ def execute_uzi_native_full_analysis(context):
         recovery = dict((bundle.content or {}).get("collection") or {}).get("uzi_recovery")
         if isinstance(recovery, dict):
             recovery_history = list(recovery.get("attempts") or [])
+    progress_emitter = getattr(context, "progress_emitter", None)
+    highest_progress = 0
+
+    def emit_progress(progress: dict[str, Any]) -> None:
+        nonlocal highest_progress
+        if not callable(progress_emitter):
+            return
+        requested_percent = max(0, min(99, int(progress.get("progress_percent") or 0)))
+        highest_progress = max(highest_progress, requested_percent)
+        progress_emitter({
+            "node_id": context.node.node_id,
+            "phase": "uzi_native_analysis",
+            "status": "running",
+            "progress_source": "runtime",
+            "current_action": str(progress.get("current_action") or "正在执行 UZI 结构化分析"),
+            "next_action": str(progress.get("next_action") or "继续重算并执行机械自审"),
+            "progress_percent": highest_progress,
+            "stage_index": progress.get("stage_index"),
+            "stage_total": progress.get("stage_total"),
+            "uzi_stage": progress.get("stage"),
+            "analysis_cycle": progress.get("cycle"),
+        })
+
     content = execute_native_analysis(
         rows,
         symbols,
@@ -844,6 +867,7 @@ def execute_uzi_native_full_analysis(context):
         llm_provider=getattr(context, "llm_provider", None),
         cancellation=getattr(context, "cancellation", None),
         recovery_history=recovery_history,
+        progress_callback=emit_progress,
     )
     content["holding_context"] = holding_context or None
     if normalized is not None:
@@ -1079,7 +1103,7 @@ def _evaluate_uzi_native_method(context, method_id: str) -> ArtifactDraft:
         risk_flags=list(content.get("data_gap") or []),
         metadata={
             "quality_status": quality,
-            "methodology_version": "3.9.2-source-parity",
+            "methodology_version": "3.9.4-source-parity",
             "source_commit": content.get("source_commit"),
             "native_method_id": method_id,
         },
@@ -1194,7 +1218,7 @@ def _uzi_native_command_artifact(
         risk_flags=list(content.get("data_gap") or []),
         metadata={
             "quality_status": quality,
-            "methodology_version": "3.9.2-source-parity",
+            "methodology_version": "3.9.4-source-parity",
             "source_commit": content.get("source_commit"),
             "native_command_id": content.get("command_id"),
             "phase": content.get("phase"),
@@ -1647,7 +1671,7 @@ def evaluate_uzi_native_report_gate(context):
     if not allowed or critical:
         return {
             "verdict": "fail",
-            "reason": f"UZI native critical gate blocked report export (critical_count={critical})",
+            "reason": f"UZI native 关键质量门禁已阻止报告导出（critical_count={critical}）",
             "evidence_refs": list(context.artifact.source_refs),
             "score": 0.0,
         }
@@ -2021,42 +2045,6 @@ def _collect_provider_snapshots(
         sector=sector,
         cancellation=cancellation,
     )
-
-
-def _collect_missing_snapshot_types(
-    *,
-    query: str,
-    symbols: list[str],
-    sector: str | None,
-    snapshots: list[object],
-    requested_types: list[str],
-    cancellation,
-) -> list[object]:
-    available = {
-        (str(row.get("snapshot_type") or ""), str(row.get("symbol") or ""))
-        for row in snapshots
-        if isinstance(row, dict)
-    }
-    missing = [
-        snapshot_type
-        for snapshot_type in requested_types
-        if snapshot_type in {"sector", "policy"}
-        and (snapshot_type, "") not in available
-        or snapshot_type not in {"sector", "policy"}
-        and any((snapshot_type, symbol) not in available for symbol in symbols)
-    ]
-    if not missing:
-        return snapshots
-    return [
-        *snapshots,
-        *_collect_provider_snapshots(
-            query=query,
-            symbols=symbols,
-            snapshot_types=missing,
-            sector=sector,
-            cancellation=cancellation,
-        ),
-    ]
 
 
 def _snapshot_source_refs(snapshots: list[object]) -> list[dict[str, str]]:
@@ -2617,18 +2605,24 @@ def _target_symbols(artifacts) -> list[str]:
     for artifact in artifacts:
         content = artifact.content if isinstance(artifact.content, dict) else {}
         candidates: list[object] = [*(content.get("symbols") or [])]
-        for snapshot in content.get("snapshots") or content.get("items") or []:
-            if isinstance(snapshot, dict):
-                candidates.append(snapshot.get("symbol"))
+        candidates.extend(
+            snapshot.get("symbol")
+            for snapshot in content.get("snapshots") or content.get("items") or []
+            if isinstance(snapshot, dict)
+        )
         for key in ("screened_candidates", "watchlist_candidates"):
-            for candidate in content.get(key) or []:
-                if isinstance(candidate, dict):
-                    candidates.append(candidate.get("symbol") or candidate.get("code"))
+            candidates.extend(
+                candidate.get("symbol") or candidate.get("code")
+                for candidate in content.get(key) or []
+                if isinstance(candidate, dict)
+            )
         screening = content.get("screening") if isinstance(content.get("screening"), dict) else {}
         for key in ("screened_candidates", "watchlist_candidates"):
-            for candidate in screening.get(key) or []:
-                if isinstance(candidate, dict):
-                    candidates.append(candidate.get("symbol") or candidate.get("code"))
+            candidates.extend(
+                candidate.get("symbol") or candidate.get("code")
+                for candidate in screening.get(key) or []
+                if isinstance(candidate, dict)
+            )
         for value in candidates:
             symbol = str(value or "").strip()
             if _STOCK_CODE_PATTERN.fullmatch(symbol) and symbol not in symbols:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from threading import Lock
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 
 import jsonschema
@@ -25,7 +27,7 @@ _GROUP_DIMENSIONS = {
 
 def _deep_base() -> dict:
     return {
-        "methodology_version": "3.9.2-adapted",
+        "methodology_version": "3.9.4-adapted",
         "profile": "deep",
         "results": [],
         "summary": "test",
@@ -108,6 +110,57 @@ class _Provider:
         return QualitativeGroupResult(agent_reviewed=True, group_label=label, dimensions=dimensions)
 
 
+class _FlakyCachedProvider(_Provider):
+    def __init__(self, workspace_root: Path) -> None:
+        super().__init__()
+        self.settings = SimpleNamespace(
+            workspace_root=workspace_root,
+            provider_name="openai",
+            default_model="test-model",
+            openai_reasoning_effort="high",
+        )
+        self.calls: dict[str, int] = {}
+
+    def parse(self, *, system_prompt, user_prompt, schema, temperature=0.2):
+        label = user_prompt.splitlines()[0].split("：", 1)[1]
+        with self._lock:
+            self.calls[label] = self.calls.get(label, 0) + 1
+            attempt = self.calls[label]
+        if label.startswith("C") and attempt == 1:
+            raise RuntimeError("temporary connection failure")
+        return super().parse(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema=schema,
+            temperature=temperature,
+        )
+
+
+class _RepairAwareProvider(_FlakyCachedProvider):
+    def __init__(self, workspace_root: Path) -> None:
+        super().__init__(workspace_root)
+        self.user_prompts: dict[str, list[str]] = {}
+
+    def parse(self, *, system_prompt, user_prompt, schema, temperature=0.2):
+        label = user_prompt.splitlines()[0].split("：", 1)[1]
+        with self._lock:
+            self.calls[label] = self.calls.get(label, 0) + 1
+            self.user_prompts.setdefault(label, []).append(user_prompt)
+            attempt = self.calls[label]
+        original = self.hallucinate
+        self.hallucinate = label.startswith("B") and attempt == 1
+        try:
+            return _Provider.parse(
+                self,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                schema=schema,
+                temperature=temperature,
+            )
+        finally:
+            self.hallucinate = original
+
+
 class UziQualitativeDeepDiveTests(unittest.TestCase):
     def test_provider_unavailable_is_a_blocking_deep_gap(self) -> None:
         result = apply_qualitative_deep_dive(
@@ -132,6 +185,38 @@ class UziQualitativeDeepDiveTests(unittest.TestCase):
         self.assertEqual(result["qualitative_agent_execution"]["status"], "evidence_preflight_failed")
         self.assertEqual(provider.system_prompts, [])
 
+    def test_neighbor_dimension_urls_cannot_satisfy_a_missing_dimension(self) -> None:
+        provider = _Provider()
+        rows = _rows()
+        materials = next(row for row in rows if row["snapshot_type"] == "materials")
+        materials["facts"]["sources"] = []
+        rows.append({
+            "snapshot_type": "industry",
+            "symbol": "600519",
+            "snapshot_date": "2026-08-07",
+            "quality_status": "available",
+            "facts": {
+                "extra_material_like_links": [
+                    {"url": "https://industry.example/not-materials/1"},
+                    {"url": "https://industry.example/not-materials/2"},
+                ]
+            },
+            "source_refs": [],
+        })
+
+        result = apply_qualitative_deep_dive(
+            _deep_base(),
+            snapshot_rows=rows,
+            llm_provider=provider,
+        )
+
+        self.assertEqual(result["qualitative_agent_execution"]["status"], "evidence_preflight_failed")
+        self.assertIn(
+            "8_materials:requires_two_cited_sources",
+            result["qualitative_agent_execution"]["errors"],
+        )
+        self.assertEqual(provider.system_prompts, [])
+
     def test_three_parallel_groups_cover_six_dimensions_with_grounded_urls(self) -> None:
         provider = _Provider()
         result = apply_qualitative_deep_dive(
@@ -141,7 +226,10 @@ class UziQualitativeDeepDiveTests(unittest.TestCase):
         )
         self.assertEqual(result["quality_status"], "available")
         self.assertTrue(result["agent_reviewed"])
-        self.assertEqual(set(result["qualitative_deep_dive"]), set(dimension for dims in _GROUP_DIMENSIONS.values() for dimension in dims))
+        self.assertEqual(
+            set(result["qualitative_deep_dive"]),
+            {dimension for dims in _GROUP_DIMENSIONS.values() for dimension in dims},
+        )
         self.assertEqual(result["qualitative_agent_execution"]["group_count"], 3)
         self.assertGreaterEqual(result["qualitative_agent_execution"]["association_count"], 3)
         self.assertEqual(len(provider.system_prompts), 3)
@@ -162,6 +250,75 @@ class UziQualitativeDeepDiveTests(unittest.TestCase):
         self.assertEqual(result["quality_status"], "data_gap")
         self.assertFalse(result["agent_reviewed"])
         self.assertEqual(result["qualitative_agent_execution"]["status"], "incomplete")
+
+    def test_successful_groups_are_cached_and_only_failed_group_is_retried(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            provider = _FlakyCachedProvider(Path(temporary_directory))
+            progress: list[dict] = []
+
+            first = apply_qualitative_deep_dive(
+                _deep_base(),
+                snapshot_rows=_rows(),
+                llm_provider=provider,
+                progress_callback=progress.append,
+            )
+            second = apply_qualitative_deep_dive(
+                _deep_base(),
+                snapshot_rows=_rows(),
+                llm_provider=provider,
+            )
+
+        self.assertEqual(first["qualitative_agent_execution"]["status"], "incomplete")
+        self.assertEqual(first["qualitative_agent_execution"]["completed_group_count"], 2)
+        self.assertTrue(
+            any(
+                "C · Cost-Transmission 未通过执行或证据校验" in row["current_action"]
+                for row in progress
+            )
+        )
+        self.assertEqual(second["qualitative_agent_execution"]["status"], "completed")
+        self.assertEqual(
+            provider.calls,
+            {
+                "A · Macro-Policy": 1,
+                "B · Industry-Events": 1,
+                "C · Cost-Transmission": 2,
+            },
+        )
+
+    def test_failed_group_receives_previous_validation_error_and_caches_canonical_result(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            provider = _RepairAwareProvider(Path(temporary_directory))
+            first = apply_qualitative_deep_dive(
+                _deep_base(),
+                snapshot_rows=_rows(),
+                llm_provider=provider,
+            )
+            second = apply_qualitative_deep_dive(
+                _deep_base(),
+                snapshot_rows=_rows(),
+                llm_provider=provider,
+                repair_feedback=first["qualitative_agent_execution"]["errors"],
+            )
+            third = apply_qualitative_deep_dive(
+                _deep_base(),
+                snapshot_rows=_rows(),
+                llm_provider=provider,
+            )
+
+        self.assertEqual(first["qualitative_agent_execution"]["status"], "incomplete")
+        self.assertEqual(second["qualitative_agent_execution"]["status"], "completed")
+        self.assertEqual(third["qualitative_agent_execution"]["status"], "completed")
+        self.assertEqual(
+            provider.calls,
+            {
+                "A · Macro-Policy": 1,
+                "B · Industry-Events": 2,
+                "C · Cost-Transmission": 1,
+            },
+        )
+        self.assertIn("UZI_REPAIR_FEEDBACK=", provider.user_prompts["B · Industry-Events"][1])
+        self.assertNotIn("UZI_REPAIR_FEEDBACK=", provider.user_prompts["A · Macro-Policy"][0])
 
 
 if __name__ == "__main__":

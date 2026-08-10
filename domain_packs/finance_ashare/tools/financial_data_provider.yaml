@@ -23,6 +23,8 @@ output_schema:
 permissions: [finance:data:read]
 parallel_safe: true
 max_concurrency: 8
-timeout_seconds: 300
+# Keep the Tool timeout unset: the Pack applies pinned UZI's five-minute wave
+# ceiling per collection wave and records unfinished dimensions as real data
+# gaps. A Tool Registry timeout would abort the whole Agent OS capability.
 max_retries: 1
 implementation: tools.financial_data_provider:invoke

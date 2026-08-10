@@ -3,17 +3,12 @@ from __future__ import annotations
 from importlib import import_module
 
 __all__ = [
-    "CheckpointStore",
     "RunPaths",
     "RunRetentionService",
     "RunStore",
 ]
 
 _EXPORTS = {
-    "CheckpointStore": (
-        "research_system.runtime.storage.runs.checkpoint_store",
-        "CheckpointStore",
-    ),
     "RunPaths": (
         "research_system.runtime.storage.runs.run_store",
         "RunPaths",

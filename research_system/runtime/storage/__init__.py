@@ -3,7 +3,6 @@ from __future__ import annotations
 from importlib import import_module
 
 __all__ = [
-    "CheckpointStore",
     "RunPaths",
     "RunRetentionService",
     "RunStore",
@@ -15,7 +14,6 @@ __all__ = [
 ]
 
 _EXPORTS = {
-    "CheckpointStore": ("research_system.runtime.storage.runs.checkpoint_store", "CheckpointStore"),
     "RunPaths": ("research_system.runtime.storage.runs.run_store", "RunPaths"),
     "RunRetentionService": ("research_system.runtime.storage.runs.retention", "RunRetentionService"),
     "RunStore": ("research_system.runtime.storage.runs.run_store", "RunStore"),

@@ -90,8 +90,8 @@ def sample_uzi_artifacts() -> list[dict]:
         },
     }
     native = {
-        "source_commit": "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359",
-        "methodology_version": "3.9.2-source-parity", "profile": "deep",
+        "source_commit": "0acf25122cabf493e7bc442faff62ceceb7f2f02",
+        "methodology_version": "3.9.4-source-parity", "profile": "deep",
         "critical_count": 0, "warning_count": 1, "report_allowed": True, "quality_status": "available",
         "recovery_history": [],
         "results": [{
@@ -115,6 +115,7 @@ class UziNativeReportTests(unittest.TestCase):
         self.assertEqual(rendered.filename_stem, f"uzi-report-600519-{RUN_ID}")
         self.assertIn("游资 SKILLS", rendered.html)
         self.assertIn("50 INVESTORS", rendered.html)
+        self.assertIn("UZI V3.9.4", rendered.html.upper())
         self.assertIn("data-gap-banner", rendered.html)
         self.assertIn("机构级估值建模", rendered.html)
         self.assertIn("sentiment:xueqiu_unavailable", rendered.html)
@@ -123,6 +124,9 @@ class UziNativeReportTests(unittest.TestCase):
         self.assertNotRegex(rendered.html, r"\{\{[A-Z0-9_]+\}\}")
         self.assertNotRegex(rendered.html, r"<!-- INJECT_[A-Z0-9_]+ -->")
         self.assertIn("data:image/svg+xml;base64,", rendered.html)
+        self.assertIn(".dim-card:has(.dim-score .num.high)::before", rendered.html)
+        self.assertIn(".lbo-block .lbo-spark-grid", rendered.html)
+        self.assertIn("scroll-behavior: smooth", rendered.html)
         self.assertEqual(
             rendered.source_artifact_ids,
             ("artifact-native", "artifact-report"),
@@ -217,29 +221,28 @@ class UziNativeReportTests(unittest.TestCase):
         second["symbol"] = "000001"
         artifacts[0]["content"]["results"].append(second)
 
-        with self.assertRaisesRegex(ReportArtifactMissingError, "exactly one"):
+        with self.assertRaisesRegex(ReportArtifactMissingError, "且仅允许一个"):
             render_uzi_native_html(artifacts, run_id=RUN_ID)
 
     def test_pdf_pool_bounds_ten_concurrent_exports_and_caches_identical_html(self) -> None:
-        state = {"active": 0, "max_active": 0, "renders": 0}
+        state = {
+            "active": 0,
+            "max_active": 0,
+            "renders": 0,
+            "evaluations": [],
+            "media_options": [],
+        }
         lock = Lock()
-
-        class FakeLocator:
-            def evaluate_all(self, _script: str) -> None:
-                return None
 
         class FakePage:
             def set_content(self, *_args, **_kwargs) -> None:
-                return None
+                pass
 
-            def evaluate(self, _script: str) -> None:
-                return None
+            def evaluate(self, script: str) -> None:
+                state["evaluations"].append(script)
 
-            def locator(self, _selector: str) -> FakeLocator:
-                return FakeLocator()
-
-            def emulate_media(self, **_kwargs) -> None:
-                return None
+            def emulate_media(self, **kwargs) -> None:
+                state["media_options"].append(kwargs)
 
             def pdf(self, **_kwargs) -> bytes:
                 with lock:
@@ -280,6 +283,12 @@ class UziNativeReportTests(unittest.TestCase):
         self.assertEqual(cached, payloads[0])
         self.assertLessEqual(state["max_active"], 2)
         self.assertLessEqual(state["renders"], 2)
+        self.assertTrue(any("boot-overlay" in script for script in state["evaluations"]))
+        self.assertTrue(any("document.fonts.ready" in script for script in state["evaluations"]))
+        self.assertTrue(state["media_options"])
+        self.assertTrue(all(options["media"] == "print" for options in state["media_options"]))
+        self.assertTrue(all(options["color_scheme"] == "light" for options in state["media_options"]))
+        self.assertTrue(all(options["reduced_motion"] == "reduce" for options in state["media_options"]))
 
 
 if __name__ == "__main__":

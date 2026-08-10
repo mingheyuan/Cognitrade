@@ -230,6 +230,7 @@ class TurnConfig(BaseModel):
     compact_config: CompactConfig | None = None
     plugin_refs: list[str] = Field(default_factory=list)
     selection: TaskSelection = Field(default_factory=TaskSelection)
+    deadline_policy: Literal["default", "unbounded"] = "default"
     timeout_seconds: float | None = Field(default=None, gt=0)
 
 

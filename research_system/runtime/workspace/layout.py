@@ -30,20 +30,8 @@ def workspace_template_candidates(settings: "Settings", template_root: Path) -> 
             settings.data_sources_path,
         ),
         (
-            [template_root / "workspace" / "config" / "http_json_sources.yml"],
-            settings.http_json_sources_path,
-        ),
-        (
             [template_root / "workspace" / "config" / "mcp_servers.yml"],
             settings.mcp_servers_path,
-        ),
-        (
-            [template_root / "workspace" / "config" / "openapi_sources.yml"],
-            settings.openapi_sources_path,
-        ),
-        (
-            [template_root / "workspace" / "config" / "skill_sources.yml"],
-            settings.skill_sources_path,
         ),
     ]
 

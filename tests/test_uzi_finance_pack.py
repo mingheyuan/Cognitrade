@@ -145,7 +145,7 @@ class UziFinancePackTests(unittest.TestCase):
                 "16_lhb", "17_sentiment", "18_trap", "19_contests", "fund_holders", "similar_stocks",
             },
         )
-        self.assertEqual(mapping["source"]["commit"], "22e65f2e0cee2cb41cb40fdbe391c9600b7fe359")
+        self.assertEqual(mapping["source"]["commit"], "0acf25122cabf493e7bc442faff62ceceb7f2f02")
         self.assertEqual(mapping["profiles"]["lite"]["panel_seats"], 10)
         self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 51)
         self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 66)
@@ -242,6 +242,31 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertEqual(result["collection"]["quality_status"], "degraded")
         self.assertEqual(result["collection"]["quality_counts"], {"available": 1, "data_gap": 1})
         self.assertEqual(result["snapshots"][1]["quality_status"], "data_gap")
+
+    def test_snapshot_collection_reports_cache_and_live_dimension_progress(self) -> None:
+        progress: list[dict] = []
+
+        def fake_run(_query, symbol, snapshot_type, _providers, _dependencies=None):
+            return {
+                "snapshot_type": snapshot_type,
+                "symbol": symbol,
+                "facts": {"availability": "available"},
+                "source": {"provider_id": "test_provider"},
+            }
+
+        with patch.object(snapshot_collector, "_run_snapshot_skill", side_effect=fake_run):
+            rows = collect_snapshots(
+                query="分析 300750",
+                symbols=["300750"],
+                snapshot_types=["market", "fundamental"],
+                max_workers=1,
+                progress_callback=progress.append,
+            )
+
+        self.assertEqual([row["snapshot_type"] for row in rows], ["market", "fundamental"])
+        completed = [row for row in progress if row["phase"] == "completed"]
+        self.assertEqual([row["completed"] for row in completed], [1, 2])
+        self.assertTrue(all(row["total"] == 2 for row in progress))
 
     def test_snapshot_cache_reuses_dimensions_and_refreshes_only_expired_one(self) -> None:
         calls = {"market": 0, "fundamental": 0}
@@ -563,11 +588,11 @@ class UziFinancePackTests(unittest.TestCase):
             DomainPackRegistry.load(repository_root / "domain_packs")
         )
         cases = {
-            "stock_screen": ("lite", "screening_result", "finance.screening.quality", 120.0),
-            "sector_research": ("medium", "sector_analysis", "finance.sector.analysis", 480.0),
-            "review_thesis": ("deep", "thesis_review", "finance.thesis.review", 1200.0),
+            "stock_screen": ("lite", "screening_result", "finance.screening.quality", 120),
+            "sector_research": ("medium", "sector_analysis", "finance.sector.analysis", 480),
+            "review_thesis": ("deep", "thesis_review", "finance.thesis.review", 1200),
         }
-        for intent, (profile, artifact_type, gate_id, timeout) in cases.items():
+        for intent, (profile, artifact_type, gate_id, estimate) in cases.items():
             with self.subTest(intent=intent):
                 graph = planner.build_graph(
                     CapabilityPlanningRequest(
@@ -584,7 +609,26 @@ class UziFinancePackTests(unittest.TestCase):
                 self.assertEqual(graph.metadata["selected_research_profile"], profile)
                 self.assertIn(artifact_type, graph.metadata["required_artifact_types"])
                 self.assertIn(gate_id, graph.governance.required_gate_ids)
-                self.assertEqual(graph.governance.timeout_seconds, timeout)
+                self.assertEqual(graph.metadata["deadline_policy"], "unbounded")
+                self.assertIsNone(graph.governance.timeout_seconds)
+                self.assertEqual(
+                    graph.metadata["profile_policy"]["estimated_duration_seconds"],
+                    estimate,
+                )
+                lazy_graph = planner.build_lazy_graph(
+                    CapabilityPlanningRequest(
+                        domain_id="finance_ashare",
+                        objective=f"Run {intent}",
+                        available_artifact_types=["user_request"],
+                        required_artifact_types=["research_report"],
+                        metadata={
+                            "intent": intent,
+                            "intent_inputs": {"intent": intent, "research_profile": profile},
+                        },
+                    )
+                )
+                self.assertEqual(lazy_graph.metadata["deadline_policy"], "unbounded")
+                self.assertIsNone(lazy_graph.governance.timeout_seconds)
                 if intent == "stock_screen":
                     self.assertNotIn(
                         "valuation_model",

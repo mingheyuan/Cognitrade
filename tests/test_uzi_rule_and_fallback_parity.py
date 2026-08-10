@@ -16,6 +16,7 @@ from domain_packs.finance_ashare.subagents.uzi_panel_rules import (
 )
 from domain_packs.finance_ashare.tools.uzi_data_recovery import (
     assess_integrity,
+    collect_qualitative_agent_evidence,
     recover_playwright_snapshots,
     recover_qualitative_snapshots,
 )
@@ -116,7 +117,7 @@ class UziRuleSourceParityTests(unittest.TestCase):
                     settings=_settings(),
                 )
 
-    def test_agent_os_root_turn_uses_the_uzi_profile_budget(self) -> None:
+    def test_agent_os_root_turn_does_not_turn_uzi_estimates_into_deadlines(self) -> None:
         settings = _settings()
         agent_os = AgentOS(settings)
         decision = RequestIntakeDecision(
@@ -144,8 +145,25 @@ class UziRuleSourceParityTests(unittest.TestCase):
             decision=decision,
             execution_mode="graph",
         )
-        self.assertEqual(medium_config.timeout_seconds, 480)
-        self.assertEqual(deep_config.timeout_seconds, 1200)
+        self.assertEqual(medium_config.deadline_policy, "unbounded")
+        self.assertIsNone(medium_config.timeout_seconds)
+        self.assertEqual(deep_config.deadline_policy, "unbounded")
+        self.assertIsNone(deep_config.timeout_seconds)
+
+        explicit_timeout = agent_os._domain_turn_config(
+            request=RequestEnvelope(
+                intent="stock_check",
+                user_query="最多等待 30 秒",
+                constraints={
+                    "research_profile": "medium",
+                    "turn_config": {"timeout_seconds": 30},
+                },
+            ),
+            decision=decision,
+            execution_mode="graph",
+        )
+        self.assertEqual(explicit_timeout.deadline_policy, "default")
+        self.assertEqual(explicit_timeout.timeout_seconds, 30)
 
     def test_source_semantics_skip_only_rules_that_cannot_evaluate_missing_data(self) -> None:
         features = {
@@ -302,6 +320,63 @@ class UziFallbackParityTests(unittest.TestCase):
         self.assertNotIn("browser_source_ids", collect.call_args.kwargs)
         self.assertTrue(snapshots[0]["fallback_applied"])
         self.assertEqual(snapshots[0]["quality_status"], "degraded")
+
+    def test_task25_agent_evidence_runs_all_six_dimensions_in_three_groups(self) -> None:
+        snapshots = [
+            {
+                "snapshot_type": snapshot_type,
+                "symbol": "600519",
+                "facts": {"availability": "available", "existing_fact": "真实主链数据"},
+                "degraded": False,
+            }
+            for snapshot_type in ("macro", "policy", "industry", "events", "materials", "futures")
+        ]
+
+        def web_search(*, query, dimension, max_results):
+            self.assertEqual(max_results, 8)
+            return {
+                "results": [
+                    {"title": f"{dimension} 来源一", "body": "公开事实一", "url": f"https://one.example/{dimension}"},
+                    {"title": f"{dimension} 来源二", "body": "公开事实二", "url": f"https://two.example/{dimension}"},
+                ],
+                "source_trace": [{"source_id": "ddgs", "status": "available"}],
+            }
+
+        def browser_collect(*, source_ids, symbol, query):
+            source_id = source_ids[0]
+            return {
+                "evidence": {
+                    source_id: {
+                        "url": f"https://browser.example/{source_id}",
+                        "text_excerpt": "浏览器取得的真实原文",
+                        "links": [],
+                    }
+                },
+                "source_trace": [{"source_id": source_id, "status": "available"}],
+            }
+
+        with patch(
+            "domain_packs.finance_ashare.tools.uzi_data_recovery.UziWebSearchAdapter.search",
+            side_effect=web_search,
+        ) as search, patch(
+            "domain_packs.finance_ashare.tools.uzi_data_recovery.UziBrowserAdapter.collect_many",
+            side_effect=browser_collect,
+        ) as browser:
+            result = collect_qualitative_agent_evidence(
+                snapshots,
+                query="研究贵州茅台",
+                symbols=["600519"],
+                profile="deep",
+                settings=_settings(mx_api_key=None),
+            )
+
+        self.assertEqual(result["group_count"], 3)
+        self.assertEqual(result["completed_group_count"], 3)
+        self.assertEqual(result["attempted"], 6)
+        self.assertEqual(result["succeeded"], 6)
+        self.assertEqual(search.call_count, 6)
+        self.assertEqual(browser.call_count, 6)
+        self.assertTrue(all(row["facts"].get("agent_qualitative_evidence") for row in snapshots))
 
     def test_playwright_is_final_profile_scoped_structured_recovery(self) -> None:
         snapshots = [{

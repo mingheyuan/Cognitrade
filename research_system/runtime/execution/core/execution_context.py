@@ -112,6 +112,7 @@ class ExecutionNodeContext:
             graph_supplier=lambda: self.graph.model_dump(mode="json"),
             cancellation=self.cancellation,
             event_callback=self.event_callback,
+            progress_emitter=self.progress_emitter,
             allowed_tools=frozenset(self.node.tools),
             allowed_permissions=frozenset(self.node.permissions),
             authorize_call=self.authorize_tool_call,

@@ -26,7 +26,6 @@ from research_system.runtime.execution.core.graph_runner import ExecutionGraphRu
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.storage.jsonl import read_json, read_jsonl
 from research_system.runtime.storage.jsonl import write_json
-from research_system.schemas.artifacts import ArtifactDraft
 from research_system.schemas.execution_graph import ArtifactPort, ExecutionGraph, ExecutionNode, ExecutionGovernance
 from research_system.schemas.core_runtime import CoreToolDefinition
 from research_system.schemas.protocol import RequestEnvelope
@@ -289,7 +288,7 @@ class AgentOSCoreLoopTests(unittest.TestCase):
             )
 
             self.assertEqual(result.status, "failed")
-            self.assertIn("no Core Skill runtime is registered", result.error or "")
+            self.assertIn("未注册 Core Skill runtime", result.error or "")
 
     def test_task_mode_uses_core_tool_for_a_file_request_without_a_pack(self) -> None:
         with TemporaryDirectory() as temporary_directory:
@@ -337,7 +336,7 @@ class AgentOSCoreLoopTests(unittest.TestCase):
             )
 
             self.assertEqual(result.status, "failed")
-            self.assertIn("timed out", result.error or "")
+            self.assertIn("超时", result.error or "")
 
     def test_native_main_agent_tool_loop_persists_turns_and_results(self) -> None:
         with TemporaryDirectory() as temporary_directory:
@@ -521,7 +520,7 @@ class AgentOSCoreLoopTests(unittest.TestCase):
             resumed = agent_os.resume(run_id)
             self.assertEqual(resumed.status, "gated")
             self.assertEqual(calls, [])
-            self.assertIn("approval", resumed.message.lower())
+            self.assertIn("审批", resumed.message)
 
     def test_core_agent_clarification_is_not_reported_as_completed(self) -> None:
         with TemporaryDirectory() as temporary_directory:
@@ -958,7 +957,7 @@ def read_with_tool(context):
 
             self.assertEqual(replay.run_id, run_id)
             self.assertEqual(replay.status, "running")
-            self.assertIn("already in progress", replay.message)
+            self.assertIn("已在执行中", replay.message)
             runs = [path for path in self._settings(root).runs_root.iterdir() if path.is_dir()]
             self.assertEqual(len(runs), 1)
 

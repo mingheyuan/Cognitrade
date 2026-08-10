@@ -180,24 +180,6 @@ class ExecutionGraphScheduler:
             stack.extend(downstream.get(downstream_id, set()))
         return resolved
 
-    def fanout_depth(self, graph: ExecutionGraph) -> dict[str, int]:
-        node_map = self.node_map(graph)
-        cache: dict[str, int] = {}
-
-        def resolve(node_id: str) -> int:
-            if node_id in cache:
-                return cache[node_id]
-            dependencies = self.effective_dependencies(graph, node_id)
-            if not dependencies:
-                cache[node_id] = 0
-            else:
-                cache[node_id] = max(resolve(dependency_id) for dependency_id in dependencies) + 1
-            return cache[node_id]
-
-        for node_id in node_map:
-            resolve(node_id)
-        return cache
-
     @staticmethod
     def node_map(graph: ExecutionGraph) -> dict[str, ExecutionNode]:
         return {node.node_id: node for node in graph.nodes}

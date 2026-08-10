@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 import unittest
+from pathlib import Path
+from threading import Event
 from unittest.mock import patch
 
 from domain_packs.finance_ashare.skills.market_snapshot.skill import MarketSnapshotSkill
@@ -10,7 +11,10 @@ from research_system.adapters.vendors.provider_execution import (
     classify_provider_exception,
     execute_provider_chain,
 )
-from research_system.adapters.vendors.provider_registry import ProviderSpec, VendorProviderRegistry
+from research_system.adapters.vendors.provider_registry import (
+    ProviderSpec,
+    VendorProviderRegistry,
+)
 from research_system.runtime.platform.settings import Settings
 
 
@@ -127,6 +131,36 @@ class FinanceProviderExecutionTests(unittest.TestCase):
             )
 
         self.assertEqual(seen, [registry])
+
+    def test_snapshot_wave_timeout_becomes_a_non_cached_data_gap(self) -> None:
+        release = Event()
+
+        def blocked_snapshot(*_args, **_kwargs):
+            release.wait(timeout=1)
+            return {
+                "snapshot_type": "notice",
+                "symbol": "600000",
+                "facts": {"availability": "available"},
+            }
+
+        try:
+            with (
+                patch.object(snapshot_collector, "_run_snapshot_skill", side_effect=blocked_snapshot),
+                patch.object(snapshot_collector, "_UZI_FETCHER_WAVE_TIMEOUT_SECONDS", 0.01),
+            ):
+                rows = snapshot_collector.collect_snapshots(
+                    query="分析 600000",
+                    symbols=["600000"],
+                    snapshot_types=["notice"],
+                    max_workers=1,
+                )
+        finally:
+            release.set()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["quality_status"], "data_gap")
+        self.assertTrue(rows[0]["facts"]["_uzi_raw_result"]["_timeout"])
+        self.assertIn("timeout", rows[0]["degrade_reason"])
 
 
 if __name__ == "__main__":

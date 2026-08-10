@@ -20,6 +20,7 @@ import { BusinessDataView } from '../artifacts/BusinessDataView'
 import { useCognitrade } from '../CognitradeContext'
 import type { MarketQuote, PaperMatchResult, PaperOrder, PaperPortfolio, QuantEngineStatus } from '../finance-contracts'
 import { estimateOrder } from '../utils/paper-order'
+import { errorMessageWithRequestId, localizeErrorMessage } from '../utils/error-message'
 
 export function PaperTrading({ onOpenMarketData }: { onOpenMarketData: () => void }) {
   const { settings } = useCognitrade()
@@ -398,15 +399,13 @@ function formatDateTime(value: string): string {
 }
 
 function apiErrorMessage(error: unknown): string {
-  if (error instanceof CognitradeApiError) return `${safeBusinessError(error.message)}${error.requestId ? ` · request ${error.requestId}` : ''}`
+  if (error instanceof CognitradeApiError) return errorMessageWithRequestId(error.message, error.requestId, '行情或模拟交易服务暂时不可用，请稍后重试。')
   return safeBusinessError(error instanceof Error ? error.message : String(error))
 }
 
 function safeBusinessError(value: string): string {
-  const message = String(value || '').trim()
-  if (!message) return '服务暂时不可用，请稍后重试。'
-  if (/(connection|remote.?disconnected|traceback|socket|timeout|timed out|errno|stack|httpx|requests\.|urllib|ssl|tcp|econn)/i.test(message)) {
+  if (/(connection|remote.?disconnected|socket|timeout|timed out|errno|httpx|requests\.|urllib|ssl|tcp|econn)/i.test(String(value || ''))) {
     return '行情数据源暂时不可用，请稍后重试。'
   }
-  return message
+  return localizeErrorMessage(value, '行情或模拟交易服务暂时不可用，请稍后重试。')
 }

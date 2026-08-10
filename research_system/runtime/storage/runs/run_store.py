@@ -13,21 +13,9 @@ class RunPaths:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.request = root / "request.json"
-        self.execution_graph = root / "execution_graph.json"
         self.run_state = root / "run_state.json"
-        self.thread_state = root / "thread_state.json"
         self.turn_state = root / "turn_state.json"
-        self.task_state = root / "task_state.json"
-        self.items = root / "items.jsonl"
-        self.run_control = root / "run_control.json"
-        self.checkpoint = root / "checkpoint.json"
-        self.events = root / "events.jsonl"
-        self.logs = root / "logs.jsonl"
         self.artifact_board = root / "artifact_board.jsonl"
-        self.mailbox = root / "mailbox" / "messages.jsonl"
-        self.artifacts = root / "artifacts"
-        self.result = root / "result.json"
-        self.summary = root / "summary.json"
 
 
 class RunStore:
@@ -57,8 +45,6 @@ class RunStore:
             raise FileExistsError(f"run already exists: {run_id}")
         paths = RunPaths(root)
         paths.root.mkdir(parents=True, exist_ok=True)
-        paths.artifacts.mkdir(parents=True, exist_ok=True)
-        paths.mailbox.parent.mkdir(parents=True, exist_ok=True)
         write_json(paths.request, request.model_dump(mode="json"))
         snapshot = RunStateSnapshot(
             run_id=run_id,
@@ -81,7 +67,7 @@ class RunStore:
             if payload is None:
                 payload = {
                     "status": "unknown",
-                    "message": "run metadata unavailable",
+                    "message": "运行元数据不可用",
                 }
             payload["run_id"] = run_dir.name
             display_summary = build_display_summary(

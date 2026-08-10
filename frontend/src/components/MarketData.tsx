@@ -17,6 +17,7 @@ import { CognitradeApiClient, CognitradeApiError } from '../api-client'
 import { useCognitrade } from '../CognitradeContext'
 import type { JsonRecord, MarketDataResponse } from '../finance-contracts'
 import { dataUnavailableMessage, isTechnicalErrorMessage } from '../utils/data-availability'
+import { errorMessageWithRequestId, localizeErrorMessage } from '../utils/error-message'
 
 const EXAMPLES = [
   { symbol: '600519', label: '贵州茅台' },
@@ -758,6 +759,6 @@ function qualityLabel(value: string): string {
 }
 
 function apiErrorMessage(error: unknown): string {
-  if (error instanceof CognitradeApiError) return `${error.message}${error.requestId ? ` · request ${error.requestId}` : ''}`
-  return error instanceof Error ? error.message : String(error)
+  if (error instanceof CognitradeApiError) return errorMessageWithRequestId(error.message, error.requestId)
+  return localizeErrorMessage(error)
 }
