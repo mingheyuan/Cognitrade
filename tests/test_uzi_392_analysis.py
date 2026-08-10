@@ -635,6 +635,20 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
 
         self.assertEqual(normalized, sorted(allowed))
 
+    def test_expanded_evidence_paths_respect_the_destination_contract_limit(self) -> None:
+        allowed = {
+            f"panel.school_scores.group_{index}.consensus"
+            for index in range(12)
+        }
+
+        normalized = _normalize_evidence_paths(
+            ["panel.school_scores"],
+            allowed_paths=allowed,
+            max_items=10,
+        )
+
+        self.assertEqual(normalized, sorted(allowed)[:10])
+
     def test_explanatory_suffix_after_exact_leaf_path_is_removed(self) -> None:
         payload = AgentAnalysisPayload.model_validate(
             _LiteAgentProvider().parse()

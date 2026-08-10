@@ -940,6 +940,7 @@ def _generate_agent_analysis(
                 row.commentary.evidence_paths = _normalize_evidence_paths(
                     row.commentary.evidence_paths,
                     allowed_paths=dimension_allowed_paths,
+                    max_items=8,
                 )
                 unknown_paths = sorted(
                     set(row.commentary.evidence_paths) - dimension_allowed_paths
@@ -1169,6 +1170,7 @@ def _generate_agent_analysis(
         buy_zone_payload.zone.basis_fields = _normalize_evidence_paths(
             buy_zone_payload.zone.basis_fields,
             allowed_paths=zone_numeric_paths,
+            max_items=6,
         )
         unknown_zone_paths = (
             set(buy_zone_payload.zone.basis_fields) - zone_numeric_paths
@@ -1414,26 +1416,31 @@ def _normalize_narrative_core_paths(
     payload.panel_evidence_paths = _normalize_evidence_paths(
         payload.panel_evidence_paths,
         allowed_paths=allowed_paths,
+        max_items=10,
     )
     payload.conclusion_evidence_paths = _normalize_evidence_paths(
         payload.conclusion_evidence_paths,
         allowed_paths=allowed_paths,
+        max_items=10,
     )
     for risk in payload.risks:
         risk.evidence_paths = _normalize_evidence_paths(
             risk.evidence_paths,
             allowed_paths=allowed_paths,
+            max_items=6,
         )
     if payload.great_divide_override is not None:
         for row in payload.great_divide_override.bull_say_rounds:
             row.evidence_paths = _normalize_evidence_paths(
                 row.evidence_paths,
                 allowed_paths=allowed_paths,
+                max_items=6,
             )
         for row in payload.great_divide_override.bear_say_rounds:
             row.evidence_paths = _normalize_evidence_paths(
                 row.evidence_paths,
                 allowed_paths=allowed_paths,
+                max_items=6,
             )
     cited_paths = set(payload.panel_evidence_paths)
     cited_paths.update(payload.conclusion_evidence_paths)
@@ -1498,36 +1505,43 @@ def _normalize_payload_paths(
         row.evidence_paths = _normalize_evidence_paths(
             row.evidence_paths,
             allowed_paths=allowed_paths,
+            max_items=8,
         )
     payload.panel_evidence_paths = _normalize_evidence_paths(
         payload.panel_evidence_paths,
         allowed_paths=allowed_paths,
+        max_items=10,
     )
     payload.narrative_override.conclusion_evidence_paths = _normalize_evidence_paths(
         payload.narrative_override.conclusion_evidence_paths,
         allowed_paths=allowed_paths,
+        max_items=10,
     )
     if payload.great_divide_override is not None:
         for row in payload.great_divide_override.bull_say_rounds:
             row.evidence_paths = _normalize_evidence_paths(
                 row.evidence_paths,
                 allowed_paths=allowed_paths,
+                max_items=6,
             )
         for row in payload.great_divide_override.bear_say_rounds:
             row.evidence_paths = _normalize_evidence_paths(
                 row.evidence_paths,
                 allowed_paths=allowed_paths,
+                max_items=6,
             )
     for row in payload.narrative_override.risks:
         row.evidence_paths = _normalize_evidence_paths(
             row.evidence_paths,
             allowed_paths=allowed_paths,
+            max_items=6,
         )
     for name in ("value", "growth", "technical", "youzi"):
         zone = getattr(payload.narrative_override.buy_zones, name)
         zone.basis_fields = _normalize_evidence_paths(
             zone.basis_fields,
             allowed_paths=allowed_paths,
+            max_items=6,
         )
 
 
@@ -1535,6 +1549,7 @@ def _normalize_evidence_paths(
     paths: list[str],
     *,
     allowed_paths: set[str] | None,
+    max_items: int | None = None,
 ) -> list[str]:
     normalized: list[str] = []
     for raw_path in paths:
@@ -1569,7 +1584,7 @@ def _normalize_evidence_paths(
         for candidate in candidates:
             if candidate not in normalized:
                 normalized.append(candidate)
-    return normalized[:12]
+    return normalized[:max_items] if max_items is not None else normalized
 
 
 def _evidence_path_retry_feedback(
@@ -2305,7 +2320,7 @@ def _path_value(root: Any, path: str) -> Any:
             try:
                 current = current[int(token)]
             except (ValueError, IndexError):
-                raise KeyError(path)
+                raise KeyError(path) from None
         elif isinstance(current, dict):
             if token not in current:
                 raise KeyError(path)
