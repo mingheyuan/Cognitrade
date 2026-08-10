@@ -25,9 +25,10 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
     config_root = workspace_root / "config"
     return {
         "provider_name": env_values.get("PROVIDER_NAME", "openai"),
-        "default_model": env_values.get("OPENAI_MODEL", "GPT-5.5"),
-        "review_model": env_values.get("OPENAI_REVIEW_MODEL") or env_values.get("OPENAI_MODEL", "GPT-5.5"),
+        "default_model": env_values.get("OPENAI_MODEL", "gpt-5.6-luna"),
+        "review_model": env_values.get("OPENAI_REVIEW_MODEL", "gpt-5.4"),
         "openai_reasoning_effort": env_values.get("OPENAI_REASONING_EFFORT") or None,
+        "openai_service_tier": env_values.get("OPENAI_SERVICE_TIER", "default").strip().lower(),
         "openai_disable_response_storage": env_values.get("OPENAI_DISABLE_RESPONSE_STORAGE", "true").strip().lower()
         in {"1", "true", "yes", "on"},
         "embedding_model": env_values.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),

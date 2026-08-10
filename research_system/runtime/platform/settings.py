@@ -14,9 +14,10 @@ class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider_name: str = "openai"
-    default_model: str = "GPT-5.5"
-    review_model: str = "GPT-5.5"
+    default_model: str = "gpt-5.6-luna"
+    review_model: str = "gpt-5.4"
     openai_reasoning_effort: str | None = None
+    openai_service_tier: str = "default"
     openai_disable_response_storage: bool = True
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
@@ -84,6 +85,8 @@ class Settings(BaseModel):
             raise ValueError("provider_name must default to 'openai' for the current phase")
         if not self.default_model:
             raise ValueError("default_model must be configured")
+        if self.openai_service_tier not in {"auto", "default", "flex", "priority"}:
+            raise ValueError("openai_service_tier must be one of: auto, default, flex, priority")
         if self.run_timeout_seconds <= 0:
             raise ValueError("run_timeout_seconds must be positive")
         if self.embedding_dimensions <= 0:

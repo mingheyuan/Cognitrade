@@ -42,6 +42,7 @@ class SettingsRuntimeTests(unittest.TestCase):
                 "OPENAI_MODEL=test-model\n"
                 "OPENAI_REVIEW_MODEL=test-review-model\n"
                 "OPENAI_REASONING_EFFORT=xhigh\n"
+                "OPENAI_SERVICE_TIER=priority\n"
                 "OPENAI_DISABLE_RESPONSE_STORAGE=false\n"
                 "UZI_LLM_REQUEST_TIMEOUT_SECONDS=360\n"
                 "COGNITRADE_BAOSTOCK_SOCKET_TIMEOUT_SECONDS=9\n"
@@ -55,6 +56,7 @@ class SettingsRuntimeTests(unittest.TestCase):
             self.assertEqual(settings.default_model, "test-model")
             self.assertEqual(settings.review_model, "test-review-model")
             self.assertEqual(settings.openai_reasoning_effort, "xhigh")
+            self.assertEqual(settings.openai_service_tier, "priority")
             self.assertFalse(settings.openai_disable_response_storage)
             self.assertEqual(settings.uzi_llm_request_timeout_seconds, 360)
             self.assertEqual(settings.baostock_socket_timeout_seconds, 9)

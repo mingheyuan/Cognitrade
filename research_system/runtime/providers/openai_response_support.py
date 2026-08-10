@@ -34,6 +34,7 @@ class OpenAIResponseSupport:
                 if reasoning_effort
                 else {"summary": "concise"}
             ),
+            service_tier=self.host.settings.openai_service_tier,
             timeout=self.host.request_timeout_seconds,
         ) as stream:
             for event in stream:

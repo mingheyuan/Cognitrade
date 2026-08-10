@@ -278,6 +278,7 @@ class ProviderRegistryTests(unittest.TestCase):
 
         self.assertEqual(provider.complete(system_prompt="sys", user_prompt="user"), "done")
         self.assertEqual(responses.create_calls[0]["reasoning"], {"effort": "xhigh"})
+        self.assertEqual(responses.create_calls[0]["service_tier"], "default")
 
     def test_public_progress_block_is_extracted_without_leaking_into_answer_text(self) -> None:
         text = (

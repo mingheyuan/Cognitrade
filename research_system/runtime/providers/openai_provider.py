@@ -91,6 +91,7 @@ class OpenAIProvider:
                     if effective_reasoning_effort
                     else None
                 ),
+                service_tier=self.settings.openai_service_tier,
                 store=not self.settings.openai_disable_response_storage,
                 timeout=request_timeout_seconds,
             )
@@ -157,6 +158,7 @@ class OpenAIProvider:
                     previous_response_id=previous_response_id,
                     temperature=temperature,
                     reasoning={"effort": effective_reasoning_effort} if effective_reasoning_effort else None,
+                    service_tier=self.settings.openai_service_tier,
                     store=not self.settings.openai_disable_response_storage,
                     timeout=request_timeout_seconds,
                 )
@@ -215,6 +217,7 @@ class OpenAIProvider:
                 tools=provider_tools,
                 temperature=temperature,
                 reasoning={"effort": effective_reasoning_effort} if effective_reasoning_effort else None,
+                service_tier=self.settings.openai_service_tier,
                 store=not self.settings.openai_disable_response_storage,
                 timeout=self.request_timeout_seconds,
             )
