@@ -371,6 +371,9 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
                 "required": True,
                 "status": "incomplete",
                 "agent_reviewed": False,
+                "errors": [
+                    "B · Industry-Events:ValueError:qualitative evidence URL not in frozen bundle"
+                ],
             },
             "qualitative_deep_dive": {},
         }
@@ -428,6 +431,10 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
 
         self.assertEqual(provider.calls, 9)
         self.assertEqual(qualitative_mock.call_count, 2)
+        self.assertEqual(
+            qualitative_mock.call_args_list[1].kwargs["repair_feedback"],
+            ["B · Industry-Events:ValueError:qualitative evidence URL not in frozen bundle"],
+        )
         history = result["results"][0]["recovery_history"]
         self.assertFalse(history[0]["reused_agent_analysis"])
         self.assertTrue(history[1]["reused_agent_analysis"])

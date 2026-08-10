@@ -136,6 +136,31 @@ class _FlakyCachedProvider(_Provider):
         )
 
 
+class _RepairAwareProvider(_FlakyCachedProvider):
+    def __init__(self, workspace_root: Path) -> None:
+        super().__init__(workspace_root)
+        self.user_prompts: dict[str, list[str]] = {}
+
+    def parse(self, *, system_prompt, user_prompt, schema, temperature=0.2):
+        label = user_prompt.splitlines()[0].split("：", 1)[1]
+        with self._lock:
+            self.calls[label] = self.calls.get(label, 0) + 1
+            self.user_prompts.setdefault(label, []).append(user_prompt)
+            attempt = self.calls[label]
+        original = self.hallucinate
+        self.hallucinate = label.startswith("B") and attempt == 1
+        try:
+            return _Provider.parse(
+                self,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                schema=schema,
+                temperature=temperature,
+            )
+        finally:
+            self.hallucinate = original
+
+
 class UziQualitativeDeepDiveTests(unittest.TestCase):
     def test_provider_unavailable_is_a_blocking_deep_gap(self) -> None:
         result = apply_qualitative_deep_dive(
@@ -260,6 +285,40 @@ class UziQualitativeDeepDiveTests(unittest.TestCase):
                 "C · Cost-Transmission": 2,
             },
         )
+
+    def test_failed_group_receives_previous_validation_error_and_caches_canonical_result(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            provider = _RepairAwareProvider(Path(temporary_directory))
+            first = apply_qualitative_deep_dive(
+                _deep_base(),
+                snapshot_rows=_rows(),
+                llm_provider=provider,
+            )
+            second = apply_qualitative_deep_dive(
+                _deep_base(),
+                snapshot_rows=_rows(),
+                llm_provider=provider,
+                repair_feedback=first["qualitative_agent_execution"]["errors"],
+            )
+            third = apply_qualitative_deep_dive(
+                _deep_base(),
+                snapshot_rows=_rows(),
+                llm_provider=provider,
+            )
+
+        self.assertEqual(first["qualitative_agent_execution"]["status"], "incomplete")
+        self.assertEqual(second["qualitative_agent_execution"]["status"], "completed")
+        self.assertEqual(third["qualitative_agent_execution"]["status"], "completed")
+        self.assertEqual(
+            provider.calls,
+            {
+                "A · Macro-Policy": 1,
+                "B · Industry-Events": 2,
+                "C · Cost-Transmission": 1,
+            },
+        )
+        self.assertIn("UZI_REPAIR_FEEDBACK=", provider.user_prompts["B · Industry-Events"][1])
+        self.assertNotIn("UZI_REPAIR_FEEDBACK=", provider.user_prompts["A · Macro-Policy"][0])
 
 
 if __name__ == "__main__":

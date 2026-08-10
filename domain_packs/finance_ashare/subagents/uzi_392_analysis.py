@@ -560,6 +560,7 @@ def _execute_symbol(
     ] = set()
     reusable_agent_analysis: dict[str, Any] | None = None
     reusable_roleplay: dict[str, Any] | None = None
+    qualitative_retry_feedback: list[str] = []
     analysis_cycle = 0
     while True:
         analysis_cycle += 1
@@ -641,6 +642,7 @@ def _execute_symbol(
                                 cancellation=cancellation,
                                 progress_callback=progress_callback,
                                 analysis_cycle=analysis_cycle,
+                                repair_feedback=qualitative_retry_feedback,
                             )
                             qualitative_execution = dict(qualitative.get("qualitative_agent_execution") or {})
                             agent_analysis["qualitative_deep_dive"] = dict(
@@ -752,6 +754,15 @@ def _execute_symbol(
         if not _agent_repairable(critical_rows, llm_provider):
             recovery_history[-1]["exhausted_reason"] = "no_remaining_agent_recovery_action"
             break
+        if any(str(row.get("dim") or "") == "qualitative_deep_dive" for row in critical_rows):
+            qualitative_retry_feedback = list(dict.fromkeys([
+                *qualitative_retry_feedback,
+                *[
+                    str(error)
+                    for error in list(qualitative_execution.get("errors") or [])
+                    if str(error).strip()
+                ],
+            ]))[-24:]
         if any(str(row.get("dim") or "") != "qualitative_deep_dive" for row in critical_rows):
             reusable_agent_analysis = None
             reusable_roleplay = None
