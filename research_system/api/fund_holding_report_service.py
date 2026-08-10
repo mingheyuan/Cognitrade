@@ -595,7 +595,7 @@ class FundHoldingReportService:
                 terminal_detail = detail
                 final_status = self._detail_status(detail) or "failed"
                 report_available, data_gap = self._report_state(detail)
-                if report_available and final_status == "completed":
+                if report_available and final_status in {"completed", "completed_partial"}:
                     break
                 if final_status not in _RECOVERABLE_RUN_STATUSES:
                     break
@@ -655,8 +655,9 @@ class FundHoldingReportService:
             item["report_available"] = report_available
             item["data_gap"] = list(dict.fromkeys(data_gap))
             item["error"] = error
-            if report_available and final_status == "completed":
+            if report_available and final_status in {"completed", "completed_partial"}:
                 item["status"] = "completed"
+                item["error"] = None
             elif final_status == "cancelled" or (state.get("cancel_requested") and not report_available):
                 item["status"] = "cancelled"
             else:

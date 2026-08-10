@@ -84,6 +84,7 @@ class FakeAgentOS:
         self.delay = delay
         self.fail_symbols: set[str] = set()
         self.partial_symbols: set[str] = set()
+        self.partial_terminal_symbols: set[str] = set()
         self.raise_after_completion_symbols: set[str] = set()
         self.active = 0
         self.max_active = 0
@@ -115,7 +116,7 @@ class FakeAgentOS:
                     "artifacts": [],
                 }
             else:
-                status = "completed"
+                status = "completed_partial" if symbol in self.partial_terminal_symbols else "completed"
                 risks = ["quote_data_gap"] if symbol in self.partial_symbols else []
                 native_id = f"native-{symbol}"
                 self.details[run_id] = {
@@ -390,6 +391,20 @@ class FundHoldingReportServiceTests(unittest.TestCase):
 
         self.assertEqual(final["status"], "completed")
         self.assertEqual(final["counts"]["deliverable"], 1)
+        self.assertTrue(final["holdings"][0]["report_available"])
+        self.assertIsNone(final["holdings"][0]["error"])
+
+    def test_quality_gated_report_survives_partial_chat_synthesis(self) -> None:
+        self.run_service.source_artifacts = [snapshot_artifact(funds=[equity_fund(count=1)])]
+        self.agent_os.partial_terminal_symbols.add("600001")
+
+        created = self.service.create_batch("source-run", fund_code="110011", profile="lite")
+        final = self.wait_terminal(created["batch_id"])
+
+        self.assertEqual(final["status"], "completed")
+        self.assertEqual(final["counts"]["deliverable"], 1)
+        self.assertEqual(final["counts"]["failed"], 0)
+        self.assertEqual(final["holdings"][0]["status"], "completed")
         self.assertTrue(final["holdings"][0]["report_available"])
         self.assertIsNone(final["holdings"][0]["error"])
 
