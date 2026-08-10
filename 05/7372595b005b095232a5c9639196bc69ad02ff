@@ -1,0 +1,43 @@
+domain_packs/finance_ashare/subagents/runtime.py
+  s_a6a8a3a6f43b3c::t_7565cacd7e7844 840-862,870
+domain_packs/finance_ashare/subagents/uzi_392_analysis.py
+  s_a6a8a3a6f43b3c::t_adb55c17f6899c 426,449-460,467-468,498,563-570,587-588,626-633,645-652,710-717,784-785,824-826,828,883-886,964,975-978,1008,1055-1058,1125-1128,1139-1151,1164-1173,1182-1191,1195-1199
+domain_packs/finance_ashare/tools/financial_data_provider.py
+  s_a6a8a3a6f43b3c::t_6a72abf3da19f9 13-41,54,91-114
+domain_packs/finance_ashare/tools/snapshot_collector.py
+  s_a6a8a3a6f43b3c::t_bd93c16544b226 245,315-326,338,345,355,370,391,432-433,454,477,917,1021,1039
+frontend/src/components/FundAnalysisDossier.tsx
+  s_a6a8a3a6f43b3c::t_48802d9d72f59f 833-834,837-838
+frontend/src/components/Funds.test.tsx
+  s_a6a8a3a6f43b3c::t_bec4f544d6fded 266-269,308,312
+research_system/api/agent_os_run_service.py
+  s_a6a8a3a6f43b3c::t_e51e52de4af712 688-704,714-719,728-739
+research_system/runtime/core/tool_registry.py
+  s_a6a8a3a6f43b3c::t_18010bd9d37a1a 64
+research_system/runtime/execution/core/execution_context.py
+  s_a6a8a3a6f43b3c::t_cc1c6ebff9faeb 115
+research_system/runtime/execution/core/graph_runner.py
+  s_a6a8a3a6f43b3c::t_61784cc78a93d6 3071-3074,3079-3084,3096,3107-3118
+tests/test_uzi_392_analysis.py
+  s_a6a8a3a6f43b3c::t_f1597bf19ec1eb 170,178,237-239
+tests/test_uzi_finance_pack.py
+  s_a6a8a3a6f43b3c::t_a9cc95db5c750c 246-270
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "057372595b005b095232a5c9639196bc69ad02ff",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
