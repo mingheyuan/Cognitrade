@@ -11,7 +11,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 import json
+import logging
 from threading import Event
+from time import monotonic
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -19,6 +21,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from domain_packs.finance_ashare.subagents.uzi_agent_roleplay import LATEST_UZI_SOURCE_COMMIT
 from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_structured
 
+
+_LOGGER = logging.getLogger("uvicorn.error")
 
 _DIMENSION_TYPES: dict[str, tuple[str, ...]] = {
     "3_macro": ("macro",),
@@ -218,13 +222,38 @@ def _evaluate_group(
         "本组证据="
         + json.dumps({key: evidence_bundle[key] for key in dimensions}, ensure_ascii=False, sort_keys=True)
     )
-    return parse_uzi_structured(
-        provider,
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        schema=QualitativeGroupResult,
-        temperature=0.1,
+    started_at = monotonic()
+    _LOGGER.info(
+        "UZI qualitative stage started: group=%s dimensions=%s prompt_chars=%d",
+        group_label,
+        ",".join(dimensions),
+        len(system_prompt) + len(user_prompt),
     )
+    try:
+        result = parse_uzi_structured(
+            provider,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema=QualitativeGroupResult,
+            temperature=0.1,
+        )
+    except Exception as exc:
+        _LOGGER.warning(
+            "UZI qualitative stage failed: group=%s dimensions=%s elapsed=%.1fs error=%s:%s",
+            group_label,
+            ",".join(dimensions),
+            monotonic() - started_at,
+            exc.__class__.__name__,
+            str(exc)[:300],
+        )
+        raise
+    _LOGGER.info(
+        "UZI qualitative stage completed: group=%s dimensions=%s elapsed=%.1fs",
+        group_label,
+        ",".join(dimensions),
+        monotonic() - started_at,
+    )
+    return result
 
 
 def _dimension_context(rows: list[dict[str, Any]], dimension: str) -> dict[str, Any]:

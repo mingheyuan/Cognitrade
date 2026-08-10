@@ -542,45 +542,62 @@ def _execute_symbol(
     review: dict[str, Any] = {}
     review_feedback: list[dict[str, Any]] = []
     seen_critical_signatures: set[tuple[tuple[str, str, str], ...]] = set()
+    reusable_agent_analysis: dict[str, Any] | None = None
+    reusable_roleplay: dict[str, Any] | None = None
     analysis_cycle = 0
     while True:
         analysis_cycle += 1
+        reused_agent_analysis = reusable_agent_analysis is not None
         agent_analysis = None
         agent_issues = []
         roleplay = {"required": profile == "deep", "status": "not_requested", "agent_reviewed": False}
         qualitative_execution = {"required": profile in {"medium", "deep"}, "status": "not_requested", "agent_reviewed": False}
         if not computation_error:
             try:
-                narrative = _generate_agent_analysis(
-                    raw,
-                    dimensions,
-                    panel,
-                    profile=profile,
-                    llm_provider=llm_provider,
-                    recovery_tasks=recovery_tasks,
-                    review_feedback=review_feedback,
-                )
-                if narrative is not None:
-                    agent_analysis = narrative
+                if reusable_agent_analysis is None:
+                    narrative = _generate_agent_analysis(
+                        raw,
+                        dimensions,
+                        panel,
+                        profile=profile,
+                        llm_provider=llm_provider,
+                        recovery_tasks=recovery_tasks,
+                        review_feedback=review_feedback,
+                    )
+                    if narrative is not None:
+                        agent_analysis = narrative
+                else:
+                    agent_analysis = deepcopy(reusable_agent_analysis)
+                    if reusable_roleplay is not None:
+                        roleplay = deepcopy(reusable_roleplay)
+                if agent_analysis is not None:
                     if profile == "deep":
-                        try:
-                            roleplay_result = build_native_panel_overrides(
-                                panel,
-                                features=features,
-                                llm_provider=llm_provider,
-                                cancellation=cancellation,
-                            )
-                            roleplay = dict(roleplay_result.get("roleplay") or {})
-                            agent_analysis["per_investor_override"] = dict(
-                                roleplay_result.get("per_investor_override") or {}
-                            )
-                        except Exception as exc:
-                            roleplay = {
-                                "required": True,
-                                "status": "failed",
-                                "agent_reviewed": False,
-                                "error": f"{exc.__class__.__name__}:{str(exc)[:300]}",
-                            }
+                        if reusable_roleplay is None:
+                            try:
+                                roleplay_result = build_native_panel_overrides(
+                                    panel,
+                                    features=features,
+                                    llm_provider=llm_provider,
+                                    cancellation=cancellation,
+                                )
+                                roleplay = dict(roleplay_result.get("roleplay") or {})
+                                agent_analysis["per_investor_override"] = dict(
+                                    roleplay_result.get("per_investor_override") or {}
+                                )
+                            except Exception as exc:
+                                roleplay = {
+                                    "required": True,
+                                    "status": "failed",
+                                    "agent_reviewed": False,
+                                    "error": f"{exc.__class__.__name__}:{str(exc)[:300]}",
+                                }
+                    roleplay_complete = not roleplay.get("required") or (
+                        roleplay.get("status") == "completed"
+                        and roleplay.get("agent_reviewed") is True
+                    )
+                    if reusable_agent_analysis is None and roleplay_complete:
+                        reusable_agent_analysis = deepcopy(agent_analysis)
+                        reusable_roleplay = deepcopy(roleplay)
                     if profile in {"medium", "deep"}:
                         try:
                             qualitative = apply_qualitative_deep_dive(
@@ -604,6 +621,14 @@ def _execute_symbol(
                     agent_issues = _validate_agent_analysis(agent_analysis)
             except Exception as exc:
                 failure_kind = _agent_failure_kind(exc)
+                _LOGGER.warning(
+                    "UZI agent analysis cycle failed: symbol=%s profile=%s cycle=%d error=%s:%s",
+                    symbol,
+                    profile,
+                    analysis_cycle,
+                    exc.__class__.__name__,
+                    _safe_error_detail(exc),
+                )
                 agent_issues = [{
                     "severity": "error",
                     "field": "agent_analysis",
@@ -654,6 +679,7 @@ def _execute_symbol(
             "critical_count": len(critical_rows),
             "status": "passed" if not critical_rows else "quality_gate_blocked",
             "suggested_fixes": [str(row.get("suggested_fix") or "") for row in critical_rows],
+            "reused_agent_analysis": reused_agent_analysis,
         })
         if not critical_rows:
             break
@@ -672,6 +698,9 @@ def _execute_symbol(
         if not _agent_repairable(critical_rows, llm_provider):
             recovery_history[-1]["exhausted_reason"] = "no_remaining_agent_recovery_action"
             break
+        if any(str(row.get("dim") or "") != "qualitative_deep_dive" for row in critical_rows):
+            reusable_agent_analysis = None
+            reusable_roleplay = None
         review_feedback = critical_rows
 
     _merge_self_review_warnings(synthesis, review)

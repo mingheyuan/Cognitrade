@@ -296,6 +296,75 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
             "no_remaining_agent_recovery_action",
         )
 
+    def test_qualitative_repair_reuses_validated_agent_analysis(self) -> None:
+        provider = _LiteAgentProvider()
+        qualitative_gap = {
+            "qualitative_agent_execution": {
+                "required": True,
+                "status": "incomplete",
+                "agent_reviewed": False,
+            },
+            "qualitative_deep_dive": {},
+        }
+        qualitative_complete = {
+            "qualitative_agent_execution": {
+                "required": True,
+                "status": "completed",
+                "agent_reviewed": True,
+            },
+            "qualitative_deep_dive": {},
+        }
+        qualitative_critical = {
+            "severity": "critical",
+            "category": "agent-os-boundary",
+            "dim": "qualitative_deep_dive",
+            "issue": "六维定性研究未满足 UZI 证据门",
+            "evidence": "status=incomplete",
+            "suggested_fix": "完成三组分析后重算",
+        }
+        reviews = [
+            {
+                "issues": [qualitative_critical],
+                "critical_count": 1,
+                "warning_count": 0,
+                "info_count": 0,
+            },
+            {
+                "issues": [],
+                "critical_count": 0,
+                "warning_count": 0,
+                "info_count": 0,
+            },
+        ]
+
+        with (
+            patch(
+                "domain_packs.finance_ashare.subagents.uzi_392_analysis.apply_qualitative_deep_dive",
+                side_effect=[qualitative_gap, qualitative_complete],
+            ) as qualitative_mock,
+            patch(
+                "domain_packs.finance_ashare.subagents.uzi_392_analysis.run_native_self_review",
+                side_effect=reviews,
+            ),
+            patch(
+                "domain_packs.finance_ashare.subagents.uzi_392_analysis._validate_agent_analysis",
+                return_value=[],
+            ),
+        ):
+            result = execute_native_analysis(
+                _lite_snapshots(),
+                ["600000"],
+                profile="medium",
+                llm_provider=provider,
+            )
+
+        self.assertEqual(provider.calls, 9)
+        self.assertEqual(qualitative_mock.call_count, 2)
+        history = result["results"][0]["recovery_history"]
+        self.assertFalse(history[0]["reused_agent_analysis"])
+        self.assertTrue(history[1]["reused_agent_analysis"])
+        self.assertTrue(result["report_allowed"])
+
     def test_enabled_empty_dimension_remains_a_non_bypassable_critical(self) -> None:
         rows = _lite_snapshots()
         governance = next(
