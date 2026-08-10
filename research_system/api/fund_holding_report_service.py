@@ -425,6 +425,10 @@ class FundHoldingReportService:
                 raise FundHoldingBatchConflict(
                     "没有符合重试条件的终态持仓报告"
                 )
+            # A persisted batch may have been created under an older worker
+            # limit. Retries use the current service pool, so keep the public
+            # batch contract aligned with the concurrency actually enforced.
+            state["concurrency"] = self.max_concurrency
             state["cancel_requested"] = False
             state["status"] = "running"
             state["completed_at"] = None

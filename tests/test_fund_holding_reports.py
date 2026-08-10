@@ -355,8 +355,15 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         self.assertTrue(partial["report_available"])
         self.assertIn("quote_data_gap", partial["data_gap"])
 
+        legacy_state = self.service._load_batch(final["batch_id"])
+        legacy_state["concurrency"] = 5
+        self.service._write_batch(
+            legacy_state,
+            event_type="fund_holding_batch_legacy_concurrency",
+        )
         self.agent_os.fail_symbols.clear()
         retried = self.service.retry(final["batch_id"], symbols=["600001"])
+        self.assertEqual(retried["concurrency"], 2)
         recovered = self.wait_terminal(retried["batch_id"])
         self.assertEqual(recovered["counts"]["deliverable"], 10)
         self.assertEqual(len(recovered["holdings"][0]["attempt_run_ids"]), 2)
