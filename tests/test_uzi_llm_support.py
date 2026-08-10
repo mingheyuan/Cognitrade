@@ -97,6 +97,27 @@ class UziLlmSupportTests(unittest.TestCase):
             [2.0, 4.0, 8.0, 16.0, 32.0, 60.0],
         )
 
+    @patch("domain_packs.finance_ashare.subagents.uzi_llm_support.random", return_value=0.0)
+    @patch("domain_packs.finance_ashare.subagents.uzi_llm_support.sleep")
+    def test_transient_api_connection_error_retries_before_returning_to_quality_gate(
+        self,
+        sleep_mock,
+        _random_mock,
+    ) -> None:
+        provider = _TransientProvider(
+            failures=2,
+            message="llm_request_failed: APIConnectionError: Connection error.",
+        )
+
+        result = parse_uzi_structured(provider, schema=dict)
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(provider.calls, 3)
+        self.assertEqual(
+            [call.args[0] for call in sleep_mock.call_args_list],
+            [2.0, 4.0],
+        )
+
     @patch("domain_packs.finance_ashare.subagents.uzi_llm_support.sleep")
     def test_timeout_is_not_retried(self, sleep_mock) -> None:
         provider = _TransientProvider(

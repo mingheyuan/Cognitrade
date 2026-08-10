@@ -129,6 +129,12 @@ def _is_transient_upstream_failure(exc: Exception) -> bool:
     return any(
         marker in detail
         for marker in (
+            "apiconnectionerror",
+            "connection error",
+            "connection reset",
+            "connection aborted",
+            "remote disconnected",
+            "server disconnected",
             "bad gateway",
             "service unavailable",
             "upstream_error",
