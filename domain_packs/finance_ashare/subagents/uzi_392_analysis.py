@@ -224,8 +224,8 @@ class AgentDimensionPayload(BaseModel):
         return self
 
 
-class AgentNarrativePayload(BaseModel):
-    """Gateway-safe transport contract for UZI synthesis fields."""
+class AgentNarrativeCorePayload(BaseModel):
+    """Gateway-safe transport contract for UZI synthesis without price zones."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -236,7 +236,21 @@ class AgentNarrativePayload(BaseModel):
         description="Exact full paths copied from ALLOWED_LEAF_EVIDENCE_PATHS.",
     )
     great_divide_override: AgentGreatDivide | None = None
-    narrative_override: AgentNarrative
+    core_conclusion: str = Field(min_length=20, max_length=2_000)
+    conclusion_evidence_paths: list[str] = Field(
+        min_length=1,
+        max_length=10,
+        description="Exact full paths copied from ALLOWED_LEAF_EVIDENCE_PATHS.",
+    )
+    risks: list[GroundedRisk] = Field(min_length=3, max_length=12)
+
+
+class AgentBuyZonesPayload(BaseModel):
+    """Gateway-safe transport contract for the four grounded UZI price zones."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    buy_zones: AgentBuyZones
 
 
 def _profile_native_panel(panel: dict[str, Any], profile: str) -> dict[str, Any]:
@@ -719,20 +733,25 @@ def _generate_agent_analysis(
         ensure_ascii=False,
         separators=(",", ":"),
     )
-    system_prompt = (
+    base_system_prompt = (
         "你是 UZI 3.9.4 完整研究链的 Agent 分析阶段。只允许使用 FROZEN_ARTIFACTBOARD_EVIDENCE；"
         f"当前显式研究档位为 {profile}。禁止模拟、补造或把缺失值改成中位值。"
-        f"本档启用的 {len(expected_dimensions)} 个维度必须逐项评论，存在数据时引用精确 evidence_paths，"
-        "不存在时明确说明缺口并引用对应 recovery/data_gap 路径。evidence_paths 使用冻结 JSON 的点号/数组下标"
-        "叶子路径，例如 raw.dimensions.0_basic.data.current_price；返回后会由机械校验逐条核对。买入区间只能由"
-        "冻结 JSON 中真实的数值叶子路径"
-        "通过 calculation 明示计算得到；若证据不足，结构化输出应失败并让报告停在质量门。"
+        "本次只生成用户消息指定的结构化片段，完整 agent_analysis 会由系统机械合并；禁止返回契约外字段。"
+        "所有事实必须使用冻结 JSON 中的真实证据；返回后会由机械校验逐条核对。若证据不足，结构化输出应失败"
+        "并让报告停在质量门。"
         f"UZI_SOURCE_COMMIT={UZI_SOURCE_COMMIT}\n"
         f"FROZEN_ARTIFACTBOARD_EVIDENCE={frozen_json}\n"
-        f"ALLOWED_LEAF_EVIDENCE_PATHS={allowed_path_json}\n"
+    )
+    evidence_system_prompt = (
+        f"{base_system_prompt}evidence_paths 使用冻结 JSON 的点号/数组下标叶子路径，例如 "
+        "raw.dimensions.0_basic.data.current_price。存在数据时引用精确 evidence_paths；不存在时明确说明缺口并"
+        "引用对应 recovery/data_gap 路径。"
+        f"ALLOWED_LEAF_EVIDENCE_PATHS={allowed_path_json}"
+    )
+    numeric_system_prompt = (
+        f"{base_system_prompt}买入区间只能由冻结 JSON 中真实的数值叶子路径通过 calculation 明示计算得到。"
         f"ALLOWED_NUMERIC_BASIS_PATHS={numeric_path_json}"
     )
-    expected_dimension_text = ",".join(expected_dimensions)
     debate_instruction = (
         "great_divide_override 必须包含多空各三轮。"
         if native_profile.enable_bull_bear_debate
@@ -743,61 +762,111 @@ def _generate_agent_analysis(
         ensure_ascii=False,
         separators=(",", ":"),
     )
-    dimension_prompt = (
-        "生成当前档位 agent_analysis 的逐维评论部分。dimensions 中的 dimension_id 必须且只能是："
-        f"{expected_dimension_text}；每个维度恰好一条、commentary.text 至少 20 字，并引用真实叶子路径。"
-        "data_gaps 只记录已经穷尽的真实恢复尝试，不能把缺口写成已解决。"
-        f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
-        "必须逐条修复；不得通过改写措辞隐藏问题。"
-    )
-    narrative_prompt = (
-        "生成当前档位 agent_analysis 的评委洞察、结论、风险和买入区间部分。"
+    dimension_rows: list[AgentDimensionCommentary] = []
+    gap_rows: list[AgentDataGapAcknowledgement] = []
+    dimension_batch_size = 10
+    for offset in range(0, len(expected_dimensions), dimension_batch_size):
+        dimension_batch = expected_dimensions[offset : offset + dimension_batch_size]
+        dimension_prompt = (
+            "生成当前档位 agent_analysis 的逐维评论部分。这是机械拆分后的一个批次，不能省略或增加维度。"
+            "dimensions 中的 dimension_id 必须且只能是："
+            f"{','.join(dimension_batch)}；每个维度恰好一条、commentary.text 至少 20 字，并引用真实叶子路径。"
+            "data_gaps 只记录本批次内已经穷尽的真实恢复尝试，不能把缺口写成已解决。"
+            f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
+            "必须逐条修复；不得通过改写措辞隐藏问题。"
+        )
+        dimension_result = parse_uzi_structured(
+            llm_provider,
+            system_prompt=evidence_system_prompt,
+            user_prompt=dimension_prompt,
+            schema=AgentDimensionPayload,
+            temperature=0.1,
+            reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
+        )
+        dimensions_payload = (
+            dimension_result
+            if isinstance(dimension_result, AgentDimensionPayload)
+            else AgentDimensionPayload.model_validate(dimension_result)
+        )
+        actual_batch = {row.dimension_id for row in dimensions_payload.dimensions}
+        expected_batch = set(dimension_batch)
+        if actual_batch != expected_batch:
+            raise ValueError(
+                "dimension transport batch does not match the selected UZI profile; "
+                f"missing={sorted(expected_batch - actual_batch)}, "
+                f"extra={sorted(actual_batch - expected_batch)}"
+            )
+        invalid_gap_ids = {
+            row.dimension_id for row in dimensions_payload.data_gaps
+        } - expected_batch
+        if invalid_gap_ids:
+            raise ValueError(
+                "dimension transport batch contains data gaps for other dimensions: "
+                f"{sorted(invalid_gap_ids)}"
+            )
+        dimension_rows.extend(dimensions_payload.dimensions)
+        gap_rows.extend(dimensions_payload.data_gaps)
+
+    narrative_core_prompt = (
+        "生成当前档位 agent_analysis 的评委洞察、核心结论和风险部分，不生成买入区间。"
         "panel_insights 至少 30 字。"
         f"{debate_instruction}至少三条风险。"
-        "buy_zones 必须含 value/growth/technical/youzi，basis_fields 只能填写冻结 JSON 中真实数值的精确叶子路径；"
-        "calculation 写清真实数值如何导出 price。"
         f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
         "必须逐条修复；不得通过改写措辞隐藏问题。"
     )
-    dimension_result = parse_uzi_structured(
+    narrative_core_result = parse_uzi_structured(
         llm_provider,
-        system_prompt=system_prompt,
-        user_prompt=dimension_prompt,
-        schema=AgentDimensionPayload,
+        system_prompt=evidence_system_prompt,
+        user_prompt=narrative_core_prompt,
+        schema=AgentNarrativeCorePayload,
         temperature=0.1,
         reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
     )
-    dimensions_payload = (
-        dimension_result
-        if isinstance(dimension_result, AgentDimensionPayload)
-        else AgentDimensionPayload.model_validate(dimension_result)
+    narrative_core_payload = (
+        narrative_core_result
+        if isinstance(narrative_core_result, AgentNarrativeCorePayload)
+        else AgentNarrativeCorePayload.model_validate(narrative_core_result)
     )
-    narrative_result = parse_uzi_structured(
+    buy_zones_prompt = (
+        "只生成当前档位 agent_analysis 的四类买入区间。buy_zones 必须含 "
+        "value/growth/technical/youzi；basis_fields 只能填写 "
+        "ALLOWED_NUMERIC_BASIS_PATHS 中真实数值的精确叶子路径，calculation 写清真实数值如何导出 price。"
+        "证据不足时不得猜测或使用中位值，必须让结构化输出失败并停在质量门。"
+        f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
+    )
+    buy_zones_result = parse_uzi_structured(
         llm_provider,
-        system_prompt=system_prompt,
-        user_prompt=narrative_prompt,
-        schema=AgentNarrativePayload,
+        system_prompt=numeric_system_prompt,
+        user_prompt=buy_zones_prompt,
+        schema=AgentBuyZonesPayload,
         temperature=0.1,
         reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
     )
-    narrative_payload = (
-        narrative_result
-        if isinstance(narrative_result, AgentNarrativePayload)
-        else AgentNarrativePayload.model_validate(narrative_result)
+    buy_zones_payload = (
+        buy_zones_result
+        if isinstance(buy_zones_result, AgentBuyZonesPayload)
+        else AgentBuyZonesPayload.model_validate(buy_zones_result)
     )
     payload = AgentAnalysisPayload(
         agent_reviewed=True,
         dim_commentary={
             row.dimension_id: row.commentary
-            for row in dimensions_payload.dimensions
+            for row in dimension_rows
         },
-        panel_insights=narrative_payload.panel_insights,
-        panel_evidence_paths=narrative_payload.panel_evidence_paths,
-        great_divide_override=narrative_payload.great_divide_override,
-        narrative_override=narrative_payload.narrative_override,
+        panel_insights=narrative_core_payload.panel_insights,
+        panel_evidence_paths=narrative_core_payload.panel_evidence_paths,
+        great_divide_override=narrative_core_payload.great_divide_override,
+        narrative_override=AgentNarrative(
+            core_conclusion=narrative_core_payload.core_conclusion,
+            conclusion_evidence_paths=(
+                narrative_core_payload.conclusion_evidence_paths
+            ),
+            risks=narrative_core_payload.risks,
+            buy_zones=buy_zones_payload.buy_zones,
+        ),
         data_gap_acknowledged={
             row.dimension_id: row.reason
-            for row in dimensions_payload.data_gaps
+            for row in gap_rows
         },
     )
     _validate_profile_payload(
@@ -847,6 +916,22 @@ def _normalize_payload_paths(
         normalized: list[str] = []
         for raw_path in paths:
             path = _canonical_evidence_path(raw_path)
+            if allowed_paths is not None and path not in allowed_paths:
+                exact_prefixes = [
+                    candidate
+                    for candidate in allowed_paths
+                    if path.startswith(candidate)
+                    and len(path) > len(candidate)
+                    and re.match(
+                        r"[\s:：;；,，。()（）`'\"—-]",
+                        path[len(candidate)],
+                    )
+                ]
+                if exact_prefixes:
+                    # Recover only an exact frozen leaf followed by prose or
+                    # punctuation.  A dotted/bracketed unknown child remains
+                    # invalid and is still rejected by the grounding gate.
+                    path = max(exact_prefixes, key=len)
             if allowed_paths is None or path in allowed_paths:
                 candidates = [path]
             else:

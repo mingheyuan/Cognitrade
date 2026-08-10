@@ -7,8 +7,9 @@ from unittest.mock import patch
 
 from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
     AgentAnalysisPayload,
+    AgentBuyZonesPayload,
     AgentDimensionPayload,
-    AgentNarrativePayload,
+    AgentNarrativeCorePayload,
     _canonical_evidence_path,
     _normalize_payload_paths,
     _safe_error_detail,
@@ -123,12 +124,20 @@ class _LiteAgentProvider:
                 ],
                 "data_gaps": [],
             }
-        if schema is AgentNarrativePayload:
+        if schema is AgentNarrativeCorePayload:
             return {
                 "panel_insights": payload["panel_insights"],
                 "panel_evidence_paths": payload["panel_evidence_paths"],
                 "great_divide_override": payload.get("great_divide_override"),
-                "narrative_override": payload["narrative_override"],
+                "core_conclusion": payload["narrative_override"]["core_conclusion"],
+                "conclusion_evidence_paths": payload["narrative_override"][
+                    "conclusion_evidence_paths"
+                ],
+                "risks": payload["narrative_override"]["risks"],
+            }
+        if schema is AgentBuyZonesPayload:
+            return {
+                "buy_zones": payload["narrative_override"]["buy_zones"],
             }
         return payload
 
@@ -173,8 +182,8 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
             _LITE_DIMENSIONS,
         )
         self.assertNotIn("great_divide_override", analysis["agent_analysis"])
-        self.assertEqual(provider.calls, 2)
-        self.assertEqual(provider.reasoning_efforts, ["low", "low"])
+        self.assertEqual(provider.calls, 3)
+        self.assertEqual(provider.reasoning_efforts, ["low", "low", "low"])
 
     def test_native_panel_obeys_all_profile_seat_counts(self) -> None:
         for profile, expected in (("lite", 10), ("medium", 51), ("deep", 66)):
@@ -387,6 +396,45 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
                 "raw.dimensions.0_basic.data.history[0].date",
                 "raw.dimensions.0_basic.data.history[0].value",
             ],
+        )
+
+    def test_explanatory_suffix_after_exact_leaf_path_is_removed(self) -> None:
+        payload = AgentAnalysisPayload.model_validate(
+            _LiteAgentProvider().parse()
+        )
+        payload.panel_evidence_paths = [
+            "panel.signal_distribution.bearish characteristic path unavailable; corrected below"
+        ]
+
+        _normalize_payload_paths(
+            payload,
+            allowed_paths={
+                "panel.signal_distribution.bearish",
+                "raw.dimensions.0_basic.data.price",
+            },
+        )
+
+        self.assertEqual(
+            payload.panel_evidence_paths,
+            ["panel.signal_distribution.bearish"],
+        )
+
+    def test_unknown_child_path_is_not_silently_rewritten(self) -> None:
+        payload = AgentAnalysisPayload.model_validate(
+            _LiteAgentProvider().parse()
+        )
+        payload.panel_evidence_paths = [
+            "panel.signal_distribution.bearish.unavailable"
+        ]
+
+        _normalize_payload_paths(
+            payload,
+            allowed_paths={"panel.signal_distribution.bearish"},
+        )
+
+        self.assertEqual(
+            payload.panel_evidence_paths,
+            ["panel.signal_distribution.bearish.unavailable"],
         )
 
 
