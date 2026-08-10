@@ -1,0 +1,23 @@
+domain_packs/finance_ashare/reporting/uzi_392_exact_report.py
+  s_eed87e69af68fb::t_1bf35715156657 1,3-5,30-44,211-214,221-238
+tests/test_uzi_native_report.py
+  s_eed87e69af68fb::t_c90542ff515d21 135-156
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "ce102cb8e9eb3f50b1d0e6cd458f69da5c76c3d8",
+  "prompts": {},
+  "sessions": {
+    "s_eed87e69af68fb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe293-3d9a-7d90-9103-316890232507",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
