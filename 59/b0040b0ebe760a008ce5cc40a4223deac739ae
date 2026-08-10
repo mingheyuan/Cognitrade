@@ -1,0 +1,45 @@
+.env.example
+  s_a6a8a3a6f43b3c::t_a0d1f07d2a7133 19-21
+domain_packs/finance_ashare/tools/financial_data_provider.yaml
+  s_a6a8a3a6f43b3c::t_4426ed4b0a10b6 26-28
+domain_packs/finance_ashare/tools/snapshot_collector.py
+  s_a6a8a3a6f43b3c::t_229cdb5665cb3c 3-6,9,18-20,22-24,30-32,58,60-67,73,165-168,415-455,532-538,643-700
+research_system/adapters/vendors/baostock_fundamental_adapter.py
+  s_a6a8a3a6f43b3c::t_e7858f4998fbbb 8-10,19
+research_system/adapters/vendors/baostock_market_adapter.py
+  s_a6a8a3a6f43b3c::t_f02316fd16029f 7-13,29
+research_system/adapters/vendors/baostock_socket_safety.py
+  s_a6a8a3a6f43b3c::t_3bb3b9404a25ed 1-135
+research_system/api/fund_holding_report_service.py
+  s_a6a8a3a6f43b3c::t_b645a1fbd3fc82 3-4,18-21,24-27,559
+research_system/runtime/config/settings_env.py
+  s_a6a8a3a6f43b3c::t_372b9cf95ec1c1 4,61-63
+research_system/runtime/platform/settings.py
+  s_a6a8a3a6f43b3c::t_bc825bc4ca0643 4,8-10,42,132-133
+tests/test_baostock_socket_safety.py
+  s_a6a8a3a6f43b3c::t_9d1b1bab6b22d5 1-43
+tests/test_finance_provider_execution.py
+  s_a6a8a3a6f43b3c::t_cf28a4e61a2127 4-5,14-17,135-164
+tests/test_fund_holding_reports.py
+  s_a6a8a3a6f43b3c::t_8e0262b7c2eaba 4-6,10,21,27,399-432
+tests/test_settings_runtime.py
+  s_a6a8a3a6f43b3c::t_ee3b349d9821f5 5,47,60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "59b0040b0ebe760a008ce5cc40a4223deac739ae",
+  "prompts": {},
+  "sessions": {
+    "s_a6a8a3a6f43b3c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4a32-504c-7e50-bdd0-022e51f7207a",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
