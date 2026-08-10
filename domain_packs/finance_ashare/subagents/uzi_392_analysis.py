@@ -14,10 +14,12 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import importlib
 import json
+import logging
 import math
 from pathlib import Path
 import re
 from threading import Event
+from time import monotonic
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -73,6 +75,7 @@ _PROFILE_REASONING_EFFORT = {
     "medium": "high",
     "deep": "xhigh",
 }
+_LOGGER = logging.getLogger("uvicorn.error")
 
 
 def _profile_dimension_keys(profile: str) -> tuple[str, ...]:
@@ -717,40 +720,13 @@ def _generate_agent_analysis(
         for path in allowed_paths
         if _path_number(frozen, path) is not None
     }
-    frozen_json = json.dumps(
-        frozen,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    allowed_path_json = json.dumps(
-        sorted(allowed_paths),
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    numeric_path_json = json.dumps(
-        sorted(numeric_paths),
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
     base_system_prompt = (
-        "你是 UZI 3.9.4 完整研究链的 Agent 分析阶段。只允许使用 FROZEN_ARTIFACTBOARD_EVIDENCE；"
+        "你是 UZI 3.9.4 完整研究链的 Agent 分析阶段。"
         f"当前显式研究档位为 {profile}。禁止模拟、补造或把缺失值改成中位值。"
         "本次只生成用户消息指定的结构化片段，完整 agent_analysis 会由系统机械合并；禁止返回契约外字段。"
-        "所有事实必须使用冻结 JSON 中的真实证据；返回后会由机械校验逐条核对。若证据不足，结构化输出应失败"
+        "所有事实必须使用当前片段提供的冻结真实证据；返回后会由机械校验逐条核对。若证据不足，结构化输出应失败"
         "并让报告停在质量门。"
         f"UZI_SOURCE_COMMIT={UZI_SOURCE_COMMIT}\n"
-        f"FROZEN_ARTIFACTBOARD_EVIDENCE={frozen_json}\n"
-    )
-    evidence_system_prompt = (
-        f"{base_system_prompt}evidence_paths 使用冻结 JSON 的点号/数组下标叶子路径，例如 "
-        "raw.dimensions.0_basic.data.current_price。存在数据时引用精确 evidence_paths；不存在时明确说明缺口并"
-        "引用对应 recovery/data_gap 路径。"
-        f"ALLOWED_LEAF_EVIDENCE_PATHS={allowed_path_json}"
-    )
-    numeric_system_prompt = (
-        f"{base_system_prompt}买入区间只能由冻结 JSON 中真实的数值叶子路径通过 calculation 明示计算得到。"
-        f"ALLOWED_NUMERIC_BASIS_PATHS={numeric_path_json}"
     )
     debate_instruction = (
         "great_divide_override 必须包含多空各三轮。"
@@ -764,9 +740,44 @@ def _generate_agent_analysis(
     )
     dimension_rows: list[AgentDimensionCommentary] = []
     gap_rows: list[AgentDataGapAcknowledgement] = []
-    dimension_batch_size = 10
+    dimension_batch_size = 5
     for offset in range(0, len(expected_dimensions), dimension_batch_size):
         dimension_batch = expected_dimensions[offset : offset + dimension_batch_size]
+        included_raw_dimensions = list(dimension_batch)
+        if "0_basic" not in included_raw_dimensions:
+            included_raw_dimensions.append("0_basic")
+        if "10_valuation" in dimension_batch:
+            included_raw_dimensions.append("20_valuation_models")
+        raw_dimensions = dict(frozen["raw"].get("dimensions") or {})
+        dimension_evidence = {
+            "raw": {
+                key: frozen["raw"].get(key)
+                for key in ("ticker", "market", "fetched_at")
+                if key in frozen["raw"]
+            },
+            # The score envelope is already small and its dimension rows live
+            # below ``dimensions``. Preserve the native object shape and path
+            # identities instead of inventing a batch-specific projection.
+            "dimension_scores": frozen["dimension_scores"],
+            # Keep the original list and indexes so recovery paths remain
+            # identical to the full frozen ArtifactBoard object.
+            "recovery_tasks": frozen["recovery_tasks"],
+        }
+        dimension_evidence["raw"]["dimensions"] = {
+            key: raw_dimensions[key]
+            for key in dict.fromkeys(included_raw_dimensions)
+            if key in raw_dimensions
+        }
+        dimension_allowed_paths = set(_leaf_paths(dimension_evidence))
+        if not dimension_allowed_paths.issubset(allowed_paths):
+            raise ValueError("dimension evidence projection changed frozen path identities")
+        dimension_system_prompt = (
+            f"{base_system_prompt}evidence_paths 使用冻结 JSON 的点号/数组下标叶子路径，例如 "
+            "raw.dimensions.0_basic.data.current_price。存在数据时引用精确 evidence_paths；不存在时明确说明缺口并"
+            "引用对应 recovery/data_gap 路径。"
+            f"FROZEN_STAGE_EVIDENCE={_compact_json(dimension_evidence)}\n"
+            f"ALLOWED_LEAF_EVIDENCE_PATHS={_compact_json(sorted(dimension_allowed_paths))}"
+        )
         dimension_prompt = (
             "生成当前档位 agent_analysis 的逐维评论部分。这是机械拆分后的一个批次，不能省略或增加维度。"
             "dimensions 中的 dimension_id 必须且只能是："
@@ -775,9 +786,12 @@ def _generate_agent_analysis(
             f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
             "必须逐条修复；不得通过改写措辞隐藏问题。"
         )
-        dimension_result = parse_uzi_structured(
+        dimension_result = _parse_agent_stage(
             llm_provider,
-            system_prompt=evidence_system_prompt,
+            stage=f"dimensions_{offset + 1}_{offset + len(dimension_batch)}",
+            symbol=str(raw.get("ticker") or ""),
+            profile=profile,
+            system_prompt=dimension_system_prompt,
             user_prompt=dimension_prompt,
             schema=AgentDimensionPayload,
             temperature=0.1,
@@ -804,9 +818,54 @@ def _generate_agent_analysis(
                 "dimension transport batch contains data gaps for other dimensions: "
                 f"{sorted(invalid_gap_ids)}"
             )
+        for row in dimensions_payload.dimensions:
+            row.commentary.evidence_paths = _normalize_evidence_paths(
+                row.commentary.evidence_paths,
+                allowed_paths=dimension_allowed_paths,
+            )
+            unknown_paths = (
+                set(row.commentary.evidence_paths) - dimension_allowed_paths
+            )
+            if unknown_paths:
+                raise ValueError(
+                    f"dimension {row.dimension_id} cited unknown evidence paths: "
+                    f"{sorted(unknown_paths)[:20]}"
+                )
         dimension_rows.extend(dimensions_payload.dimensions)
         gap_rows.extend(dimensions_payload.data_gaps)
 
+    dimension_commentary_drafts = {
+        row.dimension_id: row.commentary.model_dump(mode="json")
+        for row in dimension_rows
+    }
+    cited_dimension_paths = sorted({
+        path
+        for row in dimension_rows
+        for path in row.commentary.evidence_paths
+    })
+    cited_real_values = {
+        path: _path_value(frozen, path)
+        for path in cited_dimension_paths
+    }
+    narrative_evidence = {
+        "dimension_commentary_drafts": dimension_commentary_drafts,
+        "cited_real_evidence_values_by_original_path": cited_real_values,
+        "dimension_scores": frozen["dimension_scores"],
+        "panel": frozen["panel"],
+        "recovery_tasks": frozen["recovery_tasks"],
+    }
+    narrative_allowed_paths = set(cited_dimension_paths)
+    narrative_allowed_paths.update(_leaf_paths({"dimension_scores": frozen["dimension_scores"]}))
+    narrative_allowed_paths.update(_leaf_paths({"panel": frozen["panel"]}))
+    narrative_allowed_paths.update(_leaf_paths({"recovery_tasks": frozen["recovery_tasks"]}))
+    if not narrative_allowed_paths.issubset(allowed_paths):
+        raise ValueError("narrative evidence projection changed frozen path identities")
+    narrative_system_prompt = (
+        f"{base_system_prompt}FROZEN_STAGE_EVIDENCE={_compact_json(narrative_evidence)}\n"
+        "cited_real_evidence_values_by_original_path 的键就是原始 ArtifactBoard 叶子路径；"
+        "dimension_commentary_drafts 只是已完成机械校验的中间分析，不是可引用路径。"
+        f"ALLOWED_LEAF_EVIDENCE_PATHS={_compact_json(sorted(narrative_allowed_paths))}"
+    )
     narrative_core_prompt = (
         "生成当前档位 agent_analysis 的评委洞察、核心结论和风险部分，不生成买入区间。"
         "panel_insights 至少 30 字。"
@@ -814,9 +873,12 @@ def _generate_agent_analysis(
         f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
         "必须逐条修复；不得通过改写措辞隐藏问题。"
     )
-    narrative_core_result = parse_uzi_structured(
+    narrative_core_result = _parse_agent_stage(
         llm_provider,
-        system_prompt=evidence_system_prompt,
+        stage="narrative_core",
+        symbol=str(raw.get("ticker") or ""),
+        profile=profile,
+        system_prompt=narrative_system_prompt,
         user_prompt=narrative_core_prompt,
         schema=AgentNarrativeCorePayload,
         temperature=0.1,
@@ -827,15 +889,31 @@ def _generate_agent_analysis(
         if isinstance(narrative_core_result, AgentNarrativeCorePayload)
         else AgentNarrativeCorePayload.model_validate(narrative_core_result)
     )
+    _normalize_narrative_core_paths(
+        narrative_core_payload,
+        allowed_paths=narrative_allowed_paths,
+    )
+    numeric_values_by_path = {
+        path: _path_number(frozen, path)
+        for path in sorted(numeric_paths)
+    }
+    numeric_system_prompt = (
+        f"{base_system_prompt}买入区间只能由以下真实数值叶子路径通过 calculation 明示计算得到。"
+        "对象的键就是必须原样返回的 basis_fields 路径；不得引用对象之外的值。"
+        f"ALLOWED_NUMERIC_BASIS_VALUES={_compact_json(numeric_values_by_path)}"
+    )
     buy_zones_prompt = (
         "只生成当前档位 agent_analysis 的四类买入区间。buy_zones 必须含 "
         "value/growth/technical/youzi；basis_fields 只能填写 "
-        "ALLOWED_NUMERIC_BASIS_PATHS 中真实数值的精确叶子路径，calculation 写清真实数值如何导出 price。"
+        "ALLOWED_NUMERIC_BASIS_VALUES 中真实数值的精确叶子路径，calculation 写清真实数值如何导出 price。"
         "证据不足时不得猜测或使用中位值，必须让结构化输出失败并停在质量门。"
         f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
     )
-    buy_zones_result = parse_uzi_structured(
+    buy_zones_result = _parse_agent_stage(
         llm_provider,
+        stage="buy_zones",
+        symbol=str(raw.get("ticker") or ""),
+        profile=profile,
         system_prompt=numeric_system_prompt,
         user_prompt=buy_zones_prompt,
         schema=AgentBuyZonesPayload,
@@ -879,6 +957,109 @@ def _generate_agent_analysis(
     return _to_upstream_agent_analysis(payload)
 
 
+def _compact_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=isinstance(value, dict),
+    )
+
+
+def _parse_agent_stage(
+    llm_provider: Any,
+    *,
+    stage: str,
+    symbol: str,
+    profile: str,
+    **kwargs: Any,
+) -> Any:
+    started_at = monotonic()
+    _LOGGER.info(
+        "UZI agent analysis stage started: symbol=%s profile=%s stage=%s prompt_chars=%s",
+        symbol,
+        profile,
+        stage,
+        len(str(kwargs.get("system_prompt") or "")) + len(str(kwargs.get("user_prompt") or "")),
+    )
+    try:
+        result = parse_uzi_structured(llm_provider, **kwargs)
+    except Exception as exc:
+        _LOGGER.warning(
+            "UZI agent analysis stage failed: symbol=%s profile=%s stage=%s elapsed=%.1fs error=%s:%s",
+            symbol,
+            profile,
+            stage,
+            monotonic() - started_at,
+            exc.__class__.__name__,
+            _safe_error_detail(exc),
+        )
+        raise
+    _LOGGER.info(
+        "UZI agent analysis stage completed: symbol=%s profile=%s stage=%s elapsed=%.1fs",
+        symbol,
+        profile,
+        stage,
+        monotonic() - started_at,
+    )
+    return result
+
+
+def _normalize_narrative_core_paths(
+    payload: AgentNarrativeCorePayload,
+    *,
+    allowed_paths: set[str],
+) -> None:
+    payload.panel_evidence_paths = _normalize_evidence_paths(
+        payload.panel_evidence_paths,
+        allowed_paths=allowed_paths,
+    )
+    payload.conclusion_evidence_paths = _normalize_evidence_paths(
+        payload.conclusion_evidence_paths,
+        allowed_paths=allowed_paths,
+    )
+    for risk in payload.risks:
+        risk.evidence_paths = _normalize_evidence_paths(
+            risk.evidence_paths,
+            allowed_paths=allowed_paths,
+        )
+    if payload.great_divide_override is not None:
+        for row in payload.great_divide_override.bull_say_rounds:
+            row.evidence_paths = _normalize_evidence_paths(
+                row.evidence_paths,
+                allowed_paths=allowed_paths,
+            )
+        for row in payload.great_divide_override.bear_say_rounds:
+            row.evidence_paths = _normalize_evidence_paths(
+                row.evidence_paths,
+                allowed_paths=allowed_paths,
+            )
+    cited_paths = set(payload.panel_evidence_paths)
+    cited_paths.update(payload.conclusion_evidence_paths)
+    cited_paths.update(
+        path
+        for risk in payload.risks
+        for path in risk.evidence_paths
+    )
+    if payload.great_divide_override is not None:
+        cited_paths.update(
+            path
+            for row in payload.great_divide_override.bull_say_rounds
+            for path in row.evidence_paths
+        )
+        cited_paths.update(
+            path
+            for row in payload.great_divide_override.bear_say_rounds
+            for path in row.evidence_paths
+        )
+    unknown_paths = cited_paths - allowed_paths
+    if unknown_paths:
+        raise ValueError(
+            "narrative stage cited evidence outside its frozen projection: "
+            f"{sorted(unknown_paths)[:20]}"
+        )
+
+
 def _validate_profile_payload(
     payload: AgentAnalysisPayload,
     *,
@@ -912,60 +1093,84 @@ def _normalize_payload_paths(
     paths are preserved and still fail the grounding gate.
     """
 
-    def normalize(paths: list[str]) -> list[str]:
-        normalized: list[str] = []
-        for raw_path in paths:
-            path = _canonical_evidence_path(raw_path)
-            if allowed_paths is not None and path not in allowed_paths:
-                exact_prefixes = [
-                    candidate
-                    for candidate in allowed_paths
-                    if path.startswith(candidate)
-                    and len(path) > len(candidate)
-                    and re.match(
-                        r"[\s:：;；,，。()（）`'\"—-]",
-                        path[len(candidate)],
-                    )
-                ]
-                if exact_prefixes:
-                    # Recover only an exact frozen leaf followed by prose or
-                    # punctuation.  A dotted/bracketed unknown child remains
-                    # invalid and is still rejected by the grounding gate.
-                    path = max(exact_prefixes, key=len)
-            if allowed_paths is None or path in allowed_paths:
-                candidates = [path]
-            else:
-                object_prefix = f"{path}."
-                array_prefix = f"{path}["
-                candidates = sorted(
-                    candidate
-                    for candidate in allowed_paths
-                    if candidate.startswith(object_prefix)
-                    or candidate.startswith(array_prefix)
-                )
-                if not candidates:
-                    candidates = [path]
-            for candidate in candidates:
-                if candidate not in normalized:
-                    normalized.append(candidate)
-        return normalized[:12]
-
     for row in payload.dim_commentary.values():
-        row.evidence_paths = normalize(row.evidence_paths)
-    payload.panel_evidence_paths = normalize(payload.panel_evidence_paths)
-    payload.narrative_override.conclusion_evidence_paths = normalize(
-        payload.narrative_override.conclusion_evidence_paths
+        row.evidence_paths = _normalize_evidence_paths(
+            row.evidence_paths,
+            allowed_paths=allowed_paths,
+        )
+    payload.panel_evidence_paths = _normalize_evidence_paths(
+        payload.panel_evidence_paths,
+        allowed_paths=allowed_paths,
+    )
+    payload.narrative_override.conclusion_evidence_paths = _normalize_evidence_paths(
+        payload.narrative_override.conclusion_evidence_paths,
+        allowed_paths=allowed_paths,
     )
     if payload.great_divide_override is not None:
         for row in payload.great_divide_override.bull_say_rounds:
-            row.evidence_paths = normalize(row.evidence_paths)
+            row.evidence_paths = _normalize_evidence_paths(
+                row.evidence_paths,
+                allowed_paths=allowed_paths,
+            )
         for row in payload.great_divide_override.bear_say_rounds:
-            row.evidence_paths = normalize(row.evidence_paths)
+            row.evidence_paths = _normalize_evidence_paths(
+                row.evidence_paths,
+                allowed_paths=allowed_paths,
+            )
     for row in payload.narrative_override.risks:
-        row.evidence_paths = normalize(row.evidence_paths)
+        row.evidence_paths = _normalize_evidence_paths(
+            row.evidence_paths,
+            allowed_paths=allowed_paths,
+        )
     for name in ("value", "growth", "technical", "youzi"):
         zone = getattr(payload.narrative_override.buy_zones, name)
-        zone.basis_fields = normalize(zone.basis_fields)
+        zone.basis_fields = _normalize_evidence_paths(
+            zone.basis_fields,
+            allowed_paths=allowed_paths,
+        )
+
+
+def _normalize_evidence_paths(
+    paths: list[str],
+    *,
+    allowed_paths: set[str] | None,
+) -> list[str]:
+    normalized: list[str] = []
+    for raw_path in paths:
+        path = _canonical_evidence_path(raw_path)
+        if allowed_paths is not None and path not in allowed_paths:
+            exact_prefixes = [
+                candidate
+                for candidate in allowed_paths
+                if path.startswith(candidate)
+                and len(path) > len(candidate)
+                and re.match(
+                    r"[\s:：;；,，。()（）`'\"—-]",
+                    path[len(candidate)],
+                )
+            ]
+            if exact_prefixes:
+                # Recover only an exact frozen leaf followed by prose or
+                # punctuation.  A dotted/bracketed unknown child remains
+                # invalid and is still rejected by the grounding gate.
+                path = max(exact_prefixes, key=len)
+        if allowed_paths is None or path in allowed_paths:
+            candidates = [path]
+        else:
+            object_prefix = f"{path}."
+            array_prefix = f"{path}["
+            candidates = sorted(
+                candidate
+                for candidate in allowed_paths
+                if candidate.startswith(object_prefix)
+                or candidate.startswith(array_prefix)
+            )
+            if not candidates:
+                candidates = [path]
+        for candidate in candidates:
+            if candidate not in normalized:
+                normalized.append(candidate)
+    return normalized[:12]
 
 
 def _canonical_evidence_path(path: str) -> str:
@@ -1599,7 +1804,7 @@ def _leaf_paths(value: Any, prefix: str = "") -> list[str]:
     return [prefix] if prefix else []
 
 
-def _path_number(root: Any, path: str) -> float | None:
+def _path_value(root: Any, path: str) -> Any:
     current = root
     for token in path.replace("]", "").replace("[", ".").split("."):
         if token == "":
@@ -1608,11 +1813,21 @@ def _path_number(root: Any, path: str) -> float | None:
             try:
                 current = current[int(token)]
             except (ValueError, IndexError):
-                return None
+                raise KeyError(path)
         elif isinstance(current, dict):
-            current = current.get(token)
+            if token not in current:
+                raise KeyError(path)
+            current = current[token]
         else:
-            return None
+            raise KeyError(path)
+    return current
+
+
+def _path_number(root: Any, path: str) -> float | None:
+    try:
+        current = _path_value(root, path)
+    except KeyError:
+        return None
     if isinstance(current, bool):
         return None
     try:

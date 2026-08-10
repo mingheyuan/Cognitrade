@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -68,11 +69,13 @@ class _LiteAgentProvider:
         )
         self.timeout = timeout
         self.calls = 0
+        self.system_prompts: list[str] = []
         self.user_prompts: list[str] = []
         self.reasoning_efforts: list[str | None] = []
 
     def parse(self, **kwargs):
         self.calls += 1
+        self.system_prompts.append(str(kwargs.get("system_prompt") or ""))
         self.user_prompts.append(str(kwargs.get("user_prompt") or ""))
         self.reasoning_efforts.append(kwargs.get("reasoning_effort"))
         if self.timeout:
@@ -113,14 +116,26 @@ class _LiteAgentProvider:
         }
         schema = kwargs.get("schema")
         if schema is AgentDimensionPayload:
+            requested_match = re.search(
+                r"必须且只能是：([^；]+)；",
+                str(kwargs.get("user_prompt") or ""),
+            )
+            requested_dimensions = (
+                requested_match.group(1).split(",")
+                if requested_match is not None
+                else sorted(_LITE_DIMENSIONS)
+            )
             return {
                 "agent_reviewed": True,
                 "dimensions": [
                     {
                         "dimension_id": key,
-                        "commentary": commentary,
+                        "commentary": {
+                            "text": f"{key} 基于当前档位冻结证据完成核对，未使用任何模拟数据。",
+                            "evidence_paths": [evidence_path],
+                        },
                     }
-                    for key, commentary in payload["dim_commentary"].items()
+                    for key in requested_dimensions
                 ],
                 "data_gaps": [],
             }
@@ -182,8 +197,18 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
             _LITE_DIMENSIONS,
         )
         self.assertNotIn("great_divide_override", analysis["agent_analysis"])
-        self.assertEqual(provider.calls, 3)
-        self.assertEqual(provider.reasoning_efforts, ["low", "low", "low"])
+        self.assertEqual(provider.calls, 4)
+        self.assertEqual(provider.reasoning_efforts, ["low"] * 4)
+        self.assertNotIn('"panel":', provider.system_prompts[0])
+        self.assertIn(
+            "cited_real_evidence_values_by_original_path",
+            provider.system_prompts[-2],
+        )
+        self.assertIn(
+            "ALLOWED_NUMERIC_BASIS_VALUES",
+            provider.system_prompts[-1],
+        )
+        self.assertLess(max(map(len, provider.system_prompts)), 100_000)
 
     def test_native_panel_obeys_all_profile_seat_counts(self) -> None:
         for profile, expected in (("lite", 10), ("medium", 51), ("deep", 66)):
