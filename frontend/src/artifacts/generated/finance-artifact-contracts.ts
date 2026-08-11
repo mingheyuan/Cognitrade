@@ -897,7 +897,7 @@ export type UziNativeAnalysisContent = {
   "critical_count": number;
   "warning_count": number;
   "report_allowed": boolean;
-  "quality_status": "available" | "quality_gate_blocked";
+  "quality_status": "available" | "degraded" | "quality_gate_blocked";
   "recovery_history": Array<Record<string, unknown>>;
   "holding_context"?: Record<string, unknown> | null;
 }

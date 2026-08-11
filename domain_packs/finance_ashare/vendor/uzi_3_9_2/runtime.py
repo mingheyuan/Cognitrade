@@ -23,6 +23,7 @@ UZI_REPORT_RENDERER_SHA256 = {
 UZI_PURE_PYTHON_TREE_SHA256 = "dae53a8de9c31ec7fa9d057f954ac61c6a53d2c907ca9517be40ead873ef1905"
 UZI_COMMAND_TREE_SHA256 = "18a54c151139e8cfe50ffa093035bf90ebbf3bd6327248adc5b5bfdbda7ccc61"
 UZI_ANALYST_ASSET_TREE_SHA256 = "c5afcc7f7266ba7932195c4ee0534d6eb17707f11052bbf1bd5ce9a3c30b0396"
+UZI_STANDALONE_SKILL_TREE_SHA256 = "88b430b169ad68f028ac83df438d0dfac818e7330c266f8d86ddea75e0674593"
 
 UZI_FETCHER_IDS: tuple[str, ...] = (
     "0_basic",
@@ -186,6 +187,7 @@ _FETCHERS: dict[str, _FetcherSpec] = {
 _IMPORT_LOCK = threading.Lock()
 _CONTEST_POLICY_LOCK = threading.Lock()
 _FUND_PROFILE_ENV_LOCK = threading.Lock()
+UZI_ENVIRONMENT_LOCK = threading.RLock()
 _INITIALIZED_ROOTS: set[Path] = set()
 
 
@@ -381,6 +383,17 @@ def verify_vendored_uzi_integrity() -> dict[str, Any]:
         analyst_tree.update(path.read_bytes())
         analyst_tree.update(b"\0")
     analyst_tree_sha256 = analyst_tree.hexdigest()
+    standalone_skill_paths = [*(root / "skills").rglob("*")]
+    standalone_skill_paths = sorted(
+        path for path in standalone_skill_paths if path.is_file()
+    )
+    standalone_skill_tree = hashlib.sha256()
+    for path in standalone_skill_paths:
+        standalone_skill_tree.update(path.relative_to(root).as_posix().encode("utf-8"))
+        standalone_skill_tree.update(b"\0")
+        standalone_skill_tree.update(path.read_bytes())
+        standalone_skill_tree.update(b"\0")
+    standalone_skill_tree_sha256 = standalone_skill_tree.hexdigest()
     return {
         "source_commit": UZI_SOURCE_COMMIT,
         "report_source_commit": UZI_REPORT_SOURCE_COMMIT,
@@ -401,13 +414,19 @@ def verify_vendored_uzi_integrity() -> dict[str, Any]:
         "analyst_asset_file_count": len(analyst_paths),
         "analyst_asset_tree_sha256": analyst_tree_sha256,
         "analyst_asset_tree_matches": analyst_tree_sha256 == UZI_ANALYST_ASSET_TREE_SHA256,
+        "standalone_skill_file_count": len(standalone_skill_paths),
+        "standalone_skill_tree_sha256": standalone_skill_tree_sha256,
+        "standalone_skill_tree_matches": (
+            standalone_skill_tree_sha256 == UZI_STANDALONE_SKILL_TREE_SHA256
+        ),
         "valid": not missing_fetchers
         and set(command_ids) == set(UZI_COMMAND_IDS)
         and python_tree_sha256 == UZI_PURE_PYTHON_TREE_SHA256
         and command_tree_sha256 == UZI_COMMAND_TREE_SHA256
         and template_sha256 == UZI_REPORT_TEMPLATE_SHA256
         and report_renderer_matches
-        and analyst_tree_sha256 == UZI_ANALYST_ASSET_TREE_SHA256,
+        and analyst_tree_sha256 == UZI_ANALYST_ASSET_TREE_SHA256
+        and standalone_skill_tree_sha256 == UZI_STANDALONE_SKILL_TREE_SHA256,
     }
 
 
@@ -416,12 +435,14 @@ __all__ = [
     "UZI_COMMAND_TREE_SHA256",
     "UZI_ANALYST_ASSET_TREE_SHA256",
     "UZI_FETCHER_IDS",
+    "UZI_ENVIRONMENT_LOCK",
     "UZI_PURE_PYTHON_TREE_SHA256",
     "UZI_REPORT_RENDERER_SHA256",
     "UZI_REPORT_SOURCE_COMMIT",
     "UZI_REPORT_TEMPLATE_SHA256",
     "UZI_REPORT_VERSION",
     "UZI_SOURCE_COMMIT",
+    "UZI_STANDALONE_SKILL_TREE_SHA256",
     "Uzi392FetcherRuntime",
     "verify_vendored_uzi_integrity",
 ]

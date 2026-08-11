@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import inspect
 import json
 import math
+import os
+from contextlib import contextmanager
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -55,7 +58,10 @@ from domain_packs.finance_ashare.tools.uzi_data_recovery import (
     recover_qualitative_snapshots,
     recover_suggested_fixes_until_exhausted,
 )
-from domain_packs.finance_ashare.vendor.uzi_3_9_2 import Uzi392FetcherRuntime
+from domain_packs.finance_ashare.vendor.uzi_3_9_2 import (
+    UZI_ENVIRONMENT_LOCK,
+    Uzi392FetcherRuntime,
+)
 from research_system.adapters.vendors.akshare_utils import initialize_akshare_js_runtime
 from research_system.adapters.vendors.baostock_socket_safety import (
     DEFAULT_BAOSTOCK_SOCKET_TIMEOUT_SECONDS,
@@ -68,6 +74,9 @@ from research_system.adapters.vendors.provider_execution import (
 from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
 from research_system.adapters.vendors.uzi_shared_source_cache import (
     install_uzi_shared_source_cache,
+)
+from research_system.adapters.vendors.uzi_request_timeout import (
+    uzi_request_timeout_scope,
 )
 from research_system.runtime.platform.settings import Settings
 from research_system.runtime.storage.jsonl import read_json, write_json
@@ -162,18 +171,25 @@ _UZI_MINI_RACER_FETCHERS = frozenset(
 )
 _UZI_MINI_RACER_LOCK = Lock()
 _UZI_MAX_WORKERS = 6
-# Pinned UZI run_real_test.py gives its parallel fetcher wave a five-minute
-# hard ceiling.  Keep that native boundary inside the Pack instead of applying
-# a Tool Registry timeout to the whole Agent OS capability.
-_UZI_FETCHER_WAVE_TIMEOUT_BY_PROFILE = {
-    # Current UZI pipeline collection has no aggregate cutoff. Agent OS keeps
-    # a finite host-safety boundary, but it must not truncate a supported
-    # profile before that profile's own documented upper duration.
-    "lite": 300.0,
-    "medium": 480.0,
-    "deep": 1200.0,
-}
+# Pinned UZI run_real_test.py uses one five-minute wave-2 ceiling and a
+# separate three-minute bonus-wave ceiling for every profile.
 _UZI_FETCHER_WAVE_TIMEOUT_SECONDS = 300.0
+_UZI_BONUS_WAVE_TIMEOUT_SECONDS = 180.0
+_UZI_DEFAULT_FETCHER_TIMEOUT_SECONDS = 90.0
+_UZI_FETCHER_TIMEOUT_OVERRIDES = {
+    "research": 180.0,
+    "fundamental": 150.0,
+    "valuation": 150.0,
+    "events": 120.0,
+}
+_UZI_BONUS_FETCHER_TIMEOUT_SECONDS = 120.0
+_UZI_BONUS_SNAPSHOT_TYPES = frozenset({"fund_holders", "similar_stocks"})
+_UZI_PROFILE_ENV_KEYS = (
+    "UZI_DEPTH",
+    "UZI_LITE",
+    "UZI_DDG_BUDGET",
+    "UZI_FUND_STATS_TOP",
+)
 _SNAPSHOT_PROVIDER_HINTS = {
     "market": "akshare",
     "fundamental": "akshare",
@@ -240,14 +256,149 @@ def normalize_json_value(value: Any) -> Any:
 
 
 def _uzi_fetcher_wave_timeout_seconds(profile: str | None) -> float:
-    selected = str(profile or "").strip().lower()
-    return _UZI_FETCHER_WAVE_TIMEOUT_BY_PROFILE.get(
-        selected,
-        _UZI_FETCHER_WAVE_TIMEOUT_SECONDS,
+    del profile
+    return _UZI_FETCHER_WAVE_TIMEOUT_SECONDS
+
+
+def _uzi_per_fetcher_timeout_seconds(snapshot_type: str) -> float:
+    return _UZI_FETCHER_TIMEOUT_OVERRIDES.get(
+        snapshot_type,
+        _UZI_DEFAULT_FETCHER_TIMEOUT_SECONDS,
     )
 
 
+@contextmanager
+def _uzi_profile_environment(
+    profile: str | None,
+    provider_registry: VendorProviderRegistry | None,
+):
+    """Apply one pinned UZI profile for the complete concurrent fetch window.
+
+    UZI 3.9.4 communicates the selected profile to fetchers through process
+    environment variables.  A process-global lock is therefore the only safe
+    way to retain native intra-run thread parallelism while preventing two
+    Agent OS runs with different profiles from observing each other's values.
+    """
+
+    settings = (
+        provider_registry.settings
+        if provider_registry is not None
+        else Settings.from_env(Path(__file__).resolve().parents[3])
+    )
+    # Initialize the pinned import boundary before importing ``lib`` modules.
+    Uzi392FetcherRuntime(workspace_root=settings.workspace_root)
+    profile_module = importlib.import_module("lib.analysis_profile")
+    web_search_module = importlib.import_module("lib.web_search")
+    selected = str(profile or "").strip().lower() or None
+    with UZI_ENVIRONMENT_LOCK:
+        native_profile = profile_module.get_profile(selected)
+        previous = {key: os.environ.get(key) for key in _UZI_PROFILE_ENV_KEYS}
+        try:
+            profile_module.apply_profile_to_env(native_profile)
+            # A CLI invocation starts with a fresh module state.  Reset the
+            # pinned DDG counter once per Agent OS collection so one report
+            # cannot consume the next report's profile budget.
+            budget_lock = getattr(web_search_module, "_BUDGET_LOCK")
+            budget_state = getattr(web_search_module, "_BUDGET_STATE")
+            with budget_lock:
+                budget_state["used"] = 0
+                budget_state["skipped"] = 0
+            yield native_profile
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
 def collect_snapshots(
+    *,
+    query: str,
+    symbols: Iterable[str],
+    snapshot_types: Iterable[str],
+    sector: str | None = None,
+    cancellation=None,
+    cache_root: Path | None = None,
+    research_profile: str | None = None,
+    max_workers: int | None = None,
+    provider_registry: VendorProviderRegistry | None = None,
+    progress_callback=None,
+) -> list[dict[str, Any]]:
+    requested = tuple(
+        dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip())
+    )
+    resolved_symbols = _unique_symbols(symbols)
+    if any(_uses_uzi_fetcher(snapshot_type) for snapshot_type in requested):
+        with _uzi_profile_environment(research_profile, provider_registry):
+            # Native versus/portfolio orchestration runs one complete pipeline
+            # per ticker.  Give every explicit ticker its own wave budget and
+            # failure boundary instead of pooling symbol×dimension futures.
+            if not sector and len(resolved_symbols) > 1:
+                collected: list[dict[str, Any]] = []
+                per_symbol_total = sum(
+                    snapshot_type in _SYMBOL_SKILLS for snapshot_type in requested
+                )
+                aggregate_total = per_symbol_total * len(resolved_symbols)
+                for symbol_index, symbol in enumerate(resolved_symbols):
+                    if _cancelled(cancellation):
+                        break
+
+                    def emit_symbol_progress(
+                        progress: dict[str, Any],
+                        *,
+                        offset: int = symbol_index * per_symbol_total,
+                    ) -> None:
+                        if not callable(progress_callback):
+                            return
+                        progress_callback({
+                            **progress,
+                            "completed": offset + int(progress.get("completed") or 0),
+                            "total": aggregate_total,
+                        })
+
+                    collected.extend(
+                        _collect_snapshots(
+                            query=query,
+                            symbols=[symbol],
+                            snapshot_types=requested,
+                            sector=None,
+                            cancellation=cancellation,
+                            cache_root=cache_root,
+                            research_profile=research_profile,
+                            max_workers=max_workers,
+                            provider_registry=provider_registry,
+                            progress_callback=emit_symbol_progress,
+                        )
+                    )
+                return collected
+            return _collect_snapshots(
+                query=query,
+                symbols=resolved_symbols,
+                snapshot_types=requested,
+                sector=sector,
+                cancellation=cancellation,
+                cache_root=cache_root,
+                research_profile=research_profile,
+                max_workers=max_workers,
+                provider_registry=provider_registry,
+                progress_callback=progress_callback,
+            )
+    return _collect_snapshots(
+        query=query,
+        symbols=resolved_symbols,
+        snapshot_types=requested,
+        sector=sector,
+        cancellation=cancellation,
+        cache_root=cache_root,
+        research_profile=research_profile,
+        max_workers=max_workers,
+        provider_registry=provider_registry,
+        progress_callback=progress_callback,
+    )
+
+
+def _collect_snapshots(
     *,
     query: str,
     symbols: Iterable[str],
@@ -296,13 +447,22 @@ def collect_snapshots(
             profile=research_profile,
         )
         if policy_snapshot is None:
-            policy_snapshot = _run_uzi_fetcher_snapshot(
-                query=query,
-                symbol=None,
-                snapshot_type="policy",
-                provider_registry=providers,
-                industry=sector,
-            )
+            try:
+                with uzi_request_timeout_scope():
+                    policy_snapshot = _run_uzi_fetcher_snapshot(
+                        query=query,
+                        symbol=None,
+                        snapshot_type="policy",
+                        provider_registry=providers,
+                        industry=sector,
+                    )
+            except Exception as exc:
+                policy_snapshot = _fetcher_failure_snapshot(
+                    query=query,
+                    symbol=None,
+                    snapshot_type="policy",
+                    exc=exc,
+                )
             _save_snapshot_cache(
                 cache_root=cache_root,
                 snapshot_type="policy",
@@ -341,11 +501,19 @@ def collect_snapshots(
         })
 
     for index, symbol, snapshot_type in tasks:
-        cached = _load_snapshot_cache(
-            cache_root=cache_root,
-            snapshot_type=snapshot_type,
-            target=symbol,
-            profile=research_profile,
+        # Match UZI raw_data resume: basic and both top-level bonus collectors
+        # always run, while valid numbered dimensions are reused.
+        cached = (
+            None
+            if _uses_uzi_fetcher(snapshot_type)
+            and not _uses_uzi_resume_cache(snapshot_type)
+            else _load_snapshot_cache(
+                cache_root=cache_root,
+                snapshot_type=snapshot_type,
+                target=symbol,
+                profile=research_profile,
+                allow_expired=_uses_uzi_resume_cache(snapshot_type),
+            )
         )
         if cached is None:
             pending_tasks.append((index, symbol, snapshot_type))
@@ -355,10 +523,37 @@ def collect_snapshots(
     if pending_tasks:
         wave_timeout_seconds = _uzi_fetcher_wave_timeout_seconds(research_profile)
         initialize_akshare_js_runtime()
+
+        def store_result(
+            index: int,
+            symbol: str,
+            snapshot_type: str,
+            result: dict[str, Any],
+        ) -> None:
+            if _uses_uzi_fetcher(snapshot_type) and result.get("symbol") != symbol:
+                # Provider invocation follows UZI's canonical ticker returned
+                # by basic, while ArtifactBoard entity ownership remains the
+                # caller's requested symbol across every dimension.
+                result = {**result, "symbol": symbol}
+            results[index] = result
+            if not _uses_uzi_fetcher(snapshot_type) or _uses_uzi_resume_cache(
+                snapshot_type
+            ):
+                _save_snapshot_cache(
+                    cache_root=cache_root,
+                    snapshot_type=snapshot_type,
+                    target=symbol,
+                    profile=research_profile,
+                    snapshot=result,
+                )
+            emit_progress(phase="completed", snapshot_type=snapshot_type)
+
         # UZI runs dimension 0 first because the dependent macro/industry/
         # futures/policy dimensions consume the resolved real industry.
         basic_tasks = [task for task in pending_tasks if task[2] == "market"]
         for index, symbol, snapshot_type in basic_tasks:
+            if _cancelled(cancellation):
+                break
             emit_progress(phase="collecting", snapshot_type=snapshot_type)
             result = _run_snapshot_skill(
                 query,
@@ -368,15 +563,7 @@ def collect_snapshots(
                 None,
                 research_profile,
             )
-            results[index] = result
-            _save_snapshot_cache(
-                cache_root=cache_root,
-                snapshot_type=snapshot_type,
-                target=symbol,
-                profile=research_profile,
-                snapshot=result,
-            )
-            emit_progress(phase="completed", snapshot_type=snapshot_type)
+            store_result(index, symbol, snapshot_type, result)
         pending_tasks = [task for task in pending_tasks if task[2] != "market"]
         basic_by_symbol = {
             symbol: raw
@@ -385,42 +572,99 @@ def collect_snapshots(
             and index in results
             and (raw := _uzi_raw_result(results[index])) is not None
         }
-        # Match UZI 3.9.4's dependency waves.  Only the four context-dependent
-        # dimensions wait for the independent wave; materials belongs to the
-        # six-worker independent pool and is then passed into futures.
-        dependent_types = {"macro", "industry", "futures", "policy"}
-        independent_tasks = [
-            task for task in pending_tasks if task[2] not in dependent_types
+        invocation_symbol_by_symbol = {
+            symbol: str(raw.get("ticker") or symbol).strip() or symbol
+            for symbol, raw in basic_by_symbol.items()
+        }
+        cached_material_by_symbol = {
+            symbol: results[index]
+            for index, symbol, snapshot_type in tasks
+            if snapshot_type == "materials" and index in results
+        }
+        bonus_tasks = [
+            task for task in pending_tasks if task[2] in _UZI_BONUS_SNAPSHOT_TYPES
         ]
-        dependent_tasks = [
-            task for task in pending_tasks if task[2] in dependent_types
+        wave2_tasks = [
+            task for task in pending_tasks if task[2] not in _UZI_BONUS_SNAPSHOT_TYPES
         ]
-        # UZI's native collectors use six workers. Keep the same in-stock
-        # fan-out so provider pressure and cold-cache latency match upstream.
+
+        # UZI's numbered fetchers all belong to one six-worker wave.  Futures
+        # remains in that wave but consumes the materials future for the same
+        # symbol, so its native call receives the intended dimension-8 input.
         requested_workers = _UZI_MAX_WORKERS if max_workers is None else max(int(max_workers), 1)
-        if independent_tasks:
+        if wave2_tasks:
             executor = ThreadPoolExecutor(
-                max_workers=min(requested_workers, len(independent_tasks)),
+                max_workers=min(requested_workers, len(wave2_tasks)),
                 thread_name_prefix="finance-snapshot",
             )
-            futures = {}
-            for index, symbol, snapshot_type in independent_tasks:
+            futures: dict[Any, tuple[int, str, str]] = {}
+            material_futures: dict[str, Any] = {}
+            futures_tasks = [task for task in wave2_tasks if task[2] == "futures"]
+            other_wave2_tasks = [task for task in wave2_tasks if task[2] != "futures"]
+
+            for index, symbol, snapshot_type in other_wave2_tasks:
                 dependencies: dict[str, dict[str, Any]] = {}
                 if symbol in basic_by_symbol:
                     dependencies["0_basic"] = basic_by_symbol[symbol]
+                invocation_symbol = (
+                    invocation_symbol_by_symbol.get(symbol, symbol)
+                    if _uses_uzi_fetcher(snapshot_type)
+                    else symbol
+                )
                 future = executor.submit(
                     _run_snapshot_skill,
                     query,
-                    symbol,
+                    invocation_symbol,
                     snapshot_type,
                     providers,
                     dependencies or None,
                     research_profile,
                 )
                 futures[future] = (index, symbol, snapshot_type)
+                if snapshot_type == "materials":
+                    material_futures[symbol] = future
+
+            def run_futures_task(
+                symbol: str,
+                invocation_symbol: str,
+                material_future: Any | None,
+            ) -> dict[str, Any]:
+                dependencies: dict[str, dict[str, Any]] = {}
+                if symbol in basic_by_symbol:
+                    dependencies["0_basic"] = basic_by_symbol[symbol]
+                material_snapshot = None
+                if material_future is not None:
+                    material_snapshot = material_future.result()
+                elif symbol in cached_material_by_symbol:
+                    material_snapshot = cached_material_by_symbol[symbol]
+                if isinstance(material_snapshot, dict):
+                    if _uses_uzi_fetcher("futures"):
+                        material_raw = _uzi_raw_result(material_snapshot)
+                        if material_raw is not None:
+                            dependencies["8_materials"] = material_raw
+                    else:
+                        dependencies["materials"] = material_snapshot
+                return _run_snapshot_skill(
+                    query,
+                    invocation_symbol,
+                    "futures",
+                    providers,
+                    dependencies or None,
+                    research_profile,
+                )
+
+            for index, symbol, snapshot_type in futures_tasks:
+                future = executor.submit(
+                    run_futures_task,
+                    symbol,
+                    invocation_symbol_by_symbol.get(symbol, symbol),
+                    material_futures.get(symbol),
+                )
+                futures[future] = (index, symbol, snapshot_type)
+
             emit_progress(
                 phase="collecting",
-                snapshot_type=independent_tasks[0][2],
+                snapshot_type=wave2_tasks[0][2],
             )
             try:
                 try:
@@ -433,22 +677,52 @@ def collect_snapshots(
                             for pending in futures:
                                 pending.cancel()
                             break
-                        result = future.result()
-                        results[index] = result
-                        _save_snapshot_cache(
-                            cache_root=cache_root,
-                            snapshot_type=snapshot_type,
-                            target=symbol,
-                            profile=research_profile,
-                            snapshot=result,
-                        )
-                        emit_progress(phase="completed", snapshot_type=snapshot_type)
+                        try:
+                            result = future.result(
+                                timeout=_uzi_per_fetcher_timeout_seconds(snapshot_type)
+                            )
+                        except FutureTimeoutError:
+                            result = _fetcher_timeout_snapshot(
+                                query=query,
+                                symbol=symbol,
+                                snapshot_type=snapshot_type,
+                                timeout_seconds=_uzi_per_fetcher_timeout_seconds(
+                                    snapshot_type
+                                ),
+                            )
+                        except Exception as exc:
+                            result = _fetcher_failure_snapshot(
+                                query=query,
+                                symbol=symbol,
+                                snapshot_type=snapshot_type,
+                                exc=exc,
+                            )
+                        store_result(index, symbol, snapshot_type, result)
                 except FutureTimeoutError:
                     for future, (index, symbol, snapshot_type) in futures.items():
                         if index in results:
                             continue
                         if future.done() and not future.cancelled():
-                            result = future.result()
+                            try:
+                                result = future.result(
+                                    timeout=_uzi_per_fetcher_timeout_seconds(snapshot_type)
+                                )
+                            except FutureTimeoutError:
+                                result = _fetcher_timeout_snapshot(
+                                    query=query,
+                                    symbol=symbol,
+                                    snapshot_type=snapshot_type,
+                                    timeout_seconds=_uzi_per_fetcher_timeout_seconds(
+                                        snapshot_type
+                                    ),
+                                )
+                            except Exception as exc:
+                                result = _fetcher_failure_snapshot(
+                                    query=query,
+                                    symbol=symbol,
+                                    snapshot_type=snapshot_type,
+                                    exc=exc,
+                                )
                         else:
                             future.cancel()
                             result = _fetcher_timeout_snapshot(
@@ -457,70 +731,99 @@ def collect_snapshots(
                                 snapshot_type=snapshot_type,
                                 timeout_seconds=wave_timeout_seconds,
                             )
-                        results[index] = result
-                        _save_snapshot_cache(
-                            cache_root=cache_root,
-                            snapshot_type=snapshot_type,
-                            target=symbol,
-                            profile=research_profile,
-                            snapshot=result,
-                        )
-                        emit_progress(phase="completed", snapshot_type=snapshot_type)
+                        store_result(index, symbol, snapshot_type, result)
             finally:
-                executor.shutdown(wait=False, cancel_futures=True)
-        material_by_symbol = {
-            symbol: raw
-            for index, symbol, snapshot_type in tasks
-            if snapshot_type == "materials"
-            and index in results
-            and (raw := _uzi_raw_result(results[index])) is not None
-        }
-        material_snapshot_by_symbol = {
-            symbol: results[index]
-            for index, symbol, snapshot_type in tasks
-            if snapshot_type == "materials" and index in results
-        }
-        dependent_order = {
-            snapshot_type: fetcher_id
-            for snapshot_type, fetcher_id in _UZI_FETCHER_BY_SNAPSHOT_TYPE.items()
-            if snapshot_type in dependent_types
-        }
-        symbol_order = {symbol: index for index, symbol in enumerate(resolved_symbols)}
-        for index, symbol, snapshot_type in sorted(
-            dependent_tasks,
-            key=lambda task: (
-                symbol_order.get(task[1], len(symbol_order)),
-                dependent_order.get(task[2], task[2]),
-            ),
-        ):
-            if _cancelled(cancellation):
-                break
-            emit_progress(phase="collecting", snapshot_type=snapshot_type)
-            dependencies: dict[str, dict[str, Any]] = {}
-            if symbol in basic_by_symbol:
-                dependencies["0_basic"] = basic_by_symbol[symbol]
-            if snapshot_type == "futures":
-                if _uses_uzi_fetcher(snapshot_type) and symbol in material_by_symbol:
-                    dependencies["8_materials"] = material_by_symbol[symbol]
-                elif symbol in material_snapshot_by_symbol:
-                    dependencies["materials"] = material_snapshot_by_symbol[symbol]
-            result = _run_snapshot_skill(
-                query,
-                symbol,
-                snapshot_type,
-                providers,
-                dependencies or None,
-                research_profile,
+                # Pinned UZI uses a ThreadPoolExecutor context manager, which
+                # waits for already-running calls before the profile env can be
+                # restored.  Keep the same lifetime guarantee here.
+                executor.shutdown(wait=True, cancel_futures=True)
+
+        # Wave 3 is deliberately separate from the 19 numbered fetchers.  The
+        # two bonus collectors run for every profile with two workers and the
+        # pinned 180-second overall timeout.
+        if bonus_tasks and not _cancelled(cancellation):
+            executor = ThreadPoolExecutor(
+                max_workers=min(2, len(bonus_tasks)),
+                thread_name_prefix="finance-snapshot-bonus",
             )
-            results[index] = result
-            _save_snapshot_cache(
-                cache_root=cache_root,
-                snapshot_type=snapshot_type,
-                target=symbol,
-                profile=research_profile,
-                snapshot=result,
-            )
-            emit_progress(phase="completed", snapshot_type=snapshot_type)
+            futures = {}
+            for index, symbol, snapshot_type in bonus_tasks:
+                dependencies = (
+                    {"0_basic": basic_by_symbol[symbol]}
+                    if symbol in basic_by_symbol
+                    else None
+                )
+                future = executor.submit(
+                    _run_snapshot_skill,
+                    query,
+                    invocation_symbol_by_symbol.get(symbol, symbol),
+                    snapshot_type,
+                    providers,
+                    dependencies,
+                    research_profile,
+                )
+                futures[future] = (index, symbol, snapshot_type)
+            emit_progress(phase="collecting", snapshot_type=bonus_tasks[0][2])
+            try:
+                try:
+                    for future in as_completed(
+                        futures,
+                        timeout=_UZI_BONUS_WAVE_TIMEOUT_SECONDS,
+                    ):
+                        index, symbol, snapshot_type = futures[future]
+                        try:
+                            result = future.result(
+                                timeout=_UZI_BONUS_FETCHER_TIMEOUT_SECONDS
+                            )
+                        except FutureTimeoutError:
+                            result = _fetcher_timeout_snapshot(
+                                query=query,
+                                symbol=symbol,
+                                snapshot_type=snapshot_type,
+                                timeout_seconds=_UZI_BONUS_FETCHER_TIMEOUT_SECONDS,
+                            )
+                        except Exception as exc:
+                            result = _fetcher_failure_snapshot(
+                                query=query,
+                                symbol=symbol,
+                                snapshot_type=snapshot_type,
+                                exc=exc,
+                            )
+                        store_result(index, symbol, snapshot_type, result)
+                except FutureTimeoutError:
+                    for future, (index, symbol, snapshot_type) in futures.items():
+                        if index in results:
+                            continue
+                        if future.done() and not future.cancelled():
+                            try:
+                                result = future.result(
+                                    timeout=_UZI_BONUS_FETCHER_TIMEOUT_SECONDS
+                                )
+                            except FutureTimeoutError:
+                                result = _fetcher_timeout_snapshot(
+                                    query=query,
+                                    symbol=symbol,
+                                    snapshot_type=snapshot_type,
+                                    timeout_seconds=_UZI_BONUS_FETCHER_TIMEOUT_SECONDS,
+                                )
+                            except Exception as exc:
+                                result = _fetcher_failure_snapshot(
+                                    query=query,
+                                    symbol=symbol,
+                                    snapshot_type=snapshot_type,
+                                    exc=exc,
+                                )
+                        else:
+                            future.cancel()
+                            result = _fetcher_timeout_snapshot(
+                                query=query,
+                                symbol=symbol,
+                                snapshot_type=snapshot_type,
+                                timeout_seconds=_UZI_BONUS_WAVE_TIMEOUT_SECONDS,
+                            )
+                        store_result(index, symbol, snapshot_type, result)
+            finally:
+                executor.shutdown(wait=True, cancel_futures=True)
     snapshots.extend(results[index] for index, _symbol, _snapshot_type in tasks if index in results)
     snapshots.extend(
         _missing_scope_snapshot(query=query, snapshot_type=snapshot_type)
@@ -538,40 +841,37 @@ def _run_snapshot_skill(
     dependencies: dict[str, dict[str, Any]] | None = None,
     research_profile: str | None = None,
 ) -> dict[str, Any]:
-    if _uses_uzi_fetcher(snapshot_type):
-        raw_basic = (dependencies or {}).get("0_basic") or {}
-        industry = str((raw_basic.get("data") or {}).get("industry") or "").strip() or None
-        return dict(
-            normalize_json_value(
-                _run_uzi_fetcher_snapshot(
-                    query=query,
-                    symbol=symbol,
-                    snapshot_type=snapshot_type,
-                    provider_registry=provider_registry,
-                    industry=industry,
-                    dependencies=dependencies,
-                    research_profile=research_profile,
-                )
-            )
-        )
-    skill_cls = _SYMBOL_SKILLS[snapshot_type]
     try:
+        if _uses_uzi_fetcher(snapshot_type):
+            raw_basic = (dependencies or {}).get("0_basic") or {}
+            industry = str((raw_basic.get("data") or {}).get("industry") or "").strip() or None
+            with uzi_request_timeout_scope():
+                return dict(
+                    normalize_json_value(
+                        _run_uzi_fetcher_snapshot(
+                            query=query,
+                            symbol=symbol,
+                            snapshot_type=snapshot_type,
+                            provider_registry=provider_registry,
+                            industry=industry,
+                            dependencies=dependencies,
+                            research_profile=research_profile,
+                        )
+                    )
+                )
+        skill_cls = _SYMBOL_SKILLS[snapshot_type]
         skill = _instantiate_skill(skill_cls, provider_registry)
         kwargs: dict[str, Any] = {"query": query, "symbol": symbol}
         if "dependencies" in inspect.signature(skill.run).parameters:
             kwargs["dependencies"] = dependencies or {}
         return dict(normalize_json_value(skill.run(**kwargs)))
     except Exception as exc:
-        status = classify_provider_exception(exc)
-        return {
-            "snapshot_type": snapshot_type,
-            "symbol": symbol,
-            "query": query,
-            "facts": failure_facts(status),
-            "degraded": True,
-            "degrade_reason": status,
-            "source_trace": [{"status": status, "error_type": exc.__class__.__name__}],
-        }
+        return _fetcher_failure_snapshot(
+            query=query,
+            symbol=symbol,
+            snapshot_type=snapshot_type,
+            exc=exc,
+        )
 
 
 def _uses_uzi_fetcher(snapshot_type: str) -> bool:
@@ -579,6 +879,13 @@ def _uses_uzi_fetcher(snapshot_type: str) -> bool:
         snapshot_type in _UZI_FETCHER_BY_SNAPSHOT_TYPE
         and _SYMBOL_SKILLS.get(snapshot_type) is _CANONICAL_SYMBOL_SKILLS.get(snapshot_type)
     )
+
+
+def _uses_uzi_resume_cache(snapshot_type: str) -> bool:
+    return _uses_uzi_fetcher(snapshot_type) and snapshot_type not in {
+        "market",
+        *_UZI_BONUS_SNAPSHOT_TYPES,
+    }
 
 
 def _run_uzi_fetcher_snapshot(
@@ -775,6 +1082,69 @@ def _fetcher_timeout_snapshot(
     }
 
 
+def _fetcher_failure_snapshot(
+    *,
+    query: str,
+    symbol: str,
+    snapshot_type: str,
+    exc: Exception,
+) -> dict[str, Any]:
+    """Represent one native fetcher crash without aborting sibling fetchers."""
+
+    fetcher_id = _UZI_FETCHER_BY_SNAPSHOT_TYPE.get(snapshot_type)
+    status = classify_provider_exception(exc)
+    # Provider boundaries expose the exception type and stable taxonomy only;
+    # raw transport text may contain credentials or private upstream details.
+    reason = f"{exc.__class__.__name__}: {status}"
+    raw_result = {
+        "ticker": symbol,
+        "data": {},
+        "fallback": True,
+        "error": reason,
+        "source": fetcher_id or snapshot_type,
+    }
+    facts = {
+        **failure_facts(status),
+        "availability": "data_gap",
+        "_uzi_raw_result": raw_result,
+    }
+    if fetcher_id:
+        facts["_uzi_fetcher_id"] = fetcher_id
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+    provider_id = f"uzi_3_9_2.{fetcher_id}" if fetcher_id else snapshot_type
+    return {
+        "snapshot_type": snapshot_type,
+        "symbol": symbol,
+        "query": query,
+        "snapshot_date": retrieved_at[:10],
+        "retrieved_at": retrieved_at,
+        "facts": facts,
+        "quality_status": "data_gap",
+        "degraded": True,
+        "degrade_reason": reason,
+        "missing_fields": [snapshot_type],
+        "fallback_applied": True,
+        "source": {
+            "skill": f"uzi_{snapshot_type}_snapshot_skill",
+            "vendor": "UZI-Skill" if fetcher_id else "finance_ashare",
+            "provider_id": provider_id,
+            "source_id": fetcher_id or snapshot_type,
+            "chain_position": 0,
+            "dim": snapshot_type,
+            "from_cache": False,
+        },
+        "source_trace": [
+            {
+                "source_id": fetcher_id or snapshot_type,
+                "provider_id": provider_id,
+                "status": status,
+                "fallback": True,
+                "error_type": exc.__class__.__name__,
+            }
+        ],
+    }
+
+
 def _uzi_raw_result(snapshot: dict[str, Any]) -> dict[str, Any] | None:
     facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
     result = facts.get("_uzi_raw_result")
@@ -827,6 +1197,11 @@ def _snapshot_cache_context(
 ) -> dict[str, Any]:
     """Describe the Pack-owned raw Provider cache, not a reusable Board fact."""
 
+    cache_profile = (
+        ""
+        if _uses_uzi_resume_cache(snapshot_type)
+        else str(profile or "").strip().lower()
+    )
     return {
         "cache_layer": "provider_raw",
         "domain_id": "finance_ashare",
@@ -835,7 +1210,7 @@ def _snapshot_cache_context(
         "provider": _SNAPSHOT_PROVIDER_HINTS.get(snapshot_type, snapshot_type),
         "schema_version": _snapshot_cache_schema_version(snapshot_type),
         "target": str(target).strip(),
-        "profile": str(profile or "").strip().lower(),
+        "profile": cache_profile,
     }
 
 
@@ -858,6 +1233,7 @@ def _load_snapshot_cache(
     snapshot_type: str,
     target: str,
     profile: str | None,
+    allow_expired: bool = False,
 ) -> dict[str, Any] | None:
     path = _snapshot_cache_path(
         cache_root=cache_root,
@@ -884,7 +1260,7 @@ def _load_snapshot_cache(
         return None
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at <= datetime.now(timezone.utc):
+    if expires_at <= datetime.now(timezone.utc) and not allow_expired:
         return None
     snapshot = dict(payload["snapshot"])
     if _snapshot_quality(snapshot) != "available":

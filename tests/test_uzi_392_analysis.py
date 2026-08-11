@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 from pathlib import Path
 import re
@@ -8,6 +9,8 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+
+from jsonschema import Draft202012Validator
 
 from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
     AgentAnalysisPayload,
@@ -186,6 +189,44 @@ class _RepairingEvidenceProvider(_LiteAgentProvider):
 
 
 class Uzi392AnalysisGateTests(unittest.TestCase):
+    def test_multi_symbol_analysis_keeps_success_when_a_peer_pipeline_fails(self) -> None:
+        successful = {
+            "symbol": "600519",
+            "raw": {"ticker": "600519.SH", "dimensions": {}},
+            "self_review": {
+                "critical_count": 0,
+                "warning_count": 0,
+                "issues": [],
+            },
+            "report_allowed": True,
+            "recovery_history": [],
+        }
+        with patch(
+            "domain_packs.finance_ashare.subagents.uzi_392_analysis._execute_symbol",
+            side_effect=[successful, RuntimeError("https://provider.test?q=1&token=secret")],
+        ):
+            result = execute_native_analysis(
+                [],
+                ["600519", "000858"],
+                profile="lite",
+                llm_provider=None,
+            )
+
+        self.assertEqual(len(result["results"]), 2)
+        self.assertTrue(result["results"][0]["report_allowed"])
+        self.assertFalse(result["results"][1]["report_allowed"])
+        self.assertEqual(result["results"][1]["self_review"]["critical_count"], 1)
+        self.assertNotIn("secret", str(result["results"][1]))
+        self.assertEqual(result["quality_status"], "degraded")
+        self.assertFalse(result["report_allowed"])
+        schema = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "domain_packs/finance_ashare/artifact_schemas/uzi_native_analysis.json"
+            ).read_text(encoding="utf-8")
+        )
+        Draft202012Validator(schema).validate(result)
+
     def test_self_review_view_normalizes_nullable_strings_and_dcf_key_only(self) -> None:
         raw = {
             "dimensions": {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import hashlib
 from pathlib import Path
@@ -103,6 +104,8 @@ class UziFinancePackTests(unittest.TestCase):
                 "governance",
                 "events",
                 "lhb",
+                "fund_holders",
+                "similar_stocks",
             },
         )
         self.assertTrue(all(draft.content["quality_status"] == "data_gap" for draft in snapshots))
@@ -150,8 +153,36 @@ class UziFinancePackTests(unittest.TestCase):
         }
         self.assertTrue(all(required_mapping_fields.issubset(row) for row in fetchers))
         self.assertEqual(mapping["source_registry"]["source_count"], 73)
-        self.assertEqual(mapping["contract"]["returned_object"], "exact_upstream_identity")
+        self.assertEqual(
+            mapping["contract"]["returned_object_before_artifact_boundary"],
+            "exact_upstream_identity",
+        )
+        self.assertEqual(
+            mapping["contract"]["artifact_boundary"],
+            "canonical_json_equality_with_provenance",
+        )
+        resources = mapping["vendored_methodology_resources"]
+        self.assertEqual(resources["canonical_file_count"], 17)
+        self.assertEqual(
+            resources["path_sensitive_sha256"],
+            "88b430b169ad68f028ac83df438d0dfac818e7330c266f8d86ddea75e0674593",
+        )
+        self.assertEqual(resources["consumption"], "reference_only_static_contracts")
         self.assertEqual(mapping["contract"]["external_checkout_runtime"], "forbidden")
+
+        for invalid_resources in (
+            {key: value for key, value in resources.items() if key != "canonical_file_count"},
+            {**resources, "canonical_file_count": 18},
+            {**resources, "path_sensitive_sha256": "not-a-hash"},
+        ):
+            with self.subTest(invalid_resources=invalid_resources):
+                invalid_mapping = copy.deepcopy(mapping)
+                invalid_mapping["vendored_methodology_resources"] = invalid_resources
+                with self.assertRaises(jsonschema.ValidationError):
+                    jsonschema.validate(
+                        invalid_mapping,
+                        json.loads(schema_path.read_text(encoding="utf-8")),
+                    )
 
     def test_uzi_source_and_replay_fingerprints_are_verified(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -237,7 +268,14 @@ class UziFinancePackTests(unittest.TestCase):
     def test_snapshot_collection_reports_cache_and_live_dimension_progress(self) -> None:
         progress: list[dict] = []
 
-        def fake_run(_query, symbol, snapshot_type, _providers, _dependencies=None):
+        def fake_run(
+            _query,
+            symbol,
+            snapshot_type,
+            _providers,
+            _dependencies=None,
+            _research_profile=None,
+        ):
             return {
                 "snapshot_type": snapshot_type,
                 "symbol": symbol,

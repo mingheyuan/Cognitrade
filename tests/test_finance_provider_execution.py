@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 from unittest.mock import patch
 
 from domain_packs.finance_ashare.skills.market_snapshot.skill import MarketSnapshotSkill
@@ -166,15 +166,26 @@ class FinanceProviderExecutionTests(unittest.TestCase):
         self.assertTrue(rows[0]["facts"]["_uzi_raw_result"]["_timeout"])
         self.assertIn("timeout", rows[0]["degrade_reason"])
 
-    def test_uzi_fetcher_wave_timeout_follows_research_profile(self) -> None:
+    def test_uzi_fetcher_wave_timeout_matches_pinned_wave2_for_every_profile(self) -> None:
         self.assertEqual(snapshot_collector._uzi_fetcher_wave_timeout_seconds("lite"), 300)
-        self.assertEqual(snapshot_collector._uzi_fetcher_wave_timeout_seconds("medium"), 480)
-        self.assertEqual(snapshot_collector._uzi_fetcher_wave_timeout_seconds("deep"), 1200)
+        self.assertEqual(snapshot_collector._uzi_fetcher_wave_timeout_seconds("medium"), 300)
+        self.assertEqual(snapshot_collector._uzi_fetcher_wave_timeout_seconds("deep"), 300)
+        self.assertEqual(snapshot_collector._UZI_BONUS_WAVE_TIMEOUT_SECONDS, 180)
+        self.assertEqual(snapshot_collector._uzi_per_fetcher_timeout_seconds("kline"), 90)
+        self.assertEqual(snapshot_collector._uzi_per_fetcher_timeout_seconds("events"), 120)
+        self.assertEqual(snapshot_collector._uzi_per_fetcher_timeout_seconds("fundamental"), 150)
+        self.assertEqual(snapshot_collector._uzi_per_fetcher_timeout_seconds("research"), 180)
+        self.assertEqual(snapshot_collector._UZI_BONUS_FETCHER_TIMEOUT_SECONDS, 120)
 
-    def test_uzi_collection_uses_native_independent_then_dependent_waves(self) -> None:
+    def test_uzi_collection_uses_basic_numbered_then_bonus_waves(self) -> None:
         started: list[str] = []
         finished: set[str] = set()
         seen_dependencies: dict[str, dict] = {}
+        violations: list[str] = []
+        state_lock = Lock()
+        bonus_types = {"fund_holders", "similar_stocks"}
+        requested = list(snapshot_collector._UZI_FETCHER_BY_SNAPSHOT_TYPE)
+        numbered_types = set(requested) - {"market", *bonus_types}
 
         def fake_snapshot(
             _query,
@@ -184,48 +195,44 @@ class FinanceProviderExecutionTests(unittest.TestCase):
             dependencies=None,
             _research_profile=None,
         ):
-            started.append(snapshot_type)
-            seen_dependencies[snapshot_type] = dict(dependencies or {})
+            with state_lock:
+                started.append(snapshot_type)
+                seen_dependencies[snapshot_type] = dict(dependencies or {})
+                if snapshot_type != "market" and "market" not in finished:
+                    violations.append(f"{snapshot_type}:started_before_basic")
+                if snapshot_type in bonus_types and not numbered_types <= finished:
+                    violations.append(f"{snapshot_type}:started_before_wave2")
+            data = {"industry": "半导体"} if snapshot_type == "market" else {}
+            if snapshot_type == "materials":
+                data["materials_detail"] = [{"name": "硅", "futures_code": "SI0"}]
             result = {
                 "snapshot_type": snapshot_type,
                 "symbol": symbol,
                 "facts": {
                     "availability": "available",
                     "_uzi_raw_result": {
-                        "data": {
-                            "industry": "半导体",
-                            "materials_detail": [{"name": "硅", "futures_code": "SI0"}],
-                        }
+                        "data": data,
                     },
                 },
                 "quality_status": "available",
             }
-            if snapshot_type in {"policy", "macro", "industry", "futures"}:
-                self.assertTrue({"market", "materials", "valuation", "capital_flow"} <= finished)
-            finished.add(snapshot_type)
+            with state_lock:
+                finished.add(snapshot_type)
             return result
 
-        requested = [
-            "market",
-            "materials",
-            "valuation",
-            "capital_flow",
-            "policy",
-            "macro",
-            "industry",
-            "futures",
-        ]
         with patch.object(snapshot_collector, "_run_snapshot_skill", side_effect=fake_snapshot):
             rows = snapshot_collector.collect_snapshots(
                 query="分析 688041",
                 symbols=["688041"],
                 snapshot_types=requested,
                 research_profile="deep",
-                max_workers=1,
+                max_workers=6,
             )
 
         self.assertEqual({row["snapshot_type"] for row in rows}, set(requested))
-        self.assertEqual(started[-4:], ["policy", "macro", "industry", "futures"])
+        self.assertEqual(violations, [])
+        self.assertEqual(started[0], "market")
+        self.assertEqual(set(started[-2:]), bonus_types)
         self.assertIn("0_basic", seen_dependencies["policy"])
         self.assertIn("8_materials", seen_dependencies["futures"])
 

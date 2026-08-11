@@ -15,6 +15,10 @@ from domain_packs.finance_ashare.reporting.uzi_392_exact_report import (
     UziNativeQualityGateError,
     render_exact_uzi_392_report,
 )
+from domain_packs.finance_ashare.subagents.uzi_portfolio_contract import (
+    normalize_portfolio_holdings,
+    ticker_identity,
+)
 from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import Uzi392FetcherRuntime
 
 
@@ -199,13 +203,37 @@ def _render_uzi_portfolio(
     native_content = _record(native_artifact.get("content"))
     metrics = _native_metrics(native_content)
     holdings = [dict(row) for row in list(report.get("portfolio_holdings") or []) if isinstance(row, dict)]
-    if not metrics or len(metrics) != len(holdings):
-        raise ReportArtifactMissingError("UZI --portfolio 的成分分析未全部通过质量门")
+    if not metrics:
+        raise ReportArtifactMissingError("UZI --portfolio 至少需要一个可用成分")
     portfolio_runner = importlib.import_module("lib.portfolio_runner")
-    normalized_holdings = portfolio_runner._normalize_weights([dict(row) for row in holdings])
-    for metric, holding in zip(metrics, normalized_holdings, strict=True):
+    normalized_holdings = normalize_portfolio_holdings(holdings)
+    matched_metrics: list[dict[str, Any]] = []
+    for holding in normalized_holdings:
+        holding_keys = {
+            key
+            for key in (
+                ticker_identity(holding.get("resolved_ticker")),
+                ticker_identity(holding.get("ticker") or holding.get("symbol")),
+            )
+            if key
+        }
+        metric = next(
+            (
+                row
+                for row in metrics
+                if ticker_identity(row.get("ticker")) in holding_keys
+            ),
+            None,
+        )
+        if metric is None:
+            continue
+        metric = dict(metric)
         metric["_weight"] = float(holding.get("weight") or 0.0)
         metric["_note"] = str(holding.get("note") or "")
+        matched_metrics.append(metric)
+    metrics = matched_metrics
+    if not metrics:
+        raise ReportArtifactMissingError("UZI --portfolio 没有与持仓匹配的可用成分")
     health = portfolio_runner._portfolio_health(metrics)
     portfolio_name = str(report.get("portfolio_name") or "UZI Portfolio")
     html_document = portfolio_runner._render_html(

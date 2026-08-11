@@ -22,7 +22,7 @@ import math
 import os
 from pathlib import Path
 import re
-from threading import Event, RLock, get_ident
+from threading import Event, get_ident
 from time import monotonic
 from typing import Any, Literal
 
@@ -38,8 +38,12 @@ from domain_packs.finance_ashare.subagents.uzi_qualitative_deep_dive import (
 from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_structured
 from domain_packs.finance_ashare.subagents.uzi_panel_registry import panel_for_profile
 from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import (
+    UZI_ENVIRONMENT_LOCK,
     UZI_SOURCE_COMMIT,
     Uzi392FetcherRuntime,
+)
+from research_system.adapters.vendors.uzi_request_timeout import (
+    uzi_request_timeout_scope,
 )
 
 
@@ -81,7 +85,6 @@ _PROFILE_REASONING_EFFORT = {
 }
 _LOGGER = logging.getLogger("uvicorn.error")
 _AGENT_STAGE_CACHE_SCHEMA_VERSION = "uzi-3.9.4-agent-stage-v1"
-_UZI_ENV_LOCK = RLock()
 _UZI_SCHOOLS = frozenset("ABCDEFGHI")
 
 
@@ -98,12 +101,16 @@ def _uzi_native_environment(*, profile: str, school: str | None):
     selected_school = str(school or "").strip().upper()
     if selected_school and selected_school not in _UZI_SCHOOLS:
         raise ValueError("school must be one of A, B, C, D, E, F, G, H or I")
+    _initialize_native_imports()
+    native_profile = importlib.import_module("lib.analysis_profile").get_profile(profile)
     updates = {
         "UZI_DEPTH": profile,
-        "UZI_LITE": "1" if profile == "lite" else None,
+        "UZI_LITE": "1" if profile == "lite" else "0",
+        "UZI_DDG_BUDGET": str(native_profile.ddg_budget),
+        "UZI_FUND_STATS_TOP": str(native_profile.fund_stats_top_n),
         "UZI_SCHOOL": selected_school or None,
     }
-    with _UZI_ENV_LOCK:
+    with UZI_ENVIRONMENT_LOCK:
         previous = {key: os.environ.get(key) for key in updates}
         try:
             for key, value in updates.items():
@@ -503,16 +510,28 @@ def execute_native_analysis(
             stage_index=symbol_index,
             stage_total=len(unique_symbols),
         )
-        results.append(_execute_symbol(
-            snapshot_rows,
-            symbol,
-            profile=selected_profile,
-            school=selected_school,
-            llm_provider=llm_provider,
-            cancellation=cancellation,
-            recovery_history=list(recovery_history or []),
-            progress_callback=progress_callback,
-        ))
+        try:
+            with uzi_request_timeout_scope():
+                result = _execute_symbol(
+                    snapshot_rows,
+                    symbol,
+                    profile=selected_profile,
+                    school=selected_school,
+                    llm_provider=llm_provider,
+                    cancellation=cancellation,
+                    recovery_history=list(recovery_history or []),
+                    progress_callback=progress_callback,
+                )
+        except Exception as exc:
+            if cancellation is not None and cancellation.is_set():
+                raise
+            result = _failed_symbol_analysis(
+                symbol,
+                profile=selected_profile,
+                exc=exc,
+                recovery_history=list(recovery_history or []),
+            )
+        results.append(result)
     critical = sum(int((row.get("self_review") or {}).get("critical_count") or 0) for row in results)
     warnings = sum(int((row.get("self_review") or {}).get("warning_count") or 0) for row in results)
     combined_recovery_history = [
@@ -521,6 +540,14 @@ def execute_native_analysis(
         for row in list(result.get("recovery_history") or [])
         if isinstance(row, dict)
     ]
+    successful_count = sum(row.get("report_allowed") is True for row in results)
+    quality_status = (
+        "available"
+        if results and successful_count == len(results)
+        else "degraded"
+        if successful_count
+        else "quality_gate_blocked"
+    )
     return {
         "source_commit": UZI_SOURCE_COMMIT,
         "methodology_version": "3.9.4-source-parity",
@@ -530,8 +557,43 @@ def execute_native_analysis(
         "critical_count": critical,
         "warning_count": warnings,
         "report_allowed": bool(results) and critical == 0 and all(row.get("report_allowed") is True for row in results),
-        "quality_status": "available" if results and critical == 0 else "quality_gate_blocked",
+        "quality_status": quality_status,
         "recovery_history": combined_recovery_history,
+    }
+
+
+def _failed_symbol_analysis(
+    symbol: str,
+    *,
+    profile: str,
+    exc: Exception,
+    recovery_history: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Represent one failed native pipeline without discarding peer results."""
+
+    error_type = exc.__class__.__name__
+    issue = f"{symbol} UZI pipeline failed: {error_type}"
+    return {
+        "symbol": symbol,
+        "raw": {"ticker": symbol, "dimensions": {}},
+        "dimensions": {"dimensions": {}},
+        "panel": {},
+        "synthesis": {},
+        "self_review": {
+            "profile": profile,
+            "critical_count": 1,
+            "warning_count": 0,
+            "passed": False,
+            "issues": [{
+                "severity": "critical",
+                "issue": issue,
+                "suggested_fix": "重新采集该标的并重跑 UZI pipeline",
+            }],
+        },
+        "report_allowed": False,
+        "quality_status": "data_gap",
+        "computation_error": f"{error_type}: analysis_unavailable",
+        "recovery_history": recovery_history,
     }
 
 

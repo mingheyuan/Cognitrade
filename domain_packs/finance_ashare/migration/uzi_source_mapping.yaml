@@ -10,12 +10,34 @@ source:
 contract:
   adapter: domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime.Uzi392FetcherRuntime
   invocation: exact_upstream_function_and_arguments
-  returned_object: exact_upstream_identity
+  returned_object_before_artifact_boundary: exact_upstream_identity
+  artifact_boundary: canonical_json_equality_with_provenance
   source_registry: exact_deep_equality
   source_registry_count: 73
   provider_errors: preserved_as_upstream_result
+  collection_orchestrator: skills/deep-analysis/scripts/run_real_test.py::collect_raw_data
+  root_pipeline_difference: explicitly_documented_in_capability_ledger
+  snapshot_cache: pinned_raw_data_resume_semantics_plus_lib_cache
+  non_uzi_sector_policy_route: host_capability_outside_uzi_parity
   sensitive_sources: explicit_enable_only
   external_checkout_runtime: forbidden
+
+vendored_methodology_resources:
+  standalone_skill_roots: [skills/investor-panel, skills/lhb-analyzer, skills/trap-detector]
+  canonical_file_count: 17
+  path_sensitive_sha256: 88b430b169ad68f028ac83df438d0dfac818e7330c266f8d86ddea75e0674593
+  consumption: reference_only_static_contracts
+  deep_analysis_relocations:
+    skills/deep-analysis/SKILL.md: skill/SKILL.md
+    skills/deep-analysis/references: skill/references
+    skills/deep-analysis/personas: skill/personas
+    skills/deep-analysis/scripts: scripts
+    skills/deep-analysis/assets: assets
+  host_boundary:
+    upstream_root_router: replaced_by_agent_os
+    upstream_cli_entrypoints: replaced_by_agent_os
+    plugin_installers_and_hooks: distribution_only
+    upstream_tests: pinned_checkout_ci_surface
 
 defaults: &defaults
   source_commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
@@ -66,9 +88,9 @@ source_registry:
   acceptance: tests.test_uzi_source_parity.UziSourceParityTests.test_catalog_fields_are_deep_equal_to_pinned_upstream_registry
 
 profiles:
-  lite: {source_dimensions: [0_basic, 1_financials, 2_kline, 10_valuation, 11_governance, 15_events, 16_lhb], panel_seats: 10}
-  medium: {source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests], panel_seats: 51}
-  deep: {source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests], panel_seats: 66}
+  lite: {source_dimensions: [0_basic, 1_financials, 2_kline, 10_valuation, 11_governance, 15_events, 16_lhb], bonus_collectors: [6_fund_holders, similar_stocks], panel_seats: 10}
+  medium: {source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests], bonus_collectors: [6_fund_holders, similar_stocks], panel_seats: 51}
+  deep: {source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests], bonus_collectors: [6_fund_holders, similar_stocks], panel_seats: 66}
 
 verification:
   fetcher_id_set: exact_22

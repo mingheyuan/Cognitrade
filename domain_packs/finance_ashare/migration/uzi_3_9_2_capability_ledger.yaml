@@ -13,6 +13,7 @@ inventory:
   marketed_method_count: 22
   implementation_method_count: 23
   panel_seat_count: 66
+  vendored_methodology_resource_count: 17
 
 invariants:
   external_uzi_checkout_or_cli: forbidden
@@ -24,6 +25,15 @@ invariants:
   critical_report_bypass: forbidden
   recovery_round_limit: none
   html_pdf_visible_source: same_pinned_native_template
+  markdown_skill_dynamic_execution: forbidden
+
+vendored_methodology_resources:
+  status: pinned_reference_contract
+  roots: [skills/investor-panel, skills/lhb-analyzer, skills/trap-detector]
+  canonical_file_count: 17
+  path_sensitive_sha256: 88b430b169ad68f028ac83df438d0dfac818e7330c266f8d86ddea75e0674593
+  runtime_consumption: DomainPack implementations and Agent OS routes are executable; Markdown resources are not dynamically interpreted
+  acceptance: tests.test_uzi_392_vendor_runtime.Uzi392VendorRuntimeTests.test_all_referenced_standalone_skill_resources_are_vendored
 
 # These are upstream 3.9.4 behaviours explicitly preserved or deliberately
 # bounded by the Agent OS host.  None is an old UZI runtime compatibility path.
@@ -44,13 +54,31 @@ integration_contracts:
     bonus_dimension_key: 6_fund_holders
     top_level_spill_fields: [fund_managers, similar_stocks]
     fund_stats_top_n_by_profile: {lite: 5, medium: 20, deep: 100}
+  snapshot_cache:
+    status: source_parity
+    owner: Agent OS snapshot envelope mirrors raw_data dimension resume; vendored lib.cache owns provider sub-cache
+    numbered_dimensions: reuse valid cached raw result without TTL expiry
+    profile_partition: none for native numbered dimensions, matching ticker-level raw_data resume
+    realtime_dimensions: [0_basic]
+    always_refetched_bonus: [6_fund_holders, similar_stocks]
   collection_waves:
-    status: source_parity_with_host_boundary
+    status: source_parity_with_dependency_determinism
+    canonical_upstream_path: skills/deep-analysis/scripts/run_real_test.py::collect_raw_data
     workers: 6
     wave_1: [0_basic]
-    wave_2: independent_fetchers
-    wave_3_sorted: [13_policy, 3_macro, 7_industry, 9_futures]
-    host_safety_timeout_seconds: {lite: 300, medium: 480, deep: 1200}
+    wave_2: profile_scoped_numbered_fetchers
+    wave_2_overall_timeout_seconds: 300
+    wave_2_default_fetcher_timeout_seconds: 90
+    wave_2_fetcher_timeout_overrides_seconds: {6_research: 180, 1_financials: 150, 10_valuation: 150, 15_events: 120}
+    wave_3_bonus: [6_fund_holders, similar_stocks]
+    wave_3_workers: 2
+    wave_3_overall_timeout_seconds: 180
+    wave_3_fetcher_timeout_seconds: 120
+    timeout_semantics: upstream_completion_classification_window_not_hard_thread_cancellation
+    host_transport_guard: context-scoped requests default timeout 20s propagated into nested UZI executor tasks; peer Agent OS traffic is unaffected
+    long_running_worker_risk: a provider performing many bounded requests may finish after the classification window because Python threads cannot be force-cancelled
+    deterministic_dependency: 9_futures waits for 8_materials inside wave_2
+    upstream_root_pipeline_note: lib.pipeline.collect uses a different non-dependent/dependent split; the raw-result DomainPack boundary follows collect_raw_data because it preserves the advertised profile and native fetcher result contract
   self_review_compatibility_view:
     status: upstream_bug_compatibility
     original_evidence_mutated: false
@@ -95,7 +123,7 @@ fetchers:
   - {id: 10_valuation, target: uzi_valuation_snapshot_skill, status: source_parity}
   - {id: 11_governance, target: uzi_governance_snapshot_skill, status: source_parity}
   - {id: 12_capital_flow, target: capital_flow_snapshot_skill, status: source_parity}
-  - {id: 13_policy, target: policy_snapshot_skill, status: source_parity}
+  - {id: 13_policy, target: policy_snapshot_skill, status: source_parity, scope: stock_uzi_route_only, sector_research_route: host_capability_outside_uzi_parity}
   - {id: 14_moat, target: uzi_moat_snapshot_skill, status: source_parity}
   - {id: 15_events, target: events_snapshot_skill, status: source_parity}
   - {id: 16_lhb, target: lhb_snapshot_skill, status: source_parity}
@@ -197,5 +225,6 @@ verification:
   command_parity: tests.test_uzi_392_commands
   method_parity: tests.test_uzi_392_native_methods
   runtime_boundary: tests.test_uzi_392_vendor_runtime
+  pinned_upstream_suite: .github/workflows/ci.yml::uzi-upstream-tests
   quality_gate: tests.test_uzi_392_analysis
   quick_scan: tests.test_uzi_quick_scan

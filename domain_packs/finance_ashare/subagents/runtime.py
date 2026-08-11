@@ -17,6 +17,12 @@ from domain_packs.finance_ashare.subagents.uzi_392_native_commands import (
     execute_segmental_model,
 )
 from domain_packs.finance_ashare.subagents.uzi_392_analysis import execute_native_analysis
+from domain_packs.finance_ashare.subagents.uzi_portfolio_contract import (
+    normalize_portfolio_holdings,
+    result_ticker,
+    result_ticker_identities,
+    ticker_identity,
+)
 from research_system.adapters.vendors.akshare_utils import coerce_numeric
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.schemas.artifacts import ArtifactDraft
@@ -769,13 +775,19 @@ def execute_uzi_native_full_analysis(context):
                 "locator": str(holding_context.get("source_fund_run_id") or ""),
             },
         ])
-    critical = int(content.get("critical_count") or 0)
+    quality_status = str(content.get("quality_status") or "quality_gate_blocked")
     return ArtifactDraft(
         artifact_type="uzi_native_analysis",
         content=content,
         source_refs=source_refs,
         parent_artifact_ids=parent_ids,
-        confidence=0.86 if critical == 0 else 0.0,
+        confidence=(
+            0.86
+            if quality_status == "available"
+            else 0.5
+            if quality_status == "degraded"
+            else 0.0
+        ),
         risk_flags=[
             str(issue.get("issue") or issue.get("dim") or "critical")
             for result in list(content.get("results") or [])
@@ -900,10 +912,22 @@ def compose_stock_comparison_delivery(context):
         for issue in list((row.get("self_review") or {}).get("issues") or [])
         if isinstance(issue, dict) and issue.get("severity") == "warning"
     ]
-    critical_count = int(content.get("critical_count") or len(critical_issues))
-    allowed = bool(results) and content.get("report_allowed") is True and critical_count == 0
+    successful_results = [row for row in results if row.get("report_allowed") is True]
+    failed_results = [
+        _uzi_aggregate_failed_result(row)
+        for row in results
+        if row.get("report_allowed") is not True
+    ]
+    # Pinned UZI ``run_versus`` skips failed/cache-missing symbols and renders
+    # as soon as at least two bundles remain.  Aggregate delivery therefore
+    # gates the loaded subset, not every requested symbol.
+    allowed = len(successful_results) >= 2
+    loaded_warning_count = sum(
+        int((row.get("self_review") or {}).get("warning_count") or 0)
+        for row in successful_results
+    )
     ranked = sorted(
-        factors,
+        [row for row in factors if row.get("report_allowed") is True],
         key=lambda row: (
             row.get("overall_score") is not None,
             float(row.get("overall_score") or 0),
@@ -916,14 +940,19 @@ def compose_stock_comparison_delivery(context):
             + (f"（{float(row['overall_score']):g} 分）" if row.get("overall_score") is not None else "")
             for row in ranked
         ) or "UZI 比较研究已完成。"
+        if failed_results:
+            conclusion += f"；成功载入 {len(successful_results)}/{len(results)} 个标的，其余标的已跳过。"
     else:
-        conclusion = "至少一个比较对象仍有 UZI critical 缺口，比较结果停在质量门。"
+        conclusion = f"仅成功载入 {len(successful_results)}/{len(results)} 个标的；UZI --versus 至少需要 2 个。"
     report_content = {
         "conclusion": conclusion,
         "assessment": {
-            "status": "uzi_native_comparison_passed" if allowed else "uzi_native_quality_gate_blocked",
+            "status": "completed" if allowed else "insufficient_data",
             "summary": conclusion,
             "factors": factors,
+            "loaded": len(successful_results),
+            "requested": len(results),
+            "failed": failed_results,
         },
         "evidence": [{
             "artifact_id": analysis.artifact_id,
@@ -941,12 +970,19 @@ def compose_stock_comparison_delivery(context):
             if str(issue.get("suggested_fix") or "").strip()
         ],
         "delivery_type": "uzi_versus_3_9_4",
-        "quality_status": "available" if allowed else "quality_gate_blocked",
+        "quality_status": "available" if allowed else "data_gap",
         "native_analysis_artifact_id": analysis.artifact_id,
         "report_allowed": allowed,
-        "critical_count": critical_count,
-        "warning_count": int(content.get("warning_count") or len(warning_issues)),
-        "comparison": {"ranked_results": ranked, "source_commit": content.get("source_commit")},
+        # Aggregate runners model unavailable constituents as ``failed`` rather
+        # than leaking their self-review criticals into the successful subset.
+        "critical_count": 0,
+        "warning_count": loaded_warning_count,
+        "comparison": {
+            "ranked_results": ranked,
+            "source_commit": content.get("source_commit"),
+            "loaded": len(successful_results),
+            "failed": failed_results,
+        },
     }
     return ArtifactDraft(
         artifact_type="research_report",
@@ -972,30 +1008,78 @@ def compose_uzi_portfolio_delivery(context):
     content = dict(analysis.content or {})
     query_content = dict(query.content or {})
     results = [row for row in list(content.get("results") or []) if isinstance(row, dict)]
+    holdings = normalize_portfolio_holdings([
+        dict(row)
+        for row in list(query_content.get("portfolio_holdings") or [])
+        if isinstance(row, dict)
+    ])
+    matched: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
+    used_result_indexes: set[int] = set()
+    for holding in holdings:
+        holding_key = ticker_identity(holding.get("ticker") or holding.get("symbol"))
+        match_index = next(
+            (
+                index
+                for index, result in enumerate(results)
+                if holding_key and holding_key in result_ticker_identities(result)
+            ),
+            None,
+        )
+        if match_index is None:
+            matched.append((holding, None))
+            continue
+        used_result_indexes.add(match_index)
+        result = results[match_index]
+        resolved_ticker = result_ticker(result)
+        if resolved_ticker:
+            holding["resolved_ticker"] = resolved_ticker
+        matched.append((holding, result))
+    portfolio_results = [result for _holding, result in matched if result is not None]
     critical_issues = [
         issue
-        for row in results
+        for row in portfolio_results
         for issue in list((row.get("self_review") or {}).get("issues") or [])
         if isinstance(issue, dict) and issue.get("severity") == "critical"
     ]
     warning_issues = [
         issue
-        for row in results
+        for row in portfolio_results
         for issue in list((row.get("self_review") or {}).get("issues") or [])
         if isinstance(issue, dict) and issue.get("severity") == "warning"
     ]
-    allowed = bool(results) and content.get("report_allowed") is True and not critical_issues
-    holdings = [dict(row) for row in list(query_content.get("portfolio_holdings") or []) if isinstance(row, dict)]
+    successful_results = [
+        result
+        for _holding, result in matched
+        if result is not None and result.get("report_allowed") is True
+    ]
+    failed_results = []
+    for holding, result in matched:
+        if result is None:
+            failed_results.append({
+                "ticker": str(holding.get("ticker") or holding.get("symbol") or ""),
+                "weight": holding.get("weight"),
+                "note": str(holding.get("note") or ""),
+                "reason": "analysis_result_missing",
+            })
+        elif result.get("report_allowed") is not True:
+            failed_results.append(_uzi_aggregate_failed_result(result, holding=holding))
+    # Pinned UZI ``run_portfolio`` emits a report whenever at least one
+    # constituent bundle is available and records all other rows as failed.
+    allowed = len(successful_results) >= 1
+    loaded_warning_count = sum(
+        int((row.get("self_review") or {}).get("warning_count") or 0)
+        for row in successful_results
+    )
     portfolio_name = str(query_content.get("portfolio_name") or "UZI Portfolio").strip() or "UZI Portfolio"
     conclusion = (
-        f"{portfolio_name} 的 UZI 原生组合批量研究已完成。"
+        f"{portfolio_name} 的 UZI 原生组合批量研究已完成；成功 {len(successful_results)}/{len(holdings) or len(results)}。"
         if allowed
-        else "至少一个组合成分仍有 UZI critical 缺口，组合报告停在质量门。"
+        else f"{portfolio_name} 没有可用成分；UZI --portfolio 至少需要 1 个成功结果。"
     )
     report_content = {
         "conclusion": conclusion,
         "assessment": {
-            "status": "uzi_native_portfolio_passed" if allowed else "uzi_native_quality_gate_blocked",
+            "status": "completed" if allowed else "insufficient_data",
             "summary": conclusion,
             "factors": [
                 {
@@ -1004,7 +1088,15 @@ def compose_uzi_portfolio_delivery(context):
                     "verdict": (row.get("synthesis") or {}).get("verdict_label"),
                     "report_allowed": row.get("report_allowed") is True,
                 }
-                for row in results
+                for row in portfolio_results
+            ],
+            "loaded": len(successful_results),
+            "requested": len(holdings) or len(results),
+            "failed": failed_results,
+            "ignored_analysis_symbols": [
+                result_ticker(result)
+                for index, result in enumerate(results)
+                if index not in used_result_indexes
             ],
         },
         "evidence": [{
@@ -1015,11 +1107,11 @@ def compose_uzi_portfolio_delivery(context):
         "risk": [str(row.get("issue") or "") for row in [*critical_issues, *warning_issues]],
         "follow_up": [str(row.get("suggested_fix") or "") for row in critical_issues],
         "delivery_type": "uzi_portfolio_3_9_4",
-        "quality_status": "available" if allowed else "quality_gate_blocked",
+        "quality_status": "available" if allowed else "data_gap",
         "native_analysis_artifact_id": analysis.artifact_id,
         "report_allowed": allowed,
-        "critical_count": len(critical_issues),
-        "warning_count": len(warning_issues),
+        "critical_count": 0,
+        "warning_count": loaded_warning_count,
         "portfolio_name": portfolio_name,
         "portfolio_holdings": holdings,
         "research_profile": content.get("profile"),
@@ -1039,6 +1131,42 @@ def compose_uzi_portfolio_delivery(context):
             "report_allowed": allowed,
         },
     )
+
+
+def _uzi_aggregate_failed_result(
+    result: dict[str, Any],
+    *,
+    holding: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the auditable failure row used by UZI aggregate runners."""
+
+    raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
+    review = result.get("self_review") if isinstance(result.get("self_review"), dict) else {}
+    issues = [row for row in list(review.get("issues") or []) if isinstance(row, dict)]
+    first_issue = next(
+        (
+            str(row.get("issue") or row.get("message") or "").strip()
+            for row in issues
+            if str(row.get("issue") or row.get("message") or "").strip()
+        ),
+        "",
+    )
+    failed = {
+        "ticker": str(
+            (holding or {}).get("ticker")
+            or (holding or {}).get("symbol")
+            or raw.get("ticker")
+            or result.get("symbol")
+            or ""
+        ),
+        "critical_count": int(review.get("critical_count") or 0),
+        "warning_count": int(review.get("warning_count") or 0),
+        "reason": first_issue or str(result.get("computation_error") or "analysis_unavailable"),
+    }
+    if holding is not None:
+        failed["weight"] = holding.get("weight")
+        failed["note"] = str(holding.get("note") or "")
+    return failed
 
 
 def _evaluate_uzi_native_method(context, method_id: str) -> ArtifactDraft:

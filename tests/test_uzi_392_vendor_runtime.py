@@ -37,8 +37,44 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
         self.assertEqual(report["report_version"], UZI_REPORT_VERSION)
         self.assertEqual(report["analyst_asset_file_count"], 138)
         self.assertTrue(report["analyst_asset_tree_matches"])
+        self.assertEqual(report["standalone_skill_file_count"], 17)
+        self.assertTrue(report["standalone_skill_tree_matches"])
         self.assertIn("quick-scan", UZI_COMMAND_IDS)
         self.assertEqual(len(UZI_FETCHER_IDS), 22)
+
+    def test_all_referenced_standalone_skill_resources_are_vendored(self) -> None:
+        root = (
+            Path(__file__).resolve().parents[1]
+            / "domain_packs"
+            / "finance_ashare"
+            / "vendor"
+            / "uzi_3_9_2"
+        )
+        required = {
+            "skills/investor-panel/SKILL.md",
+            "skills/investor-panel/assets/investor-cards.json",
+            "skills/investor-panel/references/group-a-classic-value.md",
+            "skills/investor-panel/references/group-b-growth.md",
+            "skills/investor-panel/references/group-c-macro-hedge.md",
+            "skills/investor-panel/references/group-d-technical.md",
+            "skills/investor-panel/references/group-e-china-value.md",
+            "skills/investor-panel/references/group-f-china-youzi.md",
+            "skills/investor-panel/references/group-g-quant.md",
+            "skills/investor-panel/references/group-i-serenity.md",
+            "skills/investor-panel/references/quotes-knowledge-base.md",
+            "skills/investor-panel/references/serenity-voice.md",
+            "skills/lhb-analyzer/SKILL.md",
+            "skills/lhb-analyzer/assets/seats-2026.json",
+            "skills/lhb-analyzer/references/seat-encyclopedia.md",
+            "skills/trap-detector/SKILL.md",
+            "skills/trap-detector/references/eight-signals.md",
+        }
+        actual = {
+            path.relative_to(root).as_posix()
+            for path in (root / "skills").rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(actual, required)
 
     def test_fetcher_result_is_returned_without_shape_adaptation(self) -> None:
         upstream_result = {

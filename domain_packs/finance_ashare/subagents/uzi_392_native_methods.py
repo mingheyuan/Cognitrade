@@ -176,11 +176,16 @@ def build_uzi_raw(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str,
                 dimensions[fetcher_id] = native_result
     basic_result = dimensions.get("0_basic") or {}
     basic_market = basic_result.get("market")
+    resolved_ticker = str(basic_result.get("ticker") or symbol).strip() or symbol
+    try:
+        resolved_info = market_router.parse_ticker(resolved_ticker)
+    except (TypeError, ValueError):
+        resolved_info = target_info
     raw: dict[str, Any] = {
-        "ticker": symbol,
-        "market": basic_market if basic_market in {"A", "H", "U"} else target_info.market,
-        "code": target_info.code,
-        "full": target_info.full,
+        "ticker": resolved_ticker,
+        "market": basic_market if basic_market in {"A", "H", "U"} else resolved_info.market,
+        "code": resolved_info.code,
+        "full": resolved_info.full,
         "dimensions": dimensions,
         **top_level_fields,
     }

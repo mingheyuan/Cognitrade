@@ -14,9 +14,27 @@
     from the report presentation commit
   - `skills/deep-analysis/assets/{avatars,data-contracts,disclaimer,quality-checklist}`
   - `skills/deep-analysis/{SKILL.md,references/**,personas/**}`
+  - `skills/{investor-panel,lhb-analyzer,trap-detector}/**`
   - `agents/investor-panel.md`
 
-The files under `scripts/`, `commands/`, `assets/`, and `skill/` are pinned to
-the same upstream commit. Cognitrade integrates them through an in-process DomainPack
-boundary and never requires an external UZI checkout, CLI, cache, or plugin
-installation at runtime.
+The files under `scripts/`, `commands/`, `assets/`, `skill/`, and `skills/` are
+pinned to the same upstream commit. The historical `skill/`, `scripts/`, and
+`assets/` directories map respectively to upstream
+`skills/deep-analysis/{SKILL.md,references,personas}`, `skills/deep-analysis/scripts`,
+and `skills/deep-analysis/assets`. The three standalone methodology trees retain
+their canonical upstream-relative paths under `skills/` so their source material
+is auditable next to the implementations that were translated into DomainPack
+capabilities.
+
+Cognitrade does not dynamically execute UZI Markdown skills. Agent OS owns routing,
+and the in-process DomainPack implements the mapped commands, methods, fetchers,
+panel, and trap checks. The vendored standalone skill files are pinned methodology
+references, not a hidden second runtime. The upstream root router, two CLI
+entrypoints, installer/plugin manifests, documentation, screenshots, and test tree
+are intentionally not production dependencies. CI checks out the fixed upstream
+commit separately and runs its test tree against the vendored Python implementation.
+UZI collection keeps the upstream executor semantics: the documented wave values
+classify unfinished dimensions but cannot force-cancel an already running Python
+thread. Agent OS adds a context-scoped default timeout for UZI `requests` calls
+and propagates that context into nested UZI executor tasks; peer DomainPack
+traffic runs with the guard inactive.

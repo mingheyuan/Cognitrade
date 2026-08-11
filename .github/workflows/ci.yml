@@ -40,8 +40,8 @@ jobs:
           tests.test_api_v1_fund_holding_reports
           tests.test_api_v2_finance
           tests.test_backtest_strategies
-          tests.test_uzi_method_products
           tests.test_uzi_392_vendor_runtime
+          tests.test_uzi_snapshot_runtime_parity
           tests.test_uzi_source_parity
           tests.test_uzi_392_commands
           tests.test_uzi_392_native_methods
@@ -69,6 +69,34 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -p "test_*.py"
+
+  uzi-upstream-tests:
+    name: Pinned UZI suite against vendored implementation
+    needs: finance-contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: wbh604/UZI-Skill
+          ref: 0acf25122cabf493e7bc442faff62ceceb7f2f02
+          path: upstream-uzi
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt pytest
+      - name: Overlay vendored modules onto the fixed upstream test tree
+        run: >-
+          rsync -a
+          domain_packs/finance_ashare/vendor/uzi_3_9_2/scripts/
+          upstream-uzi/skills/deep-analysis/scripts/
+      - name: Run the fixed upstream tests with vendored UZI modules
+        working-directory: upstream-uzi/skills/deep-analysis/scripts
+        run: python -m pytest -q tests
 
   provider-smoke:
     name: UZI real-provider smoke

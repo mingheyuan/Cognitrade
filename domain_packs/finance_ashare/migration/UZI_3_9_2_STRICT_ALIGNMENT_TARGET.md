@@ -2,13 +2,13 @@
 
 ## 1. 文档状态
 
-- 目标状态：完成；固定提交差异测试、全量回归与真实 provider smoke 均已由 GitHub Actions 验收
+- 目标状态：实现与本地回归完成；当前 PR 的 GitHub Actions 与真实 provider smoke 待远端验收，历史 CI 仅作为迁移基线
 - 上游仓库：`https://github.com/wbh604/UZI-Skill`
 - 唯一基准提交：`0acf25122cabf493e7bc442faff62ceceb7f2f02`
 - 上游版本：`3.9.4`
 - 迁移边界：实现迁入 Finance DomainPack；生产环境不得依赖外部 UZI checkout、CLI、缓存目录或运行时
 - 保留边界：Agent OS API/Web、ArtifactBoard、运行溯源与鉴权
-- 公开方法边界：23 个 UZI 方法只能通过各自的 `finance.uzi.native.*` intent 触发；旧 `requested_methods`/`method_catalog` 入口已删除
+- 公开方法边界：23 个 UZI 方法只能通过各自的 `finance.uzi.native.*` intent 触发；旧 `method_catalog` 已删除，通用 `requested_methods` 字段仅保留快照选择兼容语义，不能分派 UZI 原生方法
 - 扩展边界：未被业务入口引用的 `cognitrade-extension-*` 已全部删除；组合能力保留三个 UZI 原生方法入口及原生 `--portfolio` 批量研究
 - 验收原则：清单状态不是完成证据；只有上游差异测试、真实链路测试和产物审计共同通过后才能标记等价
 
@@ -20,8 +20,8 @@
 4. 仅允许 UZI 原生的定性推断兜底，且必须标记“基于公开信息推断，非一手数据”；数值和事实不得推断。
 5. 敏感来源默认关闭，必须由用户显式启用并提供凭据；启用策略不得改变 UZI 的来源字段和结果结构。
 6. 用户相关估值或交易假设必须显式选择并进入 ArtifactBoard；不得静默使用 `mid`。UZI 方法本身的固定常量保持原样。
-7. `critical` 必须经过 `suggested_fix → 恢复 → 重算 → 自审` 循环清零；不设人为轮数上限，不允许绕过。
-8. `warning` 允许生成报告，但必须使用 UZI 原生 warning banner；`completed_partial` 不能绕过 `critical` 门控。
+7. 单股报告及 aggregate runner 已载入的成分，`critical` 必须经过 `suggested_fix → 恢复 → 重算 → 自审` 循环清零；不设人为轮数上限，不允许绕过。
+8. `warning` 允许生成报告，但必须使用 UZI 原生 warning banner；`completed_partial` 不能绕过已载入成分的 `critical` 门控。UZI 原生 versus/portfolio 会跳过不可用成分；这些成分必须进入 `assessment.failed`，且不计入已载入子集的 aggregate `critical_count`。
 9. HTML/PDF 使用同一份 UZI 原生可见报告；Cognitrade 元数据不得污染原生 DOM。
 
 ## 3. 基准资产与完整性锁
@@ -32,6 +32,7 @@
 | 原生报告呈现层 | `skills/deep-analysis/assets/report-template.html` + 4 个 `lib/report` helper | v3.9.4 commit `0acf25122cabf493e7bc442faff62ceceb7f2f02`；模板 3615 行；SHA-256 `1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8` | 原样迁入并加逐文件哈希测试；分析方法仍固定在 3.9.4 |
 | 来源注册表 | `skills/deep-analysis/scripts/lib/data_source_registry.py` | 73 个 source ID | 目标目录和运行注册表均为 73 项 |
 | 命令目录 | `commands/*.md` | 20 个命令 | 20 个独立 Agent OS/API/Web 能力 |
+| 独立技能方法论 | `skills/{investor-panel,lhb-analyzer,trap-detector}/**` | 17 个路径敏感资源；SHA-256 `88b430b169ad68f028ac83df438d0dfac818e7330c266f8d86ddea75e0674593` | 原样保留方法论作为静态契约；Agent OS 路由与 DomainPack 实现另行验收，不动态执行 Markdown |
 | Fetcher | `skills/deep-analysis/scripts/fetch_*.py` | 22 个 fetcher | 调用链与结果契约逐项等价 |
 | 方法 | 上游方法与命令实现 | 23 个实现单元 | 公式、字段、阈值和顺序逐项等价 |
 | 自审 | `scripts/lib/self_review.py`、`review_stage_output.py` | `critical_count == 0` 才通过 | 不可绕过的运行状态机 |
@@ -176,36 +177,36 @@
 
 | 编号 | 证明对象 | 必须提供的证据 | 状态 |
 |---|---|---|---|
-| A1 | 22 fetcher 完整性 | 上游/本地 ID 集合完全相等 | 已通过；`test_uzi_source_parity`，CI run `31265934582` |
-| A2 | 73 sources 完整性 | 注册表逐字段深度相等 | 已通过；`test_uzi_source_parity`，CI run `31265934582` |
-| A3 | fetcher 结果 | 22 组调用参数与返回对象身份差异测试 | 已通过；`UziFetcherInvocationParityTests`，CI run `31265934582` |
-| A4 | provider 行为 | 可用、失败、超时、空响应、敏感源关闭的 smoke | 已通过；22/22 完成、18 available、4 data_gap、来源链与雪球关闭策略均通过 |
-| B1 | 20 commands 完整性 | 命令 ID、schema、执行图、产物逐项等价 | 已通过；`test_uzi_392_commands`，CI run `31265934582` |
-| B2 | quick-scan | 1/2/10/18、10 席、Markdown、无 HTML | 已通过；`test_uzi_quick_scan`，CI run `31265934582` |
-| C1 | 23 methods 完整性 | ID/公式/字段/阈值/缺失分支差异测试 | 已通过；23 个上游函数直接输出比较，CI run `31265934582` |
-| C2 | 显式假设 | API、Web、ArtifactBoard 往返及无 silent-mid 测试 | 已通过；非法/缺失 profile 与假设均拒绝，CI run `31265934582` |
-| D1 | suggested_fix | 每种 issue 被执行并触发重算/自审 | 已通过；`test_uzi_strict_recovery`，CI run `31265934582` |
-| D2 | critical 门控 | critical 永不生成 HTML/PDF，且不能被 completed_partial 绕过 | 已通过；API、持仓批次与导出三层门控，CI run `31265934582` |
-| D3 | warning | 原生 banner 可见且报告成功 | 已通过；固定原生模板渲染测试，CI run `31265934582` |
-| D4 | 无三轮上限 | 超过三轮仍继续，来源耗尽才阻断 | 已通过；`round_limit: null` 与 >3 轮测试，CI run `31265934582` |
-| E1 | 模板完整性 | vendor 文件哈希等于上游固定值 | 已通过；SHA-256 固定测试，CI run `31265934582` |
-| E2 | HTML 可见等价 | DOM/CSS/JS selector 与安全转义回归 | 已通过；固定模板精确渲染，CI run `31265934582` |
-| E3 | PDF 可见等价 | 同 HTML 渲染和 PDF 头/页面回归 | 已实现；真实 Chromium smoke 已生成 26,814 字节 PDF |
-| E4 | PDF 稳定性 | 并发 10 次全部成功且资源回收 | 已验证；10/10 成功，2 个 render slot，缓存命中一致 |
-| F1 | 零外部依赖 | 生产导入/运行不读取 UZI checkout | 已通过；vendored in-process runtime 边界测试，CI run `31265934582` |
-| F2 | 完成审计 | 本文每一行具有代码、测试和运行证据 | 已完成；见下方 GitHub Actions 与脱敏 Artifact 证据 |
+| A1 | 22 fetcher 完整性 | 上游/本地 ID 集合完全相等 | 本地回归通过；当前 PR CI 待验收 |
+| A2 | 73 sources 完整性 | 注册表逐字段深度相等 | 本地回归通过；当前 PR CI 待验收 |
+| A3 | fetcher 结果 | 22 组调用参数与返回对象身份差异测试 | 本地回归通过；当前 PR CI 待验收 |
+| A4 | provider 行为 | 可用、失败、超时、空响应、敏感源关闭的 smoke | 历史基线通过；当前 PR real-provider job 待验收 |
+| B1 | 20 commands 完整性 | 命令 ID、schema、执行图、产物逐项等价 | 本地回归通过；当前 PR CI 待验收 |
+| B2 | quick-scan | 1/2/10/18、10 席、Markdown、无 HTML | 本地回归通过；当前 PR CI 待验收 |
+| C1 | 23 methods 完整性 | ID/公式/字段/阈值/缺失分支差异测试 | 本地回归通过；当前 PR CI 待验收 |
+| C2 | 显式假设 | API、Web、ArtifactBoard 往返及无 silent-mid 测试 | 本地回归通过；当前 PR CI 待验收 |
+| D1 | suggested_fix | 每种 issue 被执行并触发重算/自审 | 本地回归通过；当前 PR CI 待验收 |
+| D2 | critical 门控 | 单股及 aggregate 已载入子集的 critical 永不生成 HTML/PDF，且不能被 completed_partial 绕过；未载入成分进入 `assessment.failed` | 本地回归通过；当前 PR CI 待验收 |
+| D3 | warning | 原生 banner 可见且报告成功 | 本地回归通过；当前 PR CI 待验收 |
+| D4 | 无三轮上限 | 超过三轮仍继续，来源耗尽才阻断 | 本地回归通过；当前 PR CI 待验收 |
+| E1 | 模板完整性 | vendor 文件哈希等于上游固定值 | 本地回归通过；当前 PR CI 待验收 |
+| E2 | HTML 可见等价 | DOM/CSS/JS selector 与安全转义回归 | 本地回归通过；当前 PR CI 待验收 |
+| E3 | PDF 可见等价 | 同 HTML 渲染和 PDF 头/页面回归 | 历史 Chromium 基线通过；当前 PR CI 待验收 |
+| E4 | PDF 稳定性 | 并发 10 次全部成功且资源回收 | 本地回归通过；当前 PR CI 待验收 |
+| F1 | 零外部依赖 | 生产导入/运行不读取 UZI checkout | 本地回归通过；CI 仅在测试 job checkout 固定上游 |
+| F2 | 完成审计 | 本文每一行具有代码、测试和运行证据 | 实现和本地证据完成；当前 PR CI/真实 provider 证据待回填 |
 
-## 10. GitHub Actions 最终证据
+## 10. 历史基线 CI 与当前 PR 验收
 
-- 验收提交：`542ea6ccc3b231d81d63634b266648aa8309b292`。
-- CI 运行：[31265934582](https://github.com/mingheyuan/Cognitrade/actions/runs/31265934582)，四个 job 全部成功。
+- 历史基线提交：`542ea6ccc3b231d81d63634b266648aa8309b292`；它不包含当前语义对齐改动。
+- 历史 CI 运行：[31265934582](https://github.com/mingheyuan/Cognitrade/actions/runs/31265934582)，仅证明当时基线。
 - Finance chain and scoring contracts：138 项后端契约测试通过。
 - Complete backend suite：509 项完整后端测试通过。
 - Frontend lint/tests/build：13 个测试文件、33 项测试通过，lint 与生产构建通过。
 - UZI real-provider smoke：22/22 维完成，`contract_status=passed`，18 个维度当次可用，4 个维度按真实超时记录为 `data_gap`，未填充模拟数据。
 - 敏感源证据：CI 显式关闭敏感来源且不配置 Cookie；`19_contests` 的雪球审计为 `configured_enabled=false`、`observation_present=false`、`source_mode=cognitrade_policy_disabled`、`policy_ok=true`。公开比赛来源可独立提供结果，不代表启用了雪球。
 - 脱敏运行产物：GitHub Actions artifact `uzi-provider-smoke-542ea6ccc3b231d81d63634b266648aa8309b292`，保留 14 天，不含原始市场观察、Cookie 或 provider 原始错误正文。
-- 后端测试执行边界：按项目约定仅由 GitHub Actions 执行；本地只做静态语法、diff 与文档检查。
+- 当前 PR 新增固定上游 checkout + vendored overlay test job；提交后以该次 Actions、完整后端/前端 job 与 real-provider artifact 作为最终证据。
 
 ## 11. 完成定义
 
@@ -224,6 +225,6 @@
 ## 12. Agent OS 运行边界
 
 - `raw_data` 严格保留上游 `ticker/market/code/full/dimensions`，`6_fund_holders` 作为维度，`fund_managers` 与 `similar_stocks` 按上游放在顶层；ArtifactBoard 快照类型仍使用稳定业务名 `fund_holders`。基金统计档位同步 UZI：lite/medium/deep 分别计算前 5/20/100 家。
-- 采集顺序严格使用 UZI 的 basic → 六线程独立波次 → 排序后的依赖波次；Agent OS 仅保留有限主机安全窗口，lite/medium/deep 分别为 300/480/1200 秒，不改变 fetcher 内部 provider、参数、兜底或返回对象。
+- 采集顺序使用 UZI `collect_raw_data` 的 basic → profile-scoped numbered fetcher wave（6 workers，futures 在同一 wave 等待 materials）→ `fund_holders/similar_stocks` bonus wave（2 workers）。所有 profile 的 numbered completion window 为 300 秒，bonus window 为 180 秒；与上游相同，这些窗口会标记 unfinished dimension，但 Python 运行中线程不能被强制取消。UZI `requests` 默认 20 秒只在 UZI execution context 及其嵌套 executor task 生效，不影响其他 DomainPack。
 - UZI 3.9.4 自审的两个字符串检查会在 JSON `null` 上触发 `NoneType is not iterable`；Agent OS 只在自审副本中恢复函数声明的空字符串默认值，原始证据、完整性检查与报告数据均不改写。
 - UZI 3.9.4 DCF 生产者输出 `intrinsic_per_share`，而自审读取旧名 `intrinsic_value_per_share`；Agent OS 只在自审副本中提供同义键。真实值为 `None/0` 时原生 warning 继续保留，不生成替代估值。

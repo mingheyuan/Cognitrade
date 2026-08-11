@@ -229,6 +229,23 @@ class Uzi392NativeMethodTests(unittest.TestCase):
         self.assertEqual(raw["code"], "600000")
         self.assertEqual(raw["full"], "600000.SH")
 
+    def test_raw_builder_uses_basic_resolved_ticker_for_a_named_entity(self) -> None:
+        market = _row(
+            "market",
+            {"code": "600519", "name": "贵州茅台", "industry": "白酒"},
+        )
+        market["symbol"] = "贵州茅台"
+        market["facts"]["_uzi_raw_result"].update({
+            "ticker": "600519.SH",
+            "market": "A",
+        })
+
+        raw = build_uzi_raw([market], "贵州茅台")
+
+        self.assertEqual(raw["ticker"], "600519.SH")
+        self.assertEqual(raw["code"], "600519")
+        self.assertEqual(raw["full"], "600519.SH")
+
     def test_raw_builder_matches_uzi_bonus_collector_top_level_contract(self) -> None:
         raw = build_uzi_raw(_snapshots(), "600000")
 
