@@ -134,6 +134,7 @@ class OpenAIProvider:
         force_json: bool = False,
         timeout_seconds: float | None = None,
         max_retries: int | None = None,
+        max_continuation_attempts: int | None = None,
     ) -> str:
         client = self._client_instance()
         request_client = client.with_options(max_retries=max_retries) if max_retries is not None else client
@@ -146,11 +147,16 @@ class OpenAIProvider:
         )
         if request_timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        continuation_attempts = (
+            self._MAX_CONTINUATION_ATTEMPTS
+            if max_continuation_attempts is None
+            else max(int(max_continuation_attempts), 0)
+        )
         try:
             parts: list[str] = []
             previous_response_id: str | None = None
             current_input = prompt
-            for _ in range(self._MAX_CONTINUATION_ATTEMPTS + 1):
+            for _ in range(continuation_attempts + 1):
                 response = request_client.responses.create(
                     model=self.settings.default_model,
                     instructions=system_prompt,

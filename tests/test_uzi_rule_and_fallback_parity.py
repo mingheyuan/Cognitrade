@@ -165,6 +165,52 @@ class UziRuleSourceParityTests(unittest.TestCase):
         self.assertEqual(explicit_timeout.deadline_policy, "default")
         self.assertEqual(explicit_timeout.timeout_seconds, 30)
 
+        fund_decision = decision.model_copy(update={"intent": "fund_research"})
+        fund_config = agent_os._domain_turn_config(
+            request=RequestEnvelope(
+                intent="fund_research",
+                user_query="分析偏股混合基金",
+                constraints={"investment_cycle": "3y"},
+            ),
+            decision=fund_decision,
+            execution_mode="graph",
+        )
+        self.assertEqual(fund_config.deadline_policy, "default")
+        self.assertEqual(fund_config.timeout_seconds, settings.run_timeout_seconds)
+
+        explicit_fund_timeout = agent_os._domain_turn_config(
+            request=RequestEnvelope(
+                intent="fund_research",
+                user_query="最多等待 30 秒",
+                constraints={
+                    "investment_cycle": "3y",
+                    "turn_config": {"timeout_seconds": 30},
+                },
+            ),
+            decision=fund_decision,
+            execution_mode="graph",
+        )
+        self.assertEqual(explicit_fund_timeout.deadline_policy, "default")
+        self.assertEqual(explicit_fund_timeout.timeout_seconds, 30)
+
+        explicit_default_policy = agent_os._domain_turn_config(
+            request=RequestEnvelope(
+                intent="fund_research",
+                user_query="使用调用方默认时限",
+                constraints={
+                    "investment_cycle": "3y",
+                    "turn_config": {"deadline_policy": "default"},
+                },
+            ),
+            decision=fund_decision,
+            execution_mode="graph",
+        )
+        self.assertEqual(explicit_default_policy.deadline_policy, "default")
+        self.assertEqual(
+            explicit_default_policy.timeout_seconds,
+            settings.run_timeout_seconds,
+        )
+
     def test_source_semantics_skip_only_rules_that_cannot_evaluate_missing_data(self) -> None:
         features = {
             "ticker": "000001",

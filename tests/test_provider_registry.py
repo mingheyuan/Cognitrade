@@ -132,6 +132,26 @@ class ProviderRegistryTests(unittest.TestCase):
             OpenAIProvider._CONTINUATION_PROMPT,
         )
 
+    def test_complete_can_disable_continuations_for_deadline_bound_delivery(self) -> None:
+        first = SimpleNamespace(
+            id="resp_1",
+            status="incomplete",
+            incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+            output_text="partial response",
+        )
+        responses = _FakeResponsesClient(create_responses=[first])
+        provider = OpenAIProvider(self._settings())
+        provider._client = _FakeClient(responses)  # type: ignore[assignment]
+
+        text = provider.complete(
+            system_prompt="sys",
+            user_prompt="user",
+            max_continuation_attempts=0,
+        )
+
+        self.assertEqual(text, "partial response")
+        self.assertEqual(len(responses.create_calls), 1)
+
     def test_complete_can_disable_sdk_retries_for_uzi_owned_recovery(self) -> None:
         final = SimpleNamespace(
             id="resp_1",

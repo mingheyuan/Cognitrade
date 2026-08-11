@@ -14,13 +14,17 @@ def utc_now() -> datetime:
 
 OrchestratorStatus = Literal[
     "received",
+    "accepted",
     "identifying_intent",
     "needs_clarification",
     "ready",
     "running",
+    "paused",
     "waiting_external",
+    "waiting_approval",
     "gated",
     "completed",
+    "completed_partial",
     "cancelled",
     "failed",
     "timed_out",

@@ -287,13 +287,21 @@ class MainAgent:
         request: str,
         report: dict[str, Any],
         artifacts: list[dict[str, Any]] | None = None,
+        timeout_seconds: float | None = None,
+        max_retries: int | None = None,
+        max_continuation_attempts: int | None = None,
+        raise_on_error: bool = False,
     ) -> dict[str, Any] | None:
         """Create a user-facing Chinese synthesis without changing source facts."""
         provider = self.llm_provider
         if provider is None or not bool(getattr(provider, "available", False)):
+            if raise_on_error:
+                raise RuntimeError("research_synthesis_provider_unavailable")
             return None
         complete = getattr(provider, "complete", None)
         if not callable(complete):
+            if raise_on_error:
+                raise RuntimeError("research_synthesis_provider_missing_complete")
             return None
         facts = json.dumps(
             {
@@ -304,8 +312,8 @@ class MainAgent:
             default=str,
         )[:48_000]
         try:
-            raw = complete(
-                system_prompt=(
+            completion_kwargs: dict[str, Any] = {
+                "system_prompt": (
                     "你是 Cognitrade Agent OS 的 Main Agent，负责交付研究结果。"
                     "请根据提供的结构化证据、方法论输出、风险和数据缺口，独立组织一段中文结论。"
                     "不要照抄固定模板，不要补造缺失数据，不要给出买卖指令。"
@@ -315,13 +323,28 @@ class MainAgent:
                     "\"assistant_message\":\"给用户的中文回答\","
                     "\"follow_up\":[\"下一步研究动作\"]}。"
                 ),
-                user_prompt=f"用户请求：{request}\n结构化研究事实：\n{facts}",
-                temperature=0.2,
+                "user_prompt": f"用户请求：{request}\n结构化研究事实：\n{facts}",
+                "temperature": 0.2,
+            }
+            if timeout_seconds is not None:
+                completion_kwargs["timeout_seconds"] = float(timeout_seconds)
+            if max_retries is not None:
+                completion_kwargs["max_retries"] = int(max_retries)
+            if max_continuation_attempts is not None:
+                completion_kwargs["max_continuation_attempts"] = int(
+                    max_continuation_attempts
+                )
+            raw = complete(
+                **completion_kwargs,
             )
         except Exception:
+            if raise_on_error:
+                raise
             return None
         payload = self._parse_json_object(raw)
         if not isinstance(payload, dict):
+            if raise_on_error:
+                raise ValueError("research_synthesis_invalid_json")
             return None
         conclusion = str(payload.get("conclusion") or "").strip()
         assistant_message = str(payload.get("assistant_message") or conclusion).strip()
@@ -331,6 +354,8 @@ class MainAgent:
             if str(item).strip()
         ][:5]
         if not conclusion or not assistant_message:
+            if raise_on_error:
+                raise ValueError("research_synthesis_missing_required_fields")
             return None
         return {
             "conclusion": conclusion[:2_000],
