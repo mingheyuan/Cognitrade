@@ -1,0 +1,107 @@
+.github/workflows/ci.yml
+  s_1d753182cd1978::t_b9b6a24ca53f58 92-95
+domain_packs/finance_ashare/artifact_schemas/snapshot.json
+  s_b50dd23690b4b9::t_a3f8eafb30c9b6 87-92
+domain_packs/finance_ashare/domain.yaml
+  s_a03a12067fd87b::t_0af2836e765c20 156,210-211,260-261,265-266,270,290-291,295-296,300-301,305,310,503-508,825-827,839-841
+domain_packs/finance_ashare/migration/UZI_3_9_2_STRICT_ALIGNMENT_TARGET.md
+  s_562e0f8f06821f::t_ea3114a48b703f 9,43,47-68,80,85-86,90-92,97-98,100-103,137-138,140,185-186,209,212,230-237
+domain_packs/finance_ashare/migration/uzi_3_9_2_capability_ledger.yaml
+  s_a03a12067fd87b::t_21e50db87610eb 51-90,93-115,120-134,136-162,164,176-177,180-221,352-354
+domain_packs/finance_ashare/migration/uzi_source_mapping.yaml
+  s_21f1e1e23483c1::t_9aec0e11a01e25 11-27,29-33,37-48,89-93,123-124,130-135
+domain_packs/finance_ashare/subagents/uzi_392_analysis.py
+  s_21f1e1e23483c1::t_13bb00da5954aa 309,311-313,487-526,552,556-557,559-580,584-599,626-627,632,658-687,700-701,837
+domain_packs/finance_ashare/subagents/uzi_methodology.py
+  s_21f1e1e23483c1::t_8dba9fdfd0d961 37-38,57-63,66-68,71-77,93-94,158
+domain_packs/finance_ashare/subagents/uzi_panel_registry.py
+  s_21f1e1e23483c1::t_1d8db46da0d722 96,98-102
+domain_packs/finance_ashare/tools/financial_data_provider.py
+  s_21f1e1e23483c1::t_00d8a31d08237a 11-16,55-58
+domain_packs/finance_ashare/tools/financial_data_provider.yaml
+  s_21f1e1e23483c1::t_ee4c5ddcdbebcd 16-18,29-32
+domain_packs/finance_ashare/tools/security_master.py
+  s_21f1e1e23483c1::t_4e24906307e867 95-98
+domain_packs/finance_ashare/tools/snapshot_collector.py
+  s_21f1e1e23483c1::t_44cafcca22e61a 184-192,333-335,341-348,350-366,382-390,433-629,1120-1289,1343-1345,1485,1499,1506,1508-1512,1514-1519,1533,1536,1543,1748,1821,1825,1861-1865,1884,1896,1900-1904,1965,1967,1975-1983,1985-2016,2019,2024,2026,2054,2056,2061,2063,2068,2070,2170,2272-2274
+domain_packs/finance_ashare/vendor/uzi_3_9_2/SOURCE.md
+  s_21f1e1e23483c1::t_3c0acdf7450612 32-35,42-54
+domain_packs/finance_ashare/vendor/uzi_3_9_2/runtime.py
+  s_21f1e1e23483c1::t_c4ecd97561b51a 3,241-465,484-495,561
+tests/test_agent_os_task_intake.py
+  s_21f1e1e23483c1::t_70beb72df579a9 73-92
+tests/test_api_v1_runs.py
+  s_b50dd23690b4b9::t_99f407b12d13f1 508-516
+tests/test_finance_ashare_dashboard_contract.py
+  s_21f1e1e23483c1::t_9ccdebfcd53680 71-73,83,95-96,106-108,119
+tests/test_finance_pack_migration_completion.py
+  s_21f1e1e23483c1::t_994861a8896fde 50-65
+tests/test_finance_snapshot_json_serialization.py
+  s_21f1e1e23483c1::t_649b3e3014861a 91-111
+tests/test_uzi_392_analysis.py
+  s_21f1e1e23483c1::t_95c1d297a303fb 25,193-219,258-330,448,523
+tests/test_uzi_checkout_parity.py
+  s_1d753182cd1978::t_be984f5d2812e5 3,5-8,11-17,21-26,29-36,39-45,47-113
+tests/test_uzi_deep_roleplay.py
+  s_21f1e1e23483c1::t_c74b998b08c3de 110
+tests/test_uzi_finance_pack.py
+  s_a03a12067fd87b::t_4c21e18a8fc9d7 22-26,45-182,241,275-276
+tests/test_uzi_root_collection_router.py
+  s_21f1e1e23483c1::t_5ad4f8505d50b6 1-1082
+tests/test_uzi_rule_and_fallback_parity.py
+  s_21f1e1e23483c1::t_ae5d99387b6f9e 3,18,74-75,91-95,109-119
+tests/test_uzi_snapshot_runtime_parity.py
+  s_21f1e1e23483c1::t_6a2c6c7156e2e4 240-241
+tests/test_uzi_source_parity.py
+  s_21f1e1e23483c1::t_ab00db17aa2fc7 27,86-201,227-234,239,247-249,256-274,276-285,287,290-295,401-409
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "7463e16186eeb01cf6bd976b68b57403b5fca152",
+  "prompts": {},
+  "sessions": {
+    "s_1d753182cd1978": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fefd9-67ac-7582-9731-6d834170bc44",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_21f1e1e23483c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fed16-2f60-7bd0-8343-b94d3724ce9b",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_562e0f8f06821f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff253-cf13-73f0-8702-f9c88d8758dd",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_a03a12067fd87b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff232-77f8-7e12-a96f-8f5cac08b8a5",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_b50dd23690b4b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe341-6a16-7f11-b28e-8f8b8ba2549b",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
