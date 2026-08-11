@@ -1,0 +1,51 @@
+README.md
+  s_b50dd23690b4b9::t_bbd772623ba196 15
+plan/current-architecture.md
+  s_b50dd23690b4b9::t_c2bd16beedecee 44
+plan/uzi-3.9.2-domainpack-migration.md
+  s_21f1e1e23483c1::t_4d7f2c881ca141 182
+research_system/runtime/execution/core/graph_runner.py
+  s_b50dd23690b4b9::t_980e900bee1fde 2924
+research_system/runtime/roles.py
+  s_b50dd23690b4b9::t_086b2fffcdc980 5,275
+research_system/schemas/runtime.py
+  s_21f1e1e23483c1::t_633c436f971e2e 4
+research_system/schemas/subagents.py
+  s_b50dd23690b4b9::t_5c4c82c333b03c 3,40
+tests/api_test_support.py
+  s_21f1e1e23483c1::t_316d4327a470ea 7,72-73,77,81
+tests/test_agent_os_core_loop.py
+  s_b50dd23690b4b9::t_65361b6b0a0afe 898,903-904
+tests/test_execution_graph_runner.py
+  s_21f1e1e23483c1::t_9881941c61fb66 277-280,444-447
+tests/test_finance_ashare_dashboard_contract.py
+  s_b50dd23690b4b9::t_dfe920b1d2c6b2 57,69,81,99
+tests/test_provider_registry.py
+  s_21f1e1e23483c1::t_4801c6d8acd526 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "737668b615cba6498a3e158d5d18a46228f8e3b0",
+  "prompts": {},
+  "sessions": {
+    "s_21f1e1e23483c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fed16-2f60-7bd0-8343-b94d3724ce9b",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_b50dd23690b4b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe341-6a16-7f11-b28e-8f8b8ba2549b",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
