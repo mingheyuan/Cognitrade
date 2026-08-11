@@ -1,0 +1,21 @@
+.github/workflows/ci.yml
+  s_21f1e1e23483c1::t_e7a392274e8008 98-101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "26671f9c84d5ec1abd21c73ecbc87e9e6e9129a9",
+  "prompts": {},
+  "sessions": {
+    "s_21f1e1e23483c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fed16-2f60-7bd0-8343-b94d3724ce9b",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
