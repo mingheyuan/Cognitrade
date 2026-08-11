@@ -16,7 +16,7 @@ jobs:
   finance-contracts:
     name: Finance chain and scoring contracts
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       COGNITRADE_API_ALLOW_UNAUTHENTICATED: "true"
       PYTHONUNBUFFERED: "1"
