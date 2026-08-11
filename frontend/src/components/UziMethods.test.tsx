@@ -23,15 +23,23 @@ vi.mock('../CognitradeContext', () => ({
       replay: {
         artifacts: [
           {
-            artifact_type: 'returns_attribution',
+            artifact_type: 'uzi_native_method_result',
             content: {
+              method_id: 'returns_attribution',
               quality_status: 'degraded',
-              observed_weight_coverage: 0.6,
-              observed_contribution_pct: 6,
-              total_return_pct: null,
-              holdings: [
-                { ticker: '600519', name: '贵州茅台', return_pct: 10, contribution_pct: 6 },
-                { ticker: '300750', name: '宁德时代', return_pct: null, contribution_pct: null },
+              results: [
+                {
+                  symbol: 'portfolio',
+                  result: {
+                    observed_weight_coverage: 0.6,
+                    observed_contribution_pct: 6,
+                    total_return_pct: null,
+                    holdings: [
+                      { ticker: '600519', name: '贵州茅台', return_pct: 10, contribution_pct: 6 },
+                      { ticker: '300750', name: '宁德时代', return_pct: null, contribution_pct: null },
+                    ],
+                  },
+                },
               ],
               data_gap: ['return_pct_missing:300750'],
             },
@@ -55,7 +63,7 @@ describe('UziMethods', () => {
     render(<UziMethods onOpenRun={mocks.openRun} />)
 
     expect(screen.getByText('专项研究与组合方法')).toBeInTheDocument()
-    expect(screen.getByText('60.0%')).toBeInTheDocument()
+    expect(screen.getByText('returns_attribution')).toBeInTheDocument()
     expect(screen.getAllByText('贵州茅台').length).toBeGreaterThan(0)
     expect(screen.getByText('1 项数据缺口')).toBeInTheDocument()
   })

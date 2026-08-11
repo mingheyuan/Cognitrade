@@ -153,6 +153,30 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
             "comparison_targets_missing",
         )
 
+    def test_portfolio_queries_route_only_to_native_uzi_method_intents(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
+        holdings = [{"ticker": "600519", "weight": 100, "return_pct": 8.0, "asset_class": "A股"}]
+        for query, expected_intent in {
+            "对这个组合做收益归因": "uzi_returns",
+            "按目标权重对这个组合做持仓再平衡": "uzi_rebalance",
+            "按资产类别对组合做资产配置再平衡": "uzi_portfolio_rebalance_method",
+        }.items():
+            with self.subTest(query=query):
+                decision = service.resolve(RequestEnvelope(
+                    user_query=query,
+                    constraints={"portfolio_holdings": holdings},
+                ))
+                self.assertEqual(decision.status, "accepted")
+                self.assertEqual(decision.intent, expected_intent)
+
+        ambiguous = service.resolve(RequestEnvelope(
+            user_query="分析一下这个组合",
+            constraints={"portfolio_holdings": holdings},
+        ))
+        self.assertEqual(ambiguous.status, "needs_clarification")
+        self.assertIsNone(ambiguous.intent)
+
     def test_main_agent_composes_pack_clarification_from_structured_context(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary_directory:

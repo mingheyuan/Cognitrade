@@ -68,11 +68,7 @@ const stockMethods = [
 ] as const
 
 const methodArtifactTypes = [
-  'uzi_native_analysis', 'quick_scan', 'research_report',
-  'ai_readiness', 'earnings_preview', 'model_update', 'returns_attribution', 'holding_rebalance', 'portfolio_rebalance',
-  'three_statement_model', 'quick_lbo', 'accretion_dilution', 'segmental_model', 'initiation_report', 'earnings_review',
-  'catalyst_calendar', 'thesis_tracker', 'morning_note', 'ic_memo', 'porter_bcg', 'dd_checklist', 'unit_economics', 'value_creation_plan',
-  'uzi_native_method_result', 'uzi_native_command_result',
+  'uzi_native_analysis', 'quick_scan', 'research_report', 'uzi_native_method_result', 'uzi_native_command_result',
 ]
 
 export function UziMethods({ onOpenRun }: UziMethodsProps) {
@@ -363,49 +359,7 @@ function Tier1Result({ artifact }: { artifact: Record<string, unknown> }) {
     const commandId = String(content.command_id || 'UZI command')
     return <div className="uzi-result-body"><ResultHeadline label={`/${commandId}`} value={commandResults.length ? 'UZI 原生命令结果' : '数据不足'} detail={`执行阶段：${String(content.phase || 'complete')}`} />{commandResults.length ? <BusinessDataView value={commandResults} fieldKey={commandId} path={`uzi_native_command_result.${commandId}.results`} /> : null}<GapList gaps={gaps} /></div>
   }
-  if (type === 'ai_readiness') {
-    const company = asRecord((Array.isArray(content.companies) ? content.companies : [])[0])
-    const gates = Array.isArray(company.gates) ? company.gates.map(asRecord) : []
-    return <div className="uzi-result-body"><ResultHeadline label="AI 就绪度" value={String(company.rating || '证据不足')} detail={String(company.verdict || '')} /><div className="uzi-gate-list">{gates.map((gate) => <article key={String(gate.gate_id)} className={`is-${String(gate.status)}`}><span>{String(gate.status) === 'pass' ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}</span><div><strong>{String(gate.label || gate.gate_id)}</strong><small>{Array.isArray(gate.evidence) && gate.evidence.length ? gate.evidence.map(String).join('、') : String(gate.reason || '暂无证据')}</small></div></article>)}</div><GapList gaps={gaps} /></div>
-  }
-  if (type === 'earnings_preview') {
-    const preview = asRecord((Array.isArray(content.previews) ? content.previews : [])[0])
-    const consensus = Array.isArray(preview.consensus_table) ? preview.consensus_table.map(asRecord) : []
-    const scenarios = Array.isArray(preview.scenarios) ? preview.scenarios.map(asRecord) : []
-    return <div className="uzi-result-body"><ResultHeadline label="财报前瞻" value={String(preview.name || preview.symbol || '—')} detail="情景值均为 assumption_only，不冒充一致预期" /><div className="uzi-mini-table"><div><strong>指标</strong><strong>一致预期</strong><strong>状态</strong></div>{consensus.map((row) => <div key={String(row.metric)}><span>{metricLabel(String(row.metric))}</span><span>{formatNumber(row.value)}</span><span>{qualityLabel(String(row.status || 'data_gap'))}</span></div>)}</div><div className="uzi-scenario-row">{scenarios.map((row) => <article key={String(row.scenario)}><span>{String(row.scenario).toUpperCase()}</span><strong>显式情景</strong><small>{String(row.assumption || row.reason || '')}</small></article>)}</div><GapList gaps={gaps} /></div>
-  }
-  if (type === 'model_update') {
-    const updates = Array.isArray(content.updates) ? content.updates.map(asRecord) : []
-    return <div className="uzi-result-body"><ResultHeadline label="模型更新" value={`${updates.length} 项显式假设`} detail="只给一阶方向影响；完整重估需重新运行估值模型" /><div className="uzi-mini-table"><div><strong>字段</strong><strong>原值 → 新值</strong><strong>方向</strong></div>{updates.map((row) => <div key={`${String(row.symbol)}-${String(row.key)}`}><span>{String(row.label || row.key)}</span><span>{formatNumber(row.before)} → {formatNumber(row.after)}</span><span>{String(row.first_order_impact || '—')}</span></div>)}</div><GapList gaps={gaps} /></div>
-  }
-  if (type === 'returns_attribution') {
-    const holdings = Array.isArray(content.holdings) ? content.holdings.map(asRecord) : []
-    return <div className="uzi-result-body"><div className="uzi-result-kpis"><article><span>收益覆盖权重</span><strong>{percentFromRatio(content.observed_weight_coverage)}</strong></article><article><span>完整组合收益</span><strong>{percent(content.total_return_pct)}</strong></article><article><span>已观测贡献</span><strong>{percent(content.observed_contribution_pct)}</strong></article></div><div className="uzi-mini-table"><div><strong>持仓</strong><strong>区间收益</strong><strong>贡献</strong></div>{holdings.map((row) => <div key={String(row.ticker)}><span>{String(row.name || row.ticker)}</span><span>{percent(row.return_pct)}</span><span>{percent(row.contribution_pct)}</span></div>)}</div><GapList gaps={gaps} /></div>
-  }
-  if (type === 'portfolio_rebalance') {
-    const rows = Array.isArray(content.asset_classes) ? content.asset_classes.map(asRecord) : []
-    return <div className="uzi-result-body"><ResultHeadline label="资产配置再平衡" value={`${rows.filter((row) => row.breached).length} 类触发漂移`} detail="目标来自显式战略资产配置" /><div className="uzi-mini-table"><div><strong>资产类别</strong><strong>当前 → 目标</strong><strong>动作 / 金额</strong></div>{rows.map((row) => <div key={String(row.asset_class)}><span>{String(row.asset_class)}</span><span>{percentFromRatio(row.current_weight)} → {percentFromRatio(row.target_weight)}</span><span>{String(row.action)} / {money(row.suggested_value_change)}</span></div>)}</div><GapList gaps={gaps} /></div>
-  }
-  if (type !== 'holding_rebalance') {
-    const methodResult = asRecord((Array.isArray(content.results) ? content.results : [])[0])
-    const rows = flattenDisplay({ observed: methodResult.observed, derived: methodResult.derived, methodology: methodResult.methodology })
-    const methodLabel = stockMethods.find((item) => item.id === content.method)?.label || String(content.method || type)
-    return <div className="uzi-result-body"><ResultHeadline label={methodLabel} value={String(methodResult.symbol || '证据结果')} detail="只展示结构化字段；缺失数据不会由默认值补齐" /><div className="uzi-mini-table uzi-method-result-table"><div><strong>数据项</strong><strong>值</strong><strong>来源类型</strong></div>{rows.map((row, index) => <div key={`${row.label}-${index}`}><span>{fieldLabel(row.label)}</span><span>{row.value}</span><span>{row.group}</span></div>)}</div><GapList gaps={gaps} /></div>
-  }
-  const trades = Array.isArray(content.trades) ? content.trades.map(asRecord) : []
-  return <div className="uzi-result-body"><ResultHeadline label="持仓再平衡" value={`${trades.length} 笔策略建议`} detail={String(content.target_mode || '')} /><div className="uzi-mini-table"><div><strong>持仓</strong><strong>动作 / 漂移</strong><strong>金额 / 成本</strong></div>{trades.map((row) => <div key={String(row.ticker)}><span>{String(row.ticker)}</span><span>{String(row.action)} · {percent(row.drift_pp)}</span><span>{money(row.trade_amount)} / {money(row.estimated_cost)}</span></div>)}</div><GapList gaps={gaps} /></div>
-}
-
-function flattenDisplay(value: unknown, path = '', group = '观测', depth = 0): Array<{ label: string; value: string; group: string }> {
-  if (depth > 4 || value == null) return []
-  if (Array.isArray(value)) return value.flatMap((item, index) => flattenDisplay(item, `${path}.${index + 1}`, group, depth + 1))
-  if (typeof value === 'object') {
-    return Object.entries(asRecord(value)).flatMap(([key, item]) => {
-      const nextGroup = path === '' ? (key === 'derived' ? '推导' : key === 'methodology' ? '显式假设' : '观测') : group
-      return flattenDisplay(item, path ? `${path}.${key}` : key, nextGroup, depth + 1)
-    })
-  }
-  return [{ label: path.replace(/^(observed|derived|methodology)\./, ''), value: typeof value === 'number' ? formatNumber(value) : typeof value === 'boolean' ? (value ? '是' : '否') : String(value), group }]
+  return <div className="uzi-result-body"><BusinessDataView value={content} fieldKey={type} path={type} /><GapList gaps={gaps} /></div>
 }
 
 function ResultHeadline({ label, value, detail }: { label: string; value: string; detail: string }) {
@@ -430,43 +384,8 @@ function optionalNumber(value: unknown): number | null {
   return Number.isFinite(number) ? number : null
 }
 
-function formatNumber(value: unknown): string {
-  const number = optionalNumber(value)
-  return number == null ? '—' : number.toLocaleString('zh-CN', { maximumFractionDigits: 4 })
-}
-
-function percent(value: unknown): string {
-  const number = optionalNumber(value)
-  return number == null ? '—' : `${number > 0 ? '+' : ''}${number.toFixed(2)}%`
-}
-
-function percentFromRatio(value: unknown): string {
-  const number = optionalNumber(value)
-  return number == null ? '—' : `${(number * 100).toFixed(1)}%`
-}
-
-function money(value: unknown): string {
-  const number = optionalNumber(value)
-  return number == null ? '—' : number.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
-}
-
 function qualityLabel(value: string): string {
   return value === 'available' ? '证据可用' : value === 'degraded' ? '部分可用' : value === 'assumption_only' ? '策略假设' : value === 'pass' ? '通过' : '数据缺口'
-}
-
-function metricLabel(value: string): string {
-  return ({ revenue: '营收', eps: '每股收益', net_profit: '净利润', target_price: '目标价' } as Record<string, string>)[value] || value
-}
-
-function fieldLabel(value: string): string {
-  const leaf = value.split('.').filter((item) => !/^\d+$/.test(item)).pop() || value
-  return ({
-    revenue: '营业收入', net_income: '净利润', ebitda: 'EBITDA', total_assets: '总资产', total_liabilities: '总负债',
-    operating_cash_flow: '经营现金流', projection: '预测期', entry_equity: '入场权益价值', exit_equity: '退出权益价值',
-    moic: '投资倍数', irr: '内部收益率', standalone_eps: '独立每股收益', pro_forma_eps: '备考每股收益',
-    accretion_pct: '增厚/摊薄比例', coverage_state: '覆盖状态', dated_event_count: '有日期事件数', coverage: '证据覆盖率',
-    target_ebitda: '目标 EBITDA', recommendation: '投资建议', committee_state: '投委会状态', bcg_position: 'BCG 定位',
-  } as Record<string, string>)[leaf] || leaf.replaceAll('_', ' ')
 }
 
 function gapLabel(value: string): string {

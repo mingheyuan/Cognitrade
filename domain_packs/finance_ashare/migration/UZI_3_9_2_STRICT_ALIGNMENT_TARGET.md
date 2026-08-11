@@ -9,7 +9,7 @@
 - 迁移边界：实现迁入 Finance DomainPack；生产环境不得依赖外部 UZI checkout、CLI、缓存目录或运行时
 - 保留边界：Agent OS API/Web、ArtifactBoard、运行溯源与鉴权
 - 公开方法边界：23 个 UZI 方法只能通过各自的 `finance.uzi.native.*` intent 触发；旧 `requested_methods`/`method_catalog` 入口已删除
-- 扩展边界：仍由 Cognitrade 使用的非原生研究能力明确标记为 `cognitrade-extension-*`，不属于 UZI 等价声明，也不能作为 UZI Web 方法入口
+- 扩展边界：未被业务入口引用的 `cognitrade-extension-*` 已全部删除；组合研究只保留三个 UZI 原生方法入口
 - 验收原则：清单状态不是完成证据；只有上游差异测试、真实链路测试和产物审计共同通过后才能标记等价
 
 ## 2. 不可妥协规则

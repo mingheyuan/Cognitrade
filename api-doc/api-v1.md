@@ -87,8 +87,8 @@ The response identifies the canonical protocol and graph state:
 
 The installed `finance_ashare` Pack accepts these intents through the same
 endpoint: `stock_check`, `stock_compare`, `stock_screen`, `fund_research`,
-`portfolio_research`, `sector_research`, `review_thesis`, and
-`distill_kol_logic`. When `intent` is omitted, Pack Task Intake resolves it
+`uzi_returns`, `uzi_rebalance`, `uzi_portfolio_rebalance_method`,
+`sector_research`, `review_thesis`, and `distill_kol_logic`. When `intent` is omitted, Pack Task Intake resolves it
 from the query or returns a structured
 clarification instead of silently defaulting to stock analysis.
 
@@ -303,30 +303,33 @@ rejected at API validation and are never coerced into a plausible scenario.
 }
 ```
 
-`portfolio_research` produces `returns_attribution` and `holding_rebalance`
-Artifacts from explicit holdings. When `requested_methods` contains
-`portfolio_rebalance`, every holding must provide `asset_class` and
-`asset_class_targets` must exactly cover those classes; the additional output
-is `portfolio_rebalance`.
+The former aggregate `portfolio_research` entry has been removed. Each UZI
+portfolio method has an independent intent and produces one
+`uzi_native_method_result` Artifact:
+
+- `uzi_returns` performs return attribution; each holding must provide its
+  observed `return_pct`, otherwise the missing contribution remains a data gap.
+- `uzi_rebalance` performs holding-level rebalance and requires explicit
+  `rebalance_targets` plus `accept_uzi_native_fee_schedule: true`.
+- `uzi_portfolio_rebalance_method` performs strategic asset-class rebalance;
+  every holding must provide `asset_class`, and `asset_class_targets` must
+  exactly cover those classes.
 
 ```http
 POST /api/v1/runs
 Content-Type: application/json
 
 {
-  "intent": "portfolio_research",
-  "user_query": "对持仓做收益归因和再平衡",
+  "intent": "uzi_rebalance",
+  "user_query": "按目标权重对持仓做再平衡",
   "constraints": {
     "portfolio_holdings": [
       {"ticker": "600519", "weight": 60, "return_pct": 8, "value": 600000, "market": "A", "price": 1500},
       {"ticker": "300750", "weight": 40, "return_pct": -2, "value": 400000, "market": "A", "price": 200}
     ],
-    "benchmark_return": 3,
     "rebalance_targets": {"600519": 50, "300750": 50},
     "drift_threshold": 5,
-    "fee_model": {
-      "A": {"commission_rate": 0.00025, "buy_stamp_rate": 0, "sell_stamp_rate": 0.0005}
-    }
+    "accept_uzi_native_fee_schedule": true
   }
 }
 ```

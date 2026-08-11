@@ -1,10 +1,7 @@
 import {
   AlertTriangle,
   BrainCircuit,
-  ChartNoAxesCombined,
   Database,
-  Gauge,
-  Scale,
   ShieldCheck,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -13,21 +10,8 @@ import { financeArtifactTitle, isFinanceArtifactType } from './registry'
 import type { FinanceArtifactType } from './generated/finance-artifact-contracts'
 import type { ArtifactRecordView } from './types'
 
-const DECISION_TYPES = new Set<FinanceArtifactType>([
-  'valuation_model', 'investor_panel_review', 'risk_scan', 'uzi_dimension_coverage',
-])
-
-const SYSTEM_METHOD_TYPES = new Set<FinanceArtifactType>([
-  'institutional_analysis', 'research_workflow', 'deep_analysis',
-])
-
 const SPECIALIST_METHOD_TYPES = new Set<FinanceArtifactType>([
-  'ai_readiness', 'earnings_preview', 'model_update', 'returns_attribution',
-  'holding_rebalance', 'portfolio_rebalance', 'three_statement_model', 'quick_lbo',
-  'accretion_dilution', 'segmental_model', 'initiation_report', 'earnings_review',
-  'catalyst_calendar', 'thesis_tracker', 'morning_note', 'ic_memo', 'porter_bcg',
-  'dd_checklist', 'unit_economics', 'value_creation_plan', 'uzi_native_method_result',
-  'uzi_native_command_result',
+  'uzi_native_method_result', 'uzi_native_command_result',
 ])
 
 type MethodDeliveryDossierProps = {
@@ -74,25 +58,13 @@ function MethodArtifactCard({ artifact }: { artifact: ArtifactRecordView & { art
   const content = asRecord(artifact.content)
   const type = artifact.artifact_type
   const quality = content.quality_status || artifact.status || 'active'
-  const isPanel = type === 'investor_panel_review'
-  const isValuation = type === 'valuation_model'
-  const isRisk = type === 'risk_scan'
-  const isPortfolio = ['returns_attribution', 'holding_rebalance', 'portfolio_rebalance'].includes(type)
-  const count = isPanel
-    ? asArray(content.votes).length
-    : isValuation
-      ? asArray(content.models).length
-      : isRisk
-        ? asArray(content.signals).length
-        : isPortfolio
-          ? asArray(content.holdings || content.drift_table || content.asset_classes).length
-          : asArray(content.results).length
+  const count = asArray(content.results).length
 
   return (
-    <details className="method-delivery-card" open={DECISION_TYPES.has(type) || isPortfolio} data-method-artifact={type}>
+    <details className="method-delivery-card" open data-method-artifact={type}>
       <summary>
         <span className="method-delivery-card__icon">
-          {isValuation ? <ChartNoAxesCombined size={16} /> : isPanel ? <Scale size={16} /> : isRisk ? <AlertTriangle size={16} /> : <BrainCircuit size={16} />}
+          <BrainCircuit size={16} />
         </span>
         <span><strong>{financeArtifactTitle(type)}</strong><small>{type} · {text(content.methodology_version, `Schema ${artifact.schema_version || '1'}`)}</small></span>
         <span className={`artifact-quality-tag is-${String(quality)}`}>{qualityLabel(quality)}</span>
@@ -129,19 +101,15 @@ function ArtifactGroup({ title, description, icon, artifacts }: { title: string;
 
 export function MethodDeliveryDossier({ artifacts }: MethodDeliveryDossierProps) {
   const normalized = normalizedArtifacts(artifacts)
-  const decisions = normalized.filter((artifact) => DECISION_TYPES.has(artifact.artifact_type))
-  const systems = normalized.filter((artifact) => SYSTEM_METHOD_TYPES.has(artifact.artifact_type))
   const methods = normalized.filter((artifact) => SPECIALIST_METHOD_TYPES.has(artifact.artifact_type))
-  if (!decisions.length && !systems.length && !methods.length) return null
+  if (!methods.length) return null
   return (
     <section className="method-delivery-dossier" aria-label="完整方法论交付">
       <header className="method-delivery-dossier__header">
-        <div><span className="section-kicker">COMPLETE METHOD OUTPUTS</span><h2>完整方法论交付</h2><p>展示本次运行返回的全部估值、评审、风险、机构方法和组合方法字段；不截断列表，不使用模拟值。</p></div>
-        <span><Database size={14} />{decisions.length + systems.length + methods.length} 项方法 Artifact</span>
+        <div><span className="section-kicker">UZI NATIVE METHOD OUTPUTS</span><h2>UZI 原生方法交付</h2><p>展示本次运行返回的全部 UZI 原生命令和方法字段；不截断列表，不使用模拟值。</p></div>
+        <span><Database size={14} />{methods.length} 项方法 Artifact</span>
       </header>
-      <ArtifactGroup title="决策辅助与证据覆盖" description="估值、评审团、风险扫描和 UZI 维度覆盖。" icon={<Gauge size={16} />} artifacts={decisions} />
-      <ArtifactGroup title="机构研究体系" description="机构模型、研究工作流与 Deep 交叉检验的全部结果。" icon={<ChartNoAxesCombined size={16} />} artifacts={systems} />
-      <ArtifactGroup title="专项方法与组合" description="个股专项、收益归因、持仓再平衡与资产配置的全部结果。" icon={<BrainCircuit size={16} />} artifacts={methods} />
+      <ArtifactGroup title="专项方法与组合" description="个股专项、收益归因、持仓再平衡与资产配置的 UZI 原生结果。" icon={<BrainCircuit size={16} />} artifacts={methods} />
     </section>
   )
 }

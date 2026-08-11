@@ -15,7 +15,6 @@ const intentLabels = {
   stock_compare: '多股比较',
   stock_screen: '股票筛选',
   fund_research: '基金研究',
-  portfolio_research: '组合研究',
   sector_research: '行业研究',
 }
 

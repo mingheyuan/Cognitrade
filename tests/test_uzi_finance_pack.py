@@ -16,18 +16,9 @@ from fastapi.testclient import TestClient
 
 from domain_packs.finance_ashare.subagents.uzi_methodology import (
     build_features,
-    build_panel_review,
-    build_risk_scan,
-    build_valuation_model,
     select_profile,
 )
 from domain_packs.finance_ashare.subagents.runtime import collect_snapshot
-from domain_packs.finance_ashare.subagents.uzi_advanced_methodology import (
-    build_deep_analysis,
-    build_dimension_coverage,
-    build_institutional_analysis,
-    build_research_workflow,
-)
 from domain_packs.finance_ashare.vendor.uzi_3_9_2 import verify_vendored_uzi_integrity
 from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshots
 import domain_packs.finance_ashare.tools.snapshot_collector as snapshot_collector
@@ -331,22 +322,7 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertEqual(second[0]["facts"]["value"], first[0]["facts"]["value"])
         self.assertEqual(third[1]["facts"]["value"], first[1]["facts"]["value"])
 
-    def test_dimension_coverage_separates_raw_sources_from_derived_products(self) -> None:
-        coverage = build_dimension_coverage(
-            _snapshots(),
-            ["600000"],
-            select_profile({"research_profile": "medium"}),
-        )
-
-        self.assertEqual(coverage["dimension_count"], 22)
-        self.assertEqual(coverage["derived_dimension_count"], 3)
-        self.assertEqual(coverage["total_dimension_count"], 25)
-        rows = {row["dimension_id"]: row for row in coverage["coverage"]["600000"]}
-        self.assertEqual(rows["10_valuation"]["status"], "data_gap")
-        self.assertEqual(rows["11_governance"]["status"], "data_gap")
-        self.assertEqual(rows["20_valuation_models"]["layer"], "derived")
-
-    def test_financial_mapping_marks_proxy_dcf_inputs_explicitly(self) -> None:
+    def test_financial_mapping_preserves_observed_fields_without_proxy_fcf(self) -> None:
         rows = [
             {
                 "snapshot_type": "market",
@@ -381,22 +357,42 @@ class UziFinancePackTests(unittest.TestCase):
         ]
 
         features = build_features(rows, "300750")
-        valuation = build_valuation_model(
-            rows,
-            ["300750"],
-            select_profile({"research_profile": "lite"}),
-        )["models"][0]
-
         self.assertEqual(features["revenue_latest_yi"], 100.0)
         self.assertEqual(features["total_assets_yi"], 200.0)
         self.assertEqual(features["total_liabilities_yi"], 80.0)
         self.assertEqual(features["cash_yi"], 30.0)
-        self.assertEqual(valuation["status"], "data_gap")
-        self.assertIn("fcf_missing", valuation["data_gap"])
-        self.assertNotIn("fcf_approximated_from_revenue_margin", valuation["assumption_flags"])
         self.assertEqual(features["operating_cash_flow_yi"], 15.0)
         self.assertIsNone(features["fcf_latest_yi"])
-        self.assertNotIn("total_assets_missing", valuation["warnings"])
+
+    def test_cognitrade_uzi_extension_registry_is_fully_removed(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        manifest = yaml.safe_load(
+            (repository_root / "domain_packs/finance_ashare/domain.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        capabilities = list(manifest.get("capabilities") or [])
+        self.assertFalse(
+            [
+                row
+                for row in capabilities
+                if str(row.get("methodology_version") or "").startswith(
+                    "cognitrade-extension-"
+                )
+            ]
+        )
+        intents = {
+            str(row.get("intent_id") or "")
+            for row in list((manifest.get("intake") or {}).get("intents") or [])
+        }
+        self.assertNotIn("portfolio_research", intents)
+        self.assertTrue(
+            {
+                "uzi_returns",
+                "uzi_rebalance",
+                "uzi_portfolio_rebalance_method",
+            }.issubset(intents)
+        )
 
     def test_uzi_rule_features_are_derived_from_verified_snapshots(self) -> None:
         start = date(2025, 1, 1)
@@ -530,29 +526,6 @@ class UziFinancePackTests(unittest.TestCase):
         features = build_features(rows, "600000")
 
         self.assertEqual(features["lhb_30d_count"], 1)
-
-    def test_uzi_methodology_replay_matches_versioned_dcf_baseline(self) -> None:
-        fixture = json.loads(
-            (Path(__file__).resolve().parent / "fixtures" / "uzi_methodology_baseline.json")
-            .read_text(encoding="utf-8")
-        )
-        rows = list(fixture["snapshots"])
-        profile = select_profile({"research_profile": "lite"})
-        model = build_valuation_model(rows, [fixture["symbol"]], profile)["models"][0]
-        reference = fixture["uzi_reference"]
-
-        self.assertEqual(profile["source_commit"], fixture["source_commit"])
-        self.assertAlmostEqual(
-            model["fair_value"],
-            reference["dcf_intrinsic_per_share"],
-            delta=0.5,
-        )
-        self.assertAlmostEqual(model["assumptions"]["wacc"], reference["dcf_wacc"], places=3)
-        self.assertEqual(len(model["sensitivity"]), 25)
-        self.assertEqual(
-            len(build_panel_review(rows, [fixture["symbol"]], profile)["votes"]),
-            fixture["uzi_reference"]["panel_seats"]["lite"],
-        )
 
     def test_method_specific_request_replaces_default_report_outputs(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -775,47 +748,6 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertNotIn("finance.uzi.valuation.evaluate", dcf_capabilities)
         self.assertNotIn("finance.uzi.panel.review", dcf_capabilities)
         self.assertNotIn("finance.uzi.risk.scan", dcf_capabilities)
-
-    def test_pack_owned_uzi_methodologies_are_profile_aware_and_data_bound(self) -> None:
-        profile = select_profile({"research_profile": "lite"})
-        rows = _snapshots()
-        valuation = build_valuation_model(rows, ["600000"], profile)
-        panel = build_panel_review(rows, ["600000"], profile)
-        risk = build_risk_scan("分析 600000", rows, ["600000"], profile)
-
-        self.assertEqual(profile["selected"], "lite")
-        self.assertEqual(valuation["models"][0]["symbol"], "600000")
-        self.assertIn("methodology_log", valuation["models"][0])
-        self.assertEqual(len(valuation["dimensions"]["600000"]), 8)
-        self.assertIn("peer_group_missing", valuation["dimensions"]["600000"][3]["data_gap"])
-        self.assertEqual(len(panel["votes"]), 10)
-        self.assertTrue(all(vote["is_methodology_perspective"] for vote in panel["votes"]))
-        medium_panel = build_panel_review(rows, ["600000"], select_profile({"research_profile": "medium"}))
-        deep_panel = build_panel_review(rows, ["600000"], select_profile({"research_profile": "deep"}))
-        self.assertEqual(len(medium_panel["votes"]), 51)
-        self.assertEqual(len(deep_panel["votes"]), 66)
-        self.assertEqual(medium_panel["registered_seat_count"], 51)
-        self.assertEqual(len(risk["signals"]), 8)
-        self.assertIn("external_search_not_claimed", risk["risk_flags"])
-
-    def test_medium_and_deep_methodology_products_preserve_data_gaps(self) -> None:
-        rows = _snapshots()
-        medium = select_profile({"research_profile": "medium"})
-        valuation = build_valuation_model(rows, ["600000"], medium)
-        institutional = build_institutional_analysis(rows, ["600000"], valuation, medium)
-        workflow = build_research_workflow(rows, ["600000"], valuation, medium)
-        deep_profile = select_profile({"research_profile": "deep"})
-        deep_institutional = build_institutional_analysis(rows, ["600000"], valuation, deep_profile)
-        deep = build_deep_analysis(rows, ["600000"], deep_institutional, workflow, deep_profile)
-
-        self.assertEqual(institutional["results"][0]["symbol"], "600000")
-        self.assertIn("three_statement", institutional["results"][0]["methods"])
-        self.assertIn("quick_lbo", institutional["results"][0]["methods"])
-        self.assertNotIn("segmental", institutional["results"][0]["methods"])
-        self.assertEqual(workflow["results"][0]["symbol"], "600000")
-        self.assertEqual(deep["results"][0]["symbol"], "600000")
-        self.assertIn("bull_bear_debate", deep["results"][0])
-        self.assertIn("reported_segment_data_missing", deep_institutional["results"][0]["methods"]["segmental"]["data_gap"])
 
     def test_agent_os_graph_commits_native_uzi_analysis_and_gated_delivery(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]

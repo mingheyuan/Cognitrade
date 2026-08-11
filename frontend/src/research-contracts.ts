@@ -31,7 +31,6 @@ export type ResearchIntent =
   | 'stock_compare'
   | 'stock_screen'
   | 'fund_research'
-  | 'portfolio_research'
   | 'sector_research'
   | 'distill_kol_logic'
   | 'review_thesis'
@@ -107,9 +106,6 @@ export type ResearchReport = {
   methodologies?: Array<Record<string, unknown>>
   review_summary?: Record<string, unknown>
   presentation?: Record<string, unknown>
-  valuation_model?: Record<string, unknown>
-  investor_panel_review?: Record<string, unknown>
-  risk_scan?: Record<string, unknown>
   [key: string]: unknown
 }
 

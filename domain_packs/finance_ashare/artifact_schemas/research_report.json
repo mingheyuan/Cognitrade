@@ -39,27 +39,6 @@
     "uzi_profile": {
       "type": "object"
     },
-    "valuation_model": {
-      "type": "object"
-    },
-    "investor_panel_review": {
-      "type": "object"
-    },
-    "risk_scan": {
-      "type": "object"
-    },
-    "institutional_analysis": {
-      "type": ["object", "null"]
-    },
-    "research_workflow": {
-      "type": ["object", "null"]
-    },
-    "deep_analysis": {
-      "type": ["object", "null"]
-    },
-    "uzi_dimension_coverage": {
-      "type": ["object", "null"]
-    },
     "uzi_data_pipeline": {
       "type": ["object", "null"]
     },

@@ -477,7 +477,7 @@ VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
 - `uzi_recovery.playwright_stage`：按 Lite/Medium/Deep 白名单触发的浏览器最终兜底、质量触发原因、策略来源和解析状态；
 - `uzi_recovery.attempts`：供列表展示的统一摘要。失败保留为 `data_gap`，不生成模拟值。
 
-`investor_panel_review.votes[]` 严格按 UZI 3.9.2 执行 242 条规则，并新增：
+`uzi_native_analysis.results[].panel.investors[]` 严格按固定 UZI 源码执行规则，并保留：
 
 - `uzi_confidence`：UZI 原始 0–100 置信度；`confidence` 仍为 Agent OS 的 0–1 归一化值；
 - `investor_name_en`、`methodology_source`、`avatar_seed`、`tier`：上游席位元数据；

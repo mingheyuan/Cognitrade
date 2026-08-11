@@ -43,7 +43,6 @@ SUPPORTED_RESEARCH_INTENTS = frozenset(
         "stock_compare",
         "stock_screen",
         "fund_research",
-        "portfolio_research",
         "sector_research",
         "distill_kol_logic",
         "review_thesis",
@@ -197,15 +196,6 @@ _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
         "investment_cycle",
         *_COMMON_REQUEST_FIELDS,
     },
-    "portfolio_research": {
-        "portfolio_holdings",
-        "benchmark_return",
-        "rebalance_targets",
-        "drift_threshold",
-        "fee_model",
-        "asset_class_targets",
-        *_COMMON_REQUEST_FIELDS,
-    },
     "sector_research": {"sector_query", "include_policy_snapshot", "research_profile", *_COMMON_REQUEST_FIELDS},
     "distill_kol_logic": set(_COMMON_REQUEST_FIELDS),
     "review_thesis": {
@@ -320,8 +310,8 @@ def validate_research_request(
         _validate_stock_screen_constraints(constraints)
     elif intent == "fund_research":
         _validate_fund_research_constraints(constraints)
-    elif intent in {"portfolio_research", "uzi_returns", "uzi_rebalance", "uzi_portfolio_rebalance_method"}:
-        _validate_portfolio_research_constraints(constraints)
+    elif intent in {"uzi_returns", "uzi_rebalance", "uzi_portfolio_rebalance_method"}:
+        _validate_uzi_portfolio_method_constraints(constraints)
     return request.model_copy(update={"intent": intent, "user_query": query, "constraints": constraints})
 
 
@@ -511,7 +501,7 @@ def _validate_model_updates(value: Any) -> None:
         _require_finite_number(item, field_name=f"model_updates.{key}")
 
 
-def _validate_portfolio_research_constraints(constraints: dict[str, Any]) -> None:
+def _validate_uzi_portfolio_method_constraints(constraints: dict[str, Any]) -> None:
     holdings = constraints.get("portfolio_holdings")
     if not isinstance(holdings, list) or not holdings:
         _invalid_constraint("portfolio_holdings", "must be a non-empty array")
@@ -575,25 +565,6 @@ def _validate_portfolio_research_constraints(constraints: dict[str, Any]) -> Non
             total_target += number
         if total_target <= 0:
             _invalid_constraint("rebalance_targets", "target total must be positive")
-
-    if "fee_model" in constraints:
-        fee_model = constraints["fee_model"]
-        if not isinstance(fee_model, dict) or not fee_model:
-            _invalid_constraint("fee_model", "must be a non-empty object")
-        for market, raw_spec in fee_model.items():
-            if not isinstance(raw_spec, dict) or not raw_spec:
-                _invalid_constraint(f"fee_model.{market}", "must be a non-empty object")
-            unknown = sorted(
-                str(key)
-                for key in raw_spec
-                if str(key) not in {"commission_rate", "buy_stamp_rate", "sell_stamp_rate"}
-            )
-            if unknown:
-                _invalid_constraint(f"fee_model.{market}", f"contains unsupported fields: {', '.join(unknown)}")
-            for key, rate in raw_spec.items():
-                number = _require_finite_number(rate, field_name=f"fee_model.{market}.{key}")
-                if number < 0 or number > 1:
-                    _invalid_constraint(f"fee_model.{market}.{key}", "must be between 0 and 1")
 
     if "asset_class_targets" in constraints:
         targets = constraints["asset_class_targets"]

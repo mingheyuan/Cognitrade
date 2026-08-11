@@ -53,17 +53,28 @@ _FUND_KEYWORDS = (
     "重仓基金",
     "基金持仓",
 )
-_PORTFOLIO_KEYWORDS = (
+_PORTFOLIO_CONTEXT_KEYWORDS = (
     "portfolio",
+    "组合",
+)
+_PORTFOLIO_ATTRIBUTION_KEYWORDS = (
     "returns attribution",
     "return attribution",
-    "rebalance",
-    "组合",
     "收益归因",
     "业绩归因",
+)
+_HOLDING_REBALANCE_KEYWORDS = (
+    "rebalance",
     "再平衡",
     "调仓",
     "持仓权重",
+)
+_ASSET_ALLOCATION_REBALANCE_KEYWORDS = (
+    "asset allocation",
+    "strategic allocation",
+    "资产配置",
+    "大类资产",
+    "资产类别",
 )
 _FUND_CATEGORY_ALIASES = {
     "股票型": "股票型",
@@ -277,7 +288,7 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
             )
         slots["investment_cycle"] = investment_cycle
         constraints["investment_cycle"] = investment_cycle
-    if intent in {"portfolio_research", "uzi_returns", "uzi_rebalance", "uzi_portfolio_rebalance_method"} and not portfolio_holdings:
+    if intent in {"uzi_returns", "uzi_rebalance", "uzi_portfolio_rebalance_method"} and not portfolio_holdings:
         return _clarify(
             ["portfolio_holdings"],
             query=query,
@@ -506,8 +517,20 @@ def _infer_intent(
     portfolio_holdings: list[dict[str, Any]],
 ) -> str | None:
     lowered = query.casefold()
-    if portfolio_holdings or _contains(query, lowered, _PORTFOLIO_KEYWORDS):
-        return "portfolio_research"
+    portfolio_context = portfolio_holdings or _contains(query, lowered, (
+        *_PORTFOLIO_CONTEXT_KEYWORDS,
+        *_PORTFOLIO_ATTRIBUTION_KEYWORDS,
+        *_HOLDING_REBALANCE_KEYWORDS,
+        *_ASSET_ALLOCATION_REBALANCE_KEYWORDS,
+    ))
+    if portfolio_context:
+        if _contains(query, lowered, _ASSET_ALLOCATION_REBALANCE_KEYWORDS):
+            return "uzi_portfolio_rebalance_method"
+        if _contains(query, lowered, _HOLDING_REBALANCE_KEYWORDS):
+            return "uzi_rebalance"
+        if _contains(query, lowered, _PORTFOLIO_ATTRIBUTION_KEYWORDS):
+            return "uzi_returns"
+        return None
     if fund_codes or fund_category or _contains(query, lowered, _FUND_KEYWORDS):
         return "fund_research"
     if _contains(query, lowered, _QUICK_SCAN_KEYWORDS):

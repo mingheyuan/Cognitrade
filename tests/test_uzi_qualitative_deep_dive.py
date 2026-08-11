@@ -7,8 +7,6 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 
-import jsonschema
-
 from domain_packs.finance_ashare.subagents.uzi_qualitative_deep_dive import (
     QualitativeAssociation,
     QualitativeDimension,
@@ -234,12 +232,6 @@ class UziQualitativeDeepDiveTests(unittest.TestCase):
         self.assertGreaterEqual(result["qualitative_agent_execution"]["association_count"], 3)
         self.assertEqual(len(provider.system_prompts), 3)
         self.assertEqual(len(set(provider.system_prompts)), 1)
-
-        schema = json.loads(
-            (Path(__file__).resolve().parents[1] / "domain_packs/finance_ashare/artifact_schemas/deep_analysis.json")
-            .read_text(encoding="utf-8")
-        )
-        jsonschema.validate(result, schema)
 
     def test_ungrounded_model_url_invalidates_completion(self) -> None:
         result = apply_qualitative_deep_dive(
