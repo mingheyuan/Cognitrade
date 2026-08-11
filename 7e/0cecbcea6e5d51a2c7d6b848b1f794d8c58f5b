@@ -1,0 +1,39 @@
+research_system/runtime/core/main_agent.py
+  s_21f1e1e23483c1::t_c8e4659746fcd6 290-293,298-299,303-304,315-316,326-338,341-342,346-347,357-358
+research_system/runtime/providers/openai_provider.py
+  s_21f1e1e23483c1::t_4a37fe1d628ecb 137,150-154,159
+research_system/schemas/runtime.py
+  s_21f1e1e23483c1::t_b4f2ab67e2388a 17,22,24,27
+research_system/schemas/state_machine.py
+  s_21f1e1e23483c1::t_4b16a5eec9c8df 63
+tests/test_agent_os.py
+  s_21f1e1e23483c1::t_3426cabb8dc7b8 70,83
+tests/test_finance_pack_migration_completion.py
+  s_21f1e1e23483c1::t_a8f16e29b2dd9d 244,373,379
+tests/test_fund_research.py
+  s_21f1e1e23483c1::t_7cb5a26fc230c8 27,33,299-303,314-320,324-333,369-371,733-736,743-762,781-824
+tests/test_provider_registry.py
+  s_21f1e1e23483c1::t_e063e0dd4a1639 135-154
+tests/test_turn_extensions.py
+  s_21f1e1e23483c1::t_f6f425b317f8ef 474-477
+tests/test_uzi_rule_and_fallback_parity.py
+  s_21f1e1e23483c1::t_dc9ce610487cfe 168-213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "7e0cecbcea6e5d51a2c7d6b848b1f794d8c58f5b",
+  "prompts": {},
+  "sessions": {
+    "s_21f1e1e23483c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fed16-2f60-7bd0-8343-b94d3724ce9b",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
