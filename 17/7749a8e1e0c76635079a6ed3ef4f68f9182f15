@@ -1,0 +1,51 @@
+domain_packs/finance_ashare/migration/UZI_3_9_2_STRICT_ALIGNMENT_TARGET.md
+  s_74b9ffc09e2295::t_1cb86c55e02d41 65,84,223-229
+domain_packs/finance_ashare/migration/uzi_3_9_2_capability_ledger.yaml
+  s_74b9ffc09e2295::t_3345ca6feb230b 40-66,105
+domain_packs/finance_ashare/migration/uzi_source_mapping.yaml
+  s_74b9ffc09e2295::t_2d15dd70b5da36 55
+domain_packs/finance_ashare/subagents/uzi_392_analysis.py
+  s_74b9ffc09e2295::t_c35b1e38ca46ea 2098-2139,2162,2166,2170
+domain_packs/finance_ashare/subagents/uzi_392_native_commands.py
+  s_74b9ffc09e2295::t_6f118c284e0774 27,31-35
+domain_packs/finance_ashare/subagents/uzi_392_native_methods.py
+  s_74b9ffc09e2295::t_c121bf49afa41a 69-71,77-81,109,162-178,180-183,185,254,263,277,292,390-391
+domain_packs/finance_ashare/subagents/uzi_methodology.py
+  s_74b9ffc09e2295::t_ea519a379b45f7 60-63,125-126,202-203
+domain_packs/finance_ashare/tools/snapshot_collector.py
+  s_74b9ffc09e2295::t_d5d6b5b2aa8d15 122,168-175,242-249,356,368-369,380-381,384,388-397,401,403,407,418,421-424,429,458,471-523,539,553,592,613-621
+domain_packs/finance_ashare/vendor/uzi_3_9_2/runtime.py
+  s_74b9ffc09e2295::t_7a9b42271b9eb3 6,48,132-147,181,188
+tests/test_finance_provider_execution.py
+  s_74b9ffc09e2295::t_deb6224582e669 149-153,169-231
+tests/test_uzi_392_analysis.py
+  s_74b9ffc09e2295::t_d8a72a19b31b41 3,21,25,189-241
+tests/test_uzi_392_commands.py
+  s_74b9ffc09e2295::t_84b7c4d6c244b1 127-132,135-142
+tests/test_uzi_392_native_methods.py
+  s_74b9ffc09e2295::t_d03e58b8ddc0f5 91-97,228-243,275
+tests/test_uzi_392_vendor_runtime.py
+  s_74b9ffc09e2295::t_fdd1085b0eb83c 86,106-128
+tests/test_uzi_finance_pack.py
+  s_74b9ffc09e2295::t_6863e04dd87411 136
+tests/test_uzi_source_parity.py
+  s_74b9ffc09e2295::t_74c8b13c4b5c0f 86-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "177749a8e1e0c76635079a6ed3ef4f68f9182f15",
+  "prompts": {},
+  "sessions": {
+    "s_74b9ffc09e2295": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fef39-0d96-7163-8104-6b4a24dca7d4",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
