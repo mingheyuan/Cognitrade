@@ -1,0 +1,119 @@
+domain_packs/finance_ashare/artifact_schemas/uzi_native_analysis.json
+  s_b50dd23690b4b9::t_78dfd6fe60901d 30
+domain_packs/finance_ashare/migration/uzi_source_mapping.schema.json
+  s_09b45d85f3dd76::t_5a9857e63c33bb 8,30,73-130,156,159
+domain_packs/finance_ashare/migration/uzi_source_mapping.yaml
+  s_21f1e1e23483c1::t_081588ef97a06a 13-14,18-21,25-41,91-93
+domain_packs/finance_ashare/reporting/uzi_native_report.py
+  s_21f1e1e23483c1::t_04aa6d2ed658ad 18-21,206-207,209-230,233-236
+domain_packs/finance_ashare/subagents/runtime.py
+  s_21f1e1e23483c1::t_b036bfe5634bed 20-25,778,784-790,915-928,930,943-944,946,950,953-955,973,976-985,1011-1037,1040,1046,1050-1072,1075,1077,1082,1091-1099,1110,1113-1114,1136-1171
+domain_packs/finance_ashare/subagents/uzi_392_native_methods.py
+  s_21f1e1e23483c1::t_32e03d6d473fb7 179-183,185-188
+domain_packs/finance_ashare/subagents/uzi_portfolio_contract.py
+  s_21f1e1e23483c1::t_fc22de814691c5 1-89
+domain_packs/finance_ashare/vendor/uzi_3_9_2/__init__.py
+  s_b50dd23690b4b9::t_f440033bd1f726 11,13,20,28,30,37
+domain_packs/finance_ashare/vendor/uzi_3_9_2/runtime.py
+  s_3bed2d121c3d7b::t_0174c21ad4ba9a 26,190,386-396,417-421,428-429,438,445
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/investor-panel/SKILL.md
+  s_b50dd23690b4b9::t_6b72caf99e27ab 1-121
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/investor-panel/assets/investor-cards.json
+  s_b50dd23690b4b9::t_e935c71afb5c29 1-68
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/investor-panel/references/group-a-classic-value.md
+  s_b50dd23690b4b9::t_2bbb47c9a7a19a 1-146
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/investor-panel/references/group-b-growth.md
+  s_b50dd23690b4b9::t_696effa87d3b43 1-103
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/investor-panel/references/group-c-macro-hedge.md
+  s_b50dd23690b4b9::t_b42f5500e4eed0 1-108
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/investor-panel/references/group-d-technical.md
+  s_b50dd23690b4b9::t_f3bb5aaf40a337 1-90
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/investor-panel/references/group-e-china-value.md
+  s_b50dd23690b4b9::t_31d82f385b2d30 1-113
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/investor-panel/references/group-f-china-youzi.md
+  s_b50dd23690b4b9::t_04281e590fc1be 1-171
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/investor-panel/references/group-g-quant.md
+  s_b50dd23690b4b9::t_309d8bc4e82960 1-64
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/investor-panel/references/group-i-serenity.md
+  s_b50dd23690b4b9::t_7bc11794e8be66 1-165
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/investor-panel/references/quotes-knowledge-base.md
+  s_b50dd23690b4b9::t_9eecb9c07578ae 1-669
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/investor-panel/references/serenity-voice.md
+  s_b50dd23690b4b9::t_a352c7856a5750 1-126
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/lhb-analyzer/SKILL.md
+  s_b50dd23690b4b9::t_023fbb12e90686 1-64
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/lhb-analyzer/assets/seats-2026.json
+  s_b50dd23690b4b9::t_33452feecdc194 1-20
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/lhb-analyzer/references/seat-encyclopedia.md
+  s_b50dd23690b4b9::t_b3421db3284c72 1-145
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/trap-detector/SKILL.md
+  s_b50dd23690b4b9::t_8881722ee07843 1-75
+domain_packs/finance_ashare/vendor/uzi_3_9_2/skills/trap-detector/references/eight-signals.md
+  s_b50dd23690b4b9::t_179d1223cc3d68 1-105
+frontend/src/artifacts/finance-artifact-renderers.json
+  s_21f1e1e23483c1::t_2d1abe0c584ab1 5,15,20
+frontend/src/artifacts/generated/finance-artifact-contracts.ts
+  s_b50dd23690b4b9::t_aa651366ab0139 900
+tests/test_finance_provider_execution.py
+  s_16fe6e2224d1c6::t_a3b70d9d934918 5,169,171-180,184-188,198-207,214,219-220,229,233-235
+tests/test_uzi_392_analysis.py
+  s_21f1e1e23483c1::t_42110270089a32 4,13-14,192-229
+tests/test_uzi_392_native_methods.py
+  s_21f1e1e23483c1::t_22801ee4d957a6 232-248
+tests/test_uzi_392_vendor_runtime.py
+  s_21f1e1e23483c1::t_12fcadf7a73b0e 40-41,45-78
+tests/test_uzi_finance_pack.py
+  s_21f1e1e23483c1::t_874579d1c84b07 3,107-108,156-170,173-186,271-278
+tests/test_uzi_native_report.py
+  s_21f1e1e23483c1::t_9114a56515d485 5,8,18-23,119-172,174-177,325-546
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "c18fb33a5db855d4a5045fb47d61cbb376964c44",
+  "prompts": {},
+  "sessions": {
+    "s_09b45d85f3dd76": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fefb1-c916-7371-b016-d76e152aec11",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_16fe6e2224d1c6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec63-663a-7310-ad2b-c34fcfe8c36f",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_21f1e1e23483c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fed16-2f60-7bd0-8343-b94d3724ce9b",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_3bed2d121c3d7b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fefd9-6711-79d0-929a-019595f548e2",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_b50dd23690b4b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe341-6a16-7f11-b28e-8f8b8ba2549b",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
