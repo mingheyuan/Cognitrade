@@ -1,0 +1,47 @@
+api-doc/api-v1.md
+  s_747deb68b99771::t_f83c9f248117a7 90-91,306-316,323-324,332
+api-doc/api-v2.md
+  s_747deb68b99771::t_5c628b1db14a19 480
+domain_packs/finance_ashare/migration/UZI_3_9_2_STRICT_ALIGNMENT_TARGET.md
+  s_747deb68b99771::t_1ea74bd2b32d6a 12
+domain_packs/finance_ashare/subagents/task_intake.py
+  s_747deb68b99771::t_2174c6a56e42a6 56,58-60,65-67,72-78,291,520-533
+domain_packs/finance_ashare/subagents/uzi_methodology.py
+  s_747deb68b99771::t_7fbeed53d99f73 9
+frontend/src/artifacts/ArtifactArchive.tsx
+  s_747deb68b99771::t_9cb10746ea5654 38,51
+frontend/src/artifacts/MethodDeliveryDossier.tsx
+  s_747deb68b99771::t_170126366ecce7 14,61,64,67,105,109-110,112
+plan/uzi-3.9.2-domainpack-migration.md
+  s_747deb68b99771::t_67df8d90414063 174,224
+tests/test_finance_artifact_ui_contracts.py
+  s_21f1e1e23483c1::t_39e490e42b9b05 75
+tests/test_uzi_deep_roleplay.py
+  s_21f1e1e23483c1::t_64afc2489306b9 15-16,24-48,105,113,124,139
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "a88a6f306040a865119f4c3e0895272bef8b89a7",
+  "prompts": {},
+  "sessions": {
+    "s_21f1e1e23483c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fed16-2f60-7bd0-8343-b94d3724ce9b",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_747deb68b99771": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fed0c-771b-7be3-83ed-e77194cfc043",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
