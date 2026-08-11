@@ -88,6 +88,13 @@ def _snapshots() -> list[dict]:
             "similar_stocks",
             {"similar_stocks": [{"ticker": "601398", "name": "工商银行", "pe": 5.0, "market_cap_yi": 10000}]},
         ),
+        _row(
+            "fund_holders",
+            {
+                "top_holders": [{"name": "测试基金", "shares": 100}],
+                "fund_managers": [{"name": "测试经理", "fund": "测试基金"}],
+            },
+        ),
     ]
 
 
@@ -218,7 +225,22 @@ class Uzi392NativeMethodTests(unittest.TestCase):
 
         self.assertIn("0_basic", raw["dimensions"])
         self.assertIn("1_financials", raw["dimensions"])
-        self.assertEqual(raw["ticker"], "600000.SH")
+        self.assertEqual(raw["ticker"], "600000")
+        self.assertEqual(raw["code"], "600000")
+        self.assertEqual(raw["full"], "600000.SH")
+
+    def test_raw_builder_matches_uzi_bonus_collector_top_level_contract(self) -> None:
+        raw = build_uzi_raw(_snapshots(), "600000")
+
+        self.assertEqual(raw["similar_stocks"][0]["ticker"], "601398")
+        self.assertNotIn("similar_stocks", raw["dimensions"])
+        self.assertEqual(raw["fund_managers"][0]["name"], "测试经理")
+        self.assertIn("6_fund_holders", raw["dimensions"])
+        self.assertNotIn("fund_managers", raw["dimensions"]["6_fund_holders"]["data"])
+        self.assertEqual(
+            raw["dimensions"]["6_fund_holders"]["data"]["top_holders"][0]["name"],
+            "测试基金",
+        )
 
     def test_adapter_preserves_workflow_decision_and_tier1_results(self) -> None:
         rows = _snapshots()
@@ -250,7 +272,7 @@ class Uzi392NativeMethodTests(unittest.TestCase):
                 "pe": row.get("pe") or row.get("pe_ttm"),
                 "market_cap_yi": row.get("market_cap_yi") or row.get("market_cap"),
             }
-            for row in (raw["dimensions"]["similar_stocks"]["data"]["similar_stocks"])
+            for row in raw["similar_stocks"]
         ]
         expected = {
             "dcf": fin.compute_dcf(features, None),

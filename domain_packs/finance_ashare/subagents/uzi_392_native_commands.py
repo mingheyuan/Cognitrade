@@ -24,10 +24,15 @@ def execute_panel_only(snapshot_rows: list[dict[str, Any]], symbols: list[str]) 
         score_fns = importlib.import_module("lib.pipeline.score_fns")
         dimensions = score_fns.score_dimensions(raw)
         panel = score_fns.generate_panel(dimensions, raw)
+        synthesis = score_fns.generate_synthesis(raw, dimensions, panel)
         results.append(
             {
                 "symbol": symbol,
-                "result": {"dimensions": dimensions, "panel": panel},
+                "result": {
+                    "dimensions": dimensions,
+                    "panel": panel,
+                    "synthesis": synthesis,
+                },
                 "data_gap": [],
             }
         )

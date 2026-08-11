@@ -57,6 +57,10 @@ _PROFILES: dict[str, dict[str, Any]] = {
             "governance",
             "events",
             "lhb",
+            # UZI legacy/current pipelines always run both bonus collectors
+            # after the profile-scoped numbered dimensions.
+            "fund_holders",
+            "similar_stocks",
         ],
         "allowed_capability_tags": ["profile:lite"],
     },
@@ -118,6 +122,8 @@ _PROFILES: dict[str, dict[str, Any]] = {
             "sentiment",
             "trap",
             "contests",
+            "fund_holders",
+            "similar_stocks",
         ],
         "allowed_capability_tags": ["profile:lite", "profile:medium"],
     },
@@ -193,6 +199,8 @@ _PROFILES: dict[str, dict[str, Any]] = {
             "sentiment",
             "trap",
             "contests",
+            "fund_holders",
+            "similar_stocks",
         ],
         "allowed_capability_tags": ["profile:lite", "profile:medium", "profile:deep"],
     },

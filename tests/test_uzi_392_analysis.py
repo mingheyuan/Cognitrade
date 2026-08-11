@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import os
 from pathlib import Path
 import re
@@ -17,9 +18,11 @@ from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
     _normalize_evidence_paths,
     _normalize_payload_paths,
     _safe_error_detail,
+    _self_review_compatible_raw,
     execute_native_analysis,
 )
 from tests.test_uzi_392_native_methods import _snapshots
+from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import Uzi392FetcherRuntime
 
 
 _LITE_DIMENSIONS = {
@@ -183,6 +186,59 @@ class _RepairingEvidenceProvider(_LiteAgentProvider):
 
 
 class Uzi392AnalysisGateTests(unittest.TestCase):
+    def test_self_review_view_normalizes_nullable_strings_and_dcf_key_only(self) -> None:
+        raw = {
+            "dimensions": {
+                "0_basic": {"data": {"industry": None}},
+                "7_industry": {
+                    "data": {"cninfo_metrics": {"industry_name_match": None}}
+                },
+                "20_valuation_models": {
+                    "data": {"dcf": {"intrinsic_per_share": 42.5}}
+                },
+            }
+        }
+
+        compatible = _self_review_compatible_raw(raw)
+
+        self.assertIsNone(raw["dimensions"]["0_basic"]["data"]["industry"])
+        self.assertEqual(compatible["dimensions"]["0_basic"]["data"]["industry"], "")
+        self.assertEqual(
+            compatible["dimensions"]["7_industry"]["data"]["cninfo_metrics"][
+                "industry_name_match"
+            ],
+            "",
+        )
+        self.assertEqual(
+            compatible["dimensions"]["20_valuation_models"]["data"]["dcf"][
+                "intrinsic_value_per_share"
+            ],
+            42.5,
+        )
+        self.assertNotIn(
+            "intrinsic_value_per_share",
+            raw["dimensions"]["20_valuation_models"]["data"]["dcf"],
+        )
+        Uzi392FetcherRuntime(
+            workspace_root=Path(__file__).resolve().parents[1] / "workspace"
+        )
+        self_review = importlib.import_module("lib.self_review")
+        ctx = {
+            "raw": compatible,
+            "dims": compatible["dimensions"],
+            "syn": {},
+            "panel": {},
+            "market": "A",
+        }
+        self.assertEqual(self_review.check_industry_mapping_sanity(ctx), [])
+        self.assertEqual(self_review.check_metals_materials_populated(ctx), [])
+        self.assertFalse(
+            any(
+                "DCF 内在价值" in issue.issue
+                for issue in self_review.check_valuation_sanity(ctx)
+            )
+        )
+
     def test_unknown_dimension_evidence_retries_only_the_failed_stage(self) -> None:
         provider = _RepairingEvidenceProvider()
 

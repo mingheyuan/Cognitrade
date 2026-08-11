@@ -133,7 +133,7 @@ class UziFinancePackTests(unittest.TestCase):
                 "0_basic", "1_financials", "2_kline", "3_macro", "4_peers", "5_chain",
                 "6_research", "7_industry", "8_materials", "9_futures", "10_valuation",
                 "11_governance", "12_capital_flow", "13_policy", "14_moat", "15_events",
-                "16_lhb", "17_sentiment", "18_trap", "19_contests", "fund_holders", "similar_stocks",
+                "16_lhb", "17_sentiment", "18_trap", "19_contests", "6_fund_holders", "similar_stocks",
             },
         )
         self.assertEqual(mapping["source"]["commit"], "0acf25122cabf493e7bc442faff62ceceb7f2f02")

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import importlib
+import os
 from pathlib import Path
 import sys
 import threading
@@ -44,7 +45,7 @@ UZI_FETCHER_IDS: tuple[str, ...] = (
     "17_sentiment",
     "18_trap",
     "19_contests",
-    "fund_holders",
+    "6_fund_holders",
     "similar_stocks",
 )
 
@@ -128,7 +129,22 @@ def _fund_holders_call(
     options: dict[str, Any],
 ) -> dict[str, Any]:
     limit = options.get("limit")
-    return main(ticker, limit=int(limit) if limit is not None else None)
+    stats_top_n = options.get("fund_stats_top_n")
+    if stats_top_n is None:
+        return main(ticker, limit=int(limit) if limit is not None else None)
+    # UZI's apply_profile_to_env sets this process variable before collection.
+    # Agent OS may run different profiles concurrently, so scope the exact
+    # variable to this one native call and restore it under a lock.
+    with _FUND_PROFILE_ENV_LOCK:
+        previous = os.environ.get("UZI_FUND_STATS_TOP")
+        try:
+            os.environ["UZI_FUND_STATS_TOP"] = str(int(stats_top_n))
+            return main(ticker, limit=int(limit) if limit is not None else None)
+        finally:
+            if previous is None:
+                os.environ.pop("UZI_FUND_STATS_TOP", None)
+            else:
+                os.environ["UZI_FUND_STATS_TOP"] = previous
 
 
 def _similar_stocks_call(
@@ -162,13 +178,14 @@ _FETCHERS: dict[str, _FetcherSpec] = {
     "17_sentiment": _FetcherSpec("fetch_sentiment", _ticker_call),
     "18_trap": _FetcherSpec("fetch_trap_signals", _ticker_call),
     "19_contests": _FetcherSpec("fetch_contests", _ticker_call),
-    "fund_holders": _FetcherSpec("fetch_fund_holders", _fund_holders_call),
+    "6_fund_holders": _FetcherSpec("fetch_fund_holders", _fund_holders_call),
     "similar_stocks": _FetcherSpec("fetch_similar_stocks", _similar_stocks_call),
 }
 
 
 _IMPORT_LOCK = threading.Lock()
 _CONTEST_POLICY_LOCK = threading.Lock()
+_FUND_PROFILE_ENV_LOCK = threading.Lock()
 _INITIALIZED_ROOTS: set[Path] = set()
 
 

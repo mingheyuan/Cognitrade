@@ -52,7 +52,7 @@ fetchers:
       allowlist: COGNITRADE_SENSITIVE_SOURCE_ALLOWLIST
       credential: COGNITRADE_XUEQIU_COOKIE
       default: disabled
-  - {source_id: fund_holders, source_path: skills/deep-analysis/scripts/fetch_fund_holders.py, target_skill: uzi_fund_holders_snapshot_skill, <<: *defaults}
+  - {source_id: 6_fund_holders, source_path: skills/deep-analysis/scripts/fetch_fund_holders.py, target_skill: uzi_fund_holders_snapshot_skill, <<: *defaults}
   - {source_id: similar_stocks, source_path: skills/deep-analysis/scripts/fetch_similar_stocks.py, target_skill: uzi_similar_stocks_snapshot_skill, <<: *defaults}
 
 source_registry:

@@ -66,13 +66,19 @@ _FETCHER_BY_SNAPSHOT_TYPE = {
     "sentiment": "17_sentiment",
     "trap": "18_trap",
     "contests": "19_contests",
-    "fund_holders": "fund_holders",
+    # UZI 3.9.4's pipeline registry stores the fund-holder fetcher under
+    # ``6_fund_holders`` and spills ``fund_managers`` to raw_data's top level.
+    "fund_holders": "6_fund_holders",
     "similar_stocks": "similar_stocks",
 }
 
 _REQUIRED_DIMENSIONS: dict[str, tuple[str, ...]] = {
     "dcf": ("0_basic", "1_financials"),
-    "comps": ("0_basic", "1_financials", "similar_stocks"),
+    # ``similar_stocks`` is a raw_data top-level bonus collector in UZI's
+    # pipeline, not a numbered dimension.  An empty peer set is valid input to
+    # the native comps function, so it must not be treated as a missing
+    # dimension here.
+    "comps": ("0_basic", "1_financials"),
     "three_statement": ("1_financials",),
     "quick_lbo": ("1_financials",),
     "accretion_dilution": ("0_basic", "1_financials"),
@@ -100,6 +106,7 @@ def build_uzi_raw(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str,
     target_info = market_router.parse_ticker(symbol)
     target_symbol = target_info.full
     dimensions: dict[str, dict[str, Any]] = {}
+    top_level_fields: dict[str, Any] = {}
     for row in snapshot_rows:
         if not isinstance(row, dict):
             continue
@@ -152,15 +159,31 @@ def build_uzi_raw(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str,
                     "fields": recovered_fields,
                     "source_trace": list(row.get("source_trace") or []),
                 }
-            dimensions[fetcher_id] = native_result
+            # Match lib.pipeline.collect/run exactly: declared top-level fields
+            # are removed from the dimension payload and written beside
+            # ``dimensions``.  Keep the frozen snapshot itself untouched.
+            if fetcher_id == "6_fund_holders":
+                fund_managers = native_data.pop("fund_managers", None)
+                if isinstance(fund_managers, list):
+                    top_level_fields["fund_managers"] = list(fund_managers)
+                native_result["data"] = native_data
+                dimensions[fetcher_id] = native_result
+            elif fetcher_id == "similar_stocks":
+                similar_stocks = native_data.get("similar_stocks")
+                if isinstance(similar_stocks, list):
+                    top_level_fields["similar_stocks"] = list(similar_stocks)
+            else:
+                dimensions[fetcher_id] = native_result
+    basic_result = dimensions.get("0_basic") or {}
+    basic_market = basic_result.get("market")
     raw: dict[str, Any] = {
-        "ticker": target_info.full,
-        "market": target_info.market,
+        "ticker": symbol,
+        "market": basic_market if basic_market in {"A", "H", "U"} else target_info.market,
+        "code": target_info.code,
+        "full": target_info.full,
         "dimensions": dimensions,
+        **top_level_fields,
     }
-    holders = (dimensions.get("fund_holders") or {}).get("data") or {}
-    if isinstance(holders, dict) and isinstance(holders.get("holders"), list):
-        raw["fund_managers"] = list(holders["holders"])
     return raw
 
 
@@ -228,7 +251,7 @@ def _execute_stock_method(
     if method_id == "dcf":
         result = fin.compute_dcf(features, assumptions or None)
     elif method_id == "comps":
-        result = fin.build_comps_table(features, _peer_features(dimensions))
+        result = fin.build_comps_table(features, _peer_features(raw))
     elif method_id == "three_statement":
         result = fin.project_three_stmt(features, assumptions)
     elif method_id == "quick_lbo":
@@ -237,7 +260,7 @@ def _execute_stock_method(
         target = dict(assumptions.pop("target"))
         result = fin.accretion_dilution(features, target, **assumptions)
     elif method_id == "initiation_report":
-        result = workflow.build_initiating_coverage(features, raw, fin.compute_dcf(features), fin.build_comps_table(features, _peer_features(dimensions)))
+        result = workflow.build_initiating_coverage(features, raw, fin.compute_dcf(features), fin.build_comps_table(features, _peer_features(raw)))
     elif method_id == "earnings_review":
         result = workflow.build_earnings_analysis(features, raw, consensus=assumptions.get("consensus"))
     elif method_id == "catalyst_calendar":
@@ -251,7 +274,7 @@ def _execute_stock_method(
     elif method_id == "sector_review":
         result = workflow.build_sector_overview(features, raw)
     elif method_id == "ic_memo":
-        result = deep.build_ic_memo(features, raw, fin.compute_dcf(features), fin.build_comps_table(features, _peer_features(dimensions)))
+        result = deep.build_ic_memo(features, raw, fin.compute_dcf(features), fin.build_comps_table(features, _peer_features(raw)))
     elif method_id == "porter_bcg":
         result = deep.build_competitive_analysis(features, raw)
     elif method_id == "dd_checklist":
@@ -266,7 +289,7 @@ def _execute_stock_method(
         result = importlib.import_module("lib.tier1.earnings_preview").build_earnings_preview(features, raw)
     elif method_id == "model_update":
         dcf = fin.compute_dcf(features)
-        comps = fin.build_comps_table(features, _peer_features(dimensions))
+        comps = fin.build_comps_table(features, _peer_features(raw))
         result = importlib.import_module("lib.tier1.model_update").build_model_update(features, raw, assumptions, dcf, comps)
     else:
         raise AssertionError(method_id)
@@ -364,9 +387,8 @@ def _explicit_input_gap(method_id: str, assumptions: dict[str, Any], features: d
     return gaps
 
 
-def _peer_features(dimensions: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    data = (dimensions.get("similar_stocks") or {}).get("data") or {}
-    peers = data.get("similar_stocks") if isinstance(data, dict) else None
+def _peer_features(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    peers = raw.get("similar_stocks")
     result: list[dict[str, Any]] = []
     for row in peers or []:
         if not isinstance(row, dict):

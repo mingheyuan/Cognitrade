@@ -83,7 +83,7 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
                     main.assert_called_once_with("银行")
                 elif fetcher_id == "9_futures":
                     main.assert_called_once_with("银行", dependencies["8_materials"]["data"]["materials_detail"])
-                elif fetcher_id == "fund_holders":
+                elif fetcher_id == "6_fund_holders":
                     main.assert_called_once_with("600000", limit=7)
                 elif fetcher_id == "similar_stocks":
                     main.assert_called_once_with("600000", top_n=6)
@@ -102,6 +102,29 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
                 dependencies=dependencies,
             )
         main.assert_called_once_with("白酒", dependencies["8_materials"]["data"]["materials_detail"])
+
+    def test_fund_holder_profile_env_is_scoped_to_the_native_call(self) -> None:
+        observed: list[str | None] = []
+
+        def main(_ticker, *, limit=None):
+            observed.append(os.environ.get("UZI_FUND_STATS_TOP"))
+            return {"data": {"fund_managers": []}}
+
+        with (
+            patch.dict(os.environ, {"UZI_FUND_STATS_TOP": "77"}),
+            patch(
+                "domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime.importlib.import_module",
+                return_value=SimpleNamespace(main=main),
+            ),
+        ):
+            self.runtime.collect(
+                "6_fund_holders",
+                ticker="600000",
+                options={"fund_stats_top_n": 5},
+            )
+            self.assertEqual(os.environ.get("UZI_FUND_STATS_TOP"), "77")
+
+        self.assertEqual(observed, ["5"])
 
     def test_unknown_fetcher_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unsupported UZI 3.9.4 fetcher"):

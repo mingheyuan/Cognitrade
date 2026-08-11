@@ -119,7 +119,7 @@ _UZI_FETCHER_BY_SNAPSHOT_TYPE = {
     "sentiment": "17_sentiment",
     "trap": "18_trap",
     "contests": "19_contests",
-    "fund_holders": "fund_holders",
+    "fund_holders": "6_fund_holders",
     "similar_stocks": "similar_stocks",
 }
 _SCREEN_BASE_TYPES = ("market", "fundamental", "notice")
@@ -165,6 +165,14 @@ _UZI_MAX_WORKERS = 6
 # Pinned UZI run_real_test.py gives its parallel fetcher wave a five-minute
 # hard ceiling.  Keep that native boundary inside the Pack instead of applying
 # a Tool Registry timeout to the whole Agent OS capability.
+_UZI_FETCHER_WAVE_TIMEOUT_BY_PROFILE = {
+    # Current UZI pipeline collection has no aggregate cutoff. Agent OS keeps
+    # a finite host-safety boundary, but it must not truncate a supported
+    # profile before that profile's own documented upper duration.
+    "lite": 300.0,
+    "medium": 480.0,
+    "deep": 1200.0,
+}
 _UZI_FETCHER_WAVE_TIMEOUT_SECONDS = 300.0
 _SNAPSHOT_PROVIDER_HINTS = {
     "market": "akshare",
@@ -229,6 +237,14 @@ def normalize_json_value(value: Any) -> Any:
     if str(value) in {"<NA>", "NaT", "nan"}:
         return None
     return value
+
+
+def _uzi_fetcher_wave_timeout_seconds(profile: str | None) -> float:
+    selected = str(profile or "").strip().lower()
+    return _UZI_FETCHER_WAVE_TIMEOUT_BY_PROFILE.get(
+        selected,
+        _UZI_FETCHER_WAVE_TIMEOUT_SECONDS,
+    )
 
 
 def collect_snapshots(
@@ -337,13 +353,21 @@ def collect_snapshots(
             results[index] = cached
             emit_progress(phase="cache_hit", snapshot_type=snapshot_type)
     if pending_tasks:
+        wave_timeout_seconds = _uzi_fetcher_wave_timeout_seconds(research_profile)
         initialize_akshare_js_runtime()
         # UZI runs dimension 0 first because the dependent macro/industry/
         # futures/policy dimensions consume the resolved real industry.
         basic_tasks = [task for task in pending_tasks if task[2] == "market"]
         for index, symbol, snapshot_type in basic_tasks:
             emit_progress(phase="collecting", snapshot_type=snapshot_type)
-            result = _run_snapshot_skill(query, symbol, snapshot_type, providers)
+            result = _run_snapshot_skill(
+                query,
+                symbol,
+                snapshot_type,
+                providers,
+                None,
+                research_profile,
+            )
             results[index] = result
             _save_snapshot_cache(
                 cache_root=cache_root,
@@ -361,65 +385,29 @@ def collect_snapshots(
             and index in results
             and (raw := _uzi_raw_result(results[index])) is not None
         }
-        # UZI main makes dimension 9 depend on dimension 8 so the futures
-        # contract is the material actually identified for the company rather
-        # than a generic hard-coded commodity. Material tasks therefore form
-        # a small first wave; all remaining independent tasks stay parallel.
-        material_tasks = [task for task in pending_tasks if task[2] == "materials"]
-        for index, symbol, snapshot_type in material_tasks:
-            emit_progress(phase="collecting", snapshot_type=snapshot_type)
-            dependencies = (
-                {"0_basic": basic_by_symbol[symbol]}
-                if symbol in basic_by_symbol
-                else None
-            )
-            result = _run_snapshot_skill(
-                query,
-                symbol,
-                snapshot_type,
-                providers,
-                dependencies,
-            )
-            results[index] = result
-            _save_snapshot_cache(
-                cache_root=cache_root,
-                snapshot_type=snapshot_type,
-                target=symbol,
-                profile=research_profile,
-                snapshot=result,
-            )
-            emit_progress(phase="completed", snapshot_type=snapshot_type)
-        pending_tasks = [task for task in pending_tasks if task[2] != "materials"]
-        material_by_symbol = {
-            symbol: raw
-            for index, symbol, snapshot_type in tasks
-            if snapshot_type == "materials"
-            and index in results
-            and (raw := _uzi_raw_result(results[index])) is not None
-        }
-        material_snapshot_by_symbol = {
-            symbol: results[index]
-            for index, symbol, snapshot_type in tasks
-            if snapshot_type == "materials" and index in results
-        }
+        # Match UZI 3.9.4's dependency waves.  Only the four context-dependent
+        # dimensions wait for the independent wave; materials belongs to the
+        # six-worker independent pool and is then passed into futures.
+        dependent_types = {"macro", "industry", "futures", "policy"}
+        independent_tasks = [
+            task for task in pending_tasks if task[2] not in dependent_types
+        ]
+        dependent_tasks = [
+            task for task in pending_tasks if task[2] in dependent_types
+        ]
         # UZI's native collectors use six workers. Keep the same in-stock
         # fan-out so provider pressure and cold-cache latency match upstream.
         requested_workers = _UZI_MAX_WORKERS if max_workers is None else max(int(max_workers), 1)
-        if pending_tasks:
+        if independent_tasks:
             executor = ThreadPoolExecutor(
-                max_workers=min(requested_workers, len(pending_tasks)),
+                max_workers=min(requested_workers, len(independent_tasks)),
                 thread_name_prefix="finance-snapshot",
             )
             futures = {}
-            for index, symbol, snapshot_type in pending_tasks:
+            for index, symbol, snapshot_type in independent_tasks:
                 dependencies: dict[str, dict[str, Any]] = {}
                 if symbol in basic_by_symbol:
                     dependencies["0_basic"] = basic_by_symbol[symbol]
-                if snapshot_type == "futures":
-                    if _uses_uzi_fetcher(snapshot_type) and symbol in material_by_symbol:
-                        dependencies["8_materials"] = material_by_symbol[symbol]
-                    elif symbol in material_snapshot_by_symbol:
-                        dependencies["materials"] = material_snapshot_by_symbol[symbol]
                 future = executor.submit(
                     _run_snapshot_skill,
                     query,
@@ -427,15 +415,18 @@ def collect_snapshots(
                     snapshot_type,
                     providers,
                     dependencies or None,
+                    research_profile,
                 )
                 futures[future] = (index, symbol, snapshot_type)
-            if pending_tasks:
-                emit_progress(phase="collecting", snapshot_type=pending_tasks[0][2])
+            emit_progress(
+                phase="collecting",
+                snapshot_type=independent_tasks[0][2],
+            )
             try:
                 try:
                     for future in as_completed(
                         futures,
-                        timeout=_UZI_FETCHER_WAVE_TIMEOUT_SECONDS,
+                        timeout=wave_timeout_seconds,
                     ):
                         index, symbol, snapshot_type = futures[future]
                         if _cancelled(cancellation):
@@ -464,7 +455,7 @@ def collect_snapshots(
                                 query=query,
                                 symbol=symbol,
                                 snapshot_type=snapshot_type,
-                                timeout_seconds=_UZI_FETCHER_WAVE_TIMEOUT_SECONDS,
+                                timeout_seconds=wave_timeout_seconds,
                             )
                         results[index] = result
                         _save_snapshot_cache(
@@ -477,6 +468,59 @@ def collect_snapshots(
                         emit_progress(phase="completed", snapshot_type=snapshot_type)
             finally:
                 executor.shutdown(wait=False, cancel_futures=True)
+        material_by_symbol = {
+            symbol: raw
+            for index, symbol, snapshot_type in tasks
+            if snapshot_type == "materials"
+            and index in results
+            and (raw := _uzi_raw_result(results[index])) is not None
+        }
+        material_snapshot_by_symbol = {
+            symbol: results[index]
+            for index, symbol, snapshot_type in tasks
+            if snapshot_type == "materials" and index in results
+        }
+        dependent_order = {
+            snapshot_type: fetcher_id
+            for snapshot_type, fetcher_id in _UZI_FETCHER_BY_SNAPSHOT_TYPE.items()
+            if snapshot_type in dependent_types
+        }
+        symbol_order = {symbol: index for index, symbol in enumerate(resolved_symbols)}
+        for index, symbol, snapshot_type in sorted(
+            dependent_tasks,
+            key=lambda task: (
+                symbol_order.get(task[1], len(symbol_order)),
+                dependent_order.get(task[2], task[2]),
+            ),
+        ):
+            if _cancelled(cancellation):
+                break
+            emit_progress(phase="collecting", snapshot_type=snapshot_type)
+            dependencies: dict[str, dict[str, Any]] = {}
+            if symbol in basic_by_symbol:
+                dependencies["0_basic"] = basic_by_symbol[symbol]
+            if snapshot_type == "futures":
+                if _uses_uzi_fetcher(snapshot_type) and symbol in material_by_symbol:
+                    dependencies["8_materials"] = material_by_symbol[symbol]
+                elif symbol in material_snapshot_by_symbol:
+                    dependencies["materials"] = material_snapshot_by_symbol[symbol]
+            result = _run_snapshot_skill(
+                query,
+                symbol,
+                snapshot_type,
+                providers,
+                dependencies or None,
+                research_profile,
+            )
+            results[index] = result
+            _save_snapshot_cache(
+                cache_root=cache_root,
+                snapshot_type=snapshot_type,
+                target=symbol,
+                profile=research_profile,
+                snapshot=result,
+            )
+            emit_progress(phase="completed", snapshot_type=snapshot_type)
     snapshots.extend(results[index] for index, _symbol, _snapshot_type in tasks if index in results)
     snapshots.extend(
         _missing_scope_snapshot(query=query, snapshot_type=snapshot_type)
@@ -492,6 +536,7 @@ def _run_snapshot_skill(
     snapshot_type: str,
     provider_registry: VendorProviderRegistry | None = None,
     dependencies: dict[str, dict[str, Any]] | None = None,
+    research_profile: str | None = None,
 ) -> dict[str, Any]:
     if _uses_uzi_fetcher(snapshot_type):
         raw_basic = (dependencies or {}).get("0_basic") or {}
@@ -505,6 +550,7 @@ def _run_snapshot_skill(
                     provider_registry=provider_registry,
                     industry=industry,
                     dependencies=dependencies,
+                    research_profile=research_profile,
                 )
             )
         )
@@ -543,6 +589,7 @@ def _run_uzi_fetcher_snapshot(
     provider_registry: VendorProviderRegistry | None,
     industry: str | None = None,
     dependencies: dict[str, dict[str, Any]] | None = None,
+    research_profile: str | None = None,
 ) -> dict[str, Any]:
     fetcher_id = _UZI_FETCHER_BY_SNAPSHOT_TYPE[snapshot_type]
     settings = (
@@ -563,7 +610,15 @@ def _run_uzi_fetcher_snapshot(
     # one real full-market response is downloaded once per cache key.
     install_uzi_shared_source_cache(settings.workspace_root)
     options: dict[str, Any] | None = None
-    if fetcher_id == "19_contests":
+    if fetcher_id == "6_fund_holders":
+        profile_stats_top_n = {"lite": 5, "medium": 20, "deep": 100}
+        options = {
+            "fund_stats_top_n": profile_stats_top_n.get(
+                str(research_profile or "").strip().lower(),
+                20,
+            )
+        }
+    elif fetcher_id == "19_contests":
         allowlist = {str(item).strip().lower() for item in settings.sensitive_source_allowlist}
         xueqiu_enabled = (
             settings.sensitive_sources_enabled

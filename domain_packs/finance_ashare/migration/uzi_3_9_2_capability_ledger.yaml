@@ -37,6 +37,33 @@ upstream_3_9_4_regressions:
   - {id: valuation_cninfo_market_fallback, status: source_parity, target: uzi_valuation_snapshot_skill}
   - {id: registry_matches_provider_shapes, status: source_parity, target: uzi_source_registry}
 
+integration_contracts:
+  raw_data_shape:
+    status: source_parity
+    fields: [ticker, market, code, full, dimensions, fund_managers, similar_stocks]
+    bonus_dimension_key: 6_fund_holders
+    top_level_spill_fields: [fund_managers, similar_stocks]
+    fund_stats_top_n_by_profile: {lite: 5, medium: 20, deep: 100}
+  collection_waves:
+    status: source_parity_with_host_boundary
+    workers: 6
+    wave_1: [0_basic]
+    wave_2: independent_fetchers
+    wave_3_sorted: [13_policy, 3_macro, 7_industry, 9_futures]
+    host_safety_timeout_seconds: {lite: 300, medium: 480, deep: 1200}
+  self_review_compatibility_view:
+    status: upstream_bug_compatibility
+    original_evidence_mutated: false
+    nullable_string_defaults:
+      - dimensions.0_basic.data.industry
+      - dimensions.7_industry.data.cninfo_metrics.industry_name_match
+    dcf_output_alias:
+      producer: intrinsic_per_share
+      upstream_self_review_reader: intrinsic_value_per_share
+  panel_only:
+    status: source_parity
+    output: [dimensions, panel, synthesis]
+
 root_modes:
   school_lock:
     status: source_parity
@@ -75,7 +102,7 @@ fetchers:
   - {id: 17_sentiment, target: sentiment_snapshot_skill, status: source_parity}
   - {id: 18_trap, target: uzi_trap_snapshot_skill, status: source_parity}
   - {id: 19_contests, target: uzi_contests_snapshot_skill, status: source_parity, sensitive_source: explicit_enable_only}
-  - {id: fund_holders, target: uzi_fund_holders_snapshot_skill, status: source_parity}
+  - {id: 6_fund_holders, target: uzi_fund_holders_snapshot_skill, status: source_parity}
   - {id: similar_stocks, target: uzi_similar_stocks_snapshot_skill, status: source_parity}
 
 commands:

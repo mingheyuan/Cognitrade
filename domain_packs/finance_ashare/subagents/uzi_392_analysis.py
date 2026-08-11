@@ -2095,6 +2095,48 @@ def _profile_empty_dimension_issues(
     return issues
 
 
+def _self_review_compatible_raw(raw: dict[str, Any]) -> dict[str, Any]:
+    """Apply UZI's declared empty-string defaults without mutating evidence.
+
+    Two upstream checks use ``dict.get(key, "")`` and then perform substring
+    membership.  A provider can legitimately return the key with a JSON null,
+    in which case Python returns ``None`` instead of the declared empty-string
+    default and the check itself crashes.  Normalizing only those nullable
+    string leaves preserves the exact UZI predicates; the original raw payload
+    remains unchanged and data_integrity still reports the missing industry.
+    """
+
+    compatible = deepcopy(raw)
+    dimensions = compatible.get("dimensions")
+    if not isinstance(dimensions, dict):
+        return compatible
+    basic = dimensions.get("0_basic")
+    if isinstance(basic, dict) and isinstance(basic.get("data"), dict):
+        if basic["data"].get("industry") is None:
+            basic["data"]["industry"] = ""
+    industry = dimensions.get("7_industry")
+    if isinstance(industry, dict) and isinstance(industry.get("data"), dict):
+        metrics = industry["data"].get("cninfo_metrics")
+        if isinstance(metrics, dict) and metrics.get("industry_name_match") is None:
+            metrics["industry_name_match"] = ""
+    valuation_models = dimensions.get("20_valuation_models")
+    if isinstance(valuation_models, dict) and isinstance(
+        valuation_models.get("data"), dict
+    ):
+        dcf = valuation_models["data"].get("dcf")
+        if (
+            isinstance(dcf, dict)
+            and "intrinsic_value_per_share" not in dcf
+            and "intrinsic_per_share" in dcf
+        ):
+            # UZI 3.9.4's DCF producer calls this ``intrinsic_per_share``;
+            # check_valuation_sanity accidentally reads the older
+            # ``intrinsic_value_per_share`` spelling.  Alias it only in the
+            # self-review view so a valid native DCF is not reported as zero.
+            dcf["intrinsic_value_per_share"] = dcf["intrinsic_per_share"]
+    return compatible
+
+
 def run_native_self_review(
     *,
     symbol: str,
@@ -2117,14 +2159,15 @@ def run_native_self_review(
     enabled_dimension_numbers = {
         int(key.split("_", 1)[0]) for key in enabled_dimension_keys
     }
+    review_raw = _self_review_compatible_raw(raw)
     ctx = {
         "ticker": symbol,
         "market": raw.get("market", "A"),
-        "raw": raw,
+        "raw": review_raw,
         "syn": synthesis,
         "panel": panel,
         "ag": agent_analysis,
-        "dims": raw.get("dimensions") or {},
+        "dims": review_raw.get("dimensions") or {},
     }
     issues: list[dict[str, Any]] = []
     with _uzi_native_environment(profile=profile, school=school):

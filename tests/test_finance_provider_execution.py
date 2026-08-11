@@ -146,7 +146,11 @@ class FinanceProviderExecutionTests(unittest.TestCase):
         try:
             with (
                 patch.object(snapshot_collector, "_run_snapshot_skill", side_effect=blocked_snapshot),
-                patch.object(snapshot_collector, "_UZI_FETCHER_WAVE_TIMEOUT_SECONDS", 0.01),
+                patch.object(
+                    snapshot_collector,
+                    "_uzi_fetcher_wave_timeout_seconds",
+                    return_value=0.01,
+                ),
             ):
                 rows = snapshot_collector.collect_snapshots(
                     query="分析 600000",
@@ -161,6 +165,69 @@ class FinanceProviderExecutionTests(unittest.TestCase):
         self.assertEqual(rows[0]["quality_status"], "data_gap")
         self.assertTrue(rows[0]["facts"]["_uzi_raw_result"]["_timeout"])
         self.assertIn("timeout", rows[0]["degrade_reason"])
+
+    def test_uzi_fetcher_wave_timeout_follows_research_profile(self) -> None:
+        self.assertEqual(snapshot_collector._uzi_fetcher_wave_timeout_seconds("lite"), 300)
+        self.assertEqual(snapshot_collector._uzi_fetcher_wave_timeout_seconds("medium"), 480)
+        self.assertEqual(snapshot_collector._uzi_fetcher_wave_timeout_seconds("deep"), 1200)
+
+    def test_uzi_collection_uses_native_independent_then_dependent_waves(self) -> None:
+        started: list[str] = []
+        finished: set[str] = set()
+        seen_dependencies: dict[str, dict] = {}
+
+        def fake_snapshot(
+            _query,
+            symbol,
+            snapshot_type,
+            _providers,
+            dependencies=None,
+            _research_profile=None,
+        ):
+            started.append(snapshot_type)
+            seen_dependencies[snapshot_type] = dict(dependencies or {})
+            result = {
+                "snapshot_type": snapshot_type,
+                "symbol": symbol,
+                "facts": {
+                    "availability": "available",
+                    "_uzi_raw_result": {
+                        "data": {
+                            "industry": "半导体",
+                            "materials_detail": [{"name": "硅", "futures_code": "SI0"}],
+                        }
+                    },
+                },
+                "quality_status": "available",
+            }
+            if snapshot_type in {"policy", "macro", "industry", "futures"}:
+                self.assertTrue({"market", "materials", "valuation", "capital_flow"} <= finished)
+            finished.add(snapshot_type)
+            return result
+
+        requested = [
+            "market",
+            "materials",
+            "valuation",
+            "capital_flow",
+            "policy",
+            "macro",
+            "industry",
+            "futures",
+        ]
+        with patch.object(snapshot_collector, "_run_snapshot_skill", side_effect=fake_snapshot):
+            rows = snapshot_collector.collect_snapshots(
+                query="分析 688041",
+                symbols=["688041"],
+                snapshot_types=requested,
+                research_profile="deep",
+                max_workers=1,
+            )
+
+        self.assertEqual({row["snapshot_type"] for row in rows}, set(requested))
+        self.assertEqual(started[-4:], ["policy", "macro", "industry", "futures"])
+        self.assertIn("0_basic", seen_dependencies["policy"])
+        self.assertIn("8_materials", seen_dependencies["futures"])
 
 
 if __name__ == "__main__":

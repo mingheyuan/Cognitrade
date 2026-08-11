@@ -62,7 +62,7 @@
 | `17_sentiment` | `fetch_sentiment.py` | `sentiment_snapshot_skill` | source_parity | exact invocation/object identity test |
 | `18_trap` | `fetch_trap_signals.py` | `uzi_trap_snapshot_skill` | source_parity | exact invocation/object identity test |
 | `19_contests` | `fetch_contests.py` | `uzi_contests_snapshot_skill` | source_parity | exact invocation + sensitive-source gate test |
-| `fund_holders` | `fetch_fund_holders.py` | `uzi_fund_holders_snapshot_skill` | source_parity | exact invocation/object identity test |
+| `6_fund_holders` | `fetch_fund_holders.py` | `uzi_fund_holders_snapshot_skill` | source_parity | exact invocation/object identity test |
 | `similar_stocks` | `fetch_similar_stocks.py` | `uzi_similar_stocks_snapshot_skill` | source_parity | exact invocation/object identity test |
 
 ### 4.1 来源注册表
@@ -81,7 +81,7 @@
 |---|---|---|---|
 | `analyze-stock` | 完整股票分析 | source_parity | 完整 Stage 1/2/3/4 与报告门 |
 | `quick-scan` | 独立快速扫描 | source_parity | 仅 1/2/10/18 维、10 席、Markdown、无 HTML |
-| `panel-only` | 独立评审团 | source_parity | 上游席位和输出契约 |
+| `panel-only` | 独立评审团 | source_parity | 上游评分、完整 panel 与 synthesis 输出契约 |
 | `scan-trap` | 杀猪盘扫描 | source_parity | 8 个信号与风险等级 |
 | `dcf` | DCF | source_parity | 上游参数和输出 |
 | `comps` | 可比公司 | source_parity | 上游 peers 输入与输出 |
@@ -220,3 +220,10 @@
 7. 本文验收矩阵填写实际测试命令、产物路径和提交证据。
 
 在全部条件满足前，项目不得声明“与 UZI 3.9.4 完全对齐”。
+
+## 12. Agent OS 运行边界
+
+- `raw_data` 严格保留上游 `ticker/market/code/full/dimensions`，`6_fund_holders` 作为维度，`fund_managers` 与 `similar_stocks` 按上游放在顶层；ArtifactBoard 快照类型仍使用稳定业务名 `fund_holders`。基金统计档位同步 UZI：lite/medium/deep 分别计算前 5/20/100 家。
+- 采集顺序严格使用 UZI 的 basic → 六线程独立波次 → 排序后的依赖波次；Agent OS 仅保留有限主机安全窗口，lite/medium/deep 分别为 300/480/1200 秒，不改变 fetcher 内部 provider、参数、兜底或返回对象。
+- UZI 3.9.4 自审的两个字符串检查会在 JSON `null` 上触发 `NoneType is not iterable`；Agent OS 只在自审副本中恢复函数声明的空字符串默认值，原始证据、完整性检查与报告数据均不改写。
+- UZI 3.9.4 DCF 生产者输出 `intrinsic_per_share`，而自审读取旧名 `intrinsic_value_per_share`；Agent OS 只在自审副本中提供同义键。真实值为 `None/0` 时原生 warning 继续保留，不生成替代估值。

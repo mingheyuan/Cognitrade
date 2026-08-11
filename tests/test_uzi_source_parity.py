@@ -83,6 +83,31 @@ class UziSourceParityTests(unittest.TestCase):
         )
         self.assertEqual(snapshot["facts"]["_uzi_raw_result"], upstream)
 
+    def test_fund_holder_snapshot_applies_the_exact_profile_statistics_scope(self) -> None:
+        upstream = {
+            "ticker": "688256.SH",
+            "data": {"fund_managers": []},
+            "source": "akshare:fund_portfolio_hold_em",
+            "fallback": False,
+        }
+
+        with patch.object(Uzi392FetcherRuntime, "collect", return_value=upstream) as collect:
+            snapshot_collector._run_uzi_fetcher_snapshot(
+                query="分析寒武纪",
+                symbol="688256",
+                snapshot_type="fund_holders",
+                provider_registry=None,
+                research_profile="deep",
+            )
+
+        collect.assert_called_once_with(
+            "6_fund_holders",
+            ticker="688256",
+            industry=None,
+            dependencies=None,
+            options={"fund_stats_top_n": 100},
+        )
+
     def test_uzi_resource_sensitive_fetchers_share_one_serial_execution_lane(self) -> None:
         state_lock = Lock()
         active = 0
