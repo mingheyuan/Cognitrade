@@ -1,0 +1,77 @@
+domain_packs/finance_ashare/reporting/__init__.py
+  s_6e5a3643df6225::t_b2d3fad0a941ba 6,10-11,17,21-22
+domain_packs/finance_ashare/reporting/uzi_native_report.py
+  s_6e5a3643df6225::t_980fe39abfe1fc 8-9,18,35-38,86,92-112,135-225,296-378,382,386-387
+domain_packs/finance_ashare/subagents/runtime.py
+  s_838ebd2a1284bd::t_d6263bc2703e29 64-74,90-95,753,850,874,943,967-1043,1234-1236
+domain_packs/finance_ashare/subagents/task_intake.py
+  s_64986722d3cae0::t_7c00f415106a08 98,135-147,190-191,273-281,316,386-390,471-489,582
+domain_packs/finance_ashare/subagents/uzi_agent_roleplay.py
+  s_6e5a3643df6225::t_43ac1dfcfe69bf 421,433,438-441
+frontend/src/api-client.ts
+  s_64986722d3cae0::t_0819dce1906f47 42,208-209,212-213
+frontend/src/components/Funds.tsx
+  s_6e5a3643df6225::t_977051e55ad34e 102
+frontend/src/components/ResearchComposer.tsx
+  s_21f1e1e23483c1::t_28bdc41ef56f09 23,26,39,94,171,198-204
+frontend/src/components/Topbar.tsx
+  s_6e5a3643df6225::t_76c53b44f61fd5 26
+frontend/src/components/UziMethods.tsx
+  s_6e5a3643df6225::t_de1416cbfc54ac 80,86-87,112,151,154-159,185,191,202,226,246-247,269-270,284-287
+frontend/src/components/Workbench.tsx
+  s_64986722d3cae0::t_2839878906dd38 43,200,214-215,218,236,479-481
+frontend/src/data.ts
+  s_6e5a3643df6225::t_ba0570a391657d 26
+frontend/src/research-contracts.ts
+  s_6e5a3643df6225::t_0f557c09e6b568 23
+research_system/api/routes/runs.py
+  s_6e5a3643df6225::t_a46aba7af0b9a0 12,15-16,179-180,190,234-272
+tests/test_agent_os_task_intake.py
+  s_6e5a3643df6225::t_549204404f8161 173,175,177-178
+tests/test_uzi_finance_pack.py
+  s_6e5a3643df6225::t_d72fd970a1f41e 394
+tests/test_uzi_native_report.py
+  s_6e5a3643df6225::t_fa17e420a6d201 13,107,228-269
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "ad123e7f9955eaf504e9deb959bd7b301ea986cd",
+  "prompts": {},
+  "sessions": {
+    "s_21f1e1e23483c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fed16-2f60-7bd0-8343-b94d3724ce9b",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_64986722d3cae0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019feee0-e82a-74f0-a383-369a796c3ca4",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_6e5a3643df6225": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019feec5-1b5f-70a2-8c04-668c22e2b567",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_838ebd2a1284bd": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019feed4-172b-7ae1-a524-7f5f6d851b87",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
