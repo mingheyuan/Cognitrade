@@ -40,6 +40,7 @@ import {
   statusLabel,
 } from '../live-data'
 import type { ResearchIntent } from '../research-contracts'
+import type { RunReportFormat } from '../api-client'
 import { ArtifactArchive } from '../artifacts/ArtifactArchive'
 import { BusinessDataView } from '../artifacts/BusinessDataView'
 import { IntentDeliveryDossier } from '../artifacts/IntentDeliveryDossier'
@@ -196,7 +197,7 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
     liveEvents,
     exportRunReport,
   } = useCognitrade()
-  const [exportingReport, setExportingReport] = useState<'' | 'html' | 'pdf'>('')
+  const [exportingReport, setExportingReport] = useState<'' | RunReportFormat>('')
   const [reportExportError, setReportExportError] = useState('')
   const report = reportFromDetail(selectedRun)
   const evidences = evidenceFromReport(report)
@@ -210,9 +211,11 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
   const scorecard = asRecord(report.scorecard || report.screening_scorecard)
   const methodologies = Array.isArray(report.methodologies) ? report.methodologies.map(asRecord) : []
   const artifactBackedReport = asString(report.protocol) === 'agent_os' && Array.isArray(report.final_artifact_ids)
-  const hasUziReport = asString(report.delivery_type) === 'uzi_native_3_9_2'
+  const deliveryType = asString(report.delivery_type)
+  const hasUziReport = new Set(['uzi_native_3_9_4', 'uzi_versus_3_9_4', 'uzi_portfolio_3_9_4']).has(deliveryType)
     && report.report_allowed === true
     && asNumber(report.critical_count) === 0
+  const hasUziSingleReport = deliveryType === 'uzi_native_3_9_4'
   const updatedAt = selectedRun?.events.events.at(-1)?.created_at
   const snapshot = asRecord(selectedRun?.replay.snapshot)
   const isConversation = intent === 'core.conversation.answer' || asString(snapshot.request_kind) === 'conversation'
@@ -230,7 +233,7 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
     ? report.evidence.filter((item) => Boolean(asRecord(asRecord(item).metadata).degraded)).length
     : 0
 
-  const handleReportExport = async (format: 'html' | 'pdf') => {
+  const handleReportExport = async (format: RunReportFormat) => {
     if (!selectedRunId || exportingReport) return
     setExportingReport(format)
     setReportExportError('')
@@ -473,6 +476,9 @@ export function Workbench({ onSubmit, onSelectEvidence }: WorkbenchProps) {
                       {exportingReport === 'pdf' ? <LoaderCircle className="is-spinning" size={15} /> : <Download size={15} />}
                       {exportingReport === 'pdf' ? '正在生成' : '下载 PDF'}
                     </button>
+                    {hasUziSingleReport && <button type="button" onClick={() => void handleReportExport('share-card')} disabled={Boolean(exportingReport)}><Download size={15} />{exportingReport === 'share-card' ? '正在生成' : '分享卡 PNG'}</button>}
+                    {hasUziSingleReport && <button type="button" onClick={() => void handleReportExport('war-report')} disabled={Boolean(exportingReport)}><Download size={15} />{exportingReport === 'war-report' ? '正在生成' : '战报 PNG'}</button>}
+                    {hasUziSingleReport && <button type="button" onClick={() => void handleReportExport('one-liner')} disabled={Boolean(exportingReport)}><Download size={15} />{exportingReport === 'one-liner' ? '正在生成' : 'One-liner'}</button>}
                   </div>
                   {reportExportError && <p role="alert">{reportExportError}</p>}
                 </section>

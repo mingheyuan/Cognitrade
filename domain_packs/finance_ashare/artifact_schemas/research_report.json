@@ -84,6 +84,13 @@
     "delivery_type": {
       "type": "string"
     },
+    "portfolio_name": {"type": "string"},
+    "portfolio_holdings": {
+      "type": "array",
+      "items": {"type": "object"}
+    },
+    "research_profile": {"type": ["string", "null"]},
+    "school": {"type": ["string", "null"]},
     "candidates": {
       "type": "array",
       "items": {"type": "object"}

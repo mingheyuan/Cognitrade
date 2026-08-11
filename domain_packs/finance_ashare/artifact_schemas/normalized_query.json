@@ -24,6 +24,9 @@
       "type": "array",
       "items": {"type": "object"}
     },
+    "portfolio_name": {
+      "type": ["string", "null"]
+    },
     "benchmark_return": {
       "type": ["number", "null"]
     },

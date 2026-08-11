@@ -70,6 +70,7 @@ export type NormalizedQueryContent = {
   "fund_codes"?: Array<string>;
   "fund_category"?: string | null;
   "portfolio_holdings"?: Array<Record<string, unknown>>;
+  "portfolio_name"?: string | null;
   "benchmark_return"?: number | null;
   "rebalance_targets"?: Record<string, unknown> | null;
   "drift_threshold"?: number | null;
@@ -763,6 +764,10 @@ export type ResearchReportContent = {
   "critical_count"?: number;
   "warning_count"?: number;
   "delivery_type"?: string;
+  "portfolio_name"?: string;
+  "portfolio_holdings"?: Array<Record<string, unknown>>;
+  "research_profile"?: string | null;
+  "school"?: string | null;
   "candidates"?: Array<Record<string, unknown>>;
   "screening"?: Record<string, unknown>;
   "sector_analysis"?: Record<string, unknown>;
@@ -887,6 +892,7 @@ export type UziNativeAnalysisContent = {
   "source_commit": string;
   "methodology_version": string;
   "profile": "lite" | "medium" | "deep";
+  "school"?: "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | null;
   "results": Array<Record<string, unknown>>;
   "critical_count": number;
   "warning_count": number;
@@ -1376,6 +1382,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "fund_codes",
     "fund_category",
     "portfolio_holdings",
+    "portfolio_name",
     "benchmark_return",
     "rebalance_targets",
     "drift_threshold",
@@ -2000,6 +2007,10 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "critical_count",
     "warning_count",
     "delivery_type",
+    "portfolio_name",
+    "portfolio_holdings",
+    "research_profile",
+    "school",
     "candidates",
     "screening",
     "sector_analysis",
@@ -2112,6 +2123,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "source_commit",
     "methodology_version",
     "profile",
+    "school",
     "results",
     "critical_count",
     "warning_count",

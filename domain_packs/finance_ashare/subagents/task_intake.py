@@ -95,6 +95,7 @@ _UZI_PROFILE_INTENTS = frozenset({
     "stock_screen",
     "sector_research",
     "review_thesis",
+    "uzi_portfolio_batch",
 })
 _UZI_STOCK_COMMAND_INTENTS = frozenset({
     "uzi_analyze_stock",
@@ -130,6 +131,19 @@ _PROFILE_ALIASES = {
     "标准": "medium",
     "deep": "deep",
     "深度": "deep",
+}
+_SCHOOL_ALIASES = {
+    "价值派": "A",
+    "成长派": "B",
+    "宏观派": "C",
+    "技术派": "D",
+    "中国价投": "E",
+    "a股游资": "F",
+    "游资派": "F",
+    "量化派": "G",
+    "科技领袖派": "H",
+    "ai卡位": "I",
+    "瓶颈猎手": "I",
 }
 _INVESTMENT_CYCLE_ALIASES = {
     "short_term": "short_term",
@@ -173,6 +187,8 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
         "segmental_model",
         "accept_uzi_native_fee_schedule",
         "investment_cycle",
+        "school",
+        "portfolio_name",
     ):
         if field_name in constraints:
             slots[field_name] = constraints[field_name]
@@ -254,6 +270,15 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
                 "target_scope": sector,
             },
         )
+    if intent == "stock_compare" and len(symbols) > 4:
+        return _clarify(
+            ["symbols"],
+            query=query,
+            intent=intent,
+            slots=slots,
+            constraints=constraints,
+            context={"reason": "uzi_versus_supports_two_to_four_symbols", "maximum": 4},
+        )
     if intent == "fund_research" and not fund_codes and not fund_category:
         return _clarify(
             ["fund_category_or_codes"],
@@ -288,7 +313,7 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
             )
         slots["investment_cycle"] = investment_cycle
         constraints["investment_cycle"] = investment_cycle
-    if intent in {"uzi_returns", "uzi_rebalance", "uzi_portfolio_rebalance_method"} and not portfolio_holdings:
+    if intent in {"uzi_returns", "uzi_rebalance", "uzi_portfolio_rebalance_method", "uzi_portfolio_batch"} and not portfolio_holdings:
         return _clarify(
             ["portfolio_holdings"],
             query=query,
@@ -358,6 +383,11 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
                 },
             )
         constraints["research_profile"] = research_profile
+    if intent in {"stock_check", "uzi_analyze_stock", "stock_compare", "uzi_portfolio_batch"}:
+        school = _uzi_school(query, slots=slots, constraints=constraints)
+        if school:
+            slots["school"] = school
+            constraints["school"] = school
     return {
         "status": "accepted",
         "intent": intent,
@@ -435,6 +465,25 @@ def _research_profile(
                 return profile
         elif alias in query:
             return profile
+    return None
+
+
+def _uzi_school(
+    query: str,
+    *,
+    slots: dict[str, Any],
+    constraints: dict[str, Any],
+) -> str | None:
+    supplied = str(constraints.get("school") or slots.get("school") or "").strip().upper()
+    if supplied:
+        return supplied if supplied in set("ABCDEFGHI") else None
+    lowered = query.casefold().replace(" ", "")
+    explicit = re.search(r"(?:school|流派)\s*[:：=-]?\s*([A-I])\b", query, re.IGNORECASE)
+    if explicit:
+        return explicit.group(1).upper()
+    for alias, school in _SCHOOL_ALIASES.items():
+        if alias.casefold().replace(" ", "") in lowered:
+            return school
     return None
 
 
@@ -530,7 +579,7 @@ def _infer_intent(
             return "uzi_rebalance"
         if _contains(query, lowered, _PORTFOLIO_ATTRIBUTION_KEYWORDS):
             return "uzi_returns"
-        return None
+        return "uzi_portfolio_batch"
     if fund_codes or fund_category or _contains(query, lowered, _FUND_KEYWORDS):
         return "fund_research"
     if _contains(query, lowered, _QUICK_SCAN_KEYWORDS):

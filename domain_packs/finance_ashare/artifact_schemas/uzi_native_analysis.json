@@ -16,6 +16,7 @@
     "source_commit": {"type": "string"},
     "methodology_version": {"type": "string"},
     "profile": {"enum": ["lite", "medium", "deep"]},
+    "school": {"type": ["string", "null"], "enum": ["A", "B", "C", "D", "E", "F", "G", "H", "I", null]},
     "results": {
       "type": "array",
       "items": {

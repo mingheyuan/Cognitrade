@@ -300,6 +300,27 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         self.assertTrue(any(row.get("stage") == "self_review" for row in progress))
         self.assertTrue(all(0 <= int(row.get("progress_percent") or 0) <= 100 for row in progress))
 
+    def test_school_lock_applies_to_native_panel_synthesis_and_agent_prompt(self) -> None:
+        provider = _LiteAgentProvider()
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="lite",
+            school="A",
+            llm_provider=provider,
+        )
+
+        analysis = result["results"][0]
+        self.assertEqual(result["school"], "A")
+        self.assertEqual(analysis["synthesis"]["school_lock"], {"group": "A", "label": "价值派"})
+        self.assertTrue(all(
+            row.get("signal") == "skip"
+            for row in analysis["panel"]["investors"]
+            if row.get("group") != "A"
+        ))
+        self.assertTrue(all("UZI_SCHOOL=A" in prompt for prompt in provider.system_prompts))
+
     def test_native_panel_obeys_all_profile_seat_counts(self) -> None:
         for profile, expected in (("lite", 10), ("medium", 51), ("deep", 66)):
             with self.subTest(profile=profile):
@@ -320,7 +341,7 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
                     expected,
                 )
 
-    def test_transport_timeout_is_not_retried_as_agent_content_repair(self) -> None:
+    def test_lite_transport_timeout_is_a_native_warning_without_content_retry(self) -> None:
         provider = _LiteAgentProvider(timeout=True)
 
         result = execute_native_analysis(
@@ -333,17 +354,15 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         analysis = result["results"][0]
         self.assertEqual(provider.calls, 1)
         self.assertEqual(len(analysis["recovery_history"]), 1)
-        self.assertEqual(
-            analysis["recovery_history"][0]["exhausted_reason"],
-            "no_remaining_agent_recovery_action",
-        )
+        self.assertEqual(analysis["recovery_history"][0]["status"], "passed")
+        self.assertTrue(result["report_allowed"])
         timeout_issues = [
             issue
             for issue in analysis["self_review"]["issues"]
             if issue.get("evidence") == "llm_transport_timeout"
         ]
         self.assertEqual(len(timeout_issues), 1)
-        self.assertFalse(result["report_allowed"])
+        self.assertEqual(timeout_issues[0]["severity"], "warning")
 
     def test_medium_transport_timeout_does_not_retry_for_downstream_qualitative_stage(self) -> None:
         provider = _LiteAgentProvider(timeout=True)

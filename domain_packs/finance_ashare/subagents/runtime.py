@@ -61,6 +61,17 @@ def normalize_query(context):
         or inputs.get("funds")
         or []
     )
+    portfolio_holdings = list(
+        request.content.get("portfolio_holdings")
+        or inputs.get("portfolio_holdings")
+        or []
+    )
+    for holding in portfolio_holdings:
+        if not isinstance(holding, dict):
+            continue
+        ticker = str(holding.get("ticker") or holding.get("symbol") or "").strip()
+        if ticker and ticker not in symbols:
+            symbols.append(ticker)
     for symbol in _STOCK_CODE_PATTERN.findall(query):
         if symbol not in fund_codes and symbol not in symbols:
             symbols.append(symbol)
@@ -76,11 +87,12 @@ def normalize_query(context):
                 or ""
             ).strip()
             or None,
-            "portfolio_holdings": list(
-                request.content.get("portfolio_holdings")
-                or inputs.get("portfolio_holdings")
-                or []
-            ),
+            "portfolio_holdings": portfolio_holdings,
+            "portfolio_name": str(
+                request.content.get("portfolio_name")
+                or inputs.get("portfolio_name")
+                or ""
+            ).strip() or None,
             "benchmark_return": (
                 request.content.get("benchmark_return")
                 if request.content.get("benchmark_return") is not None
@@ -738,6 +750,7 @@ def execute_uzi_native_full_analysis(context):
         rows,
         symbols,
         profile=str(profile.get("selected") or ""),
+        school=str(inputs.get("school") or "").strip().upper() or None,
         llm_provider=getattr(context, "llm_provider", None),
         cancellation=getattr(context, "cancellation", None),
         recovery_history=recovery_history,
@@ -834,7 +847,7 @@ def compose_uzi_native_delivery(context):
         "risk": [str(row.get("issue") or "") for row in [*critical_issues, *warning_issues]],
         "follow_up": [str(row.get("suggested_fix") or "") for row in critical_issues],
         "quality_status": "available" if allowed else "quality_gate_blocked",
-        "delivery_type": "uzi_native_3_9_2",
+        "delivery_type": "uzi_native_3_9_4",
         "native_analysis_artifact_id": analysis.artifact_id,
         "report_allowed": allowed,
         "critical_count": int(content.get("critical_count") or 0),
@@ -858,12 +871,7 @@ def compose_uzi_native_delivery(context):
 
 
 def compose_stock_comparison_delivery(context):
-    """Compose a comparison without pretending it is one native UZI report.
-
-    Each symbol is still evaluated by the complete pinned UZI pipeline.  The
-    comparison is a Cognitrade semantic artifact and therefore cannot be
-    exported through the single-stock UZI HTML/PDF endpoint.
-    """
+    """Bind gate-passed analyses to the pinned UZI ``--versus`` renderer."""
 
     analysis = context.require_artifact("uzi_native_analysis")
     content = dict(analysis.content or {})
@@ -932,7 +940,7 @@ def compose_stock_comparison_delivery(context):
             for issue in critical_issues
             if str(issue.get("suggested_fix") or "").strip()
         ],
-        "delivery_type": "stock_compare_uzi_3_9_2",
+        "delivery_type": "uzi_versus_3_9_4",
         "quality_status": "available" if allowed else "quality_gate_blocked",
         "native_analysis_artifact_id": analysis.artifact_id,
         "report_allowed": allowed,
@@ -945,6 +953,83 @@ def compose_stock_comparison_delivery(context):
         content=report_content,
         source_refs=list(analysis.source_refs),
         parent_artifact_ids=[analysis.artifact_id],
+        confidence=analysis.confidence if allowed else 0.0,
+        risk_flags=list(analysis.risk_flags),
+        metadata={
+            "quality_status": report_content["quality_status"],
+            "methodology_version": content.get("methodology_version"),
+            "source_commit": content.get("source_commit"),
+            "report_allowed": allowed,
+        },
+    )
+
+
+def compose_uzi_portfolio_delivery(context):
+    """Bind explicit holdings and native analyses to UZI ``--portfolio``."""
+
+    query = context.require_artifact("normalized_query")
+    analysis = context.require_artifact("uzi_native_analysis")
+    content = dict(analysis.content or {})
+    query_content = dict(query.content or {})
+    results = [row for row in list(content.get("results") or []) if isinstance(row, dict)]
+    critical_issues = [
+        issue
+        for row in results
+        for issue in list((row.get("self_review") or {}).get("issues") or [])
+        if isinstance(issue, dict) and issue.get("severity") == "critical"
+    ]
+    warning_issues = [
+        issue
+        for row in results
+        for issue in list((row.get("self_review") or {}).get("issues") or [])
+        if isinstance(issue, dict) and issue.get("severity") == "warning"
+    ]
+    allowed = bool(results) and content.get("report_allowed") is True and not critical_issues
+    holdings = [dict(row) for row in list(query_content.get("portfolio_holdings") or []) if isinstance(row, dict)]
+    portfolio_name = str(query_content.get("portfolio_name") or "UZI Portfolio").strip() or "UZI Portfolio"
+    conclusion = (
+        f"{portfolio_name} 的 UZI 原生组合批量研究已完成。"
+        if allowed
+        else "至少一个组合成分仍有 UZI critical 缺口，组合报告停在质量门。"
+    )
+    report_content = {
+        "conclusion": conclusion,
+        "assessment": {
+            "status": "uzi_native_portfolio_passed" if allowed else "uzi_native_quality_gate_blocked",
+            "summary": conclusion,
+            "factors": [
+                {
+                    "symbol": row.get("symbol"),
+                    "overall_score": (row.get("synthesis") or {}).get("overall_score"),
+                    "verdict": (row.get("synthesis") or {}).get("verdict_label"),
+                    "report_allowed": row.get("report_allowed") is True,
+                }
+                for row in results
+            ],
+        },
+        "evidence": [{
+            "artifact_id": analysis.artifact_id,
+            "artifact_type": "uzi_native_analysis",
+            "source_refs": list(analysis.source_refs),
+        }],
+        "risk": [str(row.get("issue") or "") for row in [*critical_issues, *warning_issues]],
+        "follow_up": [str(row.get("suggested_fix") or "") for row in critical_issues],
+        "delivery_type": "uzi_portfolio_3_9_4",
+        "quality_status": "available" if allowed else "quality_gate_blocked",
+        "native_analysis_artifact_id": analysis.artifact_id,
+        "report_allowed": allowed,
+        "critical_count": len(critical_issues),
+        "warning_count": len(warning_issues),
+        "portfolio_name": portfolio_name,
+        "portfolio_holdings": holdings,
+        "research_profile": content.get("profile"),
+        "school": content.get("school"),
+    }
+    return ArtifactDraft(
+        artifact_type="research_report",
+        content=report_content,
+        source_refs=_unique_source_refs([*list(query.source_refs), *list(analysis.source_refs)]),
+        parent_artifact_ids=[query.artifact_id, analysis.artifact_id],
         confidence=analysis.confidence if allowed else 0.0,
         risk_flags=list(analysis.risk_flags),
         metadata={
@@ -1146,8 +1231,9 @@ def evaluate_uzi_native_report_gate(context):
 
     content = context.artifact.content if isinstance(context.artifact.content, dict) else {}
     if content.get("delivery_type") not in {
-        "uzi_native_3_9_2",
-        "stock_compare_uzi_3_9_2",
+        "uzi_native_3_9_4",
+        "uzi_versus_3_9_4",
+        "uzi_portfolio_3_9_4",
     }:
         return {
             "verdict": "pass",

@@ -391,6 +391,7 @@ class UziFinancePackTests(unittest.TestCase):
                 "uzi_returns",
                 "uzi_rebalance",
                 "uzi_portfolio_rebalance_method",
+                "uzi_portfolio_batch",
             }.issubset(intents)
         )
 

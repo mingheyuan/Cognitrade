@@ -23,6 +23,7 @@ export const INTENT_LABELS: Record<string, string> = {
   uzi_model_update: 'UZI 模型更新',
   uzi_returns: 'UZI 收益归因',
   uzi_rebalance: 'UZI 持仓再平衡',
+  uzi_portfolio_batch: 'UZI 组合批量分析',
   uzi_three_statement_method: 'UZI 三表联动',
   uzi_accretion_dilution_method: 'UZI 并购增厚摊薄',
   uzi_morning_note_method: 'UZI 晨报',

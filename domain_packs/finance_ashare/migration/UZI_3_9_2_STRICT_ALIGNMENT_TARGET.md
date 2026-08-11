@@ -9,7 +9,7 @@
 - 迁移边界：实现迁入 Finance DomainPack；生产环境不得依赖外部 UZI checkout、CLI、缓存目录或运行时
 - 保留边界：Agent OS API/Web、ArtifactBoard、运行溯源与鉴权
 - 公开方法边界：23 个 UZI 方法只能通过各自的 `finance.uzi.native.*` intent 触发；旧 `requested_methods`/`method_catalog` 入口已删除
-- 扩展边界：未被业务入口引用的 `cognitrade-extension-*` 已全部删除；组合研究只保留三个 UZI 原生方法入口
+- 扩展边界：未被业务入口引用的 `cognitrade-extension-*` 已全部删除；组合能力保留三个 UZI 原生方法入口及原生 `--portfolio` 批量研究
 - 验收原则：清单状态不是完成证据；只有上游差异测试、真实链路测试和产物审计共同通过后才能标记等价
 
 ## 2. 不可妥协规则
@@ -154,9 +154,9 @@
 
 1. 原始 provider 与完整性检查。
 2. 按 suggested_fix 定位字段和维度。
-3. 强制 Playwright 重试适用页面并读取网络结果。
-4. Web/DDGS 与可信官方来源补全。
-5. `MX_APIKEY` 已配置时执行 MX。
+3. 逐条按 UZI suggested_fix 的原生优先级执行 browser/MX/Web 动作。
+4. 六个定性维度优先使用已配置的 `MX_APIKEY`，再使用 DDGS/可信官方来源。
+5. 当前研究档位启用浏览器恢复时，使用 Playwright 重试适用页面并读取网络结果。
 6. 仅对允许的定性维度使用显式标注的推断；不得生成数值事实。
 7. 重算 Stage 2、再次自审，直到通过或真实来源耗尽。
 
@@ -166,6 +166,8 @@
 - 迁入 `assemble_report.py` 及其 `lib/report/` 渲染依赖所需的纯能力，输入适配到 ArtifactBoard，但不执行外部 UZI runtime。
 - 保持上游 DOM、CSS、JavaScript、19 维卡片、panel、机构模型、友好层、warning banner 与打印样式。
 - HTML 与 PDF 使用相同 HTML；PDF 不得另建白底或简化版布局。
+- `--versus` 使用原生 `versus_runner._render_html`，限制 2–4 只；`--portfolio` 使用原生权重归一化、健康度与 `_render_html`。
+- 单股报告同时恢复 `share-card.png`、`war-report.png` 与 `one-liner.txt` 的原生选择器、分辨率和文案语义。
 - Cognitrade run ID、artifact ID、来源链放在响应 header/sidecar artifact；仅上游已有插槽允许进入可见报告。
 - PDF 采用受控 Chromium 进程池、队列、超时和缓存；并发失败不得通过无限启动浏览器规避。
 - 模板哈希、DOM selector、关键文本、页面截图和 PDF 页面渲染均进入回归测试。

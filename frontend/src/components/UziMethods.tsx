@@ -77,12 +77,14 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
   const [symbol, setSymbol] = useState('')
   const [method, setMethod] = useState<(typeof stockMethods)[number]['id']>('ai_readiness')
   const [analysisProfile, setAnalysisProfile] = useState<'lite' | 'medium' | 'deep' | ''>('')
+  const [school, setSchool] = useState('')
   const [modelField, setModelField] = useState('net_margin')
   const [modelValue, setModelValue] = useState('')
   const [holdings, setHoldings] = useState<HoldingDraft[]>([emptyHolding(), emptyHolding()])
   const [benchmark, setBenchmark] = useState('')
   const [threshold, setThreshold] = useState('5')
-  const [portfolioMethod, setPortfolioMethod] = useState<'returns' | 'rebalance' | 'portfolio_rebalance'>('returns')
+  const [portfolioMethod, setPortfolioMethod] = useState<'batch' | 'returns' | 'rebalance' | 'portfolio_rebalance'>('batch')
+  const [portfolioName, setPortfolioName] = useState('')
   const [acceptNativeDefaults, setAcceptNativeDefaults] = useState(false)
   const [acceptNativeFees, setAcceptNativeFees] = useState(false)
   const [segmentalJson, setSegmentalJson] = useState('')
@@ -107,6 +109,7 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
     if (method === 'analyze_stock') {
       if (!analysisProfile) return
       constraints.research_profile = analysisProfile
+      if (school) constraints.school = school
     }
     if (method === 'model_update') {
       const value = optionalNumber(modelValue)
@@ -145,9 +148,15 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
         market: row.market,
         ...(row.assetClass.trim() ? { asset_class: row.assetClass.trim() } : {}),
       }))
-    if (!parsed.length || parsed.some((row) => row.weight == null)) return
+    if (!parsed.length || (portfolioMethod !== 'batch' && parsed.some((row) => row.weight == null))) return
     if (portfolioMethod === 'returns' && parsed.some((row) => row.return_pct == null)) return
     const constraints: Record<string, unknown> = { portfolio_holdings: parsed }
+    if (portfolioMethod === 'batch') {
+      if (!analysisProfile) return
+      constraints.research_profile = analysisProfile
+      if (school) constraints.school = school
+      if (portfolioName.trim()) constraints.portfolio_name = portfolioName.trim()
+    }
     const benchmarkValue = optionalNumber(benchmark)
     if (benchmarkValue != null) constraints.benchmark_return = benchmarkValue
     const thresholdValue = optionalNumber(threshold)
@@ -173,12 +182,13 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
       constraints.asset_class_targets = assetTargets
     }
     const intent = ({
+      batch: 'uzi_portfolio_batch',
       returns: 'uzi_returns',
       rebalance: 'uzi_rebalance',
       portfolio_rebalance: 'uzi_portfolio_rebalance_method',
     } as const)[portfolioMethod]
     const response = await createRun(
-      portfolioMethod === 'returns' ? '对显式持仓做 UZI 收益归因' : portfolioMethod === 'rebalance' ? '对显式持仓做 UZI 再平衡' : '对显式资产类别做 UZI 战略再平衡',
+      portfolioMethod === 'batch' ? `对${portfolioName.trim() || '显式组合'}执行 UZI 原生批量研究` : portfolioMethod === 'returns' ? '对显式持仓做 UZI 收益归因' : portfolioMethod === 'rebalance' ? '对显式持仓做 UZI 再平衡' : '对显式资产类别做 UZI 战略再平衡',
       intent,
       constraints,
     )
@@ -189,7 +199,7 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
     <main className="finance-page uzi-methods-page">
       <section className="finance-hero uzi-methods-hero">
         <div>
-          <span className="section-kicker">UZI 3.9.2 · COMPLETE METHODS · PACK NATIVE</span>
+          <span className="section-kicker">UZI 3.9.4 · COMPLETE METHODS · PACK NATIVE</span>
           <h1>专项研究与组合方法</h1>
           <p>方法运行在 Agent OS / DomainPack 内；缺失观测只形成数据缺口，模型情景和策略目标单独标记为假设。</p>
         </div>
@@ -213,7 +223,7 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
               })}
             </div>
             {method === 'analyze_stock' && (
-              <label><span>研究深度（必须显式选择）</span><select value={analysisProfile} onChange={(event) => setAnalysisProfile(event.target.value as typeof analysisProfile)}><option value="">请选择</option><option value="lite">快速 Lite</option><option value="medium">标准 Medium</option><option value="deep">深度 Deep</option></select></label>
+              <><label><span>研究深度（必须显式选择）</span><select value={analysisProfile} onChange={(event) => setAnalysisProfile(event.target.value as typeof analysisProfile)}><option value="">请选择</option><option value="lite">快速 Lite</option><option value="medium">标准 Medium</option><option value="deep">深度 Deep</option></select></label><UziSchoolSelect value={school} onChange={setSchool} /></>
             )}
             {method === 'model_update' && (
               <div className="uzi-inline-form">
@@ -233,7 +243,8 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
         ) : (
           <form className="uzi-config-card uzi-portfolio-form" onSubmit={submitPortfolio}>
             <header><div><span className="section-kicker">PORTFOLIO INPUT</span><h2>录入显式持仓</h2></div><button type="button" className="secondary-button" onClick={() => setHoldings((rows) => [...rows, emptyHolding()])}><Plus size={14} />添加持仓</button></header>
-            <label><span>组合方法</span><select value={portfolioMethod} onChange={(event) => setPortfolioMethod(event.target.value as typeof portfolioMethod)}><option value="returns">收益归因</option><option value="rebalance">持仓再平衡</option><option value="portfolio_rebalance">资产类别战略再平衡</option></select></label>
+            <label><span>组合方法</span><select value={portfolioMethod} onChange={(event) => setPortfolioMethod(event.target.value as typeof portfolioMethod)}><option value="batch">UZI 原生组合批量分析</option><option value="returns">收益归因</option><option value="rebalance">持仓再平衡</option><option value="portfolio_rebalance">资产类别战略再平衡</option></select></label>
+            {portfolioMethod === 'batch' && <><label><span>组合名称（可选）</span><input value={portfolioName} onChange={(event) => setPortfolioName(event.target.value)} placeholder="例如：核心持仓" /></label><label><span>研究深度（必须显式选择）</span><select value={analysisProfile} onChange={(event) => setAnalysisProfile(event.target.value as typeof analysisProfile)}><option value="">请选择</option><option value="lite">快速 Lite</option><option value="medium">标准 Medium</option><option value="deep">深度 Deep</option></select></label><UziSchoolSelect value={school} onChange={setSchool} /></>}
             <div className="uzi-holding-list">
               {holdings.map((holding, index) => (
                 <div className="uzi-holding-row" key={index}>
@@ -255,8 +266,8 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
               <label><span>漂移阈值 pp</span><input type="number" min="0" step="any" value={threshold} onChange={(event) => setThreshold(event.target.value)} /></label>
             </div>
             {portfolioMethod === 'rebalance' && <label className="uzi-policy-checkbox"><input type="checkbox" checked={acceptNativeFees} onChange={(event) => setAcceptNativeFees(event.target.checked)} /><span>我已核对并接受 UZI 原生 A/HK/US 固定费率表；每只目标权重必须填写。</span></label>}
-            <p className="uzi-policy-note"><AlertCircle size={14} />收益归因要求每只区间收益；持仓再平衡要求每只目标权重；战略再平衡要求每个资产类别目标。缺一项即不提交，不以零或等权静默补齐。</p>
-            <button className="primary-button uzi-run-button" disabled={submitting || !holdings.some((row) => row.ticker.trim() && optionalNumber(row.weight) != null)}>{submitting ? <RefreshCw size={15} className="is-spinning" /> : <ArrowRightLeft size={15} />}{submitting ? '正在运行' : '运行归因与再平衡'}</button>
+            <p className="uzi-policy-note"><AlertCircle size={14} />组合批量分析严格沿用 UZI：全部未填权重时等权，部分填写时分配剩余并归一化；其他三种方法仍要求对应真实输入完整。</p>
+            <button className="primary-button uzi-run-button" disabled={submitting || !holdings.some((row) => row.ticker.trim()) || (portfolioMethod !== 'batch' && !holdings.some((row) => row.ticker.trim() && optionalNumber(row.weight) != null)) || (portfolioMethod === 'batch' && !analysisProfile)}>{submitting ? <RefreshCw size={15} className="is-spinning" /> : <ArrowRightLeft size={15} />}{submitting ? '正在运行' : portfolioMethod === 'batch' ? '运行 UZI 组合分析' : '运行归因与再平衡'}</button>
           </form>
         )}
 
@@ -268,6 +279,10 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
       <MethodDeliveryDossier artifacts={selectedRun?.replay.artifacts || []} />
     </main>
   )
+}
+
+function UziSchoolSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return <label><span>评审流派（可选，UZI --school A–I）</span><select value={value} onChange={(event) => onChange(event.target.value)}><option value="">全部流派</option><option value="A">A · 价值派</option><option value="B">B · 成长派</option><option value="C">C · 宏观派</option><option value="D">D · 技术派</option><option value="E">E · 中国价投</option><option value="F">F · A 股游资</option><option value="G">G · 量化</option><option value="H">H · 科技领袖派</option><option value="I">I · AI 卡位 / 瓶颈猎手</option></select></label>
 }
 
 function MethodAssumptionFields({ method, values, onChange }: { method: string; values: Record<string, string>; onChange: (key: string, value: string) => void }) {

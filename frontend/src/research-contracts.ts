@@ -20,6 +20,7 @@ export type ResearchIntent =
   | 'uzi_model_update'
   | 'uzi_returns'
   | 'uzi_rebalance'
+  | 'uzi_portfolio_batch'
   | 'uzi_three_statement_method'
   | 'uzi_accretion_dilution_method'
   | 'uzi_morning_note_method'

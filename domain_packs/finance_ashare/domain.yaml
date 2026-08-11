@@ -155,6 +155,7 @@ intake:
     - intent_id: stock_check
       description: Run the complete pinned UZI 3.9.4 analysis and strict quality gate on one or more companies.
       required_slots: [symbols, research_profile]
+      optional_slots: [school]
       candidate_capabilities:
         - finance.query.normalize
         - finance.ashare.snapshot.collect
@@ -164,6 +165,7 @@ intake:
     - intent_id: uzi_analyze_stock
       description: Run the pinned UZI /analyze-stock command as an independent Agent OS capability.
       required_slots: [symbols, research_profile]
+      optional_slots: [school]
       candidate_capabilities:
         - finance.query.normalize
         - finance.ashare.snapshot.collect
@@ -310,13 +312,24 @@ intake:
       candidate_capabilities: [finance.query.normalize, finance.uzi.native.holding_rebalance]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: stock_compare
-      description: Compare two or more A-share companies on a consistent evidence basis.
+      description: Run the pinned UZI --versus flow for two to four A-share companies on a consistent evidence basis.
       required_slots: [symbols, research_profile]
+      optional_slots: [school]
       candidate_capabilities:
         - finance.query.normalize
         - finance.ashare.snapshot.collect
         - finance.uzi.native.analyze_stock
         - finance.stock.compare.report.compose
+      output_artifact_types: [research_report]
+    - intent_id: uzi_portfolio_batch
+      description: Run the pinned UZI --portfolio flow over explicit holdings, with native weight normalization and portfolio HTML.
+      required_slots: [portfolio_holdings, research_profile]
+      optional_slots: [portfolio_name, school]
+      candidate_capabilities:
+        - finance.query.normalize
+        - finance.ashare.snapshot.collect
+        - finance.uzi.native.analyze_stock
+        - finance.uzi.portfolio.report.compose
       output_artifact_types: [research_report]
     - intent_id: stock_screen
       description: Screen an A-share universe and produce traceable candidates.
@@ -523,6 +536,21 @@ capabilities:
     reliability: 0.99
     cache_scope: run
     tags: [intent:stock_compare]
+  - subagent_type: uzi_native_portfolio_report_composer
+    capability: finance.uzi.portfolio.report.compose
+    capability_version: "1"
+    methodology_version: "3.9.4-source-parity"
+    implementation: subagents.runtime:compose_uzi_portfolio_delivery
+    consumes:
+      - artifact_type: normalized_query
+      - artifact_type: uzi_native_analysis
+    produces:
+      - artifact_type: research_report
+    cost_class: low
+    latency_class: low
+    reliability: 0.99
+    cache_scope: run
+    tags: [uzi:native, intent:uzi_portfolio_batch]
   - subagent_type: uzi_native_dcf_analyst
     capability: finance.uzi.native.dcf
     capability_version: "1"
@@ -958,8 +986,8 @@ report_contracts:
     required_gate_ids: [finance.sources_required, finance.research_safety, finance.uzi.native.critical]
 planner_policies:
   prefer_evidence_backed_paths: true
-  profile_intents: [stock_check, stock_compare, stock_screen, sector_research, review_thesis]
-  profile_output_intents: [stock_check, stock_compare]
+  profile_intents: [stock_check, stock_compare, uzi_portfolio_batch, stock_screen, sector_research, review_thesis]
+  profile_output_intents: [stock_check, stock_compare, uzi_portfolio_batch]
   progress_policy:
     max_model_updates: 12
     max_tokens: 1200

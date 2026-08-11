@@ -10,6 +10,7 @@ from unittest.mock import patch
 from domain_packs.finance_ashare.reporting import (
     ReportArtifactMissingError,
     render_uzi_native_html,
+    render_uzi_native_one_liner,
     render_uzi_native_pdf,
 )
 
@@ -103,7 +104,7 @@ def sample_uzi_artifacts() -> list[dict]:
     }
     return [
         {"artifact_id": "artifact-native", "artifact_type": "uzi_native_analysis", "status": "active", "confidence": 0.86, "risk_flags": [], "source_refs": [], "content": native},
-        {"artifact_id": "artifact-report", "artifact_type": "research_report", "status": "active", "confidence": 0.86, "risk_flags": [], "source_refs": [], "content": {"conclusion": "已通过", "evidence": [], "risk": [], "follow_up": [], "report_allowed": True}},
+        {"artifact_id": "artifact-report", "artifact_type": "research_report", "status": "active", "confidence": 0.86, "risk_flags": [], "source_refs": [], "content": {"conclusion": "已通过", "evidence": [], "risk": [], "follow_up": [], "report_allowed": True, "critical_count": 0, "delivery_type": "uzi_native_3_9_4"}},
     ]
 
 
@@ -223,6 +224,48 @@ class UziNativeReportTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ReportArtifactMissingError, "且仅允许一个"):
             render_uzi_native_html(artifacts, run_id=RUN_ID)
+
+    def test_versus_and_portfolio_use_pinned_uzi_renderers(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        second = dict(artifacts[0]["content"]["results"][0])
+        second["symbol"] = "000858"
+        second["raw"] = dict(second["raw"])
+        second["raw"]["ticker"] = "000858"
+        second["synthesis"] = dict(second["synthesis"])
+        second["synthesis"]["name"] = "五粮液"
+        artifacts[0]["content"]["results"].append(second)
+        artifacts[1]["content"]["delivery_type"] = "uzi_versus_3_9_4"
+
+        versus = render_uzi_native_html(artifacts, run_id=RUN_ID)
+
+        self.assertIn("VERSUS", versus.html)
+        self.assertIn("贵州茅台", versus.html)
+        self.assertIn("五粮液", versus.html)
+
+        artifacts[1]["content"].update({
+            "delivery_type": "uzi_portfolio_3_9_4",
+            "portfolio_name": "白酒组合",
+            "portfolio_holdings": [
+                {"ticker": "600519", "weight": None},
+                {"ticker": "000858", "weight": None},
+            ],
+        })
+        portfolio = render_uzi_native_html(artifacts, run_id=RUN_ID)
+
+        self.assertIn("PORTFOLIO", portfolio.html)
+        self.assertIn("白酒组合", portfolio.html)
+        self.assertIn("50.0%", portfolio.html)
+
+    def test_one_liner_matches_native_single_stock_contract(self) -> None:
+        text, filename = render_uzi_native_one_liner(
+            sample_uzi_artifacts(),
+            report_locator="/api/v1/runs/test/report?format=html",
+        )
+
+        self.assertIn("贵州茅台 <script>alert(1)</script> 体检结果：72 分", text)
+        self.assertIn("50 位大佬里 1 人喊买", text)
+        self.assertIn("好公司与好价格仍是两件事", text)
+        self.assertTrue(filename.endswith(".txt"))
 
     def test_pdf_pool_bounds_ten_concurrent_exports_and_caches_identical_html(self) -> None:
         state = {

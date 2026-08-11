@@ -27,7 +27,7 @@ invariants:
 
 # These are upstream 3.9.4 behaviours explicitly preserved or deliberately
 # bounded by the Agent OS host.  None is an old UZI runtime compatibility path.
-upstream_3_9_2_regressions:
+upstream_3_9_4_regressions:
   - {id: direct_report_path_reuse, status: source_parity, target: finance.uzi.native.report.compose}
   - {id: cloudflare_no_implicit_install, status: host_boundary, target: deployment_owned_web_runtime}
   - {id: invalid_agent_analysis_fallback, status: source_parity, target: finance.uzi.native.analyze_stock}
@@ -36,6 +36,23 @@ upstream_3_9_2_regressions:
   - {id: peers_self_only_without_industry, status: source_parity, target: uzi_peers_snapshot_skill}
   - {id: valuation_cninfo_market_fallback, status: source_parity, target: uzi_valuation_snapshot_skill}
   - {id: registry_matches_provider_shapes, status: source_parity, target: uzi_source_registry}
+
+root_modes:
+  school_lock:
+    status: source_parity
+    values: [A, B, C, D, E, F, G, H, I]
+    transport: request_local_locked_uzi_environment
+    targets: [finance.uzi.native.analyze_stock, finance.uzi.native.report.compose]
+  versus:
+    status: source_parity
+    symbols: {minimum: 2, maximum: 4}
+    renderer: lib.versus_runner._render_html
+    target: finance.stock.compare.report.compose
+  portfolio:
+    status: source_parity
+    missing_weight_semantics: native_equal_or_remaining_weight_normalization
+    renderer: lib.portfolio_runner._render_html
+    target: finance.uzi.portfolio.report.compose
 
 fetchers:
   - {id: 0_basic, target: market_snapshot_skill, status: source_parity}
@@ -110,7 +127,15 @@ methods:
 
 recovery_loop:
   status: implemented
-  order: [primary_provider, integrity_check, playwright, web_ddgs, mx, agent_qualitative_inference, recompute, self_review]
+  order:
+    - primary_provider
+    - integrity_check_and_suggested_fix_plan
+    - suggested_fix_actions_in_native_priority
+    - six_dimension_recovery_mx_then_ddgs
+    - playwright_recovery_when_profile_enabled
+    - agent_qualitative_inference
+    - recompute
+    - self_review
   termination: critical_zero_or_real_sources_exhausted_or_cancelled
   artificial_round_limit: false
   numeric_or_factual_inference: forbidden
@@ -128,6 +153,12 @@ native_report:
     lib/report/panel_cards.py: 0b21aefb50d87dc992a378cbe8e50eef9988e0d69147d9956db759858ec666ce
     lib/report/svg_primitives.py: 2b13c6fdc9bfc1a5182a39c74d75d8c14ce1d52c26b7e88ae32975d1b547f93e
   html_pdf_same_source: true
+  side_outputs:
+    share_card_png: {status: source_parity, selector: "#share-card", device_scale_factor: 2, viewport: [1280, 800]}
+    war_report_png: {status: source_parity, selector: "#war-report", device_scale_factor: 2, viewport: [1280, 800]}
+    one_liner_txt: {status: source_parity, scope: single_stock}
+  versus_html: {status: source_parity, input: ArtifactBoard}
+  portfolio_html: {status: source_parity, input: ArtifactBoard}
   critical_blocks_export: true
   warning_banner: upstream_native
   pdf_slots: 2

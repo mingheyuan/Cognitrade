@@ -59,6 +59,29 @@ class DynamicApiValidationTests(unittest.TestCase):
         )
         self.assertEqual(request.constraints["investment_cycle"], "short_term")
 
+    def test_uzi_portfolio_batch_preserves_native_weight_parsing(self) -> None:
+        request = validate_research_request(
+            RequestEnvelope(
+                intent="uzi_portfolio_batch",
+                user_query="分析这个组合",
+                constraints={
+                    "portfolio_holdings": [
+                        {"ticker": "600519.SH", "weight": 30},
+                        {"ticker": "000858.SZ", "weight": 15},
+                        {"ticker": "002594.SZ"},
+                    ],
+                    "research_profile": "medium",
+                    "school": "a",
+                },
+            )
+        )
+
+        holdings = request.constraints["portfolio_holdings"]
+        self.assertEqual(holdings[0]["weight"], 0.3)
+        self.assertEqual(holdings[1]["weight"], 0.15)
+        self.assertIsNone(holdings[2].get("weight"))
+        self.assertEqual(request.constraints["school"], "A")
+
     def test_pack_owned_intent_is_validated_from_runtime_catalog(self) -> None:
         request = validate_research_request(
             RequestEnvelope(

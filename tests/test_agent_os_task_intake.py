@@ -170,12 +170,12 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
                 self.assertEqual(decision.status, "accepted")
                 self.assertEqual(decision.intent, expected_intent)
 
-        ambiguous = service.resolve(RequestEnvelope(
+        batch = service.resolve(RequestEnvelope(
             user_query="分析一下这个组合",
-            constraints={"portfolio_holdings": holdings},
+            constraints={"portfolio_holdings": holdings, "research_profile": "lite"},
         ))
-        self.assertEqual(ambiguous.status, "needs_clarification")
-        self.assertIsNone(ambiguous.intent)
+        self.assertEqual(batch.status, "accepted")
+        self.assertEqual(batch.intent, "uzi_portfolio_batch")
 
     def test_main_agent_composes_pack_clarification_from_structured_context(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]

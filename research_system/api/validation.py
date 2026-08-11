@@ -40,6 +40,7 @@ SUPPORTED_RESEARCH_INTENTS = frozenset(
         "uzi_portfolio_rebalance_method",
         "uzi_returns",
         "uzi_rebalance",
+        "uzi_portfolio_batch",
         "stock_compare",
         "stock_screen",
         "fund_research",
@@ -119,6 +120,7 @@ _RESEARCH_METHODS = frozenset(
 )
 _SCREEN_STYLES = frozenset({"value", "growth", "quality", "gulp", "short"})
 _RESEARCH_PROFILES = frozenset({"lite", "medium", "deep"})
+_UZI_SCHOOLS = frozenset("ABCDEFGHI")
 _UZI_PROFILE_INTENTS = frozenset({
     "stock_check",
     "uzi_analyze_stock",
@@ -126,6 +128,7 @@ _UZI_PROFILE_INTENTS = frozenset({
     "stock_screen",
     "sector_research",
     "review_thesis",
+    "uzi_portfolio_batch",
 })
 _INVESTMENT_CYCLE_INTENTS = frozenset({"fund_research", "stock_screen"})
 
@@ -136,6 +139,7 @@ _STOCK_FIELDS = {
     "allow_partial_snapshot_types",
     "investment_cycle",
     "research_profile",
+    "school",
     "model_updates",
     "method_assumptions",
     *_COMMON_REQUEST_FIELDS,
@@ -172,6 +176,9 @@ _CONSTRAINTS_BY_INTENT: dict[str, set[str]] = {
     "uzi_rebalance": {
         "portfolio_holdings", "rebalance_targets", "drift_threshold",
         "accept_uzi_native_fee_schedule", *_COMMON_REQUEST_FIELDS,
+    },
+    "uzi_portfolio_batch": {
+        "portfolio_holdings", "portfolio_name", "research_profile", "school", *_COMMON_REQUEST_FIELDS,
     },
     "stock_compare": {"symbols", *_STOCK_FIELDS},
     "stock_screen": {
@@ -310,8 +317,11 @@ def validate_research_request(
         _validate_stock_screen_constraints(constraints)
     elif intent == "fund_research":
         _validate_fund_research_constraints(constraints)
-    elif intent in {"uzi_returns", "uzi_rebalance", "uzi_portfolio_rebalance_method"}:
-        _validate_uzi_portfolio_method_constraints(constraints)
+    elif intent in {"uzi_returns", "uzi_rebalance", "uzi_portfolio_rebalance_method", "uzi_portfolio_batch"}:
+        _validate_uzi_portfolio_method_constraints(
+            constraints,
+            allow_missing_weights=intent == "uzi_portfolio_batch",
+        )
     return request.model_copy(update={"intent": intent, "user_query": query, "constraints": constraints})
 
 
@@ -334,6 +344,11 @@ def _validate_common_constraints(
         _require_enum(constraints["investment_cycle"], field_name="investment_cycle", allowed=_INVESTMENT_CYCLES)
     if "research_profile" in constraints:
         _require_enum(constraints["research_profile"], field_name="research_profile", allowed=_RESEARCH_PROFILES)
+    if "school" in constraints:
+        school = _require_non_empty_string(constraints["school"], field_name="school").upper()
+        if school not in _UZI_SCHOOLS:
+            _invalid_constraint("school", "must be one of A, B, C, D, E, F, G, H or I")
+        constraints["school"] = school
     if "requested_methods" in constraints:
         methods = _require_string_list(constraints["requested_methods"], field_name="requested_methods", min_items=1)
         allowed_methods = frozenset(
@@ -438,7 +453,7 @@ def _validate_stock_compare_constraints(constraints: dict[str, Any]) -> None:
             constraints["symbols"],
             field_name="symbols",
             min_items=1,
-            max_items=20,
+            max_items=4,
         )
         if len(supplied_symbols) != len(set(supplied_symbols)):
             _invalid_constraint("symbols", "must not contain duplicate values")
@@ -501,7 +516,11 @@ def _validate_model_updates(value: Any) -> None:
         _require_finite_number(item, field_name=f"model_updates.{key}")
 
 
-def _validate_uzi_portfolio_method_constraints(constraints: dict[str, Any]) -> None:
+def _validate_uzi_portfolio_method_constraints(
+    constraints: dict[str, Any],
+    *,
+    allow_missing_weights: bool = False,
+) -> None:
     holdings = constraints.get("portfolio_holdings")
     if not isinstance(holdings, list) or not holdings:
         _invalid_constraint("portfolio_holdings", "must be a non-empty array")
@@ -517,13 +536,23 @@ def _validate_uzi_portfolio_method_constraints(constraints: dict[str, Any]) -> N
             field_name=f"portfolio_holdings.{index}.ticker",
         )
         tickers.append(ticker)
-        weight = _require_finite_number(
-            holding.get("weight"),
-            field_name=f"portfolio_holdings.{index}.weight",
-        )
-        if weight < 0:
-            _invalid_constraint(f"portfolio_holdings.{index}.weight", "must be non-negative")
-        total_weight += weight
+        supplied_weight = holding.get("weight")
+        if supplied_weight is None and allow_missing_weights:
+            weight = None
+        else:
+            weight = _require_finite_number(
+                supplied_weight,
+                field_name=f"portfolio_holdings.{index}.weight",
+            )
+        if weight is not None:
+            if weight < 0:
+                _invalid_constraint(f"portfolio_holdings.{index}.weight", "must be non-negative")
+            if allow_missing_weights and weight > 1.0:
+                # UZI --portfolio parses CSV weights above 1 as percentages
+                # before applying its native remaining-weight normalization.
+                weight = weight / 100.0
+                holding["weight"] = weight
+            total_weight += weight
         for field_name in ("return_pct", "value", "market_value", "quantity", "price"):
             if holding.get(field_name) is None:
                 continue
@@ -541,8 +570,11 @@ def _validate_uzi_portfolio_method_constraints(constraints: dict[str, Any]) -> N
                 )
     if len(tickers) != len(set(tickers)):
         _invalid_constraint("portfolio_holdings", "must not contain duplicate tickers")
-    if total_weight <= 0:
+    if total_weight <= 0 and not allow_missing_weights:
         _invalid_constraint("portfolio_holdings", "weight total must be positive")
+
+    if "portfolio_name" in constraints:
+        _require_non_empty_string(constraints["portfolio_name"], field_name="portfolio_name")
 
     if "benchmark_return" in constraints:
         _require_finite_number(constraints["benchmark_return"], field_name="benchmark_return")

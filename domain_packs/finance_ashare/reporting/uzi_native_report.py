@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections import OrderedDict
 import hashlib
+import importlib
+from pathlib import Path
 import re
 from threading import BoundedSemaphore, RLock
 from typing import Any, Iterable
@@ -13,6 +15,7 @@ from domain_packs.finance_ashare.reporting.uzi_392_exact_report import (
     UziNativeQualityGateError,
     render_exact_uzi_392_report,
 )
+from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import Uzi392FetcherRuntime
 
 
 _PDF_RENDER_SLOTS = BoundedSemaphore(2)
@@ -27,6 +30,10 @@ class ReportArtifactMissingError(ValueError):
 
 class ReportPdfUnavailableError(RuntimeError):
     """The local Chromium PDF renderer is unavailable."""
+
+
+class ReportImageUnavailableError(RuntimeError):
+    """The local Chromium screenshot renderer is unavailable."""
 
 
 @dataclass(frozen=True)
@@ -76,12 +83,33 @@ def render_uzi_native_html(
     *,
     run_id: str,
 ) -> RenderedUziReport:
-    """Render only the exact UZI template from a gate-passed native artifact."""
+    """Render the exact UZI single, versus or portfolio presentation."""
 
     rows = [dict(item) for item in artifacts if isinstance(item, dict)]
     native_artifact = _latest(rows, "uzi_native_analysis")
     if native_artifact is None:
         raise ReportArtifactMissingError("uzi_native_analysis artifact 暂不可用")
+    report_artifact = _latest(rows, "research_report")
+    report = _record((report_artifact or {}).get("content"))
+    if report.get("report_allowed") is not True:
+        raise ReportArtifactMissingError("UZI critical 质量门未通过")
+    delivery_type = str(report.get("delivery_type") or "")
+    if delivery_type == "uzi_versus_3_9_4":
+        return _render_uzi_versus(
+            rows,
+            native_artifact=native_artifact,
+            report=report,
+            run_id=run_id,
+        )
+    if delivery_type == "uzi_portfolio_3_9_4":
+        return _render_uzi_portfolio(
+            rows,
+            native_artifact=native_artifact,
+            report=report,
+            run_id=run_id,
+        )
+    if delivery_type != "uzi_native_3_9_4":
+        raise ReportArtifactMissingError("该运行不是 UZI 3.9.4 原生报告")
     segmental_model, segmental_validation = _validated_segmental(rows)
     try:
         html_document, symbol = render_exact_uzi_392_report(
@@ -101,6 +129,97 @@ def render_uzi_native_html(
             for artifact in rows
             if artifact.get("artifact_id")
         ),
+    )
+
+
+def _initialize_native_report_imports() -> None:
+    Uzi392FetcherRuntime(
+        workspace_root=Path(__file__).resolve().parents[3] / "workspace",
+    )
+
+
+def _native_metrics(native_content: dict[str, Any]) -> list[dict[str, Any]]:
+    _initialize_native_report_imports()
+    extract_metrics = importlib.import_module("lib.versus_runner")._extract_metrics
+    metrics: list[dict[str, Any]] = []
+    for result in list(native_content.get("results") or []):
+        if not isinstance(result, dict) or result.get("report_allowed") is not True:
+            continue
+        raw = _record(result.get("raw"))
+        ticker = str(raw.get("ticker") or result.get("symbol") or "").strip()
+        if not ticker:
+            continue
+        metrics.append(extract_metrics({
+            "syn": _record(result.get("synthesis")),
+            "raw": raw,
+            "panel": _record(result.get("panel")),
+            "ticker": ticker,
+        }))
+    return metrics
+
+
+def _source_artifact_ids(rows: list[dict[str, Any]]) -> tuple[str, ...]:
+    return tuple(
+        str(artifact.get("artifact_id"))
+        for artifact in rows
+        if artifact.get("artifact_id")
+    )
+
+
+def _render_uzi_versus(
+    rows: list[dict[str, Any]],
+    *,
+    native_artifact: dict[str, Any],
+    report: dict[str, Any],
+    run_id: str,
+) -> RenderedUziReport:
+    native_content = _record(native_artifact.get("content"))
+    metrics = _native_metrics(native_content)
+    if not 2 <= len(metrics) <= 4:
+        raise ReportArtifactMissingError("UZI --versus 需要 2 至 4 个通过质量门的分析结果")
+    render_html = importlib.import_module("lib.versus_runner")._render_html
+    html_document = render_html(metrics, str(native_content.get("profile") or "lite"))
+    symbols = "_vs_".join(str(row.get("ticker") or "") for row in metrics)
+    safe_symbols = re.sub(r"[^A-Za-z0-9._-]", "-", symbols).strip("-") or "comparison"
+    return RenderedUziReport(
+        html=html_document,
+        filename_stem=f"uzi-versus-{safe_symbols}-{run_id}",
+        symbol=symbols,
+        source_artifact_ids=_source_artifact_ids(rows),
+    )
+
+
+def _render_uzi_portfolio(
+    rows: list[dict[str, Any]],
+    *,
+    native_artifact: dict[str, Any],
+    report: dict[str, Any],
+    run_id: str,
+) -> RenderedUziReport:
+    native_content = _record(native_artifact.get("content"))
+    metrics = _native_metrics(native_content)
+    holdings = [dict(row) for row in list(report.get("portfolio_holdings") or []) if isinstance(row, dict)]
+    if not metrics or len(metrics) != len(holdings):
+        raise ReportArtifactMissingError("UZI --portfolio 的成分分析未全部通过质量门")
+    portfolio_runner = importlib.import_module("lib.portfolio_runner")
+    normalized_holdings = portfolio_runner._normalize_weights([dict(row) for row in holdings])
+    for metric, holding in zip(metrics, normalized_holdings, strict=True):
+        metric["_weight"] = float(holding.get("weight") or 0.0)
+        metric["_note"] = str(holding.get("note") or "")
+    health = portfolio_runner._portfolio_health(metrics)
+    portfolio_name = str(report.get("portfolio_name") or "UZI Portfolio")
+    html_document = portfolio_runner._render_html(
+        portfolio_name,
+        metrics,
+        health,
+        str(native_content.get("profile") or "lite"),
+    )
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "-", portfolio_name).strip("-") or "portfolio"
+    return RenderedUziReport(
+        html=html_document,
+        filename_stem=f"uzi-portfolio-{safe_name}-{run_id}",
+        symbol=portfolio_name,
+        source_artifact_ids=_source_artifact_ids(rows),
     )
 
 
@@ -174,10 +293,96 @@ def render_uzi_native_pdf(html_document: str) -> bytes:
     return payload
 
 
+def render_uzi_native_image(html_document: str, *, selector: str) -> bytes:
+    """Apply UZI's native Playwright share-card/war-report screenshot flow."""
+
+    if selector not in {"#share-card", "#war-report"}:
+        raise ValueError("unsupported UZI report image selector")
+    try:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:  # pragma: no cover - deployment dependency guard
+        raise ReportImageUnavailableError("未安装 Playwright") from exc
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            try:
+                context = browser.new_context(
+                    device_scale_factor=2,
+                    viewport={"width": 1280, "height": 800},
+                )
+                page = context.new_page()
+                page.set_content(html_document, wait_until="load", timeout=30_000)
+                page.evaluate("document.fonts && document.fonts.ready")
+                page.evaluate(
+                    """selector => {
+                        const element = document.querySelector(selector);
+                        if (!element) return false;
+                        element.style.position = 'static';
+                        element.style.left = '0';
+                        element.style.top = '0';
+                        return true;
+                    }""",
+                    selector,
+                )
+                locator = page.locator(selector)
+                if locator.count() != 1:
+                    raise ReportImageUnavailableError(f"UZI 报告缺少 {selector} 元素")
+                payload = locator.screenshot(omit_background=False)
+            finally:
+                browser.close()
+    except (PlaywrightError, OSError) as exc:
+        raise ReportImageUnavailableError("Chromium 图片渲染器暂不可用") from exc
+    if not payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ReportImageUnavailableError("Chromium 返回了无效的 PNG 数据")
+    return payload
+
+
+def render_uzi_native_one_liner(
+    artifacts: Iterable[dict[str, Any]],
+    *,
+    report_locator: str,
+) -> tuple[str, str]:
+    """Render UZI's exact single-stock one-liner from ArtifactBoard data."""
+
+    rows = [dict(item) for item in artifacts if isinstance(item, dict)]
+    report = _record((_latest(rows, "research_report") or {}).get("content"))
+    if report.get("delivery_type") != "uzi_native_3_9_4" or report.get("report_allowed") is not True:
+        raise ReportArtifactMissingError("one-liner 仅适用于通过质量门的 UZI 单股报告")
+    native = _record((_latest(rows, "uzi_native_analysis") or {}).get("content"))
+    results = [row for row in list(native.get("results") or []) if isinstance(row, dict)]
+    if len(results) != 1 or results[0].get("report_allowed") is not True:
+        raise ReportArtifactMissingError("one-liner 需要一个通过质量门的单股结果")
+    result = results[0]
+    synthesis = _record(result.get("synthesis"))
+    panel = _record(result.get("panel"))
+    raw = _record(result.get("raw"))
+    divide = _record(synthesis.get("great_divide"))
+    trap = _record(_record(_record(raw.get("dimensions")).get("18_trap")).get("data"))
+    trap_level = str(trap.get("trap_level") or "🟢 安全")
+    _initialize_native_report_imports()
+    _trap_color, trap_emoji = importlib.import_module("lib.report.institutional").trap_color_emoji(trap_level)
+    score = int(float(synthesis.get("overall_score") or 0))
+    bullish = int(_record(panel.get("signal_distribution")).get("bullish") or 0)
+    symbol = str(result.get("symbol") or raw.get("ticker") or "unknown")
+    one_liner = (
+        f"{synthesis.get('name')} 体检结果：{score} 分，{synthesis.get('verdict_label')}。\n"
+        f"50 位大佬里 {bullish} 人喊买。\n"
+        f"💬 {divide.get('punchline') or '—'}\n"
+        f"{trap_emoji} {trap_level}\n"
+        f"全文 → {report_locator}"
+    )
+    safe_symbol = re.sub(r"[^A-Za-z0-9._-]", "-", symbol).strip("-") or "unknown"
+    return one_liner, f"uzi-one-liner-{safe_symbol}.txt"
+
+
 __all__ = [
     "ReportArtifactMissingError",
     "ReportPdfUnavailableError",
+    "ReportImageUnavailableError",
     "RenderedUziReport",
     "render_uzi_native_html",
     "render_uzi_native_pdf",
+    "render_uzi_native_image",
+    "render_uzi_native_one_liner",
 ]
