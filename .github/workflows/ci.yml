@@ -95,6 +95,10 @@ jobs:
           domain_packs/finance_ashare/vendor/uzi_3_9_2/scripts/
           upstream-uzi/skills/deep-analysis/scripts/
       - name: Run the fixed upstream tests with vendored UZI modules
+        env:
+          # Upstream self-review treats GitHub's implicit CI=true as CLI-only,
+          # while its medium-profile regression tests expect normal agent mode.
+          CI: "false"
         working-directory: upstream-uzi/skills/deep-analysis/scripts
         run: python -m pytest -q tests
 
