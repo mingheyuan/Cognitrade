@@ -895,12 +895,13 @@ def read_with_tool(context):
                 paths.root / "execution_control.json",
                 {"pause_requested": True, "cancel_requested": False},
             )
-            paused = agent_os.main_agent.run(
+            paused = agent_os.turn_runner.execute_task(
                 request=resolved,
                 decision=decision,
                 run_id=run_id,
                 thread_id=thread_id,
-            )
+                execution_mode=decision.recommended_mode,
+            ).result
             self.assertEqual(paused.status, "paused")
             resumed = agent_os.resume(run_id)
             self.assertEqual(resumed.status, "completed")

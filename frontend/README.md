@@ -20,7 +20,6 @@ http://127.0.0.1:8000/api/v1
 
 ```dotenv
 VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
-VITE_COGNITRADE_API_TOKEN=<token>
 ```
 
 也可以在页面顶栏配置地址和 Token。Token 只进入当前标签页的

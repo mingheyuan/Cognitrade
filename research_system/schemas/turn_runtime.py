@@ -108,15 +108,6 @@ class PendingInputItem(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
-class TurnRelation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    parent_turn_id: str | None = None
-    parent_run_id: str
-    parent_node_id: str | None = None
-    relation: Literal["child", "review", "continuation", "compact"]
-
-
 class ChildTurnSnapshot(BaseModel):
     """A child execution projected into its parent's canonical Turn."""
 
@@ -196,21 +187,6 @@ class TaskSnapshot(BaseModel):
     graph_state_ref: str | None = None
     subagent_stop_node_ids: list[str] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=utc_now)
-
-
-class GraphExecutionState(BaseModel):
-    """Serializable coordination state for one Graph step in a Turn."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    graph_id: str
-    revision: int = Field(default=1, ge=1)
-    nodes: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    frontier: list[str] = Field(default_factory=list)
-    in_flight: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    pending_feedback: list[dict[str, Any]] = Field(default_factory=list)
-    pending_patches: list[dict[str, Any]] = Field(default_factory=list)
-    gates: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class TurnConfig(BaseModel):
@@ -296,13 +272,11 @@ __all__ = [
     "FollowupTaskRequest",
     "FollowupTaskResult",
     "GraphExecutorConfig",
-    "GraphExecutionState",
     "HookConfig",
     "HookPolicy",
     "PendingInputItem",
     "TaskSelection",
     "TaskSnapshot",
-    "TurnRelation",
     "TurnConfig",
     "TurnExecutionMode",
     "TurnInput",

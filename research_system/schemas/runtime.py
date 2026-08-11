@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-
-from research_system.runtime.core.id_utils import generate_ulid
 
 
 def utc_now() -> datetime:
@@ -44,19 +42,3 @@ class RunStateSnapshot(BaseModel):
     last_event_id: str | None = None
     error_summary: str | None = None
     updated_at: datetime = Field(default_factory=utc_now)
-
-
-class RunEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    event_id: str = Field(default_factory=generate_ulid)
-    request_id: str
-    run_id: str
-    intent: str
-    event_type: str
-    phase: str | None = None
-    agent: str | None = None
-    message: str
-    payload: dict[str, Any] | None = None
-    artifacts: list[dict[str, Any]] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=utc_now)

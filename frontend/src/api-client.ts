@@ -24,7 +24,6 @@ import type {
   PaperOrderInput,
   PaperPortfolio,
   QuantEngineStatus,
-  SecuritySearchResponse,
 } from './finance-contracts'
 import { localizeErrorMessage } from './utils/error-message'
 
@@ -174,10 +173,6 @@ export class CognitradeApiClient {
     return Array.from(new Map(rows.map((run) => [run.run_id, run])).values())
   }
 
-  createRun(payload: ResearchRequest): Promise<ResearchResponse> {
-    return this.request('/runs', { method: 'POST', body: JSON.stringify(payload) })
-  }
-
   createChatThread(): Promise<ChatThreadRecord> {
     return this.request('/chat/threads', { method: 'POST' })
   }
@@ -231,10 +226,6 @@ export class CognitradeApiClient {
   listFundHoldingReportBatches(sourceRunId: string, fundCode?: string): Promise<FundHoldingReportBatch[]> {
     const query = fundCode ? `?fund_code=${encodeURIComponent(fundCode)}` : ''
     return this.request(`/runs/${encodeURIComponent(sourceRunId)}/holding-report-batches${query}`)
-  }
-
-  getFundHoldingReportBatch(batchId: string): Promise<FundHoldingReportBatch> {
-    return this.request(`/holding-report-batches/${encodeURIComponent(batchId)}`)
   }
 
   cancelFundHoldingReportBatch(batchId: string): Promise<FundHoldingReportBatch> {
@@ -331,12 +322,6 @@ export class CognitradeApiClient {
     )
   }
 
-  searchSecurities(query: string, limit = 8): Promise<SecuritySearchResponse> {
-    return this.financeRequest(
-      `/finance/securities?query=${encodeURIComponent(query)}&limit=${limit}`,
-    )
-  }
-
   getMarketData(symbol: string, refresh = false): Promise<MarketDataResponse> {
     return this.financeRequest(
       `/finance/market-data/${encodeURIComponent(symbol)}?refresh=${refresh}`,
@@ -347,10 +332,6 @@ export class CognitradeApiClient {
     return this.financeRequest(
       `/finance/quotes/${encodeURIComponent(symbol)}?refresh=${refresh}`,
     )
-  }
-
-  getPaperAccount(): Promise<PaperAccount> {
-    return this.financeRequest('/finance/paper/account')
   }
 
   resetPaperAccount(initialCash = 1_000_000): Promise<PaperAccount> {

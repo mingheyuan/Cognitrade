@@ -31,13 +31,9 @@ class TurnTask(Protocol):
 
     task_type: TurnTaskType
 
-    def start_or_resume(self, context: "TurnContext") -> TaskOutcome: ...
-
     def start(self, context: "TurnContext") -> TaskOutcome: ...
 
     def resume(self, context: "TurnContext") -> TaskOutcome: ...
-
-    def cancel(self, context: "TurnContext", reason: str) -> TaskOutcome: ...
 
 
 @dataclass

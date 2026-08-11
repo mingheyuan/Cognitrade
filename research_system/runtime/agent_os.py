@@ -151,7 +151,6 @@ class AgentOS:
             graph_adapter=_AgentOSGraphRunnerAdapter(self),
             timeout_seconds=float(settings.run_timeout_seconds),
         )
-        self.main_agent.bind_turn_runner(self.turn_runner)
 
     def list_domain_packs(self) -> list[dict[str, Any]]:
         return [
@@ -407,48 +406,6 @@ class AgentOS:
             response_factory=lambda value: self._response_from_graph(request, value),
         )
         return result
-
-    def run_request(
-        self,
-        request: RequestEnvelope,
-        *,
-        run_id: str | None = None,
-        intake_decision: RequestIntakeDecision | None = None,
-        event_callback=None,
-        turn_id: str | None = None,
-    ) -> ExecutionRunResult:
-        """Compatibility facade that still enters the canonical TurnRunner."""
-        decision = intake_decision or self.request_intake_decision(request)
-        if decision.status != "accepted":
-            raise ValueError("Agent OS RequestIntake requires clarification before execution")
-        resolved_request = decision.apply_to(request)
-        effective_run_id, _, _ = self.run_store.create_run(
-            resolved_request,
-            resolved_request.intent or "domain_task",
-            run_id=run_id,
-            reuse_existing=bool(run_id and run_id in self._prepared_run_ids),
-        )
-        with self._lock:
-            self._prepared_run_ids.add(effective_run_id)
-        thread_id = str(
-            resolved_request.thread_id
-            or resolved_request.slots.get("chat_thread_id")
-            or f"thread_{effective_run_id}"
-        )
-        outcome = self.turn_runner.execute_task(
-            request=resolved_request,
-            decision=decision,
-            run_id=effective_run_id,
-            thread_id=thread_id,
-            execution_mode="graph",
-            event_callback=event_callback,
-        )
-        self._prepared_run_ids.discard(effective_run_id)
-        self.turn_runner.finalize(
-            outcome=outcome,
-            response_factory=lambda value: self._response_from_graph(resolved_request, value),
-        )
-        return outcome.result
 
     def _run_graph_runner(
         self,
@@ -1347,34 +1304,6 @@ class AgentOS:
             ],
         }
 
-    def assert_run_scope(
-        self,
-        run_id: str,
-        *,
-        user_id: str | None = None,
-        tenant_id: str | None = None,
-    ) -> None:
-        """Enforce the same identity scope for the unversioned workspace API."""
-        if user_id is None and tenant_id is None:
-            return
-        root = self.run_store.load_run_paths(run_id).root
-        request = read_json(root / "request.json")
-        if not isinstance(request, dict):
-            if user_id == "api_token" and tenant_id == "api_token":
-                return
-            raise FileNotFoundError(f"run not found: {run_id}")
-        if (
-            request.get("user_id") in (None, "")
-            and request.get("tenant_id") in (None, "")
-            and user_id == "api_token"
-            and tenant_id == "api_token"
-        ):
-            return
-        if user_id is not None and request.get("user_id") != user_id:
-            raise FileNotFoundError(f"run not found: {run_id}")
-        if tenant_id is not None and request.get("tenant_id") != tenant_id:
-            raise FileNotFoundError(f"run not found: {run_id}")
-
     def replay(self, run_id: str) -> ExecutionRunSnapshot:
         return self._runner(run_id).replay()
 
@@ -1481,21 +1410,6 @@ class AgentOS:
             return False
         self.turn_runner.cancel(run_id, reason="调用方已请求取消运行。")
         return True
-
-    def enqueue_turn_follow_up(
-        self,
-        run_id: str,
-        *,
-        text: str,
-        operation_id: str | None = None,
-    ) -> dict[str, Any]:
-        item = self.turn_runner.enqueue_follow_up(
-            run_id,
-            text=text,
-            source="user",
-            operation_id=operation_id,
-        )
-        return item.model_dump(mode="json")
 
     def patch(
         self,

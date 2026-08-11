@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
+from research_system.schemas.events import EventEnvelope
 from research_system.schemas.protocol import ProgressState, RequestEnvelope, ResponseEnvelope
-from research_system.schemas.runtime import RunEvent
 
 
 API_TOKEN = "test-api-token"
@@ -71,15 +69,16 @@ def run_event(
     event_id: str = EVENT_ID,
     event_type: str = "agent_progress",
     run_id: str = RUN_ID,
-) -> RunEvent:
-    return RunEvent(
+) -> EventEnvelope:
+    return EventEnvelope(
         event_id=event_id,
         request_id=REQUEST_ID,
         run_id=run_id,
+        thread_id=THREAD_ID,
         intent="stock_check",
         event_type=event_type,
         phase="collect",
-        agent="collector",
+        actor="collector",
         message=f"event {event_type}",
         payload={"percent": 50},
         artifacts=[],
@@ -226,49 +225,3 @@ class FakeRunServiceFactory:
     def __call__(self, agent_os: Any) -> FakeRunService:
         self.agent_os_seen.append(agent_os)
         return self.service
-
-
-class FakeEventSource:
-    def __init__(self, rows: list[RunEvent] | None = None) -> None:
-        self.rows = list(rows or [])
-        self.prepare_calls: list[tuple[str, str | None]] = []
-        self.stream_calls: list[tuple[str, int]] = []
-        self.closed = False
-
-    def prepare(self, run_id: str, *, last_event_id: str | None = None) -> int:
-        self.prepare_calls.append((run_id, last_event_id))
-        if last_event_id:
-            for index, row in enumerate(self.rows):
-                if row.event_id == last_event_id:
-                    return index + 1
-        return 0
-
-    async def stream(self, run_id: str, *, cursor: int = 0):
-        self.stream_calls.append((run_id, cursor))
-        try:
-            for row in self.rows[max(0, cursor) :]:
-                payload = row.model_dump(mode="json")
-                data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-                yield f"id: {row.event_id}\nevent: {row.event_type}\ndata: {data}\n\n"
-        finally:
-            self.closed = True
-
-
-class FakeSystemService:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
-        self.status_payload: dict[str, Any] = {"total_runs": 0, "status_counts": {}, "recent_runs": []}
-        self.doctor_payload: dict[str, Any] = {"status": "completed", "checks": []}
-        self.checks_payload: dict[str, Any] = {"status": "completed", "checks": []}
-
-    def status(self) -> dict[str, Any]:
-        self.calls.append(("status", (), {}))
-        return self.status_payload
-
-    def doctor(self) -> dict[str, Any]:
-        self.calls.append(("doctor", (), {}))
-        return self.doctor_payload
-
-    def checks(self, repo_root: Path) -> dict[str, Any]:
-        self.calls.append(("checks", (repo_root,), {}))
-        return self.checks_payload

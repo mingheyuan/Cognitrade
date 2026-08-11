@@ -1,18 +1,5 @@
 export type JsonRecord = Record<string, unknown>
 
-export type SecuritySearchResult = {
-  symbol: string
-  name: string
-  latest_price?: number | null
-  pct_change?: number | null
-  source?: string
-}
-
-export type SecuritySearchResponse = {
-  query: string
-  results: SecuritySearchResult[]
-}
-
 export type MarketQuote = {
   symbol: string
   name: string

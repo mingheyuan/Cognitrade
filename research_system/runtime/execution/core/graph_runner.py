@@ -154,7 +154,6 @@ class ExecutionGraphRunner:
         self.progress_observer = progress_observer
         self.cache_root = Path(cache_root) if cache_root is not None else self.run_root / "cache"
         self.scheduler = ExecutionGraphScheduler()
-        self._pause_requested = Event()
         self._cancel_requested = Event()
         self._node_cancellations: dict[str, Event] = {}
         self._patches: list[ExecutionGraphPatch] = []
@@ -185,17 +184,6 @@ class ExecutionGraphRunner:
             for row in list(failure_injections or [])
             if isinstance(row, dict)
         ]
-
-    def request_pause(self) -> None:
-        self._pause_requested.set()
-        self._write_control(pause_requested=True)
-
-    def request_cancel(self) -> None:
-        self._cancel_requested.set()
-        self._write_control(cancel_requested=True)
-        with self._lock:
-            for cancellation in self._node_cancellations.values():
-                cancellation.set()
 
     @staticmethod
     def _set_run_status(snapshot: ExecutionRunSnapshot, status: str) -> None:
@@ -786,7 +774,6 @@ class ExecutionGraphRunner:
             self._set_run_status(snapshot, "paused")
             snapshot.updated_at = utc_now()
             self._persist(snapshot)
-        self._pause_requested.clear()
         control = read_json(self.control_path) or {}
         self._write_control(
             pause_requested=False,
@@ -2934,7 +2921,7 @@ class ExecutionGraphRunner:
             raise GraphTimedOutError("run timeout exceeded")
         if self._deadline_at is not None and monotonic() >= self._deadline_at:
             raise GraphTimedOutError("turn timeout exceeded")
-        if self._pause_requested.is_set() or control.get("pause_requested"):
+        if control.get("pause_requested"):
             self._set_run_status(snapshot, "paused")
             snapshot.updated_at = utc_now()
             self._persist(snapshot)

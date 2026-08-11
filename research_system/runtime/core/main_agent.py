@@ -55,48 +55,6 @@ class MainAgent:
         self.tools = tool_registry or build_core_tool_registry()
         self._event_lock = RLock()
         self._event_turn_ids: dict[str, str] = {}
-        self._turn_runner = None
-
-    def bind_turn_runner(self, turn_runner) -> None:
-        """Bind the canonical lifecycle without making TurnRunner a dependency."""
-        self._turn_runner = turn_runner
-
-    def run(
-        self,
-        *,
-        request: RequestEnvelope,
-        decision: RequestIntakeDecision,
-        run_id: str,
-        thread_id: str,
-        event_callback: Callable[[dict[str, Any]], None] | None = None,
-        resume: bool = False,
-        emit_started: bool = True,
-        turn_id: str | None = None,
-        hook_runtime=None,
-        follow_up_runtime: FollowUpRuntime | None = None,
-        turn_config: TurnConfig | None = None,
-    ) -> MainAgentRunResult:
-        """Compatibility facade; all execution is owned by TurnRunner."""
-        del emit_started, turn_id, hook_runtime, follow_up_runtime
-        if self._turn_runner is None:
-            raise RuntimeError(
-                "MainAgent.run requires a bound TurnRunner; use AgentOS as the execution entrypoint"
-            )
-        outcome = self._turn_runner.execute_task(
-            request=request,
-            decision=decision,
-            run_id=run_id,
-            thread_id=thread_id,
-            execution_mode=(
-                turn_config.execution_mode
-                if turn_config is not None
-                else decision.recommended_mode
-            ),
-            turn_config=turn_config,
-            event_callback=event_callback,
-            resume=resume,
-        )
-        return outcome.result
 
     def route(
         self,

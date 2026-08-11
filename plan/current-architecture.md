@@ -41,7 +41,7 @@ Web
 | `runtime/graph_delivery.py` | Graph 产物到 Main Agent 最终交付 |
 | `runtime/domain_packs` | Pack 加载、完整性和实现解析 |
 | `api` | 鉴权、验证、请求 ID、HTTP/SSE 和版本边界 |
-| `api/fund_holding_report_service.py` | 从冻结基金 Artifact 创建父批次，以独立默认 5 并发执行最多十个 `stock_check` 子运行，并持久化取消、重试、续跑和报告 ZIP 状态 |
+| `api/fund_holding_report_service.py` | 从冻结基金 Artifact 创建父批次，以独立默认 2 并发执行最多十个 `stock_check` 子运行，并持久化取消、重试、续跑和报告 ZIP 状态 |
 | `api/veighna_paper_adapter.py` | VeighNa PaperAccount 无界面订单建模与 Tick 撮合 |
 | `api/paper_trading_service.py` | SQLite 资金、费用、T+1、FIFO 持仓与挂单冻结账本 |
 | `api/hikyuu_backtest_service.py` | 隔离子进程执行 Hikyuu 策略并持久化结果 |
