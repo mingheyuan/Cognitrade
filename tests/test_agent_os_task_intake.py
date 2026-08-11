@@ -70,6 +70,26 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
         self.assertEqual(decision.intent, "stock_compare")
         self.assertEqual(decision.slots["symbols"], ["000001", "600036"])
 
+    def test_single_stock_uzi_command_rejects_multiple_symbols(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
+
+        decision = service.resolve(
+            RequestEnvelope(
+                intent="quick_scan",
+                user_query="快速扫描 600519 和 000001",
+                slots={"symbols": ["600519", "000001"]},
+            )
+        )
+
+        self.assertEqual(decision.status, "needs_clarification")
+        self.assertEqual(decision.intent, "quick_scan")
+        self.assertEqual(
+            decision.clarification.context["reason"],
+            "uzi_single_symbol_command_requires_one_symbol",
+        )
+        self.assertEqual(decision.clarification.context["suggested_intent"], "stock_compare")
+
     def test_pack_intake_exposes_declared_capability_candidates(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))

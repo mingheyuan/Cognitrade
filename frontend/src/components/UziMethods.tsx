@@ -48,10 +48,10 @@ const stockMethods = [
   { id: 'comps', intent: 'uzi_comps', label: '可比公司', description: 'UZI 原生同行倍数、分位与隐含价格。', icon: Scale },
   { id: 'ai_readiness', intent: 'uzi_ai_readiness', label: 'AI 就绪度', description: '核验产业链、真实需求与不可替代性三道证据门。', icon: Bot },
   { id: 'earnings_preview', intent: 'uzi_earnings_preview', label: '财报前瞻', description: '调用 UZI 原生财报前瞻方法。', icon: TrendingUp },
-  { id: 'model_update', intent: 'uzi_model_update', label: '模型更新', description: '只接受显式新假设，不执行上游演示模式。', icon: BrainCircuit },
-  { id: 'three_statement', intent: 'uzi_three_statement_method', label: '三表联动', description: '完整填写 UZI 原生 11 项预测参数后计算。', icon: BrainCircuit },
-  { id: 'quick_lbo', intent: 'uzi_lbo', label: '快速 LBO', description: '要求真实 EBITDA 与完整原生交易参数。', icon: Scale },
-  { id: 'accretion_dilution', intent: 'uzi_accretion_dilution_method', label: '并购增厚摊薄', description: '基于显式标的与交易参数计算备考 EPS。', icon: ArrowRightLeft },
+  { id: 'model_update', intent: 'uzi_model_update', label: '模型更新', description: '可填写新假设；留空保留 UZI 原生演示模式并标注降级。', icon: BrainCircuit },
+  { id: 'three_statement', intent: 'uzi_three_statement_method', label: '三表联动', description: '可覆盖部分预测参数；未填项沿用 UZI 原生默认值。', icon: BrainCircuit },
+  { id: 'quick_lbo', intent: 'uzi_lbo', label: '快速 LBO', description: '基于真实 EBITDA；未填交易参数沿用 UZI 原生默认值。', icon: Scale },
+  { id: 'accretion_dilution', intent: 'uzi_accretion_dilution_method', label: '并购增厚摊薄', description: '要求显式标的；未填交易条款沿用 UZI 原生默认值。', icon: ArrowRightLeft },
   { id: 'segmental', intent: 'uzi_segmental_model', label: '分部模型', description: '先发现真实披露骨架，再补充假设并校验。', icon: Gauge },
   { id: 'initiation_report', intent: 'uzi_initiate', label: '首次覆盖', description: '调用 UZI 原生首次覆盖产物。', icon: Database },
   { id: 'earnings_review', intent: 'uzi_earnings', label: '财报解读', description: '调用 UZI 原生财报解读产物。', icon: TrendingUp },
@@ -63,8 +63,8 @@ const stockMethods = [
   { id: 'ic_memo', intent: 'uzi_ic_memo', label: '投委会备忘录', description: '汇总证据与风险，最终决策保留人工复核。', icon: Database },
   { id: 'porter_bcg', intent: 'uzi_porter_bcg_method', label: '竞争格局', description: '调用 UZI 原生 Porter / BCG 分析。', icon: Scale },
   { id: 'dd_checklist', intent: 'uzi_dd', label: '尽调清单', description: '调用 UZI 原生尽调清单。', icon: CheckCircle2 },
-  { id: 'unit_economics', intent: 'uzi_unit_economics_method', label: '单位经济', description: '需显式接受 UZI 原生代理假设。', icon: Gauge },
-  { id: 'value_creation_plan', intent: 'uzi_value_creation_plan_method', label: '价值创造计划', description: '需显式接受 UZI 原生代理假设。', icon: TrendingUp },
+  { id: 'unit_economics', intent: 'uzi_unit_economics_method', label: '单位经济', description: '保留 UZI 原生代理假设，并在产物中明确标注降级。', icon: Gauge },
+  { id: 'value_creation_plan', intent: 'uzi_value_creation_plan_method', label: '价值创造计划', description: '保留 UZI 原生代理假设，并在产物中明确标注降级。', icon: TrendingUp },
 ] as const
 
 const methodArtifactTypes = [
@@ -85,8 +85,7 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
   const [threshold, setThreshold] = useState('5')
   const [portfolioMethod, setPortfolioMethod] = useState<'batch' | 'returns' | 'rebalance' | 'portfolio_rebalance'>('batch')
   const [portfolioName, setPortfolioName] = useState('')
-  const [acceptNativeDefaults, setAcceptNativeDefaults] = useState(false)
-  const [acceptNativeFees, setAcceptNativeFees] = useState(false)
+  const [assetTargetsJson, setAssetTargetsJson] = useState('')
   const [segmentalJson, setSegmentalJson] = useState('')
   const [assumptionInputs, setAssumptionInputs] = useState<Record<string, string>>({})
 
@@ -113,10 +112,11 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
     }
     if (method === 'model_update') {
       const value = optionalNumber(modelValue)
-      if (value == null) return
-      constraints.model_updates = { [modelField]: value }
+      if (modelValue.trim() && value == null) return
+      if (value != null) constraints.model_updates = { [modelField]: value }
     }
-    const methodAssumptions = buildMethodAssumptions(method, assumptionInputs, acceptNativeDefaults)
+    const methodAssumptions = buildMethodAssumptions(method, assumptionInputs)
+    if (hasEnteredInvalidAssumptions(method, assumptionInputs, methodAssumptions)) return
     if (methodNeedsAssumptions(method) && !methodAssumptions) return
     if (methodAssumptions) constraints.method_assumptions = { [method]: methodAssumptions }
     if (method === 'segmental' && segmentalJson.trim()) {
@@ -148,8 +148,7 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
         market: row.market,
         ...(row.assetClass.trim() ? { asset_class: row.assetClass.trim() } : {}),
       }))
-    if (!parsed.length || (portfolioMethod !== 'batch' && parsed.some((row) => row.weight == null))) return
-    if (portfolioMethod === 'returns' && parsed.some((row) => row.return_pct == null)) return
+    if (!parsed.length) return
     const constraints: Record<string, unknown> = { portfolio_holdings: parsed }
     if (portfolioMethod === 'batch') {
       if (!analysisProfile) return
@@ -166,20 +165,31 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
         .filter((row) => row.ticker.trim() && optionalNumber(row.target) != null)
         .map((row) => [row.ticker.trim(), optionalNumber(row.target)]),
     )
-    if (Object.keys(targets).length === parsed.length) constraints.rebalance_targets = targets
+    const enteredTargetCount = holdings.filter((row) => row.ticker.trim() && row.target.trim()).length
+    if (portfolioMethod === 'rebalance') {
+      if (enteredTargetCount !== Object.keys(targets).length) return
+      if (Object.keys(targets).length) constraints.rebalance_targets = targets
+    }
     const assetTargets = Object.fromEntries(
       holdings
         .filter((row) => row.assetClass.trim() && optionalNumber(row.assetTarget) != null)
         .map((row) => [row.assetClass.trim(), optionalNumber(row.assetTarget)]),
     )
-    const observedClasses = [...new Set(holdings.filter((row) => row.ticker.trim()).map((row) => row.assetClass.trim()).filter(Boolean))]
-    if (portfolioMethod === 'rebalance') {
-      if (Object.keys(targets).length !== parsed.length || !acceptNativeFees) return
-      constraints.accept_uzi_native_fee_schedule = true
-    }
+    const enteredAssetTargetCount = holdings.filter((row) => row.ticker.trim() && row.assetTarget.trim()).length
     if (portfolioMethod === 'portfolio_rebalance') {
-      if (!observedClasses.length || Object.keys(assetTargets).length !== observedClasses.length) return
-      constraints.asset_class_targets = assetTargets
+      let requestedAssetTargets: Record<string, unknown> = assetTargets
+      if (assetTargetsJson.trim()) {
+        try {
+          const parsedTargets = JSON.parse(assetTargetsJson)
+          if (!parsedTargets || typeof parsedTargets !== 'object' || Array.isArray(parsedTargets)) return
+          requestedAssetTargets = parsedTargets as Record<string, unknown>
+        } catch {
+          return
+        }
+      } else if (enteredAssetTargetCount !== Object.keys(assetTargets).length) {
+        return
+      }
+      if (Object.keys(requestedAssetTargets).length) constraints.asset_class_targets = requestedAssetTargets
     }
     const intent = ({
       batch: 'uzi_portfolio_batch',
@@ -228,29 +238,27 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
             {method === 'model_update' && (
               <div className="uzi-inline-form">
                 <label><span>更新字段</span><select value={modelField} onChange={(event) => setModelField(event.target.value)}><option value="rev_growth">营收增速 %</option><option value="gross_margin">毛利率 %</option><option value="net_margin">净利率 %</option><option value="capex_pct">资本开支/营收 %</option><option value="stage1_growth">DCF 第一阶段增速 %</option><option value="terminal_g">DCF 永续增长率 %</option><option value="beta">Beta</option><option value="target_pe">目标市盈率</option><option value="target_price">目标价</option></select></label>
-                <label><span>显式新值</span><input type="number" step="any" value={modelValue} onChange={(event) => setModelValue(event.target.value)} placeholder="必须填写" /></label>
+                <label><span>新值（可选）</span><input type="number" step="any" value={modelValue} onChange={(event) => setModelValue(event.target.value)} placeholder="留空运行 UZI 原生 demo mode" /></label>
               </div>
             )}
             <MethodAssumptionFields method={method} values={assumptionInputs} onChange={(key, value) => setAssumptionInputs((current) => ({ ...current, [key]: value }))} />
-            {['unit_economics', 'value_creation_plan'].includes(method) && (
-              <label className="uzi-policy-checkbox"><input type="checkbox" checked={acceptNativeDefaults} onChange={(event) => setAcceptNativeDefaults(event.target.checked)} /><span>我已知晓并接受 UZI 原生方法内置的代理假设；产物必须展示这些假设。</span></label>
-            )}
             {method === 'segmental' && (
               <label><span>已填分部模型 JSON（可选；留空先生成发现骨架）</span><textarea rows={8} value={segmentalJson} onChange={(event) => setSegmentalJson(event.target.value)} placeholder="从首次运行产物复制 skeleton，补齐 drivers、thesis_tag 与三情景 CAGR 后粘贴回来" /></label>
             )}
-            <button className="primary-button uzi-run-button" disabled={submitting || !symbol.trim() || (method === 'analyze_stock' && !analysisProfile) || (method === 'model_update' && optionalNumber(modelValue) == null) || (methodNeedsAssumptions(method) && !buildMethodAssumptions(method, assumptionInputs, acceptNativeDefaults))}>{submitting ? <RefreshCw size={15} className="is-spinning" /> : <Play size={15} />}{submitting ? '正在运行' : '运行 UZI 原生命令 / 方法'}</button>
+            <button className="primary-button uzi-run-button" disabled={submitting || !symbol.trim() || (method === 'analyze_stock' && !analysisProfile) || (method === 'model_update' && Boolean(modelValue.trim()) && optionalNumber(modelValue) == null) || hasEnteredInvalidAssumptions(method, assumptionInputs, buildMethodAssumptions(method, assumptionInputs)) || (methodNeedsAssumptions(method) && !buildMethodAssumptions(method, assumptionInputs))}>{submitting ? <RefreshCw size={15} className="is-spinning" /> : <Play size={15} />}{submitting ? '正在运行' : '运行 UZI 原生命令 / 方法'}</button>
           </form>
         ) : (
           <form className="uzi-config-card uzi-portfolio-form" onSubmit={submitPortfolio}>
             <header><div><span className="section-kicker">PORTFOLIO INPUT</span><h2>录入显式持仓</h2></div><button type="button" className="secondary-button" onClick={() => setHoldings((rows) => [...rows, emptyHolding()])}><Plus size={14} />添加持仓</button></header>
             <label><span>组合方法</span><select value={portfolioMethod} onChange={(event) => setPortfolioMethod(event.target.value as typeof portfolioMethod)}><option value="batch">UZI 原生组合批量分析</option><option value="returns">收益归因</option><option value="rebalance">持仓再平衡</option><option value="portfolio_rebalance">资产类别战略再平衡</option></select></label>
             {portfolioMethod === 'batch' && <><label><span>组合名称（可选）</span><input value={portfolioName} onChange={(event) => setPortfolioName(event.target.value)} placeholder="例如：核心持仓" /></label><label><span>研究深度（必须显式选择）</span><select value={analysisProfile} onChange={(event) => setAnalysisProfile(event.target.value as typeof analysisProfile)}><option value="">请选择</option><option value="lite">快速 Lite</option><option value="medium">标准 Medium</option><option value="deep">深度 Deep</option></select></label><UziSchoolSelect value={school} onChange={setSchool} /></>}
+            {portfolioMethod === 'portfolio_rebalance' && <label><span>资产类别目标 JSON（可选，可包含当前未持有类别）</span><textarea rows={4} value={assetTargetsJson} onChange={(event) => setAssetTargetsJson(event.target.value)} placeholder={'例如 {"A股蓝筹": 80, "现金": 20}；留空使用 UZI 原生平衡配置'} /></label>}
             <div className="uzi-holding-list">
               {holdings.map((holding, index) => (
                 <div className="uzi-holding-row" key={index}>
                   <input aria-label={`持仓 ${index + 1} 代码`} value={holding.ticker} onChange={(event) => updateHolding(setHoldings, index, 'ticker', event.target.value)} placeholder="代码" />
                   <input aria-label={`持仓 ${index + 1} 名称`} value={holding.name} onChange={(event) => updateHolding(setHoldings, index, 'name', event.target.value)} placeholder="名称（可选）" />
-                  <input aria-label={`持仓 ${index + 1} 权重`} type="number" step="any" value={holding.weight} onChange={(event) => updateHolding(setHoldings, index, 'weight', event.target.value)} placeholder="当前权重" />
+                  <input aria-label={`持仓 ${index + 1} 权重`} type="number" step="any" value={holding.weight} onChange={(event) => updateHolding(setHoldings, index, 'weight', event.target.value)} placeholder="当前权重（可选）" />
                   <input aria-label={`持仓 ${index + 1} 收益`} type="number" step="any" value={holding.returnPct} onChange={(event) => updateHolding(setHoldings, index, 'returnPct', event.target.value)} placeholder="区间收益 %" />
                   <input aria-label={`持仓 ${index + 1} 目标`} type="number" step="any" value={holding.target} onChange={(event) => updateHolding(setHoldings, index, 'target', event.target.value)} placeholder="目标权重" />
                   <input aria-label={`持仓 ${index + 1} 市值`} type="number" step="any" value={holding.value} onChange={(event) => updateHolding(setHoldings, index, 'value', event.target.value)} placeholder="市值" />
@@ -265,9 +273,8 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
               <label><span>基准收益 %（可选）</span><input type="number" step="any" value={benchmark} onChange={(event) => setBenchmark(event.target.value)} /></label>
               <label><span>漂移阈值 pp</span><input type="number" min="0" step="any" value={threshold} onChange={(event) => setThreshold(event.target.value)} /></label>
             </div>
-            {portfolioMethod === 'rebalance' && <label className="uzi-policy-checkbox"><input type="checkbox" checked={acceptNativeFees} onChange={(event) => setAcceptNativeFees(event.target.checked)} /><span>我已核对并接受 UZI 原生 A/HK/US 固定费率表；每只目标权重必须填写。</span></label>}
-            <p className="uzi-policy-note"><AlertCircle size={14} />组合批量分析严格沿用 UZI：全部未填权重时等权，部分填写时分配剩余并归一化；其他三种方法仍要求对应真实输入完整。</p>
-            <button className="primary-button uzi-run-button" disabled={submitting || !holdings.some((row) => row.ticker.trim()) || (portfolioMethod !== 'batch' && !holdings.some((row) => row.ticker.trim() && optionalNumber(row.weight) != null)) || (portfolioMethod === 'batch' && !analysisProfile)}>{submitting ? <RefreshCw size={15} className="is-spinning" /> : <ArrowRightLeft size={15} />}{submitting ? '正在运行' : portfolioMethod === 'batch' ? '运行 UZI 组合分析' : '运行归因与再平衡'}</button>
+            <p className="uzi-policy-note"><AlertCircle size={14} />组合批量分析沿用 UZI 权重归一化；收益缺失按原生规则计 0 贡献并告警；再平衡未填目标时使用等权，战略再平衡未填类别目标时使用原生平衡配置，均会在产物中标注降级。</p>
+            <button className="primary-button uzi-run-button" disabled={submitting || !holdings.some((row) => row.ticker.trim()) || (portfolioMethod === 'batch' && !analysisProfile)}>{submitting ? <RefreshCw size={15} className="is-spinning" /> : <ArrowRightLeft size={15} />}{submitting ? '正在运行' : portfolioMethod === 'batch' ? '运行 UZI 组合分析' : '运行归因与再平衡'}</button>
           </form>
         )}
 
@@ -306,10 +313,10 @@ function MethodAssumptionFields({ method, values, onChange }: { method: string; 
   if (method === 'accretion_dilution') fields = [
     field('targetTicker', '标的代码', '例如 000001', 'text'), field('targetName', '标的名称', '例如 平安银行', 'text'),
     field('targetShares', '标的总股本（亿股）', '例如 200'), field('targetPrice', '标的股价', '例如 10'),
-    field('targetEps', '标的 EPS', '例如 0.5'), field('targetPe', '标的 PE', '例如 20'),
-    field('targetNetIncome', '标的净利润（亿元）', '例如 100'), field('premiumPct', '收购溢价率', '例如 0.30'),
-    field('cashPct', '现金支付比例', '例如 0.50'), field('synergiesYi', '税前年化协同（亿元）', '可为 0'),
-    field('newDebtRate', '新增债务利率', '例如 0.05'),
+    field('targetEps', '标的 EPS（可选，原函数不读取）', '例如 0.5'), field('targetPe', '标的 PE（可选，原函数不读取）', '例如 20'),
+    field('targetNetIncome', '标的净利润（亿元，可为负）', '例如 100'), field('premiumPct', '收购溢价率（可选）', '默认 0.30'),
+    field('cashPct', '现金支付比例（可选）', '默认 0.50'), field('synergiesYi', '税前年化协同（可选，亿元）', '默认 0'),
+    field('newDebtRate', '新增债务利率（可选）', '默认 0.05'),
   ]
   if (method === 'thesis_tracker') fields = [
     <label key="direction"><span>投资方向</span><select value={values.direction || ''} onChange={(event) => onChange('direction', event.target.value)}><option value="">请选择</option><option value="long">多头</option><option value="short">空头</option></select></label>,
@@ -318,43 +325,71 @@ function MethodAssumptionFields({ method, values, onChange }: { method: string; 
     <label key="style"><span>筛选风格</span><select value={values.style || ''} onChange={(event) => onChange('style', event.target.value)}><option value="">请选择</option><option value="value">价值</option><option value="growth">成长</option><option value="quality">质量</option><option value="short">做空风险</option><option value="gulp">GULP 合理价成长</option></select></label>,
   ]
   if (!fields.length) return null
-  return <div className="uzi-assumption-panel"><div><strong>显式方法假设</strong><small>以下参数全部由你提供；系统不会填默认值。</small></div><div className="uzi-inline-form">{fields}</div></div>
+  return <div className="uzi-assumption-panel"><div><strong>方法假设（可选覆盖）</strong><small>留空时执行固定 UZI 函数的原生默认分支，并在产物中标注降级。</small></div><div className="uzi-inline-form">{fields}</div></div>
 }
 
 function methodNeedsAssumptions(method: string): boolean {
-  return ['three_statement', 'quick_lbo', 'accretion_dilution', 'thesis_tracker', 'quantitative_screen', 'unit_economics', 'value_creation_plan'].includes(method)
+  return method === 'accretion_dilution'
 }
 
-function buildMethodAssumptions(method: string, values: Record<string, string>, acceptNativeDefaults: boolean): Record<string, unknown> | null {
+function methodAssumptionKeys(method: string): string[] {
+  if (method === 'three_statement') return ['revenueGrowthY1', 'revenueGrowthY2', 'revenueGrowthY3', 'revenueGrowthY4', 'revenueGrowthY5', 'grossMargin', 'opexPctRevenue', 'taxRate', 'capexPctRevenue', 'depPctRevenue', 'nwcPctRevenue']
+  if (method === 'quick_lbo') return ['entryMultiple', 'debtMultiple', 'exitMultiple', 'holdYears', 'ebitdaGrowth', 'interestRate']
+  if (method === 'accretion_dilution') return ['targetTicker', 'targetName', 'targetShares', 'targetPrice', 'targetEps', 'targetPe', 'targetNetIncome', 'premiumPct', 'cashPct', 'synergiesYi', 'newDebtRate']
+  if (method === 'thesis_tracker') return ['direction']
+  if (method === 'quantitative_screen') return ['style']
+  return []
+}
+
+function hasEnteredInvalidAssumptions(method: string, values: Record<string, string>, assumptions: Record<string, unknown> | null): boolean {
+  return methodAssumptionKeys(method).some((key) => String(values[key] || '').trim()) && assumptions == null
+}
+
+function buildMethodAssumptions(method: string, values: Record<string, string>): Record<string, unknown> | null {
   const number = (key: string) => optionalNumber(values[key])
   if (method === 'three_statement') {
-    const keys = ['revenueGrowthY1', 'revenueGrowthY2', 'revenueGrowthY3', 'revenueGrowthY4', 'revenueGrowthY5', 'grossMargin', 'opexPctRevenue', 'taxRate', 'capexPctRevenue', 'depPctRevenue', 'nwcPctRevenue']
-    if (keys.some((key) => number(key) == null)) return null
-    return {
-      revenue_growth_y1: number('revenueGrowthY1'), revenue_growth_y2: number('revenueGrowthY2'), revenue_growth_y3: number('revenueGrowthY3'),
-      revenue_growth_y4: number('revenueGrowthY4'), revenue_growth_y5: number('revenueGrowthY5'), gross_margin: number('grossMargin'),
-      opex_pct_revenue: number('opexPctRevenue'), tax_rate: number('taxRate'), capex_pct_revenue: number('capexPctRevenue'),
-      dep_pct_revenue: number('depPctRevenue'), nwc_pct_revenue: number('nwcPctRevenue'),
-    }
+    const fields = [
+      ['revenueGrowthY1', 'revenue_growth_y1'], ['revenueGrowthY2', 'revenue_growth_y2'], ['revenueGrowthY3', 'revenue_growth_y3'],
+      ['revenueGrowthY4', 'revenue_growth_y4'], ['revenueGrowthY5', 'revenue_growth_y5'], ['grossMargin', 'gross_margin'],
+      ['opexPctRevenue', 'opex_pct_revenue'], ['taxRate', 'tax_rate'], ['capexPctRevenue', 'capex_pct_revenue'],
+      ['depPctRevenue', 'dep_pct_revenue'], ['nwcPctRevenue', 'nwc_pct_revenue'],
+    ] as const
+    const provided = fields.filter(([input]) => String(values[input] || '').trim())
+    if (!provided.length) return null
+    if (provided.some(([input]) => number(input) == null)) return null
+    return Object.fromEntries(provided.map(([input, output]) => [output, number(input)]))
   }
   if (method === 'quick_lbo') {
-    const keys = ['entryMultiple', 'debtMultiple', 'exitMultiple', 'holdYears', 'ebitdaGrowth', 'interestRate']
-    if (keys.some((key) => number(key) == null)) return null
-    return { entry_multiple: number('entryMultiple'), debt_multiple: number('debtMultiple'), exit_multiple: number('exitMultiple'), hold_years: number('holdYears'), ebitda_growth: number('ebitdaGrowth'), interest_rate: number('interestRate') }
+    const fields = [
+      ['entryMultiple', 'entry_multiple'], ['debtMultiple', 'debt_multiple'], ['exitMultiple', 'exit_multiple'],
+      ['holdYears', 'hold_years'], ['ebitdaGrowth', 'ebitda_growth'], ['interestRate', 'interest_rate'],
+    ] as const
+    const provided = fields.filter(([input]) => String(values[input] || '').trim())
+    if (!provided.length) return null
+    if (provided.some(([input]) => number(input) == null)) return null
+    return Object.fromEntries(provided.map(([input, output]) => [output, number(input)]))
   }
   if (method === 'accretion_dilution') {
     const targetTicker = String(values.targetTicker || '').trim()
     const targetName = String(values.targetName || '').trim()
-    const keys = ['targetShares', 'targetPrice', 'targetEps', 'targetPe', 'targetNetIncome', 'premiumPct', 'cashPct', 'synergiesYi', 'newDebtRate']
-    if (!targetTicker || !targetName || keys.some((key) => number(key) == null)) return null
+    const targetKeys = ['targetShares', 'targetPrice', 'targetNetIncome']
+    const optionalTargetFields = [['targetEps', 'eps'], ['targetPe', 'pe']] as const
+    const optionalFields = [
+      ['premiumPct', 'premium_pct'], ['cashPct', 'cash_pct'], ['synergiesYi', 'synergies_yi'], ['newDebtRate', 'new_debt_rate'],
+    ] as const
+    const providedOptionalTarget = optionalTargetFields.filter(([input]) => String(values[input] || '').trim())
+    const providedOptional = optionalFields.filter(([input]) => String(values[input] || '').trim())
+    if (!targetTicker || !targetName || targetKeys.some((key) => number(key) == null) || (number('targetShares') || 0) <= 0 || (number('targetPrice') || 0) <= 0 || providedOptionalTarget.some(([input]) => number(input) == null) || providedOptional.some(([input]) => number(input) == null)) return null
     return {
-      target: { ticker: targetTicker, name: targetName, shares_yi: number('targetShares'), price: number('targetPrice'), eps: number('targetEps'), pe: number('targetPe'), net_income_yi: number('targetNetIncome') },
-      premium_pct: number('premiumPct'), cash_pct: number('cashPct'), synergies_yi: number('synergiesYi'), new_debt_rate: number('newDebtRate'),
+      target: {
+        ticker: targetTicker, name: targetName, shares_yi: number('targetShares'), price: number('targetPrice'), net_income_yi: number('targetNetIncome'),
+        ...Object.fromEntries(providedOptionalTarget.map(([input, output]) => [output, number(input)])),
+      },
+      ...Object.fromEntries(providedOptional.map(([input, output]) => [output, number(input)])),
     }
   }
   if (method === 'thesis_tracker') return ['long', 'short'].includes(values.direction) ? { direction: values.direction } : null
   if (method === 'quantitative_screen') return ['value', 'growth', 'quality', 'short', 'gulp'].includes(values.style) ? { style: values.style } : null
-  if (['unit_economics', 'value_creation_plan'].includes(method)) return acceptNativeDefaults ? { accept_uzi_native_defaults: true } : null
   return null
 }
 

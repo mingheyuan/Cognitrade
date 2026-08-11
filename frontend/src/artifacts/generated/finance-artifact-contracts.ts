@@ -77,6 +77,7 @@ export type NormalizedQueryContent = {
   "fee_model"?: Record<string, unknown> | null;
   "asset_class_targets"?: Record<string, unknown> | null;
   "requested_methods"?: Array<string>;
+  "model_updates"?: Record<string, unknown> | null;
   "method_assumptions"?: Record<string, unknown> | null;
   "holding_context"?: {
     "parent_batch_id"?: string;
@@ -132,6 +133,7 @@ export type SnapshotContent = {
   "degrade_reasons"?: Array<string>;
   "facts": Record<string, unknown>;
   "source"?: Record<string, unknown>;
+  "source_trace"?: Array<Record<string, unknown>>;
   "source_refs"?: Array<Record<string, unknown>>;
 }
 
@@ -1389,6 +1391,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "fee_model",
     "asset_class_targets",
     "requested_methods",
+    "model_updates",
     "method_assumptions",
     "holding_context",
     "holding_context.parent_batch_id",
@@ -1440,6 +1443,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "degrade_reasons",
     "facts",
     "source",
+    "source_trace",
     "source_refs",
   ],
   "evidence_set": [

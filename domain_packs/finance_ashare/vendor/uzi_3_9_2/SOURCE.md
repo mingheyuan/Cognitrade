@@ -29,12 +29,26 @@ capabilities.
 Cognitrade does not dynamically execute UZI Markdown skills. Agent OS owns routing,
 and the in-process DomainPack implements the mapped commands, methods, fetchers,
 panel, and trap checks. The vendored standalone skill files are pinned methodology
-references, not a hidden second runtime. The upstream root router, two CLI
-entrypoints, installer/plugin manifests, documentation, screenshots, and test tree
-are intentionally not production dependencies. CI checks out the fixed upstream
+references, not a hidden second runtime. Agent OS reproduces the root router's
+resolved-equity collection branches in process, while the two CLI entrypoints,
+installer/plugin manifests, documentation, screenshots, and test tree remain
+non-production dependencies. CI checks out the fixed upstream
 commit separately and runs its test tree against the vendored Python implementation.
 UZI collection keeps the upstream executor semantics: the documented wave values
 classify unfinished dimensions but cannot force-cancel an already running Python
 thread. Agent OS adds a context-scoped default timeout for UZI `requests` calls
 and propagates that context into nested UZI executor tasks; peer DomainPack
 traffic runs with the guard inactive.
+
+The root v3 collection executes all 22 registry entries for every depth.  Fixed
+`generate_panel()` likewise ignores the profile's stale 10/51/51 display counts
+and executes all 66 seats; only the standalone `/quick-scan` command explicitly
+selects its Top 10.  Standalone command collection follows the pinned implicit
+profiles (`quick-scan`/`panel-only` lite, `initiate`/`ic-memo` deep).
+
+Request-local `no_resume` maps to `resume=False` only for the single-stock root
+route.  The fixed versus/portfolio runners always resume and reject that option.
+Snapshot Artifacts preserve both native and recovery `source_trace` entries;
+before recovery, lane-specific raw envelopes round-trip without display aliases,
+while any recovered field is an explicit, traced mutation rather than vendored
+source parity.

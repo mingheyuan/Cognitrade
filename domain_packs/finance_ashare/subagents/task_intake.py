@@ -123,6 +123,11 @@ _UZI_STOCK_COMMAND_INTENTS = frozenset({
     "uzi_unit_economics_method",
     "uzi_value_creation_plan_method",
 })
+_UZI_SINGLE_SYMBOL_INTENTS = frozenset({
+    "stock_check",
+    "quick_scan",
+    *_UZI_STOCK_COMMAND_INTENTS,
+})
 _PROFILE_ALIASES = {
     "lite": "lite",
     "速判": "lite",
@@ -185,7 +190,6 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
         "model_updates",
         "method_assumptions",
         "segmental_model",
-        "accept_uzi_native_fee_schedule",
         "investment_cycle",
         "school",
         "portfolio_name",
@@ -334,6 +338,19 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
                 constraints=constraints,
                 context={"reason": "analysis_target_missing"},
             )
+    if intent in _UZI_SINGLE_SYMBOL_INTENTS and len(symbols) > 1:
+        return _clarify(
+            ["symbols"],
+            query=query,
+            intent=intent,
+            slots=slots,
+            constraints=constraints,
+            context={
+                "reason": "uzi_single_symbol_command_requires_one_symbol",
+                "received_count": len(symbols),
+                "suggested_intent": "stock_compare",
+            },
+        )
     if intent == "stock_screen" and not symbols and not sector:
         constraints.setdefault("candidate_pool_size", 8)
         slots["universe_scope"] = "ashare_liquidity_ranked"

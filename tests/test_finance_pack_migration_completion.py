@@ -47,6 +47,22 @@ def _offline_agent_os(settings: Settings) -> AgentOS:
 
 
 class FinancePackMigrationCompletionTests(unittest.TestCase):
+    def test_profileless_quick_scan_uses_command_collection_policy(self) -> None:
+        result = snapshot_collector.collect_snapshot_bundle(
+            query="快速扫描",
+            symbols=[],
+            snapshot_types=[],
+            intent="quick_scan",
+            research_profile=None,
+        )
+
+        recovery = result["collection"]["uzi_recovery"]
+        self.assertEqual(recovery["qualitative_stage"]["profile"], "uzi_command")
+        self.assertEqual(
+            recovery["qualitative_stage"]["disabled_reason"],
+            "standalone_uzi_command",
+        )
+
     def test_normal_finance_collector_uses_pack_owned_skill_implementations(self) -> None:
         skill_types = [
             *snapshot_collector._SYMBOL_SKILLS.values(),

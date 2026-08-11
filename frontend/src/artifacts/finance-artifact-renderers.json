@@ -2,9 +2,9 @@
   "contract_version": "finance-artifact-ui-v2",
   "artifacts": {
     "user_request": {"title": "原始研究请求", "renderer": "UserRequestArtifactRenderer", "schema_field_digest": "e93fd2038968369c"},
-    "normalized_query": {"title": "标准化研究问题", "renderer": "NormalizedQueryArtifactRenderer", "schema_field_digest": "369ed838cf6adc9d"},
+    "normalized_query": {"title": "标准化研究问题", "renderer": "NormalizedQueryArtifactRenderer", "schema_field_digest": "ede43c897db22959"},
     "stock_snapshot_bundle": {"title": "股票数据采集包", "renderer": "StockSnapshotBundleArtifactRenderer", "schema_field_digest": "c189aefce2848122"},
-    "snapshot": {"title": "业务数据快照", "renderer": "SnapshotArtifactRenderer", "schema_field_digest": "b68f4f9c07d756f0"},
+    "snapshot": {"title": "业务数据快照", "renderer": "SnapshotArtifactRenderer", "schema_field_digest": "fdedd2816fbbd327"},
     "evidence_set": {"title": "分析证据集", "renderer": "EvidenceSetArtifactRenderer", "schema_field_digest": "1b8b92e4ee2d59c4"},
     "screening_result": {"title": "股票筛选结果", "renderer": "ScreeningResultArtifactRenderer", "schema_field_digest": "55e8b8a6fa9f9bbc"},
     "sector_analysis": {"title": "板块研究结果", "renderer": "SectorAnalysisArtifactRenderer", "schema_field_digest": "ac40854fe2e6ff81"},

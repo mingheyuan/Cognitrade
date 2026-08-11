@@ -72,9 +72,6 @@ from research_system.adapters.vendors.provider_execution import (
     failure_facts,
 )
 from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
-from research_system.adapters.vendors.uzi_shared_source_cache import (
-    install_uzi_shared_source_cache,
-)
 from research_system.adapters.vendors.uzi_request_timeout import (
     uzi_request_timeout_scope,
 )
@@ -184,6 +181,15 @@ _UZI_FETCHER_TIMEOUT_OVERRIDES = {
 }
 _UZI_BONUS_FETCHER_TIMEOUT_SECONDS = 120.0
 _UZI_BONUS_SNAPSHOT_TYPES = frozenset({"fund_holders", "similar_stocks"})
+_UZI_ROOT_ROUTE_INTENTS = frozenset(
+    {
+        "stock_check",
+        "uzi_analyze_stock",
+        "stock_compare",
+        "uzi_portfolio_batch",
+    }
+)
+_UZI_MULTI_ROOT_INTENTS = frozenset({"stock_compare", "uzi_portfolio_batch"})
 _UZI_PROFILE_ENV_KEYS = (
     "UZI_DEPTH",
     "UZI_LITE",
@@ -324,16 +330,40 @@ def collect_snapshots(
     max_workers: int | None = None,
     provider_registry: VendorProviderRegistry | None = None,
     progress_callback=None,
+    uzi_root_route: bool = False,
+    uzi_root_route_mode: str = "single",
+    no_resume: bool = False,
 ) -> list[dict[str, Any]]:
     requested = tuple(
         dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip())
     )
     resolved_symbols = _unique_symbols(symbols)
-    if any(_uses_uzi_fetcher(snapshot_type) for snapshot_type in requested):
+    routed_types = [
+        snapshot_type
+        for snapshot_type in requested
+        if _uses_uzi_fetcher(snapshot_type)
+        and not (snapshot_type == "policy" and sector)
+    ]
+    has_uzi = any(_uses_uzi_fetcher(snapshot_type) for snapshot_type in requested)
+    if has_uzi:
         with _uzi_profile_environment(research_profile, provider_registry):
-            # Native versus/portfolio orchestration runs one complete pipeline
-            # per ticker.  Give every explicit ticker its own wave budget and
-            # failure boundary instead of pooling symbol×dimension futures.
+            if uzi_root_route and routed_types:
+                return _collect_snapshots_with_uzi_root_router(
+                    query=query,
+                    symbols=resolved_symbols,
+                    snapshot_types=requested,
+                    sector=sector,
+                    cancellation=cancellation,
+                    cache_root=cache_root,
+                    research_profile=research_profile,
+                    max_workers=max_workers,
+                    provider_registry=provider_registry,
+                    progress_callback=progress_callback,
+                    route_mode=uzi_root_route_mode,
+                    no_resume=no_resume,
+                )
+            # Preserve the established on-demand path: each explicit symbol
+            # receives an independent native wave budget.
             if not sector and len(resolved_symbols) > 1:
                 collected: list[dict[str, Any]] = []
                 per_symbol_total = sum(
@@ -349,13 +379,15 @@ def collect_snapshots(
                         *,
                         offset: int = symbol_index * per_symbol_total,
                     ) -> None:
-                        if not callable(progress_callback):
-                            return
-                        progress_callback({
-                            **progress,
-                            "completed": offset + int(progress.get("completed") or 0),
-                            "total": aggregate_total,
-                        })
+                        if callable(progress_callback):
+                            progress_callback(
+                                {
+                                    **progress,
+                                    "completed": offset
+                                    + int(progress.get("completed") or 0),
+                                    "total": aggregate_total,
+                                }
+                            )
 
                     collected.extend(
                         _collect_snapshots(
@@ -396,6 +428,203 @@ def collect_snapshots(
         provider_registry=provider_registry,
         progress_callback=progress_callback,
     )
+
+
+def _collect_snapshots_with_uzi_root_router(
+    *,
+    query: str,
+    symbols: Iterable[str],
+    snapshot_types: Iterable[str],
+    sector: str | None,
+    cancellation,
+    cache_root: Path | None,
+    research_profile: str | None,
+    max_workers: int | None,
+    provider_registry: VendorProviderRegistry | None,
+    progress_callback,
+    route_mode: str,
+    no_resume: bool,
+) -> list[dict[str, Any]]:
+    """Collect each symbol through the pinned UZI root-default router once."""
+
+    del max_workers  # UZI's root command fixes pipeline collection at six workers.
+    requested = list(
+        dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip())
+    )
+    providers = provider_registry or _default_provider_registry()
+    resolved_symbols = _unique_symbols(symbols)
+    snapshots: list[dict[str, Any]] = []
+    sector_snapshot: dict[str, Any] | None = None
+
+    if "sector" in requested and sector and not _cancelled(cancellation):
+        sector_snapshot = _load_snapshot_cache(
+            cache_root=cache_root,
+            snapshot_type="sector",
+            target=sector,
+            profile=research_profile,
+        )
+        if sector_snapshot is None:
+            sector_snapshot = _instantiate_skill(SectorSnapshotSkill, providers).run(
+                query=sector
+            )
+            _save_snapshot_cache(
+                cache_root=cache_root,
+                snapshot_type="sector",
+                target=sector,
+                profile=research_profile,
+                snapshot=sector_snapshot,
+            )
+        snapshots.append(sector_snapshot)
+        for symbol in _constituent_symbols(sector_snapshot):
+            if symbol not in resolved_symbols:
+                resolved_symbols.append(symbol)
+
+    if "policy" in requested and sector and not _cancelled(cancellation):
+        policy_snapshot = _load_snapshot_cache(
+            cache_root=cache_root,
+            snapshot_type="policy",
+            target=sector,
+            profile=research_profile,
+        )
+        if policy_snapshot is None:
+            # Sector policy research is an explicit Agent OS host capability,
+            # not UZI's per-stock 13_policy dimension.  Keep the direct Pack
+            # fallback identical to the governed Tool Registry path.
+            policy_snapshot = _instantiate_skill(PolicySnapshotSkill, providers).run(
+                query=query,
+                sector=sector,
+                constituents=_constituents(sector_snapshot),
+            )
+            _save_snapshot_cache(
+                cache_root=cache_root,
+                snapshot_type="policy",
+                target=sector,
+                profile=research_profile,
+                snapshot=policy_snapshot,
+            )
+        snapshots.append(policy_snapshot)
+
+    symbol_types = [
+        item
+        for item in requested
+        if item in _SYMBOL_SKILLS and not (item == "policy" and sector)
+    ]
+    uzi_types = [item for item in symbol_types if _uses_uzi_fetcher(item)]
+    total = len(resolved_symbols) * len(symbol_types)
+    completed = 0
+
+    settings = providers.settings
+    runtime = Uzi392FetcherRuntime(workspace_root=settings.workspace_root)
+    install_baostock_socket_safety(
+        timeout_seconds=getattr(
+            settings,
+            "baostock_socket_timeout_seconds",
+            DEFAULT_BAOSTOCK_SOCKET_TIMEOUT_SECONDS,
+        )
+    )
+    allowlist = {
+        str(item).strip().lower() for item in settings.sensitive_source_allowlist
+    }
+    xueqiu_enabled = (
+        settings.sensitive_sources_enabled
+        and "xueqiu" in allowlist
+        and bool(settings.xueqiu_cookie)
+    )
+    route_options = {
+        "cognitrade_root_route_mode": route_mode,
+        "cognitrade_xueqiu_policy": {
+            "enabled": xueqiu_enabled,
+            "cookie": settings.xueqiu_cookie if xueqiu_enabled else None,
+        }
+    }
+
+    def emit(*, phase: str, snapshot_type: str) -> None:
+        if callable(progress_callback):
+            progress_callback(
+                {
+                    "phase": phase,
+                    "snapshot_type": snapshot_type,
+                    "completed": completed,
+                    "total": total,
+                }
+            )
+
+    for symbol in resolved_symbols:
+        if _cancelled(cancellation):
+            break
+        symbol_result: dict[str, Any] | None = None
+        route_failure: Exception | None = None
+        if uzi_types:
+            emit(phase="collecting", snapshot_type=uzi_types[0])
+            try:
+                with uzi_request_timeout_scope():
+                    symbol_result = runtime.collect_symbol(
+                        ticker=symbol,
+                        max_workers=_UZI_MAX_WORKERS,
+                        # UZI's dedicated versus/portfolio runners hard-code
+                        # resume=True.  Request-local no_resume belongs only to
+                        # the single-stock root CLI route.
+                        resume=not no_resume if route_mode == "single" else True,
+                        options=route_options,
+                    )
+                normalized = normalize_json_value(symbol_result)
+                if not isinstance(normalized, dict):
+                    raise TypeError("UZI symbol collection must normalize to an object")
+                symbol_result = normalized
+            except Exception as exc:
+                route_failure = exc
+
+        for snapshot_type in symbol_types:
+            if _cancelled(cancellation):
+                break
+            if snapshot_type in uzi_types:
+                if route_failure is not None or symbol_result is None:
+                    snapshot = _fetcher_failure_snapshot(
+                        query=query,
+                        symbol=symbol,
+                        snapshot_type=snapshot_type,
+                        exc=route_failure or RuntimeError("UZI symbol collection failed"),
+                        symbol_route_failed=route_mode == "multi",
+                    )
+                else:
+                    snapshot = _project_uzi_symbol_snapshot(
+                        query=query,
+                        requested_symbol=symbol,
+                        snapshot_type=snapshot_type,
+                        symbol_result=symbol_result,
+                    )
+            else:
+                cached = _load_snapshot_cache(
+                    cache_root=cache_root,
+                    snapshot_type=snapshot_type,
+                    target=symbol,
+                    profile=research_profile,
+                )
+                if cached is not None:
+                    snapshot = cached
+                else:
+                    snapshot = _run_snapshot_skill(
+                        query,
+                        symbol,
+                        snapshot_type,
+                        providers,
+                        None,
+                        research_profile,
+                    )
+                    _save_snapshot_cache(
+                        cache_root=cache_root,
+                        snapshot_type=snapshot_type,
+                        target=symbol,
+                        profile=research_profile,
+                        snapshot=snapshot,
+                    )
+            snapshots.append(snapshot)
+            completed += 1
+            emit(phase="completed", snapshot_type=snapshot_type)
+
+    if "sector" in requested and not sector:
+        snapshots.append(_missing_scope_snapshot(query=query, snapshot_type="sector"))
+    return snapshots
 
 
 def _collect_snapshots(
@@ -888,6 +1117,176 @@ def _uses_uzi_resume_cache(snapshot_type: str) -> bool:
     }
 
 
+def _project_uzi_symbol_snapshot(
+    *,
+    query: str,
+    requested_symbol: str,
+    snapshot_type: str,
+    symbol_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Project one requested Artifact without changing UZI's raw envelope."""
+
+    fetcher_id = _UZI_FETCHER_BY_SNAPSHOT_TYPE[snapshot_type]
+    dimensions = (
+        symbol_result.get("dimensions")
+        if isinstance(symbol_result.get("dimensions"), dict)
+        else {}
+    )
+    raw_result = dimensions.get(fetcher_id)
+    if not isinstance(raw_result, dict):
+        raw_result = None
+    execution = (
+        dict(symbol_result.get("_uzi_execution") or {})
+        if isinstance(symbol_result.get("_uzi_execution"), dict)
+        else {"lane": "unknown", "fallback_reason": None}
+    )
+    lane = str(execution.get("lane") or "unknown")
+    execution = {
+        "lane": lane,
+        "fallback_reason": execution.get("fallback_reason"),
+    }
+
+    top_level_fields = {
+        key: {
+            "present": key in symbol_result,
+            "value": symbol_result.get(key),
+        }
+        for key in ("fund_managers", "similar_stocks")
+    }
+    root_fields = {
+        key: {
+            "present": key in symbol_result,
+            "value": symbol_result.get(key),
+        }
+        for key in ("ticker", "market", "code", "full", "fetched_at")
+    }
+    data = (
+        dict(raw_result.get("data") or {})
+        if raw_result is not None and isinstance(raw_result.get("data"), dict)
+        else {}
+    )
+    bonus_field = {
+        "fund_holders": "fund_managers",
+        "similar_stocks": "similar_stocks",
+    }.get(snapshot_type)
+    bonus_present = False
+    bonus_value: Any = None
+    if bonus_field is not None:
+        spill = top_level_fields[bonus_field]
+        bonus_present = bool(spill["present"])
+        bonus_value = spill["value"]
+        if bonus_present:
+            data[bonus_field] = bonus_value
+
+    pipeline_meta = (
+        raw_result.get("_pipeline")
+        if raw_result is not None and isinstance(raw_result.get("_pipeline"), dict)
+        else {}
+    )
+    error = str(
+        (raw_result or {}).get("error")
+        or pipeline_meta.get("error")
+        or ""
+    ).strip()
+    if raw_result is not None:
+        availability = "available" if data and not error else "data_gap"
+        source_text = str(
+            raw_result.get("source") or f"uzi:{fetcher_id}"
+        ).strip()
+        dimension_fallback = bool(raw_result.get("fallback"))
+    elif bonus_field is not None:
+        # Legacy has no bonus dimension envelopes; pipeline also spills
+        # similar_stocks only at symbol-root.  Presence is therefore the only
+        # faithful signal.  Keep [] and None distinct in `_uzi_top_level_fields`.
+        availability = (
+            "available" if bonus_present and bonus_value is not None else "data_gap"
+        )
+        source_text = f"uzi:{lane}:top_level:{bonus_field}"
+        dimension_fallback = False
+    else:
+        availability = "data_gap"
+        source_text = f"uzi:{lane}:missing:{fetcher_id}"
+        dimension_fallback = True
+        error = f"{fetcher_id}_missing_from_{lane}_collection"
+
+    fallback_reason = execution.get("fallback_reason")
+    fallback_applied = dimension_fallback or bool(fallback_reason)
+    native_source_trace = [
+        {
+            "source_id": source_text,
+            "provider_id": f"uzi_3_9_2.{fetcher_id}",
+            "status": availability,
+            "fallback": fallback_applied,
+            **({"error_type": error.split(":", 1)[0]} if error else {}),
+        }
+    ]
+    facts: dict[str, Any] = {
+        **data,
+        "availability": availability,
+        "_uzi_fetcher_id": fetcher_id,
+        "_uzi_execution": execution,
+        "_uzi_root_fields": root_fields,
+        "_uzi_source_trace": native_source_trace,
+        "_uzi_top_level_fields": top_level_fields,
+    }
+    if raw_result is not None:
+        facts["_uzi_raw_result"] = raw_result
+
+    if snapshot_type == "market":
+        facts["market_overview"] = {
+            "security_name": data.get("name"),
+            "industry": data.get("industry"),
+            "latest_bar": {
+                "close": data.get("price"),
+                "pct_change": data.get("change_pct"),
+            },
+            "valuation": {
+                "pe_ttm": data.get("pe_ttm"),
+                "pb": data.get("pb"),
+                "market_cap": data.get("market_cap_raw") or data.get("market_cap"),
+            },
+        }
+    elif snapshot_type == "fundamental":
+        facts["financial_abstract"] = data
+    elif snapshot_type == "kline":
+        facts["history"] = data
+
+    basic = dimensions.get("0_basic")
+    basic_data = (
+        basic.get("data")
+        if isinstance(basic, dict) and isinstance(basic.get("data"), dict)
+        else {}
+    )
+    industry = str(basic_data.get("industry") or "").strip() or None
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+    return {
+        "snapshot_type": snapshot_type,
+        "symbol": requested_symbol,
+        "sector": industry if snapshot_type in {"macro", "industry", "policy"} else None,
+        "query": query,
+        "snapshot_date": retrieved_at[:10],
+        "retrieved_at": retrieved_at,
+        "facts": facts,
+        "quality_status": availability,
+        "degraded": availability != "available",
+        "degrade_reason": error or (
+            None if availability == "available" else f"{fetcher_id}_data_missing"
+        ),
+        "missing_fields": [] if availability == "available" else [snapshot_type],
+        "fallback_applied": fallback_applied,
+        "source": {
+            "skill": f"uzi_{snapshot_type}_snapshot_skill",
+            "vendor": "UZI-Skill",
+            "provider_id": f"uzi_3_9_2.{fetcher_id}",
+            "source_id": source_text,
+            "chain_position": 0,
+            "dim": snapshot_type,
+            "from_cache": bool(pipeline_meta.get("cached")),
+        },
+        "source_trace": native_source_trace,
+    }
+
+
 def _run_uzi_fetcher_snapshot(
     *,
     query: str,
@@ -912,10 +1311,6 @@ def _run_uzi_fetcher_snapshot(
             DEFAULT_BAOSTOCK_SOCKET_TIMEOUT_SECONDS,
         )
     )
-    # The pinned UZI fetchers remain unchanged.  Only their exact high-cost
-    # AkShare transport results are shared across concurrent holding runs so
-    # one real full-market response is downloaded once per cache key.
-    install_uzi_shared_source_cache(settings.workspace_root)
     options: dict[str, Any] | None = None
     if fetcher_id == "6_fund_holders":
         profile_stats_top_n = {"lite": 5, "medium": 20, "deep": 100}
@@ -945,10 +1340,9 @@ def _run_uzi_fetcher_snapshot(
         "options": options,
     }
     if fetcher_id in _UZI_MINI_RACER_FETCHERS:
-        # UZI's run_real_test and v3 pipeline share one lock across industry,
-        # valuation and capital-flow because their AkShare paths initialize
-        # the same V8/mini-racer runtime. Holding reports may run concurrently
-        # at the product layer, but these native fetchers remain serialized.
+        # Preserve the established on-demand path for API/quick-scan callers.
+        # Full reports bypass this host wave and use collect_symbol(), whose
+        # pinned v3/legacy orchestrators own their mini-racer behavior.
         with _UZI_MINI_RACER_LOCK:
             result = runtime.collect(fetcher_id, **collect_kwargs)
     else:
@@ -1088,6 +1482,7 @@ def _fetcher_failure_snapshot(
     symbol: str,
     snapshot_type: str,
     exc: Exception,
+    symbol_route_failed: bool = False,
 ) -> dict[str, Any]:
     """Represent one native fetcher crash without aborting sibling fetchers."""
 
@@ -1101,17 +1496,27 @@ def _fetcher_failure_snapshot(
         "data": {},
         "fallback": True,
         "error": reason,
-        "source": fetcher_id or snapshot_type,
+        "source": "lib.pipeline.collect" if symbol_route_failed else fetcher_id or snapshot_type,
     }
     facts = {
         **failure_facts(status),
         "availability": "data_gap",
         "_uzi_raw_result": raw_result,
     }
-    if fetcher_id:
+    if fetcher_id and not symbol_route_failed:
         facts["_uzi_fetcher_id"] = fetcher_id
+    if symbol_route_failed:
+        # Pinned versus/portfolio skip a symbol whose pipeline orchestration
+        # failed (unless a complete report cache is available). Prevent host
+        # recovery from rebuilding it dimension by dimension.
+        facts["_uzi_symbol_route_failed"] = True
     retrieved_at = datetime.now(timezone.utc).isoformat()
-    provider_id = f"uzi_3_9_2.{fetcher_id}" if fetcher_id else snapshot_type
+    provider_id = (
+        "uzi_3_9_2.root_collection"
+        if symbol_route_failed
+        else f"uzi_3_9_2.{fetcher_id}" if fetcher_id else snapshot_type
+    )
+    source_id = "root_symbol_route" if symbol_route_failed else fetcher_id or snapshot_type
     return {
         "snapshot_type": snapshot_type,
         "symbol": symbol,
@@ -1125,17 +1530,17 @@ def _fetcher_failure_snapshot(
         "missing_fields": [snapshot_type],
         "fallback_applied": True,
         "source": {
-            "skill": f"uzi_{snapshot_type}_snapshot_skill",
+            "skill": "uzi_root_collection" if symbol_route_failed else f"uzi_{snapshot_type}_snapshot_skill",
             "vendor": "UZI-Skill" if fetcher_id else "finance_ashare",
             "provider_id": provider_id,
-            "source_id": fetcher_id or snapshot_type,
+            "source_id": source_id,
             "chain_position": 0,
             "dim": snapshot_type,
             "from_cache": False,
         },
         "source_trace": [
             {
-                "source_id": fetcher_id or snapshot_type,
+                "source_id": source_id,
                 "provider_id": provider_id,
                 "status": status,
                 "fallback": True,
@@ -1340,6 +1745,7 @@ def collect_snapshot_bundle(
     candidate_pool_size: int = 8,
     enrichment_top_n: int = 2,
     skip_enrichment: bool = False,
+    no_resume: bool = False,
     cancellation=None,
     security_master: AShareSecurityMaster | None = None,
     cache_root: Path | None = None,
@@ -1412,9 +1818,11 @@ def collect_snapshot_bundle(
             universe_source=universe_source or "sector_unavailable",
             enrichment_targets=[],
             query=query,
+            intent=intent,
             research_profile=research_profile,
             settings=providers.settings,
             cancellation=cancellation,
+            parallelism="per_snapshot_dimension",
         )
 
     pool_size = max(int(candidate_pool_size), 1)
@@ -1450,6 +1858,11 @@ def collect_snapshot_bundle(
                 research_profile=research_profile,
                 provider_registry=providers,
                 progress_callback=progress_callback,
+                uzi_root_route=intent in _UZI_ROOT_ROUTE_INTENTS,
+                uzi_root_route_mode=(
+                    "multi" if intent in _UZI_MULTI_ROOT_INTENTS else "single"
+                ),
+                no_resume=no_resume,
             )
         )
 
@@ -1468,6 +1881,7 @@ def collect_snapshot_bundle(
                     research_profile=research_profile,
                     provider_registry=providers,
                     progress_callback=progress_callback,
+                    uzi_root_route=False,
                 )
             )
 
@@ -1479,9 +1893,15 @@ def collect_snapshot_bundle(
         universe_source=universe_source or ("structured_symbols" if resolved_symbols else "unavailable"),
         enrichment_targets=enrichment_targets,
         query=query,
+        intent=intent,
         research_profile=research_profile,
         settings=providers.settings,
         cancellation=cancellation,
+        parallelism=(
+            "per_symbol_uzi_pipeline"
+            if intent in _UZI_ROOT_ROUTE_INTENTS
+            else "per_snapshot_dimension"
+        ),
     )
 
 
@@ -1542,7 +1962,9 @@ def _bundle_result(
     query: str,
     research_profile: str | None,
     settings: Settings,
+    intent: str | None = None,
     cancellation: Any | None = None,
+    parallelism: str = "per_snapshot_dimension",
 ) -> dict[str, Any]:
     # Execute the pinned suggested-fix worklist until every real action either
     # resolves its target or records an explicit exhaustion reason.  There is
@@ -1550,19 +1972,58 @@ def _bundle_result(
     normalized_snapshots = [_normalize_snapshot_quality(snapshot) for snapshot in snapshots]
     integrity_before = assess_integrity(normalized_snapshots, symbols)
     selected_profile = str(research_profile or "").strip().lower()
-    if not selected_profile:
+    normalized_intent = str(intent or "").strip()
+    profileless_uzi_command = (
+        normalized_intent == "quick_scan"
+        or (
+            normalized_intent.startswith("uzi_")
+            and normalized_intent not in _UZI_ROOT_ROUTE_INTENTS
+        )
+    )
+    if not selected_profile and not profileless_uzi_command:
         raise ValueError("research_profile is required; choose lite, medium or deep")
-    if selected_profile in {"lite", "medium", "deep"}:
+    if profileless_uzi_command:
+        command_stage_disabled = {
+            "schema_version": "uzi-3.9.4-agent-os-v1",
+            "profile": selected_profile or "uzi_command",
+            "enabled": False,
+            "attempted": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "attempts": [],
+            "disabled_reason": "standalone_uzi_command",
+        }
+        qualitative_recovery = dict(command_stage_disabled)
+        playwright_recovery = dict(command_stage_disabled)
+        qualitative_agent_evidence = dict(command_stage_disabled)
+        strict_recovery = dict(command_stage_disabled)
+    elif selected_profile in {"lite", "medium", "deep"}:
+        route_failed_symbols = {
+            str(snapshot.get("symbol") or "").strip()
+            for snapshot in normalized_snapshots
+            if isinstance(snapshot, dict)
+            and isinstance(snapshot.get("facts"), dict)
+            and snapshot["facts"].get("_uzi_symbol_route_failed") is True
+            and str(snapshot.get("symbol") or "").strip()
+        }
+        recovery_snapshots = [
+            snapshot
+            for snapshot in normalized_snapshots
+            if str(snapshot.get("symbol") or "").strip() not in route_failed_symbols
+        ]
+        recovery_symbols = [
+            symbol for symbol in symbols if str(symbol).strip() not in route_failed_symbols
+        ]
         has_native_payload = any(
             isinstance((snapshot.get("facts") or {}).get("_uzi_raw_result"), dict)
-            for snapshot in normalized_snapshots
+            for snapshot in recovery_snapshots
             if isinstance(snapshot, dict) and isinstance(snapshot.get("facts"), dict)
         )
         strict_recovery = (
             recover_suggested_fixes_until_exhausted(
-                normalized_snapshots,
+                recovery_snapshots,
                 query=query,
-                symbols=symbols,
+                symbols=recovery_symbols,
                 profile=selected_profile,
                 settings=settings,
                 cancellation=cancellation,
@@ -1590,23 +2051,23 @@ def _bundle_result(
             # collected afterwards in three parallel groups and frozen for
             # the analysis node.
             qualitative_recovery = recover_qualitative_snapshots(
-                normalized_snapshots,
+                recovery_snapshots,
                 query=query,
-                symbols=symbols,
+                symbols=recovery_symbols,
                 profile=selected_profile,
                 settings=settings,
             )
             playwright_recovery = recover_playwright_snapshots(
-                normalized_snapshots,
+                recovery_snapshots,
                 query=query,
-                symbols=symbols,
+                symbols=recovery_symbols,
                 profile=selected_profile,
                 settings=settings,
             )
             qualitative_agent_evidence = collect_qualitative_agent_evidence(
-                normalized_snapshots,
+                recovery_snapshots,
                 query=query,
-                symbols=symbols,
+                symbols=recovery_symbols,
                 profile=selected_profile,
                 settings=settings,
                 cancellation=cancellation,
@@ -1706,7 +2167,7 @@ def _bundle_result(
                     for snapshot in degraded_rows
                 )
             ),
-            "parallelism": "per_snapshot_dimension",
+            "parallelism": parallelism,
             "uzi_integrity": integrity,
             "uzi_recovery": _recovery_summary(
                 normalized_snapshots,
@@ -1808,7 +2269,9 @@ def _normalize_snapshot_quality(snapshot: dict[str, Any]) -> dict[str, Any]:
         )
     )
     normalized["scope"] = (
-        "sector"
+        "symbol"
+        if str(normalized.get("symbol") or "").strip()
+        else "sector"
         if normalized.get("sector")
         or str(normalized.get("snapshot_type") or "") in {"sector", "policy", "macro"}
         else "symbol"

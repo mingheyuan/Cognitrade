@@ -237,8 +237,8 @@ class UziSnapshotRuntimeParityTests(unittest.TestCase):
                 outer,
             )
 
-    def test_every_analyze_profile_includes_the_two_native_bonus_fetchers(self) -> None:
-        expected_counts = {"lite": 9, "medium": 22, "deep": 22}
+    def test_every_analyze_profile_collects_the_full_v3_registry(self) -> None:
+        expected_counts = {"lite": 22, "medium": 22, "deep": 22}
         for profile_name, expected_count in expected_counts.items():
             with self.subTest(profile=profile_name):
                 snapshot_types = select_profile(

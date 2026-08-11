@@ -306,12 +306,11 @@ class AgentBuyZonePayload(BaseModel):
 
 
 def _profile_native_panel(panel: dict[str, Any], profile: str) -> dict[str, Any]:
-    """Project the upstream rule-engine panel to UZI's profile seat contract.
+    """Validate the complete panel emitted by fixed UZI 3.9.4.
 
-    The pinned generator evaluates the complete registry in one pure call.
-    UZI's profile contract then selects 10/51/66 seats.  Recompute every
-    aggregate from the selected seats so no full-panel statistic leaks into a
-    Lite or Medium report.
+    ``generate_panel`` iterates all 66 registered investors for every profile;
+    the counts in ``analysis_profile.py`` are not consumed by that executable
+    path.  Keep the full panel and only validate that no seat disappeared.
     """
 
     allowed_ids = {
@@ -485,6 +484,46 @@ def execute_native_analysis(
         raise ValueError("school must be one of A, B, C, D, E, F, G, H or I")
     _initialize_native_imports()
     market_router = importlib.import_module("lib.market_router")
+    base_recovery_history = [
+        dict(row)
+        for row in list(recovery_history or [])
+        if isinstance(row, dict)
+    ]
+
+    def canonical_symbol(value: object) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            return ""
+        try:
+            return str(market_router.parse_ticker(normalized).full)
+        except (TypeError, ValueError):
+            return normalized
+
+    global_recovery_history = [
+        dict(row)
+        for row in base_recovery_history
+        if not str(row.get("symbol") or row.get("ticker") or "").strip()
+    ]
+
+    def recovery_for_symbol(symbol: str) -> list[dict[str, Any]]:
+        target = canonical_symbol(symbol)
+        return [
+            dict(row)
+            for row in base_recovery_history
+            if str(row.get("symbol") or row.get("ticker") or "").strip()
+            and canonical_symbol(row.get("symbol") or row.get("ticker")) == target
+        ]
+
+    def root_collection_failed(symbol: str) -> bool:
+        target = canonical_symbol(symbol)
+        return any(
+            canonical_symbol(row.get("symbol")) == target
+            and isinstance(row.get("facts"), dict)
+            and row["facts"].get("_uzi_symbol_route_failed") is True
+            for row in snapshot_rows
+            if isinstance(row, dict)
+        )
+
     unique_symbols: list[str] = []
     seen_symbols: set[str] = set()
     for symbol in symbols:
@@ -510,36 +549,54 @@ def execute_native_analysis(
             stage_index=symbol_index,
             stage_total=len(unique_symbols),
         )
-        try:
-            with uzi_request_timeout_scope():
-                result = _execute_symbol(
-                    snapshot_rows,
-                    symbol,
-                    profile=selected_profile,
-                    school=selected_school,
-                    llm_provider=llm_provider,
-                    cancellation=cancellation,
-                    recovery_history=list(recovery_history or []),
-                    progress_callback=progress_callback,
-                )
-        except Exception as exc:
-            if cancellation is not None and cancellation.is_set():
-                raise
+        if root_collection_failed(symbol):
             result = _failed_symbol_analysis(
                 symbol,
                 profile=selected_profile,
-                exc=exc,
-                recovery_history=list(recovery_history or []),
+                failure_type="RootCollectionError",
+                recovery_history=recovery_for_symbol(symbol),
             )
+        else:
+            try:
+                with uzi_request_timeout_scope():
+                    result = _execute_symbol(
+                        snapshot_rows,
+                        symbol,
+                        profile=selected_profile,
+                        school=selected_school,
+                        llm_provider=llm_provider,
+                        cancellation=cancellation,
+                        recovery_history=recovery_for_symbol(symbol),
+                        progress_callback=progress_callback,
+                    )
+            except Exception as exc:
+                if cancellation is not None and cancellation.is_set():
+                    raise
+                result = _failed_symbol_analysis(
+                    symbol,
+                    profile=selected_profile,
+                    exc=exc,
+                    recovery_history=recovery_for_symbol(symbol),
+                )
         results.append(result)
     critical = sum(int((row.get("self_review") or {}).get("critical_count") or 0) for row in results)
     warnings = sum(int((row.get("self_review") or {}).get("warning_count") or 0) for row in results)
-    combined_recovery_history = [
-        dict(row)
-        for result in results
-        for row in list(result.get("recovery_history") or [])
-        if isinstance(row, dict)
-    ]
+    combined_recovery_history: list[dict[str, Any]] = []
+    seen_recovery_rows: set[str] = set()
+    for row in [
+        *global_recovery_history,
+        *[
+            dict(item)
+            for result in results
+            for item in list(result.get("recovery_history") or [])
+            if isinstance(item, dict)
+        ],
+    ]:
+        fingerprint = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+        if fingerprint in seen_recovery_rows:
+            continue
+        seen_recovery_rows.add(fingerprint)
+        combined_recovery_history.append(row)
     successful_count = sum(row.get("report_allowed") is True for row in results)
     quality_status = (
         "available"
@@ -566,12 +623,13 @@ def _failed_symbol_analysis(
     symbol: str,
     *,
     profile: str,
-    exc: Exception,
+    exc: Exception | None = None,
+    failure_type: str | None = None,
     recovery_history: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Represent one failed native pipeline without discarding peer results."""
 
-    error_type = exc.__class__.__name__
+    error_type = str(failure_type or (exc.__class__.__name__ if exc else "AnalysisError"))
     issue = f"{symbol} UZI pipeline failed: {error_type}"
     return {
         "symbol": symbol,
@@ -597,6 +655,36 @@ def _failed_symbol_analysis(
     }
 
 
+def _snapshot_rows_for_symbol(
+    snapshot_rows: list[dict[str, Any]],
+    symbol: str,
+) -> list[dict[str, Any]]:
+    """Keep current-symbol and explicitly unscoped evidence only."""
+
+    _initialize_native_imports()
+    market_router = importlib.import_module("lib.market_router")
+
+    def canonical(value: object) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            return ""
+        try:
+            return str(market_router.parse_ticker(normalized).full)
+        except (TypeError, ValueError):
+            return normalized
+
+    target = canonical(symbol)
+    return [
+        row
+        for row in snapshot_rows
+        if isinstance(row, dict)
+        and (
+            not str(row.get("symbol") or "").strip()
+            or canonical(row.get("symbol")) == target
+        )
+    ]
+
+
 def _execute_symbol(
     snapshot_rows: list[dict[str, Any]],
     symbol: str,
@@ -609,8 +697,8 @@ def _execute_symbol(
     progress_callback=None,
 ) -> dict[str, Any]:
     _initialize_native_imports()
-    raw = build_uzi_raw(snapshot_rows, symbol)
-    raw["fetched_at"] = datetime.now(timezone.utc).isoformat()
+    symbol_snapshot_rows = _snapshot_rows_for_symbol(snapshot_rows, symbol)
+    raw = build_uzi_raw(symbol_snapshot_rows, symbol)
     data_integrity = importlib.import_module("lib.data_integrity")
     enabled_dimension_keys = set(_profile_dimension_keys(profile))
     integrity = _profile_integrity_report(
@@ -746,7 +834,7 @@ def _execute_symbol(
                             )
                             qualitative = apply_qualitative_deep_dive(
                                 {},
-                                snapshot_rows=snapshot_rows,
+                                snapshot_rows=symbol_snapshot_rows,
                                 llm_provider=llm_provider,
                                 cancellation=cancellation,
                                 progress_callback=progress_callback,

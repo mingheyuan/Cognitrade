@@ -8,6 +8,12 @@ from domain_packs.finance_ashare.tools.snapshot_collector import (
 )
 
 
+def _integer_or_default(value: object, default: int) -> int:
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
 def invoke(arguments: dict[str, Any], context) -> dict[str, Any]:
     """Execute the Finance Pack data provider through the shared Tool Registry."""
     progress_emitter = getattr(context, "progress_emitter", None)
@@ -46,8 +52,10 @@ def invoke(arguments: dict[str, Any], context) -> dict[str, Any]:
             snapshot_types=list(arguments.get("snapshot_types") or []),
             intent=str(arguments.get("intent") or "stock_check"),
             sector=str(arguments.get("sector") or "").strip() or None,
-            candidate_pool_size=int(arguments.get("candidate_pool_size") or 8),
-            enrichment_top_n=int(arguments.get("enrichment_top_n") or 2),
+            candidate_pool_size=_integer_or_default(arguments.get("candidate_pool_size"), 8),
+            enrichment_top_n=_integer_or_default(arguments.get("enrichment_top_n"), 2),
+            skip_enrichment=bool(arguments.get("skip_enrichment")),
+            no_resume=bool(arguments.get("no_resume")),
             cancellation=context.cancellation,
             cache_root=getattr(context, "cache_root", None),
             research_profile=str(arguments.get("research_profile") or "").strip() or None,

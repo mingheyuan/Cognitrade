@@ -92,7 +92,10 @@ class AShareSecurityMaster:
             self._append_symbol(symbols, symbol)
             matches.append({"symbol": symbol, "matched_text": symbol, "source": "query_hk_code"})
         for token in _US_PATTERN.findall(query):
-            if token in {"A", "AI", "API", "DCF", "ETF", "FUND", "HK", "HTTP", "JSON", "LBO", "PB", "PE", "ROE", "UZI", "USD"}:
+            if token in {
+                "A", "AI", "API", "BJ", "DCF", "ETF", "FUND", "HK", "HTTP",
+                "JSON", "LBO", "PB", "PE", "ROE", "SH", "SZ", "UZI", "USD",
+            }:
                 continue
             if token.startswith(("SH", "SZ", "BJ", "HK")) and token[2:].isdigit():
                 continue

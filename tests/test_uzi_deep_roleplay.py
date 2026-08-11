@@ -107,7 +107,7 @@ class UziDeepRoleplayTests(unittest.TestCase):
         self.assertEqual(result["roleplay"]["status"], "not_requested")
         self.assertFalse(result["roleplay"]["required"])
         self.assertEqual(provider.system_prompts, [])
-        self.assertEqual(len(result["votes"]), 51)
+        self.assertEqual(len(result["votes"]), 66)
 
     def test_deep_requires_agent_os_provider_instead_of_silent_rule_fallback(self) -> None:
         panel = _panel("deep")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import importlib
@@ -237,6 +238,231 @@ class Uzi392FetcherRuntime:
             raise TypeError(f"UZI fetcher {fetcher_id} returned {type(result).__name__}, expected dict")
         return result
 
+    def collect_symbol(
+        self,
+        *,
+        ticker: str,
+        raw_previous: dict[str, Any] | None = None,
+        max_workers: int = 6,
+        resume: bool = True,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run the pinned UZI root collection route once for one symbol.
+
+        UZI 3.9.4's root command selects the v3 pipeline by default, forces
+        ``collect_raw_data`` when ``UZI_LEGACY=1``, and falls the whole symbol
+        back to legacy only when a preflight guard or the pipeline orchestrator
+        raises.  A ``BaseFetcher`` error is already a normal ``DimResult`` and
+        therefore must not switch lanes.
+        """
+
+        normalized_ticker = str(ticker or "").strip()
+        if not normalized_ticker:
+            raise ValueError("UZI symbol collection requires a ticker")
+        normalized_options = dict(options or {})
+        contest_policy = dict(
+            normalized_options.get("cognitrade_xueqiu_policy") or {}
+        )
+        route_mode = str(
+            normalized_options.get("cognitrade_root_route_mode") or "single"
+        ).strip().lower()
+        if route_mode not in {"single", "multi"}:
+            raise ValueError(f"unsupported UZI root route mode: {route_mode}")
+        # UZI's dedicated versus/portfolio runners call run_pipeline directly
+        # and therefore do not honor the root CLI's UZI_LEGACY switch.
+        force_legacy = route_mode == "single" and os.environ.get("UZI_LEGACY") == "1"
+
+        if force_legacy:
+            raw = self._collect_symbol_legacy(
+                normalized_ticker,
+                max_workers=max_workers,
+                resume=resume,
+                contest_policy=contest_policy,
+            )
+            return {
+                **raw,
+                "_uzi_execution": {
+                    "lane": "legacy_forced",
+                    "fallback_reason": None,
+                },
+            }
+
+        previous: dict[str, Any] = {}
+        try:
+            pipeline_run = importlib.import_module("lib.pipeline.run")
+            pipeline_collect = importlib.import_module("lib.pipeline.collect")
+            pipeline_run._preflight_guards(normalized_ticker)
+            previous = self._pipeline_previous(
+                normalized_ticker,
+                raw_previous=raw_previous,
+                resume=resume,
+            )
+            contests = importlib.import_module("fetch_contests")
+            with _contests_policy_scope(contests, policy=contest_policy):
+                collected = pipeline_collect.collect(
+                    normalized_ticker,
+                    raw_previous=previous,
+                    max_workers=max(int(max_workers), 1),
+                )
+            if not isinstance(collected, dict):
+                raise TypeError(
+                    "UZI pipeline collect returned "
+                    f"{type(collected).__name__}, expected dict"
+                )
+            raw = self._assemble_pipeline_raw(normalized_ticker, collected)
+            self._write_native_raw(raw)
+            return {
+                **raw,
+                "_uzi_execution": {
+                    "lane": "pipeline",
+                    "fallback_reason": None,
+                },
+            }
+        except Exception as exc:
+            # Keep route diagnostics useful without persisting provider URLs,
+            # credentials or other exception text into report artifacts.
+            fallback_reason = type(exc).__name__
+            if route_mode == "multi":
+                # Pinned versus_runner/portfolio_runner do not retry legacy.
+                # They only reuse a *complete* report cache (raw + synthesis),
+                # not a raw_data file by itself.  This collection adapter cannot
+                # prove that completeness, so it surfaces the symbol failure;
+                # the multi-symbol composer then skips it exactly as upstream.
+                raise
+            raw = self._collect_symbol_legacy(
+                normalized_ticker,
+                max_workers=max_workers,
+                resume=resume,
+                contest_policy=contest_policy,
+            )
+            return {
+                **raw,
+                "_uzi_execution": {
+                    "lane": "legacy_fallback",
+                    "fallback_reason": fallback_reason,
+                },
+            }
+
+    def _pipeline_previous(
+        self,
+        ticker: str,
+        *,
+        raw_previous: dict[str, Any] | None,
+        resume: bool,
+    ) -> dict[str, Any]:
+        # The v3 pipeline receives resume as a function argument. The
+        # process-wide UZI_NO_RESUME switch belongs to the legacy
+        # collect_raw_data path; pinned versus/portfolio always resume.
+        if not resume:
+            return {}
+        if isinstance(raw_previous, dict):
+            return raw_previous
+        cache = importlib.import_module("lib.cache")
+        market_router = importlib.import_module("lib.market_router")
+        try:
+            cache_ticker = market_router.parse_ticker(ticker).full
+        except Exception:
+            cache_ticker = ticker
+        try:
+            # Pinned ``lib.pipeline.run._load_cache`` treats a missing or
+            # malformed raw_data.json as an empty resume candidate.  A cache
+            # parse failure is not a pipeline-orchestrator failure and must
+            # therefore never select the legacy lane.
+            previous = cache.read_task_output(cache_ticker, "raw_data")
+        except Exception:
+            previous = {}
+        return previous if isinstance(previous, dict) else {}
+
+    def _assemble_pipeline_raw(
+        self,
+        ticker: str,
+        collected: dict[str, Any],
+    ) -> dict[str, Any]:
+        market_router = importlib.import_module("lib.market_router")
+        ticker_info = market_router.parse_ticker(ticker)
+        basic = collected.get("0_basic")
+        basic_market = basic.get("market") if isinstance(basic, dict) else None
+        dimensions = {
+            key: value
+            for key, value in collected.items()
+            if key not in {"fund_managers", "similar_stocks"}
+            and isinstance(value, dict)
+        }
+        raw: dict[str, Any] = {
+            "ticker": ticker,
+            "market": basic_market
+            if basic_market in {"A", "H", "U"}
+            else ticker_info.market,
+            "code": ticker_info.code,
+            "full": ticker_info.full,
+            "dimensions": dimensions,
+        }
+        for key in ("fund_managers", "similar_stocks"):
+            if key in collected:
+                raw[key] = collected[key]
+        return raw
+
+    def _write_native_raw(self, raw: dict[str, Any]) -> None:
+        cache = importlib.import_module("lib.cache")
+        cache_ticker = str(raw.get("full") or raw.get("ticker") or "").strip()
+        if cache_ticker:
+            try:
+                # Upstream's pipeline cache write is best-effort and must not
+                # turn a successful pipeline collection into a legacy retry.
+                cache.write_task_output(cache_ticker, "raw_data", raw)
+            except Exception:
+                pass
+
+    def _collect_symbol_legacy(
+        self,
+        ticker: str,
+        *,
+        max_workers: int,
+        resume: bool,
+        contest_policy: dict[str, Any],
+    ) -> dict[str, Any]:
+        run_real_test = importlib.import_module("run_real_test")
+        contests = importlib.import_module("fetch_contests")
+        resolved_ticker = self._resolve_legacy_equity_ticker(ticker)
+        with _contests_policy_scope(contests, policy=contest_policy):
+            raw = run_real_test.collect_raw_data(
+                resolved_ticker,
+                max_workers=max(int(max_workers), 1),
+                resume=resume,
+            )
+        if not isinstance(raw, dict):
+            raise TypeError(
+                "UZI legacy collect_raw_data returned "
+                f"{type(raw).__name__}, expected dict"
+            )
+        return raw
+
+    def _resolve_legacy_equity_ticker(self, ticker: str) -> str:
+        """Preserve stage1's target semantics without embedding its CLI/report work.
+
+        Agent OS owns interactive candidate confirmation and fund routing, but a
+        preflight fallback must never continue to score an ETF/LOF/fund/bond as
+        an individual company.  Name resolution and security classification are
+        the pinned stage1 primitives; only the CLI prompts and report side
+        effects remain outside this collection adapter.
+        """
+
+        market_router = importlib.import_module("lib.market_router")
+        if market_router.is_chinese_name(ticker):
+            data_sources = importlib.import_module("lib.data_sources")
+            resolved = data_sources.resolve_chinese_name_rich(ticker)
+            ticker_info = resolved.get("resolved") if isinstance(resolved, dict) else None
+            if ticker_info is None:
+                raise ValueError("UZI target name could not be resolved uniquely")
+        else:
+            ticker_info = market_router.parse_ticker(ticker)
+
+        if ticker_info.market == "A":
+            security_type = market_router.classify_security_type(ticker_info.code)
+            if security_type in {"etf", "lof", "mutual_fund", "convertible_bond"}:
+                raise ValueError(f"UZI target is not an individual stock: {security_type}")
+        return ticker_info.full
+
     def _initialize_import_boundary(self) -> None:
         with _IMPORT_LOCK:
             if self.scripts_root not in _INITIALIZED_ROOTS:
@@ -253,6 +479,18 @@ def _collect_contests_with_policy(module: Any, *, ticker: str, policy: dict[str,
 
     Only the Xueqiu branch is wrapped. The upstream function, public Taoguba /
     10jqka / DPS sources and the returned UZI object shape remain unchanged.
+    """
+
+    with _contests_policy_scope(module, policy=policy):
+        return module.main(ticker)
+
+
+@contextmanager
+def _contests_policy_scope(module: Any, *, policy: dict[str, Any]):
+    """Scope Cognitrade's Xueqiu gate around the pinned contests call.
+
+    The policy defaults to disabled.  The rest of ``fetch_contests`` and its
+    public sources execute unchanged.
     """
 
     enabled = bool(policy.get("enabled"))
@@ -320,7 +558,7 @@ def _collect_contests_with_policy(module: Any, *, ticker: str, policy: dict[str,
         module.fetch_xueqiu_cubes = controlled_fetch
         module.cached = policy_cached
         try:
-            return module.main(ticker)
+            yield
         finally:
             module.fetch_xueqiu_cubes = original_fetch
             module.cached = original_cached

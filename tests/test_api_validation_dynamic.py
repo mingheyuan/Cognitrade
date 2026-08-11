@@ -82,6 +82,198 @@ class DynamicApiValidationTests(unittest.TestCase):
         self.assertIsNone(holdings[2].get("weight"))
         self.assertEqual(request.constraints["school"], "A")
 
+    def test_portfolio_method_validation_preserves_each_pinned_weight_contract(self) -> None:
+        returns = validate_research_request(
+            RequestEnvelope(
+                intent="uzi_returns",
+                user_query="组合归因",
+                constraints={
+                    "portfolio_holdings": [
+                        {"ticker": "AAA", "return_pct": 5},
+                        {"ticker": "BBB"},
+                    ]
+                },
+            )
+        )
+        self.assertNotIn("weight", returns.constraints["portfolio_holdings"][0])
+
+        rebalance = validate_research_request(
+            RequestEnvelope(
+                intent="uzi_rebalance",
+                user_query="组合再平衡",
+                constraints={
+                    "portfolio_holdings": [
+                        {"ticker": "AAA", "weight": 1.2},
+                        {"ticker": "BBB", "weight": 0.8},
+                    ],
+                    "rebalance_targets": {"AAA": 0.8},
+                },
+            )
+        )
+        self.assertEqual(
+            [row["weight"] for row in rebalance.constraints["portfolio_holdings"]],
+            [1.2, 0.8],
+        )
+        self.assertEqual(rebalance.constraints["rebalance_targets"], {"AAA": 0.8})
+
+        strategic = validate_research_request(
+            RequestEnvelope(
+                intent="uzi_portfolio_rebalance_method",
+                user_query="战略资产再平衡",
+                constraints={
+                    "portfolio_holdings": [
+                        {"symbol": "AAA", "value": 100000, "asset_class": "A股蓝筹"}
+                    ],
+                    "asset_class_targets": {"A股蓝筹": 80, "现金": 20},
+                },
+            )
+        )
+        self.assertEqual(
+            strategic.constraints["asset_class_targets"],
+            {"A股蓝筹": 80, "现金": 20},
+        )
+
+        with self.assertRaises(ApiError):
+            validate_research_request(
+                RequestEnvelope(
+                    intent="uzi_portfolio_rebalance_method",
+                    user_query="错误百分比",
+                    constraints={
+                        "portfolio_holdings": [
+                            {"ticker": "AAA", "value": 100000, "asset_class": "A股蓝筹"}
+                        ],
+                        "asset_class_targets": {"A股蓝筹": 0.8, "现金": 0.2},
+                    },
+                )
+            )
+
+        for constraints in (
+            {
+                "portfolio_holdings": [
+                    {"ticker": "AAA", "weight": 0},
+                    {"ticker": "BBB", "weight": 0},
+                ]
+            },
+            {
+                "portfolio_holdings": [{"ticker": "AAA"}, {"ticker": "BBB"}],
+                "rebalance_targets": {"AAA": 0, "BBB": 0},
+            },
+        ):
+            with self.subTest(constraints=constraints), self.assertRaises(ApiError):
+                validate_research_request(
+                    RequestEnvelope(
+                        intent=(
+                            "uzi_returns"
+                            if "rebalance_targets" not in constraints
+                            else "uzi_rebalance"
+                        ),
+                        user_query="显式零权重",
+                        constraints=constraints,
+                    )
+                )
+
+    def test_standalone_method_inputs_reject_wrong_method_and_float_years(self) -> None:
+        cases = (
+            (
+                "uzi_lbo",
+                {"method_assumptions": {"quick_lbo": {"hold_years": 5.0}}},
+            ),
+            (
+                "uzi_dcf",
+                {"method_assumptions": {"dcf": {"stage1_years": 5.0}}},
+            ),
+            (
+                "uzi_lbo",
+                {"method_assumptions": {"three_statement": {"gross_margin": 0.4}}},
+            ),
+            (
+                "uzi_earnings",
+                {
+                    "method_assumptions": {
+                        "earnings_review": {"consensus": {"rev": 0, "ni": 0}}
+                    }
+                },
+            ),
+        )
+        for intent, extra in cases:
+            with self.subTest(intent=intent, extra=extra), self.assertRaises(ApiError):
+                validate_research_request(
+                    RequestEnvelope(
+                        intent=intent,
+                        user_query="运行固定 UZI 方法",
+                        constraints={"symbol": "600519", **extra},
+                    )
+                )
+
+        accepted = validate_research_request(
+            RequestEnvelope(
+                intent="uzi_lbo",
+                user_query="运行 LBO",
+                constraints={
+                    "symbol": "600519",
+                    "method_assumptions": {"quick_lbo": {"hold_years": 5}},
+                },
+            )
+        )
+        self.assertEqual(
+            accepted.constraints["method_assumptions"]["quick_lbo"]["hold_years"],
+            5,
+        )
+
+    def test_accretion_target_accepts_losses_and_rejects_nonpositive_shape(self) -> None:
+        target = {
+            "ticker": "LOSS",
+            "name": "亏损标的",
+            "shares_yi": 10,
+            "price": 5,
+            "net_income_yi": -2,
+        }
+        accepted = validate_research_request(
+            RequestEnvelope(
+                intent="uzi_accretion_dilution_method",
+                user_query="并购测算",
+                constraints={
+                    "symbol": "600519",
+                    "method_assumptions": {
+                        "accretion_dilution": {"target": target}
+                    },
+                },
+            )
+        )
+        self.assertEqual(
+            accepted.constraints["method_assumptions"]["accretion_dilution"]["target"],
+            target,
+        )
+
+        with self.assertRaises(ApiError):
+            validate_research_request(
+                RequestEnvelope(
+                    intent="uzi_accretion_dilution_method",
+                    user_query="错误并购测算",
+                    constraints={
+                        "symbol": "600519",
+                        "method_assumptions": {
+                            "accretion_dilution": {
+                                "target": {**target, "shares_yi": 0}
+                            }
+                        },
+                    },
+                )
+            )
+
+    def test_removed_host_acceptance_flags_are_not_public_contract(self) -> None:
+        with self.assertRaises(ApiError):
+            validate_research_request(
+                RequestEnvelope(
+                    intent="uzi_rebalance",
+                    user_query="再平衡",
+                    constraints={
+                        "portfolio_holdings": [{"ticker": "AAA"}],
+                        "accept_uzi_native_fee_schedule": False,
+                    },
+                )
+            )
+
     def test_pack_owned_intent_is_validated_from_runtime_catalog(self) -> None:
         request = validate_research_request(
             RequestEnvelope(

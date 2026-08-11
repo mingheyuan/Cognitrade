@@ -34,7 +34,8 @@ _PROFILES: dict[str, dict[str, Any]] = {
         "industry_dynamic_lookup": False,
         "playwright_mode": "off",
         "playwright_dimensions": [],
-        "investors_count": 10,
+        "investors_count": 66,
+        "declared_investors_count": 10,
         "enable_bull_bear_debate": False,
         "institutional_methods": ["dcf"],
         "methods": ["dcf"],
@@ -53,12 +54,27 @@ _PROFILES: dict[str, dict[str, Any]] = {
             "market",
             "fundamental",
             "kline",
+            "macro",
+            "peers",
+            "chain",
+            "research",
+            "industry",
+            "materials",
+            "futures",
             "valuation",
             "governance",
+            "capital_flow",
+            "policy",
+            "moat",
             "events",
             "lhb",
-            # UZI legacy/current pipelines always run both bonus collectors
-            # after the profile-scoped numbered dimensions.
+            "sentiment",
+            "trap",
+            "contests",
+            # UZI 3.9.4 root v3 collection traverses the complete 22-entry
+            # registry for every depth.  ``fetchers_enabled`` remains the
+            # lite profile's seven expected/self-review dimensions; the
+            # snapshot transport must still preserve every collected result.
             "fund_holders",
             "similar_stocks",
         ],
@@ -74,7 +90,8 @@ _PROFILES: dict[str, dict[str, Any]] = {
         "industry_dynamic_lookup": True,
         "playwright_mode": "opt-in",
         "playwright_dimensions": ["peers", "materials", "events", "sentiment", "industry", "moat"],
-        "investors_count": 51,
+        "investors_count": 66,
+        "declared_investors_count": 51,
         "enable_bull_bear_debate": False,
         "institutional_methods": [
             "dcf", "comps", "lbo", "three_statement", "merger",
@@ -138,6 +155,7 @@ _PROFILES: dict[str, dict[str, Any]] = {
         "playwright_mode": "default_subject_to_sensitive_source_policy",
         "playwright_dimensions": ["peers", "materials", "events", "sentiment", "industry", "moat", "macro", "policy", "trap", "contests"],
         "investors_count": 66,
+        "declared_investors_count": 51,
         "enable_bull_bear_debate": True,
         "institutional_methods": [
             "dcf", "comps", "lbo", "three_statement", "merger",

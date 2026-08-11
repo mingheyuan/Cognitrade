@@ -506,6 +506,15 @@ class ApiV1RunsTests(unittest.TestCase):
                 "constraints": {"symbols": ["600519", "000001", "600519"], "research_profile": "lite"},
             },
             {
+                "intent": "stock_compare",
+                "user_query": "比较两个标的并强制刷新",
+                "constraints": {
+                    "symbols": ["600519", "000001"],
+                    "research_profile": "lite",
+                    "no_resume": True,
+                },
+            },
+            {
                 "intent": "methodology_evolution",
                 "user_query": "演进方法论",
                 "constraints": {},

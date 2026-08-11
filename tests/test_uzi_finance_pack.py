@@ -19,7 +19,11 @@ from domain_packs.finance_ashare.subagents.uzi_methodology import (
     build_features,
     select_profile,
 )
-from domain_packs.finance_ashare.subagents.runtime import collect_snapshot
+from domain_packs.finance_ashare.subagents.runtime import (
+    _collection_research_profile,
+    _requested_snapshot_types,
+    collect_snapshot,
+)
 from domain_packs.finance_ashare.vendor.uzi_3_9_2 import verify_vendored_uzi_integrity
 from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshots
 import domain_packs.finance_ashare.tools.snapshot_collector as snapshot_collector
@@ -38,6 +42,144 @@ def _snapshots() -> list[dict]:
 
 
 class UziFinancePackTests(unittest.TestCase):
+    def test_standalone_command_profiles_and_collection_scopes_match_uzi(self) -> None:
+        self.assertEqual(
+            {
+                intent: _collection_research_profile({"intent": intent})
+                for intent in ("quick_scan", "uzi_panel_only", "uzi_initiate", "uzi_ic_memo")
+            },
+            {
+                "quick_scan": "lite",
+                "uzi_panel_only": "lite",
+                "uzi_initiate": "deep",
+                "uzi_ic_memo": "deep",
+            },
+        )
+        for intent in ("uzi_initiate", "uzi_ic_memo", "uzi_earnings_preview"):
+            with self.subTest(intent=intent):
+                self.assertEqual(
+                    len(_requested_snapshot_types(inputs={"intent": intent}, sector=None)),
+                    22,
+                )
+        segmental = set(
+            _requested_snapshot_types(inputs={"intent": "uzi_segmental_model"}, sector=None)
+        )
+        self.assertTrue({"research", "moat", "policy"}.issubset(segmental))
+        expected_scopes = {
+            "uzi_panel_only": {"market", "fundamental"},
+            "uzi_scan_trap": {"trap"},
+            "uzi_segmental_model": {
+                "market", "fundamental", "chain", "events", "research", "moat", "policy",
+            },
+            "uzi_dcf": {"market", "fundamental"},
+            "uzi_comps": {"market", "fundamental", "valuation", "similar_stocks"},
+            "uzi_lbo": {"fundamental"},
+            "uzi_earnings": {"fundamental", "research"},
+            "uzi_catalysts": {"events"},
+            "uzi_thesis": {"market", "fundamental", "kline", "valuation"},
+            "uzi_screen": {"fundamental", "moat"},
+            "uzi_dd": {
+                "market", "fundamental", "industry", "peers", "chain",
+                "governance", "moat", "policy", "sentiment", "events", "trap",
+            },
+            "uzi_morning_note_method": {
+                "market", "valuation", "kline", "capital_flow", "lhb", "sentiment",
+            },
+            "uzi_sector_review_method": {"market", "industry", "peers", "chain"},
+            "uzi_porter_bcg_method": {"market", "industry", "moat"},
+            "uzi_ai_readiness": {
+                "market", "fundamental", "chain", "industry", "governance",
+                "policy", "moat", "events", "sentiment", "trap",
+            },
+            "uzi_value_creation_plan_method": {
+                "market", "fundamental", "industry",
+            },
+            "uzi_model_update": {
+                "market", "fundamental", "valuation", "similar_stocks",
+            },
+            "uzi_three_statement_method": {"market", "fundamental", "valuation"},
+            "uzi_accretion_dilution_method": {"market", "fundamental"},
+            "uzi_unit_economics_method": {"market", "fundamental"},
+        }
+        for intent, expected in expected_scopes.items():
+            with self.subTest(intent=intent):
+                self.assertEqual(
+                    set(_requested_snapshot_types(inputs={"intent": intent}, sector=None)),
+                    expected,
+                )
+
+        screen_scopes = {
+            "value": {"market", "fundamental", "valuation"},
+            "growth": {"fundamental"},
+            "quality": {"fundamental", "moat"},
+            "gulp": {"market", "fundamental", "kline", "valuation"},
+            "short": {"market", "fundamental", "valuation"},
+        }
+        for style, expected in screen_scopes.items():
+            with self.subTest(screen_style=style):
+                inputs = {
+                    "intent": "uzi_screen",
+                    "method_assumptions": {"quantitative_screen": {"style": style}},
+                }
+                self.assertEqual(
+                    set(_requested_snapshot_types(inputs=inputs, sector=None)),
+                    expected,
+                )
+
+        ledger = yaml.safe_load(
+            (
+                Path(__file__).resolve().parents[1]
+                / "domain_packs/finance_ashare/migration/uzi_3_9_2_capability_ledger.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        fixed_scopes = ledger["standalone_command_collection"]["fixed_scopes"]
+        for intent, expected in expected_scopes.items():
+            with self.subTest(ledger_intent=intent):
+                self.assertEqual(
+                    set(fixed_scopes[intent]),
+                    {
+                        snapshot_collector._UZI_FETCHER_BY_SNAPSHOT_TYPE[item]
+                        for item in expected
+                    },
+                )
+        for style, expected in screen_scopes.items():
+            with self.subTest(ledger_screen_style=style):
+                self.assertEqual(
+                    set(
+                        ledger["standalone_command_collection"]["screen_style_scopes"][
+                            style
+                        ]
+                    ),
+                    {
+                        snapshot_collector._UZI_FETCHER_BY_SNAPSHOT_TYPE[item]
+                        for item in expected
+                    },
+                )
+
+    def test_bundle_consumers_declare_optional_bundle_lineage(self) -> None:
+        registry = DomainPackRegistry.load(
+            Path(__file__).resolve().parents[1] / "domain_packs"
+        )
+        expected = {
+            "finance.stock.screen": {"snapshot", "stock_snapshot_bundle"},
+            "finance.sector.research": {"snapshot", "stock_snapshot_bundle"},
+            "finance.uzi.native.analyze_stock": {
+                "snapshot",
+                "normalized_query",
+                "stock_snapshot_bundle",
+            },
+        }
+        for capability, artifact_types in expected.items():
+            with self.subTest(capability=capability):
+                definition = registry.capabilities(
+                    domain_id="finance_ashare", capability=capability
+                )[0]
+                by_type = {port.artifact_type: port for port in definition.consumes}
+                self.assertEqual(set(by_type), artifact_types)
+                self.assertFalse(by_type["stock_snapshot_bundle"].required)
+                if "normalized_query" in by_type:
+                    self.assertFalse(by_type["normalized_query"].required)
+
     def test_main_agent_synthesis_contract_accepts_full_artifact_lineage(self) -> None:
         schema = json.loads(
             (
@@ -96,17 +238,7 @@ class UziFinancePackTests(unittest.TestCase):
         ]
         self.assertEqual(
             {draft.content["snapshot_type"] for draft in snapshots},
-            {
-                "market",
-                "fundamental",
-                "kline",
-                "valuation",
-                "governance",
-                "events",
-                "lhb",
-                "fund_holders",
-                "similar_stocks",
-            },
+            set(select_profile({"research_profile": "lite"})["snapshot_types"]),
         )
         self.assertTrue(all(draft.content["quality_status"] == "data_gap" for draft in snapshots))
         self.assertTrue(
@@ -140,8 +272,8 @@ class UziFinancePackTests(unittest.TestCase):
             },
         )
         self.assertEqual(mapping["source"]["commit"], "0acf25122cabf493e7bc442faff62ceceb7f2f02")
-        self.assertEqual(mapping["profiles"]["lite"]["panel_seats"], 10)
-        self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 51)
+        self.assertEqual(mapping["profiles"]["lite"]["panel_seats"], 66)
+        self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 66)
         self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 66)
         required_mapping_fields = {
             "source_commit",

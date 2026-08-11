@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshots
+from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshot_bundle
 from domain_packs.finance_ashare.subagents.fund_methodology import build_fund_analysis
 from domain_packs.finance_ashare.subagents.uzi_methodology import (
     build_features,
@@ -129,6 +129,11 @@ def normalize_query(context):
                 or inputs.get("requested_methods")
                 or []
             ),
+            "model_updates": dict(
+                request.content.get("model_updates")
+                or inputs.get("model_updates")
+                or {}
+            ) or None,
             "method_assumptions": dict(
                 request.content.get("method_assumptions")
                 or inputs.get("method_assumptions")
@@ -353,6 +358,7 @@ def collect_snapshot(context):
     sector = str(inputs.get("sector") or inputs.get("sector_query") or "").strip() or None
     snapshots = list(query.content.get("snapshots") or inputs.get("snapshots") or [])
     requested_types = _requested_snapshot_types(inputs=inputs, sector=sector)
+    collection_profile = _collection_research_profile(inputs)
     governed_tool_path = callable(getattr(context, "call_tool", None))
     review_target_run_id = str(inputs.get("review_target_run_id") or "").strip() or None
     target_artifacts = _review_target_artifacts(context, review_target_run_id) if intent == "review_thesis" else []
@@ -376,9 +382,11 @@ def collect_snapshot(context):
             "snapshot_types": requested_types,
             "intent": intent,
             "sector": sector,
-            "candidate_pool_size": int(inputs.get("candidate_pool_size") or 8),
-            "enrichment_top_n": int(inputs.get("enrichment_top_n") or 2),
-            "research_profile": str(inputs.get("research_profile") or "").strip() or None,
+            "candidate_pool_size": _integer_or_default(inputs.get("candidate_pool_size"), 8),
+            "enrichment_top_n": _integer_or_default(inputs.get("enrichment_top_n"), 2),
+            "skip_enrichment": bool(inputs.get("skip_enrichment")),
+            "research_profile": collection_profile,
+            "no_resume": bool(inputs.get("no_resume")),
         }
         call_tool = getattr(context, "call_tool", None)
         if callable(call_tool):
@@ -390,19 +398,19 @@ def collect_snapshot(context):
         else:
             # Direct Pack unit tests may use a minimal context; production Graph
             # execution always takes the governed Tool Registry branch above.
-            direct_snapshots = _collect_provider_snapshots(
+            collected = _collect_provider_snapshots(
                 query=query_text,
                 symbols=symbols,
                 snapshot_types=requested_types,
+                intent=intent,
                 sector=sector,
+                research_profile=collection_profile,
+                candidate_pool_size=_integer_or_default(inputs.get("candidate_pool_size"), 8),
+                enrichment_top_n=_integer_or_default(inputs.get("enrichment_top_n"), 2),
+                skip_enrichment=bool(inputs.get("skip_enrichment")),
+                no_resume=bool(inputs.get("no_resume")),
                 cancellation=getattr(context, "cancellation", None),
             )
-            collected = {
-                "snapshots": direct_snapshots,
-                "symbols": symbols,
-                "candidate_universe": [],
-                "collection": collection,
-            }
         snapshots = list(collected.get("snapshots") or [])
         symbols = _unique_strings([*symbols, *(collected.get("symbols") or [])])
         candidate_universe = [
@@ -420,6 +428,7 @@ def collect_snapshot(context):
             requested_types=requested_types,
             symbols=symbols,
             sector=sector,
+            intent=intent,
         )
     quality_counts: dict[str, int] = {}
     for snapshot in snapshots:
@@ -550,21 +559,40 @@ def _ensure_requested_snapshot_records(
     requested_types: list[str],
     symbols: list[str],
     sector: str | None,
+    intent: str,
 ) -> list[dict[str, Any]]:
     """Materialize explicit data-gap facts for requested but unavailable inputs."""
 
     rows = list(snapshots)
-    sector_scoped = {"sector", "policy", "macro"}
+    symbol_root_intents = {
+        "stock_check",
+        "uzi_analyze_stock",
+        "stock_compare",
+        "uzi_portfolio_batch",
+    }
+
+    def is_sector_scoped(snapshot_type: str) -> bool:
+        if snapshot_type == "sector":
+            return True
+        return (
+            snapshot_type in {"policy", "macro"}
+            and intent not in symbol_root_intents
+        )
 
     def target_key(snapshot_type: str, row: dict[str, Any]) -> str:
-        if snapshot_type in sector_scoped:
+        if is_sector_scoped(snapshot_type):
             return str(row.get("sector") or sector or "").strip()
         return str(row.get("symbol") or "").strip()
 
     for snapshot_type in _unique_strings(requested_types):
-        targets = [None] if snapshot_type in sector_scoped else (symbols or [None])
+        sector_scoped = is_sector_scoped(snapshot_type)
+        targets = [None] if sector_scoped else (symbols or [None])
         for symbol in targets:
-            expected_target = str(sector or "").strip() if snapshot_type in sector_scoped else str(symbol or "").strip()
+            expected_target = (
+                str(sector or "").strip()
+                if sector_scoped
+                else str(symbol or "").strip()
+            )
             if any(
                 str(row.get("snapshot_type") or "").strip() == snapshot_type
                 and target_key(snapshot_type, row) == expected_target
@@ -574,8 +602,8 @@ def _ensure_requested_snapshot_records(
             rows.append(
                 {
                     "snapshot_type": snapshot_type,
-                    "symbol": None if snapshot_type in sector_scoped else symbol,
-                    "sector": sector if snapshot_type in sector_scoped else None,
+                    "symbol": None if sector_scoped else symbol,
+                    "sector": sector if sector_scoped else None,
                     "facts": {"availability": "data_gap"},
                     "quality_status": "data_gap",
                     "missing_fields": ["provider_snapshot_missing"],
@@ -588,17 +616,27 @@ def _ensure_requested_snapshot_records(
 
 def _snapshot_key(snapshot: dict[str, Any]) -> str:
     snapshot_type = str(snapshot.get("snapshot_type") or "snapshot").strip()
-    scope = "sector" if snapshot.get("sector") else "symbol"
-    target = str(snapshot.get("sector") or snapshot.get("symbol") or "unscoped").strip()
+    has_symbol = bool(str(snapshot.get("symbol") or "").strip())
+    scope = "symbol" if has_symbol else "sector"
+    target = str(
+        snapshot.get("symbol")
+        if has_symbol
+        else snapshot.get("sector") or "unscoped"
+    ).strip()
     return f"{scope}:{target}:{snapshot_type}"
 
 
 def _snapshot_artifact_content(snapshot: dict[str, Any]) -> dict[str, Any]:
-    facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
+    facts = dict(snapshot.get("facts")) if isinstance(snapshot.get("facts"), dict) else {}
+    # Sector providers historically returned ``theme`` beside ``facts``.  The
+    # independent Snapshot artifact is the analyzer's canonical input, so keep
+    # that provider observation inside the schema-backed facts envelope.
+    if snapshot.get("theme") is not None and "theme" not in facts:
+        facts["theme"] = snapshot.get("theme")
     source = snapshot.get("source") if isinstance(snapshot.get("source"), dict) else {}
     snapshot_type = str(snapshot.get("snapshot_type") or "snapshot").strip()
-    scope = "sector" if snapshot.get("sector") else (
-        "sector" if snapshot_type in {"sector", "policy", "macro"} else "symbol"
+    scope = "symbol" if snapshot.get("symbol") else (
+        "sector" if snapshot.get("sector") or snapshot_type in {"sector", "policy", "macro"} else "symbol"
     )
     return {
         "snapshot_type": snapshot_type,
@@ -620,6 +658,11 @@ def _snapshot_artifact_content(snapshot: dict[str, Any]) -> dict[str, Any]:
         "degrade_reasons": _snapshot_quality_reasons(snapshot),
         "facts": facts,
         "source": source,
+        "source_trace": [
+            dict(item)
+            for item in list(snapshot.get("source_trace") or [])
+            if isinstance(item, dict)
+        ],
         "source_refs": _snapshot_artifact_source_refs(snapshot),
     }
 
@@ -634,7 +677,26 @@ def _snapshot_artifact_source_refs(snapshot: dict[str, Any]) -> list[dict[str, A
         or "finance_pack"
     ).strip()
     identifier = _snapshot_key(snapshot)
-    return [{"type": "snapshot", "provider": provider, "id": identifier}]
+    refs: list[dict[str, Any]] = [
+        {"type": "snapshot", "provider": provider, "id": identifier}
+    ]
+    for trace in list(snapshot.get("source_trace") or []):
+        if not isinstance(trace, dict):
+            continue
+        trace_provider = str(
+            trace.get("provider_id") or trace.get("source_id") or provider
+        ).strip()
+        trace_id = str(trace.get("source_id") or trace_provider).strip()
+        if not trace_id:
+            continue
+        refs.append(
+            {
+                "type": "snapshot_source",
+                "provider": trace_provider or provider,
+                "id": trace_id,
+            }
+        )
+    return _unique_source_refs(refs)
 
 
 def _context_artifacts(context, artifact_type: str) -> list:
@@ -717,18 +779,20 @@ def execute_uzi_native_full_analysis(context):
     rows, symbols, _query, source_refs, parent_ids = _snapshot_context(context)
     inputs = dict(context.node.inputs or {})
     profile = select_profile(inputs)
-    normalized = (context.artifacts("normalized_query") or [None])[-1]
+    normalized = (_context_artifacts(context, "normalized_query") or [None])[-1]
     holding_context = (
         dict((normalized.content or {}).get("holding_context") or {})
         if normalized is not None
         else {}
     )
-    bundle = (context.artifacts("stock_snapshot_bundle") or [None])[-1]
+    bundle = (_context_artifacts(context, "stock_snapshot_bundle") or [None])[-1]
     recovery_history = []
     if bundle is not None:
         recovery = dict((bundle.content or {}).get("collection") or {}).get("uzi_recovery")
         if isinstance(recovery, dict):
             recovery_history = list(recovery.get("attempts") or [])
+        parent_ids = list(dict.fromkeys([*parent_ids, bundle.artifact_id]))
+        source_refs = _unique_source_refs([*source_refs, *list(bundle.source_refs)])
     progress_emitter = getattr(context, "progress_emitter", None)
     highest_progress = 0
 
@@ -1621,65 +1685,153 @@ def _number(value: object) -> float | None:
     return coerce_numeric(value)
 
 
+def _integer_or_default(value: object, default: int) -> int:
+    """Apply a default without mistaking the valid integer zero for absence."""
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
+_UZI_COMMAND_COLLECTION_PROFILES = {
+    "quick_scan": "lite",
+    "uzi_panel_only": "lite",
+    "uzi_initiate": "deep",
+    "uzi_ic_memo": "deep",
+}
+
+
+def _collection_research_profile(inputs: dict) -> str | None:
+    explicit = str(inputs.get("research_profile") or "").strip().lower()
+    if explicit:
+        return explicit
+    return _UZI_COMMAND_COLLECTION_PROFILES.get(str(inputs.get("intent") or "").strip())
+
+
 def _requested_snapshot_types(*, inputs: dict, sector: str | None) -> list[str]:
     intent = str(inputs.get("intent") or "").strip()
+    if intent in {
+        "stock_check",
+        "uzi_analyze_stock",
+        "stock_compare",
+        "uzi_portfolio_batch",
+    }:
+        # UZI 3.9.4's root v3 path always collects the complete registry.
+        # ``snapshot_types`` on these intents is a presentation hint, not a
+        # license to starve the native scoring/report stages of dimensions.
+        return _unique_strings(select_profile(inputs).get("snapshot_types") or [])
     if intent == "quick_scan":
         # UZI /quick-scan is a fixed four-dimension command, not a profile.
         return ["fundamental", "kline", "valuation", "trap"]
+    if intent in {"uzi_initiate", "uzi_ic_memo", "uzi_earnings_preview"}:
+        # These commands explicitly require full raw/22-dimensional evidence
+        # in the pinned command definitions.
+        profile = _UZI_COMMAND_COLLECTION_PROFILES.get(intent, "medium")
+        return _unique_strings(
+            select_profile({"research_profile": profile}).get("snapshot_types") or []
+        )
     native_command_snapshot_types: dict[str, tuple[str, ...]] = {
         "uzi_panel_only": ("market", "fundamental"),
         "uzi_scan_trap": ("trap",),
-        "uzi_segmental_model": ("market", "fundamental", "chain", "events", "research"),
+        "uzi_segmental_model": (
+            "market", "fundamental", "chain", "events", "research", "moat", "policy",
+        ),
         "uzi_dcf": ("market", "fundamental"),
-        "uzi_comps": ("market", "fundamental", "similar_stocks"),
+        "uzi_comps": ("market", "fundamental", "valuation", "similar_stocks"),
         "uzi_lbo": ("fundamental",),
-        "uzi_initiate": ("market", "fundamental", "similar_stocks"),
-        "uzi_earnings": ("market", "fundamental"),
-        "uzi_catalysts": ("market", "events"),
+        "uzi_earnings": ("fundamental", "research"),
+        "uzi_catalysts": ("events",),
         "uzi_thesis": ("market", "fundamental", "kline", "valuation"),
-        "uzi_screen": ("market", "fundamental", "kline", "valuation"),
-        "uzi_dd": ("market", "fundamental"),
-        "uzi_ic_memo": ("market", "fundamental", "similar_stocks"),
-        "uzi_ai_readiness": ("market", "chain", "industry", "moat", "events"),
-        "uzi_earnings_preview": ("market", "fundamental", "research"),
-        "uzi_model_update": ("market", "fundamental", "similar_stocks"),
-        "uzi_three_statement_method": ("fundamental",),
+        "uzi_screen": (),
+        "uzi_dd": (
+            "market", "fundamental", "industry", "peers", "chain", "governance",
+            "moat", "policy", "sentiment", "events", "trap",
+        ),
+        "uzi_ai_readiness": (
+            "market", "fundamental", "chain", "industry", "governance",
+            "policy", "moat", "events", "sentiment", "trap",
+        ),
+        "uzi_model_update": ("market", "fundamental", "valuation", "similar_stocks"),
+        "uzi_three_statement_method": ("market", "fundamental", "valuation"),
         "uzi_accretion_dilution_method": ("market", "fundamental"),
-        "uzi_morning_note_method": ("market", "kline"),
-        "uzi_sector_review_method": ("market", "industry"),
-        "uzi_porter_bcg_method": ("market", "industry"),
+        "uzi_morning_note_method": (
+            "market", "valuation", "kline", "capital_flow", "lhb", "sentiment",
+        ),
+        "uzi_sector_review_method": ("market", "industry", "peers", "chain"),
+        "uzi_porter_bcg_method": ("market", "industry", "moat"),
         "uzi_unit_economics_method": ("market", "fundamental"),
-        "uzi_value_creation_plan_method": ("market", "fundamental"),
+        "uzi_value_creation_plan_method": ("market", "fundamental", "industry"),
     }
+    if intent == "uzi_screen":
+        all_assumptions = inputs.get("method_assumptions")
+        screen_assumptions = (
+            all_assumptions.get("quantitative_screen")
+            if isinstance(all_assumptions, dict)
+            and isinstance(all_assumptions.get("quantitative_screen"), dict)
+            else {}
+        )
+        style = str(screen_assumptions.get("style") or "quality")
+        return list(
+            {
+                "value": ("market", "fundamental", "valuation"),
+                "growth": ("fundamental",),
+                "quality": ("fundamental", "moat"),
+                "gulp": ("market", "fundamental", "kline", "valuation"),
+                "short": ("market", "fundamental", "valuation"),
+            }.get(style, ("fundamental", "moat"))
+        )
     if intent in native_command_snapshot_types:
         return list(native_command_snapshot_types[intent])
     requested_methods = _unique_strings(inputs.get("requested_methods") or [])
     method_snapshot_types: dict[str, tuple[str, ...]] = {
-        "ai_readiness": ("market", "chain", "industry", "events", "research", "moat"),
+        "ai_readiness": (
+            "market", "fundamental", "chain", "industry", "governance",
+            "policy", "moat", "events", "sentiment", "trap",
+        ),
         "earnings_preview": ("market", "fundamental", "research", "events", "kline"),
         "model_update": ("market", "fundamental", "valuation", "peers"),
-        "three_statement": ("fundamental",),
+        "three_statement": ("market", "fundamental", "valuation"),
         "quick_lbo": ("fundamental",),
         "lbo": ("fundamental",),
-        "accretion_dilution": ("fundamental",),
+        "accretion_dilution": ("market", "fundamental"),
         "ma_accretion": ("fundamental",),
         "segmental": ("fundamental",),
         "initiation_report": ("market", "fundamental", "chain", "industry", "events", "valuation"),
         "earnings_review": ("fundamental", "research"),
         "catalyst_calendar": ("events",),
-        "thesis_tracker": ("market", "fundamental", "valuation"),
-        "morning_note": ("market", "capital_flow", "sentiment", "events"),
+        "thesis_tracker": ("market", "fundamental", "kline", "valuation"),
+        "morning_note": ("market", "valuation", "kline", "capital_flow", "lhb", "sentiment"),
+        "quantitative_screen": ("market", "fundamental", "kline", "valuation", "moat"),
+        "sector_review": ("market", "industry", "peers", "chain"),
         "ic_memo": ("market", "fundamental", "chain", "industry", "events", "valuation", "governance", "trap"),
-        "porter_bcg": ("moat", "industry", "peers", "chain"),
-        "dd_checklist": ("fundamental", "valuation", "industry", "peers", "chain", "governance", "notice", "policy", "sentiment", "events", "trap"),
+        "porter_bcg": ("market", "industry", "moat"),
+        "dd_checklist": ("market", "fundamental", "industry", "peers", "chain", "governance", "moat", "policy", "sentiment", "events", "trap"),
         "unit_economics": ("fundamental",),
-        "value_creation_plan": ("fundamental",),
+        "value_creation_plan": ("market", "fundamental", "industry"),
     }
+    all_assumptions = inputs.get("method_assumptions")
+    screen_assumptions = (
+        all_assumptions.get("quantitative_screen")
+        if isinstance(all_assumptions, dict)
+        and isinstance(all_assumptions.get("quantitative_screen"), dict)
+        else {}
+    )
+    screen_style = str(screen_assumptions.get("style") or "quality")
+    screen_types = {
+        "value": ("market", "fundamental", "valuation"),
+        "growth": ("fundamental",),
+        "quality": ("fundamental", "moat"),
+        "gulp": ("market", "fundamental", "kline", "valuation"),
+        "short": ("market", "fundamental", "valuation"),
+    }.get(screen_style, ("fundamental", "moat"))
     method_required = _unique_strings(
         [
             snapshot_type
             for method in requested_methods
-            for snapshot_type in method_snapshot_types.get(method, ())
+            for snapshot_type in (
+                screen_types
+                if method == "quantitative_screen"
+                else method_snapshot_types.get(method, ())
+            )
         ]
     )
     explicit = inputs.get("snapshot_types")
@@ -1728,16 +1880,29 @@ def _collect_provider_snapshots(
     query: str,
     symbols: list[str],
     snapshot_types: list[str],
+    intent: str,
     sector: str | None,
+    research_profile: str | None,
+    candidate_pool_size: int,
+    enrichment_top_n: int,
+    skip_enrichment: bool,
+    no_resume: bool,
     cancellation,
-) -> list[dict]:
-    return collect_snapshots(
+) -> dict[str, Any]:
+    bundle = collect_snapshot_bundle(
         query=query,
         symbols=symbols,
         snapshot_types=snapshot_types,
+        intent=intent,
         sector=sector,
+        candidate_pool_size=candidate_pool_size,
+        enrichment_top_n=enrichment_top_n,
+        skip_enrichment=skip_enrichment,
+        no_resume=no_resume,
         cancellation=cancellation,
+        research_profile=research_profile,
     )
+    return dict(bundle)
 
 
 def _snapshot_source_refs(snapshots: list[object]) -> list[dict[str, str]]:
@@ -1817,6 +1982,9 @@ def screen_stocks(context):
     inputs = dict(context.node.inputs or {})
     bundle = (_context_artifacts(context, "stock_snapshot_bundle") or [None])[-1]
     bundle_content = dict(bundle.content) if bundle is not None else {}
+    if bundle is not None:
+        parent_ids = list(dict.fromkeys([*parent_ids, bundle.artifact_id]))
+        source_refs = _unique_source_refs([*source_refs, *list(bundle.source_refs)])
     universe = {
         str(row.get("symbol") or ""): dict(row)
         for row in bundle_content.get("candidate_universe") or []
@@ -1940,8 +2108,8 @@ def screen_stocks(context):
     cycle_min_score = {"short_term": 0.0, "mid_term": 0.0, "long_term": 0.15}[cycle]
     min_score = _to_float(inputs.get("min_score"))
     min_score = cycle_min_score if min_score is None else min_score
-    top_k = max(int(inputs.get("top_k") or 5), 1)
-    watchlist_top_k = max(int(inputs.get("watchlist_top_k") or 2), 1)
+    top_k = max(_integer_or_default(inputs.get("top_k"), 5), 1)
+    watchlist_top_k = max(_integer_or_default(inputs.get("watchlist_top_k"), 2), 0)
     watchlist_min_score = _to_float(inputs.get("watchlist_min_score"))
     watchlist_min_score = min_score - 0.75 if watchlist_min_score is None else watchlist_min_score
     screened = [item for item in candidates if item["score"] >= min_score][:top_k]
@@ -2060,6 +2228,9 @@ def research_sector(context):
     rows, _symbols, query, source_refs, parent_ids = _snapshot_context(context)
     bundle = (_context_artifacts(context, "stock_snapshot_bundle") or [None])[-1]
     content = dict(bundle.content) if bundle is not None else {}
+    if bundle is not None:
+        parent_ids = list(dict.fromkeys([*parent_ids, bundle.artifact_id]))
+        source_refs = _unique_source_refs([*source_refs, *list(bundle.source_refs)])
     inputs = dict(context.node.inputs or {})
     rows = [row for row in rows if isinstance(row, dict)]
     sector_rows = [row for row in rows if row.get("snapshot_type") == "sector"]

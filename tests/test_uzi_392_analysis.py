@@ -22,6 +22,7 @@ from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
     _normalize_payload_paths,
     _safe_error_detail,
     _self_review_compatible_raw,
+    _snapshot_rows_for_symbol,
     execute_native_analysis,
 )
 from tests.test_uzi_392_native_methods import _snapshots
@@ -189,6 +190,33 @@ class _RepairingEvidenceProvider(_LiteAgentProvider):
 
 
 class Uzi392AnalysisGateTests(unittest.TestCase):
+    def test_multi_symbol_qualitative_rows_are_isolated(self) -> None:
+        rows = [
+            {
+                "snapshot_type": "policy",
+                "symbol": "600519",
+                "facts": {"evidence": [{"url": "https://example.test/maotai"}]},
+            },
+            {
+                "snapshot_type": "policy",
+                "symbol": "000858.SZ",
+                "facts": {"evidence": [{"url": "https://example.test/wuliangye"}]},
+            },
+            {
+                "snapshot_type": "macro",
+                "symbol": None,
+                "facts": {"evidence": [{"url": "https://example.test/global"}]},
+            },
+        ]
+
+        selected = _snapshot_rows_for_symbol(rows, "600519.SH")
+
+        self.assertEqual(
+            [row.get("symbol") for row in selected],
+            ["600519", None],
+        )
+        self.assertNotIn("wuliangye", str(selected))
+
     def test_multi_symbol_analysis_keeps_success_when_a_peer_pipeline_fails(self) -> None:
         successful = {
             "symbol": "600519",
@@ -226,6 +254,79 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
         )
         Draft202012Validator(schema).validate(result)
+
+    def test_multi_root_collection_failure_skips_native_analysis(self) -> None:
+        snapshots = [{
+            "snapshot_type": "capital_flow",
+            "symbol": "000858",
+            "facts": {
+                "availability": "data_gap",
+                "_uzi_symbol_route_failed": True,
+            },
+            "quality_status": "data_gap",
+        }]
+        with patch(
+            "domain_packs.finance_ashare.subagents.uzi_392_analysis._execute_symbol",
+        ) as execute_symbol:
+            result = execute_native_analysis(
+                snapshots,
+                ["000858"],
+                profile="lite",
+                llm_provider=None,
+            )
+
+        execute_symbol.assert_not_called()
+        failed = result["results"][0]
+        self.assertFalse(failed["report_allowed"])
+        self.assertEqual(failed["computation_error"], "RootCollectionError: analysis_unavailable")
+        self.assertEqual(result["quality_status"], "quality_gate_blocked")
+
+    def test_multi_symbol_recovery_history_is_scoped_and_not_duplicated(self) -> None:
+        received: dict[str, list[dict]] = {}
+
+        def execute_symbol(_rows, symbol, **kwargs):
+            received[symbol] = list(kwargs["recovery_history"])
+            return {
+                "symbol": symbol,
+                "raw": {"ticker": symbol, "dimensions": {}},
+                "self_review": {"critical_count": 0, "warning_count": 0, "issues": []},
+                "report_allowed": True,
+                "recovery_history": [
+                    *kwargs["recovery_history"],
+                    {"stage": "self_review", "symbol": symbol, "status": "passed"},
+                ],
+            }
+
+        source_history = [
+            {"stage": "global", "status": "completed"},
+            {"stage": "fetch", "symbol": "600519.SH", "status": "recovered"},
+            {"stage": "fetch", "symbol": "000858.SZ", "status": "recovered"},
+        ]
+        with patch(
+            "domain_packs.finance_ashare.subagents.uzi_392_analysis._execute_symbol",
+            side_effect=execute_symbol,
+        ):
+            result = execute_native_analysis(
+                [],
+                ["600519", "000858"],
+                profile="lite",
+                llm_provider=None,
+                recovery_history=source_history,
+            )
+
+        self.assertEqual(
+            received["600519"],
+            [{"stage": "fetch", "symbol": "600519.SH", "status": "recovered"}],
+        )
+        self.assertEqual(
+            received["000858"],
+            [{"stage": "fetch", "symbol": "000858.SZ", "status": "recovered"}],
+        )
+        self.assertEqual(
+            sum(1 for row in result["recovery_history"] if row["stage"] == "global"),
+            1,
+        )
+        self.assertEqual(len(result["recovery_history"]), 5)
 
     def test_self_review_view_normalizes_nullable_strings_and_dcf_key_only(self) -> None:
         raw = {
@@ -344,7 +445,7 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
             if "完全缺失" in str(issue.get("issue") or "")
         }
         self.assertEqual(missing_dimensions, set())
-        self.assertEqual(len(analysis["panel"]["investors"]), 10)
+        self.assertEqual(len(analysis["panel"]["investors"]), 66)
         self.assertEqual(
             set(analysis["agent_analysis"]["dim_commentary"]),
             _LITE_DIMENSIONS,
@@ -419,7 +520,7 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         self.assertTrue(all("UZI_SCHOOL=A" in prompt for prompt in provider.system_prompts))
 
     def test_native_panel_obeys_all_profile_seat_counts(self) -> None:
-        for profile, expected in (("lite", 10), ("medium", 51), ("deep", 66)):
+        for profile, expected in (("lite", 66), ("medium", 66), ("deep", 66)):
             with self.subTest(profile=profile):
                 result = execute_native_analysis(
                     _lite_snapshots(),

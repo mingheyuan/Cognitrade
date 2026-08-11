@@ -84,6 +84,12 @@
     "source": {
       "type": "object"
     },
+    "source_trace": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
     "source_refs": {
       "type": "array",
       "items": {

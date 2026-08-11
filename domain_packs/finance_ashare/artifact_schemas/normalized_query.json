@@ -46,6 +46,9 @@
       "type": "array",
       "items": {"type": "string"}
     },
+    "model_updates": {
+      "type": ["object", "null"]
+    },
     "method_assumptions": {
       "type": ["object", "null"]
     },

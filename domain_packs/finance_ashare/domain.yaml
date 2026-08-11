@@ -153,7 +153,7 @@ intake:
   minimum_confidence: 0.65
   intents:
     - intent_id: stock_check
-      description: Run the complete pinned UZI 3.9.4 analysis and strict quality gate on one or more companies.
+      description: Run the complete pinned UZI 3.9.4 analysis and strict quality gate on one company.
       required_slots: [symbols, research_profile]
       optional_slots: [school]
       candidate_capabilities:
@@ -207,8 +207,8 @@ intake:
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.comps]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_lbo
-      description: Run the pinned UZI /lbo command with explicit transaction assumptions.
-      required_slots: [symbols, method_assumptions]
+      description: Run the pinned UZI /lbo command, preserving its optional transaction defaults when assumptions are omitted.
+      required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.quick_lbo]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_initiate
@@ -257,17 +257,17 @@ intake:
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.earnings_preview]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_model_update
-      description: Run the pinned UZI /model-update command with explicit updated assumptions.
-      required_slots: [symbols, model_updates]
+      description: Run the pinned UZI /model-update command, including its native demo mode when updates are omitted.
+      required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.model_update]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_three_statement_method
-      description: Run the pinned UZI three-statement method with all forecast assumptions explicit.
-      required_slots: [symbols, method_assumptions]
+      description: Run the pinned UZI three-statement method, preserving native defaults for omitted forecast assumptions.
+      required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.three_statement]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_accretion_dilution_method
-      description: Run the pinned UZI merger accretion/dilution method with explicit transaction inputs.
+      description: Run the pinned UZI merger accretion/dilution method with an explicit target and optional native deal-term defaults.
       required_slots: [symbols, method_assumptions]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.accretion_dilution]
       output_artifact_types: [uzi_native_method_result]
@@ -287,27 +287,27 @@ intake:
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.porter_bcg]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_unit_economics_method
-      description: Run the pinned UZI unit-economics method only after explicit acceptance of its native defaults.
-      required_slots: [symbols, method_assumptions]
+      description: Run the pinned UZI unit-economics method and disclose its native proxy assumptions as degraded evidence.
+      required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.unit_economics]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_value_creation_plan_method
-      description: Run the pinned UZI value-creation-plan method only after explicit acceptance of its native defaults.
-      required_slots: [symbols, method_assumptions]
+      description: Run the pinned UZI value-creation-plan method and disclose its native proxy assumptions as degraded evidence.
+      required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.value_creation_plan]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_portfolio_rebalance_method
-      description: Run the pinned UZI strategic portfolio-rebalance method with explicit asset-class targets.
-      required_slots: [portfolio_holdings, asset_class_targets]
+      description: Run the pinned UZI strategic portfolio-rebalance method, using its native balanced allocation when targets are omitted.
+      required_slots: [portfolio_holdings]
       candidate_capabilities: [finance.query.normalize, finance.uzi.native.portfolio_rebalance]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_returns
-      description: Run the pinned UZI /returns command without zero-filling missing returns.
+      description: Run the pinned UZI /returns command, preserving its missing-return warning and zero-contribution behavior.
       required_slots: [portfolio_holdings]
       candidate_capabilities: [finance.query.normalize, finance.uzi.native.returns_attribution]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_rebalance
-      description: Run the pinned UZI /rebalance command with explicit acceptance of its native fee schedule.
+      description: Run the pinned UZI /rebalance command with native equal-weight targets and fee schedule when omitted.
       required_slots: [portfolio_holdings]
       candidate_capabilities: [finance.query.normalize, finance.uzi.native.holding_rebalance]
       output_artifact_types: [uzi_native_method_result]
@@ -500,6 +500,12 @@ capabilities:
     implementation: subagents.runtime:execute_uzi_native_full_analysis
     consumes:
       - *finance_snapshot_input
+      - artifact_type: normalized_query
+        required: false
+        multiple: false
+      - artifact_type: stock_snapshot_bundle
+        required: false
+        multiple: false
     produces:
       - artifact_type: uzi_native_analysis
     requires_llm: true
@@ -816,6 +822,9 @@ capabilities:
     implementation: subagents.runtime:screen_stocks
     consumes:
       - *finance_snapshot_input
+      - artifact_type: stock_snapshot_bundle
+        required: false
+        multiple: false
     produces:
       - artifact_type: screening_result
     parallel_safe: true
@@ -827,6 +836,9 @@ capabilities:
     implementation: subagents.runtime:research_sector
     consumes:
       - *finance_snapshot_input
+      - artifact_type: stock_snapshot_bundle
+        required: false
+        multiple: false
     produces:
       - artifact_type: sector_analysis
     parallel_safe: true
