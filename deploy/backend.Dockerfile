@@ -39,12 +39,14 @@ COPY research_system ./research_system
 COPY domain_packs ./domain_packs
 COPY workspace/config ./workspace_templates/config
 COPY scripts/migrate_workspace.py ./scripts/migrate_workspace.py
+COPY migrations ./migrations
+COPY alembic.ini ./alembic.ini
 COPY deploy/backend-entrypoint.sh /usr/local/bin/cognitrade-entrypoint
 
 RUN if ! getent group cognitrade >/dev/null; then groupadd --gid 10001 cognitrade; fi \
     && if ! id -u cognitrade >/dev/null 2>&1; then useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin cognitrade; fi \
     && chmod 0755 /usr/local/bin/cognitrade-entrypoint \
-    && mkdir -p workspace/runs workspace/chat_runs workspace/reports workspace/memory workspace/cache/finance_ashare workspace/paper_trading workspace/backtests \
+    && mkdir -p workspace/runs workspace/chat_runs workspace/reports workspace/memory workspace/cache/finance_ashare workspace/paper_trading workspace/backtests workspace/strategy_objects \
     && cp -a workspace_templates/. workspace/ \
     && chown -R cognitrade:cognitrade workspace /home/cognitrade /ms-playwright \
     && python -c "import research_system.api.app"
@@ -52,7 +54,8 @@ RUN if ! getent group cognitrade >/dev/null; then groupadd --gid 10001 cognitrad
 USER 10001:10001
 
 RUN python -m research_system.runtime.diagnostics.status.deployment_preflight \
-    --workspace /app/workspace
+    --workspace /app/workspace \
+    --skip-strategy-storage
 
 # The entrypoint needs one short root phase to repair persistent named-volume
 # ownership, then uses setpriv to run the API as the unprivileged runtime UID.

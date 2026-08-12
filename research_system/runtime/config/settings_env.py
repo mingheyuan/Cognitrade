@@ -109,6 +109,14 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
             "COGNITRADE_PAPER_ENFORCE_MARKET_HOURS", "true"
         ).strip().lower()
         in {"1", "true", "yes", "on"},
+        "cognitrade_database_url": env_values.get("COGNITRADE_DATABASE_URL") or None,
+        "cognitrade_database_auto_bootstrap": env_values.get(
+            "COGNITRADE_DATABASE_AUTO_BOOTSTRAP", "true"
+        ).strip().lower()
+        in {"1", "true", "yes", "on"},
+        "strategy_object_store_root": Path(env_values["COGNITRADE_OBJECT_STORE_ROOT"]).resolve()
+        if env_values.get("COGNITRADE_OBJECT_STORE_ROOT")
+        else None,
         "llm_request_timeout_seconds": int(env_values.get("LLM_REQUEST_TIMEOUT_SECONDS", "25")),
         "uzi_llm_request_timeout_seconds": int(
             env_values.get("UZI_LLM_REQUEST_TIMEOUT_SECONDS", "480")

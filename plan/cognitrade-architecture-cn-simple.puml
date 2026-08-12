@@ -1,5 +1,5 @@
 @startuml CognitradeArchitectureCNSimple
-title Cognitrade 中文版架构图（易读版）
+title Cognitrade 当前架构（中文易读版）
 
 top to bottom direction
 skinparam shadowing false
@@ -13,130 +13,78 @@ skinparam ComponentBorderColor #53657A
 skinparam DatabaseBorderColor #53657A
 skinparam NoteBackgroundColor #FFF8DC
 skinparam NoteBorderColor #B7950B
+skinparam nodesep 45
+skinparam ranksep 45
 
 actor "研究者" as user
+rectangle "React 前端\n研究 / 基金 / 行情 / /strategies / 模拟盘" as frontend
+rectangle "Nginx + FastAPI\nBearer 鉴权 / owner 隔离 / 持久化幂等 / CORS / SSE" as api
 
-rectangle "前端工作台\nReact + Vite\n研究 / 基金 / 行情 / 筛选 / 回测" as frontend
-rectangle "API 接入层\nNginx + FastAPI\n鉴权 / CORS / SSE / 版本化接口" as api
+user --> frontend : 提交、查看、治理
+frontend --> api : HTTPS + JSON
 
-user --> frontend : 提交问题、查看结果
-frontend --> api : HTTPS
+package "① 研究与证据主线" as researchLane {
+  rectangle "Agent OS\nIntake → Planner → ExecutionGraph\n重试 / 恢复 / ChildTurn" as agent
+  rectangle "DomainPack\nFinance：个股 / 基金 / 行业 / 组合 / UZI\nLegal：合同审查" as packs
+  rectangle "真实数据与模型\nAkShare / TuShare / eFinance / BaoStock / HTTP\nOpenAI 或兼容模型" as providers
+  rectangle "ArtifactBoard\n来源 / 数据日期 / 质量 / data_gap / 报告" as artifacts
 
-package "业务入口" as entryLayer {
-  rectangle "研究请求" as researchRequest
-  rectangle "金融工具请求" as financeRequest
-  rectangle "基金持仓请求" as fundRequest
-  rectangle "聊天与线程请求" as chatRequest
+  agent --> packs
+  packs --> providers
+  providers --> artifacts
 }
 
-api --> researchRequest
-api --> financeRequest
-api --> fundRequest
-api --> chatRequest
+package "② 基金报告策略主线" as strategyLane {
+  rectangle "策略草稿与不可变版本\n固定权重 / 阈值 / MA / 费率 / 模型与 UZI Pin" as version
+  rectangle "基金 Assignment\n基金 + fund_only / holdings_portfolio\n生效版本 + 日调度" as assignment
+  rectangle "Point-in-time 日报\n当时已公开基金报告\n+ top 5/10/20 canonical UZI 个股子报告" as report
+  rectangle "确定性复合信号\n基金本体 + 持仓 UZI + 结构质量\nALLOW_BUY / WATCH / AVOID / BLOCKED" as signal
+  rectangle "严格版本回测（Hikyuu）\n基金本体 / 持仓组合\n股票 / ETF·LOF / 场外基金 NAV" as backtest
+  rectangle "治理与受控执行\n机器验证 → 人工 Verified → 人工 Promoted\n精确 lineage 才能提交策略模拟单" as governedExecution
 
-package "研究主干：Agent OS" as agentLayer {
-  rectangle "1. 请求入口\n识别意图、补齐参数" as intake
-  rectangle "2. 能力规划\n选择 DomainPack 能力" as planner
-  rectangle "3. 执行图\n按依赖运行、重试、恢复" as graph
-  rectangle "4. ArtifactBoard\n证据、来源、质量、报告" as board
+  version --> assignment
+  assignment --> report : 每日 / 补跑 / 失败重试
+  report --> signal
+  signal --> backtest
+  backtest --> governedExecution
 }
 
-researchRequest --> intake
-intake --> planner
-planner --> graph
-graph --> board
+package "③ 独立金融工具" as financeLane {
+  rectangle "行情聚合\n证券解析 / 报价 / K 线 / 市场快照" as market
+  rectangle "通用模拟盘（VeighNa）\n账户 / 市价与限价单 / 冻结资金\n费用 / FIFO / T+1" as paper
+  rectangle "旧单股票技术回测\n/backtests/** 仅内部诊断\n新前端不再调用" as legacy
 
-package "DomainPack 业务能力" as domainLayer {
-  rectangle "Finance DomainPack\n个股 / 行业 / 筛选 / 组合" as financePack
-  rectangle "基金研究\n净值 / 基准 / 经理 / 规模 / 披露持仓" as fundPack
-  rectangle "ETF / FOF 穿透\n目标基金 -> 股票持仓" as lookthrough
-  rectangle "UZI 3.9.2\n分析方法、面板、估值、报告" as uzi
-  rectangle "质量门\n来源完整性 / 安全 / 方法论" as gates
-  rectangle "Legal DomainPack\n合同条款、风险、义务、引用" as legalPack
+  market --> paper : 服务端取价与撮合
+  market --> legacy : 兼容 K 线输入
 }
 
-graph --> financePack : 研究能力
-financePack --> fundPack : 基金问题
-fundPack --> lookthrough : 联接基金 / FOF
-financePack --> uzi : 个股和深度分析
-financePack --> gates : 交付前检查
-graph --> legalPack : 合同问题
-gates --> board : 通过 / 降级 / 数据缺口
+api --> agent : /api/v1 研究运行
+api --> version : /api/v2/finance 策略合同
+api --> market : /api/v2/finance 金融工具
 
-package "数据面" as dataLayer {
-  rectangle "Provider 注册表\n优先级、凭证、回退链、来源追踪" as provider
-  rectangle "主要数据源\nAkShare / 东方财富 / 蛋卷 / CNInfo" as primaryData
-  rectangle "备用数据源\nTuShare / BaoStock / eFinance / 直连 HTTP" as fallbackData
-  rectangle "模型服务\nOpenAI 或兼容接口" as model
+agent -[hidden]right-> version
+version -[hidden]right-> market
+
+package "持久化与保留" as storageLane {
+  database "Workspace\nruns / cache / memory\nAgent 事件与 Artifact" as workspace
+  database "SQLite / PostgreSQL\n策略 / 版本 / 日报 / 信号\n回测 / 验证 / lineage" as strategyDb
+  database "内容寻址对象存储\n报告 / 快照 / 回测曲线\n被引用对象永久保护" as objectStore
+  database "paper_trading.sqlite3\n资金 / 持仓 / 委托 / 成交" as paperDb
 }
 
-financePack --> provider : 请求数据
-fundPack --> provider : 请求基金数据
-provider --> primaryData
-provider --> fallbackData
-graph --> model : 需要模型分析时调用
-
-package "金融工具支线" as toolLayer {
-  rectangle "行情服务\n报价 / K 线 / 市场快照" as market
-  rectangle "模拟盘\n账户 / 订单 / 资金 / T+1" as paper
-  rectangle "回测\n历史 K 线 / 策略 / 绩效" as backtest
-  rectangle "基金持仓报告\n冻结披露 / 批量生成股票报告" as holdingReport
-  rectangle "VeighNa 模拟撮合" as veighna
-  rectangle "Hikyuu 回测引擎" as hikyuu
-}
-
-financeRequest --> market
-financeRequest --> paper
-financeRequest --> backtest
-fundRequest --> holdingReport
-market --> provider : 行情 / K 线
-paper --> market : 取价
-backtest --> market : 取历史 K 线
-holdingReport --> fundPack : 使用基金快照
-paper ..> veighna : 模拟撮合
-backtest ..> hikyuu : 回测引擎
-
-package "持久化" as storageLayer {
-  database "workspace/runs\n运行状态、事件、Artifact、报告" as runs
-  database "workspace/cache\n行情与快照缓存" as cache
-  database "workspace/memory\n记忆与提案" as memory
-  database "paper_trading.sqlite3\n模拟账户账本" as paperDb
-  database "backtests\n回测结果" as backtestDb
-  database "Qdrant（可选）\n向量检索" as qdrant
-}
-
-board --> runs : 保存运行产物
-provider --> cache : 读写缓存
+artifacts --> workspace
+governedExecution --> strategyDb
+report --> objectStore
+backtest --> objectStore
 paper --> paperDb
-backtest --> backtestDb
-board ..> memory : 长期记忆
-memory ..> qdrant : 可选检索
 
-note right of board
-  系统的核心数据面
-
-  每个研究结论都应该带有：
-  来源、数据日期、质量状态、
-  data_gap、版本和可追溯关系。
-end note
-
-note right of fundPack
-  基金持仓不是实时数据。
-  “最新持仓”表示最新公开披露，
-  ETF 联接基金需要穿透目标 ETF。
-end note
-
-note right of backtest
-  当前回测主要使用 K 线。
-  评分报告若要进入回测，
-  必须提供带日期的历史评分，
-  避免未来函数。
-end note
+workspace -[hidden]right-> strategyDb
+strategyDb -[hidden]right-> objectStore
+objectStore -[hidden]right-> paperDb
 
 legend bottom
-  实线：主流程
-  虚线：可选引擎或扩展能力
-  阅读方式：先看中间主干，再看左右两条支线
+  阅读顺序：顶部入口 → 三条独立泳道 → 底部持久化
+  泳道之间不画实现级长连线；详细调用时序见 current-architecture.md
 endlegend
 
 @enduml

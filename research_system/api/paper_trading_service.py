@@ -4,6 +4,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal, ROUND_HALF_UP
+import json
 from pathlib import Path
 import sqlite3
 from threading import RLock
@@ -23,6 +24,16 @@ _MIN_COMMISSION = Decimal("5")
 _TRANSFER_FEE_RATE = Decimal("0.00001")
 _STAMP_DUTY_RATE = Decimal("0.0005")
 _DEFAULT_INITIAL_CASH = Decimal("1000000")
+_DEFAULT_STOCK_EXECUTION_PROFILE = {
+    "model_id": "a_stock_default_v1",
+    "asset_type": "stock",
+    "board_lot": 100,
+    "commission_rate": float(_COMMISSION_RATE),
+    "minimum_commission": float(_MIN_COMMISSION),
+    "transfer_fee_rate": float(_TRANSFER_FEE_RATE),
+    "stamp_duty_rate": float(_STAMP_DUTY_RATE),
+    "settlement": "T+1",
+}
 
 
 class PaperTradingError(ValueError):
@@ -59,9 +70,11 @@ class PaperTradingService:
         self.trading_calendar = trading_calendar or AShareTradingCalendar()
         self.clock = clock or (lambda: datetime.now(UTC))
         self.enforce_market_hours = bool(enforce_market_hours)
-        self.matcher = matcher or VeighNaPaperAdapter()
-        self._lock = RLock()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self.matcher = matcher or VeighNaPaperAdapter(
+            runtime_root=self.database_path.parent / "veighna_runtime"
+        )
+        self._lock = RLock()
         self._initialize_schema()
 
     def get_account(self, *, tenant_id: str, user_id: str) -> dict[str, Any]:
@@ -115,6 +128,7 @@ class PaperTradingService:
         client_order_id: str,
         order_type: str = "market",
         limit_price: float | int | str | None = None,
+        execution_profile: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         normalized_side = str(side or "").strip().lower()
         if normalized_side not in {"buy", "sell"}:
@@ -135,6 +149,7 @@ class PaperTradingService:
         normalized_client_order_id = str(client_order_id or "").strip()
         if not normalized_client_order_id or len(normalized_client_order_id) > 128:
             raise PaperTradingError("invalid_client_order_id", "client_order_id 不能为空且不能超过 128 字符")
+        normalized_profile = self._execution_profile(execution_profile)
 
         # Resolve retries before touching the quote provider. This preserves the
         # original fill even when a duplicate arrives during a provider outage.
@@ -145,6 +160,14 @@ class PaperTradingService:
                 (account["account_id"], normalized_client_order_id),
             ).fetchone()
             if existing is not None:
+                self._assert_idempotent_order(
+                    existing,
+                    side=normalized_side,
+                    quantity=normalized_quantity,
+                    order_type=normalized_order_type,
+                    limit_price=normalized_limit_price,
+                    execution_profile=normalized_profile,
+                )
                 payload = self._order_payload(existing)
                 payload["idempotent_replay"] = True
                 return payload
@@ -189,10 +212,15 @@ class PaperTradingService:
                 quote_price=quote_price,
                 trade_moment=trade_moment,
                 engine=match.engine,
+                execution_profile=normalized_profile,
             )
         fill_price = match.fill_price
         gross = (fill_price * normalized_quantity).quantize(_CENT, rounding=ROUND_HALF_UP)
-        commission, transfer_fee, stamp_duty = self._fees(gross, side=normalized_side)
+        commission, transfer_fee, stamp_duty = self._fees(
+            gross,
+            side=normalized_side,
+            execution_profile=normalized_profile,
+        )
         fees = commission + transfer_fee + stamp_duty
         now = self._format_moment(trade_moment)
         trade_date = self.trading_calendar.trading_date(trade_moment)
@@ -207,13 +235,22 @@ class PaperTradingService:
             ).fetchone()
             if existing is not None:
                 connection.rollback()
+                self._assert_idempotent_order(
+                    existing,
+                    side=normalized_side,
+                    quantity=normalized_quantity,
+                    order_type=normalized_order_type,
+                    limit_price=normalized_limit_price,
+                    execution_profile=normalized_profile,
+                )
                 payload = self._order_payload(existing)
                 payload["idempotent_replay"] = True
                 return payload
 
-            if normalized_side == "buy" and normalized_quantity % 100 != 0:
+            board_lot = int(normalized_profile["board_lot"])
+            if normalized_side == "buy" and normalized_quantity % board_lot != 0:
                 connection.rollback()
-                raise PaperTradingError("invalid_board_lot", "买入数量必须是 100 股的整数倍")
+                raise PaperTradingError("invalid_board_lot", f"买入数量必须是 {board_lot} 份的整数倍")
 
             realized_pnl_cents: int | None = None
             total_cents = self._to_cents(gross + fees)
@@ -254,11 +291,11 @@ class PaperTradingService:
                         status_code=409,
                         details={"requested": normalized_quantity, "available": available_quantity},
                     )
-                if normalized_quantity % 100 != 0 and normalized_quantity != available_quantity:
+                if normalized_quantity % board_lot != 0 and normalized_quantity != available_quantity:
                     connection.rollback()
                     raise PaperTradingError(
                         "invalid_board_lot",
-                        "卖出数量应为 100 股整数倍；清仓时允许卖出全部可用零股",
+                        f"卖出数量应为 {board_lot} 份整数倍；清仓时允许卖出全部可用零份",
                     )
                 cost_basis_micros = self._consume_lots(
                     connection,
@@ -284,8 +321,9 @@ class PaperTradingService:
                     quote_as_of, quote_source, trade_date, status, created_at
                     , order_type, limit_price_micros, matching_engine,
                     reserved_cash_cents, reserved_quantity, updated_at, filled_at
+                    , execution_profile_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'filled', ?,
-                    ?, ?, ?, 0, 0, ?, ?)
+                    ?, ?, ?, 0, 0, ?, ?, ?)
                 """,
                 (
                     order_id,
@@ -313,6 +351,7 @@ class PaperTradingService:
                     match.engine,
                     now,
                     now,
+                    self._execution_profile_json(normalized_profile),
                 ),
             )
             if normalized_side == "buy":
@@ -637,6 +676,7 @@ class PaperTradingService:
         quote_price: Decimal,
         trade_moment: datetime,
         engine: str,
+        execution_profile: dict[str, Any],
     ) -> dict[str, Any]:
         if order_type != "limit" or limit_price is None:
             raise PaperTradingError(
@@ -644,8 +684,9 @@ class PaperTradingService:
                 "市价委托未能由撮合引擎成交",
                 status_code=409,
             )
-        if side == "buy" and quantity % 100 != 0:
-            raise PaperTradingError("invalid_board_lot", "买入数量必须是 100 股的整数倍")
+        board_lot = int(execution_profile["board_lot"])
+        if side == "buy" and quantity % board_lot != 0:
+            raise PaperTradingError("invalid_board_lot", f"买入数量必须是 {board_lot} 份的整数倍")
 
         now = self._format_moment(trade_moment)
         trade_date = self.trading_calendar.trading_date(trade_moment).isoformat()
@@ -659,13 +700,25 @@ class PaperTradingService:
                 (account["account_id"], client_order_id),
             ).fetchone()
             if existing is not None:
+                self._assert_idempotent_order(
+                    existing,
+                    side=side,
+                    quantity=quantity,
+                    order_type=order_type,
+                    limit_price=limit_price,
+                    execution_profile=execution_profile,
+                )
                 payload = self._order_payload(existing)
                 payload["idempotent_replay"] = True
                 return payload
 
             if side == "buy":
                 gross = (limit_price * quantity).quantize(_CENT, rounding=ROUND_HALF_UP)
-                commission, transfer_fee, stamp_duty = self._fees(gross, side=side)
+                commission, transfer_fee, stamp_duty = self._fees(
+                    gross,
+                    side=side,
+                    execution_profile=execution_profile,
+                )
                 reserved_cash_cents = self._to_cents(
                     gross + commission + transfer_fee + stamp_duty
                 )
@@ -694,10 +747,10 @@ class PaperTradingService:
                         status_code=409,
                         details={"requested": quantity, "available": available_quantity},
                     )
-                if quantity % 100 != 0 and quantity != available_quantity:
+                if quantity % board_lot != 0 and quantity != available_quantity:
                     raise PaperTradingError(
                         "invalid_board_lot",
-                        "卖出数量应为 100 股整数倍；清仓时允许卖出全部可用零股",
+                        f"卖出数量应为 {board_lot} 份整数倍；清仓时允许卖出全部可用零份",
                     )
                 reserved_quantity = quantity
 
@@ -711,9 +764,10 @@ class PaperTradingService:
                     total_fees_cents, cash_effect_cents, realized_pnl_cents,
                     quote_as_of, quote_source, trade_date, status, created_at,
                     order_type, limit_price_micros, matching_engine,
-                    reserved_cash_cents, reserved_quantity, updated_at, filled_at
+                    reserved_cash_cents, reserved_quantity, updated_at, filled_at,
+                    execution_profile_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, NULL,
-                    ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, NULL)
+                    ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, NULL, ?)
                 """,
                 (
                     order_id,
@@ -734,6 +788,7 @@ class PaperTradingService:
                     reserved_cash_cents,
                     reserved_quantity,
                     now,
+                    self._execution_profile_json(execution_profile),
                 ),
             )
             order = connection.execute(
@@ -771,8 +826,13 @@ class PaperTradingService:
 
             side = str(order["side"])
             quantity = int(order["quantity"])
+            execution_profile = self._stored_execution_profile(order)
             gross = (fill_price * quantity).quantize(_CENT, rounding=ROUND_HALF_UP)
-            commission, transfer_fee, stamp_duty = self._fees(gross, side=side)
+            commission, transfer_fee, stamp_duty = self._fees(
+                gross,
+                side=side,
+                execution_profile=execution_profile,
+            )
             fees = commission + transfer_fee + stamp_duty
             total_cents = self._to_cents(gross + fees)
             realized_pnl_cents: int | None = None
@@ -943,6 +1003,7 @@ class PaperTradingService:
                     reserved_quantity INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT,
                     filled_at TEXT,
+                    execution_profile_json TEXT NOT NULL DEFAULT '{}',
                     UNIQUE (account_id, client_order_id)
                 );
                 CREATE INDEX IF NOT EXISTS paper_orders_account_created
@@ -962,7 +1023,7 @@ class PaperTradingService:
                 );
                 CREATE INDEX IF NOT EXISTS paper_lots_account_symbol
                     ON paper_position_lots (account_id, symbol, available_date);
-                PRAGMA user_version = 3;
+                PRAGMA user_version = 4;
                 """
             )
             self._ensure_column(connection, "paper_orders", "trade_date", "TEXT")
@@ -988,6 +1049,12 @@ class PaperTradingService:
             )
             self._ensure_column(connection, "paper_orders", "updated_at", "TEXT")
             self._ensure_column(connection, "paper_orders", "filled_at", "TEXT")
+            self._ensure_column(
+                connection,
+                "paper_orders",
+                "execution_profile_json",
+                "TEXT NOT NULL DEFAULT '{}'",
+            )
 
     @staticmethod
     def _ensure_column(connection: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
@@ -1113,8 +1180,7 @@ class PaperTradingService:
             "updated_at": str(account["updated_at"]),
             "rules": {
                 "market": "A-share paper trading",
-                "board_lot": 100,
-                "settlement": "T+1",
+                "default_execution_profile": dict(_DEFAULT_STOCK_EXECUTION_PROFILE),
                 "short_selling": False,
                 "price_source": "server-side Finance Pack quote",
                 "matching_engine": self.matcher.status()["engine"],
@@ -1150,6 +1216,7 @@ class PaperTradingService:
                 "stamp_duty": PaperTradingService._from_cents(int(order["stamp_duty_cents"])),
                 "total": PaperTradingService._from_cents(int(order["total_fees_cents"])),
             },
+            "execution_profile": PaperTradingService._stored_execution_profile(order),
             "cash_effect": PaperTradingService._from_cents(int(order["cash_effect_cents"])),
             "realized_pnl": PaperTradingService._from_cents(int(realized)) if realized is not None else None,
             "quote_as_of": str(order["quote_as_of"] or ""),
@@ -1186,17 +1253,128 @@ class PaperTradingService:
         }
 
     @staticmethod
-    def _fees(gross: Decimal, *, side: str) -> tuple[Decimal, Decimal, Decimal]:
-        commission = max(
-            (gross * _COMMISSION_RATE).quantize(_CENT, rounding=ROUND_HALF_UP),
-            _MIN_COMMISSION,
+    def _execution_profile(payload: dict[str, Any] | None) -> dict[str, Any]:
+        supplied = dict(payload or {})
+        unknown = set(supplied) - set(_DEFAULT_STOCK_EXECUTION_PROFILE)
+        if unknown:
+            raise PaperTradingError(
+                "invalid_execution_profile",
+                f"模拟交易执行规则包含未知字段：{', '.join(sorted(unknown))}",
+            )
+        values = {**_DEFAULT_STOCK_EXECUTION_PROFILE, **supplied}
+        model_id = str(values["model_id"] or "").strip()
+        if not model_id or len(model_id) > 128:
+            raise PaperTradingError("invalid_execution_profile", "执行规则 model_id 无效")
+        asset_type = str(values["asset_type"] or "").strip()
+        if asset_type not in {"stock", "exchange_fund"}:
+            raise PaperTradingError("invalid_execution_profile", "模拟盘仅支持股票或场内基金执行规则")
+        board_lot_value = values["board_lot"]
+        if isinstance(board_lot_value, bool):
+            raise PaperTradingError("invalid_execution_profile", "执行规则 board_lot 必须是正整数")
+        try:
+            board_lot = int(board_lot_value)
+        except (TypeError, ValueError) as exc:
+            raise PaperTradingError("invalid_execution_profile", "执行规则 board_lot 必须是正整数") from exc
+        if board_lot <= 0 or float(board_lot_value) != board_lot:
+            raise PaperTradingError("invalid_execution_profile", "执行规则 board_lot 必须是正整数")
+        numeric: dict[str, float] = {}
+        for key in (
+            "commission_rate",
+            "minimum_commission",
+            "transfer_fee_rate",
+            "stamp_duty_rate",
+        ):
+            try:
+                number = Decimal(str(values[key]))
+            except Exception as exc:
+                raise PaperTradingError("invalid_execution_profile", f"执行规则 {key} 必须是数字") from exc
+            upper = Decimal("1") if key != "minimum_commission" else Decimal("1000000")
+            if not number.is_finite() or number < 0 or number > upper:
+                raise PaperTradingError("invalid_execution_profile", f"执行规则 {key} 超出允许范围")
+            numeric[key] = float(number)
+        if asset_type == "exchange_fund" and (
+            numeric["transfer_fee_rate"] != 0 or numeric["stamp_duty_rate"] != 0
+        ):
+            raise PaperTradingError(
+                "invalid_execution_profile",
+                "场内基金执行规则不能包含股票过户费或印花税",
+            )
+        settlement = str(values["settlement"] or "").strip().upper()
+        if settlement != "T+1":
+            raise PaperTradingError("invalid_execution_profile", "当前模拟盘只支持 T+1 结算规则")
+        return {
+            "model_id": model_id,
+            "asset_type": asset_type,
+            "board_lot": board_lot,
+            **numeric,
+            "settlement": settlement,
+        }
+
+    @staticmethod
+    def _execution_profile_json(profile: dict[str, Any]) -> str:
+        return json.dumps(profile, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    @staticmethod
+    def _stored_execution_profile(order: sqlite3.Row) -> dict[str, Any]:
+        keys = set(order.keys())
+        raw = order["execution_profile_json"] if "execution_profile_json" in keys else None
+        try:
+            payload = json.loads(str(raw or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+        return PaperTradingService._execution_profile(payload if isinstance(payload, dict) else {})
+
+    @staticmethod
+    def _assert_idempotent_order(
+        order: sqlite3.Row,
+        *,
+        side: str,
+        quantity: int,
+        order_type: str,
+        limit_price: Decimal | None,
+        execution_profile: dict[str, Any],
+    ) -> None:
+        keys = set(order.keys())
+        stored_limit = order["limit_price_micros"] if "limit_price_micros" in keys else None
+        requested_limit = (
+            PaperTradingService._to_micros(limit_price)
+            if limit_price is not None
+            else None
         )
-        transfer_fee = (gross * _TRANSFER_FEE_RATE).quantize(
+        if (
+            str(order["side"]) != side
+            or int(order["quantity"]) != quantity
+            or (str(order["order_type"] or "market") if "order_type" in keys else "market") != order_type
+            or stored_limit != requested_limit
+            or PaperTradingService._stored_execution_profile(order) != execution_profile
+        ):
+            raise PaperTradingError(
+                "idempotency_key_reused",
+                "同一 client_order_id 不能用于不同的模拟委托",
+                status_code=409,
+            )
+
+    @staticmethod
+    def _fees(
+        gross: Decimal,
+        *,
+        side: str,
+        execution_profile: dict[str, Any],
+    ) -> tuple[Decimal, Decimal, Decimal]:
+        commission_rate = Decimal(str(execution_profile["commission_rate"]))
+        minimum_commission = Decimal(str(execution_profile["minimum_commission"]))
+        transfer_fee_rate = Decimal(str(execution_profile["transfer_fee_rate"]))
+        stamp_duty_rate = Decimal(str(execution_profile["stamp_duty_rate"]))
+        commission = max(
+            (gross * commission_rate).quantize(_CENT, rounding=ROUND_HALF_UP),
+            minimum_commission,
+        )
+        transfer_fee = (gross * transfer_fee_rate).quantize(
             _CENT,
             rounding=ROUND_HALF_UP,
         )
         stamp_duty = (
-            (gross * _STAMP_DUTY_RATE).quantize(_CENT, rounding=ROUND_HALF_UP)
+            (gross * stamp_duty_rate).quantize(_CENT, rounding=ROUND_HALF_UP)
             if side == "sell"
             else Decimal("0")
         )

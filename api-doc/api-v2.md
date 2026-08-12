@@ -2,7 +2,7 @@
 
 ## 版本范围
 
-API v2 新增 Finance Workspace 与模拟交易接口。Agent OS 研究运行、Chat、Dashboard、Admin 与 System 接口仍保留在 `/api/v1`；v2 不复制或修改这些契约。
+API v2 提供 Finance Workspace、版本化基金报告策略、回测与模拟交易接口。Agent OS 研究运行、Chat、Dashboard、Admin 与 System 接口仍保留在 `/api/v1`；v2 不复制或修改这些契约。
 
 ```text
 Frontend
@@ -14,30 +14,29 @@ Frontend
       -> VeighNa PaperAccount headless tick crossing
       -> server-side quote
       -> SQLite paper ledger
-    -> HikyuuBacktestService
-      -> isolated Hikyuu subprocess
-      -> persisted backtest JSON
+    -> Strategy domain
+      -> PostgreSQL / SQLite business truth
+      -> point-in-time daily reports + canonical UZI holdings
+      -> deterministic four-state signals
+      -> Hikyuu fund-only / holdings-portfolio adapters
+      -> verification -> promotion -> strategy paper orders
+      -> content-addressed object store
 ```
 
-v2 当前包含 15 个操作：
+核心操作按业务域分组如下；完整请求/响应 schema 以 `/openapi.json` 为准：
 
-| Method | Path | 用途 |
+| 业务域 | 主要路径 | 用途 |
 | --- | --- | --- |
-| `GET` | `/api/v2/finance/securities` | 按代码或名称解析 A 股证券 |
-| `GET` | `/api/v2/finance/market-data/{symbol}` | 聚合八类 Finance Pack 快照 |
-| `GET` | `/api/v2/finance/quotes/{symbol}` | 获取服务端可成交行情 |
-| `GET` | `/api/v2/finance/paper/account` | 获取或创建当前模拟账户 |
-| `GET` | `/api/v2/finance/paper/engine` | 获取 VeighNa 撮合引擎状态 |
-| `POST` | `/api/v2/finance/paper/account/reset` | 归档并重置模拟账户 |
-| `GET` | `/api/v2/finance/paper/portfolio` | 获取现金、权益与持仓估值 |
-| `GET` | `/api/v2/finance/paper/orders` | 获取模拟委托与成交记录 |
-| `POST` | `/api/v2/finance/paper/orders` | 提交市价或限价模拟委托 |
-| `POST` | `/api/v2/finance/paper/orders/match` | 用最新行情撮合待成交委托 |
-| `POST` | `/api/v2/finance/paper/orders/{order_id}/cancel` | 撤销待成交委托 |
-| `GET` | `/api/v2/finance/backtests/engine` | 获取 Hikyuu 引擎状态 |
-| `GET` | `/api/v2/finance/backtests` | 获取历史回测摘要 |
-| `POST` | `/api/v2/finance/backtests` | 运行并持久化 Hikyuu 回测 |
-| `GET` | `/api/v2/finance/backtests/{backtest_id}` | 获取完整回测结果 |
+| 行情 | `/securities`、`/market-data/{symbol}`、`/quotes/{symbol}` | 证券解析、快照与成交行情 |
+| 策略 CRUD | `/strategy-catalog`、`/strategies/**` | 草稿、不可变版本、diff、归档、恢复与审计 |
+| 基金绑定 | `/strategy-assignments/**` | 把已发布版本绑定到基金和回测模式 |
+| 日报编排 | `/report-jobs/**`、`/report-backfills/**`、`/daily-report-sets/**` | 日任务、补跑、失败节点重试、暂停/恢复和 revision |
+| 信号 | `/signal-previews`、`/trade-signals/**` | 基于真实日报预演、生成和查询四态信号 |
+| 策略回测 | `/strategy-backtests/**` | 版本合同预检、运行、重试、取消和结果查询 |
+| 治理 | `/strategy-verifications/**`、`/strategies/{id}/versions/{id}/promote` | 自动验证、人工确认和晋级 |
+| 策略模拟盘 | `/paper-strategy-bindings`、`/paper-strategy-bindings/{id}/orders`、`/strategy-paper-orders` | Promoted 版本的受控下单与 lineage |
+| 通用模拟盘 | `/paper/**` | VeighNa 撮合、账户、组合、订单和撤单 |
+| 旧技术诊断 | `/backtests/**` | 兼容性 Hikyuu 单股票技术回测；新前端不再调用 |
 
 ## 认证、请求 ID 与错误
 
@@ -62,6 +61,13 @@ Authorization: Bearer <COGNITRADE_API_TOKEN>
   }
 }
 ```
+
+所有资源查询和变更都按认证主体的 `tenant_id + user_id` 作用域隔离；系统模板只读共享。
+前端对 `/api/v2/finance` 的 `POST/PATCH/DELETE` 自动发送 `Idempotency-Key`。调用方也可
+自行提供 1–128 个可见 ASCII 字符：同一 owner、方法、目标和 body 会持久化重放成功 JSON
+响应并返回 `Idempotent-Replay: true`；相同 key 改变请求返回 `409
+idempotency_key_reused`，仍在租约中的重复请求返回 `409 idempotency_request_in_progress`。
+失败响应不缓存，过期租约可重领。草稿更新同时要求 `If-Match: W/"<draft_revision>"`。
 
 常见业务错误：
 
@@ -407,9 +413,108 @@ Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格�
 只有 `pending` 委托可撤销。撤单在同一数据库事务中把状态改为 `cancelled` 并释放
 `reserved_cash` 或 `reserved_quantity`。
 
-## Hikyuu 策略回测
+## 基金报告策略主线
 
-回测与模拟盘完全独立。服务端把 Finance Pack `kline.bars` 转换为 Hikyuu 外部
+### 策略、版本与基金绑定
+
+`POST /api/v2/finance/strategies` 可用空白文档、完整 `document` 或
+`from_strategy_id` 创建个人草稿。`PATCH /strategies/{strategy_id}/draft` 同时校验 body
+中的 `expected_revision` 与 `If-Match`，冲突返回当前 revision。系统模板只读；未发布草稿
+可以物理删除，已有版本的策略只能归档。
+
+`POST /strategies/{strategy_id}/publish` 把完整策略合同规范化并生成稳定 SHA-256 content
+hash。版本一经发布不可编辑或删除；合同固定报告 top N、复合权重、coverage 门、四态阈值、
+carry 天数、MA 执行规则、三类资产费率/确认规则、模型与 UZI pin。已有 Assignment 在下一
+交易日切换到新版本，不会自动替换 Promoted 模拟盘版本。
+
+`POST /strategy-assignments` 只接受已发布策略：
+
+```json
+{
+  "strategy_id": "01J...",
+  "fund_code": "110011",
+  "fund_name": "易方达优质精选混合",
+  "mode": "holdings_portfolio",
+  "enabled": true,
+  "schedule": {"time": "18:00", "timezone": "Asia/Shanghai"}
+}
+```
+
+`mode` 为 `fund_only` 或 `holdings_portfolio`，且必须在该版本允许的模式内。Assignment 可
+暂停、恢复或删除；已有历史信号时删除会转为禁用，不破坏 lineage。
+
+### point-in-time 日报、补跑与 UZI
+
+`POST /report-jobs` 接受单个 `as_of_date`；`POST /report-backfills` 接受
+`start_date/end_date`。先用 `/report-backfills/estimate` 估算交易日、基金报告和持仓 UZI
+调用量。任务持久化 lease、attempt 和进度，可通过 `/retry` 只重试失败股票，或在
+`full_rerun=true, confirmed=true` 时创建新 revision；`/pause` 与 `/resume` 不删除旧 attempt。
+
+每个 `DailyReportSet` 固定 `as_of_date`、`effective_date`、revision、input/source/content
+hash、coverage 和 Artifact 引用。基金公开信息必须在回测日期当时可获得；没有可信
+`published_at/first_seen_at` 的历史证据输出 `BLOCKED`，不会借用当前数据。配置的 top
+5/10/20 每只股票都需要 canonical UZI 子报告；同一股票、日期和 pin 跨基金复用一次，基金
+上下文只作为独立节点保存。
+
+### 确定性四态信号
+
+`POST /signal-previews` 只允许用真实 `report_set_id`，可临时应用某个个人草稿的映射规则，
+但不生成伪造报告分数。`POST /trade-signals/recompute` 使用 Assignment 的生效版本持久化
+基金和持仓股票信号：
+
+- `ALLOW_BUY`：质量门和固定权重下界达到买入阈值；
+- `WATCH`：覆盖率或分数只达到观察区间；
+- `AVOID`：应回避，但不等同于数据错误；
+- `BLOCKED`：point-in-time、关键证据或覆盖率不满足，不能据此制造买卖。
+
+缺失因子的权重不转移给其他因子。配置允许时可沿用最近信号，但沿用天数从原始报告日期
+计算并保留 `carried_from_signal_id`；late revision 会使同日旧信号失效，查询结果仍保留
+完整 supersession 链。
+
+### 严格版本回测
+
+先调用 `POST /strategy-backtests/preflight` 检查日期范围内的日报和信号覆盖，再提交：
+
+```json
+{
+  "strategy_version_id": "01J...",
+  "fund_code": "110011",
+  "mode": "holdings_portfolio",
+  "start_date": "2025-01-01",
+  "end_date": "2025-12-31",
+  "initial_cash": 1000000,
+  "benchmark": {},
+  "report_policy": "existing_only"
+}
+```
+
+请求不接受临时权重、信号阈值、MA 周期或费率。`fund_only` 支持 ETF/LOF K 线和场外基金
+NAV 确认日账本；`holdings_portfolio` 以基金信号作为总门禁，以持仓 UZI 信号和冻结 MA
+规则形成 A 股目标权重。每笔成交必须包含 strategy/version hash、report set、signal ID、
+资产适配器、费用模型和数据 snapshot hash。结果曲线进入内容寻址对象存储，数据库保存
+指标、状态、hash 与 URI。失败/取消任务可 `/retry`，排队或运行任务可 `/cancel`。
+
+### Verified、Promoted 与策略模拟单
+
+`POST /strategy-verifications` 必须引用同一基金、模式和精确版本的已完成回测。自动检查
+point-in-time、报告/信号/成交 lineage、确定性复跑、coverage、样本天数、信号数、六项
+费用完整性，以及最大回撤、年化收益、Sharpe、超额收益、换手率和费用影响门槛。机器通过
+后仍需 `POST /strategy-verifications/{id}/confirm` 人工确认 Verified。
+
+只有 Verified 版本可由 `POST /strategies/{strategy_id}/versions/{version_id}/promote`
+人工晋级。一个 owner 的同一 `account_id + fund_code + mode` 只能存在一个主绑定，重复晋级
+同版本幂等，发布新版本不会自动替换它。
+
+`POST /paper-strategy-bindings/{binding_id}/orders` 只执行精确 Promoted 绑定和当前未被取代的
+信号。买入同时要求个股与基金门禁为 `ALLOW_BUY`；`BLOCKED` 不制造卖出，卖出必须是版本
+允许的技术、风险或报告原因。订单冻结该版本的 board lot、佣金、印花税、过户费和 T+1
+规则，并保存完整 strategy/report/signal/order lineage。该操作必须提供与 `client_order_id`
+一致的 `Idempotency-Key`。
+
+## 旧单股票 Hikyuu 技术回测（兼容诊断）
+
+这些 `/backtests/**` 端点为旧技术诊断兼容接口，新 `/strategies` 前端不再调用，也不能
+用于 Verified 或 Promoted。服务端把 Finance Pack `kline.bars` 转换为 Hikyuu 外部
 `Stock/KRecord`，使用 `SYS_Simple + SG_Cross + MM_FixedCount` 执行注册策略。
 每次回测在 120 秒受控子进程中运行，隔离 HOME 已预置本地空策略仓库，因此不会
 自动下载 Hikyuu Hub，也不会影响 API 主进程。
@@ -463,7 +568,10 @@ Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格�
 VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
 ```
 
-前端 API Client 对 Finance Workspace 请求自动将同一 host 的 `/api/v1` 替换为 `/api/v2`。Bearer token 与 v1 共用。
+前端 API Client 对 Finance Workspace 请求自动将同一 host 的 `/api/v1` 替换为 `/api/v2`，
+并为变更请求生成幂等 key。Bearer token 与 v1 共用。GitHub Pages 构建还设置
+`VITE_BASE_PATH`，并生成与 `index.html` 同内容的 `404.html`；路由器会剥离仓库 base path，
+因此仓库子路径下的 `/strategies` 可直接访问。
 
 ## UZI 数据完整性与真实兜底字段
 

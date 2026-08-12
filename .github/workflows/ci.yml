@@ -13,6 +13,51 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  strategy-contracts:
+    name: Strategy SQLite/PostgreSQL contracts and migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: cognitrade
+          POSTGRES_USER: cognitrade
+          POSTGRES_PASSWORD: cognitrade-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cognitrade -d cognitrade"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      COGNITRADE_TEST_POSTGRES_URL: postgresql+psycopg://cognitrade:cognitrade-ci@127.0.0.1:5432/cognitrade
+      COGNITRADE_API_ALLOW_UNAUTHENTICATED: "true"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt
+      - name: Validate reversible PostgreSQL migration chain
+        env:
+          COGNITRADE_DATABASE_URL: ${{ env.COGNITRADE_TEST_POSTGRES_URL }}
+        run: |
+          python -m alembic -c alembic.ini upgrade head
+          python -m alembic -c alembic.ini downgrade base
+          python -m alembic -c alembic.ini upgrade head
+          python -m alembic -c alembic.ini check
+      - name: Run cross-dialect repository and deployment contracts
+        run: >-
+          python -m unittest -v
+          tests.test_strategy_database_contract
+          tests.test_strategy_migration_deployment
+          tests.test_strategy_legacy_retention
+
   finance-contracts:
     name: Finance chain and scoring contracts
     runs-on: ubuntu-latest

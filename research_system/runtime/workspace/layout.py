@@ -16,6 +16,7 @@ def required_workspace_directories(settings: "Settings") -> list[Path]:
         settings.memory_root / "exports",
         settings.memory_root / "cache",
         settings.config_root,
+        settings.strategy_object_store_root or settings.workspace_root / "strategy_objects",
     ]
 
 
