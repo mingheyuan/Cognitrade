@@ -275,7 +275,7 @@ async def get_backtest(
 def _owner(principal: ApiPrincipal) -> tuple[str, str]:
     return (
         str(principal.tenant_id or "local"),
-        str(principal.user_id or principal.actor_id or "local_user"),
+        str(principal.user_id or principal.actor_id or "local_development"),
     )
 
 

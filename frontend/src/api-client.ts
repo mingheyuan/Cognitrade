@@ -12,9 +12,6 @@ import type {
   SystemStatus,
 } from './research-contracts'
 import type {
-  BacktestRequest,
-  BacktestResult,
-  BacktestSummaryPage,
   MarketDataResponse,
   MarketQuote,
   PaperAccount,
@@ -27,12 +24,35 @@ import type {
   SecuritySearchResponse,
 } from './finance-contracts'
 import { localizeErrorMessage } from './utils/error-message'
+import type {
+  BacktestMode,
+  BacktestPreflight,
+  DailyReportSet,
+  PaperStrategyBinding,
+  StrategyPaperOrder,
+  ReportJob,
+  StrategyAssignment,
+  StrategyBacktest,
+  StrategyDocument,
+  StrategyEvent,
+  StrategyRecord,
+  SignalPreviewResult,
+  StrategyVerification,
+  TradeSignal,
+  VersionDiff,
+} from './strategy-contracts'
 
 export const API_BASE_STORAGE_KEY = 'cognitrade.api.base-url'
 export const API_TOKEN_STORAGE_KEY = 'cognitrade.api.token'
 export const API_CONNECTION_CONFIGURED_STORAGE_KEY = 'cognitrade.api.connection-configured'
 
 const DEFAULT_API_BASE = 'http://127.0.0.1:8000/api/v1'
+
+function createIdempotencyKey(): string {
+  const randomUuid = globalThis.crypto?.randomUUID?.()
+  if (randomUuid) return `web-${randomUuid}`
+  return `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
+}
 
 export type ApiConnectionSettings = {
   baseUrl: string
@@ -391,23 +411,202 @@ export class CognitradeApiClient {
     })
   }
 
-  getBacktestEngine(): Promise<QuantEngineStatus> {
-    return this.financeRequest('/finance/backtests/engine')
+  listStrategyCatalog(): Promise<{ strategies: StrategyRecord[] }> {
+    return this.financeRequest('/finance/strategy-catalog')
   }
 
-  listBacktests(limit = 20, offset = 0): Promise<BacktestSummaryPage> {
-    return this.financeRequest(`/finance/backtests?limit=${limit}&offset=${offset}`)
+  listStrategies(includeArchived = false): Promise<{ strategies: StrategyRecord[] }> {
+    return this.financeRequest(`/finance/strategies?include_archived=${includeArchived}`)
   }
 
-  runBacktest(request: BacktestRequest): Promise<BacktestResult> {
-    return this.financeRequest('/finance/backtests', {
-      method: 'POST',
-      body: JSON.stringify(request),
+  getStrategy(strategyId: string): Promise<StrategyRecord> {
+    return this.financeRequest(`/finance/strategies/${encodeURIComponent(strategyId)}`)
+  }
+
+  createStrategy(payload: { name: string; description?: string; document?: StrategyDocument; from_strategy_id?: string }): Promise<StrategyRecord> {
+    return this.financeRequest('/finance/strategies', { method: 'POST', body: JSON.stringify(payload) })
+  }
+
+  updateStrategyDraft(strategyId: string, payload: { expected_revision: number; document: StrategyDocument; name?: string }): Promise<StrategyRecord> {
+    return this.financeRequest(`/finance/strategies/${encodeURIComponent(strategyId)}/draft`, {
+      method: 'PATCH',
+      headers: { 'If-Match': `W/"${payload.expected_revision}"` },
+      body: JSON.stringify(payload),
     })
   }
 
-  getBacktest(backtestId: string): Promise<BacktestResult> {
-    return this.financeRequest(`/finance/backtests/${encodeURIComponent(backtestId)}`)
+  deleteStrategy(strategyId: string): Promise<{ deleted: boolean; strategy_id: string }> {
+    return this.financeRequest(`/finance/strategies/${encodeURIComponent(strategyId)}`, { method: 'DELETE' })
+  }
+
+  cloneStrategy(strategyId: string, name?: string): Promise<StrategyRecord> {
+    return this.financeRequest(`/finance/strategies/${encodeURIComponent(strategyId)}/clone`, {
+      method: 'POST',
+      body: JSON.stringify({ ...(name ? { name } : {}) }),
+    })
+  }
+
+  publishStrategy(strategyId: string): Promise<Record<string, unknown>> {
+    return this.financeRequest(`/finance/strategies/${encodeURIComponent(strategyId)}/publish`, { method: 'POST' })
+  }
+
+  archiveStrategy(strategyId: string): Promise<StrategyRecord> {
+    return this.financeRequest(`/finance/strategies/${encodeURIComponent(strategyId)}/archive`, { method: 'POST' })
+  }
+
+  restoreStrategy(strategyId: string): Promise<StrategyRecord> {
+    return this.financeRequest(`/finance/strategies/${encodeURIComponent(strategyId)}/restore`, { method: 'POST' })
+  }
+
+  listStrategyVersions(strategyId: string): Promise<{ strategy_id: string; versions: StrategyRecord['versions'] }> {
+    return this.financeRequest(`/finance/strategies/${encodeURIComponent(strategyId)}/versions`)
+  }
+
+  getStrategyVersion(strategyId: string, versionId: string): Promise<Record<string, unknown>> {
+    return this.financeRequest(`/finance/strategies/${encodeURIComponent(strategyId)}/versions/${encodeURIComponent(versionId)}`)
+  }
+
+  getStrategyVersionDiff(strategyId: string, fromVersionId: string, toVersionId: string): Promise<VersionDiff> {
+    const query = `from_version_id=${encodeURIComponent(fromVersionId)}&to_version_id=${encodeURIComponent(toVersionId)}`
+    return this.financeRequest(`/finance/strategies/${encodeURIComponent(strategyId)}/version-diff?${query}`)
+  }
+
+  listStrategyEvents(strategyId: string): Promise<{ strategy_id: string; events: StrategyEvent[] }> {
+    return this.financeRequest(`/finance/strategies/${encodeURIComponent(strategyId)}/events`)
+  }
+
+  listStrategyAssignments(filters: { strategyId?: string; fundCode?: string } = {}): Promise<{ assignments: StrategyAssignment[] }> {
+    const query = new URLSearchParams()
+    if (filters.strategyId) query.set('strategy_id', filters.strategyId)
+    if (filters.fundCode) query.set('fund_code', filters.fundCode)
+    return this.financeRequest(`/finance/strategy-assignments${query.size ? `?${query}` : ''}`)
+  }
+
+  createStrategyAssignment(payload: { strategy_id: string; fund_code: string; fund_name?: string; mode: BacktestMode; enabled?: boolean; schedule?: Record<string, unknown> }): Promise<StrategyAssignment> {
+    return this.financeRequest('/finance/strategy-assignments', { method: 'POST', body: JSON.stringify(payload) })
+  }
+
+  updateStrategyAssignment(assignmentId: string, payload: { enabled?: boolean; paused?: boolean; schedule?: Record<string, unknown> }): Promise<StrategyAssignment> {
+    return this.financeRequest(`/finance/strategy-assignments/${encodeURIComponent(assignmentId)}`, { method: 'PATCH', body: JSON.stringify(payload) })
+  }
+
+  deleteStrategyAssignment(assignmentId: string): Promise<Record<string, unknown>> {
+    return this.financeRequest(`/finance/strategy-assignments/${encodeURIComponent(assignmentId)}`, { method: 'DELETE' })
+  }
+
+  setStrategyAssignmentPaused(assignmentId: string, paused: boolean): Promise<StrategyAssignment> {
+    return this.financeRequest(`/finance/strategy-assignments/${encodeURIComponent(assignmentId)}/${paused ? 'pause' : 'resume'}`, { method: 'POST' })
+  }
+
+  estimateReportBackfill(payload: { assignment_id: string; as_of_date?: string; start_date?: string; end_date?: string; source_run_id?: string }): Promise<Record<string, unknown>> {
+    return this.financeRequest('/finance/report-backfills/estimate', { method: 'POST', body: JSON.stringify(payload) })
+  }
+
+  createReportJob(payload: { assignment_id: string; as_of_date?: string; start_date?: string; end_date?: string; source_run_id?: string }, backfill = false): Promise<ReportJob> {
+    return this.financeRequest(`/finance/${backfill ? 'report-backfills' : 'report-jobs'}`, { method: 'POST', body: JSON.stringify(payload) })
+  }
+
+  listReportJobs(): Promise<{ jobs: ReportJob[] }> {
+    return this.financeRequest('/finance/report-jobs')
+  }
+
+  retryReportJob(jobId: string, payload: { symbols?: string[]; full_rerun?: boolean; confirmed?: boolean }): Promise<ReportJob> {
+    return this.financeRequest(`/finance/report-jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST', body: JSON.stringify(payload) })
+  }
+
+  setReportJobPaused(jobId: string, paused: boolean): Promise<ReportJob> {
+    return this.financeRequest(`/finance/report-jobs/${encodeURIComponent(jobId)}/${paused ? 'pause' : 'resume'}`, { method: 'POST' })
+  }
+
+  listDailyReportSets(filters: { fundCode?: string; asOfDate?: string } = {}): Promise<{ report_sets: DailyReportSet[] }> {
+    const query = new URLSearchParams()
+    if (filters.fundCode) query.set('fund_code', filters.fundCode)
+    if (filters.asOfDate) query.set('as_of_date', filters.asOfDate)
+    return this.financeRequest(`/finance/daily-report-sets${query.size ? `?${query}` : ''}`)
+  }
+
+  previewTradeSignal(payload: { assignment_id: string; report_set_id: string; draft_strategy_id?: string }): Promise<SignalPreviewResult> {
+    return this.financeRequest('/finance/signal-previews', { method: 'POST', body: JSON.stringify(payload) })
+  }
+
+  recomputeTradeSignals(payload: { assignment_id: string; report_set_id: string }): Promise<{ fund_signal: TradeSignal; holding_signals: TradeSignal[]; strategy_version_id: string; report_set_id: string }> {
+    return this.financeRequest('/finance/trade-signals/recompute', { method: 'POST', body: JSON.stringify(payload) })
+  }
+
+  listTradeSignals(filters: { assignmentId?: string; subjectCode?: string; startDate?: string; endDate?: string } = {}): Promise<{ signals: TradeSignal[] }> {
+    const query = new URLSearchParams()
+    if (filters.assignmentId) query.set('assignment_id', filters.assignmentId)
+    if (filters.subjectCode) query.set('subject_code', filters.subjectCode)
+    if (filters.startDate) query.set('start_date', filters.startDate)
+    if (filters.endDate) query.set('end_date', filters.endDate)
+    return this.financeRequest(`/finance/trade-signals${query.size ? `?${query}` : ''}`)
+  }
+
+  preflightStrategyBacktest(payload: { strategy_version_id: string; fund_code: string; mode: BacktestMode; start_date: string; end_date: string }): Promise<BacktestPreflight> {
+    return this.financeRequest('/finance/strategy-backtests/preflight', { method: 'POST', body: JSON.stringify(payload) })
+  }
+
+  createStrategyBacktest(payload: { strategy_version_id: string; fund_code: string; mode: BacktestMode; start_date: string; end_date: string; initial_cash: number; benchmark: Record<string, unknown>; report_policy: 'existing_only' | 'require_complete' }): Promise<StrategyBacktest> {
+    return this.financeRequest('/finance/strategy-backtests', { method: 'POST', body: JSON.stringify(payload) })
+  }
+
+  listStrategyBacktests(): Promise<{ backtests: StrategyBacktest[] }> {
+    return this.financeRequest('/finance/strategy-backtests')
+  }
+
+  getStrategyBacktest(backtestId: string): Promise<StrategyBacktest> {
+    return this.financeRequest(`/finance/strategy-backtests/${encodeURIComponent(backtestId)}`)
+  }
+
+  retryStrategyBacktest(backtestId: string): Promise<StrategyBacktest> {
+    return this.financeRequest(`/finance/strategy-backtests/${encodeURIComponent(backtestId)}/retry`, { method: 'POST' })
+  }
+
+  cancelStrategyBacktest(backtestId: string): Promise<StrategyBacktest> {
+    return this.financeRequest(`/finance/strategy-backtests/${encodeURIComponent(backtestId)}/cancel`, { method: 'POST' })
+  }
+
+  listStrategyVerifications(strategyVersionId?: string): Promise<{ verifications: StrategyVerification[] }> {
+    const query = strategyVersionId ? `?strategy_version_id=${encodeURIComponent(strategyVersionId)}` : ''
+    return this.financeRequest(`/finance/strategy-verifications${query}`)
+  }
+
+  createStrategyVerification(payload: { strategy_version_id: string; backtest_run_id: string; thresholds?: Record<string, number | boolean> }): Promise<StrategyVerification> {
+    return this.financeRequest('/finance/strategy-verifications', { method: 'POST', body: JSON.stringify(payload) })
+  }
+
+  confirmStrategyVerification(verificationId: string): Promise<StrategyVerification> {
+    return this.financeRequest(`/finance/strategy-verifications/${encodeURIComponent(verificationId)}/confirm`, { method: 'POST' })
+  }
+
+  promoteStrategyVersion(strategyId: string, versionId: string, payload: { account_id: string; fund_code: string; mode: BacktestMode }): Promise<Record<string, unknown>> {
+    return this.financeRequest(`/finance/strategies/${encodeURIComponent(strategyId)}/versions/${encodeURIComponent(versionId)}/promote`, { method: 'POST', body: JSON.stringify(payload) })
+  }
+
+  listPaperStrategyBindings(): Promise<{ bindings: PaperStrategyBinding[] }> {
+    return this.financeRequest('/finance/paper-strategy-bindings')
+  }
+
+  listStrategyPaperOrders(bindingId?: string): Promise<{ orders: StrategyPaperOrder[] }> {
+    const query = bindingId ? `?binding_id=${encodeURIComponent(bindingId)}` : ''
+    return this.financeRequest(`/finance/strategy-paper-orders${query}`)
+  }
+
+  submitStrategyPaperOrder(bindingId: string, payload: {
+    signal_id: string
+    side: 'buy' | 'sell'
+    quantity: number
+    technical_reason: string
+    client_order_id: string
+    trading_date?: string
+    order_type?: 'market' | 'limit'
+    limit_price?: number
+  }): Promise<StrategyPaperOrder> {
+    return this.financeRequest(`/finance/paper-strategy-bindings/${encodeURIComponent(bindingId)}/orders`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': payload.client_order_id },
+      body: JSON.stringify(payload),
+    })
   }
 
   async getRunDetail(runId: string): Promise<RunDetail> {
@@ -422,6 +621,12 @@ export class CognitradeApiClient {
 
   private financeRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
     const financeBase = this.settings.baseUrl.replace(/\/api\/v1$/, '/api/v2')
+    const method = String(init.method || 'GET').toUpperCase()
+    if (method === 'POST' || method === 'PATCH' || method === 'DELETE') {
+      const headers = new Headers(init.headers)
+      if (!headers.has('Idempotency-Key')) headers.set('Idempotency-Key', createIdempotencyKey())
+      return this.request(path, { ...init, headers }, financeBase)
+    }
     return this.request(path, init, financeBase)
   }
 

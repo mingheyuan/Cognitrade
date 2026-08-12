@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   selectRun: vi.fn(),
   reloadRun: vi.fn(async () => undefined),
   openRun: vi.fn(),
-  openBacktest: vi.fn(),
+  openStrategy: vi.fn(),
   selectedRunDetailId: 'run-fund',
 }))
 
@@ -113,7 +113,7 @@ describe('Funds', () => {
     mocks.selectRun.mockClear()
     mocks.reloadRun.mockClear()
     mocks.openRun.mockClear()
-    mocks.openBacktest.mockClear()
+    mocks.openStrategy.mockClear()
     mocks.selectedRunDetailId = 'run-fund'
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -312,7 +312,7 @@ describe('Funds', () => {
     expect(screen.getByRole('progressbar', { name: '持仓分析任务处理进度 25%' })).toHaveAttribute('aria-valuenow', '25')
   })
 
-  it('restores a persisted batch, retries one failed report and opens its backtest', async () => {
+  it('restores a persisted batch, retries one failed report and opens the fund strategy context', async () => {
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       const batch = {
@@ -337,7 +337,7 @@ describe('Funds', () => {
       return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } })
     })
 
-    render(<Funds onOpenRun={mocks.openRun} onOpenBacktest={mocks.openBacktest} />)
+    render(<Funds onOpenRun={mocks.openRun} onOpenStrategy={mocks.openStrategy} />)
 
     await waitFor(() => expect(screen.getByRole('combobox', { name: '研究档位' })).toHaveValue('deep'))
     expect(screen.getByText('批次状态')).toBeInTheDocument()
@@ -347,8 +347,14 @@ describe('Funds', () => {
       const call = vi.mocked(fetch).mock.calls.find(([input]) => String(input).endsWith('/holding-report-batches/batch-failed/retry'))
       expect(JSON.parse(String(call?.[1]?.body))).toEqual({ symbols: ['688012'], force: false })
     })
-    fireEvent.click(screen.getByRole('button', { name: '回测' }))
-    expect(mocks.openBacktest).toHaveBeenCalledWith(expect.objectContaining({ symbol: '688012', fundCode: '110011' }))
+    fireEvent.click(screen.getByRole('button', { name: '策略回测' }))
+    expect(mocks.openStrategy).toHaveBeenCalledWith(expect.objectContaining({
+      tab: 'assignments',
+      fundCode: '110011',
+      mode: 'holdings_portfolio',
+      holdingSymbol: '688012',
+      sourceRunId: 'run-fund',
+    }))
   })
 
   it('regenerates only one selected completed report without rerunning the batch', async () => {

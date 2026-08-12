@@ -10,6 +10,10 @@ import sys
 import tempfile
 from typing import Any, Sequence
 
+from sqlalchemy.engine import make_url
+
+from research_system.strategies.database import StrategyDatabase
+
 
 _RUNTIME_PACKAGES: tuple[tuple[str, str, str], ...] = (
     ("akshare", "akshare", "A-share provider aggregation"),
@@ -108,6 +112,27 @@ def _run_probe(
     }
 
 
+def _probe_veighna_runtime(runtime_root: Path) -> str:
+    """Load VeighNa through the same isolated adapter used in production."""
+
+    from research_system.api.veighna_paper_adapter import VeighNaPaperAdapter
+
+    adapter = VeighNaPaperAdapter(runtime_root=runtime_root)
+    status = adapter.status()
+    if not status.get("available"):
+        detail = status.get("load_error") or "native runtime is unavailable"
+        raise RuntimeError(f"VeighNa PaperAccount probe failed: {detail}")
+    if not status.get("capabilities", {}).get("tick_crossing"):
+        raise RuntimeError("VeighNa PaperAccount tick crossing is unavailable")
+    versions = status.get("versions", {})
+    return (
+        "VeighNa PaperAccount isolated runtime loaded: "
+        f"vnpy={versions.get('vnpy')}, "
+        f"vnpy_paperaccount={versions.get('vnpy_paperaccount')}, "
+        f"runtime_root={runtime_root.resolve()}"
+    )
+
+
 def _workspace_checks(workspace_root: Path | None) -> list[dict[str, Any]]:
     if workspace_root is None:
         return []
@@ -137,10 +162,76 @@ def _workspace_checks(workspace_root: Path | None) -> list[dict[str, Any]]:
     return checks
 
 
+def _strategy_storage_checks(workspace_root: Path | None) -> list[dict[str, Any]]:
+    if workspace_root is None:
+        return []
+    database_url = str(os.environ.get("COGNITRADE_DATABASE_URL") or "").strip()
+    if not database_url:
+        database_url = f"sqlite:///{(workspace_root / 'cognitrade.sqlite3').resolve()}"
+    try:
+        redacted_url = make_url(database_url).render_as_string(hide_password=True)
+    except Exception:
+        redacted_url = "invalid-database-url"
+    database_check: dict[str, Any] = {
+        "name": "strategy-database",
+        "target": redacted_url,
+        "passed": False,
+        "detail": None,
+    }
+    database = None
+    try:
+        database = StrategyDatabase(database_url)
+        health = database.health()
+        database_check["passed"] = bool(health.get("ready"))
+        database_check["detail"] = health
+    except Exception as exc:
+        database_check["detail"] = f"{exc.__class__.__name__}: database unavailable or not migrated"
+    finally:
+        if database is not None:
+            database.close()
+
+    object_store = Path(
+        os.environ.get("COGNITRADE_OBJECT_STORE_ROOT")
+        or workspace_root / "strategy_objects"
+    ).resolve()
+    object_passed = object_store.is_dir() and os.access(object_store, os.R_OK | os.W_OK | os.X_OK)
+    object_detail: Any = None
+    if object_passed:
+        try:
+            with tempfile.NamedTemporaryFile(dir=object_store, prefix=".preflight-object-"):
+                pass
+        except OSError as exc:
+            object_passed = False
+            object_detail = f"{exc.__class__.__name__}: {exc}"
+    else:
+        object_detail = "object store directory is missing or not writable"
+    object_check = {
+        "name": "strategy-object-store",
+        "target": str(object_store),
+        "passed": object_passed,
+        "detail": object_detail,
+    }
+    auto_bootstrap = str(
+        os.environ.get("COGNITRADE_DATABASE_AUTO_BOOTSTRAP", "false")
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    migration_check = {
+        "name": "strategy-database-migration-policy",
+        "target": "COGNITRADE_DATABASE_AUTO_BOOTSTRAP",
+        "passed": not auto_bootstrap,
+        "detail": (
+            "Alembic-managed schema; runtime auto-bootstrap disabled"
+            if not auto_bootstrap
+            else "production must set COGNITRADE_DATABASE_AUTO_BOOTSTRAP=false"
+        ),
+    }
+    return [database_check, object_check, migration_check]
+
+
 def build_deployment_report(
     *,
     workspace_root: Path | None = None,
     require_browser: bool = True,
+    require_strategy_storage: bool = True,
 ) -> dict[str, Any]:
     packages = _package_checks()
     probes = [
@@ -152,13 +243,28 @@ def build_deployment_report(
             "api-import",
             "import research_system.api.app; print('FastAPI application import succeeded')",
         ),
-        _run_probe(
-            "veighna-paperaccount",
-            "from vnpy.trader.object import ContractData, OrderRequest, TickData; "
-            "from vnpy_paperaccount.engine import PaperEngine; "
-            "print('VeighNa PaperAccount native models and matching engine imported')",
-        ),
     ]
+
+    veighna_parent = workspace_root / "paper_trading" if workspace_root else None
+    if veighna_parent is not None and not veighna_parent.is_dir():
+        veighna_parent = None
+    with tempfile.TemporaryDirectory(
+        prefix="cognitrade-veighna-",
+        dir=veighna_parent,
+    ) as temporary:
+        isolated_environment = os.environ.copy()
+        isolated_environment["COGNITRADE_VEIGHNA_RUNTIME_ROOT"] = temporary
+        probes.append(
+            _run_probe(
+                "veighna-paperaccount",
+                "import os; from pathlib import Path; "
+                "from research_system.runtime.diagnostics.status.deployment_preflight "
+                "import _probe_veighna_runtime; "
+                "print(_probe_veighna_runtime(Path("
+                "os.environ['COGNITRADE_VEIGHNA_RUNTIME_ROOT'])))",
+                environment=isolated_environment,
+            )
+        )
 
     temporary_parent = workspace_root / "backtests" if workspace_root else None
     if temporary_parent is not None and not temporary_parent.is_dir():
@@ -194,19 +300,23 @@ def build_deployment_report(
         )
 
     workspace = _workspace_checks(workspace_root)
+    strategy_storage = _strategy_storage_checks(workspace_root) if require_strategy_storage else []
     missing_packages = [item["distribution"] for item in packages if not item["available"]]
     failed_probes = [item["name"] for item in probes if not item["passed"]]
     failed_paths = [item["path"] for item in workspace if not item["passed"]]
-    passed = not (missing_packages or failed_probes or failed_paths)
+    failed_strategy_storage = [item["name"] for item in strategy_storage if not item["passed"]]
+    passed = not (missing_packages or failed_probes or failed_paths or failed_strategy_storage)
     return {
         "status": "passed" if passed else "failed",
         "packages": packages,
         "probes": probes,
         "workspace": workspace,
+        "strategy_storage": strategy_storage,
         "failures": {
             "missing_packages": missing_packages,
             "failed_probes": failed_probes,
             "failed_paths": failed_paths,
+            "failed_strategy_storage": failed_strategy_storage,
         },
     }
 
@@ -221,6 +331,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the Chromium binary check (intended only for non-browser test environments).",
     )
+    parser.add_argument(
+        "--skip-strategy-storage",
+        action="store_true",
+        help="Skip migrated database/object-store checks during image-build-only validation.",
+    )
     return parser
 
 
@@ -229,6 +344,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     report = build_deployment_report(
         workspace_root=args.workspace,
         require_browser=not args.skip_browser,
+        require_strategy_storage=not args.skip_strategy_storage,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["status"] == "passed" else 2

@@ -7,7 +7,9 @@ import {
   Download,
   ExternalLink,
   FileText,
+  GitBranch,
   LineChart as LineChartIcon,
+  Link2,
   LoaderCircle,
   RefreshCw,
   Scale,
@@ -36,7 +38,13 @@ import {
   type RunReportExport,
   type RunReportFormat,
 } from '../api-client'
-import type { BacktestTarget } from '../finance-contracts'
+import type {
+  DailyReportSet,
+  StrategyAssignment,
+  StrategyRecord,
+  StrategyWorkspaceContext,
+  TradeSignal,
+} from '../strategy-contracts'
 import type { RunStepsPayload } from '../research-contracts'
 import { errorMessageWithRequestId, localizeErrorMessage } from '../utils/error-message'
 
@@ -45,7 +53,7 @@ type FundAnalysisDossierProps = {
   sourceRunId: string
   client: CognitradeApiClient
   onOpenRun: (runId: string) => void
-  onOpenBacktest: (target: BacktestTarget) => void
+  onOpenStrategy: (context: StrategyWorkspaceContext) => void
 }
 
 type RecordValue = Record<string, unknown>
@@ -193,9 +201,11 @@ function FundTrendChart({
   )
 }
 
-export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun, onOpenBacktest }: FundAnalysisDossierProps) {
+export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun, onOpenStrategy }: FundAnalysisDossierProps) {
   const analysis = artifactContent(artifacts, 'fund_analysis')
   const snapshot = artifactContent(artifacts, 'fund_snapshot')
+  const sourceArtifact = [...artifacts].reverse().find((row) => ['fund_analysis', 'fund_snapshot'].includes(String(row.artifact_type || '')))
+  const sourceArtifactId = String(sourceArtifact?.artifact_id || '')
   const analysisMode = String(analysis.analysis_mode || snapshot.analysis_mode || 'comparison')
   const isSingleFund = analysisMode === 'single_fund'
   const snapshotFunds = new Map(records(snapshot.funds).map((row) => [String(row.fund_code || ''), row]))
@@ -219,6 +229,13 @@ export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun,
   const [holdingAction, setHoldingAction] = useState('')
   const [holdingError, setHoldingError] = useState('')
   const [holdingRunProgress, setHoldingRunProgress] = useState<Record<string, HoldingRunProgress>>({})
+  const [strategyBridge, setStrategyBridge] = useState<{
+    strategies: StrategyRecord[]
+    assignments: StrategyAssignment[]
+    reportSets: DailyReportSet[]
+    signals: TradeSignal[]
+  }>({ strategies: [], assignments: [], reportSets: [], signals: [] })
+  const [strategyBridgeError, setStrategyBridgeError] = useState('')
   const holdingBatchLoadSequence = useRef(0)
   const sourceRunIdRef = useRef(sourceRunId)
   const holdingBatches = useMemo(
@@ -259,6 +276,30 @@ export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun,
   useEffect(() => {
     queueMicrotask(() => void refreshHoldingBatches())
   }, [refreshHoldingBatches])
+
+  const refreshStrategyBridge = useCallback(async () => {
+    try {
+      const [strategyRows, assignmentRows, reportRows, signalRows] = await Promise.all([
+        client.listStrategies(false),
+        client.listStrategyAssignments(),
+        client.listDailyReportSets(),
+        client.listTradeSignals(),
+      ])
+      setStrategyBridge({
+        strategies: Array.isArray(strategyRows?.strategies) ? strategyRows.strategies : [],
+        assignments: Array.isArray(assignmentRows?.assignments) ? assignmentRows.assignments : [],
+        reportSets: Array.isArray(reportRows?.report_sets) ? reportRows.report_sets : [],
+        signals: Array.isArray(signalRows?.signals) ? signalRows.signals : [],
+      })
+      setStrategyBridgeError('')
+    } catch (bridgeError) {
+      setStrategyBridgeError(reportErrorMessage(bridgeError))
+    }
+  }, [client])
+
+  useEffect(() => {
+    queueMicrotask(() => void refreshStrategyBridge())
+  }, [refreshStrategyBridge])
 
   const hasRunningBatch = holdingBatches.some((row) => row.status === 'running')
   useEffect(() => {
@@ -405,6 +446,7 @@ export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun,
       </section>
 
       {holdingError && <div className="fund-holding-report-error" role="alert"><AlertCircle size={15} />{holdingError}</div>}
+      {strategyBridgeError && <div className="fund-holding-report-error" role="alert"><AlertCircle size={15} />策略链路：{strategyBridgeError}</div>}
 
       <div className="fund-candidate-dossiers">
         {candidates.map((candidate, index) => <FundCandidateDossier
@@ -420,7 +462,14 @@ export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun,
           onDownloadZip={(batchId) => downloadHoldingExport(`zip:${batchId}`, () => client.getFundHoldingReportZip(batchId))}
           onDownloadReport={(runId, format) => downloadHoldingExport(`${format}:${runId}`, () => client.getRunReport(runId, format))}
           onOpenRun={onOpenRun}
-          onOpenBacktest={(target) => onOpenBacktest({ ...target, sourceRunId })}
+          sourceRunId={sourceRunId}
+          sourceArtifactId={sourceArtifactId}
+          strategies={strategyBridge.strategies}
+          strategyAssignments={strategyBridge.assignments.filter((row) => row.fund_code === String(candidate.fund_code || ''))}
+          strategyReportSets={strategyBridge.reportSets.filter((row) => row.fund_code === String(candidate.fund_code || ''))}
+          strategySignals={strategyBridge.signals}
+          onOpenStrategy={onOpenStrategy}
+          onGenerateSignals={(assignmentId, reportSetId) => client.recomputeTradeSignals({ assignment_id: assignmentId, report_set_id: reportSetId }).then(() => refreshStrategyBridge())}
         />)}
       </div>
 
@@ -454,7 +503,14 @@ function FundCandidateDossier({
   onDownloadZip,
   onDownloadReport,
   onOpenRun,
-  onOpenBacktest,
+  sourceRunId,
+  sourceArtifactId,
+  strategies,
+  strategyAssignments,
+  strategyReportSets,
+  strategySignals,
+  onOpenStrategy,
+  onGenerateSignals,
 }: {
   candidate: RecordValue
   defaultOpen: boolean
@@ -467,7 +523,14 @@ function FundCandidateDossier({
   onDownloadZip: (batchId: string) => void
   onDownloadReport: (runId: string, format: RunReportFormat) => void
   onOpenRun: (runId: string) => void
-  onOpenBacktest: (target: BacktestTarget) => void
+  sourceRunId: string
+  sourceArtifactId: string
+  strategies: StrategyRecord[]
+  strategyAssignments: StrategyAssignment[]
+  strategyReportSets: DailyReportSet[]
+  strategySignals: TradeSignal[]
+  onOpenStrategy: (context: StrategyWorkspaceContext) => void
+  onGenerateSignals: (assignmentId: string, reportSetId: string) => Promise<void>
 }) {
   const returns = asRecord(candidate.returns_pct)
   const risk = asRecord(candidate.risk)
@@ -526,6 +589,45 @@ function FundCandidateDossier({
   const disclosureAge = dateAgeDays(reportDisclosureDate)
   const requiresConfirmation = disclosureAge != null && disclosureAge > 180
   const warnsStale = disclosureAge != null && disclosureAge > 120
+  const fundCode = String(candidate.fund_code || '')
+  const fundName = String(candidate.fund_name || '')
+  const activeAssignment = strategyAssignments.find((row) => row.mode === 'holdings_portfolio' && row.enabled && !row.paused)
+    || strategyAssignments.find((row) => row.enabled && !row.paused)
+    || strategyAssignments[0]
+  const assignedStrategy = strategies.find((row) => row.id === activeAssignment?.strategy_id)
+  const latestStrategyReport = [...strategyReportSets]
+    .filter((row) => !activeAssignment || row.assignment_id === activeAssignment.id)
+    .sort((left, right) => `${right.as_of_date}-${String(right.revision).padStart(4, '0')}`.localeCompare(`${left.as_of_date}-${String(left.revision).padStart(4, '0')}`))[0]
+  const assignmentSignals = strategySignals.filter((row) => !activeAssignment || row.assignment_id === activeAssignment.id)
+  const latestFundSignal = assignmentSignals.find((row) => row.kind === 'fund' && row.source_report_set_id === latestStrategyReport?.id)
+    || assignmentSignals.find((row) => row.kind === 'fund')
+  const [signalGenerating, setSignalGenerating] = useState(false)
+  const [signalError, setSignalError] = useState('')
+  const strategyContext = (tab: StrategyWorkspaceContext['tab'], holdingSymbol?: string): StrategyWorkspaceContext => ({
+    strategyId: activeAssignment?.strategy_id,
+    tab,
+    fundCode,
+    fundName,
+    sourceRunId,
+    sourceArtifactId: latestStrategyReport?.source_artifact_id ? String(latestStrategyReport.source_artifact_id) : sourceArtifactId,
+    reportSetId: latestStrategyReport?.id,
+    strategyVersionId: activeAssignment?.active_version_id,
+    assignmentId: activeAssignment?.id,
+    mode: 'holdings_portfolio',
+    holdingSymbol,
+  })
+  const generateSignals = async () => {
+    if (!activeAssignment || !latestStrategyReport) return
+    setSignalGenerating(true)
+    setSignalError('')
+    try {
+      await onGenerateSignals(activeAssignment.id, latestStrategyReport.id)
+    } catch (value) {
+      setSignalError(reportErrorMessage(value))
+    } finally {
+      setSignalGenerating(false)
+    }
+  }
   return (
     <details className={`fund-candidate-dossier ${candidate.selection_eligible ? 'is-eligible' : ''}`} open={defaultOpen}>
       <summary>
@@ -537,6 +639,24 @@ function FundCandidateDossier({
         <ChevronDown size={16} />
       </summary>
       <div className="fund-candidate-dossier-body">
+        <section className="fund-strategy-bridge" aria-label="基金报告与策略链路">
+          <header>
+            <div><GitBranch size={15} /><span><strong>报告 → 复合信号 → 回测</strong><small>基金信号是总门禁，持仓 UZI 信号决定个股目标权重。</small></span></div>
+            <span className={activeAssignment ? 'is-linked' : 'is-unlinked'}>{activeAssignment ? '已绑定策略' : '未绑定策略'}</span>
+          </header>
+          <div className="fund-strategy-bridge-grid">
+            <article><small>策略</small><strong>{assignedStrategy?.name || '待选择 Published 策略'}</strong><span>{activeAssignment ? `${activeAssignment.mode} · ${activeAssignment.active_version_id}` : '先创建 Assignment'}</span></article>
+            <article><small>当日日报</small><strong>{latestStrategyReport ? `${latestStrategyReport.as_of_date} · r${latestStrategyReport.revision}` : '尚未生成'}</strong><span>{latestStrategyReport ? `${latestStrategyReport.status} · coverage ${(latestStrategyReport.coverage * 100).toFixed(0)}%` : '一天一份，可手动补跑'}</span></article>
+            <article><small>基金复合信号</small><strong className={latestFundSignal ? `is-${latestFundSignal.state.toLowerCase()}` : ''}>{latestFundSignal?.state || '等待生成'}</strong><span>{latestFundSignal ? `coverage ${(latestFundSignal.coverage * 100).toFixed(0)}% · ${latestFundSignal.as_of_date}` : '不使用基金评分代替个股 UZI'}</span></article>
+          </div>
+          <div className="fund-strategy-bridge-actions">
+            <button type="button" onClick={() => onOpenStrategy(strategyContext('assignments'))}><Link2 size={13} />{activeAssignment ? '管理绑定' : '选择策略并绑定'}</button>
+            <button type="button" onClick={() => onOpenStrategy(strategyContext('signals'))}><FileText size={13} />{latestStrategyReport ? '查看当日日报' : '生成当日报告'}</button>
+            <button type="button" disabled={!activeAssignment || !latestStrategyReport || signalGenerating} onClick={() => void generateSignals()}>{signalGenerating ? <LoaderCircle size={13} className="is-spinning" /> : <GitBranch size={13} />}生成信号</button>
+            <button type="button" disabled={!activeAssignment || !activeAssignment.active_version_id} onClick={() => onOpenStrategy(strategyContext('backtests'))}><LineChartIcon size={13} />使用策略回测</button>
+          </div>
+          {signalError && <p className="fund-strategy-bridge-error"><AlertCircle size={12} />{signalError}</p>}
+        </section>
         <div className="fund-return-grid">
           {RETURN_FIELDS.map(([key, label]) => <article key={key}><span>{label}</span><strong className={(numberValue(returns[key]) || 0) >= 0 ? 'number-up' : 'number-down'}>{percent(returns[key])}</strong></article>)}
         </div>
@@ -733,7 +853,7 @@ function FundCandidateDossier({
                       <div className="fund-holding-report-name"><strong>{item.name}</strong><small>{item.symbol} · {item.market} · 基金权重 {percent(item.fund_weight_pct, false)}</small></div>
                       <span className="fund-holding-report-status">{item.status === 'running' && <LoaderCircle size={12} className="is-spinning" />}{holdingItemStatusLabel(item.status)}</span>
                       <div className="fund-holding-report-actions">
-                        <button type="button" title="使用该持仓股票打开策略回测" onClick={() => onOpenBacktest({ symbol: item.symbol, name: item.name, fundCode: String(candidate.fund_code || ''), fundName: String(candidate.fund_name || '') })}><LineChartIcon size={13} />回测</button>
+                        <button type="button" title="打开该基金持仓组合策略回测；股票代码只作为 lineage 上下文" onClick={() => onOpenStrategy(strategyContext(activeAssignment ? 'backtests' : 'assignments', item.symbol))}><LineChartIcon size={13} />策略回测</button>
                         {item.status === 'failed' && <button type="button" title="只重试这一只股票，其他持仓报告不重新执行" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'retry', [item.symbol])} disabled={holdingAction === holdingMutationKey('retry', currentBatch.batch_id, [item.symbol])}><RefreshCw size={13} />仅重试此项</button>}
                         {item.status === 'cancelled' && <button type="button" title="只继续这一只股票，其他持仓报告不重新执行" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'continue', [item.symbol])} disabled={holdingAction === holdingMutationKey('continue', currentBatch.batch_id, [item.symbol])}><RefreshCw size={13} />仅继续此项</button>}
                         {['completed', 'completed_partial'].includes(item.status) && <button type="button" title="只重新生成这一只股票，其他持仓报告保持不变" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'regenerate', [item.symbol])} disabled={holdingAction === holdingMutationKey('regenerate', currentBatch.batch_id, [item.symbol])}><RefreshCw size={13} />重新生成此项</button>}
@@ -743,6 +863,10 @@ function FundCandidateDossier({
                           <button type="button" onClick={() => onDownloadReport(item.child_run_id || '', 'pdf')} disabled={holdingAction === `pdf:${item.child_run_id}`}><Download size={13} />PDF</button>
                         </>}
                       </div>
+                      {(() => {
+                        const stockSignal = assignmentSignals.find((row) => row.kind === 'holding_stock' && row.subject_code === item.symbol && (!latestStrategyReport || row.source_report_set_id === latestStrategyReport.id))
+                        return stockSignal ? <div className="fund-holding-strategy-signal"><span className={`is-${stockSignal.state.toLowerCase()}`}>{stockSignal.state}</span><small>coverage {(stockSignal.coverage * 100).toFixed(0)}% · 来源 {stockSignal.as_of_date} · {stockSignal.source_report_set_id}</small></div> : <div className="fund-holding-strategy-signal is-empty"><span>暂无个股信号</span><small>生成基金复合信号时会同时生成持仓 UZI 信号</small></div>
+                      })()}
                       {item.status === 'running' && <div className="fund-holding-item-progress" role="status">
                         <div><span>{progress?.currentObjective || '正在初始化执行图并读取冻结持仓证据'}</span><strong>{progress?.totalNodes ? `${progress.settledNodes} / ${progress.totalNodes} 节点` : '准备中'}</strong></div>
                         <div className="fund-holding-item-progress-track"><i style={{ width: `${progress?.percent ?? 0}%` }} /></div>

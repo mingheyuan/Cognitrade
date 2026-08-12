@@ -19,6 +19,9 @@ services:
       COGNITRADE_API_HOST: 0.0.0.0
       COGNITRADE_API_PORT: "8000"
       COGNITRADE_API_RELOAD: "false"
+      COGNITRADE_DATABASE_URL: ${COGNITRADE_DATABASE_URL:-sqlite:////app/workspace/cognitrade.sqlite3}
+      COGNITRADE_DATABASE_AUTO_BOOTSTRAP: "false"
+      COGNITRADE_OBJECT_STORE_ROOT: ${COGNITRADE_OBJECT_STORE_ROOT:-/app/workspace/strategy_objects}
       HOME: /home/cognitrade
     init: true
     restart: unless-stopped

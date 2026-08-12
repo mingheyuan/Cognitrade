@@ -2,7 +2,6 @@ import {
   Activity,
   Archive,
   BarChart3,
-  BrainCircuit,
   CandlestickChart,
   ChevronsUpDown,
   CircleDot,
@@ -13,10 +12,10 @@ import {
   Plus,
   PieChart,
   Search,
+  SlidersHorizontal,
   Sparkles,
   WalletCards,
   Workflow,
-  FlaskConical,
   type LucideIcon,
 } from 'lucide-react'
 import { useCognitrade } from '../CognitradeContext'
@@ -37,11 +36,10 @@ const navigation: Array<{ id: ViewId; label: string; icon: LucideIcon }> = [
   { id: 'overview', label: '研究总览', icon: LayoutDashboard },
   { id: 'market', label: '行情数据', icon: CandlestickChart },
   { id: 'paper', label: '模拟交易', icon: WalletCards },
-  { id: 'backtest', label: '策略回测', icon: FlaskConical },
   { id: 'screening', label: '智能筛选', icon: BarChart3 },
   { id: 'funds', label: '基金研究', icon: PieChart },
   { id: 'uzi', label: 'UZI 专项方法', icon: Workflow },
-  { id: 'methodology', label: '方法论', icon: BrainCircuit },
+  { id: 'strategies', label: '策略与回测', icon: SlidersHorizontal },
   { id: 'runs', label: '运行记录', icon: Activity },
 ]
 

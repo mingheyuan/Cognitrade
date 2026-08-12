@@ -94,6 +94,7 @@ async def create_holding_reports(
             source_artifact_id=payload.source_artifact_id,
             confirm_stale=payload.confirm_stale,
             force=payload.force,
+            top_n=payload.top_n,
             **_scope(principal),
         )
     except Exception as exc:

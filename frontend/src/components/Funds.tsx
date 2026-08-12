@@ -8,16 +8,16 @@ import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { CognitradeApiClient } from '../api-client'
 import { useCognitrade } from '../CognitradeContext'
 import { FundAnalysisDossier } from './FundAnalysisDossier'
-import type { BacktestTarget } from '../finance-contracts'
+import type { StrategyWorkspaceContext } from '../strategy-contracts'
 
 type FundsProps = {
   onOpenRun: (runId: string) => void
-  onOpenBacktest?: (target: BacktestTarget) => void
+  onOpenStrategy?: (context: StrategyWorkspaceContext) => void
 }
 
 type FundSelectionMode = 'category' | 'codes'
 
-export function Funds({ onOpenRun, onOpenBacktest = () => undefined }: FundsProps) {
+export function Funds({ onOpenRun, onOpenStrategy = () => undefined }: FundsProps) {
   const {
     createRun,
     settings,
@@ -175,7 +175,7 @@ export function Funds({ onOpenRun, onOpenBacktest = () => undefined }: FundsProp
               sourceRunId={sourceRunId || ''}
               client={client}
               onOpenRun={onOpenRun}
-              onOpenBacktest={onOpenBacktest}
+              onOpenStrategy={onOpenStrategy}
             />
           ) : (
             <div className="fund-empty">
