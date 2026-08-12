@@ -37,8 +37,44 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
         self.assertEqual(report["report_version"], UZI_REPORT_VERSION)
         self.assertEqual(report["analyst_asset_file_count"], 138)
         self.assertTrue(report["analyst_asset_tree_matches"])
+        self.assertEqual(report["standalone_skill_file_count"], 17)
+        self.assertTrue(report["standalone_skill_tree_matches"])
         self.assertIn("quick-scan", UZI_COMMAND_IDS)
         self.assertEqual(len(UZI_FETCHER_IDS), 22)
+
+    def test_all_referenced_standalone_skill_resources_are_vendored(self) -> None:
+        root = (
+            Path(__file__).resolve().parents[1]
+            / "domain_packs"
+            / "finance_ashare"
+            / "vendor"
+            / "uzi_3_9_2"
+        )
+        required = {
+            "skills/investor-panel/SKILL.md",
+            "skills/investor-panel/assets/investor-cards.json",
+            "skills/investor-panel/references/group-a-classic-value.md",
+            "skills/investor-panel/references/group-b-growth.md",
+            "skills/investor-panel/references/group-c-macro-hedge.md",
+            "skills/investor-panel/references/group-d-technical.md",
+            "skills/investor-panel/references/group-e-china-value.md",
+            "skills/investor-panel/references/group-f-china-youzi.md",
+            "skills/investor-panel/references/group-g-quant.md",
+            "skills/investor-panel/references/group-i-serenity.md",
+            "skills/investor-panel/references/quotes-knowledge-base.md",
+            "skills/investor-panel/references/serenity-voice.md",
+            "skills/lhb-analyzer/SKILL.md",
+            "skills/lhb-analyzer/assets/seats-2026.json",
+            "skills/lhb-analyzer/references/seat-encyclopedia.md",
+            "skills/trap-detector/SKILL.md",
+            "skills/trap-detector/references/eight-signals.md",
+        }
+        actual = {
+            path.relative_to(root).as_posix()
+            for path in (root / "skills").rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(actual, required)
 
     def test_fetcher_result_is_returned_without_shape_adaptation(self) -> None:
         upstream_result = {
@@ -83,7 +119,7 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
                     main.assert_called_once_with("银行")
                 elif fetcher_id == "9_futures":
                     main.assert_called_once_with("银行", dependencies["8_materials"]["data"]["materials_detail"])
-                elif fetcher_id == "fund_holders":
+                elif fetcher_id == "6_fund_holders":
                     main.assert_called_once_with("600000", limit=7)
                 elif fetcher_id == "similar_stocks":
                     main.assert_called_once_with("600000", top_n=6)
@@ -102,6 +138,29 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
                 dependencies=dependencies,
             )
         main.assert_called_once_with("白酒", dependencies["8_materials"]["data"]["materials_detail"])
+
+    def test_fund_holder_profile_env_is_scoped_to_the_native_call(self) -> None:
+        observed: list[str | None] = []
+
+        def main(_ticker, *, limit=None):
+            observed.append(os.environ.get("UZI_FUND_STATS_TOP"))
+            return {"data": {"fund_managers": []}}
+
+        with (
+            patch.dict(os.environ, {"UZI_FUND_STATS_TOP": "77"}),
+            patch(
+                "domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime.importlib.import_module",
+                return_value=SimpleNamespace(main=main),
+            ),
+        ):
+            self.runtime.collect(
+                "6_fund_holders",
+                ticker="600000",
+                options={"fund_stats_top_n": 5},
+            )
+            self.assertEqual(os.environ.get("UZI_FUND_STATS_TOP"), "77")
+
+        self.assertEqual(observed, ["5"])
 
     def test_unknown_fetcher_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unsupported UZI 3.9.4 fetcher"):

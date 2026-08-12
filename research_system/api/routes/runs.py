@@ -9,8 +9,11 @@ from starlette.concurrency import run_in_threadpool
 from domain_packs.finance_ashare.reporting import (
     ReportArtifactMissingError,
     ReportPdfUnavailableError,
+    ReportImageUnavailableError,
     render_uzi_native_html,
     render_uzi_native_pdf,
+    render_uzi_native_image,
+    render_uzi_native_one_liner,
 )
 from research_system.api.dependencies import (
     ApiPrincipal,
@@ -173,6 +176,8 @@ async def run_artifacts(
             "content": {
                 "text/html": {},
                 "application/pdf": {},
+                "image/png": {},
+                "text/plain": {},
             },
             "description": "UZI native-style report derived from ArtifactBoard records",
         },
@@ -182,7 +187,7 @@ async def run_artifacts(
 )
 async def export_run_report(
     run_id: str,
-    format: Literal["html", "pdf"] = "html",
+    format: Literal["html", "pdf", "share-card", "war-report", "one-liner"] = "html",
     run_service=Depends(get_run_service),
     principal: ApiPrincipal = Depends(require_principal),
 ) -> Response:
@@ -224,6 +229,45 @@ async def export_run_report(
             headers={
                 **common_headers,
                 "Content-Disposition": f'inline; filename="{rendered.filename_stem}.html"',
+            },
+        )
+    if format == "one-liner":
+        try:
+            one_liner, filename = await run_in_threadpool(
+                render_uzi_native_one_liner,
+                list(artifact_payload.get("artifacts") or []),
+                report_locator=f"/api/v1/runs/{resolved}/report?format=html",
+            )
+        except ReportArtifactMissingError as exc:
+            raise ApiError(
+                status_code=409,
+                code="uzi_one_liner_unavailable",
+                message="该运行不包含可导出的 UZI one-liner",
+            ) from exc
+        return Response(
+            one_liner,
+            media_type="text/plain; charset=utf-8",
+            headers={
+                **common_headers,
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+    if format in {"share-card", "war-report"}:
+        selector = "#share-card" if format == "share-card" else "#war-report"
+        try:
+            png = await run_in_threadpool(render_uzi_native_image, rendered.html, selector=selector)
+        except ReportImageUnavailableError as exc:
+            raise ApiError(
+                status_code=503,
+                code="uzi_image_renderer_unavailable",
+                message="UZI 图片渲染器暂不可用",
+            ) from exc
+        return Response(
+            png,
+            media_type="image/png",
+            headers={
+                **common_headers,
+                "Content-Disposition": f'attachment; filename="{rendered.filename_stem}-{format}.png"',
             },
         )
     try:

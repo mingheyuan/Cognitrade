@@ -38,7 +38,7 @@ export type ApiConnectionSettings = {
   token: string
 }
 
-export type RunReportFormat = 'html' | 'pdf'
+export type RunReportFormat = 'html' | 'pdf' | 'share-card' | 'war-report' | 'one-liner'
 
 export type RunReportExport = {
   blob: Blob
@@ -200,10 +200,12 @@ export class CognitradeApiClient {
   }
 
   getRunReport(runId: string, format: RunReportFormat): Promise<RunReportExport> {
+    const mediaType = format === 'pdf' ? 'application/pdf' : format === 'share-card' || format === 'war-report' ? 'image/png' : format === 'one-liner' ? 'text/plain' : 'text/html'
+    const extension = format === 'share-card' || format === 'war-report' ? 'png' : format === 'one-liner' ? 'txt' : format
     return this.requestBlob(
       `/runs/${encodeURIComponent(runId)}/report?format=${encodeURIComponent(format)}`,
-      format === 'pdf' ? 'application/pdf' : 'text/html',
-      `uzi-report-${runId}.${format}`,
+      mediaType,
+      `uzi-report-${runId}-${format}.${extension}`,
     )
   }
 

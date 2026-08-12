@@ -99,7 +99,7 @@ export function Funds({ onOpenRun, onOpenBacktest = () => undefined }: FundsProp
     <main className="finance-page fund-page">
       <section className="finance-hero fund-hero">
         <div>
-          <span className="section-kicker">FUND RESEARCH · UZI 3.9.2 · AGENT OS</span>
+          <span className="section-kicker">FUND RESEARCH · UZI 3.9.4 · AGENT OS</span>
           <h1>基金研究与选择</h1>
           <p>比较基金本体的真实收益、净值回撤、波动率、费率和定期披露持仓；缺失数据只标记缺口，不做模拟补值。</p>
         </div>

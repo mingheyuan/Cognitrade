@@ -5,6 +5,7 @@
     "schema_version",
     "source",
     "contract",
+    "vendored_methodology_resources",
     "fetchers",
     "source_registry",
     "profiles",
@@ -26,6 +27,7 @@
       "additionalProperties": false
     },
     "contract": {"type": "object", "minProperties": 1},
+    "vendored_methodology_resources": {"$ref": "#/$defs/methodology_resources"},
     "defaults": {
       "type": "object",
       "required": ["source_commit", "migration_status", "result_equivalence", "invocation_acceptance"],
@@ -68,6 +70,64 @@
     "verification": {"type": "object", "minProperties": 1}
   },
   "$defs": {
+    "methodology_resources": {
+      "type": "object",
+      "required": [
+        "standalone_skill_roots",
+        "canonical_file_count",
+        "path_sensitive_sha256",
+        "consumption",
+        "deep_analysis_relocations",
+        "host_boundary"
+      ],
+      "properties": {
+        "standalone_skill_roots": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "canonical_file_count": {"const": 17},
+        "path_sensitive_sha256": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
+        "consumption": {"const": "reference_only_static_contracts"},
+        "deep_analysis_relocations": {
+          "type": "object",
+          "required": [
+            "skills/deep-analysis/SKILL.md",
+            "skills/deep-analysis/references",
+            "skills/deep-analysis/personas",
+            "skills/deep-analysis/scripts",
+            "skills/deep-analysis/assets"
+          ],
+          "properties": {
+            "skills/deep-analysis/SKILL.md": {"const": "skill/SKILL.md"},
+            "skills/deep-analysis/references": {"const": "skill/references"},
+            "skills/deep-analysis/personas": {"const": "skill/personas"},
+            "skills/deep-analysis/scripts": {"const": "scripts"},
+            "skills/deep-analysis/assets": {"const": "assets"}
+          },
+          "additionalProperties": false
+        },
+        "host_boundary": {
+          "type": "object",
+          "required": [
+            "upstream_root_router",
+            "upstream_cli_entrypoints",
+            "plugin_installers_and_hooks",
+            "upstream_tests"
+          ],
+          "properties": {
+            "upstream_root_router": {"const": "replaced_by_agent_os"},
+            "upstream_cli_entrypoints": {"const": "replaced_by_agent_os"},
+            "plugin_installers_and_hooks": {"const": "distribution_only"},
+            "upstream_tests": {"const": "pinned_checkout_ci_surface"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "fetcher": {
       "type": "object",
       "required": [
@@ -93,9 +153,10 @@
     },
     "profile": {
       "type": "object",
-      "required": ["source_dimensions", "panel_seats"],
+      "required": ["source_dimensions", "bonus_collectors", "panel_seats"],
       "properties": {
         "source_dimensions": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "bonus_collectors": {"type": "array", "minItems": 1, "items": {"type": "string"}},
         "panel_seats": {"type": "integer", "minimum": 1}
       },
       "additionalProperties": false

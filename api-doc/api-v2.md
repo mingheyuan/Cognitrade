@@ -9,7 +9,7 @@ Frontend
   -> /api/v2/finance
     -> FinanceMarketDataService
       -> finance_ashare DomainPack snapshots
-      -> UZI 3.9.2 provider chains (AkShare/eFinance/TuShare/BaoStock/direct HTTP/DDGS/browser)
+      -> UZI 3.9.4 provider chains (AkShare/eFinance/TuShare/BaoStock/direct HTTP/DDGS/browser)
     -> PaperTradingService
       -> VeighNa PaperAccount headless tick crossing
       -> server-side quote
@@ -202,7 +202,7 @@ Pack 质量 Gate 还可能标记 `degraded`、`data_gap` 或 `assumption_only`�
 不会被静默替换成演示数据，也不会向客户端暴露上游连接异常原文。
 
 每个 Snapshot 同时携带 `source`、`primary_source`、`fallback_sources`、
-`field_sources` 与 `source_trace`。来源目录固定对齐 UZI 3.9.2 的 70 个 source ID，
+`field_sources` 与 `source_trace`。来源目录固定对齐 UZI 3.9.4 的 73 个 source ID，
 但目录项只是候选来源；客户端必须以本次 `source_trace[].status` 判断实际是否取到数据，
 不能把“存在于目录”解释成“数据可用”。Token/Cookie/API Key 只通过运行环境配置，任何
 响应都不会返回密钥值。
@@ -477,7 +477,7 @@ VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
 - `uzi_recovery.playwright_stage`：按 Lite/Medium/Deep 白名单触发的浏览器最终兜底、质量触发原因、策略来源和解析状态；
 - `uzi_recovery.attempts`：供列表展示的统一摘要。失败保留为 `data_gap`，不生成模拟值。
 
-`investor_panel_review.votes[]` 严格按 UZI 3.9.2 执行 242 条规则，并新增：
+`uzi_native_analysis.results[].panel.investors[]` 严格按固定 UZI 源码执行规则，并保留：
 
 - `uzi_confidence`：UZI 原始 0–100 置信度；`confidence` 仍为 Agent OS 的 0–1 归一化值；
 - `investor_name_en`、`methodology_source`、`avatar_seed`、`tier`：上游席位元数据；

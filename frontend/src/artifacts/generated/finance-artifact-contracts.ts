@@ -7,7 +7,6 @@ export const FINANCE_ARTIFACT_TYPES = [
   "stock_snapshot_bundle",
   "snapshot",
   "evidence_set",
-  "financial_analysis",
   "screening_result",
   "sector_analysis",
   "thesis_review",
@@ -16,40 +15,13 @@ export const FINANCE_ARTIFACT_TYPES = [
   "distillation_review",
   "research_report",
   "main_agent_synthesis",
-  "valuation_model",
-  "investor_panel_review",
-  "risk_scan",
   "quick_scan",
   "uzi_native_method_result",
   "uzi_native_command_result",
   "uzi_native_analysis",
-  "institutional_analysis",
-  "research_workflow",
-  "deep_analysis",
-  "uzi_dimension_coverage",
   "fund_snapshot",
   "fund_analysis",
   "fund_holding_report_batch",
-  "ai_readiness",
-  "earnings_preview",
-  "model_update",
-  "returns_attribution",
-  "holding_rebalance",
-  "portfolio_rebalance",
-  "three_statement_model",
-  "quick_lbo",
-  "accretion_dilution",
-  "segmental_model",
-  "initiation_report",
-  "earnings_review",
-  "catalyst_calendar",
-  "thesis_tracker",
-  "morning_note",
-  "ic_memo",
-  "porter_bcg",
-  "dd_checklist",
-  "unit_economics",
-  "value_creation_plan",
 ] as const
 
 export type FinanceArtifactType = typeof FINANCE_ARTIFACT_TYPES[number]
@@ -98,12 +70,14 @@ export type NormalizedQueryContent = {
   "fund_codes"?: Array<string>;
   "fund_category"?: string | null;
   "portfolio_holdings"?: Array<Record<string, unknown>>;
+  "portfolio_name"?: string | null;
   "benchmark_return"?: number | null;
   "rebalance_targets"?: Record<string, unknown> | null;
   "drift_threshold"?: number | null;
   "fee_model"?: Record<string, unknown> | null;
   "asset_class_targets"?: Record<string, unknown> | null;
   "requested_methods"?: Array<string>;
+  "model_updates"?: Record<string, unknown> | null;
   "method_assumptions"?: Record<string, unknown> | null;
   "holding_context"?: {
     "parent_batch_id"?: string;
@@ -159,6 +133,7 @@ export type SnapshotContent = {
   "degrade_reasons"?: Array<string>;
   "facts": Record<string, unknown>;
   "source"?: Record<string, unknown>;
+  "source_trace"?: Array<Record<string, unknown>>;
   "source_refs"?: Array<Record<string, unknown>>;
 }
 
@@ -166,17 +141,6 @@ export type EvidenceSetContent = {
   "items": Array<unknown>;
   "symbols"?: Array<string>;
   "query": string | null;
-}
-
-export type FinancialAnalysisContent = {
-  "methodology_version": string;
-  "method": "cashflow_resilience";
-  "artifact_type": "financial_analysis";
-  "results": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
 }
 
 export type ScreeningResultContent = {
@@ -775,13 +739,6 @@ export type ResearchReportContent = {
   "scorecard"?: Record<string, unknown> | null;
   "screening_scorecard"?: Record<string, unknown> | null;
   "uzi_profile"?: Record<string, unknown>;
-  "valuation_model"?: Record<string, unknown>;
-  "investor_panel_review"?: Record<string, unknown>;
-  "risk_scan"?: Record<string, unknown>;
-  "institutional_analysis"?: Record<string, unknown> | null;
-  "research_workflow"?: Record<string, unknown> | null;
-  "deep_analysis"?: Record<string, unknown> | null;
-  "uzi_dimension_coverage"?: Record<string, unknown> | null;
   "uzi_data_pipeline"?: Record<string, unknown> | null;
   "presentation_artifact_type"?: string;
   "holding_context"?: {
@@ -809,6 +766,10 @@ export type ResearchReportContent = {
   "critical_count"?: number;
   "warning_count"?: number;
   "delivery_type"?: string;
+  "portfolio_name"?: string;
+  "portfolio_holdings"?: Array<Record<string, unknown>>;
+  "research_profile"?: string | null;
+  "school"?: string | null;
   "candidates"?: Array<Record<string, unknown>>;
   "screening"?: Record<string, unknown>;
   "sector_analysis"?: Record<string, unknown>;
@@ -824,179 +785,6 @@ export type MainAgentSynthesisContent = {
   "source_artifact_id": string;
   "source_artifact_ids"?: Array<string>;
   "model_generated"?: boolean;
-}
-
-export type ValuationModelContent = {
-  "methodology_version": string;
-  "profile": string;
-  "models": Array<{
-    "model": string;
-    "methodology_version": string;
-    "symbol": string;
-    "currency": string | null;
-    "currency_symbol": string | null;
-    "status": string;
-    "fair_value": number | null;
-    "market_price": number | null;
-    "margin_of_safety": number | null;
-    "enterprise_value_yi"?: number | null;
-    "net_debt_yi"?: number | null;
-    "equity_value_yi"?: number | null;
-    "net_debt_bridge_note"?: string | null;
-    "assumptions": {
-      "wacc"?: number;
-      "terminal_growth"?: number;
-      "stage_one_growth"?: number;
-      "stage_two_growth"?: number;
-      "forecast_years"?: number;
-      "risk_free_rate"?: number;
-      "equity_risk_premium"?: number;
-      "beta"?: number;
-      "tax_rate"?: number;
-      "target_debt_ratio"?: number;
-      "cost_of_equity"?: number;
-      "after_tax_cost_of_debt"?: number;
-      "total_debt_yi"?: number | null;
-      "cash_yi"?: number | null;
-    };
-    "sensitivity": Array<{
-      "wacc": number;
-      "terminal_growth": number;
-      "fair_value": number | null;
-    }>;
-    "verdict": string;
-    "confidence": number;
-    "warnings": Array<string>;
-    "data_gap": Array<string>;
-    "assumption_flags": Array<string>;
-    "field_sources": Record<string, unknown>;
-    "methodology_log": Array<string>;
-    "comps": unknown;
-  }>;
-  "primary_symbol": string | null;
-  "methodologies": Array<string>;
-  "dimensions"?: Record<string, unknown>;
-  "quality_status"?: string;
-  "method_input_contract"?: Record<string, unknown>;
-}
-
-export type InvestorPanelReviewContent = {
-  "methodology_version": string;
-  "profile": string;
-  "scope": string;
-  "panel_version": string;
-  "source_commit"?: string;
-  "registered_seat_count"?: number;
-  "rule_mode"?: string;
-  "method_input_contract"?: Record<string, unknown>;
-  "votes": Array<{
-    "symbol": string;
-    "investor_id": string;
-    "perspective_id": string;
-    "perspective_label": string;
-    "investor_name_en": string | null;
-    "methodology_source": string | null;
-    "avatar_seed": string | null;
-    "tier": string | null;
-    "school": string;
-    "required_dimensions": Array<string>;
-    "signal": string;
-    "score": number;
-    "confidence": number;
-    "uzi_confidence": number;
-    "reasoning": string;
-    "headline": string;
-    "pass_rules": Array<{
-      "rule_id": string;
-      "name": string;
-      "weight": number;
-      "msg": string;
-    }>;
-    "fail_rules": Array<{
-      "rule_id": string;
-      "name": string;
-      "weight": number;
-      "msg": string;
-    }>;
-    "pass_count": number;
-    "fail_count": number;
-    "skipped_rule_count": number;
-    "weight_pass": number;
-    "weight_total": number;
-    "rule_engine_version": string;
-    "skip_reason": string | null;
-    "time_horizon": string | null;
-    "position_sizing": string | null;
-    "what_would_change_my_mind": string | null;
-    "checks": Array<{
-      "dimension": string;
-      "status": string;
-      "feature_names": Array<string>;
-    }>;
-    "is_methodology_perspective": boolean;
-    "is_real_person_advice": boolean;
-    "rule_mode": string;
-    "original_rule_signal"?: string;
-    "original_rule_score"?: number;
-    "agent_roleplay_applied"?: boolean;
-    "override_rule_engine"?: boolean;
-    "override_reason"?: string | null;
-    "roleplay_source"?: string;
-    "comment"?: string | null;
-    "verdict"?: string | null;
-  }>;
-  "distribution": {
-    "bullish"?: number;
-    "bearish"?: number;
-    "neutral"?: number;
-    "skip"?: number;
-    "insufficient_evidence"?: number;
-  };
-  "average_score"?: number | null;
-  "evaluated_rule_count"?: number;
-  "skipped_seat_count"?: number;
-  "quality_status"?: string;
-  "data_gap"?: Array<string>;
-  "disagreement": {
-    "exists": boolean;
-    "summary": string;
-  };
-  "confidence": number;
-  "risk_flags": Array<string>;
-  "per_investor_override"?: Record<string, unknown>;
-  "roleplay"?: {
-    "required": boolean;
-    "status": string;
-    "agent_reviewed": boolean;
-    "source_commit": string;
-    "group_count": number;
-    "completed_group_count": number;
-    "errors": Array<string>;
-  };
-}
-
-export type RiskScanContent = {
-  "methodology_version": string;
-  "profile": string;
-  "symbol": string | null;
-  "risk_level": string;
-  "signals": Array<{
-    "signal_id": string;
-    "status": string;
-    "severity": string;
-    "finding": string;
-    "evidence_refs": Array<{
-      "type": string;
-      "id": string;
-      "provider"?: string | null;
-    }>;
-  }>;
-  "signals_hit_count": number;
-  "recommendation": string;
-  "method_input_contract"?: Record<string, unknown>;
-  "quality_status"?: string;
-  "confidence": number;
-  "risk_flags": Array<string>;
 }
 
 export type QuickScanContent = {
@@ -1106,83 +894,14 @@ export type UziNativeAnalysisContent = {
   "source_commit": string;
   "methodology_version": string;
   "profile": "lite" | "medium" | "deep";
+  "school"?: "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | null;
   "results": Array<Record<string, unknown>>;
   "critical_count": number;
   "warning_count": number;
   "report_allowed": boolean;
-  "quality_status": "available" | "quality_gate_blocked";
+  "quality_status": "available" | "degraded" | "quality_gate_blocked";
   "recovery_history": Array<Record<string, unknown>>;
   "holding_context"?: Record<string, unknown> | null;
-}
-
-export type InstitutionalAnalysisContent = {
-  "methodology_version": string;
-  "profile": string;
-  "status"?: string;
-  "methods"?: Array<unknown>;
-  "results": Array<unknown>;
-  "data_gap"?: Array<unknown>;
-  "confidence": number;
-  "risk_flags": Array<string>;
-  "summary"?: string;
-  "quality_status"?: string;
-}
-
-export type ResearchWorkflowContent = {
-  "methodology_version": string;
-  "profile": string;
-  "results": Array<unknown>;
-  "status"?: string;
-  "data_gap"?: Array<string>;
-  "summary"?: string;
-  "confidence": number;
-  "risk_flags": Array<string>;
-  "quality_status"?: string;
-}
-
-export type DeepAnalysisContent = {
-  "methodology_version": string;
-  "profile": string;
-  "results": Array<unknown>;
-  "status"?: string;
-  "assumption_flags"?: Array<string>;
-  "summary"?: string;
-  "confidence": number;
-  "risk_flags": Array<string>;
-  "agent_reviewed"?: boolean;
-  "quality_status"?: string;
-  "data_gap"?: Array<string>;
-  "qualitative_deep_dive"?: Record<string, unknown>;
-  "qualitative_agent_execution"?: {
-    "required": boolean;
-    "status": string;
-    "agent_reviewed": boolean;
-    "source_commit": string;
-    "group_count": number;
-    "completed_group_count": number;
-    "evidence_count": number;
-    "association_count": number;
-    "errors": Array<string>;
-  };
-}
-
-export type UziDimensionCoverageContent = {
-  "methodology_version": string;
-  "profile": string;
-  "dimension_count": number;
-  "raw_dimension_count"?: number;
-  "derived_dimension_count"?: number;
-  "total_dimension_count"?: number;
-  "coverage": Record<string, unknown>;
-  "available_count"?: number;
-  "missing_count"?: number;
-  "derived_available_count"?: number;
-  "derived_missing_count"?: number;
-  "data_gap"?: Array<string>;
-  "confidence": number;
-  "risk_flags": Array<string>;
-  "quality_status"?: string;
-  "method_input_contract"?: Record<string, unknown>;
 }
 
 export type FundSnapshotContent = {
@@ -1599,321 +1318,12 @@ export type FundHoldingReportBatchContent = {
   "completed_at"?: string | null;
 }
 
-export type AiReadinessContent = {
-  "methodology_version": string;
-  "method": "ai_readiness";
-  "companies": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type EarningsPreviewContent = {
-  "methodology_version": string;
-  "method": "earnings_preview";
-  "previews": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "data_gap" | "assumption_only";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type ModelUpdateContent = {
-  "methodology_version": string;
-  "method": "model_update";
-  "updates": Array<Record<string, unknown>>;
-  "impacts": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "data_gap" | "assumption_only";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type ReturnsAttributionContent = {
-  "methodology_version": string;
-  "method": "returns_attribution";
-  "holdings"?: Array<{
-    "ticker"?: string;
-    "symbol"?: string;
-    "name"?: string;
-    "weight"?: number;
-    "normalized_weight"?: number;
-    "return_pct"?: number | null;
-    "contribution_pct"?: number | null;
-    "status"?: string;
-    "industry"?: string;
-    "market"?: string;
-    "asset_class"?: string;
-    "value"?: number;
-    "market_value"?: number;
-    "quantity"?: number;
-    "price"?: number;
-  }>;
-  "observed_weight_coverage"?: number;
-  "observed_contribution_pct"?: number;
-  "total_return_pct"?: number | null;
-  "groups"?: {
-    "industry"?: Array<{
-      "industry"?: string;
-      "market"?: string;
-      "weight"?: number;
-      "observed_weight"?: number;
-      "contribution_pct"?: number;
-      "missing_tickers"?: Array<string>;
-      "status"?: string;
-    }>;
-    "market"?: Array<{
-      "industry"?: string;
-      "market"?: string;
-      "weight"?: number;
-      "observed_weight"?: number;
-      "contribution_pct"?: number;
-      "missing_tickers"?: Array<string>;
-      "status"?: string;
-    }>;
-  };
-  "benchmark"?: {
-    "benchmark_return_pct": number | null;
-    "excess_return_pct": number | null;
-    "status": string;
-  };
-  "quality_status": "available" | "degraded" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type HoldingRebalanceContent = {
-  "methodology_version": string;
-  "method": "holding_rebalance";
-  "target_mode"?: string;
-  "drift_threshold_pp"?: number;
-  "drift_table"?: Array<{
-    "ticker"?: string;
-    "symbol"?: string;
-    "name"?: string;
-    "weight"?: number;
-    "normalized_weight"?: number;
-    "target_weight"?: number;
-    "drift_pp"?: number;
-    "breached"?: boolean;
-    "action"?: string;
-    "trade_amount"?: number | null;
-    "estimated_shares"?: number | null;
-    "estimated_cost"?: number | null;
-    "return_pct"?: number;
-    "industry"?: string;
-    "market"?: string;
-    "asset_class"?: string;
-    "value"?: number;
-    "market_value"?: number;
-    "quantity"?: number;
-    "price"?: number;
-  }>;
-  "trades"?: Array<{
-    "ticker": string;
-    "action": string;
-    "trade_amount": number | null;
-    "estimated_shares": number | null;
-    "estimated_cost": number | null;
-    "drift_pp": number;
-  }>;
-  "concentration"?: {
-    "before_hhi": number;
-    "after_hhi": number;
-    "before_top3_weight": number;
-    "after_top3_weight": number;
-  };
-  "estimated_cost"?: number | null;
-  "quality_status": "available" | "degraded" | "data_gap" | "assumption_only";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type PortfolioRebalanceContent = {
-  "methodology_version": string;
-  "method": "portfolio_rebalance";
-  "target_mode"?: string;
-  "drift_threshold_pp"?: number;
-  "asset_classes"?: Array<{
-    "asset_class": string;
-    "current_weight": number;
-    "target_weight": number;
-    "drift_pp": number;
-    "breached": boolean;
-    "action": string;
-    "suggested_value_change": number | null;
-  }>;
-  "portfolio_value"?: number | null;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type ThreeStatementModelContent = {
-  "methodology_version": string;
-  "method": "three_statement";
-  "artifact_type": "three_statement_model";
-  "results": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type QuickLboContent = {
-  "methodology_version": string;
-  "method": "quick_lbo";
-  "artifact_type": "quick_lbo";
-  "results": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type AccretionDilutionContent = {
-  "methodology_version": string;
-  "method": "accretion_dilution";
-  "artifact_type": "accretion_dilution";
-  "results": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type SegmentalModelContent = {
-  "methodology_version": string;
-  "method": "segmental";
-  "artifact_type": "segmental_model";
-  "results": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type InitiationReportContent = {
-  "methodology_version": string;
-  "method": "initiation_report";
-  "artifact_type": "initiation_report";
-  "results": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type EarningsReviewContent = {
-  "methodology_version": string;
-  "method": "earnings_review";
-  "artifact_type": "earnings_review";
-  "results": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type CatalystCalendarContent = {
-  "methodology_version": string;
-  "method": "catalyst_calendar";
-  "artifact_type": "catalyst_calendar";
-  "results": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type ThesisTrackerContent = {
-  "methodology_version": string;
-  "method": "thesis_tracker";
-  "artifact_type": "thesis_tracker";
-  "results": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type MorningNoteContent = {
-  "methodology_version": string;
-  "method": "morning_note";
-  "artifact_type": "morning_note";
-  "results": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type IcMemoContent = {
-  "methodology_version": string;
-  "method": "ic_memo";
-  "artifact_type": "ic_memo";
-  "results": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type PorterBcgContent = {
-  "methodology_version": string;
-  "method": "porter_bcg";
-  "artifact_type": "porter_bcg";
-  "results": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type DdChecklistContent = {
-  "methodology_version": string;
-  "method": "dd_checklist";
-  "artifact_type": "dd_checklist";
-  "results": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type UnitEconomicsContent = {
-  "methodology_version": string;
-  "method": "unit_economics";
-  "artifact_type": "unit_economics";
-  "results": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
-export type ValueCreationPlanContent = {
-  "methodology_version": string;
-  "method": "value_creation_plan";
-  "artifact_type": "value_creation_plan";
-  "results": Array<Record<string, unknown>>;
-  "quality_status": "available" | "degraded" | "assumption_only" | "data_gap";
-  "data_gap": Array<string>;
-  "assumption_flags": Array<string>;
-  "generated_at": string;
-}
-
 export type FinanceArtifactContentMap = {
   "user_request": UserRequestContent
   "normalized_query": NormalizedQueryContent
   "stock_snapshot_bundle": StockSnapshotBundleContent
   "snapshot": SnapshotContent
   "evidence_set": EvidenceSetContent
-  "financial_analysis": FinancialAnalysisContent
   "screening_result": ScreeningResultContent
   "sector_analysis": SectorAnalysisContent
   "thesis_review": ThesisReviewContent
@@ -1922,40 +1332,13 @@ export type FinanceArtifactContentMap = {
   "distillation_review": DistillationReviewContent
   "research_report": ResearchReportContent
   "main_agent_synthesis": MainAgentSynthesisContent
-  "valuation_model": ValuationModelContent
-  "investor_panel_review": InvestorPanelReviewContent
-  "risk_scan": RiskScanContent
   "quick_scan": QuickScanContent
   "uzi_native_method_result": UziNativeMethodResultContent
   "uzi_native_command_result": UziNativeCommandResultContent
   "uzi_native_analysis": UziNativeAnalysisContent
-  "institutional_analysis": InstitutionalAnalysisContent
-  "research_workflow": ResearchWorkflowContent
-  "deep_analysis": DeepAnalysisContent
-  "uzi_dimension_coverage": UziDimensionCoverageContent
   "fund_snapshot": FundSnapshotContent
   "fund_analysis": FundAnalysisContent
   "fund_holding_report_batch": FundHoldingReportBatchContent
-  "ai_readiness": AiReadinessContent
-  "earnings_preview": EarningsPreviewContent
-  "model_update": ModelUpdateContent
-  "returns_attribution": ReturnsAttributionContent
-  "holding_rebalance": HoldingRebalanceContent
-  "portfolio_rebalance": PortfolioRebalanceContent
-  "three_statement_model": ThreeStatementModelContent
-  "quick_lbo": QuickLboContent
-  "accretion_dilution": AccretionDilutionContent
-  "segmental_model": SegmentalModelContent
-  "initiation_report": InitiationReportContent
-  "earnings_review": EarningsReviewContent
-  "catalyst_calendar": CatalystCalendarContent
-  "thesis_tracker": ThesisTrackerContent
-  "morning_note": MorningNoteContent
-  "ic_memo": IcMemoContent
-  "porter_bcg": PorterBcgContent
-  "dd_checklist": DdChecklistContent
-  "unit_economics": UnitEconomicsContent
-  "value_creation_plan": ValueCreationPlanContent
 }
 
 export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
@@ -2001,12 +1384,14 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "fund_codes",
     "fund_category",
     "portfolio_holdings",
+    "portfolio_name",
     "benchmark_return",
     "rebalance_targets",
     "drift_threshold",
     "fee_model",
     "asset_class_targets",
     "requested_methods",
+    "model_updates",
     "method_assumptions",
     "holding_context",
     "holding_context.parent_batch_id",
@@ -2058,22 +1443,13 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "degrade_reasons",
     "facts",
     "source",
+    "source_trace",
     "source_refs",
   ],
   "evidence_set": [
     "items",
     "symbols",
     "query",
-  ],
-  "financial_analysis": [
-    "methodology_version",
-    "method",
-    "artifact_type",
-    "results",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
   ],
   "screening_result": [
     "screened_candidates",
@@ -2609,13 +1985,6 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "scorecard",
     "screening_scorecard",
     "uzi_profile",
-    "valuation_model",
-    "investor_panel_review",
-    "risk_scan",
-    "institutional_analysis",
-    "research_workflow",
-    "deep_analysis",
-    "uzi_dimension_coverage",
     "uzi_data_pipeline",
     "presentation_artifact_type",
     "holding_context",
@@ -2642,6 +2011,10 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "critical_count",
     "warning_count",
     "delivery_type",
+    "portfolio_name",
+    "portfolio_holdings",
+    "research_profile",
+    "school",
     "candidates",
     "screening",
     "sector_analysis",
@@ -2656,164 +2029,6 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "source_artifact_id",
     "source_artifact_ids",
     "model_generated",
-  ],
-  "valuation_model": [
-    "methodology_version",
-    "profile",
-    "models",
-    "models[].model",
-    "models[].methodology_version",
-    "models[].symbol",
-    "models[].currency",
-    "models[].currency_symbol",
-    "models[].status",
-    "models[].fair_value",
-    "models[].market_price",
-    "models[].margin_of_safety",
-    "models[].enterprise_value_yi",
-    "models[].net_debt_yi",
-    "models[].equity_value_yi",
-    "models[].net_debt_bridge_note",
-    "models[].assumptions",
-    "models[].assumptions.wacc",
-    "models[].assumptions.terminal_growth",
-    "models[].assumptions.stage_one_growth",
-    "models[].assumptions.stage_two_growth",
-    "models[].assumptions.forecast_years",
-    "models[].assumptions.risk_free_rate",
-    "models[].assumptions.equity_risk_premium",
-    "models[].assumptions.beta",
-    "models[].assumptions.tax_rate",
-    "models[].assumptions.target_debt_ratio",
-    "models[].assumptions.cost_of_equity",
-    "models[].assumptions.after_tax_cost_of_debt",
-    "models[].assumptions.total_debt_yi",
-    "models[].assumptions.cash_yi",
-    "models[].sensitivity",
-    "models[].sensitivity[].wacc",
-    "models[].sensitivity[].terminal_growth",
-    "models[].sensitivity[].fair_value",
-    "models[].verdict",
-    "models[].confidence",
-    "models[].warnings",
-    "models[].data_gap",
-    "models[].assumption_flags",
-    "models[].field_sources",
-    "models[].methodology_log",
-    "models[].comps",
-    "primary_symbol",
-    "methodologies",
-    "dimensions",
-    "quality_status",
-    "method_input_contract",
-  ],
-  "investor_panel_review": [
-    "methodology_version",
-    "profile",
-    "scope",
-    "panel_version",
-    "source_commit",
-    "registered_seat_count",
-    "rule_mode",
-    "method_input_contract",
-    "votes",
-    "votes[].symbol",
-    "votes[].investor_id",
-    "votes[].perspective_id",
-    "votes[].perspective_label",
-    "votes[].investor_name_en",
-    "votes[].methodology_source",
-    "votes[].avatar_seed",
-    "votes[].tier",
-    "votes[].school",
-    "votes[].required_dimensions",
-    "votes[].signal",
-    "votes[].score",
-    "votes[].confidence",
-    "votes[].uzi_confidence",
-    "votes[].reasoning",
-    "votes[].headline",
-    "votes[].pass_rules",
-    "votes[].pass_rules[].rule_id",
-    "votes[].pass_rules[].name",
-    "votes[].pass_rules[].weight",
-    "votes[].pass_rules[].msg",
-    "votes[].fail_rules",
-    "votes[].fail_rules[].rule_id",
-    "votes[].fail_rules[].name",
-    "votes[].fail_rules[].weight",
-    "votes[].fail_rules[].msg",
-    "votes[].pass_count",
-    "votes[].fail_count",
-    "votes[].skipped_rule_count",
-    "votes[].weight_pass",
-    "votes[].weight_total",
-    "votes[].rule_engine_version",
-    "votes[].skip_reason",
-    "votes[].time_horizon",
-    "votes[].position_sizing",
-    "votes[].what_would_change_my_mind",
-    "votes[].checks",
-    "votes[].checks[].dimension",
-    "votes[].checks[].status",
-    "votes[].checks[].feature_names",
-    "votes[].is_methodology_perspective",
-    "votes[].is_real_person_advice",
-    "votes[].rule_mode",
-    "votes[].original_rule_signal",
-    "votes[].original_rule_score",
-    "votes[].agent_roleplay_applied",
-    "votes[].override_rule_engine",
-    "votes[].override_reason",
-    "votes[].roleplay_source",
-    "votes[].comment",
-    "votes[].verdict",
-    "distribution",
-    "distribution.bullish",
-    "distribution.bearish",
-    "distribution.neutral",
-    "distribution.skip",
-    "distribution.insufficient_evidence",
-    "average_score",
-    "evaluated_rule_count",
-    "skipped_seat_count",
-    "quality_status",
-    "data_gap",
-    "disagreement",
-    "disagreement.exists",
-    "disagreement.summary",
-    "confidence",
-    "risk_flags",
-    "per_investor_override",
-    "roleplay",
-    "roleplay.required",
-    "roleplay.status",
-    "roleplay.agent_reviewed",
-    "roleplay.source_commit",
-    "roleplay.group_count",
-    "roleplay.completed_group_count",
-    "roleplay.errors",
-  ],
-  "risk_scan": [
-    "methodology_version",
-    "profile",
-    "symbol",
-    "risk_level",
-    "signals",
-    "signals[].signal_id",
-    "signals[].status",
-    "signals[].severity",
-    "signals[].finding",
-    "signals[].evidence_refs",
-    "signals[].evidence_refs[].type",
-    "signals[].evidence_refs[].id",
-    "signals[].evidence_refs[].provider",
-    "signals_hit_count",
-    "recommendation",
-    "method_input_contract",
-    "quality_status",
-    "confidence",
-    "risk_flags",
   ],
   "quick_scan": [
     "command",
@@ -2912,6 +2127,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "source_commit",
     "methodology_version",
     "profile",
+    "school",
     "results",
     "critical_count",
     "warning_count",
@@ -2919,71 +2135,6 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "quality_status",
     "recovery_history",
     "holding_context",
-  ],
-  "institutional_analysis": [
-    "methodology_version",
-    "profile",
-    "status",
-    "methods",
-    "results",
-    "data_gap",
-    "confidence",
-    "risk_flags",
-    "summary",
-    "quality_status",
-  ],
-  "research_workflow": [
-    "methodology_version",
-    "profile",
-    "results",
-    "status",
-    "data_gap",
-    "summary",
-    "confidence",
-    "risk_flags",
-    "quality_status",
-  ],
-  "deep_analysis": [
-    "methodology_version",
-    "profile",
-    "results",
-    "status",
-    "assumption_flags",
-    "summary",
-    "confidence",
-    "risk_flags",
-    "agent_reviewed",
-    "quality_status",
-    "data_gap",
-    "qualitative_deep_dive",
-    "qualitative_agent_execution",
-    "qualitative_agent_execution.required",
-    "qualitative_agent_execution.status",
-    "qualitative_agent_execution.agent_reviewed",
-    "qualitative_agent_execution.source_commit",
-    "qualitative_agent_execution.group_count",
-    "qualitative_agent_execution.completed_group_count",
-    "qualitative_agent_execution.evidence_count",
-    "qualitative_agent_execution.association_count",
-    "qualitative_agent_execution.errors",
-  ],
-  "uzi_dimension_coverage": [
-    "methodology_version",
-    "profile",
-    "dimension_count",
-    "raw_dimension_count",
-    "derived_dimension_count",
-    "total_dimension_count",
-    "coverage",
-    "available_count",
-    "missing_count",
-    "derived_available_count",
-    "derived_missing_count",
-    "data_gap",
-    "confidence",
-    "risk_flags",
-    "quality_status",
-    "method_input_contract",
   ],
   "fund_snapshot": [
     "query",
@@ -3358,284 +2509,5 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "created_at",
     "updated_at",
     "completed_at",
-  ],
-  "ai_readiness": [
-    "methodology_version",
-    "method",
-    "companies",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "earnings_preview": [
-    "methodology_version",
-    "method",
-    "previews",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "model_update": [
-    "methodology_version",
-    "method",
-    "updates",
-    "impacts",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "returns_attribution": [
-    "methodology_version",
-    "method",
-    "holdings",
-    "holdings[].ticker",
-    "holdings[].symbol",
-    "holdings[].name",
-    "holdings[].weight",
-    "holdings[].normalized_weight",
-    "holdings[].return_pct",
-    "holdings[].contribution_pct",
-    "holdings[].status",
-    "holdings[].industry",
-    "holdings[].market",
-    "holdings[].asset_class",
-    "holdings[].value",
-    "holdings[].market_value",
-    "holdings[].quantity",
-    "holdings[].price",
-    "observed_weight_coverage",
-    "observed_contribution_pct",
-    "total_return_pct",
-    "groups",
-    "groups.industry",
-    "groups.industry[].industry",
-    "groups.industry[].market",
-    "groups.industry[].weight",
-    "groups.industry[].observed_weight",
-    "groups.industry[].contribution_pct",
-    "groups.industry[].missing_tickers",
-    "groups.industry[].status",
-    "groups.market",
-    "groups.market[].industry",
-    "groups.market[].market",
-    "groups.market[].weight",
-    "groups.market[].observed_weight",
-    "groups.market[].contribution_pct",
-    "groups.market[].missing_tickers",
-    "groups.market[].status",
-    "benchmark",
-    "benchmark.benchmark_return_pct",
-    "benchmark.excess_return_pct",
-    "benchmark.status",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "holding_rebalance": [
-    "methodology_version",
-    "method",
-    "target_mode",
-    "drift_threshold_pp",
-    "drift_table",
-    "drift_table[].ticker",
-    "drift_table[].symbol",
-    "drift_table[].name",
-    "drift_table[].weight",
-    "drift_table[].normalized_weight",
-    "drift_table[].target_weight",
-    "drift_table[].drift_pp",
-    "drift_table[].breached",
-    "drift_table[].action",
-    "drift_table[].trade_amount",
-    "drift_table[].estimated_shares",
-    "drift_table[].estimated_cost",
-    "drift_table[].return_pct",
-    "drift_table[].industry",
-    "drift_table[].market",
-    "drift_table[].asset_class",
-    "drift_table[].value",
-    "drift_table[].market_value",
-    "drift_table[].quantity",
-    "drift_table[].price",
-    "trades",
-    "trades[].ticker",
-    "trades[].action",
-    "trades[].trade_amount",
-    "trades[].estimated_shares",
-    "trades[].estimated_cost",
-    "trades[].drift_pp",
-    "concentration",
-    "concentration.before_hhi",
-    "concentration.after_hhi",
-    "concentration.before_top3_weight",
-    "concentration.after_top3_weight",
-    "estimated_cost",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "portfolio_rebalance": [
-    "methodology_version",
-    "method",
-    "target_mode",
-    "drift_threshold_pp",
-    "asset_classes",
-    "asset_classes[].asset_class",
-    "asset_classes[].current_weight",
-    "asset_classes[].target_weight",
-    "asset_classes[].drift_pp",
-    "asset_classes[].breached",
-    "asset_classes[].action",
-    "asset_classes[].suggested_value_change",
-    "portfolio_value",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "three_statement_model": [
-    "methodology_version",
-    "method",
-    "artifact_type",
-    "results",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "quick_lbo": [
-    "methodology_version",
-    "method",
-    "artifact_type",
-    "results",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "accretion_dilution": [
-    "methodology_version",
-    "method",
-    "artifact_type",
-    "results",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "segmental_model": [
-    "methodology_version",
-    "method",
-    "artifact_type",
-    "results",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "initiation_report": [
-    "methodology_version",
-    "method",
-    "artifact_type",
-    "results",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "earnings_review": [
-    "methodology_version",
-    "method",
-    "artifact_type",
-    "results",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "catalyst_calendar": [
-    "methodology_version",
-    "method",
-    "artifact_type",
-    "results",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "thesis_tracker": [
-    "methodology_version",
-    "method",
-    "artifact_type",
-    "results",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "morning_note": [
-    "methodology_version",
-    "method",
-    "artifact_type",
-    "results",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "ic_memo": [
-    "methodology_version",
-    "method",
-    "artifact_type",
-    "results",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "porter_bcg": [
-    "methodology_version",
-    "method",
-    "artifact_type",
-    "results",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "dd_checklist": [
-    "methodology_version",
-    "method",
-    "artifact_type",
-    "results",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "unit_economics": [
-    "methodology_version",
-    "method",
-    "artifact_type",
-    "results",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
-  ],
-  "value_creation_plan": [
-    "methodology_version",
-    "method",
-    "artifact_type",
-    "results",
-    "quality_status",
-    "data_gap",
-    "assumption_flags",
-    "generated_at",
   ],
 } as const satisfies Record<FinanceArtifactType, readonly string[]>

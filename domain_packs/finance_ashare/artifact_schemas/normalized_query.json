@@ -24,6 +24,9 @@
       "type": "array",
       "items": {"type": "object"}
     },
+    "portfolio_name": {
+      "type": ["string", "null"]
+    },
     "benchmark_return": {
       "type": ["number", "null"]
     },
@@ -42,6 +45,9 @@
     "requested_methods": {
       "type": "array",
       "items": {"type": "string"}
+    },
+    "model_updates": {
+      "type": ["object", "null"]
     },
     "method_assumptions": {
       "type": ["object", "null"]

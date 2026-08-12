@@ -13,6 +13,9 @@ input_schema:
     sector: {type: [string, "null"]}
     candidate_pool_size: {type: integer, minimum: 1}
     enrichment_top_n: {type: integer, minimum: 0}
+    skip_enrichment: {type: boolean}
+    no_resume: {type: boolean}
+    research_profile: {type: [string, "null"]}
 output_schema:
   type: object
   required: [snapshots, symbols, source_refs]
@@ -23,8 +26,9 @@ output_schema:
 permissions: [finance:data:read]
 parallel_safe: true
 max_concurrency: 8
-# Keep the Tool timeout unset: the Pack applies pinned UZI's five-minute wave
-# ceiling per collection wave and records unfinished dimensions as real data
-# gaps. A Tool Registry timeout would abort the whole Agent OS capability.
+# Keep the Tool timeout unset: pinned UZI's default v3 pipeline has no aggregate
+# completion ceiling.  Its legacy lane classifies unfinished wave-2 work after
+# five minutes, but cannot force-cancel a running Python thread.  A Tool Registry
+# timeout would replace both upstream behaviours with an Agent OS abort.
 max_retries: 1
 implementation: tools.financial_data_provider:invoke

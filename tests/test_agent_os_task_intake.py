@@ -70,6 +70,26 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
         self.assertEqual(decision.intent, "stock_compare")
         self.assertEqual(decision.slots["symbols"], ["000001", "600036"])
 
+    def test_single_stock_uzi_command_rejects_multiple_symbols(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
+
+        decision = service.resolve(
+            RequestEnvelope(
+                intent="quick_scan",
+                user_query="快速扫描 600519 和 000001",
+                slots={"symbols": ["600519", "000001"]},
+            )
+        )
+
+        self.assertEqual(decision.status, "needs_clarification")
+        self.assertEqual(decision.intent, "quick_scan")
+        self.assertEqual(
+            decision.clarification.context["reason"],
+            "uzi_single_symbol_command_requires_one_symbol",
+        )
+        self.assertEqual(decision.clarification.context["suggested_intent"], "stock_compare")
+
     def test_pack_intake_exposes_declared_capability_candidates(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
@@ -152,6 +172,30 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
             decision.clarification.context["reason"],
             "comparison_targets_missing",
         )
+
+    def test_portfolio_queries_route_only_to_native_uzi_method_intents(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
+        holdings = [{"ticker": "600519", "weight": 100, "return_pct": 8.0, "asset_class": "A股"}]
+        for query, expected_intent in {
+            "对这个组合做收益归因": "uzi_returns",
+            "按目标权重对这个组合做持仓再平衡": "uzi_rebalance",
+            "按资产类别对组合做资产配置再平衡": "uzi_portfolio_rebalance_method",
+        }.items():
+            with self.subTest(query=query):
+                decision = service.resolve(RequestEnvelope(
+                    user_query=query,
+                    constraints={"portfolio_holdings": holdings},
+                ))
+                self.assertEqual(decision.status, "accepted")
+                self.assertEqual(decision.intent, expected_intent)
+
+        batch = service.resolve(RequestEnvelope(
+            user_query="分析一下这个组合",
+            constraints={"portfolio_holdings": holdings, "research_profile": "lite"},
+        ))
+        self.assertEqual(batch.status, "accepted")
+        self.assertEqual(batch.intent, "uzi_portfolio_batch")
 
     def test_main_agent_composes_pack_clarification_from_structured_context(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
