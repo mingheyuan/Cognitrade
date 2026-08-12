@@ -569,9 +569,7 @@ VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
 ```
 
 前端 API Client 对 Finance Workspace 请求自动将同一 host 的 `/api/v1` 替换为 `/api/v2`，
-并为变更请求生成幂等 key。Bearer token 与 v1 共用。GitHub Pages 构建还设置
-`VITE_BASE_PATH`，并生成与 `index.html` 同内容的 `404.html`；路由器会剥离仓库 base path，
-因此仓库子路径下的 `/strategies` 可直接访问。
+并为变更请求生成幂等 key。Bearer token 与 v1 共用。
 
 ## UZI 数据完整性与真实兜底字段
 

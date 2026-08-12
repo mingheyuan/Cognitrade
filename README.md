@@ -174,18 +174,6 @@ COGNITRADE_DEBIAN_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian-se
 
 完整变量见 [`.env.example`](./.env.example)。
 
-## GitHub Pages 前端
-
-仓库包含 `.github/workflows/pages.yml`。在 GitHub Pages 选择 GitHub Actions 作为来源，并
-设置仓库变量 `COGNITRADE_API_BASE_URL=https://api.example.com/api/v1`；推送 `main` 后会构建
-前端、自动采用仓库子路径，并复制 `index.html` 为 `404.html`，因此直接访问
-`/<repo>/strategies` 也能恢复 SPA 路由。
-
-GitHub Pages 只托管静态前端，后端仍需单独部署为 HTTPS 服务。后端
-`COGNITRADE_API_CORS_ORIGINS` 必须包含实际 Pages Origin，例如
-`https://<owner>.github.io`；Bearer Token 和数据库密码不得写入仓库变量或 Vite 构建变量。
-Token 仍由用户在页面顶栏输入并仅保存在当前标签页 `sessionStorage`。
-
 ## API
 
 - Swagger UI：`/docs`
@@ -229,7 +217,6 @@ cd frontend
 npm run lint
 npm test -- --run
 npm run build
-npm run build:pages
 ```
 
 部署后可执行：
