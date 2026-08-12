@@ -18,6 +18,157 @@ class UziRootCollectionRouterTests(unittest.TestCase):
     def _runtime(self, workspace_root: Path) -> Uzi392FetcherRuntime:
         return Uzi392FetcherRuntime(workspace_root=workspace_root)
 
+    def test_pipeline_partial_is_a_degraded_snapshot_with_explicit_gaps(self) -> None:
+        raw_result = {
+            "ticker": "600519.SH",
+            "data": {"roe_history": [30.0, 31.0]},
+            "source": "legacy:fetch_financials",
+            "fallback": False,
+            "_pipeline": {
+                "dim_key": "1_financials",
+                "quality": "partial",
+                "data_gaps": ["gross_margin", "ocf"],
+            },
+        }
+        normalized = snapshot_collector._normalize_snapshot_quality(
+            {
+                "snapshot_type": "fundamental",
+                "symbol": "600519",
+                "quality_status": "available",
+                "degraded": False,
+                "missing_fields": [],
+                "facts": {
+                    "availability": "available",
+                    "_uzi_raw_result": raw_result,
+                },
+            }
+        )
+
+        self.assertEqual(normalized["quality_status"], "degraded")
+        self.assertTrue(normalized["degraded"])
+        self.assertEqual(normalized["missing_fields"], ["gross_margin", "ocf"])
+        self.assertIn("uzi_pipeline_partial", normalized["degrade_reasons"])
+        self.assertEqual(normalized["facts"]["availability"], "degraded")
+        self.assertIs(normalized["facts"]["_uzi_raw_result"], raw_result)
+
+    def test_capital_flow_partial_without_target_observation_is_data_gap(self) -> None:
+        raw_result = {
+            "ticker": "000858.SZ",
+            "data": {
+                "northbound": None,
+                "margin_recent": None,
+                "holder_count_history": [
+                    {"代码": "688609", "名称": "九联科技", "股东户数-本次": 18680}
+                ],
+                "holders_trend": "基本持平",
+                "main_fund_flow_20d": None,
+                "institutional_history": {
+                    "quarters": ["26Q1", "26Q2"],
+                    "fund": [0.0, 0.0],
+                    "qfii": [0.0, 0.0],
+                    "shehui": [0.0, 0.0],
+                },
+            },
+            "source": "legacy:fetch_capital_flow",
+            "fallback": False,
+            "_pipeline": {
+                "dim_key": "12_capital_flow",
+                "quality": "partial",
+                "data_gaps": [
+                    "northbound",
+                    "margin_recent",
+                    "main_fund_flow_20d",
+                ],
+            },
+        }
+        symbol_result = {
+            "ticker": "000858",
+            "market": "A",
+            "code": "000858",
+            "full": "000858.SZ",
+            "dimensions": {"12_capital_flow": raw_result},
+            "_uzi_execution": {"lane": "pipeline", "fallback_reason": None},
+        }
+        with patch.object(
+            Uzi392FetcherRuntime,
+            "collect_symbol",
+            autospec=True,
+            return_value=symbol_result,
+        ):
+            row = snapshot_collector.collect_snapshots(
+                query="五粮液资金面",
+                symbols=["000858"],
+                snapshot_types=["capital_flow"],
+                research_profile="medium",
+                uzi_root_route=True,
+                no_resume=True,
+            )[0]
+
+        self.assertEqual(row["quality_status"], "data_gap")
+        self.assertTrue(row["degraded"])
+        self.assertEqual(
+            row["missing_fields"],
+            [
+                "northbound",
+                "margin_recent",
+                "main_fund_flow_20d",
+                "capital_flow_target_observation",
+            ],
+        )
+        self.assertIn(
+            "capital_flow_target_observation_missing",
+            row["degrade_reasons"],
+        )
+        self.assertEqual(row["facts"]["availability"], "data_gap")
+        self.assertEqual(row["source_trace"][0]["status"], "data_gap")
+        self.assertEqual(row["facts"]["_uzi_raw_result"], raw_result)
+
+    def test_capital_flow_partial_with_target_observation_is_degraded(self) -> None:
+        raw_result = {
+            "ticker": "600519.SH",
+            "data": {
+                "main_fund_flow_20d": [
+                    {"日期": "2026-08-11", "主力净流入-净额": -303316592.0}
+                ],
+                "northbound": None,
+                "margin_recent": None,
+            },
+            "source": "legacy:fetch_capital_flow",
+            "fallback": False,
+            "_pipeline": {
+                "dim_key": "12_capital_flow",
+                "quality": "partial",
+                "data_gaps": ["northbound", "margin_recent"],
+            },
+        }
+        symbol_result = {
+            "ticker": "600519",
+            "market": "A",
+            "code": "600519",
+            "full": "600519.SH",
+            "dimensions": {"12_capital_flow": raw_result},
+            "_uzi_execution": {"lane": "pipeline", "fallback_reason": None},
+        }
+        with patch.object(
+            Uzi392FetcherRuntime,
+            "collect_symbol",
+            autospec=True,
+            return_value=symbol_result,
+        ):
+            row = snapshot_collector.collect_snapshots(
+                query="茅台资金面",
+                symbols=["600519"],
+                snapshot_types=["capital_flow"],
+                research_profile="medium",
+                uzi_root_route=True,
+                no_resume=True,
+            )[0]
+
+        self.assertEqual(row["quality_status"], "degraded")
+        self.assertEqual(row["missing_fields"], ["northbound", "margin_recent"])
+        self.assertIn("uzi_pipeline_partial", row["degrade_reasons"])
+        self.assertEqual(row["source_trace"][0]["status"], "degraded")
+
     def test_request_scoped_no_resume_reaches_root_uzi_router(self) -> None:
         symbol_result = {
             "ticker": "600519",
@@ -759,6 +910,7 @@ class UziRootCollectionRouterTests(unittest.TestCase):
                     research_profile="lite",
                     cache_root=Path(temporary) / "snapshots",
                     uzi_root_route=True,
+                    no_resume=True,
                 )
 
         self.assertEqual(set(executed), set(pipeline_registry.FETCHER_REGISTRY))

@@ -1209,6 +1209,15 @@ def _project_uzi_symbol_snapshot(
         dimension_fallback = True
         error = f"{fetcher_id}_missing_from_{lane}_collection"
 
+    quality_floor, pipeline_gaps, pipeline_reasons = _uzi_pipeline_quality_floor(
+        snapshot_type=snapshot_type,
+        symbol=str(root_fields.get("full") or root_fields.get("ticker") or requested_symbol),
+        data=data,
+        pipeline_meta=pipeline_meta,
+        error=error,
+    )
+    availability = _apply_quality_floor(availability, quality_floor)
+
     fallback_reason = execution.get("fallback_reason")
     fallback_applied = dimension_fallback or bool(fallback_reason)
     native_source_trace = [
@@ -1269,10 +1278,13 @@ def _project_uzi_symbol_snapshot(
         "facts": facts,
         "quality_status": availability,
         "degraded": availability != "available",
-        "degrade_reason": error or (
+        "degrade_reason": error or (pipeline_reasons[0] if pipeline_reasons else (
             None if availability == "available" else f"{fetcher_id}_data_missing"
+        )),
+        "degrade_reasons": pipeline_reasons,
+        "missing_fields": pipeline_gaps or (
+            [] if availability == "available" else [snapshot_type]
         ),
-        "missing_fields": [] if availability == "available" else [snapshot_type],
         "fallback_applied": fallback_applied,
         "source": {
             "skill": f"uzi_{snapshot_type}_snapshot_skill",
@@ -1630,6 +1642,135 @@ def _snapshot_quality(snapshot: dict[str, Any]) -> str:
     if declared in _UNAVAILABLE_QUALITY_STATUSES:
         return declared
     return "degraded" if snapshot.get("degraded") else "available"
+
+
+def _normalized_security_code(value: Any) -> str:
+    """Return the six-digit A-share code used by UZI row payloads."""
+
+    text = str(value or "").strip().upper()
+    if not text:
+        return ""
+    for token in (text.split(".", 1)[0], text[2:] if text[:2] in {"SH", "SZ", "BJ"} else text):
+        digits = "".join(character for character in token if character.isdigit())
+        if len(digits) >= 6:
+            return digits[-6:]
+    return ""
+
+
+def _rows_include_symbol(rows: Any, *, symbol: str) -> bool:
+    if not isinstance(rows, list) or not rows:
+        return False
+    target = _normalized_security_code(symbol)
+    if not target:
+        return False
+    code_fields = ("代码", "股票代码", "证券代码", "symbol", "ticker", "code")
+    return any(
+        isinstance(row, dict)
+        and any(
+            _normalized_security_code(row.get(field)) == target
+            for field in code_fields
+            if row.get(field) is not None
+        )
+        for row in rows
+    )
+
+
+def _capital_flow_has_target_observation(
+    data: dict[str, Any],
+    *,
+    symbol: str,
+) -> bool:
+    """Reject the fixed UZI capital-flow skeleton as a real observation.
+
+    The pinned fetcher always returns quarter labels and zero-valued series,
+    and its current GDHS call can return an unrelated all-market slice.  Those
+    values keep the upstream payload intact but must not make the host claim
+    that target-security capital-flow data is available.
+    """
+
+    main_flow = data.get("main_fund_flow_20d")
+    if isinstance(main_flow, list) and any(isinstance(row, dict) and row for row in main_flow):
+        return True
+
+    northbound = data.get("northbound")
+    if isinstance(northbound, dict):
+        history = northbound.get("flow_history")
+        if isinstance(history, list) and any(isinstance(row, dict) and row for row in history):
+            return True
+
+    for field in (
+        "margin_recent",
+        "holder_count_history",
+        "block_trades_recent",
+        "unlock_recent",
+    ):
+        if _rows_include_symbol(data.get(field), symbol=symbol):
+            return True
+
+    unlock_schedule = data.get("unlock_schedule")
+    if isinstance(unlock_schedule, list) and any(
+        isinstance(row, dict) and row for row in unlock_schedule
+    ):
+        return True
+
+    institutional = data.get("institutional_history")
+    if isinstance(institutional, dict) and any(
+        isinstance(value, (int, float)) and not isinstance(value, bool) and value != 0
+        for field in ("fund", "qfii", "shehui")
+        for value in (institutional.get(field) or [])
+    ):
+        return True
+
+    market_value_history = data.get("mv_history_30d")
+    return isinstance(market_value_history, list) and any(
+        isinstance(row, dict) and row for row in market_value_history
+    )
+
+
+def _uzi_pipeline_quality_floor(
+    *,
+    snapshot_type: str,
+    symbol: str,
+    data: dict[str, Any],
+    pipeline_meta: dict[str, Any],
+    error: str,
+) -> tuple[str | None, list[str], list[str]]:
+    """Map pinned DimResult quality without changing its raw payload."""
+
+    pipeline_quality = str(pipeline_meta.get("quality") or "").strip().lower()
+    pipeline_gaps = list(
+        dict.fromkeys(
+            str(item).strip()
+            for item in list(pipeline_meta.get("data_gaps") or [])
+            if str(item).strip()
+        )
+    )
+    if error or pipeline_quality in {"error", "missing"}:
+        return "data_gap", pipeline_gaps, ["uzi_pipeline_error"]
+    if pipeline_quality == "partial" or pipeline_gaps:
+        if snapshot_type == "capital_flow" and not _capital_flow_has_target_observation(
+            data,
+            symbol=symbol,
+        ):
+            return (
+                "data_gap",
+                list(dict.fromkeys([*pipeline_gaps, "capital_flow_target_observation"])),
+                ["capital_flow_target_observation_missing", "uzi_pipeline_partial"],
+            )
+        return "degraded", pipeline_gaps, ["uzi_pipeline_partial"]
+    if pipeline_quality == "full":
+        if data:
+            return None, [], []
+        return "data_gap", [], ["uzi_pipeline_data_missing"]
+    return None, [], []
+
+
+def _apply_quality_floor(declared: str, quality_floor: str | None) -> str:
+    if quality_floor == "data_gap":
+        return "data_gap"
+    if quality_floor == "degraded" and declared == "available":
+        return "degraded"
+    return declared
 
 
 def _load_snapshot_cache(
@@ -2134,7 +2275,14 @@ def _bundle_result(
         collection_quality = next(
             (
                 status
-                for status in ("rate_limited", "provider_unavailable", "parse_failed", "no_data", "data_gap")
+                for status in (
+                    "degraded",
+                    "rate_limited",
+                    "provider_unavailable",
+                    "parse_failed",
+                    "no_data",
+                    "data_gap",
+                )
                 if quality_counts.get(status, 0)
             ),
             "no_data",
@@ -2237,7 +2385,12 @@ def _normalize_snapshot_quality(snapshot: dict[str, Any]) -> dict[str, Any]:
     """Promote source quality to a stable per-dimension contract."""
 
     normalized = dict(snapshot)
-    facts = normalized.get("facts") if isinstance(normalized.get("facts"), dict) else {}
+    facts = (
+        dict(normalized.get("facts"))
+        if isinstance(normalized.get("facts"), dict)
+        else {}
+    )
+    normalized["facts"] = facts
     declared = str(
         normalized.get("quality_status")
         or normalized.get("status")
@@ -2250,12 +2403,43 @@ def _normalize_snapshot_quality(snapshot: dict[str, Any]) -> dict[str, Any]:
         declared = "degraded"
     if declared in _UNAVAILABLE_QUALITY_STATUSES and not bool(normalized.get("degraded")):
         normalized["degraded"] = True
+    raw_result = facts.get("_uzi_raw_result")
+    pipeline_meta = (
+        raw_result.get("_pipeline")
+        if isinstance(raw_result, dict) and isinstance(raw_result.get("_pipeline"), dict)
+        else {}
+    )
+    raw_data = (
+        raw_result.get("data")
+        if isinstance(raw_result, dict) and isinstance(raw_result.get("data"), dict)
+        else {}
+    )
+    raw_error = str(
+        (raw_result or {}).get("error")
+        or pipeline_meta.get("error")
+        or ""
+    ).strip() if isinstance(raw_result, dict) else ""
+    quality_floor, pipeline_gaps, pipeline_reasons = _uzi_pipeline_quality_floor(
+        snapshot_type=str(normalized.get("snapshot_type") or ""),
+        symbol=str(
+            (raw_result or {}).get("full")
+            or (raw_result or {}).get("ticker")
+            or normalized.get("symbol")
+            or ""
+        ) if isinstance(raw_result, dict) else str(normalized.get("symbol") or ""),
+        data=dict(raw_data),
+        pipeline_meta=dict(pipeline_meta),
+        error=raw_error,
+    )
+    declared = _apply_quality_floor(declared, quality_floor)
+    normalized["degraded"] = declared != "available"
     reasons = [
         str(item).strip()
         for item in (
             list(normalized.get("degrade_reasons") or [])
             + ([normalized.get("degrade_reason")] if normalized.get("degrade_reason") else [])
             + list(facts.get("data_gap") or [])
+            + pipeline_reasons
         )
         if str(item).strip()
     ]
@@ -2265,9 +2449,11 @@ def _normalize_snapshot_quality(snapshot: dict[str, Any]) -> dict[str, Any]:
         dict.fromkeys(
             str(item).strip()
             for item in list(normalized.get("missing_fields") or [])
+            + pipeline_gaps
             if str(item).strip()
         )
     )
+    facts["availability"] = declared
     normalized["scope"] = (
         "symbol"
         if str(normalized.get("symbol") or "").strip()
