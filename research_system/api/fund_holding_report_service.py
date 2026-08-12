@@ -30,9 +30,6 @@ from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.schemas.protocol import RequestEnvelope
 
 _BATCH_FILE = "fund_holding_batch.json"
-_TERMINAL_ITEM_STATUSES = {
-    "completed", "completed_partial", "failed", "cancelled", "unsupported"
-}
 _DELIVERABLE_ITEM_STATUSES = {"completed"}
 _RECOVERABLE_RUN_STATUSES = {"running", "paused", "waiting_approval", "gated", "timed_out", "failed", "cancelled"}
 

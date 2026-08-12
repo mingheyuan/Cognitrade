@@ -432,9 +432,6 @@ class RegularTask:
     def __init__(self, executor: RegularExecutor) -> None:
         self.executor = executor
 
-    def start_or_resume(self, context: TurnContext) -> TaskOutcome:
-        return self.executor.execute(context)
-
     def start(self, context: TurnContext) -> TaskOutcome:
         context.resume = False
         return self.executor.execute(context)
@@ -442,22 +439,6 @@ class RegularTask:
     def resume(self, context: TurnContext) -> TaskOutcome:
         context.resume = True
         return self.executor.execute(context)
-
-    def cancel(self, context: TurnContext, reason: str) -> TaskOutcome:
-        control = read_json(context.root / "execution_control.json") or {}
-        write_json(
-            context.root / "execution_control.json",
-            {
-                **control,
-                "pause_requested": False,
-                "cancel_requested": True,
-                "cancel_reason": reason,
-                "updated_at": _utc_now().isoformat(),
-            },
-        )
-        context.resume = True
-        return self.executor.execute(context)
-
 
 class ReviewExecutor:
     """Review the current Turn's active artifacts in the same lifecycle."""
@@ -755,17 +736,11 @@ class ReviewTask(RegularTask):
         super().__init__(executor)
         self.review_executor = review_executor
 
-    def start_or_resume(self, context: TurnContext) -> TaskOutcome:
-        return self._execute_guarded(context) or self.review_executor.execute(context)
-
     def start(self, context: TurnContext) -> TaskOutcome:
         return self._execute_guarded(context) or self.review_executor.execute(context)
 
     def resume(self, context: TurnContext) -> TaskOutcome:
         return self._execute_guarded(context) or self.review_executor.execute(context)
-
-    def cancel(self, context: TurnContext, reason: str) -> TaskOutcome:
-        return _special_control_outcome(context, "cancelled", reason)
 
     @staticmethod
     def _execute_guarded(context: TurnContext) -> TaskOutcome | None:
@@ -781,17 +756,11 @@ class CompactTask(RegularTask):
         super().__init__(executor)
         self.compact_executor = compact_executor
 
-    def start_or_resume(self, context: TurnContext) -> TaskOutcome:
-        return self._execute_guarded(context) or self.compact_executor.execute(context)
-
     def start(self, context: TurnContext) -> TaskOutcome:
         return self._execute_guarded(context) or self.compact_executor.execute(context)
 
     def resume(self, context: TurnContext) -> TaskOutcome:
         return self._execute_guarded(context) or self.compact_executor.execute(context)
-
-    def cancel(self, context: TurnContext, reason: str) -> TaskOutcome:
-        return _special_control_outcome(context, "cancelled", reason)
 
     @staticmethod
     def _execute_guarded(context: TurnContext) -> TaskOutcome | None:
@@ -1010,26 +979,6 @@ class TaskFactory:
         if task_type == "compact":
             return CompactTask(regular.executor, compact_executor)
         return regular
-
-    @staticmethod
-    def restore(
-        *,
-        turn: TurnSnapshot,
-        task_snapshot: Any,
-        regular: RegularTask,
-        review_executor: ReviewExecutor | None = None,
-        compact_executor: CompactExecutor | None = None,
-    ) -> TurnTask:
-        if str(getattr(task_snapshot, "execution_mode", turn.execution_mode)) != turn.execution_mode:
-            raise ValueError("TaskSnapshot execution mode does not match Turn")
-        return TaskFactory.build(
-            turn.config,
-            regular,
-            review_executor=review_executor or ReviewExecutor(),
-            compact_executor=compact_executor or CompactExecutor(),
-            active_task_type=str(getattr(task_snapshot, "task_type", "") or "") or None,  # type: ignore[arg-type]
-        )
-
 
 class TurnRunner:
     """Own the root Turn lifecycle around Core and Graph execution."""
@@ -1795,34 +1744,6 @@ class TurnRunner:
         )
         return self.finalize(outcome=outcome, response_factory=response_factory)
 
-    def start_or_resume(
-        self,
-        *,
-        request: RequestEnvelope,
-        decision: RequestIntakeDecision,
-        run_id: str,
-        thread_id: str,
-        execution_mode: TurnExecutionMode,
-        response_factory: Callable[[Any], ResponseEnvelope],
-        operation: str = "start",
-        turn_config: TurnConfig | None = None,
-        event_callback: Callable[[dict[str, Any]], None] | None = None,
-    ) -> ResponseEnvelope:
-        if operation not in {"start", "resume"}:
-            raise ValueError(f"unsupported Turn operation: {operation}")
-        return self.run(
-            request=request,
-            decision=decision,
-            run_id=run_id,
-            thread_id=thread_id,
-            execution_mode=execution_mode,
-            turn_config=turn_config,
-            response_factory=response_factory,
-            event_callback=event_callback,
-            resume=operation == "resume",
-            recover=operation == "resume",
-        )
-
     def resume(
         self,
         run_id: str,
@@ -2478,69 +2399,6 @@ class TurnRunner:
 
     def cancel(self, run_id: str, *, reason: str = "cancel requested") -> TurnSnapshot:
         return self._request_control(run_id, "cancel", reason)
-
-    def enqueue_follow_up(
-        self,
-        run_id: str,
-        *,
-        text: str,
-        source: str = "user",
-        operation_id: str | None = None,
-        delivery_phase: str = "current_turn",
-    ):
-        """Queue external input with the same mailbox audit as model input."""
-        return self._enqueue_follow_up(
-            run_id,
-            text=text,
-            source=source,
-            operation_id=operation_id,
-            delivery_phase=delivery_phase,
-        )
-
-    def _enqueue_follow_up(
-        self,
-        run_id: str,
-        *,
-        text: str,
-        source: str,
-        operation_id: str | None,
-        delivery_phase: str,
-    ):
-        """Write one mailbox item through FollowUpRuntime's shared lease."""
-        root = self.run_store.load_run_paths(run_id).root
-        payload = read_json(root / "turn_state.json")
-        if not isinstance(payload, dict):
-            raise ValueError(f"Turn state is missing: {run_id}")
-        turn = TurnSnapshot.model_validate(payload)
-        event_turn = turn
-
-        def emit_followup(event_type: str, event_payload: dict[str, Any]) -> None:
-            nonlocal event_turn
-            event_turn = self._append_snapshot_event(
-                event_turn,
-                event_type,
-                actor="turn_runner.api",
-                **{
-                    key: value
-                    for key, value in event_payload.items()
-                    if key not in {"run_id", "thread_id", "turn_id"}
-                },
-            )
-
-        runtime = FollowUpRuntime(
-            root=root,
-            run_id=run_id,
-            turn_id=turn.turn_id,
-            config=turn.config.follow_up_config,
-            emitter=emit_followup,
-        )
-        return runtime.enqueue(
-            source=source,
-            kind="user_input" if source == "user" else "inter_agent_communication",
-            text=text,
-            operation_id=operation_id,
-            delivery_phase=delivery_phase,
-        )
 
     def followup_task(
         self,

@@ -507,7 +507,6 @@ Unversioned `/api/*` business routes do not exist.
 
 ```text
 VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
-VITE_COGNITRADE_API_TOKEN=<COGNITRADE_API_TOKEN>
 ```
 
 The Vite frontend submits Task Intake requests through FastAPI, uses fetch-SSE

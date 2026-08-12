@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.event_store import append_canonical_event
@@ -10,11 +10,6 @@ from research_system.runtime.storage.jsonl import read_json, write_json
 from research_system.schemas.events import EventEnvelope
 from research_system.schemas.subagents import RoleContract
 from research_system.schemas.turn_runtime import ChildTurnSnapshot
-
-
-class RoleExecutorAdapter(Protocol):
-    def execute(self, *, role: RoleContract, context: Any, input_artifacts: list[Any]) -> Any:
-        ...
 
 
 class RoleRegistry:
@@ -29,10 +24,6 @@ class RoleRegistry:
         self._roles[role.role_id] = role
         return role
 
-    def replace(self, role: RoleContract) -> RoleContract:
-        self._roles[role.role_id] = role
-        return role
-
     def get(self, role_id: str) -> RoleContract:
         try:
             return self._roles[role_id]
@@ -41,17 +32,6 @@ class RoleRegistry:
 
     def list(self) -> list[RoleContract]:
         return list(self._roles.values())
-
-    def remove(self, role_id: str) -> None:
-        self._roles.pop(role_id, None)
-
-    def validate_tool(self, role_id: str, tool_name: str) -> None:
-        role = self.get(role_id)
-        if role.allowed_tools and tool_name not in role.allowed_tools:
-            raise PermissionError(f"tool is not allowed by role contract: {tool_name}")
-        if tool_name in role.denied_tools:
-            raise PermissionError(f"tool is denied by role contract: {tool_name}")
-
 
 class ChildTurnRuntime:
     """Persist child Turn projections under the parent's Run."""
@@ -292,4 +272,4 @@ class ChildTurnRuntime:
         write_json(self.path, [row.model_dump(mode="json") for row in rows])
 
 
-__all__ = ["ChildTurnRuntime", "RoleExecutorAdapter", "RoleRegistry"]
+__all__ = ["ChildTurnRuntime", "RoleRegistry"]
