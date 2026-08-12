@@ -1,0 +1,23 @@
+domain_packs/finance_ashare/tools/snapshot_collector.py
+  s_b423fa50eafd30::t_46691ee74e6a10 1212-1220,1281,1283-1286,1647-1775,2278-2285,2388-2393,2406-2435,2442,2452,2456
+tests/test_uzi_root_collection_router.py
+  s_b423fa50eafd30::t_d06c262f12d89c 21-171,913
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "f7863f962449f12b86311b3831c07b43281d111f",
+  "prompts": {},
+  "sessions": {
+    "s_b423fa50eafd30": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff508-a293-7f63-9c4a-fe15d6b6f4cd",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
