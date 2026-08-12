@@ -418,6 +418,7 @@ def build_native_panel_overrides(
     features: dict[str, Any],
     llm_provider: Any | None,
     cancellation: Event | None = None,
+    school: str | None = None,
 ) -> dict[str, Any]:
     """Generate Agent OS overrides for the exact upstream ``investors`` list.
 
@@ -429,10 +430,15 @@ def build_native_panel_overrides(
 
     native = deepcopy(panel)
     native["profile"] = "deep"
+    selected_school = str(school or "").strip().upper()
     native["votes"] = [
         deepcopy(row)
         for row in list(native.get("investors") or [])
         if isinstance(row, dict)
+        and (
+            not selected_school
+            or str(row.get("school") or row.get("group") or "") == selected_school
+        )
     ]
     evaluated = apply_deep_agent_roleplay(
         native,

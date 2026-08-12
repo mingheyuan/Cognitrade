@@ -54,7 +54,7 @@ class FinanceAshareDashboardContractTests(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             agent_os = AgentOS(self._settings(root))
-            screening = agent_os.run_request(
+            screening = agent_os.handle_request(
                 RequestEnvelope(
                     intent="stock_screen",
                     user_query="Screen the supplied candidate.",
@@ -66,8 +66,11 @@ class FinanceAshareDashboardContractTests(unittest.TestCase):
                     },
                 )
             )
-            screening_board = ArtifactBoard(root / "runs" / screening.snapshot.run_id / "artifact_board.jsonl")
+            screening_board = ArtifactBoard(root / "runs" / screening.run_id / "artifact_board.jsonl")
             result = screening_board.list_artifacts(artifact_type="screening_result", status="active")[0]
+            screening_bundle = screening_board.list_artifacts(
+                artifact_type="stock_snapshot_bundle", status="active"
+            )[0]
             candidate = result.content["screened_candidates"][0]
 
             self.assertEqual(result.content["methodology"]["screen_style"], "value")
@@ -77,8 +80,9 @@ class FinanceAshareDashboardContractTests(unittest.TestCase):
             )
             self.assertEqual(valuation["status"], "pass")
             self.assertEqual(valuation["source_field"], "pe")
+            self.assertIn(screening_bundle.artifact_id, result.parent_artifact_ids)
 
-            sector = agent_os.run_request(
+            sector = agent_os.handle_request(
                 RequestEnvelope(
                     intent="sector_research",
                     user_query="Review the semiconductor sector.",
@@ -88,7 +92,8 @@ class FinanceAshareDashboardContractTests(unittest.TestCase):
                             {
                                 "snapshot_type": "sector",
                                 "sector": "Semiconductor",
-                                "facts": {"research_heat": 73, "theme": "AI hardware"},
+                                "theme": "AI hardware",
+                                "facts": {"research_heat": 73},
                             },
                             {"snapshot_type": "market", "symbol": "688001", "facts": {}},
                         ],
@@ -96,8 +101,11 @@ class FinanceAshareDashboardContractTests(unittest.TestCase):
                     constraints={"research_profile": "medium"},
                 )
             )
-            sector_board = ArtifactBoard(root / "runs" / sector.snapshot.run_id / "artifact_board.jsonl")
+            sector_board = ArtifactBoard(root / "runs" / sector.run_id / "artifact_board.jsonl")
             analysis = sector_board.list_artifacts(artifact_type="sector_analysis", status="active")[0]
+            sector_bundle = sector_board.list_artifacts(
+                artifact_type="stock_snapshot_bundle", status="active"
+            )[0]
             heatmap = analysis.content["sector_heatmap"]
 
             self.assertEqual(heatmap, [{
@@ -108,6 +116,7 @@ class FinanceAshareDashboardContractTests(unittest.TestCase):
                 "related_snapshot_count": 1,
                 "theme": "AI hardware",
             }])
+            self.assertIn(sector_bundle.artifact_id, analysis.parent_artifact_ids)
 
 
 if __name__ == "__main__":

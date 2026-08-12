@@ -2,16 +2,25 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from copy import deepcopy
 from threading import Lock
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from domain_packs.finance_ashare.reporting import (
     ReportArtifactMissingError,
     render_uzi_native_html,
+    render_uzi_native_one_liner,
     render_uzi_native_pdf,
 )
+from domain_packs.finance_ashare.subagents.runtime import (
+    compose_stock_comparison_delivery,
+    compose_uzi_portfolio_delivery,
+    evaluate_uzi_native_report_gate,
+)
+from domain_packs.finance_ashare.subagents.uzi_portfolio_contract import ticker_identity
 
 
 RUN_ID = "01JREPORT000000000000000001"
@@ -103,11 +112,69 @@ def sample_uzi_artifacts() -> list[dict]:
     }
     return [
         {"artifact_id": "artifact-native", "artifact_type": "uzi_native_analysis", "status": "active", "confidence": 0.86, "risk_flags": [], "source_refs": [], "content": native},
-        {"artifact_id": "artifact-report", "artifact_type": "research_report", "status": "active", "confidence": 0.86, "risk_flags": [], "source_refs": [], "content": {"conclusion": "已通过", "evidence": [], "risk": [], "follow_up": [], "report_allowed": True}},
+        {"artifact_id": "artifact-report", "artifact_type": "research_report", "status": "active", "confidence": 0.86, "risk_flags": [], "source_refs": [], "content": {"conclusion": "已通过", "evidence": [], "risk": [], "follow_up": [], "report_allowed": True, "critical_count": 0, "delivery_type": "uzi_native_3_9_4"}},
     ]
 
 
+def _native_result(
+    source: dict,
+    *,
+    ticker: str,
+    name: str,
+    report_allowed: bool,
+) -> dict:
+    result = deepcopy(source)
+    result["symbol"] = ticker
+    result["raw"]["ticker"] = ticker
+    result["raw"]["dimensions"]["0_basic"]["data"]["code"] = ticker.split(".", 1)[0]
+    result["raw"]["dimensions"]["0_basic"]["data"]["name"] = name
+    result["synthesis"]["ticker"] = ticker
+    result["synthesis"]["name"] = name
+    result["report_allowed"] = report_allowed
+    result["self_review"] = {
+        "critical_count": 0 if report_allowed else 1,
+        "warning_count": 0,
+        "passed": report_allowed,
+        "issues": [] if report_allowed else [{
+            "severity": "critical",
+            "issue": f"{ticker} 缺少关键数据",
+            "suggested_fix": "重新采集",
+        }],
+    }
+    return result
+
+
+class _ArtifactContext:
+    def __init__(self, artifacts: dict[str, SimpleNamespace]) -> None:
+        self.artifacts = artifacts
+
+    def require_artifact(self, artifact_type: str):
+        return self.artifacts[artifact_type]
+
+
+def _analysis_artifact(content: dict) -> SimpleNamespace:
+    return SimpleNamespace(
+        artifact_id="artifact-native",
+        content=content,
+        source_refs=[{"type": "test", "id": "native"}],
+        confidence=0.86,
+        risk_flags=[],
+    )
+
+
+def _query_artifact(holdings: list[dict]) -> SimpleNamespace:
+    return SimpleNamespace(
+        artifact_id="artifact-query",
+        content={"portfolio_holdings": holdings, "portfolio_name": "部分成功组合"},
+        source_refs=[{"type": "test", "id": "query"}],
+    )
+
+
 class UziNativeReportTests(unittest.TestCase):
+    def test_portfolio_ticker_identity_matches_sehk_without_collapsing_us_classes(self) -> None:
+        self.assertEqual(ticker_identity("SEHK.700"), ticker_identity("00700.HK"))
+        self.assertNotEqual(ticker_identity("BRK.A"), ticker_identity("BRK.B"))
+
     def test_renders_native_sections_from_artifact_board_without_raw_html_injection(self) -> None:
         rendered = render_uzi_native_html(sample_uzi_artifacts(), run_id=RUN_ID)
 
@@ -130,6 +197,28 @@ class UziNativeReportTests(unittest.TestCase):
         self.assertEqual(
             rendered.source_artifact_ids,
             ("artifact-native", "artifact-report"),
+        )
+
+    def test_resets_inherited_tracking_for_small_generated_text(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        artifacts[0]["content"]["results"][0]["synthesis"]["overall_score"] = 56.0
+
+        rendered = render_uzi_native_html(artifacts, run_id=RUN_ID)
+
+        self.assertIn('id="cognitrade-uzi-render-compat"', rendered.html)
+        self.assertRegex(
+            rendered.html,
+            r"\.score-giant::after\s*\{[^}]*letter-spacing:\s*normal",
+        )
+        self.assertRegex(
+            rendered.html,
+            r"\.jargon:hover::after\s*\{[^}]*letter-spacing:\s*normal",
+        )
+        self.assertIn(
+            '<div class="score-giant" role="meter" aria-label="Alpha Score" '
+            'aria-valuemin="0" aria-valuemax="100" aria-valuenow="56" '
+            'aria-valuetext="56 / 100">56</div>',
+            rendered.html,
         )
 
     def test_critical_quality_gate_cannot_be_bypassed_by_completed_report(self) -> None:
@@ -223,6 +312,270 @@ class UziNativeReportTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ReportArtifactMissingError, "且仅允许一个"):
             render_uzi_native_html(artifacts, run_id=RUN_ID)
+
+    def test_versus_and_portfolio_use_pinned_uzi_renderers(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        second = dict(artifacts[0]["content"]["results"][0])
+        second["symbol"] = "000858"
+        second["raw"] = dict(second["raw"])
+        second["raw"]["ticker"] = "000858"
+        second["synthesis"] = dict(second["synthesis"])
+        second["synthesis"]["name"] = "五粮液"
+        artifacts[0]["content"]["results"].append(second)
+        artifacts[1]["content"]["delivery_type"] = "uzi_versus_3_9_4"
+
+        versus = render_uzi_native_html(artifacts, run_id=RUN_ID)
+
+        self.assertIn("VERSUS", versus.html)
+        self.assertIn("贵州茅台", versus.html)
+        self.assertIn("五粮液", versus.html)
+
+        artifacts[1]["content"].update({
+            "delivery_type": "uzi_portfolio_3_9_4",
+            "portfolio_name": "白酒组合",
+            "portfolio_holdings": [
+                {"ticker": "600519", "weight": None},
+                {"ticker": "000858", "weight": None},
+            ],
+        })
+        portfolio = render_uzi_native_html(artifacts, run_id=RUN_ID)
+
+        self.assertIn("PORTFOLIO", portfolio.html)
+        self.assertIn("白酒组合", portfolio.html)
+        self.assertIn("50.0%", portfolio.html)
+
+    def test_versus_delivers_when_two_of_three_native_results_succeed(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        source = artifacts[0]["content"]["results"][0]
+        artifacts[0]["content"]["results"] = [
+            _native_result(source, ticker="600519", name="贵州茅台", report_allowed=True),
+            _native_result(source, ticker="000858", name="五粮液", report_allowed=True),
+            _native_result(source, ticker="600809", name="山西汾酒", report_allowed=False),
+        ]
+        artifacts[0]["content"].update({
+            "report_allowed": False,
+            "critical_count": 1,
+            "quality_status": "quality_gate_blocked",
+        })
+        analysis = _analysis_artifact(artifacts[0]["content"])
+
+        draft = compose_stock_comparison_delivery(
+            _ArtifactContext({"uzi_native_analysis": analysis})
+        )
+
+        self.assertTrue(draft.content["report_allowed"])
+        self.assertEqual(draft.content["assessment"]["status"], "completed")
+        self.assertEqual(draft.content["assessment"]["loaded"], 2)
+        self.assertEqual(
+            [row["ticker"] for row in draft.content["assessment"]["failed"]],
+            ["600809"],
+        )
+        self.assertEqual(
+            evaluate_uzi_native_report_gate(SimpleNamespace(
+                artifact=SimpleNamespace(
+                    content=draft.content,
+                    source_refs=draft.source_refs,
+                    confidence=draft.confidence,
+                )
+            ))["verdict"],
+            "pass",
+        )
+        artifacts[1]["content"] = draft.content
+        rendered = render_uzi_native_html(artifacts, run_id=RUN_ID)
+        self.assertIn("贵州茅台", rendered.html)
+        self.assertIn("五粮液", rendered.html)
+        self.assertNotIn("山西汾酒", rendered.html)
+
+    def test_versus_blocks_when_fewer_than_two_results_succeed(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        source = artifacts[0]["content"]["results"][0]
+        content = artifacts[0]["content"]
+        content["results"] = [
+            _native_result(source, ticker="600519", name="贵州茅台", report_allowed=True),
+            _native_result(source, ticker="000858", name="五粮液", report_allowed=False),
+        ]
+        draft = compose_stock_comparison_delivery(
+            _ArtifactContext({"uzi_native_analysis": _analysis_artifact(content)})
+        )
+        self.assertFalse(draft.content["report_allowed"])
+        self.assertEqual(draft.content["assessment"]["status"], "insufficient_data")
+
+    def test_portfolio_delivers_one_success_and_preserves_failed_constituents(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        source = artifacts[0]["content"]["results"][0]
+        content = artifacts[0]["content"]
+        content["results"] = [
+            _native_result(source, ticker="600519.SH", name="贵州茅台", report_allowed=True),
+            _native_result(source, ticker="000858.SZ", name="五粮液", report_allowed=False),
+            _native_result(source, ticker="600809.SH", name="山西汾酒", report_allowed=False),
+        ]
+        content.update({
+            "report_allowed": False,
+            "critical_count": 2,
+            "quality_status": "quality_gate_blocked",
+        })
+        holdings = [
+            {"ticker": "600519", "weight": None, "note": "核心"},
+            {"ticker": "000858", "weight": None, "note": "观察"},
+            {"ticker": "600809", "weight": None, "note": "观察"},
+        ]
+        draft = compose_uzi_portfolio_delivery(_ArtifactContext({
+            "normalized_query": _query_artifact(holdings),
+            "uzi_native_analysis": _analysis_artifact(content),
+        }))
+
+        self.assertTrue(draft.content["report_allowed"])
+        self.assertEqual(draft.content["assessment"]["status"], "completed")
+        self.assertEqual(draft.content["assessment"]["loaded"], 1)
+        self.assertEqual(
+            [row["ticker"] for row in draft.content["assessment"]["failed"]],
+            ["000858", "600809"],
+        )
+        self.assertEqual(
+            [round(float(row["weight"]), 6) for row in draft.content["assessment"]["failed"]],
+            [round(1 / 3, 6), round(1 / 3, 6)],
+        )
+        artifacts[1]["content"] = draft.content
+        rendered = render_uzi_native_html(artifacts, run_id=RUN_ID)
+        self.assertIn("PORTFOLIO", rendered.html)
+        self.assertIn("贵州茅台", rendered.html)
+        self.assertNotIn("五粮液", rendered.html)
+        self.assertNotIn("山西汾酒", rendered.html)
+        # UZI normalizes all three input rows before skipping failures, so the
+        # surviving constituent keeps its original one-third portfolio weight.
+        self.assertIn("33.3%", rendered.html)
+
+    def test_portfolio_matches_reordered_results_and_ignores_non_holdings(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        source = artifacts[0]["content"]["results"][0]
+        content = artifacts[0]["content"]
+        content["results"] = [
+            _native_result(source, ticker="AAPL", name="Apple", report_allowed=True),
+            _native_result(source, ticker="000858.SZ", name="五粮液", report_allowed=False),
+            _native_result(source, ticker="600519.SH", name="贵州茅台", report_allowed=True),
+        ]
+        holdings = [
+            {"ticker": "600519", "weight": 0.6, "note": "核心"},
+            {"ticker": "000858", "weight": 0.4, "note": "观察"},
+        ]
+        draft = compose_uzi_portfolio_delivery(_ArtifactContext({
+            "normalized_query": _query_artifact(holdings),
+            "uzi_native_analysis": _analysis_artifact(content),
+        }))
+
+        self.assertTrue(draft.content["report_allowed"])
+        self.assertEqual(draft.content["assessment"]["loaded"], 1)
+        self.assertEqual(draft.content["assessment"]["failed"][0]["ticker"], "000858")
+        self.assertEqual(draft.content["assessment"]["failed"][0]["weight"], 0.4)
+        self.assertEqual(draft.content["assessment"]["ignored_analysis_symbols"], ["AAPL"])
+        artifacts[1]["content"] = draft.content
+        rendered = render_uzi_native_html(artifacts, run_id=RUN_ID)
+        self.assertIn("贵州茅台", rendered.html)
+        self.assertNotIn("Apple", rendered.html)
+        self.assertIn("60.0%", rendered.html)
+
+    def test_portfolio_does_not_collapse_us_class_share_tickers(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        source = artifacts[0]["content"]["results"][0]
+        content = artifacts[0]["content"]
+        content["results"] = [
+            _native_result(source, ticker="BRK.B", name="Berkshire B", report_allowed=True),
+            _native_result(source, ticker="BRK.A", name="Berkshire A", report_allowed=False),
+        ]
+        holdings = [
+            {"ticker": "BRK.A", "weight": 0.25, "note": "A 类"},
+            {"ticker": "BRK.B", "weight": 0.75, "note": "B 类"},
+        ]
+        draft = compose_uzi_portfolio_delivery(_ArtifactContext({
+            "normalized_query": _query_artifact(holdings),
+            "uzi_native_analysis": _analysis_artifact(content),
+        }))
+
+        self.assertEqual(draft.content["assessment"]["failed"][0]["ticker"], "BRK.A")
+        self.assertEqual(draft.content["assessment"]["failed"][0]["weight"], 0.25)
+        artifacts[1]["content"] = draft.content
+        rendered = render_uzi_native_html(artifacts, run_id=RUN_ID)
+        self.assertIn("Berkshire B", rendered.html)
+        self.assertNotIn("Berkshire A", rendered.html)
+        self.assertIn("75.0%", rendered.html)
+
+    def test_portfolio_reuses_one_canonical_analysis_for_duplicate_holding_rows(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        source = artifacts[0]["content"]["results"][0]
+        content = artifacts[0]["content"]
+        content["results"] = [
+            _native_result(source, ticker="600519.SH", name="贵州茅台", report_allowed=True),
+        ]
+        holdings = [
+            {"ticker": "600519", "weight": 0.4, "note": "账户一"},
+            {"ticker": "600519.SH", "weight": 0.6, "note": "账户二"},
+        ]
+        draft = compose_uzi_portfolio_delivery(_ArtifactContext({
+            "normalized_query": _query_artifact(holdings),
+            "uzi_native_analysis": _analysis_artifact(content),
+        }))
+
+        self.assertEqual(draft.content["assessment"]["loaded"], 2)
+        self.assertEqual(draft.content["assessment"]["failed"], [])
+        artifacts[1]["content"] = draft.content
+        rendered = render_uzi_native_html(artifacts, run_id=RUN_ID)
+        self.assertIn("40.0%", rendered.html)
+        self.assertIn("60.0%", rendered.html)
+
+    def test_portfolio_preserves_named_holding_to_basic_resolved_ticker_lineage(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        source = artifacts[0]["content"]["results"][0]
+        result = _native_result(
+            source,
+            ticker="600519.SH",
+            name="贵州茅台",
+            report_allowed=True,
+        )
+        result["symbol"] = "贵州茅台"
+        content = artifacts[0]["content"]
+        content["results"] = [result]
+        holdings = [{"ticker": "贵州茅台", "weight": 1.0, "note": "中文名输入"}]
+        draft = compose_uzi_portfolio_delivery(_ArtifactContext({
+            "normalized_query": _query_artifact(holdings),
+            "uzi_native_analysis": _analysis_artifact(content),
+        }))
+
+        self.assertTrue(draft.content["report_allowed"])
+        self.assertEqual(
+            draft.content["portfolio_holdings"][0]["resolved_ticker"],
+            "600519.SH",
+        )
+        artifacts[1]["content"] = draft.content
+        rendered = render_uzi_native_html(artifacts, run_id=RUN_ID)
+        self.assertIn("贵州茅台", rendered.html)
+        self.assertIn("100.0%", rendered.html)
+
+    def test_portfolio_blocks_only_when_every_result_fails(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        source = artifacts[0]["content"]["results"][0]
+        content = artifacts[0]["content"]
+        content["results"] = [
+            _native_result(source, ticker="600519", name="贵州茅台", report_allowed=False),
+        ]
+        holdings = [{"ticker": "600519", "weight": 1.0}]
+        draft = compose_uzi_portfolio_delivery(_ArtifactContext({
+            "normalized_query": _query_artifact(holdings),
+            "uzi_native_analysis": _analysis_artifact(content),
+        }))
+        self.assertFalse(draft.content["report_allowed"])
+        self.assertEqual(draft.content["assessment"]["status"], "insufficient_data")
+        self.assertEqual(draft.content["assessment"]["loaded"], 0)
+
+    def test_one_liner_matches_native_single_stock_contract(self) -> None:
+        text, filename = render_uzi_native_one_liner(
+            sample_uzi_artifacts(),
+            report_locator="/api/v1/runs/test/report?format=html",
+        )
+
+        self.assertIn("贵州茅台 <script>alert(1)</script> 体检结果：72 分", text)
+        self.assertIn("50 位大佬里 1 人喊买", text)
+        self.assertIn("好公司与好价格仍是两件事", text)
+        self.assertTrue(filename.endswith(".txt"))
 
     def test_pdf_pool_bounds_ten_concurrent_exports_and_caches_identical_html(self) -> None:
         state = {

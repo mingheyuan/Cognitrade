@@ -13,15 +13,26 @@ def main() -> int:
     request_path = Path(sys.argv[1])
     response_path = Path(sys.argv[2])
     request = json.loads(request_path.read_text(encoding="utf-8"))
-    result = HikyuuBacktestService._run_hikyuu(
-        symbol=str(request["symbol"]),
-        name=str(request["name"]),
-        bars=list(request["bars"]),
-        strategy_id=str(request["strategy_id"]),
-        strategy_parameters=dict(request["strategy_parameters"]),
-        initial_cash=float(request["initial_cash"]),
-        trade_size=int(request["trade_size"]),
-    )
+    if request.get("operation") == "report_gate_signals":
+        result = HikyuuBacktestService._report_gate_signal_events(
+            symbol=str(request["symbol"]),
+            name=str(request["name"]),
+            asset_type=str(request["asset_type"]),
+            bars=list(request["bars"]),
+            signals=list(request["signals"]),
+            fast_period=int(request["fast_period"]),
+            slow_period=int(request["slow_period"]),
+        )
+    else:
+        result = HikyuuBacktestService._run_hikyuu(
+            symbol=str(request["symbol"]),
+            name=str(request["name"]),
+            bars=list(request["bars"]),
+            strategy_id=str(request["strategy_id"]),
+            strategy_parameters=dict(request["strategy_parameters"]),
+            initial_cash=float(request["initial_cash"]),
+            trade_size=int(request["trade_size"]),
+        )
     response_path.write_text(
         json.dumps(result, ensure_ascii=False, sort_keys=True),
         encoding="utf-8",

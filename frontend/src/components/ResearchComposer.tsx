@@ -15,14 +15,15 @@ const intentLabels = {
   stock_compare: '多股比较',
   stock_screen: '股票筛选',
   fund_research: '基金研究',
-  portfolio_research: '组合研究',
   sector_research: '行业研究',
 }
 
 type IntentValue = keyof typeof intentLabels
 type ResearchProfile = '' | 'lite' | 'medium' | 'deep'
+type UziSchool = '' | 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H' | 'I'
 
 const profileIntents = new Set<IntentValue>(['stock_check', 'stock_compare', 'stock_screen', 'sector_research'])
+const schoolIntents = new Set<IntentValue>(['stock_check', 'stock_compare'])
 const profileOptions: Array<{ value: Exclude<ResearchProfile, ''>; label: string; detail: string }> = [
   { value: 'lite', label: '速判', detail: '1–2 分钟' },
   { value: 'medium', label: '标准', detail: '5–8 分钟' },
@@ -35,6 +36,7 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
   const [query, setQuery] = useState('')
   const [intent, setIntent] = useState<IntentValue>('auto')
   const [profile, setProfile] = useState<ResearchProfile>('')
+  const [school, setSchool] = useState<UziSchool>('')
   const [intentMenuOpen, setIntentMenuOpen] = useState(false)
   const intentSelectRef = useRef<HTMLDivElement>(null)
   const intentTriggerRef = useRef<HTMLButtonElement>(null)
@@ -89,7 +91,7 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
     onSubmit(
       normalized,
       intent === 'auto' ? undefined : intent,
-      requiresProfile && profile ? { research_profile: profile } : undefined,
+      requiresProfile && profile ? { research_profile: profile, ...(schoolIntents.has(intent) && school ? { school } : {}) } : undefined,
     )
     setQuery('')
   }
@@ -166,6 +168,7 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
                   onClick={() => {
                     setIntent(value)
                     if (!profileIntents.has(value)) setProfile('')
+                    if (!schoolIntents.has(value)) setSchool('')
                     setIntentMenuOpen(false)
                     intentTriggerRef.current?.focus()
                   }}
@@ -190,6 +193,13 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
             {profileOptions.map((option) => (
               <option key={option.value} value={option.value}>{option.label} · {option.detail}</option>
             ))}
+          </select>
+        </label>
+        <label className={`profile-select ${schoolIntents.has(intent) ? '' : 'is-disabled'}`}>
+          <span className="visually-hidden">UZI 评审流派</span>
+          <select value={school} disabled={!schoolIntents.has(intent)} aria-label="选择 UZI 评审流派" onChange={(event) => setSchool(event.target.value as UziSchool)}>
+            <option value="">{schoolIntents.has(intent) ? '全部流派' : '该类型无需流派'}</option>
+            <option value="A">A · 价值</option><option value="B">B · 成长</option><option value="C">C · 宏观</option><option value="D">D · 技术</option><option value="E">E · 中国价投</option><option value="F">F · A股游资</option><option value="G">G · 量化</option><option value="H">H · 科技领袖</option><option value="I">I · AI卡位</option>
           </select>
         </label>
         <input

@@ -47,6 +47,22 @@ def _offline_agent_os(settings: Settings) -> AgentOS:
 
 
 class FinancePackMigrationCompletionTests(unittest.TestCase):
+    def test_profileless_quick_scan_uses_command_collection_policy(self) -> None:
+        result = snapshot_collector.collect_snapshot_bundle(
+            query="快速扫描",
+            symbols=[],
+            snapshot_types=[],
+            intent="quick_scan",
+            research_profile=None,
+        )
+
+        recovery = result["collection"]["uzi_recovery"]
+        self.assertEqual(recovery["qualitative_stage"]["profile"], "uzi_command")
+        self.assertEqual(
+            recovery["qualitative_stage"]["disabled_reason"],
+            "standalone_uzi_command",
+        )
+
     def test_normal_finance_collector_uses_pack_owned_skill_implementations(self) -> None:
         skill_types = [
             *snapshot_collector._SYMBOL_SKILLS.values(),
@@ -241,7 +257,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
 
             self.assertEqual(prior["status"], "gated")
         self.assertEqual(review_response.status_code, 200, review_response.text)
-        self.assertEqual(review_response.json()["status"], "completed_partial")
+        self.assertEqual(review_response.json()["status"], "completed")
         review_artifact = next(
             artifact for artifact in replay["artifacts"] if artifact["artifact_type"] == "thesis_review"
         )
@@ -370,12 +386,13 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     replay = client.get(f"/api/v1/runs/{run_id}/replay", headers=headers)
                     self.assertEqual(replay.status_code, 200, replay.text)
                     payload = replay.json()
-                    self.assertEqual(payload["snapshot"]["status"], "completed_partial")
+                    self.assertEqual(payload["snapshot"]["status"], "completed")
                     artifact_types = {row["artifact_type"] for row in payload["artifacts"]}
                     self.assertTrue(
                         {
                             specialist_artifact_type,
                             "research_report",
+                            "main_agent_synthesis",
                             "assistant_message",
                         }.issubset(artifact_types),
                             (run_id, artifact_types),

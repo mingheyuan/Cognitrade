@@ -20,11 +20,10 @@ const viewTitles: Record<ViewId, { eyebrow: string; title: string }> = {
   overview: { eyebrow: '工作区', title: '研究总览' },
   market: { eyebrow: '数据中心', title: '行情与研究数据' },
   paper: { eyebrow: '交易实验室', title: '模拟交易' },
-  backtest: { eyebrow: '量化实验室', title: '策略回测' },
   screening: { eyebrow: '研究工具', title: '智能筛选' },
   funds: { eyebrow: '资产研究', title: '基金研究与选择' },
-  uzi: { eyebrow: '专项方法', title: 'UZI 3.9.2 能力工作区' },
-  methodology: { eyebrow: '认知系统', title: '方法论' },
+  uzi: { eyebrow: '专项方法', title: 'UZI 3.9.4 能力工作区' },
+  strategies: { eyebrow: '策略治理', title: '策略、信号与回测' },
   runs: { eyebrow: '运行时', title: '运行记录' },
 }
 

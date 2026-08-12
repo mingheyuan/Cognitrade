@@ -1,58 +1,12 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from typing import Any
 
 
 class OpenAIResponseSupport:
     def __init__(self, host) -> None:
         self.host = host
-
-    def stream_response_part(
-        self,
-        *,
-        client,
-        system_prompt: str,
-        user_input: str,
-        previous_response_id: str | None,
-        temperature: float,
-        reasoning_effort: str | None,
-        on_text_delta: Callable[[str], None],
-        on_reasoning_summary: Callable[[str], None] | None,
-    ) -> tuple[str, Any]:
-        chunks: list[str] = []
-        with client.responses.stream(
-            model=self.host.settings.default_model,
-            instructions=system_prompt,
-            input=user_input,
-            previous_response_id=previous_response_id,
-            temperature=temperature,
-            store=not self.host.settings.openai_disable_response_storage,
-            reasoning=(
-                {"effort": reasoning_effort, "summary": "concise"}
-                if reasoning_effort
-                else {"summary": "concise"}
-            ),
-            service_tier=self.host.settings.openai_service_tier,
-            timeout=self.host.request_timeout_seconds,
-        ) as stream:
-            for event in stream:
-                event_type = getattr(event, "type", "")
-                if event_type == "response.output_text.delta":
-                    delta = getattr(event, "delta", None)
-                    if not isinstance(delta, str) or not delta:
-                        continue
-                    chunks.append(delta)
-                    on_text_delta(delta)
-                    continue
-                if event_type == "response.reasoning_summary_text.done" and on_reasoning_summary is not None:
-                    summary_text = getattr(event, "text", None)
-                    if isinstance(summary_text, str) and summary_text.strip():
-                        on_reasoning_summary(summary_text.strip())
-            final_response = stream.get_final_response()
-            final_text = self.coerce_responses_text(final_response)
-            return (final_text if final_text else "".join(chunks), final_response)
 
     def should_continue_response(self, response: Any) -> bool:
         return self.response_status(response) == "incomplete" and self.incomplete_reason(response) == "max_output_tokens"

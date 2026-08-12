@@ -285,7 +285,7 @@ class FundHoldingReportServiceTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail(f"batch did not finish: {batch_id}")
 
-    def test_runs_ten_children_with_dedicated_concurrency_and_context(self) -> None:
+    def test_runs_ten_children_with_dedicated_concurrency_and_canonical_input(self) -> None:
         self.agent_os.delay = 0.08
         created = self.service.create_batch("source-run", fund_code="110011", profile="lite")
         active_duplicate = self.service.create_batch(
@@ -302,10 +302,12 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         self.assertTrue(RunEventSource._is_terminal(self.agent_os.run_store.load_run_paths(final["batch_id"]).root))
         child = final["holdings"][0]
         request = read_json(self.agent_os.run_store.load_run_paths(child["child_run_id"]).request)
-        context = request["slots"]["holding_context"]
-        self.assertEqual(context["parent_batch_id"], final["batch_id"])
-        self.assertEqual(context["source_fund_artifact_id"], "fund-artifact-1")
-        self.assertEqual(context["holding_rank"], 1)
+        self.assertNotIn("holding_context", request["slots"])
+        self.assertEqual(request["slots"], {"symbols": [child["symbol"]]})
+        self.assertTrue(request["constraints"]["canonical_uzi_analysis"])
+        self.assertEqual(request["constraints"]["parent_batch_id"], final["batch_id"])
+        self.assertEqual(final["source_artifact_id"], "fund-artifact-1")
+        self.assertEqual(child["rank"], 1)
         user_request_schema = json.loads(
             (
                 Path(__file__).resolve().parents[1]
@@ -319,7 +321,6 @@ class FundHoldingReportServiceTests(unittest.TestCase):
             {
                 "query": request["user_query"],
                 "symbols": request["slots"]["symbols"],
-                "holding_context": context,
             },
             user_request_schema,
         )

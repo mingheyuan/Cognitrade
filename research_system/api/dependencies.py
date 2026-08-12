@@ -43,6 +43,13 @@ class ApiRuntimeState:
     finance_market_data: Any
     paper_trading: Any
     backtesting: Any
+    strategies: Any
+    report_orchestration: Any | None
+    signal_engine: Any | None
+    strategy_backtesting: Any | None
+    strategy_verification: Any | None
+    strategy_paper_execution: Any | None
+    api_idempotency: Any | None
     mutation_lock: asyncio.Lock
 
 
@@ -104,6 +111,45 @@ def get_backtesting(request: Request):
     return get_api_runtime(request).backtesting
 
 
+def get_strategies(request: Request):
+    return get_api_runtime(request).strategies
+
+
+def get_report_orchestration(request: Request):
+    service = get_api_runtime(request).report_orchestration
+    if service is None:
+        raise ApiError(503, "report_orchestration_unavailable", "日报编排服务暂不可用")
+    return service
+
+
+def get_signal_engine(request: Request):
+    service = get_api_runtime(request).signal_engine
+    if service is None:
+        raise ApiError(503, "signal_engine_unavailable", "信号服务暂不可用")
+    return service
+
+
+def get_strategy_backtesting(request: Request):
+    service = get_api_runtime(request).strategy_backtesting
+    if service is None:
+        raise ApiError(503, "strategy_backtesting_unavailable", "策略回测服务暂不可用")
+    return service
+
+
+def get_strategy_verification(request: Request):
+    service = get_api_runtime(request).strategy_verification
+    if service is None:
+        raise ApiError(503, "strategy_verification_unavailable", "策略验证服务暂不可用")
+    return service
+
+
+def get_strategy_paper_execution(request: Request):
+    service = get_api_runtime(request).strategy_paper_execution
+    if service is None:
+        raise ApiError(503, "strategy_paper_execution_unavailable", "策略模拟交易服务暂不可用")
+    return service
+
+
 def get_repo_root(request: Request) -> Path:
     return get_api_runtime(request).repo_root
 
@@ -125,8 +171,8 @@ def _authenticate_principal(
         return ApiPrincipal(
             actor_id="local_development",
             authenticated=False,
-            user_id=request.headers.get("X-User-ID") or None,
-            tenant_id=request.headers.get("X-Tenant-ID") or None,
+            user_id="local_development",
+            tenant_id="local",
             roles=("admin", "user"),
         )
 
@@ -223,6 +269,12 @@ __all__ = [
     "get_agent_os",
     "get_chat_service",
     "get_backtesting",
+    "get_strategies",
+    "get_report_orchestration",
+    "get_signal_engine",
+    "get_strategy_backtesting",
+    "get_strategy_verification",
+    "get_strategy_paper_execution",
     "get_event_source",
     "get_fund_holding_reports",
     "get_mutation_lock",

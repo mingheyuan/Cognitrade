@@ -72,7 +72,7 @@ class FinanceArtifactUiContractTests(unittest.TestCase):
     def test_manifest_schema_and_renderer_inventories_are_exact(self) -> None:
         self.assertEqual(set(self.schemas), self.declared)
         self.assertEqual(set(self.renderers), self.declared)
-        self.assertEqual(len(self.renderers), 48)
+        self.assertEqual(len(self.renderers), 20)
 
     def test_every_artifact_has_a_named_dedicated_renderer(self) -> None:
         renderer_names: list[str] = []
@@ -152,40 +152,6 @@ class FinanceArtifactUiContractTests(unittest.TestCase):
             with self.subTest(artifact_type=artifact_type):
                 schema = self.schemas[artifact_type]
                 assert_closed(schema, schema, artifact_type)
-
-    def test_uzi_decision_and_portfolio_contracts_close_pack_owned_objects(self) -> None:
-        def assert_closed(node: dict, root: dict, path: str) -> None:
-            node = _resolve_local_ref(node, root)
-            if node.get("type") == "object" or isinstance(node.get("properties"), dict):
-                if node.get("x-business-extensible") is not True:
-                    self.assertIs(node.get("additionalProperties"), False, msg=f"open UZI contract: {path}")
-                for name, child in (node.get("properties") or {}).items():
-                    if isinstance(child, dict):
-                        assert_closed(child, root, f"{path}.{name}")
-            item = node.get("items")
-            if isinstance(item, dict):
-                assert_closed(item, root, f"{path}[]")
-            for branch_key in ("anyOf", "oneOf", "allOf"):
-                for index, branch in enumerate(node.get(branch_key) or []):
-                    if isinstance(branch, dict):
-                        assert_closed(branch, root, f"{path}.{branch_key}[{index}]")
-
-        for artifact_type in (
-            "valuation_model", "investor_panel_review", "risk_scan", "uzi_dimension_coverage",
-            "returns_attribution", "holding_rebalance", "portfolio_rebalance",
-        ):
-            with self.subTest(artifact_type=artifact_type):
-                schema = self.schemas[artifact_type]
-                assert_closed(schema, schema, artifact_type)
-
-    def test_portfolio_rebalance_schema_declares_every_success_payload_field(self) -> None:
-        properties = self.schemas["portfolio_rebalance"]["properties"]
-        self.assertTrue({
-            "target_mode",
-            "drift_threshold_pp",
-            "asset_classes",
-            "portfolio_value",
-        }.issubset(properties))
 
     def test_generated_frontend_contract_is_current(self) -> None:
         result = subprocess.run(

@@ -291,6 +291,25 @@ class ApiV1RunsTests(unittest.TestCase):
         self.assertEqual(pdf_response.content, b"%PDF-1.7\nunit-test")
         self.assertTrue(pdf_response.headers["content-type"].startswith("application/pdf"))
         self.assertIn("attachment", pdf_response.headers["content-disposition"])
+
+        with patch(
+            "research_system.api.routes.runs.render_uzi_native_image",
+            return_value=b"\x89PNG\r\n\x1a\nunit-test",
+        ):
+            image_response = self.client.get(
+                f"/api/v1/runs/{RUN_ID}/report?format=share-card",
+                headers=auth_headers(),
+            )
+        self.assertEqual(image_response.status_code, 200, image_response.text)
+        self.assertTrue(image_response.headers["content-type"].startswith("image/png"))
+
+        one_liner_response = self.client.get(
+            f"/api/v1/runs/{RUN_ID}/report?format=one-liner",
+            headers=auth_headers(),
+        )
+        self.assertEqual(one_liner_response.status_code, 200, one_liner_response.text)
+        self.assertIn("50 位大佬里 1 人喊买", one_liner_response.text)
+        self.assertTrue(one_liner_response.headers["content-type"].startswith("text/plain"))
         calls = self.run_service.calls_for("artifacts")
         self.assertEqual(calls[-1].args, (RUN_ID,))
         self.assertEqual(calls[-1].kwargs, {"artifact_type": None, "status": "active"})
@@ -485,6 +504,15 @@ class ApiV1RunsTests(unittest.TestCase):
                 "intent": "stock_compare",
                 "user_query": "比较重复标的",
                 "constraints": {"symbols": ["600519", "000001", "600519"], "research_profile": "lite"},
+            },
+            {
+                "intent": "stock_compare",
+                "user_query": "比较两个标的并强制刷新",
+                "constraints": {
+                    "symbols": ["600519", "000001"],
+                    "research_profile": "lite",
+                    "no_resume": True,
+                },
             },
             {
                 "intent": "methodology_evolution",

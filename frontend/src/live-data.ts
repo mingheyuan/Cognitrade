@@ -33,22 +33,6 @@ export type EvidenceItem = {
   type: 'market' | 'filing' | 'methodology' | 'news'
 }
 
-export type CandidateItem = {
-  rank: number
-  code: string
-  name: string
-  sector: string
-  score: number | null
-  change: number | null
-  valuation: string
-  cashflow: number | null
-  momentum: number | null
-  tier: string
-  reason: string
-  risk: string
-  deepChecked: boolean
-}
-
 export type DashboardCandidateItem = {
   rank: number
   code: string
@@ -196,14 +180,6 @@ export function statusLabel(status?: string | null): string {
     unknown: '未知',
   }
   return labels[String(status || 'unknown')] || String(status || '未知')
-}
-
-export type AgentProgressItem = {
-  id: string
-  actor: string
-  nodeId: string
-  message: string
-  createdAt: string
 }
 
 export type AgentActivityItem = {
@@ -463,27 +439,6 @@ export function activityFromEvents(events: RunEvent[]): AgentActivityItem[] {
   return rows
 }
 
-export function progressFromEvents(events: RunEvent[]): AgentProgressItem[] {
-  const seen = new Set<string>()
-  const rows: AgentProgressItem[] = []
-  for (const event of events) {
-    if (event.event_type !== 'agent_progress') continue
-    const message = eventSummary(event)
-    if (!message) continue
-    const id = asString(event.event_id) || `${event.created_at || ''}:${event.node_id || ''}:${message}`
-    if (seen.has(id)) continue
-    seen.add(id)
-    rows.push({
-      id,
-      actor: asString(event.actor, 'Agent OS'),
-      nodeId: asString(event.node_id, 'main_agent'),
-      message,
-      createdAt: asString(event.created_at),
-    })
-  }
-  return rows.slice(-8)
-}
-
 export function runListItem(row: RunHistoryRecord): RunListItem {
   const intent = asString(row.intent, 'unknown')
   const status = asString(row.status, 'unknown')
@@ -530,41 +485,12 @@ function evidenceType(sourceType: string): EvidenceItem['type'] {
   return 'news'
 }
 
-export function candidatesFromReport(report: ResearchReport): CandidateItem[] {
-  const candidates = Array.isArray(report.candidates) ? report.candidates : []
-  return candidates.map((raw, index) => {
-    const row = asRecord(raw)
-    const code = asString(row.symbol || row.code || row.ticker, `candidate-${index + 1}`)
-    const score = asNumber(row.score ?? row.composite_score ?? row.total_score)
-    const change = asNumber(row.latest_pct_change ?? row.change_pct ?? row.change)
-    const cashflow = asNumber(row.cashflow_score ?? row.cash_flow_score)
-    const momentum = asNumber(row.momentum_score ?? row.trend_score)
-    const reason = asString(row.why_it_made_the_list || row.why || row.reason || row.summary, '后端未提供候选理由')
-    const deepChecked = Boolean(row.deep_checked ?? row.verified)
-    return {
-      rank: asNumber(row.rank) || index + 1,
-      code,
-      name: asString(row.name || row.company_name, code),
-      sector: asString(row.sector || row.industry, '行业未提供'),
-      score,
-      change,
-      valuation: asString(row.valuation || row.valuation_state, '未提供'),
-      cashflow,
-      momentum,
-      tier: asString(row.candidate_tier || row.tier, deepChecked ? '深度核验' : '候选'),
-      reason,
-      risk: asString(row.main_risk || row.risk, '未提供'),
-      deepChecked,
-    }
-  })
-}
-
 export function dashboardItems(view: AgentOSDashboardView | null | undefined, resourceId: string): AgentOSDashboardItem[] {
-  return view?.resources[resourceId]?.items || []
+  return view?.resources?.[resourceId]?.items || []
 }
 
 export function dashboardValue(view: AgentOSDashboardView | null | undefined, resourceId: string): Record<string, unknown> {
-  const resource = view?.resources[resourceId]
+  const resource = view?.resources?.[resourceId]
   if (resource?.value !== undefined) return asRecord(resource.value)
   return asRecord(resource?.items?.[0]?.data)
 }

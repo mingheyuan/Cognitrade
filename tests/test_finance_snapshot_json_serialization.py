@@ -88,6 +88,27 @@ class FinanceSnapshotJsonSerializationTests(unittest.TestCase):
         )
         json.dumps(result)
 
+    def test_financial_tool_preserves_zero_enrichment_budget(self) -> None:
+        payload = {
+            "snapshots": [],
+            "symbols": [],
+            "candidate_universe": [],
+            "collection": {},
+        }
+        context = SimpleNamespace(cancellation=None, cache_root=None)
+
+        with patch.object(
+            financial_data_provider,
+            "collect_snapshot_bundle",
+            return_value=payload,
+        ) as collector:
+            financial_data_provider.invoke(
+                {"enrichment_top_n": 0, "no_resume": True}, context
+            )
+
+        self.assertEqual(collector.call_args.kwargs["enrichment_top_n"], 0)
+        self.assertIs(collector.call_args.kwargs["no_resume"], True)
+
 
 if __name__ == "__main__":
     unittest.main()

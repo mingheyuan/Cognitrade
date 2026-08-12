@@ -7,6 +7,8 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from research_system.api.hikyuu_backtest_service import HikyuuBacktestService
+from research_system.strategies.backtesting.instruments import InstrumentResolver
+from research_system.strategies.backtesting.signal_core import HikyuuSignalCore
 
 
 class _SyntheticMarket:
@@ -42,6 +44,58 @@ class _SyntheticMarket:
 
 @unittest.skipUnless(find_spec("hikyuu"), "Hikyuu optional dependency is not installed")
 class HikyuuBacktestServiceTests(unittest.TestCase):
+    def test_report_gate_crtsg_preserves_external_signal_lineage(self) -> None:
+        bars = _SyntheticMarket().get_market_data("600519")["sections"]["kline"]["bars"]
+        signals = [
+            {
+                "id": "allow-signal",
+                "state": "ALLOW_BUY",
+                "effective_from": bars[0]["date"],
+                "source_report_set_id": "report-allow",
+                "revision": 1,
+            },
+            {
+                "id": "blocked-signal",
+                "state": "BLOCKED",
+                "effective_from": bars[45]["date"],
+                "source_report_set_id": "report-blocked",
+                "revision": 1,
+            },
+            {
+                "id": "avoid-signal",
+                "state": "AVOID",
+                "effective_from": bars[70]["date"],
+                "source_report_set_id": "report-avoid",
+                "revision": 1,
+            },
+        ]
+
+        with TemporaryDirectory() as temporary:
+            events = HikyuuSignalCore(Path(temporary)).events(
+                instrument=InstrumentResolver.resolve_stock("600519", "贵州茅台"),
+                bars=bars,
+                signals=signals,
+                fast_period=5,
+                slow_period=20,
+            )
+
+        self.assertTrue(all(row.get("signal_id") for row in events))
+        self.assertFalse(
+            any(
+                row.get("signal_id") == "blocked-signal"
+                and row.get("technical_reason") == "report_gate_avoid"
+                for row in events
+            )
+        )
+        self.assertTrue(
+            any(
+                row.get("signal_id") == "avoid-signal"
+                and row.get("side") == "sell"
+                and row.get("technical_reason") == "report_gate_avoid"
+                for row in events
+            )
+        )
+
     def test_runs_native_engine_and_persists_replayable_result(self) -> None:
         with TemporaryDirectory() as temporary:
             service = HikyuuBacktestService(

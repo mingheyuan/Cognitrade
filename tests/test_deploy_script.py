@@ -83,10 +83,13 @@ class DeployScriptTests(unittest.TestCase):
         self.assertIn("python -m playwright install-deps chromium", backend)
         self.assertIn("python -m playwright install chromium", backend)
         self.assertIn("deployment_preflight", backend)
+        self.assertIn("COPY migrations ./migrations", backend)
+        self.assertIn("COPY alembic.ini ./alembic.ini", backend)
         self.assertIn("USER root", backend)
         self.assertIn("chown -R 10001:10001 /app/workspace", backend_entrypoint)
         self.assertIn("--reuid=10001", backend_entrypoint)
         self.assertIn("--no-new-privs", backend_entrypoint)
+        self.assertNotIn("alembic", backend_entrypoint)
         for runtime_directory in (
             "workspace/runs",
             "workspace/chat_runs",
@@ -95,6 +98,7 @@ class DeployScriptTests(unittest.TestCase):
             "workspace/cache/finance_ashare",
             "workspace/paper_trading",
             "workspace/backtests",
+            "workspace/strategy_objects",
         ):
             self.assertIn(runtime_directory, backend)
             self.assertIn(runtime_directory, backend_entrypoint)
@@ -112,6 +116,19 @@ class DeployScriptTests(unittest.TestCase):
         self.assertIn("DEBIAN_MIRROR", services["api"]["build"]["args"])
         self.assertIn("DEBIAN_SECURITY_MIRROR", services["api"]["build"]["args"])
         self.assertIn("NPM_CONFIG_REGISTRY", services["web"]["build"]["args"])
+        self.assertEqual(services["api"]["environment"]["COGNITRADE_DATABASE_AUTO_BOOTSTRAP"], "false")
+        self.assertIn("COGNITRADE_DATABASE_URL", services["api"]["environment"])
+        self.assertIn("COGNITRADE_OBJECT_STORE_ROOT", services["api"]["environment"])
+
+    def test_explicit_migration_backs_up_before_alembic_and_legacy_index(self) -> None:
+        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        backup = script.index("research_system.strategies.migration_backup")
+        alembic = script.index("python -m alembic")
+        legacy = script.index("research_system.strategies.legacy_index")
+        workspace = script.index("python -m scripts.migrate_workspace", legacy)
+        self.assertLess(backup, alembic)
+        self.assertLess(alembic, legacy)
+        self.assertLess(legacy, workspace)
 
     @unittest.skipUnless(HAS_BASH, POSIX_DEPLOY_NOTE)
     def test_init_generates_secure_token_and_runtime_identity(self) -> None:

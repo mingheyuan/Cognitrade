@@ -1,4 +1,4 @@
-export type ViewId = 'workbench' | 'overview' | 'market' | 'paper' | 'backtest' | 'screening' | 'funds' | 'uzi' | 'methodology' | 'runs'
+export type ViewId = 'workbench' | 'overview' | 'market' | 'paper' | 'screening' | 'funds' | 'uzi' | 'strategies' | 'runs'
 
 export const INTENT_LABELS: Record<string, string> = {
   'core.conversation.answer': '普通对话',
@@ -23,6 +23,7 @@ export const INTENT_LABELS: Record<string, string> = {
   uzi_model_update: 'UZI 模型更新',
   uzi_returns: 'UZI 收益归因',
   uzi_rebalance: 'UZI 持仓再平衡',
+  uzi_portfolio_batch: 'UZI 组合批量分析',
   uzi_three_statement_method: 'UZI 三表联动',
   uzi_accretion_dilution_method: 'UZI 并购增厚摊薄',
   uzi_morning_note_method: 'UZI 晨报',
@@ -34,7 +35,6 @@ export const INTENT_LABELS: Record<string, string> = {
   stock_compare: '多股比较',
   stock_screen: '股票筛选',
   fund_research: '基金研究',
-  portfolio_research: '组合归因与再平衡',
   sector_research: '行业研究',
   distill_kol_logic: '逻辑蒸馏',
   review_thesis: '判断复核',

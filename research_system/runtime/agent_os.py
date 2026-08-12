@@ -151,7 +151,6 @@ class AgentOS:
             graph_adapter=_AgentOSGraphRunnerAdapter(self),
             timeout_seconds=float(settings.run_timeout_seconds),
         )
-        self.main_agent.bind_turn_runner(self.turn_runner)
 
     def list_domain_packs(self) -> list[dict[str, Any]]:
         return [
@@ -441,6 +440,11 @@ class AgentOS:
             run_id=effective_run_id,
             thread_id=thread_id,
             execution_mode="graph",
+            turn_config=self._domain_turn_config(
+                request=resolved_request,
+                decision=decision,
+                execution_mode="graph",
+            ),
             event_callback=event_callback,
         )
         self._prepared_run_ids.discard(effective_run_id)
@@ -515,7 +519,10 @@ class AgentOS:
                 "cancelled",
                 "timed_out",
             }:
-                result = self._ensure_graph_assistant_message(result)
+                result = self._ensure_graph_assistant_message(
+                    result,
+                    deadline_at=deadline_at,
+                )
             self._update_graph_agent_state(result)
             if not step or result.snapshot.status in {
                 "completed",
@@ -681,7 +688,9 @@ class AgentOS:
                 self.run_store.load_run_paths(existing_run_id).root / "response.json"
             )
             if isinstance(persisted_response, dict):
-                return ResponseEnvelope.model_validate(persisted_response)
+                response = ResponseEnvelope.model_validate(persisted_response)
+                self.turn_runner.reconcile_persisted_response(response)
+                return response
             # Idempotency applies while a worker is still running too.  Return
             # the persisted lifecycle view instead of routing the same request
             # into a second execution attempt.
@@ -880,10 +889,14 @@ class AgentOS:
         )
         explicit_turn_config = (request.constraints or {}).get("turn_config")
         if isinstance(explicit_turn_config, TurnConfig):
-            if explicit_turn_config.timeout_seconds is not None:
+            if {
+                "deadline_policy",
+                "timeout_seconds",
+            } & explicit_turn_config.model_fields_set:
                 return config
-        elif isinstance(explicit_turn_config, dict) and explicit_turn_config.get("timeout_seconds") is not None:
-            return config
+        elif isinstance(explicit_turn_config, dict):
+            if {"deadline_policy", "timeout_seconds"} & explicit_turn_config.keys():
+                return config
 
         domain_id = str(decision.domain_id or "").strip()
         if not domain_id:
@@ -904,7 +917,10 @@ class AgentOS:
             or str(policies.get("default_profile") or "").strip().lower()
         )
         profile_policy = dict(profiles.get(selected_profile) or {})
-        if str(profile_policy.get("deadline_policy") or "default").strip().lower() == "unbounded":
+        deadline_policy = str(profile_policy.get("deadline_policy") or "default").strip().lower()
+        if deadline_policy not in {"default", "unbounded"}:
+            raise ValueError(f"unsupported research profile deadline policy: {deadline_policy}")
+        if deadline_policy == "unbounded":
             return config.model_copy(
                 update={"deadline_policy": "unbounded", "timeout_seconds": None}
             )
@@ -1347,34 +1363,6 @@ class AgentOS:
             ],
         }
 
-    def assert_run_scope(
-        self,
-        run_id: str,
-        *,
-        user_id: str | None = None,
-        tenant_id: str | None = None,
-    ) -> None:
-        """Enforce the same identity scope for the unversioned workspace API."""
-        if user_id is None and tenant_id is None:
-            return
-        root = self.run_store.load_run_paths(run_id).root
-        request = read_json(root / "request.json")
-        if not isinstance(request, dict):
-            if user_id == "api_token" and tenant_id == "api_token":
-                return
-            raise FileNotFoundError(f"run not found: {run_id}")
-        if (
-            request.get("user_id") in (None, "")
-            and request.get("tenant_id") in (None, "")
-            and user_id == "api_token"
-            and tenant_id == "api_token"
-        ):
-            return
-        if user_id is not None and request.get("user_id") != user_id:
-            raise FileNotFoundError(f"run not found: {run_id}")
-        if tenant_id is not None and request.get("tenant_id") != tenant_id:
-            raise FileNotFoundError(f"run not found: {run_id}")
-
     def replay(self, run_id: str) -> ExecutionRunSnapshot:
         return self._runner(run_id).replay()
 
@@ -1481,21 +1469,6 @@ class AgentOS:
             return False
         self.turn_runner.cancel(run_id, reason="调用方已请求取消运行。")
         return True
-
-    def enqueue_turn_follow_up(
-        self,
-        run_id: str,
-        *,
-        text: str,
-        operation_id: str | None = None,
-    ) -> dict[str, Any]:
-        item = self.turn_runner.enqueue_follow_up(
-            run_id,
-            text=text,
-            source="user",
-            operation_id=operation_id,
-        )
-        return item.model_dump(mode="json")
 
     def patch(
         self,
@@ -1798,16 +1771,7 @@ class AgentOS:
         delivery_status = str(
             (assistant_content or {}).get("delivery_status") or snapshot.status
         )
-        message = next(
-            (
-                str(artifact.get("content", {}).get("message"))
-                for artifact in final_artifacts
-                if artifact.get("artifact_type") == "assistant_message"
-                and isinstance(artifact.get("content"), dict)
-                and artifact.get("content", {}).get("message")
-            ),
-            None,
-        )
+        message = str((assistant_content or {}).get("message") or "").strip() or None
         if not message:
             message = next(
                 (
@@ -2042,10 +2006,16 @@ class AgentOS:
     def _ensure_graph_assistant_message(
         self,
         result: ExecutionRunResult,
+        *,
+        deadline_at: float | None = None,
     ) -> ExecutionRunResult:
         from research_system.runtime.graph_delivery import ensure_graph_assistant_message
 
-        return ensure_graph_assistant_message(self, result)
+        return ensure_graph_assistant_message(
+            self,
+            result,
+            deadline_at=deadline_at,
+        )
 
     @staticmethod
     def _mark_graph_partial_delivery(*, result: ExecutionRunResult, runner) -> None:
@@ -2064,6 +2034,23 @@ class AgentOS:
             reason="main_agent_synthesis_unavailable",
         )
 
+    @staticmethod
+    def _mark_graph_completed_delivery(*, result: ExecutionRunResult, runner) -> None:
+        """Promote a partial Graph after its durable delivery is repaired."""
+
+        snapshot = result.snapshot
+        if snapshot.status != "completed_partial":
+            return
+        runner._set_run_status(snapshot, "completed")
+        snapshot.updated_at = datetime.now(timezone.utc)
+        runner._persist(snapshot)
+        runner._emit(
+            "graph_run_delivery_recovered",
+            status="completed",
+            delivery_status="completed",
+            reason="main_agent_synthesis_recovered",
+        )
+
     def _write_summary(
         self,
         result: ExecutionRunResult,
@@ -2071,12 +2058,25 @@ class AgentOS:
         intent: str | None = None,
     ) -> None:
         root = self.run_store.load_run_paths(result.snapshot.run_id).root
+        resolved_intent = intent or f"domain:{result.snapshot.graph.domain_id}"
+        run_state = read_json(root / "run_state.json") or {}
+        run_state.update(
+            {
+                "run_id": result.snapshot.run_id,
+                "request_id": result.snapshot.request_id,
+                "intent": resolved_intent,
+                "status": result.snapshot.status,
+                "thread_id": result.snapshot.thread_id,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        write_json(root / "run_state.json", run_state)
         write_json(
             root / "summary.json",
             {
                 "run_id": result.snapshot.run_id,
                 "request_id": result.snapshot.request_id,
-                "intent": intent or f"domain:{result.snapshot.graph.domain_id}",
+                "intent": resolved_intent,
                 "domain_id": result.snapshot.graph.domain_id,
                 "status": result.snapshot.status,
                 "message": runtime_status_message(result.snapshot.status),

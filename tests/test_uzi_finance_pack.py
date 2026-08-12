@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import hashlib
 from pathlib import Path
@@ -16,17 +17,12 @@ from fastapi.testclient import TestClient
 
 from domain_packs.finance_ashare.subagents.uzi_methodology import (
     build_features,
-    build_panel_review,
-    build_risk_scan,
-    build_valuation_model,
     select_profile,
 )
-from domain_packs.finance_ashare.subagents.runtime import collect_snapshot
-from domain_packs.finance_ashare.subagents.uzi_advanced_methodology import (
-    build_deep_analysis,
-    build_dimension_coverage,
-    build_institutional_analysis,
-    build_research_workflow,
+from domain_packs.finance_ashare.subagents.runtime import (
+    _collection_research_profile,
+    _requested_snapshot_types,
+    collect_snapshot,
 )
 from domain_packs.finance_ashare.vendor.uzi_3_9_2 import verify_vendored_uzi_integrity
 from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshots
@@ -46,6 +42,144 @@ def _snapshots() -> list[dict]:
 
 
 class UziFinancePackTests(unittest.TestCase):
+    def test_standalone_command_profiles_and_collection_scopes_match_uzi(self) -> None:
+        self.assertEqual(
+            {
+                intent: _collection_research_profile({"intent": intent})
+                for intent in ("quick_scan", "uzi_panel_only", "uzi_initiate", "uzi_ic_memo")
+            },
+            {
+                "quick_scan": "lite",
+                "uzi_panel_only": "lite",
+                "uzi_initiate": "deep",
+                "uzi_ic_memo": "deep",
+            },
+        )
+        for intent in ("uzi_initiate", "uzi_ic_memo", "uzi_earnings_preview"):
+            with self.subTest(intent=intent):
+                self.assertEqual(
+                    len(_requested_snapshot_types(inputs={"intent": intent}, sector=None)),
+                    22,
+                )
+        segmental = set(
+            _requested_snapshot_types(inputs={"intent": "uzi_segmental_model"}, sector=None)
+        )
+        self.assertTrue({"research", "moat", "policy"}.issubset(segmental))
+        expected_scopes = {
+            "uzi_panel_only": {"market", "fundamental"},
+            "uzi_scan_trap": {"trap"},
+            "uzi_segmental_model": {
+                "market", "fundamental", "chain", "events", "research", "moat", "policy",
+            },
+            "uzi_dcf": {"market", "fundamental"},
+            "uzi_comps": {"market", "fundamental", "valuation", "similar_stocks"},
+            "uzi_lbo": {"fundamental"},
+            "uzi_earnings": {"fundamental", "research"},
+            "uzi_catalysts": {"events"},
+            "uzi_thesis": {"market", "fundamental", "kline", "valuation"},
+            "uzi_screen": {"fundamental", "moat"},
+            "uzi_dd": {
+                "market", "fundamental", "industry", "peers", "chain",
+                "governance", "moat", "policy", "sentiment", "events", "trap",
+            },
+            "uzi_morning_note_method": {
+                "market", "valuation", "kline", "capital_flow", "lhb", "sentiment",
+            },
+            "uzi_sector_review_method": {"market", "industry", "peers", "chain"},
+            "uzi_porter_bcg_method": {"market", "industry", "moat"},
+            "uzi_ai_readiness": {
+                "market", "fundamental", "chain", "industry", "governance",
+                "policy", "moat", "events", "sentiment", "trap",
+            },
+            "uzi_value_creation_plan_method": {
+                "market", "fundamental", "industry",
+            },
+            "uzi_model_update": {
+                "market", "fundamental", "valuation", "similar_stocks",
+            },
+            "uzi_three_statement_method": {"market", "fundamental", "valuation"},
+            "uzi_accretion_dilution_method": {"market", "fundamental"},
+            "uzi_unit_economics_method": {"market", "fundamental"},
+        }
+        for intent, expected in expected_scopes.items():
+            with self.subTest(intent=intent):
+                self.assertEqual(
+                    set(_requested_snapshot_types(inputs={"intent": intent}, sector=None)),
+                    expected,
+                )
+
+        screen_scopes = {
+            "value": {"market", "fundamental", "valuation"},
+            "growth": {"fundamental"},
+            "quality": {"fundamental", "moat"},
+            "gulp": {"market", "fundamental", "kline", "valuation"},
+            "short": {"market", "fundamental", "valuation"},
+        }
+        for style, expected in screen_scopes.items():
+            with self.subTest(screen_style=style):
+                inputs = {
+                    "intent": "uzi_screen",
+                    "method_assumptions": {"quantitative_screen": {"style": style}},
+                }
+                self.assertEqual(
+                    set(_requested_snapshot_types(inputs=inputs, sector=None)),
+                    expected,
+                )
+
+        ledger = yaml.safe_load(
+            (
+                Path(__file__).resolve().parents[1]
+                / "domain_packs/finance_ashare/migration/uzi_3_9_2_capability_ledger.yaml"
+            ).read_text(encoding="utf-8")
+        )
+        fixed_scopes = ledger["standalone_command_collection"]["fixed_scopes"]
+        for intent, expected in expected_scopes.items():
+            with self.subTest(ledger_intent=intent):
+                self.assertEqual(
+                    set(fixed_scopes[intent]),
+                    {
+                        snapshot_collector._UZI_FETCHER_BY_SNAPSHOT_TYPE[item]
+                        for item in expected
+                    },
+                )
+        for style, expected in screen_scopes.items():
+            with self.subTest(ledger_screen_style=style):
+                self.assertEqual(
+                    set(
+                        ledger["standalone_command_collection"]["screen_style_scopes"][
+                            style
+                        ]
+                    ),
+                    {
+                        snapshot_collector._UZI_FETCHER_BY_SNAPSHOT_TYPE[item]
+                        for item in expected
+                    },
+                )
+
+    def test_bundle_consumers_declare_optional_bundle_lineage(self) -> None:
+        registry = DomainPackRegistry.load(
+            Path(__file__).resolve().parents[1] / "domain_packs"
+        )
+        expected = {
+            "finance.stock.screen": {"snapshot", "stock_snapshot_bundle"},
+            "finance.sector.research": {"snapshot", "stock_snapshot_bundle"},
+            "finance.uzi.native.analyze_stock": {
+                "snapshot",
+                "normalized_query",
+                "stock_snapshot_bundle",
+            },
+        }
+        for capability, artifact_types in expected.items():
+            with self.subTest(capability=capability):
+                definition = registry.capabilities(
+                    domain_id="finance_ashare", capability=capability
+                )[0]
+                by_type = {port.artifact_type: port for port in definition.consumes}
+                self.assertEqual(set(by_type), artifact_types)
+                self.assertFalse(by_type["stock_snapshot_bundle"].required)
+                if "normalized_query" in by_type:
+                    self.assertFalse(by_type["normalized_query"].required)
+
     def test_main_agent_synthesis_contract_accepts_full_artifact_lineage(self) -> None:
         schema = json.loads(
             (
@@ -104,15 +238,7 @@ class UziFinancePackTests(unittest.TestCase):
         ]
         self.assertEqual(
             {draft.content["snapshot_type"] for draft in snapshots},
-            {
-                "market",
-                "fundamental",
-                "kline",
-                "valuation",
-                "governance",
-                "events",
-                "lhb",
-            },
+            set(select_profile({"research_profile": "lite"})["snapshot_types"]),
         )
         self.assertTrue(all(draft.content["quality_status"] == "data_gap" for draft in snapshots))
         self.assertTrue(
@@ -142,12 +268,12 @@ class UziFinancePackTests(unittest.TestCase):
                 "0_basic", "1_financials", "2_kline", "3_macro", "4_peers", "5_chain",
                 "6_research", "7_industry", "8_materials", "9_futures", "10_valuation",
                 "11_governance", "12_capital_flow", "13_policy", "14_moat", "15_events",
-                "16_lhb", "17_sentiment", "18_trap", "19_contests", "fund_holders", "similar_stocks",
+                "16_lhb", "17_sentiment", "18_trap", "19_contests", "6_fund_holders", "similar_stocks",
             },
         )
         self.assertEqual(mapping["source"]["commit"], "0acf25122cabf493e7bc442faff62ceceb7f2f02")
-        self.assertEqual(mapping["profiles"]["lite"]["panel_seats"], 10)
-        self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 51)
+        self.assertEqual(mapping["profiles"]["lite"]["panel_seats"], 66)
+        self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 66)
         self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 66)
         required_mapping_fields = {
             "source_commit",
@@ -159,8 +285,36 @@ class UziFinancePackTests(unittest.TestCase):
         }
         self.assertTrue(all(required_mapping_fields.issubset(row) for row in fetchers))
         self.assertEqual(mapping["source_registry"]["source_count"], 73)
-        self.assertEqual(mapping["contract"]["returned_object"], "exact_upstream_identity")
+        self.assertEqual(
+            mapping["contract"]["returned_object_before_artifact_boundary"],
+            "exact_upstream_identity",
+        )
+        self.assertEqual(
+            mapping["contract"]["artifact_boundary"],
+            "canonical_json_equality_with_provenance",
+        )
+        resources = mapping["vendored_methodology_resources"]
+        self.assertEqual(resources["canonical_file_count"], 17)
+        self.assertEqual(
+            resources["path_sensitive_sha256"],
+            "88b430b169ad68f028ac83df438d0dfac818e7330c266f8d86ddea75e0674593",
+        )
+        self.assertEqual(resources["consumption"], "reference_only_static_contracts")
         self.assertEqual(mapping["contract"]["external_checkout_runtime"], "forbidden")
+
+        for invalid_resources in (
+            {key: value for key, value in resources.items() if key != "canonical_file_count"},
+            {**resources, "canonical_file_count": 18},
+            {**resources, "path_sensitive_sha256": "not-a-hash"},
+        ):
+            with self.subTest(invalid_resources=invalid_resources):
+                invalid_mapping = copy.deepcopy(mapping)
+                invalid_mapping["vendored_methodology_resources"] = invalid_resources
+                with self.assertRaises(jsonschema.ValidationError):
+                    jsonschema.validate(
+                        invalid_mapping,
+                        json.loads(schema_path.read_text(encoding="utf-8")),
+                    )
 
     def test_uzi_source_and_replay_fingerprints_are_verified(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -246,7 +400,14 @@ class UziFinancePackTests(unittest.TestCase):
     def test_snapshot_collection_reports_cache_and_live_dimension_progress(self) -> None:
         progress: list[dict] = []
 
-        def fake_run(_query, symbol, snapshot_type, _providers, _dependencies=None):
+        def fake_run(
+            _query,
+            symbol,
+            snapshot_type,
+            _providers,
+            _dependencies=None,
+            _research_profile=None,
+        ):
             return {
                 "snapshot_type": snapshot_type,
                 "symbol": symbol,
@@ -331,22 +492,7 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertEqual(second[0]["facts"]["value"], first[0]["facts"]["value"])
         self.assertEqual(third[1]["facts"]["value"], first[1]["facts"]["value"])
 
-    def test_dimension_coverage_separates_raw_sources_from_derived_products(self) -> None:
-        coverage = build_dimension_coverage(
-            _snapshots(),
-            ["600000"],
-            select_profile({"research_profile": "medium"}),
-        )
-
-        self.assertEqual(coverage["dimension_count"], 22)
-        self.assertEqual(coverage["derived_dimension_count"], 3)
-        self.assertEqual(coverage["total_dimension_count"], 25)
-        rows = {row["dimension_id"]: row for row in coverage["coverage"]["600000"]}
-        self.assertEqual(rows["10_valuation"]["status"], "data_gap")
-        self.assertEqual(rows["11_governance"]["status"], "data_gap")
-        self.assertEqual(rows["20_valuation_models"]["layer"], "derived")
-
-    def test_financial_mapping_marks_proxy_dcf_inputs_explicitly(self) -> None:
+    def test_financial_mapping_preserves_observed_fields_without_proxy_fcf(self) -> None:
         rows = [
             {
                 "snapshot_type": "market",
@@ -381,22 +527,43 @@ class UziFinancePackTests(unittest.TestCase):
         ]
 
         features = build_features(rows, "300750")
-        valuation = build_valuation_model(
-            rows,
-            ["300750"],
-            select_profile({"research_profile": "lite"}),
-        )["models"][0]
-
         self.assertEqual(features["revenue_latest_yi"], 100.0)
         self.assertEqual(features["total_assets_yi"], 200.0)
         self.assertEqual(features["total_liabilities_yi"], 80.0)
         self.assertEqual(features["cash_yi"], 30.0)
-        self.assertEqual(valuation["status"], "data_gap")
-        self.assertIn("fcf_missing", valuation["data_gap"])
-        self.assertNotIn("fcf_approximated_from_revenue_margin", valuation["assumption_flags"])
         self.assertEqual(features["operating_cash_flow_yi"], 15.0)
         self.assertIsNone(features["fcf_latest_yi"])
-        self.assertNotIn("total_assets_missing", valuation["warnings"])
+
+    def test_cognitrade_uzi_extension_registry_is_fully_removed(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        manifest = yaml.safe_load(
+            (repository_root / "domain_packs/finance_ashare/domain.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        capabilities = list(manifest.get("capabilities") or [])
+        self.assertFalse(
+            [
+                row
+                for row in capabilities
+                if str(row.get("methodology_version") or "").startswith(
+                    "cognitrade-extension-"
+                )
+            ]
+        )
+        intents = {
+            str(row.get("intent_id") or "")
+            for row in list((manifest.get("intake") or {}).get("intents") or [])
+        }
+        self.assertNotIn("portfolio_research", intents)
+        self.assertTrue(
+            {
+                "uzi_returns",
+                "uzi_rebalance",
+                "uzi_portfolio_rebalance_method",
+                "uzi_portfolio_batch",
+            }.issubset(intents)
+        )
 
     def test_uzi_rule_features_are_derived_from_verified_snapshots(self) -> None:
         start = date(2025, 1, 1)
@@ -530,29 +697,6 @@ class UziFinancePackTests(unittest.TestCase):
         features = build_features(rows, "600000")
 
         self.assertEqual(features["lhb_30d_count"], 1)
-
-    def test_uzi_methodology_replay_matches_versioned_dcf_baseline(self) -> None:
-        fixture = json.loads(
-            (Path(__file__).resolve().parent / "fixtures" / "uzi_methodology_baseline.json")
-            .read_text(encoding="utf-8")
-        )
-        rows = list(fixture["snapshots"])
-        profile = select_profile({"research_profile": "lite"})
-        model = build_valuation_model(rows, [fixture["symbol"]], profile)["models"][0]
-        reference = fixture["uzi_reference"]
-
-        self.assertEqual(profile["source_commit"], fixture["source_commit"])
-        self.assertAlmostEqual(
-            model["fair_value"],
-            reference["dcf_intrinsic_per_share"],
-            delta=0.5,
-        )
-        self.assertAlmostEqual(model["assumptions"]["wacc"], reference["dcf_wacc"], places=3)
-        self.assertEqual(len(model["sensitivity"]), 25)
-        self.assertEqual(
-            len(build_panel_review(rows, [fixture["symbol"]], profile)["votes"]),
-            fixture["uzi_reference"]["panel_seats"]["lite"],
-        )
 
     def test_method_specific_request_replaces_default_report_outputs(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -775,47 +919,6 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertNotIn("finance.uzi.valuation.evaluate", dcf_capabilities)
         self.assertNotIn("finance.uzi.panel.review", dcf_capabilities)
         self.assertNotIn("finance.uzi.risk.scan", dcf_capabilities)
-
-    def test_pack_owned_uzi_methodologies_are_profile_aware_and_data_bound(self) -> None:
-        profile = select_profile({"research_profile": "lite"})
-        rows = _snapshots()
-        valuation = build_valuation_model(rows, ["600000"], profile)
-        panel = build_panel_review(rows, ["600000"], profile)
-        risk = build_risk_scan("分析 600000", rows, ["600000"], profile)
-
-        self.assertEqual(profile["selected"], "lite")
-        self.assertEqual(valuation["models"][0]["symbol"], "600000")
-        self.assertIn("methodology_log", valuation["models"][0])
-        self.assertEqual(len(valuation["dimensions"]["600000"]), 8)
-        self.assertIn("peer_group_missing", valuation["dimensions"]["600000"][3]["data_gap"])
-        self.assertEqual(len(panel["votes"]), 10)
-        self.assertTrue(all(vote["is_methodology_perspective"] for vote in panel["votes"]))
-        medium_panel = build_panel_review(rows, ["600000"], select_profile({"research_profile": "medium"}))
-        deep_panel = build_panel_review(rows, ["600000"], select_profile({"research_profile": "deep"}))
-        self.assertEqual(len(medium_panel["votes"]), 51)
-        self.assertEqual(len(deep_panel["votes"]), 66)
-        self.assertEqual(medium_panel["registered_seat_count"], 51)
-        self.assertEqual(len(risk["signals"]), 8)
-        self.assertIn("external_search_not_claimed", risk["risk_flags"])
-
-    def test_medium_and_deep_methodology_products_preserve_data_gaps(self) -> None:
-        rows = _snapshots()
-        medium = select_profile({"research_profile": "medium"})
-        valuation = build_valuation_model(rows, ["600000"], medium)
-        institutional = build_institutional_analysis(rows, ["600000"], valuation, medium)
-        workflow = build_research_workflow(rows, ["600000"], valuation, medium)
-        deep_profile = select_profile({"research_profile": "deep"})
-        deep_institutional = build_institutional_analysis(rows, ["600000"], valuation, deep_profile)
-        deep = build_deep_analysis(rows, ["600000"], deep_institutional, workflow, deep_profile)
-
-        self.assertEqual(institutional["results"][0]["symbol"], "600000")
-        self.assertIn("three_statement", institutional["results"][0]["methods"])
-        self.assertIn("quick_lbo", institutional["results"][0]["methods"])
-        self.assertNotIn("segmental", institutional["results"][0]["methods"])
-        self.assertEqual(workflow["results"][0]["symbol"], "600000")
-        self.assertEqual(deep["results"][0]["symbol"], "600000")
-        self.assertIn("bull_bear_debate", deep["results"][0])
-        self.assertIn("reported_segment_data_missing", deep_institutional["results"][0]["methods"]["segmental"]["data_gap"])
 
     def test_agent_os_graph_commits_native_uzi_analysis_and_gated_delivery(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]

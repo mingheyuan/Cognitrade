@@ -124,9 +124,22 @@ class Uzi392CommandTests(unittest.TestCase):
         random.seed(392)
         expected_panel = score_fns.generate_panel(expected_dimensions, raw)
         random.seed(392)
+        expected_synthesis = score_fns.generate_synthesis(
+            raw,
+            expected_dimensions,
+            expected_panel,
+        )
+        random.seed(392)
         actual = execute_panel_only(rows, ["600000"])
         Draft202012Validator(COMMAND_SCHEMA).validate(actual)
-        self.assertEqual(actual["results"][0]["result"], {"dimensions": expected_dimensions, "panel": expected_panel})
+        self.assertEqual(
+            actual["results"][0]["result"],
+            {
+                "dimensions": expected_dimensions,
+                "panel": expected_panel,
+                "synthesis": expected_synthesis,
+            },
+        )
 
     def test_scan_trap_does_not_turn_an_empty_search_into_safe(self) -> None:
         empty = [

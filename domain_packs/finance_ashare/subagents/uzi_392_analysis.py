@@ -10,6 +10,7 @@ frozen snapshot payload before it is admitted to ``agent_analysis``.
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 from difflib import get_close_matches
@@ -18,6 +19,7 @@ import importlib
 import json
 import logging
 import math
+import os
 from pathlib import Path
 import re
 from threading import Event, get_ident
@@ -36,8 +38,12 @@ from domain_packs.finance_ashare.subagents.uzi_qualitative_deep_dive import (
 from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_structured
 from domain_packs.finance_ashare.subagents.uzi_panel_registry import panel_for_profile
 from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import (
+    UZI_ENVIRONMENT_LOCK,
     UZI_SOURCE_COMMIT,
     Uzi392FetcherRuntime,
+)
+from research_system.adapters.vendors.uzi_request_timeout import (
+    uzi_request_timeout_scope,
 )
 
 
@@ -79,6 +85,46 @@ _PROFILE_REASONING_EFFORT = {
 }
 _LOGGER = logging.getLogger("uvicorn.error")
 _AGENT_STAGE_CACHE_SCHEMA_VERSION = "uzi-3.9.4-agent-stage-v1"
+_UZI_SCHOOLS = frozenset("ABCDEFGHI")
+
+
+@contextmanager
+def _uzi_native_environment(*, profile: str, school: str | None):
+    """Expose request-local settings to the pinned functions that read env.
+
+    UZI's native Python functions intentionally read ``UZI_DEPTH``,
+    ``UZI_LITE`` and ``UZI_SCHOOL``. Agent OS can execute requests in parallel,
+    so mutate those process variables only while an upstream call is running
+    and restore the previous values before releasing the lock.
+    """
+
+    selected_school = str(school or "").strip().upper()
+    if selected_school and selected_school not in _UZI_SCHOOLS:
+        raise ValueError("school must be one of A, B, C, D, E, F, G, H or I")
+    _initialize_native_imports()
+    native_profile = importlib.import_module("lib.analysis_profile").get_profile(profile)
+    updates = {
+        "UZI_DEPTH": profile,
+        "UZI_LITE": "1" if profile == "lite" else "0",
+        "UZI_DDG_BUDGET": str(native_profile.ddg_budget),
+        "UZI_FUND_STATS_TOP": str(native_profile.fund_stats_top_n),
+        "UZI_SCHOOL": selected_school or None,
+    }
+    with UZI_ENVIRONMENT_LOCK:
+        previous = {key: os.environ.get(key) for key in updates}
+        try:
+            for key, value in updates.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            yield
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
 
 def _profile_dimension_keys(profile: str) -> tuple[str, ...]:
@@ -260,12 +306,11 @@ class AgentBuyZonePayload(BaseModel):
 
 
 def _profile_native_panel(panel: dict[str, Any], profile: str) -> dict[str, Any]:
-    """Project the upstream rule-engine panel to UZI's profile seat contract.
+    """Validate the complete panel emitted by fixed UZI 3.9.4.
 
-    The pinned generator evaluates the complete registry in one pure call.
-    UZI's profile contract then selects 10/51/66 seats.  Recompute every
-    aggregate from the selected seats so no full-panel statistic leaks into a
-    Lite or Medium report.
+    ``generate_panel`` iterates all 66 registered investors for every profile;
+    the counts in ``analysis_profile.py`` are not consumed by that executable
+    path.  Keep the full panel and only validate that no seat disappeared.
     """
 
     allowed_ids = {
@@ -423,6 +468,7 @@ def execute_native_analysis(
     symbols: list[str],
     *,
     profile: str,
+    school: str | None = None,
     llm_provider: Any | None,
     cancellation: Event | None = None,
     recovery_history: list[dict[str, Any]] | None = None,
@@ -433,8 +479,51 @@ def execute_native_analysis(
     selected_profile = str(profile or "").strip().lower()
     if selected_profile not in {"lite", "medium", "deep"}:
         raise ValueError("research_profile is required; choose lite, medium or deep")
+    selected_school = str(school or "").strip().upper() or None
+    if selected_school is not None and selected_school not in _UZI_SCHOOLS:
+        raise ValueError("school must be one of A, B, C, D, E, F, G, H or I")
     _initialize_native_imports()
     market_router = importlib.import_module("lib.market_router")
+    base_recovery_history = [
+        dict(row)
+        for row in list(recovery_history or [])
+        if isinstance(row, dict)
+    ]
+
+    def canonical_symbol(value: object) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            return ""
+        try:
+            return str(market_router.parse_ticker(normalized).full)
+        except (TypeError, ValueError):
+            return normalized
+
+    global_recovery_history = [
+        dict(row)
+        for row in base_recovery_history
+        if not str(row.get("symbol") or row.get("ticker") or "").strip()
+    ]
+
+    def recovery_for_symbol(symbol: str) -> list[dict[str, Any]]:
+        target = canonical_symbol(symbol)
+        return [
+            dict(row)
+            for row in base_recovery_history
+            if str(row.get("symbol") or row.get("ticker") or "").strip()
+            and canonical_symbol(row.get("symbol") or row.get("ticker")) == target
+        ]
+
+    def root_collection_failed(symbol: str) -> bool:
+        target = canonical_symbol(symbol)
+        return any(
+            canonical_symbol(row.get("symbol")) == target
+            and isinstance(row.get("facts"), dict)
+            and row["facts"].get("_uzi_symbol_route_failed") is True
+            for row in snapshot_rows
+            if isinstance(row, dict)
+        )
+
     unique_symbols: list[str] = []
     seen_symbols: set[str] = set()
     for symbol in symbols:
@@ -460,34 +549,140 @@ def execute_native_analysis(
             stage_index=symbol_index,
             stage_total=len(unique_symbols),
         )
-        results.append(_execute_symbol(
-            snapshot_rows,
-            symbol,
-            profile=selected_profile,
-            llm_provider=llm_provider,
-            cancellation=cancellation,
-            recovery_history=list(recovery_history or []),
-            progress_callback=progress_callback,
-        ))
+        if root_collection_failed(symbol):
+            result = _failed_symbol_analysis(
+                symbol,
+                profile=selected_profile,
+                failure_type="RootCollectionError",
+                recovery_history=recovery_for_symbol(symbol),
+            )
+        else:
+            try:
+                with uzi_request_timeout_scope():
+                    result = _execute_symbol(
+                        snapshot_rows,
+                        symbol,
+                        profile=selected_profile,
+                        school=selected_school,
+                        llm_provider=llm_provider,
+                        cancellation=cancellation,
+                        recovery_history=recovery_for_symbol(symbol),
+                        progress_callback=progress_callback,
+                    )
+            except Exception as exc:
+                if cancellation is not None and cancellation.is_set():
+                    raise
+                result = _failed_symbol_analysis(
+                    symbol,
+                    profile=selected_profile,
+                    exc=exc,
+                    recovery_history=recovery_for_symbol(symbol),
+                )
+        results.append(result)
     critical = sum(int((row.get("self_review") or {}).get("critical_count") or 0) for row in results)
     warnings = sum(int((row.get("self_review") or {}).get("warning_count") or 0) for row in results)
-    combined_recovery_history = [
-        dict(row)
-        for result in results
-        for row in list(result.get("recovery_history") or [])
-        if isinstance(row, dict)
-    ]
+    combined_recovery_history: list[dict[str, Any]] = []
+    seen_recovery_rows: set[str] = set()
+    for row in [
+        *global_recovery_history,
+        *[
+            dict(item)
+            for result in results
+            for item in list(result.get("recovery_history") or [])
+            if isinstance(item, dict)
+        ],
+    ]:
+        fingerprint = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+        if fingerprint in seen_recovery_rows:
+            continue
+        seen_recovery_rows.add(fingerprint)
+        combined_recovery_history.append(row)
+    successful_count = sum(row.get("report_allowed") is True for row in results)
+    quality_status = (
+        "available"
+        if results and successful_count == len(results)
+        else "degraded"
+        if successful_count
+        else "quality_gate_blocked"
+    )
     return {
         "source_commit": UZI_SOURCE_COMMIT,
         "methodology_version": "3.9.4-source-parity",
         "profile": selected_profile,
+        "school": selected_school,
         "results": results,
         "critical_count": critical,
         "warning_count": warnings,
         "report_allowed": bool(results) and critical == 0 and all(row.get("report_allowed") is True for row in results),
-        "quality_status": "available" if results and critical == 0 else "quality_gate_blocked",
+        "quality_status": quality_status,
         "recovery_history": combined_recovery_history,
     }
+
+
+def _failed_symbol_analysis(
+    symbol: str,
+    *,
+    profile: str,
+    exc: Exception | None = None,
+    failure_type: str | None = None,
+    recovery_history: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Represent one failed native pipeline without discarding peer results."""
+
+    error_type = str(failure_type or (exc.__class__.__name__ if exc else "AnalysisError"))
+    issue = f"{symbol} UZI pipeline failed: {error_type}"
+    return {
+        "symbol": symbol,
+        "raw": {"ticker": symbol, "dimensions": {}},
+        "dimensions": {"dimensions": {}},
+        "panel": {},
+        "synthesis": {},
+        "self_review": {
+            "profile": profile,
+            "critical_count": 1,
+            "warning_count": 0,
+            "passed": False,
+            "issues": [{
+                "severity": "critical",
+                "issue": issue,
+                "suggested_fix": "重新采集该标的并重跑 UZI pipeline",
+            }],
+        },
+        "report_allowed": False,
+        "quality_status": "data_gap",
+        "computation_error": f"{error_type}: analysis_unavailable",
+        "recovery_history": recovery_history,
+    }
+
+
+def _snapshot_rows_for_symbol(
+    snapshot_rows: list[dict[str, Any]],
+    symbol: str,
+) -> list[dict[str, Any]]:
+    """Keep current-symbol and explicitly unscoped evidence only."""
+
+    _initialize_native_imports()
+    market_router = importlib.import_module("lib.market_router")
+
+    def canonical(value: object) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            return ""
+        try:
+            return str(market_router.parse_ticker(normalized).full)
+        except (TypeError, ValueError):
+            return normalized
+
+    target = canonical(symbol)
+    return [
+        row
+        for row in snapshot_rows
+        if isinstance(row, dict)
+        and (
+            not str(row.get("symbol") or "").strip()
+            or canonical(row.get("symbol")) == target
+        )
+    ]
 
 
 def _execute_symbol(
@@ -495,14 +690,15 @@ def _execute_symbol(
     symbol: str,
     *,
     profile: str,
+    school: str | None,
     llm_provider: Any | None,
     cancellation: Event | None,
     recovery_history: list[dict[str, Any]],
     progress_callback=None,
 ) -> dict[str, Any]:
     _initialize_native_imports()
-    raw = build_uzi_raw(snapshot_rows, symbol)
-    raw["fetched_at"] = datetime.now(timezone.utc).isoformat()
+    symbol_snapshot_rows = _snapshot_rows_for_symbol(snapshot_rows, symbol)
+    raw = build_uzi_raw(symbol_snapshot_rows, symbol)
     data_integrity = importlib.import_module("lib.data_integrity")
     enabled_dimension_keys = set(_profile_dimension_keys(profile))
     integrity = _profile_integrity_report(
@@ -538,10 +734,9 @@ def _execute_symbol(
         raw["dimensions"]["22_deep_methods"] = dim22
         score_fns = importlib.import_module("lib.pipeline.score_fns")
         dimensions = score_fns.score_dimensions(raw)
-        panel = _profile_native_panel(
-            score_fns.generate_panel(dimensions, raw),
-            profile,
-        )
+        with _uzi_native_environment(profile=profile, school=school):
+            native_panel = score_fns.generate_panel(dimensions, raw)
+        panel = _profile_native_panel(native_panel, profile)
     except Exception as exc:
         computation_error = f"{exc.__class__.__name__}:{str(exc)[:500]}"
         features = {}
@@ -585,6 +780,7 @@ def _execute_symbol(
                         dimensions,
                         panel,
                         profile=profile,
+                        school=school,
                         llm_provider=llm_provider,
                         recovery_tasks=recovery_tasks,
                         review_feedback=review_feedback,
@@ -606,6 +802,7 @@ def _execute_symbol(
                                     features=features,
                                     llm_provider=llm_provider,
                                     cancellation=cancellation,
+                                    school=school,
                                 )
                                 roleplay = dict(roleplay_result.get("roleplay") or {})
                                 agent_analysis["per_investor_override"] = dict(
@@ -637,7 +834,7 @@ def _execute_symbol(
                             )
                             qualitative = apply_qualitative_deep_dive(
                                 {},
-                                snapshot_rows=snapshot_rows,
+                                snapshot_rows=symbol_snapshot_rows,
                                 llm_provider=llm_provider,
                                 cancellation=cancellation,
                                 progress_callback=progress_callback,
@@ -689,12 +886,13 @@ def _execute_symbol(
         if computation_error:
             synthesis = {}
         else:
-            synthesis = importlib.import_module("lib.pipeline.score_fns").generate_synthesis(
-                raw,
-                dimensions,
-                panel,
-                agent_analysis=agent_analysis,
-            )
+            with _uzi_native_environment(profile=profile, school=school):
+                synthesis = importlib.import_module("lib.pipeline.score_fns").generate_synthesis(
+                    raw,
+                    dimensions,
+                    panel,
+                    agent_analysis=agent_analysis,
+                )
             synthesis["data_gaps"] = _data_gap_document(
                 recovery_tasks,
                 agent_analysis,
@@ -704,6 +902,7 @@ def _execute_symbol(
         review = run_native_self_review(
             symbol=symbol,
             profile=profile,
+            school=school,
             raw=raw,
             dimensions=dimensions,
             panel=panel,
@@ -771,6 +970,7 @@ def _execute_symbol(
     _merge_self_review_warnings(synthesis, review)
     return {
         "symbol": symbol,
+        "school": school,
         "raw": raw,
         "dimensions": dimensions,
         "panel": panel,
@@ -794,6 +994,7 @@ def _generate_agent_analysis(
     panel: dict[str, Any],
     *,
     profile: str,
+    school: str | None,
     llm_provider: Any | None,
     recovery_tasks: list[dict[str, Any]],
     review_feedback: list[dict[str, Any]],
@@ -807,7 +1008,7 @@ def _generate_agent_analysis(
     frozen = {
         "raw": _compact(raw),
         "dimension_scores": _compact(dimensions),
-        "panel": _compact_panel_for_agent(panel),
+        "panel": _compact_panel_for_agent(panel, school=school),
         "recovery_tasks": _compact(recovery_tasks),
     }
     allowed_paths = set(_leaf_paths(frozen))
@@ -824,6 +1025,12 @@ def _generate_agent_analysis(
         "并让报告停在质量门。"
         f"UZI_SOURCE_COMMIT={UZI_SOURCE_COMMIT}\n"
     )
+    if school:
+        base_system_prompt += (
+            f"UZI_SCHOOL={school} 已锁定：只能分析 group/school={school} 的评委；"
+            "其他流派必须保持 skip，不得写入 per_investor_override，panel_insights 与多空辩论"
+            "不得引用或模拟其他流派观点。\n"
+        )
     debate_instruction = (
         "great_divide_override 必须包含多空各三轮。"
         if native_profile.enable_bull_bear_debate
@@ -2038,10 +2245,53 @@ def _profile_empty_dimension_issues(
     return issues
 
 
+def _self_review_compatible_raw(raw: dict[str, Any]) -> dict[str, Any]:
+    """Apply UZI's declared empty-string defaults without mutating evidence.
+
+    Two upstream checks use ``dict.get(key, "")`` and then perform substring
+    membership.  A provider can legitimately return the key with a JSON null,
+    in which case Python returns ``None`` instead of the declared empty-string
+    default and the check itself crashes.  Normalizing only those nullable
+    string leaves preserves the exact UZI predicates; the original raw payload
+    remains unchanged and data_integrity still reports the missing industry.
+    """
+
+    compatible = deepcopy(raw)
+    dimensions = compatible.get("dimensions")
+    if not isinstance(dimensions, dict):
+        return compatible
+    basic = dimensions.get("0_basic")
+    if isinstance(basic, dict) and isinstance(basic.get("data"), dict):
+        if basic["data"].get("industry") is None:
+            basic["data"]["industry"] = ""
+    industry = dimensions.get("7_industry")
+    if isinstance(industry, dict) and isinstance(industry.get("data"), dict):
+        metrics = industry["data"].get("cninfo_metrics")
+        if isinstance(metrics, dict) and metrics.get("industry_name_match") is None:
+            metrics["industry_name_match"] = ""
+    valuation_models = dimensions.get("20_valuation_models")
+    if isinstance(valuation_models, dict) and isinstance(
+        valuation_models.get("data"), dict
+    ):
+        dcf = valuation_models["data"].get("dcf")
+        if (
+            isinstance(dcf, dict)
+            and "intrinsic_value_per_share" not in dcf
+            and "intrinsic_per_share" in dcf
+        ):
+            # UZI 3.9.4's DCF producer calls this ``intrinsic_per_share``;
+            # check_valuation_sanity accidentally reads the older
+            # ``intrinsic_value_per_share`` spelling.  Alias it only in the
+            # self-review view so a valid native DCF is not reported as zero.
+            dcf["intrinsic_value_per_share"] = dcf["intrinsic_per_share"]
+    return compatible
+
+
 def run_native_self_review(
     *,
     symbol: str,
     profile: str,
+    school: str | None,
     raw: dict[str, Any],
     dimensions: dict[str, Any],
     panel: dict[str, Any],
@@ -2059,57 +2309,59 @@ def run_native_self_review(
     enabled_dimension_numbers = {
         int(key.split("_", 1)[0]) for key in enabled_dimension_keys
     }
+    review_raw = _self_review_compatible_raw(raw)
     ctx = {
         "ticker": symbol,
         "market": raw.get("market", "A"),
-        "raw": raw,
+        "raw": review_raw,
         "syn": synthesis,
         "panel": panel,
         "ag": agent_analysis,
-        "dims": raw.get("dimensions") or {},
+        "dims": review_raw.get("dimensions") or {},
     }
     issues: list[dict[str, Any]] = []
-    for check in review_module.CHECKS:
-        try:
-            if check.__name__ == "check_coverage_threshold":
-                issues.extend(
-                    _profile_coverage_issues(
-                        raw,
-                        enabled_dimension_keys=enabled_dimension_keys,
+    with _uzi_native_environment(profile=profile, school=school):
+        for check in review_module.CHECKS:
+            try:
+                if check.__name__ == "check_coverage_threshold":
+                    issues.extend(
+                        _profile_coverage_issues(
+                            raw,
+                            enabled_dimension_keys=enabled_dimension_keys,
+                        )
                     )
-                )
-                continue
-            if check.__name__ == "check_empty_dims":
-                issues.extend(
-                    _profile_empty_dimension_issues(
-                        raw,
-                        enabled_dimension_keys=enabled_dimension_keys,
+                    continue
+                if check.__name__ == "check_empty_dims":
+                    issues.extend(
+                        _profile_empty_dimension_issues(
+                            raw,
+                            enabled_dimension_keys=enabled_dimension_keys,
+                        )
                     )
-                )
-                continue
-            rows = [row.to_dict() for row in (check(ctx) or [])]
-            if check.__name__ == "check_all_dims_exist":
-                rows = [
-                    row
-                    for row in rows
-                    if _issue_dimension_number(row) in enabled_dimension_numbers
-                ]
-            if check.__name__ == "check_agent_analysis_exists" and len(enabled_dimension_keys) < 15:
-                rows = [
-                    row
-                    for row in rows
-                    if not str(row.get("issue") or "").startswith("agent 仅覆盖")
-                ]
-            issues.extend(rows)
-        except Exception as exc:
-            issues.append({
-                "severity": "warning",
-                "category": "self-check",
-                "dim": "review-engine",
-                "issue": f"check {check.__name__} 自身失败: {exc.__class__.__name__}: {str(exc)[:100]}",
-                "evidence": "",
-                "suggested_fix": "修复自审函数后重新运行",
-            })
+                    continue
+                rows = [row.to_dict() for row in (check(ctx) or [])]
+                if check.__name__ == "check_all_dims_exist":
+                    rows = [
+                        row
+                        for row in rows
+                        if _issue_dimension_number(row) in enabled_dimension_numbers
+                    ]
+                if check.__name__ == "check_agent_analysis_exists" and len(enabled_dimension_keys) < 15:
+                    rows = [
+                        row
+                        for row in rows
+                        if not str(row.get("issue") or "").startswith("agent 仅覆盖")
+                    ]
+                issues.extend(rows)
+            except Exception as exc:
+                issues.append({
+                    "severity": "warning",
+                    "category": "self-check",
+                    "dim": "review-engine",
+                    "issue": f"check {check.__name__} 自身失败: {exc.__class__.__name__}: {str(exc)[:100]}",
+                    "evidence": "",
+                    "suggested_fix": "修复自审函数后重新运行",
+                })
 
     def add_critical(dim: str, issue: str, evidence: str, fix: str) -> None:
         issues.append({
@@ -2123,16 +2375,27 @@ def run_native_self_review(
 
     if computation_error:
         add_critical("pipeline", "UZI 原生计算链失败", computation_error, "恢复缺失数据或修复计算异常后重算")
-    if not agent_analysis or agent_analysis.get("agent_reviewed") is not True:
+    if profile != "lite" and (not agent_analysis or agent_analysis.get("agent_reviewed") is not True):
         add_critical("agent_analysis", "Agent 分析缺失或未确认", "agent_reviewed!=true", "完成 Agent 分析后重算与自审")
     for issue in agent_validation_issues:
-        if issue.get("severity") == "error":
+        if issue.get("severity") != "error":
+            continue
+        if profile != "lite":
             add_critical(
                 str(issue.get("field") or "agent_analysis"),
                 str(issue.get("message") or "agent_analysis schema error"),
                 str(issue.get("failure_kind") or "agent_content_invalid"),
                 str(issue.get("suggestion") or "修正 Agent 分析结构后重算"),
             )
+        else:
+            issues.append({
+                "severity": "warning",
+                "category": "agent-os-boundary",
+                "dim": str(issue.get("field") or "agent_analysis"),
+                "issue": str(issue.get("message") or "agent_analysis schema error"),
+                "evidence": str(issue.get("failure_kind") or "agent_content_invalid"),
+                "suggested_fix": str(issue.get("suggestion") or "稍后重试 Agent 分析"),
+            })
     if roleplay.get("required") and (
         roleplay.get("status") != "completed" or roleplay.get("agent_reviewed") is not True
     ):
@@ -2147,13 +2410,13 @@ def run_native_self_review(
             str(qualitative_execution),
             "补充每维至少两个真实 URL 并完成三组分析后重算",
         )
-    # Environment variables such as CI/UZI_CLI_ONLY must never downgrade the
-    # production report gate.  Reinstate the two upstream critical invariants.
+    # Match UZI: Lite/CLI may export with warnings, while medium/deep retain
+    # the critical integrity floor required by the interactive Agent workflow.
     coverage, _missing_critical = _profile_integrity_coverage(
         raw,
         enabled_dimension_keys=enabled_dimension_keys,
     )
-    if coverage < 40:
+    if coverage < 40 and profile != "lite":
         add_critical("overall", "数据完整性低于 40%", f"coverage_pct={coverage}", "按 suggested_fix 穷尽真实来源后重算")
 
     deduped: list[dict[str, Any]] = []
@@ -2179,9 +2442,10 @@ def run_native_self_review(
         "issues": deduped,
         "checks_run": [check.__name__ for check in review_module.CHECKS],
         "profile": profile,
+        "school": school,
         "enabled_dimensions": list(_profile_dimension_keys(profile)),
         "profile_coverage_pct": coverage,
-        "gate_policy": "critical_blocks_html_pdf;warning_allowed;no_environment_bypass",
+        "gate_policy": "uzi_native_lite_cli_warning_semantics;critical_blocks_html_pdf;warning_allowed",
     }
 
 
@@ -2252,7 +2516,7 @@ def _compact(value: Any, *, depth: int = 0) -> Any:
     return str(value)[:500]
 
 
-def _compact_panel_for_agent(panel: dict[str, Any]) -> dict[str, Any]:
+def _compact_panel_for_agent(panel: dict[str, Any], *, school: str | None = None) -> dict[str, Any]:
     """Keep every UZI seat while removing duplicated rule prose.
 
     The generic list compactor intentionally caps arbitrary arrays, but UZI's
@@ -2270,6 +2534,8 @@ def _compact_panel_for_agent(panel: dict[str, Any]) -> dict[str, Any]:
     votes = []
     for row in list(panel.get(member_key) or []):
         if not isinstance(row, dict):
+            continue
+        if school and str(row.get("school") or row.get("group") or "") != school:
             continue
         vote = {
             key: _compact(row.get(key))

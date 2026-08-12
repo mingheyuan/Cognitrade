@@ -49,6 +49,9 @@ class Settings(BaseModel):
     xueqiu_cookie: str | None = None
     browser_sources_enabled: bool = False
     paper_trading_enforce_market_hours: bool = True
+    cognitrade_database_url: str | None = None
+    cognitrade_database_auto_bootstrap: bool = True
+    strategy_object_store_root: Path | None = None
     llm_request_timeout_seconds: int = 25
     uzi_llm_request_timeout_seconds: int = 480
     uzi_llm_max_concurrency: int = 2
@@ -130,6 +133,10 @@ class Settings(BaseModel):
             raise ValueError("provider_probe_timeout_seconds must be positive")
         if self.baostock_socket_timeout_seconds <= 0:
             raise ValueError("baostock_socket_timeout_seconds must be positive")
+        if self.cognitrade_database_url is not None and not self.cognitrade_database_url.startswith(
+            ("sqlite:", "postgresql:", "postgresql+psycopg:")
+        ):
+            raise ValueError("cognitrade_database_url must use sqlite or postgresql")
         if self.qdrant_vector_weight < 0 or self.qdrant_lexical_weight < 0:
             raise ValueError("qdrant hybrid weights must be non-negative")
         if self.qdrant_vector_weight == 0 and self.qdrant_lexical_weight == 0:

@@ -6,11 +6,10 @@ const VIEW_PATHS: Record<ViewId, string> = {
   overview: '/overview',
   market: '/market-data',
   paper: '/paper-trading',
-  backtest: '/backtesting',
   screening: '/screening',
   funds: '/funds',
   uzi: '/uzi-methods',
-  methodology: '/methodology',
+  strategies: '/strategies',
   runs: '/runs',
 }
 
@@ -18,12 +17,22 @@ const PATH_VIEWS = Object.fromEntries(
   Object.entries(VIEW_PATHS).map(([view, path]) => [path, view]),
 ) as Record<string, ViewId>
 
-export function pathForView(view: ViewId): string {
-  return VIEW_PATHS[view]
+function normalizeBasePath(basePath: string): string {
+  const segment = String(basePath || '').replace(/^\/+|\/+$/g, '')
+  return segment ? `/${segment}` : ''
 }
 
-export function viewFromPath(pathname: string): ViewId {
-  const normalized = `/${String(pathname || '').split('?')[0].split('#')[0].replace(/^\/+|\/+$/g, '')}`
+export function pathForView(view: ViewId, basePath = import.meta.env.BASE_URL): string {
+  return `${normalizeBasePath(basePath)}${VIEW_PATHS[view]}` || '/'
+}
+
+export function viewFromPath(pathname: string, basePath = import.meta.env.BASE_URL): ViewId {
+  const base = normalizeBasePath(basePath)
+  const rawPath = `/${String(pathname || '').split('?')[0].split('#')[0].replace(/^\/+|\/+$/g, '')}`
+  const routePath = base && (rawPath === base || rawPath.startsWith(`${base}/`))
+    ? rawPath.slice(base.length) || '/'
+    : rawPath
+  const normalized = `/${routePath.replace(/^\/+|\/+$/g, '')}`
   return PATH_VIEWS[normalized === '/' ? '/' : normalized] || 'workbench'
 }
 

@@ -4,11 +4,11 @@ import { useCognitrade } from './CognitradeContext'
 import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/Topbar'
 import { WorkspaceView } from './components/WorkspaceView'
-import { useViewNavigation } from './hooks/useViewNavigation'
+import { pathForView, useViewNavigation } from './hooks/useViewNavigation'
 import type { MarketDataViewState } from './components/MarketData'
-import type { BacktestTarget } from './finance-contracts'
 import type { ResearchIntent } from './research-contracts'
 import type { ViewId } from './data'
+import type { StrategyWorkspaceContext } from './strategy-contracts'
 
 function App() {
   const {
@@ -26,7 +26,7 @@ function App() {
     error: '',
   })
   const [selectedEvidence, setSelectedEvidence] = useState('')
-  const [backtestTarget, setBacktestTarget] = useState<BacktestTarget | null>(null)
+  const [strategyContext, setStrategyContext] = useState<StrategyWorkspaceContext | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [toast, setToast] = useState('')
   const toastTimer = useRef<number | undefined>(undefined)
@@ -69,13 +69,18 @@ function App() {
     [navigate, selectRun],
   )
 
-  const openBacktest = useCallback((target: BacktestTarget) => {
-    setBacktestTarget(target)
-    navigate('backtest')
+  const openStrategy = useCallback((context: StrategyWorkspaceContext) => {
+    setStrategyContext(context)
+    navigate('strategies')
+    const query = new URLSearchParams()
+    Object.entries(context).forEach(([key, value]) => {
+      if (value != null && value !== '') query.set(key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`), String(value))
+    })
+    window.history.replaceState({ view: 'strategies' }, '', `${pathForView('strategies')}?${query}`)
   }, [navigate])
 
   const navigateView = useCallback((view: ViewId) => {
-    if (view === 'backtest') setBacktestTarget(null)
+    if (view === 'strategies') setStrategyContext(null)
     navigate(view)
   }, [navigate])
 
@@ -122,8 +127,8 @@ function App() {
             setSelectedEvidence={setSelectedEvidence}
             onResearch={handleResearch}
             onOpenRun={openRun}
-            backtestTarget={backtestTarget}
-            onOpenBacktest={openBacktest}
+            strategyContext={strategyContext}
+            onOpenStrategy={openStrategy}
           />
         </Suspense>
       </section>
