@@ -1,0 +1,177 @@
+.github/workflows/pages.yml
+  s_4f7f05ab472aaa::t_7f1488d18990dc 1-49
+alembic.ini
+  s_b50dd23690b4b9::t_4bccf8d86315b8 1-39
+frontend/scripts/create-pages-fallback.mjs
+  s_dfc5d68635fdcc::t_5aee1062481822 1-7
+frontend/src/components/Strategies.test.tsx
+  s_dfc5d68635fdcc::t_f8e0aeeac78bdd 3-4,9,13-29,31-34,36-49,52-54,57-79,82-86,88-114,118-144,146-150,153-155,157-181,184-187
+frontend/src/components/Strategies.tsx
+  s_dfc5d68635fdcc::t_329478cf8e75f8 2-3,5-10,12,14-19,21,23-28,30,34-84,87-108,112-131,133-141,143,149-157,159-163,165-182,184,186-196,198,202-224,226-311,315-321,323-341,343-373,375,379,384-392,394-397,399,401-455,458-528,531-538,541-547,550-568,571-585,588-589,592-598,601-604,607-608,611-637,640-652
+frontend/src/strategy-contracts.ts
+  s_dfc5d68635fdcc::t_86db463ce70dbc 1-307
+migrations/env.py
+  s_dfc5d68635fdcc::t_72572a3b5a7ca9 1-63
+migrations/script.py.mako
+  s_b50dd23690b4b9::t_1446323a7bf011 1-24
+migrations/versions/20260812_0001_strategy_domain.py
+  s_dfc5d68635fdcc::t_6d2b7477c5601b 1-20
+migrations/versions/20260812_0002_create_strategy_domain_tables.py
+  s_dfc5d68635fdcc::t_e9604f90eece80 1-529
+research_system/api/routes/report_signals.py
+  s_dfc5d68635fdcc::t_1929750b512a0a 1-283
+research_system/api/routes/strategies.py
+  s_51144f0342b4de::t_4053383dcc6438 1-343
+research_system/api/routes/strategy_backtests.py
+  s_0635fe82728b39::t_bed9ac5bd1bead 1-117
+research_system/api/routes/strategy_paper.py
+  s_dfc5d68635fdcc::t_453ad1795e5105 1-98
+research_system/api/routes/strategy_verifications.py
+  s_562e0f8f06821f::t_2c7ddf9ddeae3a 1-87
+research_system/strategies/__init__.py
+  s_b50dd23690b4b9::t_089d5194f4840a 1-22
+research_system/strategies/backtesting/__init__.py
+  s_dfc5d68635fdcc::t_50a54cd2648e7f 1-3
+research_system/strategies/backtesting/adapters.py
+  s_dfc5d68635fdcc::t_46013d8853073d 1-136
+research_system/strategies/backtesting/instruments.py
+  s_dfc5d68635fdcc::t_4912e27a5610b0 1-126
+research_system/strategies/backtesting/market_data_gateway.py
+  s_de80a42c35df9e::t_8a2c9d03e9e271 1-342
+research_system/strategies/backtesting/portfolio_ledger.py
+  s_de80a42c35df9e::t_eaa0bbc05b6b1d 1-582
+research_system/strategies/backtesting/result_store.py
+  s_b50dd23690b4b9::t_57888c8775947e 1-50
+research_system/strategies/backtesting/service.py
+  s_a03a12067fd87b::t_585215a1e46ed9 1-1109
+research_system/strategies/backtesting/signal_core.py
+  s_dfc5d68635fdcc::t_c37a301bd8da67 1-125
+research_system/strategies/contracts.py
+  s_dfc5d68635fdcc::t_1af34aa73cdd02 1-394
+research_system/strategies/database.py
+  s_dfc5d68635fdcc::t_3f0fcbd5c660ee 1-119
+research_system/strategies/errors.py
+  s_b50dd23690b4b9::t_6af282248e7c7a 1-32
+research_system/strategies/factors.py
+  s_b50dd23690b4b9::t_ac91d6c90f2ccf 1-415
+research_system/strategies/idempotency.py
+  s_dfc5d68635fdcc::t_62e8754fb4b3c0 1-177
+research_system/strategies/legacy_index.py
+  s_4f7f05ab472aaa::t_1bb95bd75accec 1-183
+research_system/strategies/migration_backup.py
+  s_b50dd23690b4b9::t_a5258c8688dfce 1-157
+research_system/strategies/models.py
+  s_dfc5d68635fdcc::t_4b56be18039038 1-604
+research_system/strategies/orchestration.py
+  s_dfc5d68635fdcc::t_cfc2528983c849 1-2062
+research_system/strategies/paper_execution.py
+  s_dfc5d68635fdcc::t_17503e48b87ff3 1-515
+research_system/strategies/repository.py
+  s_b50dd23690b4b9::t_bbe08c9a899e8c 1-314
+research_system/strategies/service.py
+  s_dfc5d68635fdcc::t_970bd7ba1423bc 1-1011
+research_system/strategies/signals.py
+  s_dfc5d68635fdcc::t_e8951276ad729c 1-716
+research_system/strategies/trading_calendar.py
+  s_dfc5d68635fdcc::t_77ad8aa877e3c0 1-96
+research_system/strategies/verification.py
+  s_dfc5d68635fdcc::t_9db60e19647716 1-374
+tests/test_api_mutation_idempotency.py
+  s_dfc5d68635fdcc::t_5276b5a09c2b85 1-95
+tests/test_report_orchestration.py
+  s_4f7f05ab472aaa::t_358e273f557ba5 1-773
+tests/test_strategy_backtesting.py
+  s_dfc5d68635fdcc::t_bb7a8c03e270b2 1-519
+tests/test_strategy_database_contract.py
+  s_625607951f411c::t_6bce3fe55e90da 1-106
+tests/test_strategy_domain.py
+  s_4f7f05ab472aaa::t_8b4351b9fcdfe2 1-311
+tests/test_strategy_legacy_retention.py
+  s_dfc5d68635fdcc::t_50353d6be63990 1-116
+tests/test_strategy_migration_deployment.py
+  s_dfc5d68635fdcc::t_a2b42bc250a68b 1-207
+tests/test_strategy_paper_execution.py
+  s_b50dd23690b4b9::t_c45fe1a60b8483 1-484
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "f4f891f60ef44f2f6ac5420862b95ad3e7f8b3a1",
+  "prompts": {},
+  "sessions": {
+    "s_0635fe82728b39": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff235-5a69-70d2-aa0e-202c5c11e60c",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_4f7f05ab472aaa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff272-35e3-7a73-9962-0ebe4203b516",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_51144f0342b4de": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff235-726c-71e1-8eaf-db99fce15292",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_562e0f8f06821f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff253-cf13-73f0-8702-f9c88d8758dd",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_625607951f411c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff272-4ae3-7150-903e-84a94e71f457",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_a03a12067fd87b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff232-77f8-7e12-a96f-8f5cac08b8a5",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_b50dd23690b4b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe341-6a16-7f11-b28e-8f8b8ba2549b",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_de80a42c35df9e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff272-2668-7620-bb1e-40a599e17081",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    },
+    "s_dfc5d68635fdcc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f6eb7-85f9-7432-98dc-8c57152f1b7e",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
