@@ -67,7 +67,7 @@ class AgentOSTests(unittest.TestCase):
                 )
             )
 
-            self.assertEqual(response.status, "completed_partial")
+            self.assertEqual(response.status, "completed")
             self.assertEqual(response.mode, "graph")
             events = read_jsonl(
                 self._settings(repository_root, root).runs_root
@@ -80,6 +80,7 @@ class AgentOSTests(unittest.TestCase):
                 event_types.index("graph_run_started"),
             )
             self.assertIn("main_agent_route_decided", event_types)
+            self.assertIn("main_agent_synthesis_fallback", event_types)
 
     def test_public_api_runs_and_inspects_an_installed_non_finance_pack(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]

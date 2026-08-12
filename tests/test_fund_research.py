@@ -24,11 +24,13 @@ from research_system.api.errors import ApiError
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
 from research_system.api.validation import validate_research_request
+from research_system.runtime.agent_os import AgentOS
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.intake.pack_intake import PackIntakeService
 from research_system.runtime.planning.capability_planner import CapabilityPlanner
 from research_system.runtime.platform.settings import Settings
 from research_system.schemas.domain_pack import CapabilityPlanningRequest
+from research_system.schemas.core_runtime import RequestIntakeDecision
 from research_system.schemas.protocol import RequestEnvelope
 
 
@@ -294,7 +296,11 @@ class FundResearchTests(unittest.TestCase):
                     },
                 )
                 self.assertEqual(response.status_code, 200, response.text)
-                run_id = response.json()["run_id"]
+                response_payload = response.json()
+                self.assertEqual(response_payload["status"], "completed")
+                self.assertEqual(response_payload["result"]["delivery_status"], "completed")
+                self.assertFalse(response_payload["result"]["synthesis_unavailable"])
+                run_id = response_payload["run_id"]
                 artifacts = client.get(
                     f"/api/v1/runs/{run_id}/artifacts",
                     headers={"Authorization": "Bearer fund-test"},
@@ -305,9 +311,25 @@ class FundResearchTests(unittest.TestCase):
                     for row in artifacts.json()["artifacts"]
                 }
                 self.assertTrue(
-                    {"fund_snapshot", "fund_analysis", "research_report"}.issubset(
+                    {
+                        "fund_snapshot",
+                        "fund_analysis",
+                        "research_report",
+                        "main_agent_synthesis",
+                        "assistant_message",
+                    }.issubset(
                         artifact_types
                     )
+                )
+                synthesis_artifact = next(
+                    row
+                    for row in artifacts.json()["artifacts"]
+                    if row["artifact_type"] == "main_agent_synthesis"
+                )
+                self.assertFalse(synthesis_artifact["content"]["model_generated"])
+                self.assertEqual(
+                    synthesis_artifact["content"]["fallback_reason"],
+                    "fund_report_is_canonical",
                 )
                 analysis_artifact = next(
                     row
@@ -344,6 +366,9 @@ class FundResearchTests(unittest.TestCase):
                         for row in events.json()["events"]
                     )
                 )
+                event_types = {row["event_type"] for row in events.json()["events"]}
+                self.assertIn("main_agent_synthesis_fallback", event_types)
+                self.assertNotIn("main_agent_synthesis_started", event_types)
 
     def test_fund_master_resolves_mutual_fund_before_bond_prefix_routing(self) -> None:
         master = FundSecurityMaster(catalog_loader=_catalog_frame)
@@ -705,11 +730,35 @@ class FundResearchTests(unittest.TestCase):
         self.assertIn("finance.fund.analyze", capabilities)
         self.assertIn("finance.fund.report.compose", capabilities)
         self.assertNotIn("finance.ashare.snapshot.collect", capabilities)
+        self.assertIsNone(graph.metadata["selected_research_profile"])
+        self.assertEqual(graph.metadata["profile_policy"], {})
+        self.assertEqual(graph.metadata["deadline_policy"], "default")
+        self.assertIsNone(graph.governance.timeout_seconds)
         fund_node = next(
             node for node in graph.nodes
             if node.capability == "finance.fund.snapshot.collect"
         )
         self.assertEqual(fund_node.tools, ["fund_data_provider"])
+
+        lazy_graph = CapabilityPlanner(registry).build_lazy_graph(
+            CapabilityPlanningRequest(
+                domain_id="finance_ashare",
+                objective="选择混合型基金",
+                available_artifact_types=["user_request"],
+                required_artifact_types=[],
+                metadata={
+                    "intent": "fund_research",
+                    "intent_inputs": {
+                        "fund_category": "混合型",
+                        "candidate_pool_size": 3,
+                    },
+                },
+            )
+        )
+        self.assertIsNone(lazy_graph.metadata["selected_research_profile"])
+        self.assertEqual(lazy_graph.metadata["profile_policy"], {})
+        self.assertEqual(lazy_graph.metadata["deadline_policy"], "default")
+        self.assertIsNone(lazy_graph.governance.timeout_seconds)
 
         stock_graph = CapabilityPlanner(registry).build_graph(
             CapabilityPlanningRequest(
@@ -728,6 +777,50 @@ class FundResearchTests(unittest.TestCase):
             if node.capability == "finance.ashare.snapshot.collect"
         )
         self.assertEqual(stock_node.tools, ["financial_data_provider"])
+
+    def test_run_request_passes_resolved_turn_config(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            settings = Settings.from_env(repository_root).model_copy(
+                update={
+                    "runs_root": root / "runs",
+                    "memory_root": root / "memory",
+                    "domain_packs_root": repository_root / "domain_packs",
+                }
+            )
+            agent_os = AgentOS(settings)
+            request = RequestEnvelope(
+                intent="fund_research",
+                user_query="分析偏股混合基金",
+                constraints={"investment_cycle": "3y"},
+            )
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="domain_task",
+                recommended_mode="graph",
+                intent="fund_research",
+                domain_id="finance_ashare",
+            )
+            outcome = SimpleNamespace(result="fund-result")
+
+            with (
+                patch.object(
+                    agent_os.turn_runner,
+                    "execute_task",
+                    return_value=outcome,
+                ) as execute_task,
+                patch.object(agent_os.turn_runner, "finalize"),
+            ):
+                result = agent_os.run_request(
+                    request,
+                    intake_decision=decision,
+                )
+
+            self.assertEqual(result, "fund-result")
+            turn_config = execute_task.call_args.kwargs["turn_config"]
+            self.assertEqual(turn_config.deadline_policy, "default")
+            self.assertEqual(turn_config.timeout_seconds, settings.run_timeout_seconds)
 
     def test_fund_snapshot_runs_through_governed_pack_tool(self) -> None:
         query = SimpleNamespace(

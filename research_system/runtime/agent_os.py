@@ -407,6 +407,53 @@ class AgentOS:
         )
         return result
 
+    def run_request(
+        self,
+        request: RequestEnvelope,
+        *,
+        run_id: str | None = None,
+        intake_decision: RequestIntakeDecision | None = None,
+        event_callback=None,
+        turn_id: str | None = None,
+    ) -> ExecutionRunResult:
+        """Compatibility facade that still enters the canonical TurnRunner."""
+        decision = intake_decision or self.request_intake_decision(request)
+        if decision.status != "accepted":
+            raise ValueError("Agent OS RequestIntake requires clarification before execution")
+        resolved_request = decision.apply_to(request)
+        effective_run_id, _, _ = self.run_store.create_run(
+            resolved_request,
+            resolved_request.intent or "domain_task",
+            run_id=run_id,
+            reuse_existing=bool(run_id and run_id in self._prepared_run_ids),
+        )
+        with self._lock:
+            self._prepared_run_ids.add(effective_run_id)
+        thread_id = str(
+            resolved_request.thread_id
+            or resolved_request.slots.get("chat_thread_id")
+            or f"thread_{effective_run_id}"
+        )
+        outcome = self.turn_runner.execute_task(
+            request=resolved_request,
+            decision=decision,
+            run_id=effective_run_id,
+            thread_id=thread_id,
+            execution_mode="graph",
+            turn_config=self._domain_turn_config(
+                request=resolved_request,
+                decision=decision,
+                execution_mode="graph",
+            ),
+            event_callback=event_callback,
+        )
+        self._prepared_run_ids.discard(effective_run_id)
+        self.turn_runner.finalize(
+            outcome=outcome,
+            response_factory=lambda value: self._response_from_graph(resolved_request, value),
+        )
+        return outcome.result
+
     def _run_graph_runner(
         self,
         *,
@@ -472,7 +519,10 @@ class AgentOS:
                 "cancelled",
                 "timed_out",
             }:
-                result = self._ensure_graph_assistant_message(result)
+                result = self._ensure_graph_assistant_message(
+                    result,
+                    deadline_at=deadline_at,
+                )
             self._update_graph_agent_state(result)
             if not step or result.snapshot.status in {
                 "completed",
@@ -638,7 +688,9 @@ class AgentOS:
                 self.run_store.load_run_paths(existing_run_id).root / "response.json"
             )
             if isinstance(persisted_response, dict):
-                return ResponseEnvelope.model_validate(persisted_response)
+                response = ResponseEnvelope.model_validate(persisted_response)
+                self.turn_runner.reconcile_persisted_response(response)
+                return response
             # Idempotency applies while a worker is still running too.  Return
             # the persisted lifecycle view instead of routing the same request
             # into a second execution attempt.
@@ -837,10 +889,14 @@ class AgentOS:
         )
         explicit_turn_config = (request.constraints or {}).get("turn_config")
         if isinstance(explicit_turn_config, TurnConfig):
-            if explicit_turn_config.timeout_seconds is not None:
+            if {
+                "deadline_policy",
+                "timeout_seconds",
+            } & explicit_turn_config.model_fields_set:
                 return config
-        elif isinstance(explicit_turn_config, dict) and explicit_turn_config.get("timeout_seconds") is not None:
-            return config
+        elif isinstance(explicit_turn_config, dict):
+            if {"deadline_policy", "timeout_seconds"} & explicit_turn_config.keys():
+                return config
 
         domain_id = str(decision.domain_id or "").strip()
         if not domain_id:
@@ -861,7 +917,10 @@ class AgentOS:
             or str(policies.get("default_profile") or "").strip().lower()
         )
         profile_policy = dict(profiles.get(selected_profile) or {})
-        if str(profile_policy.get("deadline_policy") or "default").strip().lower() == "unbounded":
+        deadline_policy = str(profile_policy.get("deadline_policy") or "default").strip().lower()
+        if deadline_policy not in {"default", "unbounded"}:
+            raise ValueError(f"unsupported research profile deadline policy: {deadline_policy}")
+        if deadline_policy == "unbounded":
             return config.model_copy(
                 update={"deadline_policy": "unbounded", "timeout_seconds": None}
             )
@@ -1712,16 +1771,7 @@ class AgentOS:
         delivery_status = str(
             (assistant_content or {}).get("delivery_status") or snapshot.status
         )
-        message = next(
-            (
-                str(artifact.get("content", {}).get("message"))
-                for artifact in final_artifacts
-                if artifact.get("artifact_type") == "assistant_message"
-                and isinstance(artifact.get("content"), dict)
-                and artifact.get("content", {}).get("message")
-            ),
-            None,
-        )
+        message = str((assistant_content or {}).get("message") or "").strip() or None
         if not message:
             message = next(
                 (
@@ -1956,10 +2006,16 @@ class AgentOS:
     def _ensure_graph_assistant_message(
         self,
         result: ExecutionRunResult,
+        *,
+        deadline_at: float | None = None,
     ) -> ExecutionRunResult:
         from research_system.runtime.graph_delivery import ensure_graph_assistant_message
 
-        return ensure_graph_assistant_message(self, result)
+        return ensure_graph_assistant_message(
+            self,
+            result,
+            deadline_at=deadline_at,
+        )
 
     @staticmethod
     def _mark_graph_partial_delivery(*, result: ExecutionRunResult, runner) -> None:
@@ -1978,6 +2034,23 @@ class AgentOS:
             reason="main_agent_synthesis_unavailable",
         )
 
+    @staticmethod
+    def _mark_graph_completed_delivery(*, result: ExecutionRunResult, runner) -> None:
+        """Promote a partial Graph after its durable delivery is repaired."""
+
+        snapshot = result.snapshot
+        if snapshot.status != "completed_partial":
+            return
+        runner._set_run_status(snapshot, "completed")
+        snapshot.updated_at = datetime.now(timezone.utc)
+        runner._persist(snapshot)
+        runner._emit(
+            "graph_run_delivery_recovered",
+            status="completed",
+            delivery_status="completed",
+            reason="main_agent_synthesis_recovered",
+        )
+
     def _write_summary(
         self,
         result: ExecutionRunResult,
@@ -1985,12 +2058,25 @@ class AgentOS:
         intent: str | None = None,
     ) -> None:
         root = self.run_store.load_run_paths(result.snapshot.run_id).root
+        resolved_intent = intent or f"domain:{result.snapshot.graph.domain_id}"
+        run_state = read_json(root / "run_state.json") or {}
+        run_state.update(
+            {
+                "run_id": result.snapshot.run_id,
+                "request_id": result.snapshot.request_id,
+                "intent": resolved_intent,
+                "status": result.snapshot.status,
+                "thread_id": result.snapshot.thread_id,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        write_json(root / "run_state.json", run_state)
         write_json(
             root / "summary.json",
             {
                 "run_id": result.snapshot.run_id,
                 "request_id": result.snapshot.request_id,
-                "intent": intent or f"domain:{result.snapshot.graph.domain_id}",
+                "intent": resolved_intent,
                 "domain_id": result.snapshot.graph.domain_id,
                 "status": result.snapshot.status,
                 "message": runtime_status_message(result.snapshot.status),
