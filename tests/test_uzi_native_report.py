@@ -132,6 +132,28 @@ class UziNativeReportTests(unittest.TestCase):
             ("artifact-native", "artifact-report"),
         )
 
+    def test_resets_inherited_tracking_for_small_generated_text(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        artifacts[0]["content"]["results"][0]["synthesis"]["overall_score"] = 56.0
+
+        rendered = render_uzi_native_html(artifacts, run_id=RUN_ID)
+
+        self.assertIn('id="cognitrade-uzi-render-compat"', rendered.html)
+        self.assertRegex(
+            rendered.html,
+            r"\.score-giant::after\s*\{[^}]*letter-spacing:\s*normal",
+        )
+        self.assertRegex(
+            rendered.html,
+            r"\.jargon:hover::after\s*\{[^}]*letter-spacing:\s*normal",
+        )
+        self.assertIn(
+            '<div class="score-giant" role="meter" aria-label="Alpha Score" '
+            'aria-valuemin="0" aria-valuemax="100" aria-valuenow="56" '
+            'aria-valuetext="56 / 100">56</div>',
+            rendered.html,
+        )
+
     def test_critical_quality_gate_cannot_be_bypassed_by_completed_report(self) -> None:
         artifacts = sample_uzi_artifacts()
         native = artifacts[0]["content"]

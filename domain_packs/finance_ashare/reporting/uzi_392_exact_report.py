@@ -1,7 +1,8 @@
-"""ArtifactBoard adapter for UZI 3.9.4 analysis and exact 3.9.4 report presentation.
+"""ArtifactBoard adapter for UZI 3.9.4 analysis and 3.9.4 report presentation.
 
-Visible DOM, CSS and JavaScript come from the pinned upstream template and
-renderer helpers.  Cognitrade metadata is deliberately kept out of the visible
+The pinned upstream template and renderer helpers remain byte-for-byte intact.
+The adapter adds only narrowly scoped browser-compatibility rules for confirmed
+upstream rendering defects. Cognitrade metadata stays out of the visible
 document and remains in the surrounding Artifact records/API headers.
 """
 
@@ -26,6 +27,21 @@ _VENDOR_ROOT = Path(__file__).resolve().parents[1] / "vendor" / "uzi_3_9_2"
 _TEMPLATE = _VENDOR_ROOT / "assets" / "report-template.html"
 _AVATARS = _VENDOR_ROOT / "assets" / "avatars"
 _SEGMENTAL_RENDER_LOCK = RLock()
+_RENDER_COMPATIBILITY_STYLE = """
+<style id="cognitrade-uzi-render-compat">
+/* UZI's giant score uses negative tracking. Generated/smaller text inherits
+   that computed pixel value, so reset tracking anywhere the font size changes. */
+.score-giant::after {
+  letter-spacing: normal;
+  line-height: 1;
+  white-space: nowrap;
+}
+.jargon:hover::after {
+  letter-spacing: normal;
+  text-transform: none;
+}
+</style>
+"""
 
 
 class UziNativeQualityGateError(ValueError):
@@ -192,10 +208,32 @@ def render_exact_uzi_392_report(
         template = template.replace(marker, value)
     if currency_symbol != "¥":
         template = template.replace("¥", currency_symbol)
+    template = _apply_render_compatibility(
+        template,
+        overall_score=int(synthesis.get("overall_score", 0)),
+    )
     unresolved = sorted(set(re.findall(r"\{\{[A-Z0-9_]+\}\}|<!-- INJECT_[A-Z0-9_]+ -->", template)))
     if unresolved:
         raise RuntimeError(f"存在未解析的 UZI native 模板标记：{', '.join(unresolved)}")
     return _inline_avatars(template), str(raw.get("ticker") or result.get("symbol") or "unknown")
+
+
+def _apply_render_compatibility(html: str, *, overall_score: int) -> str:
+    """Fix browser inheritance defects without modifying the pinned template."""
+
+    score_markup = f'<div class="score-giant">{overall_score}</div>'
+    if score_markup not in html:
+        raise RuntimeError("UZI score card markup changed; compatibility patch cannot be applied")
+    accessible_score = min(100, max(0, overall_score))
+    score_meter = (
+        '<div class="score-giant" role="meter" aria-label="Alpha Score" '
+        f'aria-valuemin="0" aria-valuemax="100" aria-valuenow="{accessible_score}" '
+        f'aria-valuetext="{accessible_score} / 100">{overall_score}</div>'
+    )
+    html = html.replace(score_markup, score_meter, 1)
+    if "</head>" not in html:
+        raise RuntimeError("UZI report template is missing </head>")
+    return html.replace("</head>", f"{_RENDER_COMPATIBILITY_STYLE}\n</head>", 1)
 
 
 def _render_segmental_in_memory(
