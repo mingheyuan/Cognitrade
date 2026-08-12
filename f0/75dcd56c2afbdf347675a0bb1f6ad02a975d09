@@ -1,0 +1,23 @@
+api-doc/api-v2.md
+  s_225a950ae46d92::t_9e4d02a79d4ba7 572
+frontend/vite.config.ts
+  s_225a950ae46d92::t_f39d8a7961fcc5 4-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "f075dcd56c2afbdf347675a0bb1f6ad02a975d09",
+  "prompts": {},
+  "sessions": {
+    "s_225a950ae46d92": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff564-80aa-75c2-a65d-b26a78130c1c",
+        "model": "unknown"
+      },
+      "human_author": "qingbingwei <zjb1225212252@gmail.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
