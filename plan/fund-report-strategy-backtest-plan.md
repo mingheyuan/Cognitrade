@@ -640,7 +640,6 @@ research_system/api/routes/strategy_backtests.py
 ### 阶段 G：迁移、保留、部署与删除旧代码
 
 - 索引旧 Artifact/回测、实现引用安全清理、更新 Docker/部署预检/API 文档/架构文档。
-- GitHub Pages 构建增加 SPA 404 fallback，保证直接访问 `/strategies` 可恢复。
 - PostgreSQL 生产配置和对象存储配置进入部署检查。
 - 完成新旧回归后删除前端原型与不再调用的旧协调代码。
 - 验收：新环境从迁移到健康检查一键通过；旧数据只读可访问；引用对象不会被清理。
