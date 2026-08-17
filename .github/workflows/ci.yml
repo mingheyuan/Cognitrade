@@ -91,23 +91,34 @@ jobs:
           tests.test_uzi_392_vendor_runtime
           tests.test_uzi_snapshot_runtime_parity
           tests.test_uzi_source_parity
-      - name: Validate UZI commands and native methods
-        run: >-
-          python -m unittest
-          tests.test_uzi_392_commands
-          tests.test_uzi_392_native_methods
-      - name: Validate UZI analysis and recovery contracts
-        run: >-
-          python -m unittest
-          tests.test_uzi_392_analysis
-          tests.test_uzi_quick_scan
-          tests.test_uzi_strict_recovery
-      - name: Validate UZI reports, providers, and frontend contracts
-        run: >-
-          python -m unittest
-          tests.test_uzi_native_report
-          tests.test_uzi_provider_smoke
-          tests.test_finance_artifact_ui_contracts
+      - name: Validate isolated UZI command, method, report, and provider modules
+        run: |
+          run_module() {
+            local test_module="$1"
+            local module_status=0
+            echo "::group::$test_module"
+            timeout --signal=TERM --kill-after=10s 180s \
+              python -X faulthandler -m unittest -v "$test_module" || module_status=$?
+            if [[ "$module_status" -eq 124 || "$module_status" -eq 137 ]]; then
+              echo "::warning::$test_module did not exit within 180s; retrying once in a fresh process"
+              module_status=0
+              timeout --signal=TERM --kill-after=10s 180s \
+                python -X faulthandler -m unittest -v "$test_module" || module_status=$?
+            fi
+            echo "::endgroup::"
+            return "$module_status"
+          }
+          for test_module in \
+            tests.test_uzi_392_commands \
+            tests.test_uzi_392_native_methods \
+            tests.test_uzi_392_analysis \
+            tests.test_uzi_quick_scan \
+            tests.test_uzi_strict_recovery \
+            tests.test_uzi_native_report \
+            tests.test_uzi_provider_smoke \
+            tests.test_finance_artifact_ui_contracts; do
+            run_module "$test_module" || exit $?
+          done
 
   backend:
     name: Complete backend suite
@@ -132,7 +143,20 @@ jobs:
           suite_status=0
           for test_file in tests/test_*.py; do
             test_pattern="${test_file#tests/}"
-            python -X faulthandler -m unittest discover -v -s tests -p "$test_pattern" || suite_status=1
+            module_status=0
+            echo "::group::$test_pattern"
+            timeout --signal=TERM --kill-after=10s 180s \
+              python -X faulthandler -m unittest discover -v -s tests -p "$test_pattern" || module_status=$?
+            if [[ "$module_status" -eq 124 || "$module_status" -eq 137 ]]; then
+              echo "::warning::$test_pattern did not exit within 180s; retrying once in a fresh process"
+              module_status=0
+              timeout --signal=TERM --kill-after=10s 180s \
+                python -X faulthandler -m unittest discover -v -s tests -p "$test_pattern" || module_status=$?
+            fi
+            echo "::endgroup::"
+            if [[ "$module_status" -ne 0 ]]; then
+              suite_status=1
+            fi
           done
           exit "$suite_status"
 

@@ -102,7 +102,8 @@ Cognitrade 宿主边界。完整的 `v1.0` 差异见
 - CI 使用该提交的 pristine checkout 做逐字节对比，并将 vendored 实现覆盖到上游测试树中运行。
 - 源码树、command 树、分析资产、独立 skill 和报告渲染器均有 SHA-256 完整性锁。
 - 完整后端 CI 按测试文件使用独立 Python 解释器，隔离 UZI/provider 原生依赖的进程级状态，
-  同时保留全部测试清单和 faulthandler 崩溃诊断。
+  同时保留全部测试清单和 faulthandler 崩溃诊断。单模块超过 180 秒未退出时会终止并在
+  全新进程重试一次；普通断言失败不会重试。
 - 更新 Artifact Schema、生成的 TypeScript 合同、测试快照、评估 fixture 和数据源配置。
 
 ## 验证结果
