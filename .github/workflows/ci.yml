@@ -73,7 +73,10 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt
-      - name: Validate API, planning, fund scoring, artifacts, and frontend contracts
+      # Native finance/UZI dependencies keep process-wide state. Keep the
+      # command/method/report contracts in a fresh interpreter so an earlier
+      # provider test cannot strand their worker initialization.
+      - name: Validate API, planning, fund scoring, and core UZI runtime contracts
         run: >-
           python -m unittest
           tests.test_api_validation_dynamic
@@ -88,6 +91,9 @@ jobs:
           tests.test_uzi_392_vendor_runtime
           tests.test_uzi_snapshot_runtime_parity
           tests.test_uzi_source_parity
+      - name: Validate UZI commands, methods, reports, providers, and frontend contracts
+        run: >-
+          python -m unittest
           tests.test_uzi_392_commands
           tests.test_uzi_392_native_methods
           tests.test_uzi_392_analysis
