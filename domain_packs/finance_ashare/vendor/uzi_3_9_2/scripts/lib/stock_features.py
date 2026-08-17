@@ -291,12 +291,16 @@ def extract_features(raw: dict, dims: dict) -> dict:
 
     # ─────────────── MOAT ───────────────
     moat_scores = moat.get("scores") or {}
-    f["moat_intangible"] = _f(moat_scores.get("intangible"))
-    f["moat_switching"] = _f(moat_scores.get("switching"))
-    f["moat_network"] = _f(moat_scores.get("network"))
-    f["moat_scale"] = _f(moat_scores.get("scale"))
-    f["moat_total"] = f["moat_intangible"] + f["moat_switching"] + f["moat_network"] + f["moat_scale"]
-    f["moat_clear"] = f["moat_total"] >= 24  # avg 6+/10
+    f["moat_known"] = bool(moat_scores)
+    f["moat_intangible"] = _f(moat_scores.get("intangible")) if moat_scores else None
+    f["moat_switching"] = _f(moat_scores.get("switching")) if moat_scores else None
+    f["moat_network"] = _f(moat_scores.get("network")) if moat_scores else None
+    f["moat_scale"] = _f(moat_scores.get("scale")) if moat_scores else None
+    f["moat_total"] = (
+        f["moat_intangible"] + f["moat_switching"] + f["moat_network"] + f["moat_scale"]
+        if moat_scores else None
+    )
+    f["moat_clear"] = f["moat_total"] >= 24 if f["moat_known"] else None
 
     # ─────────────── EVENTS ───────────────
     timeline = events.get("event_timeline") or []
@@ -362,12 +366,15 @@ def extract_features(raw: dict, dims: dict) -> dict:
     # v3.9.4 · FCF：优先用真实经营现金流（fetch_financials 提供 operating_cash_flow_yi），
     # 缺失时才回退到净利×0.8 代理。fcf_positive 基于真实 OCF 判断——
     # 此前净利为正但现金流失血的公司会被误报 FCF 正（Codex P1）
-    _real_ocf = _f(fin.get("operating_cash_flow_yi"))
-    if _real_ocf:
+    _real_ocf_raw = fin.get("operating_cash_flow_yi")
+    _real_ocf = _f(_real_ocf_raw)
+    f["fcf_known"] = _real_ocf_raw is not None
+    if f["fcf_known"]:
         f["fcf_latest_yi"] = round(_real_ocf, 2)
     else:
         f["fcf_latest_yi"] = round(latest_ni * 0.8, 2) if latest_ni > 0 else 0
-    f["fcf_positive"] = f["fcf_latest_yi"] > 0
+    f["fcf_is_proxy"] = not f["fcf_known"]
+    f["fcf_positive"] = _real_ocf > 0 if f["fcf_known"] else None
     # EBITDA (proxy: net_income / 0.6)
     f["ebitda_yi"] = round(latest_ni / 0.6, 2) if latest_ni > 0 else 0
     # Debt and cash (from financial_health if available; else default)

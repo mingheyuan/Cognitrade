@@ -896,11 +896,25 @@ class UziRootCollectionRouterTests(unittest.TestCase):
                 self.assertIn(dim_key, pipeline_registry.FETCHER_REGISTRY)
                 return FixtureFetcher(dim_key)
 
+            def run_jobs(jobs, *, max_workers, overall_timeout):
+                return [
+                    pipeline_collect.ProcessOutcome(
+                        key=job.key,
+                        value=(
+                            pipeline_collect._run_fetcher_job
+                            if job.key == "19_contests"
+                            else job.target
+                        )(*job.args[:3], **job.kwargs),
+                    )
+                    for job in jobs
+                ]
+
             with (
                 patch.dict(os.environ, {"UZI_LEGACY": "0"}),
                 patch.object(pipeline_run, "_preflight_guards"),
                 patch.object(pipeline_collect, "DEPENDENT_DIMS", set()),
                 patch.object(pipeline_collect, "get_fetcher", side_effect=get_fetcher),
+                patch.object(pipeline_collect, "run_process_jobs", side_effect=run_jobs),
                 patch.object(Uzi392FetcherRuntime, "_write_native_raw"),
             ):
                 rows = snapshot_collector.collect_snapshots(

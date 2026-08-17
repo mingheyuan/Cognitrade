@@ -75,12 +75,23 @@ class StrategyBacktestService:
         self._lock = RLock()
         self._futures: dict[str, Future] = {}
         self._closed = False
+        self._shutdown_complete = Event()
         if recover:
             self._recover()
 
     def close(self) -> None:
-        self._closed = True
-        self._executor.shutdown(wait=False, cancel_futures=False)
+        with self._lock:
+            should_shutdown = not self._closed
+            self._closed = True
+        if not should_shutdown:
+            self._shutdown_complete.wait()
+            return
+        try:
+            # The database owner is normally closed immediately after this service.
+            # Wait for queued/running jobs so no worker can outlive its connection pool.
+            self._executor.shutdown(wait=True, cancel_futures=False)
+        finally:
+            self._shutdown_complete.set()
 
     def preflight(
         self,
@@ -229,14 +240,16 @@ class StrategyBacktestService:
                 tenant_id=scope.tenant_id,
                 user_id=scope.user_id,
             )
-            return {"backtests": [self._payload(row) for row in rows]}
+            payloads = [self._payload(row) for row in rows]
+        return {"backtests": [self._visible_payload(row) for row in payloads]}
 
     def get(self, scope: OwnerScope, backtest_id: str, *, include_result: bool = True) -> dict[str, Any]:
         with self.database.session() as session:
             row = self._require(session, scope, backtest_id)
             payload = self._payload(row)
             uri = row.result_object_uri
-        if include_result and uri:
+        payload = self._visible_payload(payload)
+        if include_result and uri and payload["status"] not in {"queued", "running"}:
             payload["result"] = self.result_store.get_json(uri)
         return payload
 
@@ -268,9 +281,9 @@ class StrategyBacktestService:
             return self._payload(row)
 
     def _submit(self, backtest_id: str) -> None:
-        if self._closed:
-            return
         with self._lock:
+            if self._closed:
+                return
             current = self._futures.get(backtest_id)
             if current is not None and not current.done():
                 return
@@ -284,6 +297,24 @@ class StrategyBacktestService:
         with self._lock:
             if self._futures.get(backtest_id) is future:
                 self._futures.pop(backtest_id, None)
+
+    def _visible_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            future = self._futures.get(str(payload["id"]))
+            in_flight = future is not None and not future.done()
+        if not in_flight or payload["status"] in {"queued", "running"}:
+            return payload
+        # SQLite in-memory tests share one connection across threads and can
+        # observe transaction-local fields. Never publish a terminal state until
+        # the worker (including lineage writes and heartbeat cleanup) has exited.
+        return {
+            **payload,
+            "status": "running",
+            "metrics": {},
+            "result_content_hash": None,
+            "error_summary": None,
+            "completed_at": None,
+        }
 
     def _execute(self, backtest_id: str) -> None:
         heartbeat_stop = Event()
@@ -315,12 +346,10 @@ class StrategyBacktestService:
                     row.lease_owner = None
                     row.lease_until = None
                     return
-                row.status = "completed"
                 row.input_snapshot_hash = input_hash
                 row.metrics_json = dict(result["metrics"])
                 row.result_object_uri = stored.uri
                 row.result_content_hash = stored.content_hash
-                row.completed_at = datetime.now(UTC)
                 row.lease_owner = None
                 row.lease_until = None
                 for link in signal_links:
@@ -339,6 +368,8 @@ class StrategyBacktestService:
                     uri=stored.uri,
                     size_bytes=stored.size_bytes,
                 )
+                row.status = "completed"
+                row.completed_at = datetime.now(UTC)
         except _BacktestControlRequested:
             with self.database.session() as session:
                 row = session.get(BacktestRun, backtest_id)
@@ -359,7 +390,7 @@ class StrategyBacktestService:
         finally:
             heartbeat_stop.set()
             if heartbeat is not None:
-                heartbeat.join(timeout=1.0)
+                heartbeat.join()
 
     def _run(
         self,

@@ -271,7 +271,7 @@ class UziFinancePackTests(unittest.TestCase):
                 "16_lhb", "17_sentiment", "18_trap", "19_contests", "6_fund_holders", "similar_stocks",
             },
         )
-        self.assertEqual(mapping["source"]["commit"], "0acf25122cabf493e7bc442faff62ceceb7f2f02")
+        self.assertEqual(mapping["source"]["commit"], "b004d7a988ca53a4805bf36784af091fa1209f22")
         self.assertEqual(mapping["profiles"]["lite"]["panel_seats"], 66)
         self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 66)
         self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 66)
@@ -297,7 +297,7 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertEqual(resources["canonical_file_count"], 17)
         self.assertEqual(
             resources["path_sensitive_sha256"],
-            "88b430b169ad68f028ac83df438d0dfac818e7330c266f8d86ddea75e0674593",
+            "8bc93074f001fa97154629dcd33cf5a6dfed653cf79d954fa883570be0a4f1ca",
         )
         self.assertEqual(resources["consumption"], "reference_only_static_contracts")
         self.assertEqual(mapping["contract"]["external_checkout_runtime"], "forbidden")

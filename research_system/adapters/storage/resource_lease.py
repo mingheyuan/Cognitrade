@@ -1,16 +1,64 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import hashlib
 import json
 import math
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
+from threading import RLock
 from typing import Any, Protocol
+from weakref import WeakValueDictionary
+
+try:  # pragma: no cover - platform-specific import
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+
+try:  # pragma: no cover - platform-specific import
+    import msvcrt
+except ImportError:  # pragma: no cover - POSIX
+    msvcrt = None
 
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.storage.jsonl import read_json, write_json
+
+_FILE_LEASE_LOCKS_GUARD = RLock()
+_FILE_LEASE_LOCKS: WeakValueDictionary[str, RLock] = WeakValueDictionary()
+
+
+def _process_file_lock(path: Path) -> RLock:
+    key = str(path.resolve())
+    with _FILE_LEASE_LOCKS_GUARD:
+        return _FILE_LEASE_LOCKS.setdefault(key, RLock())
+
+
+@contextlib.contextmanager
+def _exclusive_file_lock(path: Path):
+    """Serialize a lease mutation across threads and worker processes."""
+
+    process_lock = _process_file_lock(path)
+    with process_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a+b") as handle:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            elif msvcrt is not None:  # pragma: no cover - Windows
+                handle.seek(0, 2)
+                if handle.tell() == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                elif msvcrt is not None:  # pragma: no cover - Windows
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def utc_now() -> datetime:
@@ -90,45 +138,42 @@ class FileResourceLeaseStore:
         path = self._path(resource_key)
         lease = self._new_lease(resource_key, metadata, lease_seconds)
         payload = self._payload(lease)
-        for _ in range(2):
-            try:
+        try:
+            with _exclusive_file_lock(self._lock_path(resource_key)):
+                existing = read_json(path)
+                if isinstance(existing, dict):
+                    existing_expiry = _parse_expiry(existing.get("expires_at"))
+                    if existing_expiry > utc_now():
+                        return None
+                    path.unlink(missing_ok=True)
+                elif path.exists():
+                    raise ResourceLeaseStoreError("resource lease file is invalid")
                 with path.open("x", encoding="utf-8") as handle:
                     json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
                 return lease
-            except FileExistsError:
-                existing = read_json(path)
-                if not isinstance(existing, dict):
-                    raise ResourceLeaseStoreError("resource lease file is invalid") from None
-                existing_expiry = _parse_expiry(existing.get("expires_at"))
-                if existing_expiry > utc_now():
-                    return None
-                with contextlib.suppress(FileNotFoundError):
-                    path.unlink()
-            except OSError as exc:
-                raise ResourceLeaseStoreError(
-                    "resource lease could not be acquired"
-                ) from exc
-        return None
+        except ResourceLeaseStoreError:
+            raise
+        except OSError as exc:
+            raise ResourceLeaseStoreError(
+                "resource lease could not be acquired"
+            ) from exc
 
     def renew(self, lease: ResourceLease, *, lease_seconds: float) -> ResourceLease | None:
         path = self._path(lease.resource_key)
-        current = read_json(path)
-        if not isinstance(current, dict) or current.get("lease_id") != lease.lease_id:
-            return None
-        if _parse_expiry(current.get("expires_at")) <= utc_now():
-            return None
-        renewed = ResourceLease(
-            lease_id=lease.lease_id,
-            resource_key=lease.resource_key,
-            expires_at=_iso_timestamp(_expires_at(lease_seconds)),
-            metadata=dict(lease.metadata),
-        )
-        payload = self._payload(renewed)
         try:
-            # The lease id was checked immediately before this atomic replace.
-            # A subsequent renew/release by the same owner remains safe; a
-            # different owner can only appear after expiry and reclamation.
-            write_json(path, payload)
+            with _exclusive_file_lock(self._lock_path(lease.resource_key)):
+                current = read_json(path)
+                if not isinstance(current, dict) or current.get("lease_id") != lease.lease_id:
+                    return None
+                if _parse_expiry(current.get("expires_at")) <= utc_now():
+                    return None
+                renewed = ResourceLease(
+                    lease_id=lease.lease_id,
+                    resource_key=lease.resource_key,
+                    expires_at=_iso_timestamp(_expires_at(lease_seconds)),
+                    metadata=dict(lease.metadata),
+                )
+                write_json(path, self._payload(renewed))
         except OSError:
             return None
         return renewed
@@ -136,10 +181,11 @@ class FileResourceLeaseStore:
     def release(self, lease: ResourceLease) -> bool:
         path = self._path(lease.resource_key)
         try:
-            current = read_json(path)
-            if isinstance(current, dict) and current.get("lease_id") == lease.lease_id:
-                path.unlink(missing_ok=True)
-                return True
+            with _exclusive_file_lock(self._lock_path(lease.resource_key)):
+                current = read_json(path)
+                if isinstance(current, dict) and current.get("lease_id") == lease.lease_id:
+                    path.unlink(missing_ok=True)
+                    return True
         except OSError:
             return False
         return False
@@ -147,6 +193,10 @@ class FileResourceLeaseStore:
     def _path(self, resource_key: str) -> Path:
         digest = hashlib.sha256(resource_key.encode("utf-8")).hexdigest()
         return self.root / f"{digest}.json"
+
+    def _lock_path(self, resource_key: str) -> Path:
+        digest = hashlib.sha256(resource_key.encode("utf-8")).hexdigest()
+        return self.root / f"{digest}.lock"
 
     @staticmethod
     def _new_lease(
@@ -270,7 +320,7 @@ class RedisResourceLeaseStore:
 
     @staticmethod
     def _ttl_ms(lease_seconds: float) -> int:
-        return max(1, int(math.ceil(float(lease_seconds) * 1000)))
+        return max(1, math.ceil(float(lease_seconds) * 1000))
 
     def _client_instance(self):
         if self._client is not None:

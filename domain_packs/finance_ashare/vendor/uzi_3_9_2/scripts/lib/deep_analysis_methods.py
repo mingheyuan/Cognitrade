@@ -125,7 +125,7 @@ def _ic_recommendation(features: dict, dcf: dict | None) -> tuple[str, str]:
         quality_score += 1
     if features.get("net_margin", 0) > 15:
         quality_score += 1
-    if features.get("moat_total", 0) >= 28:
+    if features.get("moat_known") and features.get("moat_total", 0) >= 28:
         quality_score += 2
 
     val_score = 0
@@ -159,7 +159,7 @@ def _ic_risks(features: dict, moat: dict) -> list[dict]:
             "severity": "High",
             "mitigant": "监控利息覆盖倍数与再融资窗口",
         })
-    if features.get("moat_total", 0) < 20:
+    if features.get("moat_known") and features.get("moat_total", 0) < 20:
         risks.append({
             "risk": "护城河偏弱",
             "detail": f"4 项合计 {features.get('moat_total', 0):.0f}/40",
@@ -173,7 +173,7 @@ def _ic_risks(features: dict, moat: dict) -> list[dict]:
             "severity": "Medium",
             "mitigant": "等待 PE 回归 40 以下再建仓",
         })
-    if not features.get("fcf_positive", True):
+    if features.get("fcf_known") and not features.get("fcf_positive"):
         risks.append({
             "risk": "现金流为负",
             "detail": "依赖外部融资",
@@ -398,7 +398,7 @@ def build_dd_checklist(features: dict, raw_data: dict) -> dict:
                 {"item": "5 年营收 / 净利历史", "status": _check(bool(dims.get("1_financials", {}).get("data", {}).get("revenue_history")))},
                 {"item": "ROE / 毛利 / 净利率", "status": _check(bool(features.get("roe_last", 0)))},
                 {"item": "资产负债率", "status": _check(bool(features.get("debt_ratio", 0)))},
-                {"item": "自由现金流", "status": _check(bool(features.get("fcf_positive", False)))},
+                {"item": "自由现金流", "status": _check(bool(features.get("fcf_known")))},
                 {"item": "审计意见 / 会计政策", "status": "⚪ 需人工核查"},
             ],
         },
@@ -423,7 +423,7 @@ def build_dd_checklist(features: dict, raw_data: dict) -> dict:
         {
             "workstream": "运营尽调 (Operational DD)",
             "items": [
-                {"item": "护城河评估", "status": _check(features.get("moat_total", 0) > 0)},
+                {"item": "护城河评估", "status": _check(bool(features.get("moat_known")))},
                 {"item": "研发投入", "status": "⚪ 需年报披露"},
                 {"item": "管理层背景", "status": "⚪ 需人工核查"},
                 {"item": "ESG 评级", "status": "⚪ 需第三方数据"},

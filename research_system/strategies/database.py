@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from threading import RLock
 from typing import Iterator
 
 from sqlalchemy import Engine, create_engine, event, inspect
@@ -43,6 +44,11 @@ class StrategyDatabase:
             }
             if self.database_url in {"sqlite://", "sqlite:///:memory:"}:
                 engine_options["poolclass"] = StaticPool
+        self._session_lock = (
+            RLock()
+            if self.database_url in {"sqlite://", "sqlite:///:memory:"}
+            else None
+        )
         self.engine: Engine = create_engine(self.database_url, **engine_options)
         if self.database_url.startswith("sqlite"):
             event.listen(self.engine, "connect", self._configure_sqlite)
@@ -97,15 +103,22 @@ class StrategyDatabase:
 
     @contextmanager
     def session(self) -> Iterator[Session]:
-        session = self._sessions()
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
+        # StaticPool is required so every thread sees the same in-memory SQLite
+        # database, but it also hands every Session the same physical connection.
+        # Concurrent transactions on that connection can commit or release each
+        # other's savepoints. Serialize only this test/embedded configuration;
+        # file SQLite and PostgreSQL retain normal connection-level concurrency.
+        guard = self._session_lock if self._session_lock is not None else nullcontext()
+        with guard:
+            session = self._sessions()
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
 
     def close(self) -> None:
         self.engine.dispose()

@@ -5,7 +5,7 @@ import unittest
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Event
+from threading import Event, Thread
 from typing import Any
 
 from research_system.strategies.backtesting.adapters import ExchangeExecutionAdapter, OTCExecutionAdapter
@@ -56,6 +56,21 @@ class BlockingSignalCore(FakeSignalCore):
         self.started.set()
         self.release.wait(5)
         return super().events(**kwargs)
+
+
+class EarlyTerminalBacktestService(StrategyBacktestService):
+    def __init__(self, *args, **kwargs) -> None:
+        self.terminal_written = Event()
+        self.release = Event()
+        super().__init__(*args, **kwargs)
+
+    def _execute(self, backtest_id: str) -> None:
+        with self.database.session() as session:
+            row = session.get(BacktestRun, backtest_id)
+            row.status = "completed"
+            row.completed_at = datetime.now(UTC)
+        self.terminal_written.set()
+        self.release.wait(5)
 
 
 def _series_loader(_instrument, start_date: date, end_date: date, _as_of: date):
@@ -262,7 +277,7 @@ class StrategyBacktestTests(unittest.TestCase):
                 initial_cash=1_000_000,
             )["id"]
         )
-        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(completed["status"], "completed", completed.get("error_summary"))
         result = completed["result"]
         post_entry = next(row for row in result["equity_curve"] if row["date"] == "2026-08-05")
         self.assertGreater(post_entry["cash"], 650_000)
@@ -300,7 +315,12 @@ class StrategyBacktestTests(unittest.TestCase):
             backtest_run_id=second["id"],
             thresholds={"minimum_sample_days": 5},
         )
-        self.assertTrue(passed["machine_passed"])
+        failed_checks = {
+            key: value
+            for key, value in passed["checks"].items()
+            if value.get("required", True) and not value.get("passed")
+        }
+        self.assertTrue(passed["machine_passed"], failed_checks)
         confirmed = verification_service.confirm(self.owner, passed["id"])
         self.assertEqual(confirmed["status"], "verified")
         promoted = self.strategy_service.promote(
@@ -359,6 +379,79 @@ class StrategyBacktestTests(unittest.TestCase):
             self.assertEqual(completed["status"], "cancelled")
         finally:
             core.release.set()
+            service.close()
+
+    def test_close_waits_for_running_worker_and_heartbeat(self) -> None:
+        core = BlockingSignalCore()
+        service = StrategyBacktestService(
+            self.database,
+            market_data_gateway=MarketDataGateway(series_loader=_series_loader),
+            object_store_root=Path(self.temporary.name) / "closing-objects",
+            signal_core=core,
+            max_workers=1,
+            recover=False,
+            lease_seconds=1,
+        )
+        closed = Event()
+
+        def close_service() -> None:
+            service.close()
+            closed.set()
+
+        closer = Thread(target=close_service, name="test-backtest-close", daemon=True)
+        try:
+            created = service.create(
+                self.owner,
+                strategy_version_id=self.version["id"],
+                fund_code="510300",
+                mode=BacktestMode.FUND_ONLY,
+                start_date=date(2026, 8, 4),
+                end_date=date(2026, 8, 10),
+                initial_cash=1_000_000,
+            )
+            self.assertTrue(core.started.wait(2))
+            closer.start()
+            self.assertFalse(closed.wait(0.1))
+
+            core.release.set()
+            self.assertTrue(closed.wait(2))
+            closer.join(timeout=1)
+            self.assertFalse(closer.is_alive())
+
+            with self.database.session() as session:
+                row = session.get(BacktestRun, created["id"])
+                self.assertEqual(row.status, "completed")
+        finally:
+            core.release.set()
+            service.close()
+
+    def test_terminal_status_is_hidden_until_worker_exits(self) -> None:
+        service = EarlyTerminalBacktestService(
+            self.database,
+            market_data_gateway=MarketDataGateway(series_loader=_series_loader),
+            object_store_root=Path(self.temporary.name) / "terminal-visibility-objects",
+            signal_core=FakeSignalCore(),
+            max_workers=1,
+            recover=False,
+        )
+        try:
+            created = service.create(
+                self.owner,
+                strategy_version_id=self.version["id"],
+                fund_code="510300",
+                mode=BacktestMode.FUND_ONLY,
+                start_date=date(2026, 8, 4),
+                end_date=date(2026, 8, 10),
+                initial_cash=1_000_000,
+            )
+            self.assertTrue(service.terminal_written.wait(2))
+            self.assertEqual(service.get(self.owner, created["id"])["status"], "running")
+
+            service.release.set()
+            completed = self._wait_with(service, created["id"])
+            self.assertEqual(completed["status"], "completed")
+        finally:
+            service.release.set()
             service.close()
 
     def test_backtest_rejects_unknown_benchmark_fields(self) -> None:

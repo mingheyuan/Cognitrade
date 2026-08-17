@@ -41,6 +41,7 @@ from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import (
     UZI_ENVIRONMENT_LOCK,
     UZI_SOURCE_COMMIT,
     Uzi392FetcherRuntime,
+    uzi_snapshot_scoring_scope,
 )
 from research_system.adapters.vendors.uzi_request_timeout import (
     uzi_request_timeout_scope,
@@ -118,7 +119,8 @@ def _uzi_native_environment(*, profile: str, school: str | None):
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
-            yield
+            with uzi_snapshot_scoring_scope():
+                yield
         finally:
             for key, value in previous.items():
                 if value is None:
@@ -138,6 +140,24 @@ def _profile_dimension_keys(profile: str) -> tuple[str, ...]:
     native_profile = importlib.import_module("lib.analysis_profile").get_profile(profile)
     enabled = set(native_profile.fetchers_enabled)
     return tuple(key for key in _DIMENSION_KEYS if key in enabled)
+
+
+def _research_workflow_compatible_features(
+    features: dict[str, Any],
+) -> dict[str, Any]:
+    """Bridge b004d7a's nullable moat value into its older idea-screen reader.
+
+    The latest upstream extractor truthfully emits ``moat_total=None`` when no
+    scored moat evidence exists. Its idea-screen function still performs one
+    direct numeric comparison. Normalize only that internal compatibility copy;
+    the canonical feature map and raw evidence remain nullable and continue to
+    drive data-gap disclosure.
+    """
+
+    compatible = dict(features)
+    if not compatible.get("moat_known") and compatible.get("moat_total") is None:
+        compatible["moat_total"] = 0
+    return compatible
 
 
 class GroundedText(BaseModel):
@@ -718,7 +738,11 @@ def _execute_symbol(
         deep_methods = importlib.import_module("compute_deep_methods")
         dim20 = deep_methods.compute_dim_20(features, raw)
         raw["dimensions"]["20_valuation_models"] = dim20
-        dim21 = deep_methods.compute_dim_21(features, raw, dim20.get("data"))
+        dim21 = deep_methods.compute_dim_21(
+            _research_workflow_compatible_features(features),
+            raw,
+            dim20.get("data"),
+        )
         raw["dimensions"]["21_research_workflow"] = dim21
         dim22 = deep_methods.compute_dim_22(features, raw, dim20.get("data"), dim21.get("data"))
         # Upstream currently inserts a fabricated ¥10,000 sample position.

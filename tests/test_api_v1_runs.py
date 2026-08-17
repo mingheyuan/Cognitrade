@@ -308,7 +308,7 @@ class ApiV1RunsTests(unittest.TestCase):
             headers=auth_headers(),
         )
         self.assertEqual(one_liner_response.status_code, 200, one_liner_response.text)
-        self.assertIn("50 位大佬里 1 人喊买", one_liner_response.text)
+        self.assertIn("2 位多头评委里 1 人喊买", one_liner_response.text)
         self.assertTrue(one_liner_response.headers["content-type"].startswith("text/plain"))
         calls = self.run_service.calls_for("artifacts")
         self.assertEqual(calls[-1].args, (RUN_ID,))

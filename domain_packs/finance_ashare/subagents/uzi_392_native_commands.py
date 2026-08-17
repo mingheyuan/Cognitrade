@@ -6,7 +6,11 @@ import importlib
 from typing import Any, Mapping
 
 from domain_packs.finance_ashare.subagents.uzi_392_native_methods import build_uzi_raw
-from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import UZI_SOURCE_COMMIT, Uzi392FetcherRuntime
+from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import (
+    UZI_SOURCE_COMMIT,
+    Uzi392FetcherRuntime,
+    uzi_snapshot_scoring_scope,
+)
 
 
 _PROMOTION_CONTEXT = ("朋友推荐", "群里说", "老师带", "内幕消息", "直播间", "跟单")
@@ -22,9 +26,10 @@ def execute_panel_only(snapshot_rows: list[dict[str, Any]], symbols: list[str]) 
             results.append({"symbol": symbol, "result": None, "data_gap": gaps})
             continue
         score_fns = importlib.import_module("lib.pipeline.score_fns")
-        dimensions = score_fns.score_dimensions(raw)
-        panel = score_fns.generate_panel(dimensions, raw)
-        synthesis = score_fns.generate_synthesis(raw, dimensions, panel)
+        with uzi_snapshot_scoring_scope():
+            dimensions = score_fns.score_dimensions(raw)
+            panel = score_fns.generate_panel(dimensions, raw)
+            synthesis = score_fns.generate_synthesis(raw, dimensions, panel)
         results.append(
             {
                 "symbol": symbol,

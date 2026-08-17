@@ -10,12 +10,48 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 - Finance Workspace：证券解析、行情、K 线摘要、基本面、资金流、舆情、公告、事件和龙虎榜。
 - 策略工作台：`/strategies` 从零创建或复制系统模板，编辑、发布不可变版本、绑定基金、生成日报、预演四态信号、回测、验证和晋级；旧 `/methodology` 与 `/backtesting` 前端入口已删除。
 - 报告与信号：一天一份 point-in-time 基金报告，前十大持仓必须生成可复用的 canonical UZI 个股子报告；基金本体、持仓 UZI 与结构质量共同生成可配置复合信号，缺失数据不重权也不伪造中性值。
-- 策略回测：Hikyuu 执行 `fund_only`、ETF/LOF 与场外基金 NAV、`holdings_portfolio` 三类资产适配；回测只接受已发布版本，成交逐笔追溯到策略版本、日报和信号，不允许页面临时覆盖阈值、均线或费率。
+- 策略回测：仅接受已发布的不可变策略版本；Hikyuu 生成技术事件，Cognitrade 确定性账本分别执行 `fund_only` 和 `holdings_portfolio` 两种模式，并适配 ETF/LOF、场外基金 NAV 与 A 股持仓。成交逐笔追溯到策略版本、日报和信号，不允许页面临时覆盖阈值、均线或费率。
 - 模拟交易：VeighNa PaperAccount 到价撮合，服务端现金/持仓账本、限价挂单、资金冻结、撤单、费用、T+1 和幂等订单；只有人工确认的 Verified 版本可晋级 Promoted 并通过策略链路下单。
 - DomainPack：`finance_ashare` 与 `legal_contract` 通过声明式能力、工具、Gate 和报告合同接入。
-- UZI 报告：研究工作台可从 ArtifactBoard 直接打开与上游 v3.9.4 分析及呈现层逐文件对齐的原生 HTML，或下载同源 PDF；不依赖旧 UZI CLI、缓存和报告服务。
+- UZI 报告：研究工作台可从 ArtifactBoard 直接打开与上游 v3.9.4 分析及呈现层逐文件对齐的原生 HTML，或下载同源 PDF；不依赖旧 UZI CLI、缓存和报告服务。评分阶段只消费已冻结快照，不会因基金持仓样本不足而隐式启动新的 AkShare 网络采集。
 - 基金持仓股票报告：从冻结公开披露生成可配置 top 5/10/20 的 UZI 股票报告，支持失败节点重试、完整重跑、暂停/恢复、历史补跑与 late revision；同一股票同一日期跨基金复用 canonical UZI Artifact。ETF 联接只使用已取得的穿透持仓，不推断缺失数据。
 - 治理：Bearer 鉴权、作用域隔离、高风险审批、质量 Gate、来源引用和分层记忆。
+
+## 2.0 核心升级：可审计的策略回测闭环
+
+1.0 已有独立的 A 股手工模拟盘，支持服务端现金/持仓账本、FIFO、T+1、费用、
+整手校验和幂等订单；它不是一个版本化策略回测系统。2.0 在保留这条能力的基础上，
+新增了从研究证据到策略模拟执行的完整治理链：
+
+```text
+已发布的不可变策略版本
+  + point-in-time 基金日报 / canonical UZI 持仓报告
+  -> 同版本四态信号（ALLOW_BUY / WATCH / AVOID / BLOCKED）
+  -> 回测预检
+  -> Hikyuu 技术事件 + Cognitrade 确定性成交/费用账本
+  -> 指标、基准、逐笔 lineage 与内容哈希
+  -> 机器验证 + 人工确认 Verified
+  -> 人工晋级 Promoted
+  -> VeighNa 模拟交易（当前策略委托限 holdings_portfolio A 股持仓）
+```
+
+| 能力 | v1.0 | 2.0 |
+| --- | --- | --- |
+| 策略定义 | 没有独立策略业务域 | 草稿、发布不可变版本、版本 diff、归档和审计事件 |
+| 回测 | 没有受治理的策略回测 | `fund_only` / `holdings_portfolio`，异步运行、预检、取消和重试 |
+| 数据时点 | 模拟下单时取服务端最新行情 | 日报、信号、行情/NAV 和持仓按 point-in-time 固化，禁止前视 |
+| 执行模型 | A 股手工模拟订单即时成交 | Hikyuu 技术事件 + 基金/A 股确定性账本，完整计费和 T+1/确认日约束 |
+| 可追溯性 | 订单和账户流水 | 每笔成交关联策略版本、内容哈希、信号、日报及市场数据哈希 |
+| 上线门槛 | 手工模拟盘可直接下单 | Published → 回测 → 机器检查 → 人工 Verified → 人工 Promoted |
+
+回测输出包括总收益、年化收益、最大回撤、Sharpe、换手率和总费用，并提供基金买入
+持有、基金类别指数、期初披露持仓静态组合、沪深 300 或自定义指数基准。机器验证会
+检查无前视、lineage 完整性、确定性复跑、样本/信号覆盖、费用完整性和绩效阈值；
+机器通过后仍不能自动晋级。
+
+完整差异、两种回测模式、费用/基准、数据库与 API 变化、升级步骤和能力边界见
+[《Cognitrade 1.0 → 2.0 中文升级报告》](./UPGRADE_REPORT_1.0_TO_2.0_CN.md)。
+UZI 对齐细节见 [《Cognitrade 2.0 中文版本说明》](./RELEASE_NOTES_2.0_CN.md)。
 
 ## 快速部署
 
@@ -71,6 +107,8 @@ COGNITRADE_PROVIDER_SMOKE_SECTOR=白酒 \
 迁移先在 `workspace/backups/strategy_migrations/` 生成一致性 SQLite 与工作区索引备份，
 再执行 Alembic、旧 Artifact/回测引用索引及 Run 状态规范化。`deploy` 命令显式调用这条
 链；普通 `start`、`restart` 和 API 进程启动不会隐式改库。
+
+从 v1.0 升级前请先阅读[升级报告中的迁移说明](./UPGRADE_REPORT_1.0_TO_2.0_CN.md#九升级与兼容性影响)。
 
 ## 本地开发
 

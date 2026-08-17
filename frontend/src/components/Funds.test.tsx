@@ -236,6 +236,8 @@ describe('Funds', () => {
   it('starts a lite top-holding report batch from the frozen fund run', async () => {
     render(<Funds onOpenRun={mocks.openRun} />)
     await waitFor(() => expect(screen.getByRole('combobox', { name: '研究档位' })).toBeEnabled())
+    expect(screen.getByRole('option', { name: '速判 · 1–2 分钟 · 精简数据 · 66 席评审' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: '标准 · 5–8 分钟 · 标准数据 · 66 席评审' })).toBeInTheDocument()
     fireEvent.change(screen.getByRole('combobox', { name: '研究档位' }), {
       target: { value: 'lite' },
     })

@@ -1,7 +1,7 @@
 schema_version: "3"
 source:
   repository: https://github.com/wbh604/UZI-Skill
-  commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
+  commit: b004d7a988ca53a4805bf36784af091fa1209f22
   version: 3.9.4
   license: MIT
   license_sha256: 78bebb5232741327c31b0da4f5bbd570dc59ab3c3230582a4d1b4650238a7d58
@@ -36,6 +36,9 @@ contract:
   source_registry_count: 73
   provider_errors: preserved_per_selected_upstream_lane
   collection_orchestrator: root_v3_primary_with_route_specific_single_or_multi_error_policy
+  pipeline_execution: spawn_process_workers_with_hard_per_fetcher_and_per_wave_timeouts
+  pipeline_timeout_defaults_seconds: {fetcher: 120, wave: 300}
+  pipeline_resume_freshness: fetcher_cache_ttl_requires_numeric_fetched_at
   pipeline_registry_dimensions: all_22_fetchers_for_every_profile
   profile_source_dimensions_scope: legacy_numbered_wave_and_expected_self_review_dimensions
   snapshot_cache: route_specific_pinned_pipeline_or_legacy_resume_semantics_plus_lib_cache
@@ -47,13 +50,13 @@ contract:
   executable_panel_seats_by_profile: {lite: 66, medium: 66, deep: 66}
   stale_declared_panel_seats_by_profile: {lite: 10, medium: 51, deep: 51}
   non_uzi_sector_policy_route: host_capability_outside_uzi_parity
-  sensitive_sources: explicit_enable_only
+  sensitive_sources: explicit_enable_only_with_request_policy_transported_to_spawn_worker
   external_checkout_runtime: forbidden
 
 vendored_methodology_resources:
   standalone_skill_roots: [skills/investor-panel, skills/lhb-analyzer, skills/trap-detector]
   canonical_file_count: 17
-  path_sensitive_sha256: 88b430b169ad68f028ac83df438d0dfac818e7330c266f8d86ddea75e0674593
+  path_sensitive_sha256: 8bc93074f001fa97154629dcd33cf5a6dfed653cf79d954fa883570be0a4f1ca
   consumption: reference_only_static_contracts
   deep_analysis_relocations:
     skills/deep-analysis/SKILL.md: skill/SKILL.md
@@ -68,7 +71,7 @@ vendored_methodology_resources:
     upstream_tests: pinned_checkout_ci_surface
 
 defaults: &defaults
-  source_commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
+  source_commit: b004d7a988ca53a4805bf36784af091fa1209f22
   migration_status: source_parity
   result_equivalence: exact
   invocation_acceptance: tests.test_uzi_392_vendor_runtime.Uzi392VendorRuntimeTests.test_all_22_fetcher_dispatches_preserve_upstream_results_and_call_contracts

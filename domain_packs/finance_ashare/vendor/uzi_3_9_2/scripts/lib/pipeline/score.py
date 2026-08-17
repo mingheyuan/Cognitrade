@@ -76,6 +76,10 @@ def score_from_cache(ticker: str) -> dict:
     except Exception as e:
         print(f"   ⚠️ 机构建模 dim 20/21/22 计算失败: {type(e).__name__}: {str(e)[:100]}")
 
+    # Always derive the recovery artifact from the final, post-fallback snapshot.
+    from lib.data_integrity import refresh_recovery_artifact
+    refresh_recovery_artifact(raw, ti.full, cache_dir / "_data_gaps.json")
+
     # 重新写回 raw_data.json（autofill 已修改 · dim 20-22 已就位）
     raw_path.write_text(
         json.dumps(raw, ensure_ascii=False, indent=2, default=str), encoding="utf-8"

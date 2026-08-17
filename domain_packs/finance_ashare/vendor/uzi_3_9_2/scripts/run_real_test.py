@@ -130,6 +130,18 @@ def _disarm_mini_racer_sentinel() -> None:
 def run_fetcher(module_name: str, args: tuple) -> dict:
     # v3.3.4 · issue #61 · 多重保护 mini_racer 崩溃
     if module_name in _MINI_RACER_FETCHERS and _mini_racer_disabled():
+        if module_name == "fetch_valuation":
+            try:
+                from fetch_valuation import main_safe
+                result = main_safe(*args)
+                return result if isinstance(result, dict) else {"data": result}
+            except Exception as e:
+                return {
+                    "data": {"_disabled": "mini_racer skipped; main_safe failed"},
+                    "source": "fetch_valuation (safe-fallback-error)",
+                    "fallback": True,
+                    "error": f"{type(e).__name__}: {e}",
+                }
         return {
             "data": {"_disabled": "mini_racer skipped (env / sentinel)"},
             "source": f"{module_name} (skipped)",
@@ -496,7 +508,7 @@ def stage1(ticker: str) -> dict:
     """Stage 1: 数据采集 + 建模 + 规则引擎骨架分。
 
     返回 {ticker, raw, dims, panel, features} 供 Claude agent 审查。
-    Claude 应该在 stage1 之后介入，用 sub-agent 逐组分析 51 评委，
+    Claude 应该在 stage1 之后介入，用 sub-agent 逐组分析所有评委，
     覆盖 panel.json 中的 headline/reasoning/score，然后调 stage2 生成报告。
     """
     # v3.1 · stage1 前置段 (preflight + lite + name resolve + ETF guard) 已抽到 pipeline.preflight_helpers
@@ -516,6 +528,7 @@ def stage1(ticker: str) -> dict:
         validate as _validate_raw,
         format_report as _fmt_integrity,
         generate_recovery_tasks as _gen_tasks,
+        refresh_recovery_artifact as _refresh_recovery,
     )
     _integrity = _validate_raw(raw)
     print("\n" + _fmt_integrity(_integrity))
@@ -580,6 +593,10 @@ def stage1(ticker: str) -> dict:
     raw["dimensions"]["21_research_workflow"] = compute_dim_21(_features_pre, raw, _d20)
     _d21 = raw["dimensions"]["21_research_workflow"]["data"]
     raw["dimensions"]["22_deep_methods"] = compute_dim_22(_features_pre, raw, _d20, _d21)
+    # Fallbacks and institutional modeling may have changed fields after the first
+    # integrity pass. Recompute from the final raw snapshot and remove stale gaps.
+    from pathlib import Path as _Path
+    _refresh_recovery(raw, ti.full, _Path(".cache") / ti.full / "_data_gaps.json")
     write_task_output(ti.full, "raw_data", raw)
     _s20 = _d20["summary"]
     _s21 = _d21["summary"]
@@ -595,13 +612,16 @@ def stage1(ticker: str) -> dict:
     write_task_output(ti.full, "dimensions", dims)
     print(f"  基本面得分: {dims['fundamental_score']}/100")
 
-    print("\n🎭 Task 3 · 51 评委规则引擎（骨架分）")
+    print("\n🎭 Task 3 · 评委规则引擎（骨架分）")
     panel = generate_panel(dims, raw)
     write_task_output(ti.full, "panel", panel)
     sd = panel["signal_distribution"]
     skip_n = sd.get("skip", 0)
-    active_n = len(panel["investors"]) - skip_n
+    active_n = panel.get("long_active", sum(sd.get(k, 0) for k in ("bullish", "neutral", "bearish")))
     print(f"  参与 {active_n} · 跳过 {skip_n} · 看多 {sd['bullish']} · 中性 {sd['neutral']} · 看空 {sd['bearish']}")
+    if not panel.get("consensus_valid", True):
+        print(f"  ⚠️ {panel.get('consensus_warning')}")
+        print(f"     空判评委: {', '.join(panel.get('hollow_ids', [])[:8])}")
 
     features = extract_features(raw, raw.get("dimensions", {}))
 
