@@ -20,6 +20,7 @@ from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
     _canonical_evidence_path,
     _normalize_evidence_paths,
     _normalize_payload_paths,
+    _research_workflow_compatible_features,
     _safe_error_detail,
     _self_review_compatible_raw,
     _snapshot_rows_for_symbol,
@@ -190,6 +191,15 @@ class _RepairingEvidenceProvider(_LiteAgentProvider):
 
 
 class Uzi392AnalysisGateTests(unittest.TestCase):
+    def test_nullable_moat_is_only_normalized_for_the_legacy_idea_screen(self) -> None:
+        features = {"moat_known": False, "moat_total": None, "fcf_positive": None}
+
+        compatible = _research_workflow_compatible_features(features)
+
+        self.assertIsNone(features["moat_total"])
+        self.assertEqual(compatible["moat_total"], 0)
+        self.assertIsNone(compatible["fcf_positive"])
+
     def test_multi_symbol_qualitative_rows_are_isolated(self) -> None:
         rows = [
             {
@@ -530,12 +540,14 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
                 )
                 panel = result["results"][0]["panel"]
                 self.assertEqual(len(panel["investors"]), expected)
+                short_total = panel["short_consensus"]["total"]
+                self.assertEqual(short_total, 2)
                 self.assertEqual(
-                    sum(panel["signal_distribution"].values()),
+                    sum(panel["signal_distribution"].values()) + short_total,
                     expected,
                 )
                 self.assertEqual(
-                    sum(panel["vote_distribution"].values()),
+                    sum(panel["vote_distribution"].values()) + short_total,
                     expected,
                 )
 

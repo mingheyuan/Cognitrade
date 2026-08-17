@@ -140,6 +140,24 @@ def _profile_dimension_keys(profile: str) -> tuple[str, ...]:
     return tuple(key for key in _DIMENSION_KEYS if key in enabled)
 
 
+def _research_workflow_compatible_features(
+    features: dict[str, Any],
+) -> dict[str, Any]:
+    """Bridge b004d7a's nullable moat value into its older idea-screen reader.
+
+    The latest upstream extractor truthfully emits ``moat_total=None`` when no
+    scored moat evidence exists. Its idea-screen function still performs one
+    direct numeric comparison. Normalize only that internal compatibility copy;
+    the canonical feature map and raw evidence remain nullable and continue to
+    drive data-gap disclosure.
+    """
+
+    compatible = dict(features)
+    if not compatible.get("moat_known") and compatible.get("moat_total") is None:
+        compatible["moat_total"] = 0
+    return compatible
+
+
 class GroundedText(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -718,7 +736,11 @@ def _execute_symbol(
         deep_methods = importlib.import_module("compute_deep_methods")
         dim20 = deep_methods.compute_dim_20(features, raw)
         raw["dimensions"]["20_valuation_models"] = dim20
-        dim21 = deep_methods.compute_dim_21(features, raw, dim20.get("data"))
+        dim21 = deep_methods.compute_dim_21(
+            _research_workflow_compatible_features(features),
+            raw,
+            dim20.get("data"),
+        )
         raw["dimensions"]["21_research_workflow"] = dim21
         dim22 = deep_methods.compute_dim_22(features, raw, dim20.get("data"), dim21.get("data"))
         # Upstream currently inserts a fabricated ¥10,000 sample position.

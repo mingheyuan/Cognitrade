@@ -4,7 +4,7 @@
 
 - 目标状态：实现与本地回归完成；当前 PR 的 GitHub Actions 与真实 provider smoke 待远端验收，历史 CI 仅作为迁移基线
 - 上游仓库：`https://github.com/wbh604/UZI-Skill`
-- 唯一基准提交：`0acf25122cabf493e7bc442faff62ceceb7f2f02`
+- 唯一基准提交：`b004d7a988ca53a4805bf36784af091fa1209f22`
 - 上游版本：`3.9.4`
 - 根采集基准：对已解析个股复现上游 route-specific 采集；单股默认执行 v3 pipeline，`UZI_LEGACY=1` 强制 legacy，preflight 或采集编排异常时整股回退 legacy；versus/portfolio 与上游专用 runner 一样始终逐股调用 v3，失败后读已有 cache 或跳过，不重试 legacy；单个 provider/fetcher 错误仍留在 v3 `DimResult`
 - 迁移边界：实现迁入 Finance DomainPack；生产环境不得依赖外部 UZI checkout、CLI、缓存目录或运行时
@@ -30,10 +30,10 @@
 | 资产 | 上游路径 | 固定证据 | 目标 |
 |---|---|---|---|
 | 许可证 | `LICENSE` | SHA-256 `78bebb5232741327c31b0da4f5bbd570dc59ab3c3230582a4d1b4650238a7d58` | 保留 MIT notice 与来源提交 |
-| 原生报告呈现层 | `skills/deep-analysis/assets/report-template.html` + 4 个 `lib/report` helper | v3.9.4 commit `0acf25122cabf493e7bc442faff62ceceb7f2f02`；模板 3615 行；SHA-256 `1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8` | 原样迁入并加逐文件哈希测试；分析方法仍固定在 3.9.4 |
+| 原生报告呈现层 | `skills/deep-analysis/assets/report-template.html` + 4 个 `lib/report` helper | v3.9.4 commit `b004d7a988ca53a4805bf36784af091fa1209f22`；模板 3615 行；SHA-256 `1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8` | 原样迁入并加逐文件哈希测试；分析方法仍固定在 3.9.4 |
 | 来源注册表 | `skills/deep-analysis/scripts/lib/data_source_registry.py` | 73 个 source ID | 目标目录和运行注册表均为 73 项 |
 | 命令目录 | `commands/*.md` | 20 个命令 | 20 个独立 Agent OS/API/Web 能力 |
-| 独立技能方法论 | `skills/{investor-panel,lhb-analyzer,trap-detector}/**` | 17 个路径敏感资源；SHA-256 `88b430b169ad68f028ac83df438d0dfac818e7330c266f8d86ddea75e0674593` | 原样保留方法论作为静态契约；Agent OS 路由与 DomainPack 实现另行验收，不动态执行 Markdown |
+| 独立技能方法论 | `skills/{investor-panel,lhb-analyzer,trap-detector}/**` | 17 个路径敏感资源；SHA-256 `8bc93074f001fa97154629dcd33cf5a6dfed653cf79d954fa883570be0a4f1ca` | 原样保留方法论作为静态契约；Agent OS 路由与 DomainPack 实现另行验收，不动态执行 Markdown |
 | Fetcher | `skills/deep-analysis/scripts/fetch_*.py` | 22 个 fetcher | 调用链与结果契约逐项等价 |
 | 方法 | 上游方法与命令实现 | 23 个实现单元 | 公式、字段、阈值和顺序逐项等价 |
 | 自审 | `scripts/lib/self_review.py`、`review_stage_output.py` | `critical_count == 0` 才通过 | 不可绕过的运行状态机 |
@@ -228,11 +228,11 @@
 ## 12. Agent OS 运行边界
 
 - 已解析个股的完整研究由 `Uzi392FetcherRuntime.collect_symbol` 以整股为 lane 单位复现固定上游采集分支。单股 `stock_check/uzi_analyze_stock` 默认先执行 `_preflight_guards` 再走 `lib.pipeline.collect.collect`；`UZI_LEGACY=1` 进入 `legacy_forced`，preflight 或 pipeline 采集编排抛出异常才进入 `legacy_fallback`。`stock_compare/uzi_portfolio_batch` 对齐专用 `versus_runner/portfolio_runner`：始终逐股调用 v3，忽略根 CLI 的 `UZI_LEGACY`，异常时不重试 legacy。上游只有在 raw+synthesis 等完整报告 cache 可读时才复用；当前采集适配器只有 raw cache，不能伪装完整，因此把该股标为整股 route failure，从所有 Agent OS recovery/LLM 阶段排除，并由多股 composer 跳过。单个 provider/fetcher 异常由 `BaseFetcher` 转成 v3 error `DimResult`，不触发 legacy。`_uzi_execution` 只记录 lane 和脱敏后的异常类型。
-- v3 lane 对所有 lite/medium/deep 都遍历完整 22-entry registry：wave 1 串行 `0_basic`；wave 2 以最多 6 workers 执行 17 个非依赖 fetcher（包括 `6_fund_holders`、`similar_stocks`）；wave 3 串行执行依赖集合 `3_macro/7_industry/9_futures/13_policy`。它没有整条采集的 overall completion timeout。固定代码只在 wave 2 的 `10_valuation/12_capital_flow` 执行 pipeline mini-racer lock 与 `UZI_DISABLE_MINI_RACER` 检查；`7_industry` 虽在 wave 3 串行，却直接调用 `_fetch_with_context`，不经过该 lock/disable 分支。每个 adapter 提取上游 `data`、规范化空值、校验并返回带 `_pipeline` 的 `DimResult`。lite 的 `fetchers_enabled` 仍为上游 7 个 expected/self-review 维度，但 ArtifactBoard `snapshot_types` 必须承载全 22 项结果，不能把 lite 误当成 v3 采集裁剪。
+- v3 lane 对所有 lite/medium/deep 都遍历完整 22-entry registry：wave 1 运行 `0_basic`；wave 2 以最多 6 个 spawn 子进程执行 17 个非依赖 fetcher（包括 `6_fund_holders`、`similar_stocks`）；wave 3 以单 worker 顺序执行依赖集合 `13_policy/3_macro/7_industry/9_futures`。默认单 fetcher 硬超时 120 秒、每波硬超时 300 秒，超时子进程会 terminate/kill；可分别由 `UZI_PIPELINE_FETCHER_TIMEOUT` 与 `UZI_PIPELINE_WAVE_TIMEOUT` 调整。mini-racer fetcher 进入串行组，禁用时 valuation 走 `main_safe`，其余返回缺失结果。每个 adapter 提取上游 `data`、规范化空值、校验并返回带 `_pipeline` 的 `DimResult`。lite 的 `fetchers_enabled` 仍为上游 7 个 expected/self-review 维度，但 ArtifactBoard `snapshot_types` 必须承载全 22 项结果，不能把 lite 误当成 v3 采集裁剪。
 - legacy forced/fallback lane 使用 `run_real_test.collect_raw_data`：basic 始终刷新；随后是 profile-scoped numbered wave（最多 6 workers，300 秒 completion classification window）；最后并发执行 `fund_holders/similar_stocks` bonus wave（2 workers，180 秒 classification window）。这些窗口会标记 unfinished 结果，但 executor 中的 Python 线程不能被强制取消，因此不是整条运行的硬超时；legacy 保留 `run_fetcher` envelope、mini-racer lock/disable/force/crash-sentinel 语义。
 - `raw_data` 是 lane 相关契约：v3 具有 `ticker/market/code/full/dimensions`，保留 `6_fund_holders` 维度，把 `fund_managers` 放到可选顶层，并因同名 spill 只在顶层保留 `similar_stocks`；legacy 具有 `ticker/market/fetched_at/dimensions`，没有 `6_fund_holders` 维度，两个 bonus 结果都在顶层。快照用 `_uzi_raw_result` 保存原始维度 envelope、`_uzi_root_fields` 保存 lane-specific 根字段，并用 `_uzi_top_level_fields.{fund_managers|similar_stocks}={present,value}` 严格区分 absent、`None` 与 `[]`；在没有 recovery 写入时，展示别名不得恢复进原生 data，`build_uzi_raw` 按原 lane 无损重建。若上游 suggested-fix/MX/DDGS/Playwright recovery 确实补到缺失证据，则新增字段与 `recovery` 元数据是显式变更，不再宣称 byte-identical raw。Snapshot schema 的 `source_trace` 和 Artifact `source_refs` 同时保留原始与恢复 provider lineage。ArtifactBoard 业务快照名保持 `fund_holders`；基金统计档位 lite/medium/deep 分别计算前 5/20/100 家。
 - 对齐边界是“个股数据采集”，不是原样嵌入交互式 CLI：legacy forced/fallback 会复用 pinned 中文名解析与证券类型分类，确保 ETF/LOF/基金/可转债不会被当成个股评分；候选确认、ETF 持仓循环和命令行退出码不在服务端重放，由 Agent OS intake/专用基金能力承接。采集后的评分、Agent roleplay、ArtifactBoard 报告和渲染由 Agent OS 原生 UZI 阶段负责，因此后处理失败不会像根 `run.py` 那样重新执行一遍 legacy stage1/stage2。该边界必须在验收中显式披露，不能称为 CLI 全流程对象身份等价。
-- resume 同样按 lane 保留上游语义：v3 可复用任何通过 `_is_resume_valid` 的维度，包括 `0_basic`；单股请求的 `no_resume=true` 映射为 v3 `resume=False`。v3 不直接读取进程变量 `UZI_NO_RESUME`；versus/portfolio 与固定 runner 一样始终 `resume=True`，公开 API 拒绝给多股 intent 传 `no_resume`。legacy 的 `collect_raw_data` 自己保留 `UZI_NO_RESUME`、`0_basic` 和两个 bonus 始终刷新等上游规则。UZI `requests` 默认 20 秒只在 UZI execution context 及其嵌套 executor task 生效，不影响其他 DomainPack；该单次请求边界不等于 v3 overall completion timeout。
+- resume 同样按 lane 保留上游语义：v3 只复用通过 `_is_resume_valid` 且带数值 `fetched_at`、仍在对应 fetcher `cache_ttl_sec` 内的维度，包括 `0_basic`；无时间戳旧缓存会重抓。单股请求的 `no_resume=true` 映射为 v3 `resume=False`。v3 不直接读取进程变量 `UZI_NO_RESUME`；versus/portfolio 与固定 runner 一样始终 `resume=True`，公开 API 拒绝给多股 intent 传 `no_resume`。legacy 的 `collect_raw_data` 自己保留 `UZI_NO_RESUME`、`0_basic` 和两个 bonus 始终刷新等上游规则。Agent OS 的 `requests` 默认 20 秒仍覆盖直接/legacy UZI 线程；v3 spawn worker 由上游进程级硬超时约束。请求级 Xueqiu gate 会显式传入 `19_contests` 子进程，不影响其他 DomainPack。
 - 固定版完整 `generate_panel()` 不读取 profile，lite/medium/deep 实际都遍历 66 个 registry seat；`analysis_profile.py` 中 10/51/51 只作为陈旧声明元数据保留审计，不能用于截断生产 panel。独立 `/quick-scan` 命令仍按其命令契约显式选择 Top 10。
 - `_uzi_execution.lane` 表示本次活跃编排器，不承诺每个复用维度都由同一 lane 首次生成：pinned v3 与 legacy 本来就能互相读取符合各自有效性检查的历史 dimension envelope。Artifact 中保留每个 dimension 自身的 envelope 与 `_pipeline` 元数据，不能仅凭 active lane 重写其来源。
 - UZI 3.9.4 自审的两个字符串检查会在 JSON `null` 上触发 `NoneType is not iterable`；Agent OS 只在自审副本中恢复函数声明的空字符串默认值，原始证据、完整性检查与报告数据均不改写。

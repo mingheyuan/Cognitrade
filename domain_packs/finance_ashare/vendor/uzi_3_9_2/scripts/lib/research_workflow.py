@@ -185,8 +185,7 @@ def _build_thesis_pillars(features: dict, fin: dict, moat: dict) -> list[dict]:
             "weight": "Medium",
         })
 
-    fcf_pos = features.get("fcf_positive", False)
-    if fcf_pos:
+    if features.get("fcf_known") and features.get("fcf_positive"):
         pillars.append({
             "pillar": "自由现金流健康",
             "evidence": "持续正 FCF 支撑分红与再投资",
@@ -214,7 +213,7 @@ def _build_risks(features: dict, fin: dict) -> list[dict]:
     if features.get("pe", 0) > 60:
         risks.append({"risk": "估值偏高", "severity": "Medium",
                       "detail": f"PE {features.get('pe', 0):.0f}x 高于市场"})
-    if not features.get("fcf_positive", True):
+    if features.get("fcf_known") and not features.get("fcf_positive"):
         risks.append({"risk": "自由现金流为负", "severity": "High",
                       "detail": "长期依赖外部融资"})
     if features.get("pct_from_60d_high", 0) < -20:

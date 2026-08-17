@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import operator
 from pathlib import Path
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -14,6 +16,7 @@ from domain_packs.finance_ashare.vendor.uzi_3_9_2 import (
     Uzi392FetcherRuntime,
     verify_vendored_uzi_integrity,
 )
+from domain_packs.finance_ashare.vendor.uzi_3_9_2 import runtime as uzi_runtime
 from domain_packs.finance_ashare.tools import snapshot_collector
 
 
@@ -27,7 +30,7 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
         report = verify_vendored_uzi_integrity()
         self.assertTrue(report["valid"], report)
         self.assertEqual(report["fetcher_count"], 22)
-        self.assertEqual(report["python_file_count"], 134)
+        self.assertEqual(report["python_file_count"], 135)
         self.assertEqual(report["command_count"], 20)
         self.assertTrue(report["python_tree_matches"])
         self.assertTrue(report["command_tree_matches"])
@@ -209,6 +212,118 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
         )
         self.assertIs(module.fetch_xueqiu_cubes, original_fetch)
         self.assertIs(module.cached, cached)
+
+    def test_pipeline_spawn_worker_preserves_xueqiu_policy_gate(self) -> None:
+        contests = SimpleNamespace()
+
+        def original_fetch(_ticker_info, limit=50):
+            return [{"name": "unexpected"}], {"source": "unguarded"}
+
+        def cached(_ticker, _key, fetch_fn, ttl=0):
+            return fetch_fn()
+
+        contests.fetch_xueqiu_cubes = original_fetch
+        contests.cached = cached
+
+        def native_job(dim_key, ticker, raw_context):
+            cubes, meta = contests.fetch_xueqiu_cubes(object())
+            return dim_key, {"data": {"xueqiu_cubes": cubes, "xueqiu_meta": meta}}, {}
+
+        pipeline_collect = SimpleNamespace(_run_fetcher_job=native_job)
+
+        def import_module(name):
+            return pipeline_collect if name == "lib.pipeline.collect" else contests
+
+        with patch.object(
+            uzi_runtime.importlib,
+            "import_module",
+            side_effect=import_module,
+        ):
+            result = uzi_runtime._run_pipeline_contest_job(
+                "19_contests",
+                "600519",
+                None,
+                {"enabled": False, "cookie": None},
+            )
+
+        self.assertEqual(result[1]["data"]["xueqiu_cubes"], [])
+        self.assertEqual(
+            result[1]["data"]["xueqiu_meta"]["policy_status"],
+            "sensitive_source_disabled",
+        )
+        self.assertIs(contests.fetch_xueqiu_cubes, original_fetch)
+        self.assertIs(contests.cached, cached)
+
+    def test_pipeline_policy_is_attached_only_to_the_contest_process_job(self) -> None:
+        runner = __import__("lib.pipeline.process_runner", fromlist=["ProcessJob"])
+        captured = []
+
+        def run_process_jobs(jobs, *, max_workers, overall_timeout):
+            captured.extend(jobs)
+            return []
+
+        pipeline_collect = SimpleNamespace(run_process_jobs=run_process_jobs)
+        normal = runner.ProcessJob(
+            key="0_basic",
+            target=operator.add,
+            args=(1, 2),
+        )
+        contest = runner.ProcessJob(
+            key="19_contests",
+            target=operator.add,
+            args=("19_contests", "600519"),
+        )
+
+        with uzi_runtime._pipeline_contests_policy_scope(
+            pipeline_collect,
+            policy={"enabled": True, "cookie": "secret-cookie"},
+        ):
+            pipeline_collect.run_process_jobs(
+                [normal, contest],
+                max_workers=2,
+                overall_timeout=30,
+            )
+
+        self.assertIs(captured[0], normal)
+        self.assertIs(captured[1].target, uzi_runtime._run_pipeline_contest_job)
+        self.assertEqual(captured[1].args[-1]["cookie"], "secret-cookie")
+        self.assertNotIn("secret-cookie", repr(captured[0]))
+        self.assertIs(pipeline_collect.run_process_jobs, run_process_jobs)
+
+    def test_process_runner_enforces_hard_timeout_with_platform_startup_budget(self) -> None:
+        runner = __import__(
+            "lib.pipeline.process_runner",
+            fromlist=["ProcessJob", "run_process_jobs"],
+        )
+        jobs = [
+            runner.ProcessJob(
+                key="fast",
+                target=operator.add,
+                args=(1, 2),
+                timeout_sec=5.0,
+            ),
+            runner.ProcessJob(
+                key="slow",
+                target=time.sleep,
+                args=(10.0,),
+                timeout_sec=0.05,
+            ),
+        ]
+
+        started = time.monotonic()
+        outcomes = {
+            row.key: row
+            for row in runner.run_process_jobs(
+                jobs,
+                max_workers=2,
+                overall_timeout=5.0,
+            )
+        }
+
+        self.assertLess(time.monotonic() - started, 5.0)
+        self.assertEqual(outcomes["fast"].value, 3)
+        self.assertIsNone(outcomes["fast"].error)
+        self.assertTrue(outcomes["slow"].timed_out)
 
     def test_production_snapshot_path_preserves_raw_results_and_dependency_waves(self) -> None:
         calls: list[tuple[str, str | None, dict]] = []

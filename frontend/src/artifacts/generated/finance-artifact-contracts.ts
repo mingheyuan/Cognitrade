@@ -864,7 +864,7 @@ export type QuickScanContent = {
 
 export type UziNativeMethodResultContent = {
   "method_id": "dcf" | "comps" | "three_statement" | "quick_lbo" | "accretion_dilution" | "initiation_report" | "earnings_review" | "catalyst_calendar" | "thesis_tracker" | "morning_note" | "quantitative_screen" | "sector_review" | "ic_memo" | "porter_bcg" | "dd_checklist" | "unit_economics" | "value_creation_plan" | "portfolio_rebalance" | "ai_readiness" | "earnings_preview" | "model_update" | "returns_attribution" | "holding_rebalance";
-  "source_commit": "0acf25122cabf493e7bc442faff62ceceb7f2f02";
+  "source_commit": "b004d7a988ca53a4805bf36784af091fa1209f22";
   "implementation": "vendored_uzi_3_9_2_pure_function";
   "results": Array<{
     "symbol": string | null;
@@ -878,7 +878,7 @@ export type UziNativeMethodResultContent = {
 
 export type UziNativeCommandResultContent = {
   "command_id": "analyze-stock" | "quick-scan" | "panel-only" | "scan-trap" | "dcf" | "comps" | "lbo" | "segmental-model" | "initiate" | "earnings" | "catalysts" | "thesis" | "screen" | "dd" | "ic-memo" | "ai-readiness" | "earnings-preview" | "model-update" | "returns" | "rebalance";
-  "source_commit": "0acf25122cabf493e7bc442faff62ceceb7f2f02";
+  "source_commit": "b004d7a988ca53a4805bf36784af091fa1209f22";
   "implementation": "vendored_uzi_3_9_2_command_boundary";
   "phase": string;
   "results": Array<{

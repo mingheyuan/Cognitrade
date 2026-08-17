@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import importlib
 import os
@@ -11,20 +11,20 @@ import threading
 from typing import Any, Callable
 
 
-UZI_SOURCE_COMMIT = "0acf25122cabf493e7bc442faff62ceceb7f2f02"
-UZI_REPORT_SOURCE_COMMIT = "0acf25122cabf493e7bc442faff62ceceb7f2f02"
+UZI_SOURCE_COMMIT = "b004d7a988ca53a4805bf36784af091fa1209f22"
+UZI_REPORT_SOURCE_COMMIT = "b004d7a988ca53a4805bf36784af091fa1209f22"
 UZI_REPORT_VERSION = "3.9.4"
 UZI_REPORT_TEMPLATE_SHA256 = "1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8"
 UZI_REPORT_RENDERER_SHA256 = {
     "lib/report/dim_viz.py": "032dd9e0429f8d5e4ffd030dcc33c6360817b4ac81f6983479b4f82adef29304",
     "lib/report/institutional.py": "ca2e0ff2ba3dcc2690834da994e5a292e466b137875f660306be4687506e3fef",
-    "lib/report/panel_cards.py": "0b21aefb50d87dc992a378cbe8e50eef9988e0d69147d9956db759858ec666ce",
+    "lib/report/panel_cards.py": "28dfdb0b9ba226cc92236b0f31e7032c22fe624c2069b140410429923c82e828",
     "lib/report/svg_primitives.py": "2b13c6fdc9bfc1a5182a39c74d75d8c14ce1d52c26b7e88ae32975d1b547f93e",
 }
-UZI_PURE_PYTHON_TREE_SHA256 = "dae53a8de9c31ec7fa9d057f954ac61c6a53d2c907ca9517be40ead873ef1905"
-UZI_COMMAND_TREE_SHA256 = "18a54c151139e8cfe50ffa093035bf90ebbf3bd6327248adc5b5bfdbda7ccc61"
-UZI_ANALYST_ASSET_TREE_SHA256 = "c5afcc7f7266ba7932195c4ee0534d6eb17707f11052bbf1bd5ce9a3c30b0396"
-UZI_STANDALONE_SKILL_TREE_SHA256 = "88b430b169ad68f028ac83df438d0dfac818e7330c266f8d86ddea75e0674593"
+UZI_PURE_PYTHON_TREE_SHA256 = "defc3d44eae6106fa92a3d707eed0268aac74012a4490b8d0f4294cd8b0ef7ce"
+UZI_COMMAND_TREE_SHA256 = "e4bedf13fae4dbe429ed1816a235b61a96a179a2b6aa4588421a17d34c2c33e6"
+UZI_ANALYST_ASSET_TREE_SHA256 = "8cf78e97cd37ba3f1e6c53decad83ae35dd46b487618aa8f9bb535af55e38350"
+UZI_STANDALONE_SKILL_TREE_SHA256 = "8bc93074f001fa97154629dcd33cf5a6dfed653cf79d954fa883570be0a4f1ca"
 
 UZI_FETCHER_IDS: tuple[str, ...] = (
     "0_basic",
@@ -297,8 +297,10 @@ class Uzi392FetcherRuntime:
                 raw_previous=raw_previous,
                 resume=resume,
             )
-            contests = importlib.import_module("fetch_contests")
-            with _contests_policy_scope(contests, policy=contest_policy):
+            with _pipeline_contests_policy_scope(
+                pipeline_collect,
+                policy=contest_policy,
+            ):
                 collected = pipeline_collect.collect(
                     normalized_ticker,
                     raw_previous=previous,
@@ -483,6 +485,63 @@ def _collect_contests_with_policy(module: Any, *, ticker: str, policy: dict[str,
 
     with _contests_policy_scope(module, policy=policy):
         return module.main(ticker)
+
+
+def _run_pipeline_contest_job(
+    dim_key: str,
+    ticker: Any,
+    raw_context: dict[str, Any] | None = None,
+    policy: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Run only the contest job with its request-local policy in the child."""
+
+    pipeline_collect = importlib.import_module("lib.pipeline.collect")
+    contests = importlib.import_module("fetch_contests")
+    with _contests_policy_scope(contests, policy=dict(policy or {})):
+        return pipeline_collect._run_fetcher_job(dim_key, ticker, raw_context)
+
+
+@contextmanager
+def _pipeline_contests_policy_scope(module: Any, *, policy: dict[str, Any]):
+    """Transport the request-local source policy into spawn workers."""
+
+    enabled = bool(policy.get("enabled")) and bool(
+        str(policy.get("cookie") or "").strip()
+    )
+    child_policy = {
+        "enabled": enabled,
+        "cookie": str(policy.get("cookie") or "").strip() if enabled else None,
+    }
+    original_runner = module.run_process_jobs
+
+    def controlled_runner(jobs, *, max_workers, overall_timeout):
+        scoped_jobs = [
+            replace(
+                job,
+                target=_run_pipeline_contest_job,
+                args=(
+                    job.args[0],
+                    job.args[1],
+                    job.args[2] if len(job.args) > 2 else None,
+                    child_policy,
+                ),
+            )
+            if job.key == "19_contests"
+            else job
+            for job in jobs
+        ]
+        return original_runner(
+            scoped_jobs,
+            max_workers=max_workers,
+            overall_timeout=overall_timeout,
+        )
+
+    with _CONTEST_POLICY_LOCK:
+        module.run_process_jobs = controlled_runner
+        try:
+            yield
+        finally:
+            module.run_process_jobs = original_runner
 
 
 @contextmanager

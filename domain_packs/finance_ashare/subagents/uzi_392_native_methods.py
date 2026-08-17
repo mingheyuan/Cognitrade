@@ -973,7 +973,19 @@ def _execute_stock_method(
         elif method_id == "morning_note":
             result = workflow.build_morning_note(features, raw)
         elif method_id == "quantitative_screen":
-            result = workflow.run_idea_screen(features, style=str(assumptions.get("style") or "quality"))
+            workflow_features = dict(features)
+            if (
+                not workflow_features.get("moat_known")
+                and workflow_features.get("moat_total") is None
+            ):
+                # UZI b004d7a preserves a missing moat as None, while this
+                # older internal screen still performs one direct comparison.
+                # Keep raw/features truthful and normalize only its reader copy.
+                workflow_features["moat_total"] = 0
+            result = workflow.run_idea_screen(
+                workflow_features,
+                style=str(assumptions.get("style") or "quality"),
+            )
         elif method_id == "sector_review":
             result = workflow.build_sector_overview(features, raw)
         elif method_id == "ic_memo":

@@ -26,7 +26,7 @@ from domain_packs.finance_ashare.subagents.uzi_panel_profiles import get_profile
 from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_structured
 
 
-LATEST_UZI_SOURCE_COMMIT = "0acf25122cabf493e7bc442faff62ceceb7f2f02"
+LATEST_UZI_SOURCE_COMMIT = "b004d7a988ca53a4805bf36784af091fa1209f22"
 PERSONAS_DIR = (
     Path(__file__).resolve().parents[1]
     / "vendor"

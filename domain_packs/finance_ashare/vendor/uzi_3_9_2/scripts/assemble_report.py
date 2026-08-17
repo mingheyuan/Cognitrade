@@ -605,10 +605,14 @@ def assemble(ticker: str) -> Path:
     if not out_avatars.exists():
         shutil.copytree(AVATARS_DIR, out_avatars)
 
+    long_active = panel.get("long_active") or sum(
+        (panel.get("signal_distribution") or {}).get(key, 0)
+        for key in ("bullish", "neutral", "bearish")
+    )
     one_liner = (
         f"{syn.get('name')} 体检结果：{int(syn.get('overall_score', 0))} 分，"
         f"{syn.get('verdict_label')}。\n"
-        f"50 位大佬里 {(panel.get('signal_distribution') or {}).get('bullish', 0)} 人喊买。\n"
+        f"{long_active} 位多头评委里 {(panel.get('signal_distribution') or {}).get('bullish', 0)} 人喊买。\n"
         f"💬 {divide.get('punchline') or '—'}\n"
         f"{trap_emoji} {trap_level}\n"
         f"全文 → {out_file}"

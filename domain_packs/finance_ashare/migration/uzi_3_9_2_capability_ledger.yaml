@@ -1,7 +1,7 @@
 schema_version: "2"
 upstream:
   repository: https://github.com/wbh604/UZI-Skill
-  commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
+  commit: b004d7a988ca53a4805bf36784af091fa1209f22
   version: 3.9.4
   vendored_root: domain_packs/finance_ashare/vendor/uzi_3_9_2
   runtime_boundary: in_process_vendored_pure_capability
@@ -31,7 +31,7 @@ vendored_methodology_resources:
   status: pinned_reference_contract
   roots: [skills/investor-panel, skills/lhb-analyzer, skills/trap-detector]
   canonical_file_count: 17
-  path_sensitive_sha256: 88b430b169ad68f028ac83df438d0dfac818e7330c266f8d86ddea75e0674593
+  path_sensitive_sha256: 8bc93074f001fa97154629dcd33cf5a6dfed653cf79d954fa883570be0a4f1ca
   runtime_consumption: DomainPack implementations and Agent OS routes are executable; Markdown resources are not dynamically interpreted
   acceptance: tests.test_uzi_392_vendor_runtime.Uzi392VendorRuntimeTests.test_all_referenced_standalone_skill_resources_are_vendored
 
@@ -46,6 +46,15 @@ upstream_3_9_4_regressions:
   - {id: peers_self_only_without_industry, status: source_parity, target: uzi_peers_snapshot_skill}
   - {id: valuation_cninfo_market_fallback, status: source_parity, target: uzi_valuation_snapshot_skill}
   - {id: registry_matches_provider_shapes, status: source_parity, target: uzi_source_registry}
+  - {id: pipeline_spawn_hard_timeouts, status: source_parity, target: finance.uzi.native.collect}
+  - {id: pipeline_resume_uses_fetcher_ttl, status: source_parity, target: finance.uzi.native.collect}
+  - {id: mx_financial_and_valuation_fallbacks, status: source_parity, target: fundamental_snapshot_skill}
+  - {id: missing_data_truthfulness, status: source_parity, target: finance.uzi.native.analyze_stock}
+  - {id: hollow_panel_consensus_guard, status: source_parity, target: finance.uzi.native.analyze_stock}
+  - {id: short_mandate_consensus_separation, status: source_parity, target: finance.uzi.native.analyze_stock}
+  - {id: recovery_artifact_refresh, status: source_parity, target: finance.uzi.native.analyze_stock}
+  - {id: safe_rule_placeholder_rendering, status: source_parity, target: finance.uzi.native.analyze_stock}
+  - {id: nullable_moat_idea_screen_bridge, status: host_boundary, target: finance.uzi.native.analyze_stock}
 
 integration_contracts:
   root_collection:
@@ -119,8 +128,9 @@ integration_contracts:
     owner: Agent OS snapshot envelope mirrors raw_data dimension resume; vendored lib.cache owns provider sub-cache
     pipeline_lane:
       previous_input: explicit_raw_previous_then_pinned_raw_data_cache
-      reused_dimensions: every_dimension_envelope_accepted_by_lib.pipeline.collect._is_resume_valid_including_0_basic
-      validity: nonempty_data_and_quality_not_missing_or_error_and_fallback_not_true
+      reused_dimensions: every_fresh_dimension_envelope_accepted_by_lib.pipeline.collect._is_resume_valid_including_0_basic
+      validity: nonempty_data_and_quality_not_missing_or_error_and_fallback_not_true_and_numeric_fetched_at_within_fetcher_cache_ttl
+      timestamp_free_previous_envelope: refetch
       top_level_spills: not_independent_dimension_cache_entries
       active_lane_note: resumed_dimension_envelopes_may_have_been_created_by_a_previous_legacy_run
       process_UZI_NO_RESUME: ignored_by_v3
@@ -138,15 +148,20 @@ integration_contracts:
       canonical_upstream_path: skills/deep-analysis/scripts/lib/pipeline/collect.py::collect
       registry_scope: all_22_fetchers_for_lite_medium_and_deep
       max_workers: 6
+      worker_model: multiprocessing_spawn_with_force_terminate_then_kill
       wave_1: [0_basic]
+      wave_1_hard_timeout_seconds: 120
       wave_2: 17_non_dependent_registry_fetchers_including_6_fund_holders_and_similar_stocks
       wave_3_sequential: [13_policy, 3_macro, 7_industry, 9_futures]
       dependency_context: 0_basic_plus_8_materials_and_1_financials_when_present
-      overall_completion_timeout: none
+      per_fetcher_hard_timeout_seconds: 120
+      per_wave_hard_timeout_seconds: 300
+      timeout_env: {fetcher: UZI_PIPELINE_FETCHER_TIMEOUT, wave: UZI_PIPELINE_WAVE_TIMEOUT}
       provider_error_semantics: normalize_validate_and_return_dim_result_error
       mini_racer_policy:
-        wave_2_locked_and_disable_aware: [10_valuation, 12_capital_flow]
-        wave_3_industry_quirk: 7_industry_is_sequential_but_bypasses_pipeline_lock_and_UZI_DISABLE_MINI_RACER
+        serial_group: [10_valuation, 12_capital_flow, 7_industry]
+        disabled_valuation: main_safe_without_mini_racer
+        disabled_other_modules: missing_dim_result
     legacy_lanes:
       canonical_upstream_path: skills/deep-analysis/scripts/run_real_test.py::collect_raw_data
       max_workers: 6
@@ -160,22 +175,30 @@ integration_contracts:
       wave_3_configured_fetcher_seconds: 120
       timeout_semantics: completion_classification_windows_not_hard_thread_cancellation
       mini_racer_policy: run_fetcher_lock_disable_force_and_crash_sentinel
-    host_transport_guard: context-scoped requests default timeout 20s propagated into nested UZI executor tasks; peer Agent OS traffic is unaffected
+    host_transport_guard: context-scoped requests default timeout 20s applies to direct_and_legacy_UZI_threads;pipeline_spawn_workers_are_bounded_by_upstream_hard_process_timeout;peer_Agent_OS_traffic_is_unaffected
+    sensitive_source_guard: request_local_Xueqiu_policy_is_transported_to_the_spawned_19_contests_worker
     legacy_long_running_worker_risk: a provider performing many bounded requests may finish after the classification window because Python threads cannot be force-cancelled
   self_review_compatibility_view:
-    status: upstream_bug_compatibility
+    status: source_parity
     original_evidence_mutated: false
     nullable_string_defaults:
       - dimensions.0_basic.data.industry
       - dimensions.7_industry.data.cninfo_metrics.industry_name_match
     dcf_output_alias:
       producer: intrinsic_per_share
-      upstream_self_review_reader: intrinsic_value_per_share
+      upstream_self_review_reader: intrinsic_per_share_then_intrinsic_value_per_share
+    comps_output_alias:
+      producer: implied_price
+      upstream_self_review_reader: implied_price_then_target_price_implied
   panel_only:
     status: source_parity
     collection_profile: lite
     executable_panel_seats: 66
     output: [dimensions, panel, synthesis]
+  panel_mandates:
+    long_consensus: excludes_short_mandates
+    short_consensus: separate_short_candidates_and_no_short_thesis
+    short_investors: [burry, chanos]
 
 standalone_command_collection:
   explicit_profiles:
@@ -327,12 +350,12 @@ native_report:
   status: source_parity
   template: domain_packs/finance_ashare/vendor/uzi_3_9_2/assets/report-template.html
   presentation_version: 3.9.4
-  presentation_commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
+  presentation_commit: b004d7a988ca53a4805bf36784af091fa1209f22
   template_sha256: 1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8
   renderer_helpers:
     lib/report/dim_viz.py: 032dd9e0429f8d5e4ffd030dcc33c6360817b4ac81f6983479b4f82adef29304
     lib/report/institutional.py: ca2e0ff2ba3dcc2690834da994e5a292e466b137875f660306be4687506e3fef
-    lib/report/panel_cards.py: 0b21aefb50d87dc992a378cbe8e50eef9988e0d69147d9956db759858ec666ce
+    lib/report/panel_cards.py: 28dfdb0b9ba226cc92236b0f31e7032c22fe624c2069b140410429923c82e828
     lib/report/svg_primitives.py: 2b13c6fdc9bfc1a5182a39c74d75d8c14ce1d52c26b7e88ae32975d1b547f93e
   html_pdf_same_source: true
   side_outputs:

@@ -1,9 +1,9 @@
 # Vendored UZI source
 
 - Repository: `https://github.com/wbh604/UZI-Skill`
-- Analysis commit: `0acf25122cabf493e7bc442faff62ceceb7f2f02`
+- Analysis commit: `b004d7a988ca53a4805bf36784af091fa1209f22`
 - Analysis version: `3.9.4`
-- Report presentation commit: `0acf25122cabf493e7bc442faff62ceceb7f2f02`
+- Report presentation commit: `b004d7a988ca53a4805bf36784af091fa1209f22`
 - Report presentation version: `3.9.4`
 - License: MIT; see `LICENSE`
 - Imported capability roots:
@@ -34,11 +34,15 @@ resolved-equity collection branches in process, while the two CLI entrypoints,
 installer/plugin manifests, documentation, screenshots, and test tree remain
 non-production dependencies. CI checks out the fixed upstream
 commit separately and runs its test tree against the vendored Python implementation.
-UZI collection keeps the upstream executor semantics: the documented wave values
-classify unfinished dimensions but cannot force-cancel an already running Python
-thread. Agent OS adds a context-scoped default timeout for UZI `requests` calls
-and propagates that context into nested UZI executor tasks; peer DomainPack
-traffic runs with the guard inactive.
+UZI collection keeps the upstream route-specific executor semantics. The default
+v3 pipeline runs fetchers in spawned processes with a 120-second per-fetcher hard
+timeout and a 300-second per-wave hard timeout; timed-out workers are terminated.
+The forced/fallback legacy lane still uses thread completion-classification
+windows that cannot force-cancel an already running Python thread. Agent OS keeps
+its context-scoped default timeout for direct and legacy UZI `requests` calls;
+spawned pipeline jobs are instead bounded by the upstream process timeout, and
+peer DomainPack traffic remains unaffected. Cognitrade's request-local Xueqiu
+source gate is explicitly transported into the spawned contest worker.
 
 The root v3 collection executes all 22 registry entries for every depth.  Fixed
 `generate_panel()` likewise ignores the profile's stale 10/51/51 display counts
@@ -51,4 +55,5 @@ route.  The fixed versus/portfolio runners always resume and reject that option.
 Snapshot Artifacts preserve both native and recovery `source_trace` entries;
 before recovery, lane-specific raw envelopes round-trip without display aliases,
 while any recovered field is an explicit, traced mutation rather than vendored
-source parity.
+source parity. Pipeline resume entries now require a valid per-fetcher TTL and a
+numeric `fetched_at`; old timestamp-free envelopes are collected again.

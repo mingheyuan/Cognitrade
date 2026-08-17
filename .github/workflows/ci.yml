@@ -125,7 +125,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: wbh604/UZI-Skill
-          ref: 0acf25122cabf493e7bc442faff62ceceb7f2f02
+          ref: b004d7a988ca53a4805bf36784af091fa1209f22
           path: upstream-uzi
           persist-credentials: false
       - uses: actions/setup-python@v5

@@ -4,8 +4,6 @@ from pathlib import Path
 import importlib
 import hashlib
 import json
-from threading import Lock
-from time import sleep
 import unittest
 from unittest.mock import patch
 
@@ -224,7 +222,7 @@ class UziSourceParityTests(unittest.TestCase):
             options={"fund_stats_top_n": 100},
         )
 
-    def test_uzi_default_pipeline_uses_its_serial_mini_racer_lane(self) -> None:
+    def test_uzi_default_pipeline_uses_hard_timeout_process_jobs_and_serial_group(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         Uzi392FetcherRuntime(workspace_root=repository_root / "workspace")
         pipeline_collect = importlib.import_module("lib.pipeline.collect")
@@ -232,26 +230,13 @@ class UziSourceParityTests(unittest.TestCase):
         pipeline_schema = importlib.import_module("lib.pipeline.schema")
         fetch_valuation = importlib.import_module("fetch_valuation")
         fetch_capital_flow = importlib.import_module("fetch_capital_flow")
-        state_lock = Lock()
-        active = 0
-        maximum_active = 0
-
         def main(*args):
-            nonlocal active, maximum_active
-            with state_lock:
-                active += 1
-                maximum_active = max(maximum_active, active)
-            try:
-                sleep(0.03)
-                return {
-                    "ticker": "688256.SH",
-                    "data": {"args": list(args)},
-                    "source": "uzi:actual-module-main",
-                    "fallback": False,
-                }
-            finally:
-                with state_lock:
-                    active -= 1
+            return {
+                "ticker": "688256.SH",
+                "data": {"args": list(args)},
+                "source": "uzi:actual-module-main",
+                "fallback": False,
+            }
 
         class BasicFetcher:
             def fetch(self, ticker):
@@ -272,6 +257,18 @@ class UziSourceParityTests(unittest.TestCase):
                 return BasicFetcher()
             return actual_fetchers[dim_key]
 
+        observed_calls = []
+
+        def run_jobs(jobs, *, max_workers, overall_timeout):
+            observed_calls.append((list(jobs), max_workers, overall_timeout))
+            return [
+                pipeline_collect.ProcessOutcome(
+                    key=job.key,
+                    value=job.target(*job.args, **job.kwargs),
+                )
+                for job in jobs
+            ]
+
         with (
             patch.object(fetch_valuation, "main", side_effect=main) as valuation_main,
             patch.object(fetch_capital_flow, "main", side_effect=main) as capital_flow_main,
@@ -282,13 +279,19 @@ class UziSourceParityTests(unittest.TestCase):
             ),
             patch.object(pipeline_collect, "DEPENDENT_DIMS", set()),
             patch.object(pipeline_collect, "get_fetcher", side_effect=get_fetcher),
+            patch.object(pipeline_collect, "_mini_racer_disabled", return_value=False),
+            patch.object(pipeline_collect, "run_process_jobs", side_effect=run_jobs),
             patch("builtins.print"),
         ):
             result = pipeline_collect.collect("688256", max_workers=2)
 
-        self.assertEqual(maximum_active, 1)
         valuation_main.assert_called_once_with("688256")
         capital_flow_main.assert_called_once_with("688256")
+        jobs = [job for call in observed_calls for job in call[0]]
+        mini_jobs = [job for job in jobs if job.key in {"10_valuation", "12_capital_flow"}]
+        self.assertEqual({job.serial_group for job in mini_jobs}, {"mini_racer"})
+        self.assertEqual({job.timeout_sec for job in jobs}, {120.0})
+        self.assertEqual([call[2] for call in observed_calls], [120.0, 300.0, 300.0])
         self.assertEqual(
             set(result),
             {"0_basic", "10_valuation", "12_capital_flow"},
@@ -349,7 +352,7 @@ class UziSourceParityTests(unittest.TestCase):
         self.assertEqual(config["catalog"]["source_count"], 73)
         self.assertEqual(
             config["catalog"]["commit"],
-            "0acf25122cabf493e7bc442faff62ceceb7f2f02",
+            "b004d7a988ca53a4805bf36784af091fa1209f22",
         )
         self.assertEqual(config["catalog"]["version"], "3.9.4")
         self.assertEqual(set(config["sources"]), EXPECTED_UZI_SOURCE_IDS)
