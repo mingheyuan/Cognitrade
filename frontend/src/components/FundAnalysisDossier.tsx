@@ -90,9 +90,9 @@ const SCORE_LABELS: Record<string, string> = {
 }
 
 const REPORT_PROFILES: Array<{ value: HoldingReportProfile; label: string; detail: string }> = [
-  { value: 'lite', label: '速判', detail: '1–2 分钟 · 10 位评委' },
-  { value: 'medium', label: '标准', detail: '5–8 分钟 · 51 位评委' },
-  { value: 'deep', label: '深度', detail: '15–20 分钟 · 66 位 Agent 角色评审与多空辩论' },
+  { value: 'lite', label: '速判', detail: '1–2 分钟 · 精简数据 · 66 席评审' },
+  { value: 'medium', label: '标准', detail: '5–8 分钟 · 标准数据 · 66 席评审' },
+  { value: 'deep', label: '深度', detail: '15–20 分钟 · 深度数据 · 66 席评审与多空辩论' },
 ]
 
 function asRecord(value: unknown): RecordValue {

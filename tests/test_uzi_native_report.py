@@ -567,13 +567,15 @@ class UziNativeReportTests(unittest.TestCase):
         self.assertEqual(draft.content["assessment"]["loaded"], 0)
 
     def test_one_liner_matches_native_single_stock_contract(self) -> None:
+        artifacts = sample_uzi_artifacts()
+        artifacts[0]["content"]["results"][0]["panel"]["long_active"] = 64
         text, filename = render_uzi_native_one_liner(
-            sample_uzi_artifacts(),
+            artifacts,
             report_locator="/api/v1/runs/test/report?format=html",
         )
 
         self.assertIn("贵州茅台 <script>alert(1)</script> 体检结果：72 分", text)
-        self.assertIn("50 位大佬里 1 人喊买", text)
+        self.assertIn("64 位多头评委里 1 人喊买", text)
         self.assertIn("好公司与好价格仍是两件事", text)
         self.assertTrue(filename.endswith(".txt"))
 

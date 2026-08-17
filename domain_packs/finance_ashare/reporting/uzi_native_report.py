@@ -391,11 +391,16 @@ def render_uzi_native_one_liner(
     _initialize_native_report_imports()
     _trap_color, trap_emoji = importlib.import_module("lib.report.institutional").trap_color_emoji(trap_level)
     score = int(float(synthesis.get("overall_score") or 0))
-    bullish = int(_record(panel.get("signal_distribution")).get("bullish") or 0)
+    signal_distribution = _record(panel.get("signal_distribution"))
+    bullish = int(signal_distribution.get("bullish") or 0)
+    long_active = int(panel.get("long_active") or sum(
+        int(signal_distribution.get(key) or 0)
+        for key in ("bullish", "neutral", "bearish")
+    ))
     symbol = str(result.get("symbol") or raw.get("ticker") or "unknown")
     one_liner = (
         f"{synthesis.get('name')} 体检结果：{score} 分，{synthesis.get('verdict_label')}。\n"
-        f"50 位大佬里 {bullish} 人喊买。\n"
+        f"{long_active} 位多头评委里 {bullish} 人喊买。\n"
         f"💬 {divide.get('punchline') or '—'}\n"
         f"{trap_emoji} {trap_level}\n"
         f"全文 → {report_locator}"

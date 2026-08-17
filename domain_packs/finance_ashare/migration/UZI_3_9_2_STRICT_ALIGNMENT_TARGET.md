@@ -172,6 +172,7 @@
 - HTML 与 PDF 使用相同 HTML；PDF 不得另建白底或简化版布局。
 - `--versus` 使用原生 `versus_runner._render_html`，限制 2–4 只；`--portfolio` 使用原生权重归一化、健康度与 `_render_html`。
 - 单股报告同时恢复 `share-card.png`、`war-report.png` 与 `one-liner.txt` 的原生选择器、分辨率和文案语义。
+- `one-liner.txt` 必须使用上游 `panel.long_active` 口径（当字段缺失时按多头 mandate 的信号分布求和），不得残留旧版 50/51 席硬编码。
 - Cognitrade run ID、artifact ID、来源链放在响应 header/sidecar artifact；仅上游已有插槽允许进入可见报告。
 - PDF 采用受控 Chromium 进程池、队列、超时和缓存；并发失败不得通过无限启动浏览器规避。
 - 模板哈希、DOM selector、关键文本、页面截图和 PDF 页面渲染均进入回归测试。

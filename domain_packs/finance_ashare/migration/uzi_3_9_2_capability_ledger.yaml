@@ -52,6 +52,8 @@ upstream_3_9_4_regressions:
   - {id: missing_data_truthfulness, status: source_parity, target: finance.uzi.native.analyze_stock}
   - {id: hollow_panel_consensus_guard, status: source_parity, target: finance.uzi.native.analyze_stock}
   - {id: short_mandate_consensus_separation, status: source_parity, target: finance.uzi.native.analyze_stock}
+  - {id: one_liner_long_mandate_count, status: source_parity, target: finance.uzi.native.report.compose}
+  - {id: profile_ui_executable_panel_count, status: host_boundary, target: fund_holding_report_profile_selector}
   - {id: recovery_artifact_refresh, status: source_parity, target: finance.uzi.native.analyze_stock}
   - {id: safe_rule_placeholder_rendering, status: source_parity, target: finance.uzi.native.analyze_stock}
   - {id: nullable_moat_idea_screen_bridge, status: host_boundary, target: finance.uzi.native.analyze_stock}
