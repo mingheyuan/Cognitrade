@@ -75,12 +75,23 @@ class StrategyBacktestService:
         self._lock = RLock()
         self._futures: dict[str, Future] = {}
         self._closed = False
+        self._shutdown_complete = Event()
         if recover:
             self._recover()
 
     def close(self) -> None:
-        self._closed = True
-        self._executor.shutdown(wait=False, cancel_futures=False)
+        with self._lock:
+            should_shutdown = not self._closed
+            self._closed = True
+        if not should_shutdown:
+            self._shutdown_complete.wait()
+            return
+        try:
+            # The database owner is normally closed immediately after this service.
+            # Wait for queued/running jobs so no worker can outlive its connection pool.
+            self._executor.shutdown(wait=True, cancel_futures=False)
+        finally:
+            self._shutdown_complete.set()
 
     def preflight(
         self,
@@ -268,9 +279,9 @@ class StrategyBacktestService:
             return self._payload(row)
 
     def _submit(self, backtest_id: str) -> None:
-        if self._closed:
-            return
         with self._lock:
+            if self._closed:
+                return
             current = self._futures.get(backtest_id)
             if current is not None and not current.done():
                 return
@@ -359,7 +370,7 @@ class StrategyBacktestService:
         finally:
             heartbeat_stop.set()
             if heartbeat is not None:
-                heartbeat.join(timeout=1.0)
+                heartbeat.join()
 
     def _run(
         self,

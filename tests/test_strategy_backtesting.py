@@ -5,7 +5,7 @@ import unittest
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Event
+from threading import Event, Thread
 from typing import Any
 
 from research_system.strategies.backtesting.adapters import ExchangeExecutionAdapter, OTCExecutionAdapter
@@ -357,6 +357,50 @@ class StrategyBacktestTests(unittest.TestCase):
             core.release.set()
             completed = self._wait_with(service, created["id"])
             self.assertEqual(completed["status"], "cancelled")
+        finally:
+            core.release.set()
+            service.close()
+
+    def test_close_waits_for_running_worker_and_heartbeat(self) -> None:
+        core = BlockingSignalCore()
+        service = StrategyBacktestService(
+            self.database,
+            market_data_gateway=MarketDataGateway(series_loader=_series_loader),
+            object_store_root=Path(self.temporary.name) / "closing-objects",
+            signal_core=core,
+            max_workers=1,
+            recover=False,
+            lease_seconds=1,
+        )
+        closed = Event()
+
+        def close_service() -> None:
+            service.close()
+            closed.set()
+
+        closer = Thread(target=close_service, name="test-backtest-close", daemon=True)
+        try:
+            created = service.create(
+                self.owner,
+                strategy_version_id=self.version["id"],
+                fund_code="510300",
+                mode=BacktestMode.FUND_ONLY,
+                start_date=date(2026, 8, 4),
+                end_date=date(2026, 8, 10),
+                initial_cash=1_000_000,
+            )
+            self.assertTrue(core.started.wait(2))
+            closer.start()
+            self.assertFalse(closed.wait(0.1))
+
+            core.release.set()
+            self.assertTrue(closed.wait(2))
+            closer.join(timeout=1)
+            self.assertFalse(closer.is_alive())
+
+            with self.database.session() as session:
+                row = session.get(BacktestRun, created["id"])
+                self.assertEqual(row.status, "completed")
         finally:
             core.release.set()
             service.close()
