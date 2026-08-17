@@ -4,18 +4,19 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
 from research_system.runtime.agent_os import AgentOS
+from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.intake.pack_intake import PackIntakeService
 from research_system.runtime.intake.request_intake import RequestIntakeService
-from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.platform.settings import Settings
-from research_system.schemas.protocol import RequestEnvelope
 from research_system.schemas.core_runtime import IntakeClassificationProposal
+from research_system.schemas.protocol import RequestEnvelope
 
 
 class _ModelIntakeProvider:
@@ -174,26 +175,36 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
         )
 
     def test_portfolio_queries_route_only_to_native_uzi_method_intents(self) -> None:
+        from domain_packs.finance_ashare.subagents import (
+            task_intake as task_intake_module,
+        )
+
         repository_root = Path(__file__).resolve().parents[1]
         service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
         holdings = [{"ticker": "600519", "weight": 100, "return_pct": 8.0, "asset_class": "A股"}]
-        for query, expected_intent in {
-            "对这个组合做收益归因": "uzi_returns",
-            "按目标权重对这个组合做持仓再平衡": "uzi_rebalance",
-            "按资产类别对组合做资产配置再平衡": "uzi_portfolio_rebalance_method",
-        }.items():
-            with self.subTest(query=query):
-                decision = service.resolve(RequestEnvelope(
-                    user_query=query,
-                    constraints={"portfolio_holdings": holdings},
-                ))
-                self.assertEqual(decision.status, "accepted")
-                self.assertEqual(decision.intent, expected_intent)
+        provider_error = AssertionError("portfolio intake must not query a provider catalog")
+        with (
+            patch.object(task_intake_module._SECURITY_MASTER, "rows", side_effect=provider_error),
+            patch.object(task_intake_module._FUND_MASTER, "rows", side_effect=provider_error),
+        ):
+            for query, expected_intent in {
+                "对这个组合做收益归因": "uzi_returns",
+                "对这个基金组合做收益归因": "uzi_returns",
+                "按目标权重对这个组合做持仓再平衡": "uzi_rebalance",
+                "按资产类别对组合做资产配置再平衡": "uzi_portfolio_rebalance_method",
+            }.items():
+                with self.subTest(query=query):
+                    decision = service.resolve(RequestEnvelope(
+                        user_query=query,
+                        constraints={"portfolio_holdings": holdings},
+                    ))
+                    self.assertEqual(decision.status, "accepted")
+                    self.assertEqual(decision.intent, expected_intent)
 
-        batch = service.resolve(RequestEnvelope(
-            user_query="分析一下这个组合",
-            constraints={"portfolio_holdings": holdings, "research_profile": "lite"},
-        ))
+            batch = service.resolve(RequestEnvelope(
+                user_query="分析一下这个组合",
+                constraints={"portfolio_holdings": holdings, "research_profile": "lite"},
+            ))
         self.assertEqual(batch.status, "accepted")
         self.assertEqual(batch.intent, "uzi_portfolio_batch")
 

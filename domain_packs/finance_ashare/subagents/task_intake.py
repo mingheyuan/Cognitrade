@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
 from domain_packs.finance_ashare.tools.fund_master import FundSecurityMaster
+from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
 
 _SECURITY_MASTER = AShareSecurityMaster()
 _FUND_MASTER = FundSecurityMaster()
@@ -97,6 +97,12 @@ _UZI_PROFILE_INTENTS = frozenset({
     "review_thesis",
     "uzi_portfolio_batch",
 })
+_UZI_PORTFOLIO_INTENTS = frozenset({
+    "uzi_returns",
+    "uzi_rebalance",
+    "uzi_portfolio_rebalance_method",
+    "uzi_portfolio_batch",
+})
 _UZI_STOCK_COMMAND_INTENTS = frozenset({
     "uzi_analyze_stock",
     "uzi_dcf",
@@ -180,6 +186,10 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
     ]
     if portfolio_holdings:
         slots["portfolio_holdings"] = portfolio_holdings
+    portfolio_intake = (
+        explicit_intent in _UZI_PORTFOLIO_INTENTS
+        or (bool(portfolio_holdings) and explicit_intent is None)
+    )
     for field_name in (
         "benchmark_return",
         "rebalance_targets",
@@ -203,10 +213,15 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
     ]
     should_resolve_funds = (
         explicit_intent == "fund_research"
-        or _contains(query, query.casefold(), _FUND_KEYWORDS)
-        or fund_category is not None
-        or any(not _looks_like_equity_code(code) for code in _CODE_PATTERN.findall(query))
-        or bool(supplied_fund_codes)
+        or (
+            not portfolio_intake
+            and (
+                _contains(query, query.casefold(), _FUND_KEYWORDS)
+                or fund_category is not None
+                or any(not _looks_like_equity_code(code) for code in _CODE_PATTERN.findall(query))
+                or bool(supplied_fund_codes)
+            )
+        )
     )
     fund_resolution = _FUND_MASTER.resolve(
         query,
@@ -237,7 +252,15 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
         query,
         slots=slots,
         constraints=constraints,
-        allow_network=not sector and not _looks_like_multi_target_request(query),
+        # Structured holdings already establish both the portfolio context and
+        # its targets.  Sending the surrounding natural-language method request
+        # to the security master adds no information and can strand intake on
+        # an unrelated provider lookup when the catalog cache is cold.
+        allow_network=(
+            not portfolio_intake
+            and not sector
+            and not _looks_like_multi_target_request(query)
+        ),
     )
     symbols = [symbol for symbol in resolution.symbols if symbol not in fund_codes]
     if symbols:
@@ -317,7 +340,7 @@ def resolve_request(request: dict[str, Any]) -> dict[str, Any]:
             )
         slots["investment_cycle"] = investment_cycle
         constraints["investment_cycle"] = investment_cycle
-    if intent in {"uzi_returns", "uzi_rebalance", "uzi_portfolio_rebalance_method", "uzi_portfolio_batch"} and not portfolio_holdings:
+    if intent in _UZI_PORTFOLIO_INTENTS and not portfolio_holdings:
         return _clarify(
             ["portfolio_holdings"],
             query=query,
