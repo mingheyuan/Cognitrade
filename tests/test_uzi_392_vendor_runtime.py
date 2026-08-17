@@ -325,6 +325,47 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
         self.assertIsNone(outcomes["fast"].error)
         self.assertTrue(outcomes["slow"].timed_out)
 
+    def test_process_runner_serializes_groups_with_platform_startup_budget(self) -> None:
+        runner = __import__(
+            "lib.pipeline.process_runner",
+            fromlist=["ProcessJob", "run_process_jobs"],
+        )
+        jobs = [
+            runner.ProcessJob(
+                key="mini-a",
+                target=time.sleep,
+                args=(0.08,),
+                timeout_sec=5.0,
+                serial_group="mini",
+            ),
+            runner.ProcessJob(
+                key="mini-b",
+                target=time.sleep,
+                args=(0.08,),
+                timeout_sec=5.0,
+                serial_group="mini",
+            ),
+            runner.ProcessJob(
+                key="regular",
+                target=time.sleep,
+                args=(0.08,),
+                timeout_sec=5.0,
+            ),
+        ]
+
+        started = time.monotonic()
+        outcomes = runner.run_process_jobs(
+            jobs,
+            max_workers=3,
+            overall_timeout=5.0,
+        )
+        elapsed = time.monotonic() - started
+
+        self.assertEqual(len(outcomes), 3)
+        self.assertTrue(all(row.error is None for row in outcomes), outcomes)
+        self.assertGreaterEqual(elapsed, 0.14)
+        self.assertLess(elapsed, 5.0)
+
     def test_production_snapshot_path_preserves_raw_results_and_dependency_waves(self) -> None:
         calls: list[tuple[str, str | None, dict]] = []
 

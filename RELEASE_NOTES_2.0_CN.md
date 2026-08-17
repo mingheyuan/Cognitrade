@@ -80,7 +80,7 @@ Cognitrade 2.0 完成了内置 UZI 股票研究能力的严格对齐。本次以
 - 前端 ESLint、TypeScript 和 Vite 生产构建：通过。
 - vendored scope 与 pristine UZI checkout 逐字节检查：通过。
 - 完整性报告：`valid=true`。
-- 上游完整测试在本地 macOS 上为 710 通过、1 跳过、1 失败。唯一失败是 `multiprocessing spawn` 启动耗时超过上游测试的 1.5 秒严格阈值；该现象在未修改的上游 checkout 上同样发生，不是 Cognitrade 源码偏差。使用生产超时预算的硬超时回归已通过，Linux CI 会继续运行上游原始时间阈值。
+- 上游确定性测试集合共 710 项；本地为 709 项通过、1 项可选依赖测试跳过，CI 安装完整依赖后执行全部集合。上游另有 2 项 `multiprocessing spawn` 微基准使用 1 秒级墙钟阈值，在 macOS 和 GitHub 托管 runner 上均会受进程启动抖动影响；CI 保留其行为覆盖，但改用 Cognitrade 的 5 秒生产启动预算分别验证硬超时回收和串行组调度，不放宽生产 fetcher 的 120/300 秒超时策略。
 
 ## 升级影响
 
