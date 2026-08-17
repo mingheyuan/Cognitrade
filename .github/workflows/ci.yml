@@ -91,14 +91,20 @@ jobs:
           tests.test_uzi_392_vendor_runtime
           tests.test_uzi_snapshot_runtime_parity
           tests.test_uzi_source_parity
-      - name: Validate UZI commands, methods, reports, providers, and frontend contracts
+      - name: Validate UZI commands and native methods
         run: >-
           python -m unittest
           tests.test_uzi_392_commands
           tests.test_uzi_392_native_methods
+      - name: Validate UZI analysis and recovery contracts
+        run: >-
+          python -m unittest
           tests.test_uzi_392_analysis
           tests.test_uzi_quick_scan
           tests.test_uzi_strict_recovery
+      - name: Validate UZI reports, providers, and frontend contracts
+        run: >-
+          python -m unittest
           tests.test_uzi_native_report
           tests.test_uzi_provider_smoke
           tests.test_finance_artifact_ui_contracts
