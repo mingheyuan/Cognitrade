@@ -94,6 +94,9 @@ Cognitrade 宿主边界。完整的 `v1.0` 差异见
 - HTML 与 PDF 共用同一份 UZI 可见报告，Cognitrade 运行元数据继续放在 ArtifactBoard 与响应边界。
 - 上游子进程启动后，请求级雪球策略只传入 `19_contests` worker，不写入全局环境，不泄露给其他任务。
 - 上游 `moat_total=None` 仅在旧 idea-screen 内部读取副本中兼容为 `0`，原始证据和报告缺口仍保持 `null`。
+- UZI 评分和综合研判只消费 Cognitrade 已冻结快照；上游风格识别在基金经理样本不足时
+  触发的隐式 AkShare 补采会在宿主评分作用域内禁用，避免回测/报告重算产生未记录外呼或
+  在 Linux 分页请求中无限等待。作用域退出后采集模块会原样恢复，不影响正式快照采集。
 - 即使未安装可选 VeighNa 引擎，模拟交易也会预先创建受控的 `veighna_runtime/.vntrader` 目录，避免 fallback 引擎初始化不一致，并确保后续启用原生引擎时不会回落到进程 HOME。
 
 ## 来源、完整性和 CI

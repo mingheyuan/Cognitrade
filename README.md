@@ -13,7 +13,7 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 - 策略回测：仅接受已发布的不可变策略版本；Hikyuu 生成技术事件，Cognitrade 确定性账本分别执行 `fund_only` 和 `holdings_portfolio` 两种模式，并适配 ETF/LOF、场外基金 NAV 与 A 股持仓。成交逐笔追溯到策略版本、日报和信号，不允许页面临时覆盖阈值、均线或费率。
 - 模拟交易：VeighNa PaperAccount 到价撮合，服务端现金/持仓账本、限价挂单、资金冻结、撤单、费用、T+1 和幂等订单；只有人工确认的 Verified 版本可晋级 Promoted 并通过策略链路下单。
 - DomainPack：`finance_ashare` 与 `legal_contract` 通过声明式能力、工具、Gate 和报告合同接入。
-- UZI 报告：研究工作台可从 ArtifactBoard 直接打开与上游 v3.9.4 分析及呈现层逐文件对齐的原生 HTML，或下载同源 PDF；不依赖旧 UZI CLI、缓存和报告服务。
+- UZI 报告：研究工作台可从 ArtifactBoard 直接打开与上游 v3.9.4 分析及呈现层逐文件对齐的原生 HTML，或下载同源 PDF；不依赖旧 UZI CLI、缓存和报告服务。评分阶段只消费已冻结快照，不会因基金持仓样本不足而隐式启动新的 AkShare 网络采集。
 - 基金持仓股票报告：从冻结公开披露生成可配置 top 5/10/20 的 UZI 股票报告，支持失败节点重试、完整重跑、暂停/恢复、历史补跑与 late revision；同一股票同一日期跨基金复用 canonical UZI Artifact。ETF 联接只使用已取得的穿透持仓，不推断缺失数据。
 - 治理：Bearer 鉴权、作用域隔离、高风险审批、质量 Gate、来源引用和分层记忆。
 

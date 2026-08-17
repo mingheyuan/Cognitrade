@@ -41,6 +41,7 @@ from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import (
     UZI_ENVIRONMENT_LOCK,
     UZI_SOURCE_COMMIT,
     Uzi392FetcherRuntime,
+    uzi_snapshot_scoring_scope,
 )
 from research_system.adapters.vendors.uzi_request_timeout import (
     uzi_request_timeout_scope,
@@ -118,7 +119,8 @@ def _uzi_native_environment(*, profile: str, school: str | None):
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
-            yield
+            with uzi_snapshot_scoring_scope():
+                yield
         finally:
             for key, value in previous.items():
                 if value is None:

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import random
 import unittest
+from unittest.mock import patch
 
 from jsonschema import Draft202012Validator
 import yaml
@@ -17,7 +18,11 @@ from domain_packs.finance_ashare.subagents.uzi_392_native_commands import (
     execute_segmental_model,
 )
 from domain_packs.finance_ashare.subagents.uzi_392_native_methods import build_uzi_raw
-from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import UZI_COMMAND_IDS, Uzi392FetcherRuntime
+from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import (
+    UZI_COMMAND_IDS,
+    Uzi392FetcherRuntime,
+    uzi_snapshot_scoring_scope,
+)
 from research_system.api.validation import validate_research_request
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.planning.capability_planner import CapabilityPlanner
@@ -120,17 +125,28 @@ class Uzi392CommandTests(unittest.TestCase):
         rows = _command_snapshots()
         raw = build_uzi_raw(rows, "600000")
         score_fns = importlib.import_module("lib.pipeline.score_fns")
-        expected_dimensions = score_fns.score_dimensions(raw)
-        random.seed(392)
-        expected_panel = score_fns.generate_panel(expected_dimensions, raw)
-        random.seed(392)
-        expected_synthesis = score_fns.generate_synthesis(
-            raw,
-            expected_dimensions,
-            expected_panel,
-        )
-        random.seed(392)
-        actual = execute_panel_only(rows, ["600000"])
+        quant_signal = importlib.import_module("lib.quant_signal")
+
+        class UnexpectedAkshare:
+            def __getattr__(self, name: str):
+                raise AssertionError(f"snapshot-only scoring attempted AkShare call: {name}")
+
+        sentinel = UnexpectedAkshare()
+        with patch.object(quant_signal, "ak", sentinel):
+            with uzi_snapshot_scoring_scope():
+                expected_dimensions = score_fns.score_dimensions(raw)
+                random.seed(392)
+                expected_panel = score_fns.generate_panel(expected_dimensions, raw)
+                random.seed(392)
+                expected_synthesis = score_fns.generate_synthesis(
+                    raw,
+                    expected_dimensions,
+                    expected_panel,
+                )
+            self.assertIs(quant_signal.ak, sentinel)
+            random.seed(392)
+            actual = execute_panel_only(rows, ["600000"])
+            self.assertIs(quant_signal.ak, sentinel)
         Draft202012Validator(COMMAND_SCHEMA).validate(actual)
         self.assertEqual(
             actual["results"][0]["result"],

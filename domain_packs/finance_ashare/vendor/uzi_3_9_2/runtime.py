@@ -476,6 +476,32 @@ class Uzi392FetcherRuntime:
             cache.CACHE_ROOT = self.workspace_root / "cache" / "uzi_3_9_2"
 
 
+@contextmanager
+def uzi_snapshot_scoring_scope():
+    """Keep pinned UZI scoring on the already-collected snapshot.
+
+    UZI 3.9.4's style detector calls ``detect_quant_signal`` while generating
+    the synthesis.  When the snapshot has fewer than 20 fund-manager rows that
+    helper silently starts a new AkShare collection.  That makes an otherwise
+    deterministic scoring command depend on an unbounded network request and
+    can stall Linux workers inside AkShare pagination.
+
+    Cognitrade owns data collection before this boundary, so temporarily make
+    AkShare unavailable to that optional fallback.  The vendored scoring code
+    and its returned object shape remain unchanged, and the module global is
+    restored before releasing the process-wide UZI lock.
+    """
+
+    with UZI_ENVIRONMENT_LOCK:
+        quant_signal = importlib.import_module("lib.quant_signal")
+        previous_akshare = quant_signal.ak
+        try:
+            quant_signal.ak = None
+            yield
+        finally:
+            quant_signal.ak = previous_akshare
+
+
 def _collect_contests_with_policy(module: Any, *, ticker: str, policy: dict[str, Any]) -> dict[str, Any]:
     """Run the pinned contests fetcher without bypassing Cognitrade's source gate.
 
@@ -741,5 +767,6 @@ __all__ = [
     "UZI_SOURCE_COMMIT",
     "UZI_STANDALONE_SKILL_TREE_SHA256",
     "Uzi392FetcherRuntime",
+    "uzi_snapshot_scoring_scope",
     "verify_vendored_uzi_integrity",
 ]
