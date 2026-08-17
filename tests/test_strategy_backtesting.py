@@ -277,7 +277,7 @@ class StrategyBacktestTests(unittest.TestCase):
                 initial_cash=1_000_000,
             )["id"]
         )
-        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(completed["status"], "completed", completed.get("error_summary"))
         result = completed["result"]
         post_entry = next(row for row in result["equity_curve"] if row["date"] == "2026-08-05")
         self.assertGreater(post_entry["cash"], 650_000)

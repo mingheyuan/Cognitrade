@@ -1,6 +1,6 @@
 # Cognitrade 2.0 中文版本说明
 
-发布日期：2026-08-17
+发布日期：2026-08-18
 
 ## 发布概要
 
@@ -35,6 +35,9 @@ Cognitrade 宿主边界。完整的 `v1.0` 差异见
   尾部写入与 SQLite/PostgreSQL 生命周期发生竞态。
 - `completed` 终态只在结果、成交 lineage 和内容寻址引用全部落库且 worker 退出后对外
   可见，机器验证不会再读取事务中的半成品结果。
+- 内存 SQLite 的 `StaticPool` 会让 worker、租约心跳和状态轮询共享同一物理连接；2.0
+  仅在该配置下串行化 Session，避免并发事务释放彼此 savepoint。文件 SQLite 与
+  PostgreSQL 继续保持连接级并发。
 - 机器检查覆盖无前视、lineage、复跑一致性、样本、信号、费用、回撤、收益、Sharpe、
   超额收益、换手和费用影响；通过后仍必须人工确认并晋级。
 - 只有与账户、基金、模式精确绑定的 Promoted 版本可沿策略链路下模拟单；当前该链路
@@ -112,7 +115,7 @@ Cognitrade 宿主边界。完整的 `v1.0` 差异见
 ## 验证结果
 
 - Cognitrade UZI 回归：228 项通过。
-- Cognitrade 完整后端套件：688 项通过，2 项跳过。
+- Cognitrade 完整后端套件：689 项通过，2 项跳过。
 - 报告和 API 定向回归：40 项通过。
 - 前端完整套件：14 个测试文件、44 项测试通过。
 - 前端 ESLint、TypeScript 和 Vite 生产构建：通过。
