@@ -159,7 +159,17 @@ def apply_qualitative_deep_dive(
             _validate_group(cached, dimensions, evidence_bundle)
         except Exception as exc:
             _discard_qualitative_stage_cache(cache_path, exc)
-            pending_groups.append((label, dimensions, user_prompt, cache_path))
+            pending_groups.append((
+                label,
+                dimensions,
+                _group_user_prompt(
+                    group_label=label,
+                    dimensions=dimensions,
+                    evidence_bundle=evidence_bundle,
+                    repair_feedback=_group_repair_feedback(label, repair_feedback),
+                ),
+                cache_path,
+            ))
             continue
         completed.append(cached)
         _LOGGER.info("UZI qualitative stage cache hit: group=%s", label)

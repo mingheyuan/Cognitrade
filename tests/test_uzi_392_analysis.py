@@ -18,6 +18,7 @@ from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
     AgentDimensionPayload,
     AgentNarrativeCorePayload,
     _canonical_evidence_path,
+    _deep_methods_compatible_raw,
     _normalize_evidence_paths,
     _normalize_payload_paths,
     _research_workflow_compatible_features,
@@ -190,6 +191,25 @@ class _RepairingEvidenceProvider(_LiteAgentProvider):
         return result
 
 
+class _RepairingBuyZoneProvider(_LiteAgentProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.youzi_calls = 0
+
+    def parse(self, **kwargs):
+        result = super().parse(**kwargs)
+        if (
+            kwargs.get("schema") is AgentBuyZonePayload
+            and " youzi 买入区间" in str(kwargs.get("user_prompt") or "")
+        ):
+            self.youzi_calls += 1
+            if self.youzi_calls == 1:
+                result["zone"]["basis_fields"] = [
+                    "raw.dimensions.1_financials.data.revenue_history[0]"
+                ]
+        return result
+
+
 class Uzi392AnalysisGateTests(unittest.TestCase):
     def test_nullable_moat_is_only_normalized_for_the_legacy_idea_screen(self) -> None:
         features = {"moat_known": False, "moat_total": None, "fcf_positive": None}
@@ -199,6 +219,46 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         self.assertIsNone(features["moat_total"])
         self.assertEqual(compatible["moat_total"], 0)
         self.assertIsNone(compatible["fcf_positive"])
+
+    def test_nullable_moat_scores_are_normalized_only_for_deep_methods(self) -> None:
+        raw = {"dimensions": {"14_moat": {"data": {"scores": None}}}}
+
+        compatible = _deep_methods_compatible_raw(raw)
+
+        self.assertIsNone(raw["dimensions"]["14_moat"]["data"]["scores"])
+        self.assertEqual(
+            compatible["dimensions"]["14_moat"]["data"]["scores"],
+            {},
+        )
+
+    def test_lite_analysis_accepts_nullable_optional_moat_scores(self) -> None:
+        rows = _lite_snapshots()
+        rows.append(
+            {
+                "snapshot_type": "moat",
+                "symbol": "600000",
+                "facts": {
+                    "_uzi_raw_result": {
+                        "data": {"scores": None},
+                        "sources": [{"provider": "fixture"}],
+                    }
+                },
+            }
+        )
+
+        result = execute_native_analysis(
+            rows,
+            ["600000"],
+            profile="lite",
+            llm_provider=_LiteAgentProvider(),
+        )
+
+        analysis = result["results"][0]
+        self.assertIsNone(
+            analysis["raw"]["dimensions"]["14_moat"]["data"]["scores"]
+        )
+        self.assertNotIn("computation_error", analysis)
+        self.assertTrue(result["report_allowed"])
 
     def test_multi_symbol_qualitative_rows_are_isolated(self) -> None:
         rows = [
@@ -408,6 +468,29 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
                 "MECHANICAL_EVIDENCE_REPAIR=" in prompt
                 for prompt in provider.user_prompts
             )
+        )
+
+    def test_unknown_buy_zone_evidence_retries_only_the_failed_stage(self) -> None:
+        provider = _RepairingBuyZoneProvider()
+        progress: list[dict] = []
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="lite",
+            llm_provider=provider,
+            progress_callback=progress.append,
+        )
+
+        self.assertTrue(result["report_allowed"])
+        self.assertEqual(provider.calls, 8)
+        self.assertEqual(provider.youzi_calls, 2)
+        self.assertEqual(
+            sum(
+                row.get("stage") == "buy_zone_youzi_repair"
+                for row in progress
+            ),
+            1,
         )
 
     def test_validated_agent_stages_resume_from_persistent_cache(self) -> None:

@@ -57,6 +57,10 @@ class FundHoldingReportService:
             1,
             min(int(getattr(settings, "fund_holding_report_concurrency", 2)), 10),
         )
+        self.llm_max_concurrency = max(
+            1,
+            int(getattr(settings, "uzi_llm_max_concurrency", 2)),
+        )
         self._lock = RLock()
         self._executor = ThreadPoolExecutor(
             max_workers=self.max_concurrency,
@@ -177,6 +181,7 @@ class FundHoldingReportService:
                 "pin_set_hash": normalized_pin_set_hash,
                 "status": "running",
                 "concurrency": self.max_concurrency,
+                "llm_concurrency": self.llm_max_concurrency,
                 "holding_source": frozen["holding_source"],
                 "is_fund_of_funds": bool(frozen.get("is_fund_of_funds")),
                 "disclosure_date": frozen.get("disclosure_date"),
@@ -355,16 +360,46 @@ class FundHoldingReportService:
 
     def metrics(self, batch_id: str, **scope) -> dict[str, Any]:
         state = self.detail(batch_id, **scope)
+        duration_seconds = self._duration_seconds(state)
         return {
             "run_id": batch_id,
             "status": state["status"],
             "counts": state["counts"],
             "tool_call_count": 0,
-            "usage": {"tokens": 0, "cost": 0.0, "duration_seconds": 0.0},
+            "usage": {
+                "tokens": 0,
+                "cost": 0.0,
+                "duration_seconds": duration_seconds,
+            },
+            "concurrency": {
+                "holding_reports": int(
+                    state.get("concurrency") or self.max_concurrency
+                ),
+                "uzi_llm": int(
+                    state.get("llm_concurrency") or self.llm_max_concurrency
+                ),
+            },
             "node_status_counts": dict(Counter(item["status"] for item in state["holdings"])),
             "event_type_counts": {},
             "graph_event_counts": {},
         }
+
+    @staticmethod
+    def _duration_seconds(state: dict[str, Any]) -> float:
+        started = str(state.get("created_at") or "").strip()
+        finished = str(
+            state.get("completed_at")
+            or state.get("updated_at")
+            or ""
+        ).strip()
+        if not started or not finished:
+            return 0.0
+        try:
+            start_dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            finish_dt = datetime.fromisoformat(finished.replace("Z", "+00:00"))
+        except ValueError:
+            return 0.0
+        return round(max((finish_dt - start_dt).total_seconds(), 0.0), 3)
 
     def steps(self, batch_id: str, **scope) -> dict[str, Any]:
         state = self.detail(batch_id, **scope)

@@ -278,6 +278,40 @@ class UziQualitativeDeepDiveTests(unittest.TestCase):
             },
         )
 
+    def test_invalid_cached_group_is_discarded_and_regenerated(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            provider = _FlakyCachedProvider(Path(temporary_directory))
+            first = apply_qualitative_deep_dive(
+                _deep_base(),
+                snapshot_rows=_rows(),
+                llm_provider=provider,
+            )
+            second = apply_qualitative_deep_dive(
+                _deep_base(),
+                snapshot_rows=_rows(),
+                llm_provider=provider,
+            )
+            self.assertEqual(first["qualitative_agent_execution"]["status"], "incomplete")
+            self.assertEqual(second["qualitative_agent_execution"]["status"], "completed")
+            calls_before = sum(provider.calls.values())
+            cache_file = next(
+                (Path(temporary_directory) / "cache" / "uzi_qualitative_stages").glob("*.json")
+            )
+            envelope = json.loads(cache_file.read_text(encoding="utf-8"))
+            envelope["payload"]["dimensions"][0]["evidence"][0]["url"] = (
+                "https://fabricated.example/not-in-artifact"
+            )
+            cache_file.write_text(json.dumps(envelope), encoding="utf-8")
+
+            third = apply_qualitative_deep_dive(
+                _deep_base(),
+                snapshot_rows=_rows(),
+                llm_provider=provider,
+            )
+
+        self.assertEqual(third["qualitative_agent_execution"]["status"], "completed")
+        self.assertEqual(sum(provider.calls.values()), calls_before + 1)
+
     def test_failed_group_receives_previous_validation_error_and_caches_canonical_result(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             provider = _RepairAwareProvider(Path(temporary_directory))

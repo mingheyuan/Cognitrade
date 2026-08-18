@@ -297,6 +297,12 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         self.assertEqual(final["status"], "completed")
         self.assertEqual(final["counts"]["deliverable"], 10)
         self.assertEqual(self.agent_os.max_active, 2)
+        metrics = self.service.metrics(final["batch_id"])
+        self.assertGreater(metrics["usage"]["duration_seconds"], 0)
+        self.assertEqual(
+            metrics["concurrency"],
+            {"holding_reports": 2, "uzi_llm": 2},
+        )
         events = read_jsonl(self.agent_os.run_store.load_run_paths(final["batch_id"]).root / "execution_events.jsonl")
         self.assertTrue(any(row.get("event_type") == "assistant_message_ready" for row in events))
         self.assertTrue(RunEventSource._is_terminal(self.agent_os.run_store.load_run_paths(final["batch_id"]).root))

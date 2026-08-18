@@ -160,6 +160,28 @@ def _research_workflow_compatible_features(
     return compatible
 
 
+def _deep_methods_compatible_raw(raw: dict[str, Any]) -> dict[str, Any]:
+    """Bridge nullable optional mappings into UZI's deep-method readers.
+
+    The pinned moat fetcher can truthfully emit ``scores=None`` when no scored
+    moat evidence is available, while ``build_competitive_analysis`` still
+    treats the field as a mapping.  Normalize only the computation copy so the
+    canonical raw evidence remains nullable and continues to disclose the data
+    gap in the report.
+    """
+
+    compatible = deepcopy(raw)
+    dimensions = compatible.get("dimensions")
+    if not isinstance(dimensions, dict):
+        return compatible
+    moat = dimensions.get("14_moat")
+    if not isinstance(moat, dict) or not isinstance(moat.get("data"), dict):
+        return compatible
+    if moat["data"].get("scores") is None:
+        moat["data"]["scores"] = {}
+    return compatible
+
+
 class GroundedText(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -744,7 +766,12 @@ def _execute_symbol(
             dim20.get("data"),
         )
         raw["dimensions"]["21_research_workflow"] = dim21
-        dim22 = deep_methods.compute_dim_22(features, raw, dim20.get("data"), dim21.get("data"))
+        dim22 = deep_methods.compute_dim_22(
+            features,
+            _deep_methods_compatible_raw(raw),
+            dim20.get("data"),
+            dim21.get("data"),
+        )
         # Upstream currently inserts a fabricated ¥10,000 sample position.
         # Keep every other exact output but reject that demo value at the
         # ArtifactBoard boundary; portfolio analysis needs explicit positions.
@@ -1375,57 +1402,79 @@ def _generate_agent_analysis(
             stage=zone_stage,
             system_prompt=numeric_system_prompt,
         ) if not review_feedback else None
-        buy_zone_result = _load_agent_stage_cache(
-            zone_cache_path,
-            schema=AgentBuyZonePayload,
-        )
-        zone_loaded_from_cache = buy_zone_result is not None
-        if zone_loaded_from_cache:
-            _notify_stage_cache_hit(
-                progress_callback,
-                symbol=str(raw.get("ticker") or ""),
-                profile=profile,
-                stage=zone_stage,
-                stage_index=stage_index,
-                stage_total=stage_total,
-                analysis_cycle=analysis_cycle,
-            )
-        else:
-            buy_zone_result = _parse_agent_stage(
-                llm_provider,
-                stage=zone_stage,
-                symbol=str(raw.get("ticker") or ""),
-                profile=profile,
-                system_prompt=numeric_system_prompt,
-                user_prompt=buy_zone_prompt,
+        stage_retry_feedback = ""
+        seen_zone_failure_signatures: set[tuple[str, ...]] = set()
+        while True:
+            buy_zone_result = _load_agent_stage_cache(
+                zone_cache_path,
                 schema=AgentBuyZonePayload,
-                temperature=0.1,
-                reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
-                progress_callback=progress_callback,
-                stage_index=stage_index,
-                stage_total=stage_total,
-                analysis_cycle=analysis_cycle,
+            ) if not stage_retry_feedback else None
+            zone_loaded_from_cache = buy_zone_result is not None
+            if zone_loaded_from_cache:
+                _notify_stage_cache_hit(
+                    progress_callback,
+                    symbol=str(raw.get("ticker") or ""),
+                    profile=profile,
+                    stage=zone_stage,
+                    stage_index=stage_index,
+                    stage_total=stage_total,
+                    analysis_cycle=analysis_cycle,
+                )
+            else:
+                buy_zone_result = _parse_agent_stage(
+                    llm_provider,
+                    stage=zone_stage,
+                    symbol=str(raw.get("ticker") or ""),
+                    profile=profile,
+                    system_prompt=numeric_system_prompt,
+                    user_prompt=f"{stage_retry_feedback}{buy_zone_prompt}",
+                    schema=AgentBuyZonePayload,
+                    temperature=0.1,
+                    reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
+                    progress_callback=progress_callback,
+                    stage_index=stage_index,
+                    stage_total=stage_total,
+                    analysis_cycle=analysis_cycle,
+                )
+            buy_zone_payload = (
+                buy_zone_result
+                if isinstance(buy_zone_result, AgentBuyZonePayload)
+                else AgentBuyZonePayload.model_validate(buy_zone_result)
             )
-        buy_zone_payload = (
-            buy_zone_result
-            if isinstance(buy_zone_result, AgentBuyZonePayload)
-            else AgentBuyZonePayload.model_validate(buy_zone_result)
-        )
-        buy_zone_payload.zone.basis_fields = _normalize_evidence_paths(
-            buy_zone_payload.zone.basis_fields,
-            allowed_paths=zone_numeric_paths,
-            max_items=6,
-        )
-        unknown_zone_paths = (
-            set(buy_zone_payload.zone.basis_fields) - zone_numeric_paths
-        )
-        if unknown_zone_paths:
-            raise ValueError(
-                f"buy_zone_{zone_name} cited numeric evidence outside its frozen projection: "
-                f"{sorted(unknown_zone_paths)[:20]}"
+            buy_zone_payload.zone.basis_fields = _normalize_evidence_paths(
+                buy_zone_payload.zone.basis_fields,
+                allowed_paths=zone_numeric_paths,
+                max_items=6,
             )
-        if not zone_loaded_from_cache:
-            _write_agent_stage_cache(zone_cache_path, buy_zone_payload)
+            unknown_zone_paths = sorted(
+                set(buy_zone_payload.zone.basis_fields) - zone_numeric_paths
+            )
+            if not unknown_zone_paths:
+                if not zone_loaded_from_cache:
+                    _write_agent_stage_cache(zone_cache_path, buy_zone_payload)
+                break
+            signature = tuple(unknown_zone_paths)
+            if signature in seen_zone_failure_signatures:
+                raise ValueError(
+                    f"buy_zone_{zone_name} repeated numeric evidence outside its "
+                    f"frozen projection after targeted repair: {unknown_zone_paths[:20]}"
+                )
+            seen_zone_failure_signatures.add(signature)
+            stage_retry_feedback = _evidence_path_retry_feedback(
+                {zone_stage: unknown_zone_paths},
+                allowed_paths=zone_numeric_paths,
+            )
+            _notify_progress(
+                progress_callback,
+                current_action=(
+                    f"UZI 第 {analysis_cycle} 轮：数值证据路径校验未通过，"
+                    f"仅重试 {zone_stage}"
+                ),
+                next_action="从当前买入区间的真实数值白名单中复制合法路径",
+                progress_percent=min(78, 5 + stage_index * 8),
+                stage=f"{zone_stage}_repair",
+                cycle=analysis_cycle,
+            )
         zone_payloads[zone_name] = buy_zone_payload.zone
     payload = AgentAnalysisPayload(
         agent_reviewed=True,
