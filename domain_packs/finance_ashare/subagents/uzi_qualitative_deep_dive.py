@@ -91,6 +91,7 @@ def apply_qualitative_deep_dive(
     progress_callback=None,
     analysis_cycle: int | None = None,
     repair_feedback: list[str] | None = None,
+    research_profile: Literal["medium", "deep"] = "deep",
 ) -> dict[str, Any]:
     result = deepcopy(deep_analysis)
     provider_available = llm_provider is not None and bool(getattr(llm_provider, "available", True))
@@ -190,6 +191,7 @@ def apply_qualitative_deep_dive(
                 dimensions=dimensions,
                 evidence_bundle=evidence_bundle,
                 user_prompt=user_prompt,
+                research_profile=research_profile,
             ): (label, dimensions, cache_path)
             for label, dimensions, user_prompt, cache_path in pending_groups
         }
@@ -290,6 +292,7 @@ def _evaluate_group(
     dimensions: tuple[str, str],
     evidence_bundle: dict[str, dict[str, Any]],
     user_prompt: str | None = None,
+    research_profile: Literal["medium", "deep"] = "deep",
 ) -> QualitativeGroupResult:
     user_prompt = user_prompt or _group_user_prompt(
         group_label=group_label,
@@ -310,6 +313,8 @@ def _evaluate_group(
             user_prompt=user_prompt,
             schema=QualitativeGroupResult,
             temperature=0.1,
+            research_profile=research_profile,
+            uzi_stage=f"qualitative_{group_label}",
         )
     except Exception as exc:
         _LOGGER.warning(

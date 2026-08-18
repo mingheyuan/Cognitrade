@@ -891,6 +891,7 @@ def _execute_symbol(
                                 progress_callback=progress_callback,
                                 analysis_cycle=analysis_cycle,
                                 repair_feedback=qualitative_retry_feedback,
+                                research_profile=profile,
                             )
                             qualitative_execution = dict(qualitative.get("qualitative_agent_execution") or {})
                             agent_analysis["qualitative_deep_dive"] = dict(
@@ -1654,7 +1655,12 @@ def _parse_agent_stage(
         cycle=analysis_cycle,
     )
     try:
-        result = parse_uzi_structured(llm_provider, **kwargs)
+        result = parse_uzi_structured(
+            llm_provider,
+            research_profile=profile,
+            uzi_stage=stage,
+            **kwargs,
+        )
     except Exception as exc:
         _LOGGER.warning(
             "UZI agent analysis stage failed: symbol=%s profile=%s stage=%s elapsed=%.1fs error=%s:%s",

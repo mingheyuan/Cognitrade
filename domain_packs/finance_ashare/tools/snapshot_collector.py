@@ -180,6 +180,8 @@ _UZI_FETCHER_TIMEOUT_OVERRIDES = {
     "events": 120.0,
 }
 _UZI_BONUS_FETCHER_TIMEOUT_SECONDS = 120.0
+_UZI_SIMILAR_STOCKS_TOTAL_TIMEOUT_SECONDS = 30.0
+_UZI_SIMILAR_STOCKS_HTTP_TIMEOUT_SECONDS = 5.0
 _UZI_BONUS_SNAPSHOT_TYPES = frozenset({"fund_holders", "similar_stocks"})
 _UZI_ROOT_ROUTE_INTENTS = frozenset(
     {
@@ -1074,7 +1076,15 @@ def _run_snapshot_skill(
         if _uses_uzi_fetcher(snapshot_type):
             raw_basic = (dependencies or {}).get("0_basic") or {}
             industry = str((raw_basic.get("data") or {}).get("industry") or "").strip() or None
-            with uzi_request_timeout_scope():
+            request_scope_kwargs = (
+                {
+                    "timeout_seconds": _UZI_SIMILAR_STOCKS_HTTP_TIMEOUT_SECONDS,
+                    "total_timeout_seconds": _UZI_SIMILAR_STOCKS_TOTAL_TIMEOUT_SECONDS,
+                }
+                if snapshot_type == "similar_stocks"
+                else {}
+            )
+            with uzi_request_timeout_scope(**request_scope_kwargs):
                 return dict(
                     normalize_json_value(
                         _run_uzi_fetcher_snapshot(

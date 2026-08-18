@@ -293,6 +293,8 @@ def _evaluate_batch(
         user_prompt=user_prompt,
         schema=AgentRoleplayBatch,
         temperature=0.1,
+        research_profile="deep",
+        uzi_stage=f"roleplay_{group_label}",
     )
 
 

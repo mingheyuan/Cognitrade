@@ -176,6 +176,8 @@ class FinanceProviderExecutionTests(unittest.TestCase):
         self.assertEqual(snapshot_collector._uzi_per_fetcher_timeout_seconds("fundamental"), 150)
         self.assertEqual(snapshot_collector._uzi_per_fetcher_timeout_seconds("research"), 180)
         self.assertEqual(snapshot_collector._UZI_BONUS_FETCHER_TIMEOUT_SECONDS, 120)
+        self.assertEqual(snapshot_collector._UZI_SIMILAR_STOCKS_TOTAL_TIMEOUT_SECONDS, 30)
+        self.assertEqual(snapshot_collector._UZI_SIMILAR_STOCKS_HTTP_TIMEOUT_SECONDS, 5)
 
     def test_uzi_collection_uses_basic_numbered_then_bonus_waves(self) -> None:
         started: list[str] = []

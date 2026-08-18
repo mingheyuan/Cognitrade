@@ -54,6 +54,10 @@ class Settings(BaseModel):
     strategy_object_store_root: Path | None = None
     llm_request_timeout_seconds: int = 25
     uzi_llm_request_timeout_seconds: int = 480
+    uzi_llm_lite_request_timeout_seconds: int = 240
+    uzi_llm_medium_request_timeout_seconds: int = 600
+    uzi_llm_deep_request_timeout_seconds: int = 900
+    uzi_llm_buy_zone_request_timeout_seconds: int = 300
     uzi_llm_max_concurrency: int = 2
     uzi_llm_transient_retries: int = 6
     uzi_llm_retry_base_seconds: float = 2.0
@@ -93,6 +97,16 @@ class Settings(BaseModel):
             raise ValueError("llm_request_timeout_seconds must be positive")
         if self.uzi_llm_request_timeout_seconds <= 0:
             raise ValueError("uzi_llm_request_timeout_seconds must be positive")
+        if any(
+            timeout <= 0
+            for timeout in (
+                self.uzi_llm_lite_request_timeout_seconds,
+                self.uzi_llm_medium_request_timeout_seconds,
+                self.uzi_llm_deep_request_timeout_seconds,
+                self.uzi_llm_buy_zone_request_timeout_seconds,
+            )
+        ):
+            raise ValueError("UZI profile and buy-zone request timeouts must be positive")
         if self.uzi_llm_max_concurrency <= 0:
             raise ValueError("uzi_llm_max_concurrency must be positive")
         if self.uzi_llm_transient_retries < 0:

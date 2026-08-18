@@ -84,9 +84,28 @@ class UziSnapshotRuntimeParityTests(unittest.TestCase):
                         "GET",
                         "https://uzi-child.test",
                     ).result()
+            with uzi_request_timeout.uzi_request_timeout_scope(timeout_seconds=5):
+                guarded_request(object(), "GET", "https://uzi-short.test")
+            with patch.object(
+                uzi_request_timeout,
+                "monotonic",
+                side_effect=(100.0, 131.0),
+            ):
+                with uzi_request_timeout.uzi_request_timeout_scope(
+                    timeout_seconds=5,
+                    total_timeout_seconds=30,
+                ):
+                    with self.assertRaisesRegex(
+                        requests.Timeout,
+                        "scope deadline exceeded",
+                    ):
+                        guarded_request(object(), "GET", "https://uzi-expired.test")
             guarded_request(object(), "GET", "https://peer.test/after")
 
-        self.assertEqual(observed, [{}, {"timeout": 23}, {"timeout": 23}, {}])
+        self.assertEqual(
+            observed,
+            [{}, {"timeout": 23.0}, {"timeout": 23.0}, {"timeout": 5.0}, {}],
+        )
 
     def test_basic_canonical_ticker_drives_fetchers_but_not_artifact_entity(self) -> None:
         calls: list[tuple[str, str]] = []
