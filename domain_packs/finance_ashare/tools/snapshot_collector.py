@@ -534,6 +534,12 @@ def _collect_snapshots_with_uzi_root_router(
     )
     route_options = {
         "cognitrade_root_route_mode": route_mode,
+        # The v3 pipeline runs fetchers in spawned processes.  Pass the bonus
+        # budget to the host runtime so its existing hard process scheduler,
+        # rather than a parent-only requests patch, enforces the deadline.
+        "cognitrade_pipeline_fetcher_timeout_overrides": {
+            "similar_stocks": _UZI_SIMILAR_STOCKS_TOTAL_TIMEOUT_SECONDS,
+        },
         "cognitrade_xueqiu_policy": {
             "enabled": xueqiu_enabled,
             "cookie": settings.xueqiu_cookie if xueqiu_enabled else None,

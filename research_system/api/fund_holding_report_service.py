@@ -55,7 +55,7 @@ class FundHoldingReportService:
         self.run_service = run_service
         self.max_concurrency = max(
             1,
-            min(int(getattr(settings, "fund_holding_report_concurrency", 2)), 10),
+            min(int(getattr(settings, "fund_holding_report_concurrency", 5)), 10),
         )
         self.llm_max_concurrency = max(
             1,

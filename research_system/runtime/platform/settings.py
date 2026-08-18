@@ -64,7 +64,7 @@ class Settings(BaseModel):
     uzi_llm_retry_max_seconds: float = 60.0
     max_agent_tool_loop_turns: int = 4
     max_child_threads_per_turn: int = 8
-    fund_holding_report_concurrency: int = 2
+    fund_holding_report_concurrency: int = 5
     artifacts_retention_days: int = 30
     max_artifacts_size_mb: int = 1024
     memory_expiration_interval_seconds: float = 300.0

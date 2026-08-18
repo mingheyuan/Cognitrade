@@ -145,7 +145,7 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         ),
         "max_child_threads_per_turn": int(env_values.get("MAX_CHILD_THREADS_PER_TURN", "8")),
         "fund_holding_report_concurrency": int(
-            env_values.get("COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY", "2")
+            env_values.get("COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY", "5")
         ),
         "artifacts_retention_days": int(env_values.get("ARTIFACTS_RETENTION_DAYS", "30")),
         "max_artifacts_size_mb": int(env_values.get("MAX_ARTIFACTS_SIZE_MB", "1024")),

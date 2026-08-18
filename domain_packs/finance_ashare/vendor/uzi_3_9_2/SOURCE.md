@@ -37,10 +37,13 @@ commit separately and runs its test tree against the vendored Python implementat
 UZI collection keeps the upstream route-specific executor semantics. The default
 v3 pipeline runs fetchers in spawned processes with a 120-second per-fetcher hard
 timeout and a 300-second per-wave hard timeout; timed-out workers are terminated.
+Agent OS narrows only the optional `similar_stocks` process job to 30 seconds through
+the pinned scheduler's existing per-job timeout field; the vendored source and every
+core dimension retain their upstream limits.
 The forced/fallback legacy lane still uses thread completion-classification
 windows that cannot force-cancel an already running Python thread. Agent OS keeps
 its context-scoped default timeout for direct and legacy UZI `requests` calls;
-spawned pipeline jobs are instead bounded by the upstream process timeout, and
+spawned pipeline jobs are instead bounded by the upstream process scheduler, and
 peer DomainPack traffic remains unaffected. Cognitrade's request-local Xueqiu
 source gate is explicitly transported into the spawned contest worker.
 

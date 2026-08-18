@@ -157,6 +157,7 @@ integration_contracts:
       wave_3_sequential: [13_policy, 3_macro, 7_industry, 9_futures]
       dependency_context: 0_basic_plus_8_materials_and_1_financials_when_present
       per_fetcher_hard_timeout_seconds: 120
+      host_optional_fetcher_timeout_seconds: {similar_stocks: 30}
       per_wave_hard_timeout_seconds: 300
       timeout_env: {fetcher: UZI_PIPELINE_FETCHER_TIMEOUT, wave: UZI_PIPELINE_WAVE_TIMEOUT}
       provider_error_semantics: normalize_validate_and_return_dim_result_error
@@ -177,7 +178,7 @@ integration_contracts:
       wave_3_configured_fetcher_seconds: 120
       timeout_semantics: completion_classification_windows_not_hard_thread_cancellation
       mini_racer_policy: run_fetcher_lock_disable_force_and_crash_sentinel
-    host_transport_guard: context-scoped requests default timeout 20s applies to direct_and_legacy_UZI_threads;pipeline_spawn_workers_are_bounded_by_upstream_hard_process_timeout;peer_Agent_OS_traffic_is_unaffected
+    host_transport_guard: context-scoped requests default timeout 20s applies to direct_and_legacy_UZI_threads;pipeline_spawn_workers_use_upstream_process_scheduler_with_similar_stocks_narrowed_to_30s;peer_Agent_OS_traffic_is_unaffected
     sensitive_source_guard: request_local_Xueqiu_policy_is_transported_to_the_spawned_19_contests_worker
     legacy_long_running_worker_risk: a provider performing many bounded requests may finish after the classification window because Python threads cannot be force-cancelled
   self_review_compatibility_view:

@@ -202,6 +202,54 @@ class UziRootCollectionRouterTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertIs(collect_symbol.call_args.kwargs["resume"], False)
+        self.assertEqual(
+            collect_symbol.call_args.kwargs["options"][
+                "cognitrade_pipeline_fetcher_timeout_overrides"
+            ],
+            {"similar_stocks": 30.0},
+        )
+
+    def test_pipeline_host_timeout_override_reaches_spawn_job(self) -> None:
+        observed: dict[str, float] = {}
+
+        with TemporaryDirectory() as temporary:
+            runtime = self._runtime(Path(temporary))
+            pipeline_run = importlib.import_module("lib.pipeline.run")
+            pipeline_collect = importlib.import_module("lib.pipeline.collect")
+            run_real_test = importlib.import_module("run_real_test")
+
+            def collect_with_job(*_args, **_kwargs):
+                job = pipeline_collect.ProcessJob(
+                    "similar_stocks",
+                    lambda: None,
+                    timeout_sec=120.0,
+                )
+                observed["timeout_seconds"] = job.timeout_sec
+                return {}
+
+            with (
+                patch.dict(os.environ, {"UZI_LEGACY": "0"}),
+                patch.object(pipeline_run, "_preflight_guards"),
+                patch.object(
+                    pipeline_collect,
+                    "collect",
+                    side_effect=collect_with_job,
+                ),
+                patch.object(run_real_test, "collect_raw_data") as legacy,
+                patch.object(runtime, "_write_native_raw"),
+            ):
+                runtime.collect_symbol(
+                    ticker="600519",
+                    options={
+                        "cognitrade_pipeline_fetcher_timeout_overrides": {
+                            "similar_stocks": 30.0,
+                        }
+                    },
+                )
+
+        self.assertEqual(observed, {"timeout_seconds": 30.0})
+        self.assertEqual(pipeline_collect.ProcessJob.__name__, "ProcessJob")
+        legacy.assert_not_called()
 
     def test_multi_runner_keeps_pinned_resume_true(self) -> None:
         symbol_result = {

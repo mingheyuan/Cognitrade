@@ -59,6 +59,7 @@ class SettingsRuntimeTests(unittest.TestCase):
             self.assertEqual(settings.uzi_llm_deep_request_timeout_seconds, 810)
             self.assertEqual(settings.uzi_llm_buy_zone_request_timeout_seconds, 270)
             self.assertEqual(settings.baostock_socket_timeout_seconds, 9)
+            self.assertEqual(settings.fund_holding_report_concurrency, 5)
             self.assertEqual(settings.workspace_root, resolved_root / "workspace")
             self.assertEqual(settings.config_root, resolved_root / "workspace" / "config")
 

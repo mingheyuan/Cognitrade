@@ -210,6 +210,22 @@ class _RepairingBuyZoneProvider(_LiteAgentProvider):
         return result
 
 
+class _RepairingNarrativeProvider(_LiteAgentProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.narrative_calls = 0
+
+    def parse(self, **kwargs):
+        result = super().parse(**kwargs)
+        if kwargs.get("schema") is AgentNarrativeCorePayload:
+            self.narrative_calls += 1
+            if self.narrative_calls == 1:
+                result["panel_evidence_paths"] = [
+                    "panel.consensus_final"
+                ]
+        return result
+
+
 class Uzi392AnalysisGateTests(unittest.TestCase):
     def test_nullable_moat_is_only_normalized_for_the_legacy_idea_screen(self) -> None:
         features = {"moat_known": False, "moat_total": None, "fcf_positive": None}
@@ -491,6 +507,35 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
                 for row in progress
             ),
             1,
+        )
+
+    def test_unknown_narrative_evidence_retries_only_narrative_stage(self) -> None:
+        provider = _RepairingNarrativeProvider()
+        progress: list[dict] = []
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="lite",
+            llm_provider=provider,
+            progress_callback=progress.append,
+        )
+
+        self.assertTrue(result["report_allowed"])
+        self.assertEqual(provider.calls, 8)
+        self.assertEqual(provider.narrative_calls, 2)
+        self.assertEqual(
+            sum(
+                row.get("stage") == "narrative_core_repair"
+                for row in progress
+            ),
+            1,
+        )
+        self.assertTrue(
+            any(
+                "MECHANICAL_EVIDENCE_REPAIR=" in prompt
+                for prompt in provider.user_prompts
+            )
         )
 
     def test_validated_agent_stages_resume_from_persistent_cache(self) -> None:

@@ -184,8 +184,9 @@ UZI_LLM_RETRY_MAX_SECONDS=60
 UZI 报告不再给所有请求套同一个 480 秒上限：Lite、Medium、Deep 的结构化阶段
 分别使用 240、600、900 秒；内容较短的四个买入区间始终最多使用 300 秒。
 `UZI_LLM_REQUEST_TIMEOUT_SECONDS` 仅作为未归属档位的兼容回退。`similar_stocks`
-属于可选 bonus 数据，其单次 HTTP 默认 5 秒且整段网络预算 30 秒；超时会如实记录
-为数据缺口，不会阻塞核心报告或伪造同行数据。
+属于可选 bonus 数据：直接/legacy 路径的单次 HTTP 默认 5 秒，v3 spawn 路径由
+上游进程调度器执行 30 秒硬终止；超时会如实记录为数据缺口，不会阻塞核心报告或
+伪造同行数据。
 
 没有模型 Key 时，系统仍可执行确定性 Pack 能力，但需要模型合成的最终答复可能以
 `completed_partial` 结束。`COGNITRADE_API_ALLOW_UNAUTHENTICATED=true` 只允许
@@ -196,8 +197,27 @@ UZI 报告不再给所有请求套同一个 480 秒上限：Lite、Medium、Deep
 ```dotenv
 TUSHARE_TOKEN=<runtime-secret>
 MX_APIKEY=<runtime-secret>
-COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY=2
+COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY=5
 ```
+
+持仓报告 worker 默认 5；UZI 数据采集因 profile 环境变量仍按股票串行保护，模型请求
+继续由独立的 `UZI_LLM_MAX_CONCURRENCY` 限流，因此提高持仓 worker 不会把模型并发
+一并放大。模型上限属于 provider/账号级容量，未实测的部署保留默认 2。
+
+2026-08-18 同一真实 provider、同一股票的两轮小样本基准如下；样本量仅 `n=2`，用于
+定位长尾而不是承诺 SLA/P95：
+
+| 档位 | 平均时间 | 两次范围 | 结果说明 |
+| --- | ---: | ---: | --- |
+| Lite | 5.39 分钟（墙钟） | 4.20–6.58 分钟 | 两次均可交付 |
+| Medium | 15.86 分钟（墙钟） | 11.98–19.73 分钟 | 均被真实资金流缺口质量门拦截 |
+| Deep | 42.01 分钟（执行图） | 11.21–72.81 分钟 | 第二次触发 900 秒模型阶段超时，方差很高 |
+
+同环境另跑 5 只真实 A 股的 Lite 冷批次，持仓 worker=5、模型上限=4，峰值确实达到
+5，`5/5` 报告可交付，批次墙钟 25.29 分钟，折合吞吐约每 5.06 分钟一份；单股从批次
+开始到交付平均 24.24 分钟。该基线中 2 份报告的 narrative 证据路径被机械门拒绝并
+按 Lite 规则降级，随后已增加只重试 `narrative_core` 的定向修复。十大持仓在冷缓存、
+相同 provider 状态下应按约 45–60 分钟规划，不能把单股均值直接除以 5。
 
 TuShare 配置 Token 只表示客户端可以鉴权；具体 `daily`、`fina_indicator`、`moneyflow`、
 `top_list` 等接口仍取决于账号积分与权限。接口无权限时会记录脱敏的

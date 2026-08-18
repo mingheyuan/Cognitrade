@@ -1298,48 +1298,83 @@ def _generate_agent_analysis(
         stage="narrative_core",
         system_prompt=narrative_system_prompt,
     ) if not review_feedback else None
-    narrative_core_result = _load_agent_stage_cache(
-        narrative_cache_path,
-        schema=AgentNarrativeCorePayload,
-    )
-    narrative_loaded_from_cache = narrative_core_result is not None
-    if narrative_loaded_from_cache:
-        _notify_stage_cache_hit(
-            progress_callback,
-            symbol=str(raw.get("ticker") or ""),
-            profile=profile,
-            stage="narrative_core",
-            stage_index=stage_index,
-            stage_total=stage_total,
-            analysis_cycle=analysis_cycle,
-        )
-    else:
-        narrative_core_result = _parse_agent_stage(
-            llm_provider,
-            stage="narrative_core",
-            symbol=str(raw.get("ticker") or ""),
-            profile=profile,
-            system_prompt=narrative_system_prompt,
-            user_prompt=narrative_core_prompt,
+    narrative_retry_feedback = ""
+    seen_narrative_failure_signatures: set[tuple[str, ...]] = set()
+    while True:
+        narrative_core_result = _load_agent_stage_cache(
+            narrative_cache_path,
             schema=AgentNarrativeCorePayload,
-            temperature=0.1,
-            reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
-            progress_callback=progress_callback,
-            stage_index=stage_index,
-            stage_total=stage_total,
-            analysis_cycle=analysis_cycle,
+        ) if not narrative_retry_feedback else None
+        narrative_loaded_from_cache = narrative_core_result is not None
+        if narrative_loaded_from_cache:
+            _notify_stage_cache_hit(
+                progress_callback,
+                symbol=str(raw.get("ticker") or ""),
+                profile=profile,
+                stage="narrative_core",
+                stage_index=stage_index,
+                stage_total=stage_total,
+                analysis_cycle=analysis_cycle,
+            )
+        else:
+            narrative_core_result = _parse_agent_stage(
+                llm_provider,
+                stage="narrative_core",
+                symbol=str(raw.get("ticker") or ""),
+                profile=profile,
+                system_prompt=narrative_system_prompt,
+                user_prompt=f"{narrative_retry_feedback}{narrative_core_prompt}",
+                schema=AgentNarrativeCorePayload,
+                temperature=0.1,
+                reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
+                progress_callback=progress_callback,
+                stage_index=stage_index,
+                stage_total=stage_total,
+                analysis_cycle=analysis_cycle,
+            )
+        narrative_core_payload = (
+            narrative_core_result
+            if isinstance(narrative_core_result, AgentNarrativeCorePayload)
+            else AgentNarrativeCorePayload.model_validate(narrative_core_result)
         )
-    narrative_core_payload = (
-        narrative_core_result
-        if isinstance(narrative_core_result, AgentNarrativeCorePayload)
-        else AgentNarrativeCorePayload.model_validate(narrative_core_result)
-    )
-    _normalize_narrative_core_paths(
-        narrative_core_payload,
-        allowed_paths=narrative_allowed_paths,
-    )
-    if not narrative_loaded_from_cache:
-        _write_agent_stage_cache(narrative_cache_path, narrative_core_payload)
+        try:
+            _normalize_narrative_core_paths(
+                narrative_core_payload,
+                allowed_paths=narrative_allowed_paths,
+            )
+        except ValueError:
+            unknown_narrative_paths = sorted(
+                _narrative_core_evidence_paths(narrative_core_payload)
+                - narrative_allowed_paths
+            )
+            if not unknown_narrative_paths:
+                raise
+            signature = tuple(unknown_narrative_paths)
+            if signature in seen_narrative_failure_signatures:
+                raise ValueError(
+                    "narrative stage repeated unknown evidence paths after targeted repair: "
+                    f"{unknown_narrative_paths[:20]}"
+                )
+            seen_narrative_failure_signatures.add(signature)
+            narrative_retry_feedback = _evidence_path_retry_feedback(
+                {"narrative_core": unknown_narrative_paths},
+                allowed_paths=narrative_allowed_paths,
+            )
+            _notify_progress(
+                progress_callback,
+                current_action=(
+                    f"UZI 第 {analysis_cycle} 轮：证据路径校验未通过，"
+                    "仅重试 narrative_core"
+                ),
+                next_action="从冻结证据候选中逐字符复制合法叶子路径",
+                progress_percent=min(78, 5 + stage_index * 8),
+                stage="narrative_core_repair",
+                cycle=analysis_cycle,
+            )
+            continue
+        if not narrative_loaded_from_cache:
+            _write_agent_stage_cache(narrative_cache_path, narrative_core_payload)
+        break
     zone_dimension_keys = {
         "value": (
             "0_basic", "1_financials", "4_peers", "10_valuation",
@@ -1741,6 +1776,18 @@ def _normalize_narrative_core_paths(
                 allowed_paths=allowed_paths,
                 max_items=6,
             )
+    cited_paths = _narrative_core_evidence_paths(payload)
+    unknown_paths = cited_paths - allowed_paths
+    if unknown_paths:
+        raise ValueError(
+            "narrative stage cited evidence outside its frozen projection: "
+            f"{sorted(unknown_paths)[:20]}"
+        )
+
+
+def _narrative_core_evidence_paths(
+    payload: AgentNarrativeCorePayload,
+) -> set[str]:
     cited_paths = set(payload.panel_evidence_paths)
     cited_paths.update(payload.conclusion_evidence_paths)
     cited_paths.update(
@@ -1759,12 +1806,7 @@ def _normalize_narrative_core_paths(
             for row in payload.great_divide_override.bear_say_rounds
             for path in row.evidence_paths
         )
-    unknown_paths = cited_paths - allowed_paths
-    if unknown_paths:
-        raise ValueError(
-            "narrative stage cited evidence outside its frozen projection: "
-            f"{sorted(unknown_paths)[:20]}"
-        )
+    return cited_paths
 
 
 def _validate_profile_payload(

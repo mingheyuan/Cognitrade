@@ -159,6 +159,49 @@ def _similar_stocks_call(
     return main(ticker, top_n=int(options.get("top_n") or 4))
 
 
+@contextmanager
+def _pipeline_process_job_timeout_scope(
+    pipeline_collect: Any,
+    *,
+    overrides: dict[str, float] | None = None,
+):
+    """Apply host-owned hard timeouts without editing pinned UZI sources.
+
+    UZI v3 executes fetchers in spawned processes, so a request-scoped timeout
+    installed in the Agent OS parent cannot reach those workers.  The pinned
+    scheduler already supports a per-job ``timeout_sec``; this narrow wrapper
+    only changes that field for explicitly named optional fetchers and restores
+    the upstream constructor before the collection lock is released.
+    """
+
+    normalized = {
+        str(key): float(value)
+        for key, value in dict(overrides or {}).items()
+        if str(key) and float(value) > 0
+    }
+    if not normalized:
+        yield
+        return
+
+    original_process_job = pipeline_collect.ProcessJob
+
+    def process_job_with_host_timeout(*args: Any, **kwargs: Any):
+        job = original_process_job(*args, **kwargs)
+        timeout_seconds = normalized.get(str(job.key))
+        return (
+            replace(job, timeout_sec=timeout_seconds)
+            if timeout_seconds is not None
+            else job
+        )
+
+    with UZI_ENVIRONMENT_LOCK:
+        pipeline_collect.ProcessJob = process_job_with_host_timeout
+        try:
+            yield
+        finally:
+            pipeline_collect.ProcessJob = original_process_job
+
+
 _FETCHERS: dict[str, _FetcherSpec] = {
     "0_basic": _FetcherSpec("fetch_basic", _ticker_call),
     "1_financials": _FetcherSpec("fetch_financials", _ticker_call),
@@ -260,6 +303,12 @@ class Uzi392FetcherRuntime:
         if not normalized_ticker:
             raise ValueError("UZI symbol collection requires a ticker")
         normalized_options = dict(options or {})
+        process_timeout_overrides = dict(
+            normalized_options.get(
+                "cognitrade_pipeline_fetcher_timeout_overrides"
+            )
+            or {}
+        )
         contest_policy = dict(
             normalized_options.get("cognitrade_xueqiu_policy") or {}
         )
@@ -300,6 +349,9 @@ class Uzi392FetcherRuntime:
             with _pipeline_contests_policy_scope(
                 pipeline_collect,
                 policy=contest_policy,
+            ), _pipeline_process_job_timeout_scope(
+                pipeline_collect,
+                overrides=process_timeout_overrides,
             ):
                 collected = pipeline_collect.collect(
                     normalized_ticker,
