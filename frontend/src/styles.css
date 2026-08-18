@@ -797,6 +797,21 @@ select {
   font: inherit;
 }
 
+select {
+  color-scheme: dark;
+  background-color: var(--surface-soft);
+  color: var(--text);
+}
+
+select option {
+  background-color: var(--surface-strong);
+  color: var(--text);
+}
+
+select option:disabled {
+  color: var(--muted-dim);
+}
+
 button {
   color: inherit;
 }
