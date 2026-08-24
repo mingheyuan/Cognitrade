@@ -14,6 +14,7 @@ import { useCognitrade } from '../CognitradeContext'
 import { IntentDeliveryDossier } from '../artifacts/IntentDeliveryDossier'
 import { asNumber, asRecord, asString, dashboardCandidates, dashboardValue } from '../live-data'
 import type { ResearchIntent } from '../research-contracts'
+import { AppSelect } from './AppSelect'
 
 type ScreeningProps = {
   onSubmit: (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => void
@@ -57,8 +58,8 @@ export function Screening({ onSubmit, onOpenRun }: ScreeningProps) {
       <header className="page-heading">
         <div><span className="page-kicker">STOCK SCREENING · AGENT OS</span><h1>智能筛选</h1><p>候选、评分、数据缺口和来源均来自最新 `screening_result` Artifact。</p></div>
         <div className="page-heading-actions">
-          <label className="screening-profile-select"><span>研究周期</span><select aria-label="研究周期" value={investmentCycle} onChange={(event) => setInvestmentCycle(event.target.value as InvestmentCycle)}><option value="">请选择</option><option value="short_term">短期</option><option value="mid_term">中期</option><option value="long_term">长期</option></select></label>
-          <label className="screening-profile-select"><span>研究深度</span><select value={researchProfile} onChange={(event) => setResearchProfile(event.target.value as ResearchProfile)}><option value="">请选择</option><option value="lite">速判 · 1–2 分钟</option><option value="medium">标准 · 5–8 分钟</option><option value="deep">深度 · 15–20 分钟</option></select></label>
+          <label className="screening-profile-select"><span>研究周期</span><AppSelect aria-label="研究周期" value={investmentCycle} onChange={(event) => setInvestmentCycle(event.target.value as InvestmentCycle)}><option value="">请选择</option><option value="short_term">短期</option><option value="mid_term">中期</option><option value="long_term">长期</option></AppSelect></label>
+          <label className="screening-profile-select"><span>研究深度</span><AppSelect value={researchProfile} onChange={(event) => setResearchProfile(event.target.value as ResearchProfile)}><option value="">请选择</option><option value="lite">速判 · 1–2 分钟</option><option value="medium">标准 · 5–8 分钟</option><option value="deep">深度 · 15–20 分钟</option></AppSelect></label>
           <button className="secondary-button" onClick={exportResults} disabled={!screeningDashboard}><Download size={15} />导出结果</button>
           <button className="primary-button" onClick={() => onSubmit('筛选现金流质量改善、估值合理且风险可解释的 A 股候选', 'stock_screen', { research_profile: researchProfile, investment_cycle: investmentCycle })} disabled={submitting || !researchProfile || !investmentCycle}><Sparkles size={15} />新建筛选任务</button>
         </div>

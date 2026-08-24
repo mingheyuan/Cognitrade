@@ -41,6 +41,7 @@ def freeze_fund_holdings(
     fund_code: str,
     source_artifact_id: str | None = None,
     now: datetime | date | None = None,
+    top_n: int = 10,
 ) -> dict[str, Any]:
     """Freeze the displayed fund disclosure without doing another network read."""
 
@@ -119,8 +120,11 @@ def freeze_fund_holdings(
                 "disclosure_date": disclosure_date,
             }
         )
+    normalized_top_n = int(top_n)
+    if not 5 <= normalized_top_n <= 20:
+        raise FundHoldingReportError("top_n must be between 5 and 20")
     normalized_holdings.sort(key=lambda row: (int(row["rank"]), str(row["symbol"])))
-    normalized_holdings = normalized_holdings[:10]
+    normalized_holdings = normalized_holdings[:normalized_top_n]
     # Upstream disclosure tables can retain the source document row number
     # (for example 16-25 after non-equity rows).  This batch is explicitly the
     # selected top-ten set, so expose a stable 1-N position without changing
@@ -157,6 +161,7 @@ def freeze_fund_holdings(
         "disclosure_date": disclosure_date,
         "disclosure_age_days": age_days,
         "stale_level": stale_level,
+        "top_n": normalized_top_n,
         "holdings": normalized_holdings,
         "data_gap": data_gap,
     }

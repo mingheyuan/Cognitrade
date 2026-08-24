@@ -109,6 +109,14 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
             "COGNITRADE_PAPER_ENFORCE_MARKET_HOURS", "true"
         ).strip().lower()
         in {"1", "true", "yes", "on"},
+        "cognitrade_database_url": env_values.get("COGNITRADE_DATABASE_URL") or None,
+        "cognitrade_database_auto_bootstrap": env_values.get(
+            "COGNITRADE_DATABASE_AUTO_BOOTSTRAP", "true"
+        ).strip().lower()
+        in {"1", "true", "yes", "on"},
+        "strategy_object_store_root": Path(env_values["COGNITRADE_OBJECT_STORE_ROOT"]).resolve()
+        if env_values.get("COGNITRADE_OBJECT_STORE_ROOT")
+        else None,
         "llm_request_timeout_seconds": int(env_values.get("LLM_REQUEST_TIMEOUT_SECONDS", "25")),
         "uzi_llm_request_timeout_seconds": int(
             env_values.get("UZI_LLM_REQUEST_TIMEOUT_SECONDS", "480")
@@ -126,6 +134,12 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "max_child_threads_per_turn": int(env_values.get("MAX_CHILD_THREADS_PER_TURN", "8")),
         "fund_holding_report_concurrency": int(
             env_values.get("COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY", "2")
+        ),
+        "fund_holding_report_max_auto_retries": int(
+            env_values.get("COGNITRADE_FUND_HOLDING_REPORT_MAX_AUTO_RETRIES", "3")
+        ),
+        "strategy_backfill_batch_timeout_seconds": int(
+            env_values.get("COGNITRADE_STRATEGY_BACKFILL_BATCH_TIMEOUT_SECONDS", "21600")
         ),
         "artifacts_retention_days": int(env_values.get("ARTIFACTS_RETENTION_DAYS", "30")),
         "max_artifacts_size_mb": int(env_values.get("MAX_ARTIFACTS_SIZE_MB", "1024")),

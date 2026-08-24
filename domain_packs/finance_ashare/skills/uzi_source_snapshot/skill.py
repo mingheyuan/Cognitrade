@@ -217,20 +217,32 @@ class UziSourceSnapshotSkill:
         if self.snapshot_type == "governance":
             fundamental = FundamentalSnapshotSkill(provider_registry=self.provider_registry).run(query=query, symbol=symbol)
             facts = dict(fundamental.get("facts") or {})
+            structured = self._structured_governance(symbol)
             result = {
                 "info": dict(facts.get("info") or {}),
                 "banking_metrics": dict(facts.get("banking_metrics") or {}),
                 "bank_peer_comparison": dict(facts.get("bank_peer_comparison") or {}),
+                "pledge": structured["pledge"],
+                "insider_trades_1y": structured["insider_trades_1y"],
+                "observation_status": structured["observation_status"],
+                "source_coverage": structured["source_coverage"],
             }
             search = self._safe_search(query=f"{query} 公司治理 股权质押 违规 减持", dimension="governance")
             browser = self._safe_browser(source_ids=("ths_f10", "xueqiu_f10"), symbol=symbol, query=query)
             result["governance_evidence"] = search.get("results") or []
             result["browser_evidence"] = browser.get("evidence") or {}
+            structured_verified = structured["observation_status"] in {
+                "verified_empty",
+                "verified_non_empty",
+            }
+            qualitative_available = bool(result["governance_evidence"] or result["browser_evidence"])
+            available = structured_verified or qualitative_available
             return self._from_snapshot(fundamental, {
                 **result,
-                "availability": "available" if any(result.values()) else "data_gap",
-                "data_gap": [] if any(result.values()) else ["governance_snapshot_missing"],
-                "_source_trace": [*list(fundamental.get("source_trace") or []), *list(search.get("source_trace") or []), *list(browser.get("source_trace") or [])],
+                "availability": "available" if available else "degraded" if any(result.values()) else "data_gap",
+                "data_gap": [] if available else ["governance_structured_observation_missing"],
+                "degrade_reason": None if available else "governance_structured_observation_missing",
+                "_source_trace": [*list(fundamental.get("source_trace") or []), *structured["source_trace"], *list(search.get("source_trace") or []), *list(browser.get("source_trace") or [])],
             })
         if self.snapshot_type == "research":
             try:
@@ -691,6 +703,100 @@ class UziSourceSnapshotSkill:
                     "exact": normalized == sector_name,
                 }
         return {}
+
+    @staticmethod
+    def _structured_governance(symbol: str) -> dict[str, Any]:
+        code = "".join(character for character in str(symbol or "") if character.isdigit())[-6:]
+        pledge: list[dict[str, Any]] = []
+        insider: list[dict[str, Any]] = []
+        coverage: dict[str, str] = {}
+        trace: list[dict[str, Any]] = []
+
+        endpoints = (
+            (
+                "em_data.stock_gpzy_pledge_ratio",
+                lambda: ak.stock_gpzy_pledge_ratio_em(),
+                "pledge",
+            ),
+            (
+                "em_data.stock_ggcg",
+                lambda: ak.stock_ggcg_em(symbol="近一年"),
+                "insider_trades_1y",
+            ),
+        )
+        for source_id, loader, field in endpoints:
+            try:
+                frame = call_with_retry(loader, retries=1, delay_seconds=0.2)
+                if frame is None or getattr(frame, "empty", True):
+                    coverage[field] = "no_data"
+                    trace.append({"source_id": source_id, "status": "no_data"})
+                    continue
+                symbol_column = next(
+                    (
+                        column
+                        for column in frame.columns
+                        if str(column) in {"股票代码", "证券代码", "代码"}
+                    ),
+                    None,
+                )
+                if symbol_column is None:
+                    coverage[field] = "parse_failed"
+                    trace.append({"source_id": source_id, "status": "parse_failed"})
+                    continue
+                normalized_codes = (
+                    frame[symbol_column]
+                    .astype(str)
+                    .str.replace(r"\.0$", "", regex=True)
+                    .str.extract(r"(\d+)", expand=False)
+                    .fillna("")
+                    .str.zfill(6)
+                )
+                rows = frame[normalized_codes == code].head(20).to_dict("records")
+                normalized_rows = [
+                    {str(key): normalize_value(value) for key, value in row.items()}
+                    for row in rows
+                ]
+                if field == "pledge":
+                    pledge = normalized_rows
+                else:
+                    insider = normalized_rows
+                coverage[field] = "available"
+                trace.append(
+                    {
+                        "source_id": source_id,
+                        "status": "available",
+                        "count": len(normalized_rows),
+                    }
+                )
+            except Exception as exc:
+                coverage[field] = "provider_unavailable"
+                trace.append(
+                    {
+                        "source_id": source_id,
+                        "status": "provider_unavailable",
+                        "error_type": exc.__class__.__name__,
+                    }
+                )
+
+        complete = all(
+            coverage.get(field) == "available"
+            for field in ("pledge", "insider_trades_1y")
+        )
+        if pledge or insider:
+            observation_status = "verified_non_empty" if complete else "partially_verified_non_empty"
+        elif complete:
+            observation_status = "verified_empty"
+        elif any(status == "available" for status in coverage.values()):
+            observation_status = "partially_verified_empty"
+        else:
+            observation_status = "unverified_empty"
+        return {
+            "pledge": pledge,
+            "insider_trades_1y": insider,
+            "observation_status": observation_status,
+            "source_coverage": coverage,
+            "source_trace": trace,
+        }
 
     def _safe_search(self, *, query: str, dimension: str) -> dict[str, Any]:
         try:

@@ -1,6 +1,7 @@
-import { ArrowUp, Check, ChevronDown, Paperclip, SlidersHorizontal, Sparkles } from 'lucide-react'
-import { type ChangeEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
+import { ArrowUp, Paperclip, SlidersHorizontal, Sparkles } from 'lucide-react'
+import { type ChangeEvent, type FormEvent, useRef, useState } from 'react'
 import type { ResearchIntent } from '../research-contracts'
+import { AppSelect } from './AppSelect'
 
 type ResearchComposerProps = {
   onSubmit: (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => void
@@ -35,51 +36,8 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
   const [query, setQuery] = useState('')
   const [intent, setIntent] = useState<IntentValue>('auto')
   const [profile, setProfile] = useState<ResearchProfile>('')
-  const [intentMenuOpen, setIntentMenuOpen] = useState(false)
-  const intentSelectRef = useRef<HTMLDivElement>(null)
-  const intentTriggerRef = useRef<HTMLButtonElement>(null)
   const materialInputRef = useRef<HTMLInputElement>(null)
-  const intentOptionRefs = useRef<Partial<Record<IntentValue, HTMLButtonElement | null>>>({})
   const [localMaterials, setLocalMaterials] = useState<Array<{ name: string; size: number }>>([])
-
-  useEffect(() => {
-    if (!intentMenuOpen) return
-
-    const focusFrame = window.requestAnimationFrame(() => intentOptionRefs.current[intent]?.focus())
-    const closeOnOutsideClick = (event: PointerEvent) => {
-      if (!intentSelectRef.current?.contains(event.target as Node)) setIntentMenuOpen(false)
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      setIntentMenuOpen(false)
-      intentTriggerRef.current?.focus()
-    }
-
-    document.addEventListener('pointerdown', closeOnOutsideClick)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      window.cancelAnimationFrame(focusFrame)
-      document.removeEventListener('pointerdown', closeOnOutsideClick)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [intent, intentMenuOpen])
-
-  const focusIntentOption = (current: IntentValue, offset: number) => {
-    const currentIndex = intentEntries.findIndex(([value]) => value === current)
-    const nextIndex = (currentIndex + offset + intentEntries.length) % intentEntries.length
-    intentOptionRefs.current[intentEntries[nextIndex][0]]?.focus()
-  }
-
-  const handleIntentOptionKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, value: IntentValue) => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault()
-      focusIntentOption(value, event.key === 'ArrowDown' ? 1 : -1)
-    } else if (event.key === 'Home' || event.key === 'End') {
-      event.preventDefault()
-      const target = event.key === 'Home' ? intentEntries[0][0] : intentEntries.at(-1)![0]
-      intentOptionRefs.current[target]?.focus()
-    }
-  }
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -132,55 +90,23 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
         </button>
       </div>
       <div className="composer-toolbar">
-        <div className={`intent-select ${intentMenuOpen ? 'is-open' : ''}`} ref={intentSelectRef}>
-          <button
-            ref={intentTriggerRef}
-            className="intent-select-trigger"
-            type="button"
-            aria-label={`选择研究意图，当前为${intentLabels[intent]}`}
-            aria-haspopup="menu"
-            aria-expanded={intentMenuOpen}
-            aria-controls="research-intent-menu"
-            onClick={() => setIntentMenuOpen((open) => !open)}
-            onKeyDown={(event) => {
-              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                event.preventDefault()
-                setIntentMenuOpen(true)
-              }
-            }}
-          >
-            <SlidersHorizontal size={14} />
-            <span>{intentLabels[intent]}</span>
-            <ChevronDown className="intent-select-chevron" size={13} />
-          </button>
-          {intentMenuOpen && (
-            <div id="research-intent-menu" className="intent-select-menu" role="menu" aria-label="研究意图">
-              {intentEntries.map(([value, label]) => (
-                <button
-                  key={value}
-                  ref={(node) => { intentOptionRefs.current[value] = node }}
-                  className="intent-select-option"
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={intent === value}
-                  onClick={() => {
-                    setIntent(value)
-                    if (!profileIntents.has(value)) setProfile('')
-                    setIntentMenuOpen(false)
-                    intentTriggerRef.current?.focus()
-                  }}
-                  onKeyDown={(event) => handleIntentOptionKeyDown(event, value)}
-                >
-                  <span className="intent-select-option-check">{intent === value && <Check size={13} />}</span>
-                  <span>{label}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <AppSelect
+          className="app-select--compact composer-intent-select"
+          value={intent}
+          aria-label={`选择研究意图，当前为${intentLabels[intent]}`}
+          prefix={<SlidersHorizontal size={14} />}
+          onChange={(event) => {
+            const value = event.target.value as IntentValue
+            setIntent(value)
+            if (!profileIntents.has(value)) setProfile('')
+          }}
+        >
+          {intentEntries.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </AppSelect>
         <label className={`profile-select ${profileIntents.has(intent) ? '' : 'is-disabled'}`}>
           <span className="visually-hidden">研究深度</span>
-          <select
+          <AppSelect
+            className="app-select--compact composer-profile-select"
             value={profile}
             disabled={!profileIntents.has(intent)}
             aria-label="选择研究深度"
@@ -190,7 +116,7 @@ export function ResearchComposer({ onSubmit, running, compact = false }: Researc
             {profileOptions.map((option) => (
               <option key={option.value} value={option.value}>{option.label} · {option.detail}</option>
             ))}
-          </select>
+          </AppSelect>
         </label>
         <input
           ref={materialInputRef}

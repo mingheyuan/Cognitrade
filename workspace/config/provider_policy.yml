@@ -16,7 +16,7 @@ provider_chains:
     providers: [akshare_lhb, tushare_lhb, yuncaijing_lhb]
   capital_flow:
     default_market: cn_equity
-    providers: [akshare_capital_flow, tushare_capital_flow]
+    providers: [akshare_capital_flow, efinance_capital_flow, tushare_capital_flow]
   sentiment:
     default_market: cn_equity
     providers: [akshare_sentiment, ddgs_sentiment, uzi_news_sentiment, hottrend_sentiment]

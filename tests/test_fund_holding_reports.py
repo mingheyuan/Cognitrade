@@ -285,7 +285,7 @@ class FundHoldingReportServiceTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail(f"batch did not finish: {batch_id}")
 
-    def test_runs_ten_children_with_dedicated_concurrency_and_context(self) -> None:
+    def test_runs_ten_children_with_dedicated_concurrency_and_canonical_input(self) -> None:
         self.agent_os.delay = 0.08
         created = self.service.create_batch("source-run", fund_code="110011", profile="lite")
         active_duplicate = self.service.create_batch(
@@ -302,10 +302,12 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         self.assertTrue(RunEventSource._is_terminal(self.agent_os.run_store.load_run_paths(final["batch_id"]).root))
         child = final["holdings"][0]
         request = read_json(self.agent_os.run_store.load_run_paths(child["child_run_id"]).request)
-        context = request["slots"]["holding_context"]
-        self.assertEqual(context["parent_batch_id"], final["batch_id"])
-        self.assertEqual(context["source_fund_artifact_id"], "fund-artifact-1")
-        self.assertEqual(context["holding_rank"], 1)
+        self.assertNotIn("holding_context", request["slots"])
+        self.assertEqual(request["slots"], {"symbols": [child["symbol"]]})
+        self.assertTrue(request["constraints"]["canonical_uzi_analysis"])
+        self.assertEqual(request["constraints"]["parent_batch_id"], final["batch_id"])
+        self.assertEqual(final["source_artifact_id"], "fund-artifact-1")
+        self.assertEqual(child["rank"], 1)
         user_request_schema = json.loads(
             (
                 Path(__file__).resolve().parents[1]
@@ -319,7 +321,6 @@ class FundHoldingReportServiceTests(unittest.TestCase):
             {
                 "query": request["user_query"],
                 "symbols": request["slots"]["symbols"],
-                "holding_context": context,
             },
             user_request_schema,
         )
@@ -381,6 +382,112 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         )
         self.assertEqual(len(regenerated_item["attempt_run_ids"]), 2)
         self.assertEqual(len(untouched_item["attempt_run_ids"]), 1)
+
+    def test_auto_recovery_has_a_persisted_retry_limit(self) -> None:
+        self.run_service.source_artifacts = [
+            snapshot_artifact(funds=[equity_fund(count=1)])
+        ]
+        self.service.max_auto_retries = 2
+        self.agent_os.fail_symbols.add("600001")
+        fingerprint = 0
+
+        def changing_fingerprint(_detail):
+            nonlocal fingerprint
+            fingerprint += 1
+            return ("changing", fingerprint)
+
+        with patch.object(
+            self.service,
+            "_recovery_fingerprint",
+            side_effect=changing_fingerprint,
+        ):
+            created = self.service.create_batch(
+                "source-run",
+                fund_code="110011",
+                profile="lite",
+            )
+            final = self.wait_terminal(created["batch_id"])
+
+        item = final["holdings"][0]
+        self.assertEqual(final["max_auto_retries"], 2)
+        self.assertEqual(item["retry_count"], 2)
+        self.assertEqual(item["status"], "failed")
+        self.assertIn("holding_stock_report_retry_exhausted", item["data_gap"])
+        self.assertIn("自动恢复已达到上限", item["error"])
+
+    def test_recovered_legacy_retry_storm_stops_before_another_resume(self) -> None:
+        self.run_service.source_artifacts = [
+            snapshot_artifact(funds=[equity_fund(count=1)])
+        ]
+        with patch.object(self.service, "_submit_item"):
+            created = self.service.create_batch(
+                "source-run",
+                fund_code="110011",
+                profile="deep",
+            )
+        state = self.service._load_batch(created["batch_id"])
+        item = state["holdings"][0]
+        item["status"] = "running"
+        item["retry_count"] = 11_622
+        state.pop("max_auto_retries", None)
+        self.service._refresh_parent_status(state)
+        self.service._write_batch(
+            state,
+            event_type="legacy_retry_storm_fixture",
+        )
+        child_run_id = str(item["child_run_id"])
+        with patch.object(self.agent_os, "resume", wraps=self.agent_os.resume) as resume, patch.object(
+            self.agent_os,
+            "handle_request",
+            wraps=self.agent_os.handle_request,
+        ) as handle_request:
+            self.service._execute_item(
+                created["batch_id"],
+                str(item["symbol"]),
+                child_run_id,
+            )
+
+        final = self.service.detail(created["batch_id"])
+        self.assertEqual(resume.call_count, 0)
+        self.assertEqual(handle_request.call_count, 0)
+        self.assertEqual(final["holdings"][0]["status"], "failed")
+        self.assertEqual(final["holdings"][0]["retry_count"], 11_622)
+        self.assertIn(
+            "holding_stock_report_retry_exhausted",
+            final["holdings"][0]["data_gap"],
+        )
+
+    def test_startup_recovery_settles_exhausted_items_before_queueing(self) -> None:
+        self.run_service.source_artifacts = [
+            snapshot_artifact(funds=[equity_fund(count=1)])
+        ]
+        with patch.object(self.service, "_submit_item"):
+            created = self.service.create_batch(
+                "source-run",
+                fund_code="110011",
+                profile="deep",
+            )
+        state = self.service._load_batch(created["batch_id"])
+        state.pop("max_auto_retries", None)
+        state["holdings"][0]["status"] = "running"
+        state["holdings"][0]["retry_count"] = 50
+        self.service._refresh_parent_status(state)
+        self.service._write_batch(
+            state,
+            event_type="legacy_retry_storm_fixture",
+        )
+
+        with patch.object(self.service, "_submit_item") as submit:
+            self.service._recover_batches()
+
+        final = self.service.detail(created["batch_id"])
+        self.assertEqual(submit.call_count, 0)
+        self.assertEqual(final["status"], "failed")
+        self.assertEqual(final["counts"]["failed"], 1)
+        self.assertIn(
+            "holding_stock_report_retry_exhausted",
+            final["holdings"][0]["data_gap"],
+        )
 
     def test_committed_reports_survive_response_finalization_error(self) -> None:
         self.run_service.source_artifacts = [snapshot_artifact(funds=[equity_fund(count=1)])]

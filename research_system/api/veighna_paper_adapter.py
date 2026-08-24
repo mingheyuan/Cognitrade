@@ -3,8 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, ROUND_HALF_UP
-from importlib import metadata
+from importlib import import_module, metadata
 from importlib.util import find_spec
+import os
+from pathlib import Path
+import sys
+from tempfile import gettempdir
+from threading import RLock
 from typing import Any
 
 from research_system.runtime.presentation.display import localize_runtime_error
@@ -12,6 +17,7 @@ from research_system.runtime.presentation.display import localize_runtime_error
 
 _MICRO = Decimal("0.000001")
 _DEFAULT_HALF_SPREAD = Decimal("0.0005")
+_NATIVE_IMPORT_LOCK = RLock()
 
 
 @dataclass(frozen=True)
@@ -34,10 +40,28 @@ class VeighNaPaperAdapter:
 
     engine_name = "veighna-paperaccount"
 
-    def __init__(self, *, half_spread: Decimal = _DEFAULT_HALF_SPREAD) -> None:
+    def __init__(
+        self,
+        *,
+        half_spread: Decimal = _DEFAULT_HALF_SPREAD,
+        runtime_root: Path | None = None,
+    ) -> None:
         self.half_spread = Decimal(half_spread)
-        self._available = bool(find_spec("vnpy") and find_spec("vnpy_paperaccount"))
+        self.runtime_root = Path(
+            runtime_root or Path(gettempdir()) / "cognitrade" / "veighna_runtime"
+        ).resolve()
+        self._available = False
         self._load_error: str | None = None
+        self._native: dict[str, Any] = {}
+        if find_spec("vnpy") and find_spec("vnpy_paperaccount"):
+            try:
+                self._native = self._load_native_bindings()
+                self._available = True
+            except Exception as exc:
+                self._load_error = localize_runtime_error(
+                    exc,
+                    fallback="VeighNa 撮合依赖加载失败。",
+                )
 
     def status(self) -> dict[str, Any]:
         versions: dict[str, str | None] = {}
@@ -121,9 +145,16 @@ class VeighNaPaperAdapter:
         latest: Decimal,
         moment: datetime,
     ) -> PaperMatch:
-        from vnpy.trader.constant import Direction, Exchange, Offset, OrderType, Product
-        from vnpy.trader.object import ContractData, OrderRequest, TickData
-        from vnpy_paperaccount.engine import EVENT_TRADE, PaperEngine
+        Direction = self._native["Direction"]
+        Exchange = self._native["Exchange"]
+        Offset = self._native["Offset"]
+        OrderType = self._native["OrderType"]
+        Product = self._native["Product"]
+        ContractData = self._native["ContractData"]
+        OrderRequest = self._native["OrderRequest"]
+        TickData = self._native["TickData"]
+        EVENT_TRADE = self._native["EVENT_TRADE"]
+        PaperEngine = self._native["PaperEngine"]
 
         exchange = self._exchange(symbol, Exchange)
         direction = Direction.LONG if side == "buy" else Direction.SHORT
@@ -201,6 +232,57 @@ class VeighNaPaperAdapter:
             ask_price=ask,
             engine=self.engine_name,
         )
+
+    def _load_native_bindings(self) -> dict[str, Any]:
+        """Load VeighNa with all writable state rooted in Cognitrade storage.
+
+        VeighNa resolves ``.vntrader`` while importing ``vnpy.trader.utility``
+        and its logger opens a file during the later engine import.  A service
+        account can have a read-only or unavailable home directory, so relying
+        on ``Path.home()`` makes an apparently available engine fail on its
+        first fill.  The import lock also protects the temporary HOME override
+        and Python's process-global module initialisation.
+        """
+
+        with _NATIVE_IMPORT_LOCK:
+            self.runtime_root.mkdir(parents=True, exist_ok=True)
+            temp_dir = self.runtime_root / ".vntrader"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+
+            previous_home = os.environ.get("HOME")
+            os.environ["HOME"] = str(self.runtime_root)
+            try:
+                utility = import_module("vnpy.trader.utility")
+            finally:
+                if previous_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = previous_home
+
+            # The module may already have been imported by another adapter in
+            # this process. Rebind both globals before importing the engine so
+            # settings and logs still use this controlled writable directory.
+            utility.TRADER_DIR = self.runtime_root
+            utility.TEMP_DIR = temp_dir
+            runtime_path = str(self.runtime_root)
+            if runtime_path not in sys.path:
+                sys.path.append(runtime_path)
+
+            constants = import_module("vnpy.trader.constant")
+            objects = import_module("vnpy.trader.object")
+            paper_engine = import_module("vnpy_paperaccount.engine")
+            return {
+                "Direction": constants.Direction,
+                "Exchange": constants.Exchange,
+                "Offset": constants.Offset,
+                "OrderType": constants.OrderType,
+                "Product": constants.Product,
+                "ContractData": objects.ContractData,
+                "OrderRequest": objects.OrderRequest,
+                "TickData": objects.TickData,
+                "EVENT_TRADE": paper_engine.EVENT_TRADE,
+                "PaperEngine": paper_engine.PaperEngine,
+            }
 
     def _compatible_match(
         self,

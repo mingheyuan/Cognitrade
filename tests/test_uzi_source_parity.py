@@ -24,7 +24,10 @@ from research_system.adapters.vendors.uzi_source_catalog import (
 from research_system.runtime.platform.settings import Settings
 from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
 from domain_packs.finance_ashare.tools import snapshot_collector
-from domain_packs.finance_ashare.skills.uzi_source_snapshot.skill import IndustrySnapshotSkill
+from domain_packs.finance_ashare.skills.uzi_source_snapshot.skill import (
+    GovernanceSnapshotSkill,
+    IndustrySnapshotSkill,
+)
 from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import Uzi392FetcherRuntime
 
 
@@ -43,6 +46,29 @@ EXPECTED_UZI_SOURCE_IDS = {
 
 
 class UziSourceParityTests(unittest.TestCase):
+    def test_governance_structured_sources_distinguish_verified_empty_from_failure(self) -> None:
+        pledge_frame = pd.DataFrame({"股票代码": ["000001"], "质押比例": [1.2]})
+        insider_frame = pd.DataFrame({"股票代码": ["000001"], "变动数量": [1000]})
+        with (
+            patch(
+                "domain_packs.finance_ashare.skills.uzi_source_snapshot.skill.ak.stock_gpzy_pledge_ratio_em",
+                return_value=pledge_frame,
+            ),
+            patch(
+                "domain_packs.finance_ashare.skills.uzi_source_snapshot.skill.ak.stock_ggcg_em",
+                return_value=insider_frame,
+            ),
+        ):
+            result = GovernanceSnapshotSkill._structured_governance("600519.SH")
+
+        self.assertEqual(result["observation_status"], "verified_empty")
+        self.assertEqual(
+            result["source_coverage"],
+            {"pledge": "available", "insider_trades_1y": "available"},
+        )
+        self.assertEqual(result["pledge"], [])
+        self.assertEqual(result["insider_trades_1y"], [])
+
     def test_capital_flow_fetcher_is_the_exact_pinned_uzi_source(self) -> None:
         source_path = (
             Path(__file__).resolve().parents[1]
@@ -61,7 +87,10 @@ class UziSourceParityTests(unittest.TestCase):
     def test_capital_flow_snapshot_invokes_uzi_without_provider_substitution(self) -> None:
         upstream = {
             "ticker": "688256.SH",
-            "data": {"holder_count_history": [{"股东户数": 12345}]},
+            "data": {
+                "holder_count_history": [{"股东户数": 12345}],
+                "main_fund_flow_20d": [{"日期": "2026-08-21", "主力净流入": 10}],
+            },
             "source": "akshare:multi",
             "fallback": False,
         }
@@ -82,6 +111,58 @@ class UziSourceParityTests(unittest.TestCase):
             options=None,
         )
         self.assertEqual(snapshot["facts"]["_uzi_raw_result"], upstream)
+
+    def test_capital_flow_snapshot_recovers_empty_uzi_main_flow_with_provider_chain(self) -> None:
+        upstream = {
+            "ticker": "688256.SH",
+            "data": {
+                "holder_count_history": [{"股东户数": 12345}],
+                "main_fund_flow_20d": [],
+            },
+            "source": "akshare:multi",
+            "fallback": False,
+        }
+        fallback = {
+            "facts": {
+                "availability": "available",
+                "latest_flow": {"date": "2026-08-21", "main_net_inflow": 10},
+                "recent_flows": [{"date": "2026-08-21", "main_net_inflow": 10}],
+                "main_fund_flow_20d": [{"date": "2026-08-21", "main_net_inflow": 10}],
+            },
+            "source": {
+                "provider_id": "efinance_capital_flow",
+                "source_id": "efinance",
+                "vendor": "efinance",
+            },
+            "source_trace": [
+                {
+                    "provider_id": "efinance_capital_flow",
+                    "source_id": "efinance",
+                    "status": "available",
+                }
+            ],
+        }
+
+        with (
+            patch.object(Uzi392FetcherRuntime, "collect", return_value=upstream),
+            patch(
+                "domain_packs.finance_ashare.tools.snapshot_collector.CapitalFlowSnapshotSkill.run",
+                return_value=fallback,
+            ),
+        ):
+            snapshot = snapshot_collector._run_uzi_fetcher_snapshot(
+                query="分析寒武纪",
+                symbol="688256",
+                snapshot_type="capital_flow",
+                provider_registry=None,
+            )
+
+        self.assertEqual(snapshot["facts"]["_uzi_raw_result"], upstream)
+        self.assertEqual(snapshot["facts"]["main_fund_flow_20d"], fallback["facts"]["main_fund_flow_20d"])
+        self.assertEqual(snapshot["field_sources"]["main_fund_flow_20d"], "efinance_capital_flow")
+        self.assertEqual(snapshot["source"]["provider_id"], "uzi_3_9_2.12_capital_flow")
+        self.assertTrue(snapshot["fallback_applied"])
+        self.assertFalse(snapshot["degraded"])
 
     def test_uzi_resource_sensitive_fetchers_share_one_serial_execution_lane(self) -> None:
         state_lock = Lock()

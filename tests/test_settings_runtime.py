@@ -38,7 +38,9 @@ class SettingsRuntimeTests(unittest.TestCase):
                 "OPENAI_SERVICE_TIER=priority\n"
                 "OPENAI_DISABLE_RESPONSE_STORAGE=false\n"
                 "UZI_LLM_REQUEST_TIMEOUT_SECONDS=360\n"
-                "COGNITRADE_BAOSTOCK_SOCKET_TIMEOUT_SECONDS=9\n",
+                "COGNITRADE_BAOSTOCK_SOCKET_TIMEOUT_SECONDS=9\n"
+                "COGNITRADE_FUND_HOLDING_REPORT_MAX_AUTO_RETRIES=4\n"
+                "COGNITRADE_STRATEGY_BACKFILL_BATCH_TIMEOUT_SECONDS=28800\n",
                 encoding="utf-8",
             )
 
@@ -51,6 +53,8 @@ class SettingsRuntimeTests(unittest.TestCase):
             self.assertFalse(settings.openai_disable_response_storage)
             self.assertEqual(settings.uzi_llm_request_timeout_seconds, 360)
             self.assertEqual(settings.baostock_socket_timeout_seconds, 9)
+            self.assertEqual(settings.fund_holding_report_max_auto_retries, 4)
+            self.assertEqual(settings.strategy_backfill_batch_timeout_seconds, 28800)
             self.assertEqual(settings.workspace_root, resolved_root / "workspace")
             self.assertEqual(settings.config_root, resolved_root / "workspace" / "config")
 

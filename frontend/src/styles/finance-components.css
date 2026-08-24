@@ -675,7 +675,8 @@
 }
 
 .backtest-config-card input,
-.backtest-config-card select {
+.backtest-config-card select,
+.backtest-config-card .app-select-trigger {
   width: 100%;
   min-width: 0;
   height: 41px;
@@ -689,7 +690,8 @@
 }
 
 .backtest-config-card input:focus,
-.backtest-config-card select:focus {
+.backtest-config-card select:focus,
+.backtest-config-card .app-select-trigger:focus-visible {
   border-color: rgba(125, 226, 189, .5);
   box-shadow: 0 0 0 3px rgba(125, 226, 189, .06);
 }
@@ -2122,7 +2124,8 @@
   font-size: 9px;
 }
 
-.fund-holding-report-config select {
+.fund-holding-report-config select,
+.fund-holding-report-config .app-select-trigger {
   min-height: 36px;
   padding: 7px 10px;
   border: 1px solid var(--border);

@@ -4,7 +4,7 @@ import re
 import zipfile
 from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from threading import RLock
@@ -60,6 +60,10 @@ class FundHoldingReportService:
             1,
             min(int(getattr(settings, "fund_holding_report_concurrency", 2)), 10),
         )
+        self.max_auto_retries = max(
+            0,
+            int(getattr(settings, "fund_holding_report_max_auto_retries", 3)),
+        )
         self._lock = RLock()
         self._executor = ThreadPoolExecutor(
             max_workers=self.max_concurrency,
@@ -85,6 +89,11 @@ class FundHoldingReportService:
         source_artifact_id: str | None = None,
         confirm_stale: bool = False,
         force: bool = False,
+        top_n: int = 10,
+        as_of_date: date | str | None = None,
+        pin_set_hash: str | None = None,
+        canonical_reuse: dict[str, dict[str, Any]] | None = None,
+        selected_symbols: Iterable[str] | None = None,
         user_id: str | None = None,
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
@@ -100,14 +109,30 @@ class FundHoldingReportService:
             list(payload.get("artifacts") or []),
             fund_code=fund_code,
             source_artifact_id=source_artifact_id,
+            top_n=top_n,
         )
         require_stale_confirmation(frozen, confirmed=confirm_stale)
+        normalized_as_of_date = str(as_of_date or date.today().isoformat())[:10]
+        normalized_pin_set_hash = str(pin_set_hash or "legacy-unpinned")
+        reusable = {
+            str(symbol): dict(payload)
+            for symbol, payload in (canonical_reuse or {}).items()
+            if isinstance(payload, dict)
+        }
+        selected = (
+            {str(symbol).strip() for symbol in selected_symbols if str(symbol).strip()}
+            if selected_symbols is not None
+            else None
+        )
         with self._lock:
             existing = self._find_existing(
                 source_run_id=source_run_id,
                 source_artifact_id=str(frozen["source_artifact_id"]),
                 fund_code=str(frozen["fund_code"]),
                 profile=normalized_profile,
+                top_n=int(frozen["top_n"]),
+                as_of_date=normalized_as_of_date,
+                pin_set_hash=normalized_pin_set_hash,
                 user_id=user_id,
                 tenant_id=tenant_id,
             )
@@ -122,7 +147,7 @@ class FundHoldingReportService:
             request = RequestEnvelope(
                 intent="fund_holding_research",
                 user_query=(
-                    f"为基金 {frozen['fund_name']}（{frozen['fund_code']}）的最新披露前十大持仓"
+                    f"为基金 {frozen['fund_name']}（{frozen['fund_code']}）的最新披露前 {frozen['top_n']} 大持仓"
                     f"生成 {normalized_profile} 档股票报告"
                 ),
                 user_id=user_id,
@@ -133,6 +158,9 @@ class FundHoldingReportService:
                     "source_fund_artifact_id": frozen["source_artifact_id"],
                     "fund_code": frozen["fund_code"],
                     "research_profile": normalized_profile,
+                    "top_n": int(frozen["top_n"]),
+                    "as_of_date": normalized_as_of_date,
+                    "pin_set_hash": normalized_pin_set_hash,
                 },
                 constraints={"managed_fund_holding_batch": True},
             )
@@ -151,8 +179,12 @@ class FundHoldingReportService:
                 "fund_name": frozen["fund_name"],
                 "fund_type": frozen.get("fund_type"),
                 "profile": normalized_profile,
+                "top_n": int(frozen["top_n"]),
+                "as_of_date": normalized_as_of_date,
+                "pin_set_hash": normalized_pin_set_hash,
                 "status": "running",
                 "concurrency": self.max_concurrency,
+                "max_auto_retries": self.max_auto_retries,
                 "holding_source": frozen["holding_source"],
                 "is_fund_of_funds": bool(frozen.get("is_fund_of_funds")),
                 "disclosure_date": frozen.get("disclosure_date"),
@@ -180,10 +212,30 @@ class FundHoldingReportService:
                     "completed_at": None,
                 }
                 if item.get("supported"):
-                    child_run_id = self._prepare_child(state, item)
-                    item["child_run_id"] = child_run_id
-                    item["attempt_run_ids"] = [child_run_id]
-                    item["status"] = "queued"
+                    cached = reusable.get(str(item["symbol"]))
+                    if cached and cached.get("run_id"):
+                        child_run_id = str(cached["run_id"])
+                        item["child_run_id"] = child_run_id
+                        item["attempt_run_ids"] = [child_run_id]
+                        item["status"] = "completed"
+                        item["report_available"] = True
+                        item["canonical_reused"] = True
+                        item["canonical_artifact_id"] = cached.get("artifact_id")
+                        item["canonical_content_hash"] = cached.get("content_hash")
+                        item["confidence"] = cached.get("confidence")
+                        item["completed_at"] = now
+                    elif selected is not None and str(item["symbol"]) not in selected:
+                        item["status"] = "failed"
+                        item["canonical_reused"] = False
+                        item["data_gap"] = ["not_selected_for_retry"]
+                        item["error"] = "该节点未包含在本次手动重试范围内"
+                        item["completed_at"] = now
+                    else:
+                        child_run_id = self._prepare_child(state, item)
+                        item["child_run_id"] = child_run_id
+                        item["attempt_run_ids"] = [child_run_id]
+                        item["status"] = "queued"
+                        item["canonical_reused"] = False
                 else:
                     item["status"] = "unsupported"
                     item["data_gap"] = ["holding_market_not_supported"]
@@ -429,6 +481,7 @@ class FundHoldingReportService:
             # limit. Retries use the current service pool, so keep the public
             # batch contract aligned with the concurrency actually enforced.
             state["concurrency"] = self.max_concurrency
+            state["max_auto_retries"] = self.max_auto_retries
             state["cancel_requested"] = False
             state["status"] = "running"
             state["completed_at"] = None
@@ -499,24 +552,6 @@ class FundHoldingReportService:
 
     def _prepare_child(self, state: dict[str, Any], item: dict[str, Any]) -> str:
         child_run_id = generate_ulid()
-        holding_context = {
-            "parent_batch_id": state["batch_id"],
-            "source_fund_run_id": state["source_run_id"],
-            "source_fund_artifact_id": state["source_artifact_id"],
-            "fund_code": state["fund_code"],
-            "fund_name": state["fund_name"],
-            "fund_type": state.get("fund_type"),
-            "holding_rank": item["rank"],
-            "symbol": item["symbol"],
-            "security_name": item["name"],
-            "fund_weight_pct": item.get("fund_weight_pct"),
-            "target_security_weight_pct": item.get("target_security_weight_pct"),
-            "holding_source": item["holding_source"],
-            "disclosure_date": item.get("disclosure_date"),
-            "disclosure_age_days": state.get("disclosure_age_days"),
-            "stale_level": state.get("stale_level") or "unknown",
-            "disclaimer": "基金定期披露持仓不代表当前仍持有该证券；股票结论独立于基金持仓关系。",
-        }
         attempt = len(item.get("attempt_run_ids") or []) + 1
         parent_request = read_json(
             self.agent_os.run_store.load_run_paths(state["batch_id"]).root / "request.json"
@@ -529,11 +564,13 @@ class FundHoldingReportService:
             tenant_id=parent_request.get("tenant_id"),
             slots={
                 "symbols": [item["symbol"]],
-                "holding_context": holding_context,
             },
             constraints={
                 "research_profile": state["profile"],
                 "fund_holding_report_child": True,
+                "canonical_uzi_analysis": True,
+                "analysis_as_of_date": state.get("as_of_date"),
+                "strategy_pin_set_hash": state.get("pin_set_hash"),
                 "parent_batch_id": state["batch_id"],
                 "hidden_from_history": True,
             },
@@ -568,6 +605,11 @@ class FundHoldingReportService:
                 return
             item["status"] = "running"
             item["started_at"] = item.get("started_at") or self._now()
+            retry_count = max(0, int(item.get("retry_count") or 0))
+            max_auto_retries = max(
+                0,
+                int(state.get("max_auto_retries", self.max_auto_retries)),
+            )
             self._refresh_parent_status(state)
             self._write_batch(state, event_type="fund_holding_child_started")
 
@@ -575,7 +617,6 @@ class FundHoldingReportService:
         report_available = False
         data_gap: list[str] = []
         error: str | None = None
-        retry_count = 0
         terminal_detail: dict[str, Any] = {}
         try:
             request_payload = read_json(self.agent_os.run_store.load_run_paths(child_run_id).root / "request.json")
@@ -585,6 +626,24 @@ class FundHoldingReportService:
                 detail = self.agent_os.inspect_run(child_run_id)
                 mode = str(detail.get("mode") or "")
                 current = self._detail_status(detail)
+                retry_budget_exhausted = retry_count >= max_auto_retries and (
+                    current in _RECOVERABLE_RUN_STATUSES
+                    or (mode == "pending" and retry_count > 0)
+                )
+                if retry_budget_exhausted:
+                    terminal_detail = detail
+                    report_available, data_gap = self._report_state(detail)
+                    final_status = "failed"
+                    data_gap = list(
+                        dict.fromkeys(
+                            [*data_gap, "holding_stock_report_retry_exhausted"]
+                        )
+                    )
+                    error = (
+                        "持仓股票报告自动恢复已达到上限"
+                        f"（{max_auto_retries} 次），请检查数据缺口后手动重试。"
+                    )
+                    break
                 if mode == "pending":
                     self.agent_os.handle_request(request, run_id=child_run_id)
                 elif current in _RECOVERABLE_RUN_STATUSES:
@@ -598,6 +657,18 @@ class FundHoldingReportService:
                 if report_available and final_status in {"completed", "completed_partial"}:
                     break
                 if final_status not in _RECOVERABLE_RUN_STATUSES:
+                    break
+                if retry_count >= max_auto_retries:
+                    final_status = "failed"
+                    data_gap = list(
+                        dict.fromkeys(
+                            [*data_gap, "holding_stock_report_retry_exhausted"]
+                        )
+                    )
+                    error = (
+                        "持仓股票报告自动恢复已达到上限"
+                        f"（{max_auto_retries} 次），请检查数据缺口后手动重试。"
+                    )
                     break
                 recovery_state = self._recovery_fingerprint(detail)
                 if recovery_state in seen_recovery_states:
@@ -674,7 +745,28 @@ class FundHoldingReportService:
                 continue
             for item in state.get("holdings") or []:
                 if item.get("status") in {"queued", "running"} and item.get("child_run_id"):
-                    self._submit_item(root.name, str(item["symbol"]), str(item["child_run_id"]))
+                    retry_count = max(0, int(item.get("retry_count") or 0))
+                    max_auto_retries = max(
+                        0,
+                        int(state.get("max_auto_retries", self.max_auto_retries)),
+                    )
+                    if retry_count > 0 and retry_count >= max_auto_retries:
+                        # Reconcile exhausted legacy retry storms before they
+                        # enter the executor queue. This is intentionally
+                        # synchronous and bounded: _execute_item exits before
+                        # another provider call when the persisted budget is
+                        # already exhausted.
+                        self._execute_item(
+                            root.name,
+                            str(item["symbol"]),
+                            str(item["child_run_id"]),
+                        )
+                    else:
+                        self._submit_item(
+                            root.name,
+                            str(item["symbol"]),
+                            str(item["child_run_id"]),
+                        )
 
     def _refresh_parent_status(self, state: dict[str, Any]) -> None:
         items = list(state.get("holdings") or [])

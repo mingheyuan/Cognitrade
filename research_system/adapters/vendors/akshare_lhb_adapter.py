@@ -24,9 +24,38 @@ class AkShareLHBAdapter:
     def get_lhb_snapshot(self, *, symbol: str) -> dict[str, Any]:
         date_df = call_with_retry(lambda: ak.stock_lhb_stock_detail_date_em(symbol=symbol), retries=2, delay_seconds=0.5)
         if date_df.empty:
-            raise ValueError(f"no lhb dates returned for symbol {symbol}")
+            # A successful empty date list is a verified zero-event result,
+            # not a transport/data-source failure.  Preserve the observation
+            # window so report completeness can distinguish it from the
+            # native UZI fetcher's unverified empty fallback.
+            return {
+                "symbol": symbol,
+                "latest_lhb_date": None,
+                "buy_detail": [],
+                "sell_detail": [],
+                "lhb_statistics": [],
+                "lhb_count_30d": 0,
+                "buy_top_total": None,
+                "sell_top_total": None,
+                "observation_status": "verified_empty",
+                "observation_window_days": 30,
+            }
 
         latest_date = self._extract_latest_date(date_df)
+        if self._date_value(latest_date) < date.today() - timedelta(days=30):
+            return {
+                "symbol": symbol,
+                "latest_lhb_date": None,
+                "latest_historical_lhb_date": latest_date,
+                "buy_detail": [],
+                "sell_detail": [],
+                "lhb_statistics": [],
+                "lhb_count_30d": 0,
+                "buy_top_total": None,
+                "sell_top_total": None,
+                "observation_status": "verified_empty",
+                "observation_window_days": 30,
+            }
         buy_df = call_with_retry(
             lambda: ak.stock_lhb_stock_detail_em(symbol=symbol, date=latest_date, flag="买入"),
             retries=2,
@@ -54,9 +83,37 @@ class AkShareLHBAdapter:
             "buy_detail": [self._normalize_row(item) for item in buy_df.head(10).to_dict("records")] if not buy_df.empty else [],
             "sell_detail": [self._normalize_row(item) for item in sell_df.head(10).to_dict("records")] if not sell_df.empty else [],
             "lhb_statistics": statistics[:5],
+            "lhb_count_30d": self._event_count(statistics, default=1),
             "buy_top_total": self._sum_numeric_column(buy_df),
             "sell_top_total": self._sum_numeric_column(sell_df),
+            "observation_status": "verified_non_empty",
+            "observation_window_days": 30,
         }
+
+    @staticmethod
+    def _date_value(value: str) -> date:
+        normalized = str(value or "").replace("-", "").replace("/", "")
+        try:
+            return date(
+                int(normalized[:4]),
+                int(normalized[4:6]),
+                int(normalized[6:8]),
+            )
+        except (TypeError, ValueError):
+            return date.min
+
+    @staticmethod
+    def _event_count(rows: list[dict[str, Any]], *, default: int) -> int:
+        values: list[int] = []
+        for row in rows:
+            for key in ("上榜次数", "count", "lhb_count_30d"):
+                try:
+                    value = int(float(row.get(key)))
+                except (TypeError, ValueError):
+                    continue
+                if value >= 0:
+                    values.append(value)
+        return max(values) if values else default
 
     def _extract_latest_date(self, df) -> str:
         rows = df.to_dict("records")

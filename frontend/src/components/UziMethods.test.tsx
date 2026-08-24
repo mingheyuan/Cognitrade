@@ -106,7 +106,8 @@ describe('UziMethods', () => {
     fireEvent.click(screen.getByRole('button', { name: /组合归因与再平衡/ }))
     const selector = screen.getByLabelText('组合方法')
     expect(selector).toHaveTextContent('收益归因')
-    expect(selector).toHaveTextContent('持仓再平衡')
+    fireEvent.click(selector)
+    expect(screen.getByRole('option', { name: '持仓再平衡' })).toBeInTheDocument()
   })
 
   it('requires an explicit profile for the complete analyze-stock command', async () => {

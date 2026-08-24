@@ -560,11 +560,11 @@ export function candidatesFromReport(report: ResearchReport): CandidateItem[] {
 }
 
 export function dashboardItems(view: AgentOSDashboardView | null | undefined, resourceId: string): AgentOSDashboardItem[] {
-  return view?.resources[resourceId]?.items || []
+  return view?.resources?.[resourceId]?.items || []
 }
 
 export function dashboardValue(view: AgentOSDashboardView | null | undefined, resourceId: string): Record<string, unknown> {
-  const resource = view?.resources[resourceId]
+  const resource = view?.resources?.[resourceId]
   if (resource?.value !== undefined) return asRecord(resource.value)
   return asRecord(resource?.items?.[0]?.data)
 }

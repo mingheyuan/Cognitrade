@@ -18,6 +18,7 @@ class FundHoldingReportCreateRequest(ApiRequestModel):
     source_artifact_id: str | None = Field(default=None, min_length=1, max_length=128)
     confirm_stale: bool = False
     force: bool = False
+    top_n: int = Field(default=10, ge=5, le=20)
 
 
 class FundHoldingReportRetryRequest(ApiRequestModel):

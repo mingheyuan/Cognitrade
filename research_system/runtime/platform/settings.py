@@ -49,6 +49,9 @@ class Settings(BaseModel):
     xueqiu_cookie: str | None = None
     browser_sources_enabled: bool = False
     paper_trading_enforce_market_hours: bool = True
+    cognitrade_database_url: str | None = None
+    cognitrade_database_auto_bootstrap: bool = True
+    strategy_object_store_root: Path | None = None
     llm_request_timeout_seconds: int = 25
     uzi_llm_request_timeout_seconds: int = 480
     uzi_llm_max_concurrency: int = 2
@@ -58,6 +61,8 @@ class Settings(BaseModel):
     max_agent_tool_loop_turns: int = 4
     max_child_threads_per_turn: int = 8
     fund_holding_report_concurrency: int = 2
+    fund_holding_report_max_auto_retries: int = 3
+    strategy_backfill_batch_timeout_seconds: int = 6 * 60 * 60
     artifacts_retention_days: int = 30
     max_artifacts_size_mb: int = 1024
     memory_expiration_interval_seconds: float = 300.0
@@ -109,6 +114,10 @@ class Settings(BaseModel):
             raise ValueError("max_child_threads_per_turn must be positive")
         if not 1 <= self.fund_holding_report_concurrency <= 10:
             raise ValueError("fund_holding_report_concurrency must be between 1 and 10")
+        if self.fund_holding_report_max_auto_retries < 0:
+            raise ValueError("fund_holding_report_max_auto_retries must not be negative")
+        if self.strategy_backfill_batch_timeout_seconds <= 0:
+            raise ValueError("strategy_backfill_batch_timeout_seconds must be positive")
         if self.tool_resource_lease_backend not in {"file", "redis"}:
             raise ValueError("tool_resource_lease_backend must be 'file' or 'redis'")
         if self.tool_resource_lease_backend == "redis" and not self.tool_resource_lease_redis_url:
@@ -130,6 +139,10 @@ class Settings(BaseModel):
             raise ValueError("provider_probe_timeout_seconds must be positive")
         if self.baostock_socket_timeout_seconds <= 0:
             raise ValueError("baostock_socket_timeout_seconds must be positive")
+        if self.cognitrade_database_url is not None and not self.cognitrade_database_url.startswith(
+            ("sqlite:", "postgresql:", "postgresql+psycopg:")
+        ):
+            raise ValueError("cognitrade_database_url must use sqlite or postgresql")
         if self.qdrant_vector_weight < 0 or self.qdrant_lexical_weight < 0:
             raise ValueError("qdrant hybrid weights must be non-negative")
         if self.qdrant_vector_weight == 0 and self.qdrant_lexical_weight == 0:

@@ -18,6 +18,7 @@ import { useCognitrade } from '../CognitradeContext'
 import { BusinessDataView } from '../artifacts/BusinessDataView'
 import { MethodDeliveryDossier } from '../artifacts/MethodDeliveryDossier'
 import type { ResearchIntent } from '../research-contracts'
+import { AppSelect } from './AppSelect'
 
 type UziMethodsProps = {
   onOpenRun: (runId: string) => void
@@ -217,11 +218,11 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
               })}
             </div>
             {method === 'analyze_stock' && (
-              <label><span>研究深度（必须显式选择）</span><select value={analysisProfile} onChange={(event) => setAnalysisProfile(event.target.value as typeof analysisProfile)}><option value="">请选择</option><option value="lite">快速 Lite</option><option value="medium">标准 Medium</option><option value="deep">深度 Deep</option></select></label>
+              <label><span>研究深度（必须显式选择）</span><AppSelect value={analysisProfile} onChange={(event) => setAnalysisProfile(event.target.value as typeof analysisProfile)}><option value="">请选择</option><option value="lite">快速 Lite</option><option value="medium">标准 Medium</option><option value="deep">深度 Deep</option></AppSelect></label>
             )}
             {method === 'model_update' && (
               <div className="uzi-inline-form">
-                <label><span>更新字段</span><select value={modelField} onChange={(event) => setModelField(event.target.value)}><option value="rev_growth">营收增速 %</option><option value="gross_margin">毛利率 %</option><option value="net_margin">净利率 %</option><option value="capex_pct">资本开支/营收 %</option><option value="stage1_growth">DCF 第一阶段增速 %</option><option value="terminal_g">DCF 永续增长率 %</option><option value="beta">Beta</option><option value="target_pe">目标市盈率</option><option value="target_price">目标价</option></select></label>
+                <label><span>更新字段</span><AppSelect value={modelField} onChange={(event) => setModelField(event.target.value)}><option value="rev_growth">营收增速 %</option><option value="gross_margin">毛利率 %</option><option value="net_margin">净利率 %</option><option value="capex_pct">资本开支/营收 %</option><option value="stage1_growth">DCF 第一阶段增速 %</option><option value="terminal_g">DCF 永续增长率 %</option><option value="beta">Beta</option><option value="target_pe">目标市盈率</option><option value="target_price">目标价</option></AppSelect></label>
                 <label><span>显式新值</span><input type="number" step="any" value={modelValue} onChange={(event) => setModelValue(event.target.value)} placeholder="必须填写" /></label>
               </div>
             )}
@@ -237,7 +238,7 @@ export function UziMethods({ onOpenRun }: UziMethodsProps) {
         ) : (
           <form className="uzi-config-card uzi-portfolio-form" onSubmit={submitPortfolio}>
             <header><div><span className="section-kicker">PORTFOLIO INPUT</span><h2>录入显式持仓</h2></div><button type="button" className="secondary-button" onClick={() => setHoldings((rows) => [...rows, emptyHolding()])}><Plus size={14} />添加持仓</button></header>
-            <label><span>组合方法</span><select value={portfolioMethod} onChange={(event) => setPortfolioMethod(event.target.value as typeof portfolioMethod)}><option value="returns">收益归因</option><option value="rebalance">持仓再平衡</option><option value="portfolio_rebalance">资产类别战略再平衡</option></select></label>
+            <label><span>组合方法</span><AppSelect value={portfolioMethod} onChange={(event) => setPortfolioMethod(event.target.value as typeof portfolioMethod)}><option value="returns">收益归因</option><option value="rebalance">持仓再平衡</option><option value="portfolio_rebalance">资产类别战略再平衡</option></AppSelect></label>
             <div className="uzi-holding-list">
               {holdings.map((holding, index) => (
                 <div className="uzi-holding-row" key={index}>
@@ -301,10 +302,10 @@ function MethodAssumptionFields({ method, values, onChange }: { method: string; 
     field('newDebtRate', '新增债务利率', '例如 0.05'),
   ]
   if (method === 'thesis_tracker') fields = [
-    <label key="direction"><span>投资方向</span><select value={values.direction || ''} onChange={(event) => onChange('direction', event.target.value)}><option value="">请选择</option><option value="long">多头</option><option value="short">空头</option></select></label>,
+    <label key="direction"><span>投资方向</span><AppSelect value={values.direction || ''} onChange={(event) => onChange('direction', event.target.value)}><option value="">请选择</option><option value="long">多头</option><option value="short">空头</option></AppSelect></label>,
   ]
   if (method === 'quantitative_screen') fields = [
-    <label key="style"><span>筛选风格</span><select value={values.style || ''} onChange={(event) => onChange('style', event.target.value)}><option value="">请选择</option><option value="value">价值</option><option value="growth">成长</option><option value="quality">质量</option><option value="short">做空风险</option><option value="gulp">GULP 合理价成长</option></select></label>,
+    <label key="style"><span>筛选风格</span><AppSelect value={values.style || ''} onChange={(event) => onChange('style', event.target.value)}><option value="">请选择</option><option value="value">价值</option><option value="growth">成长</option><option value="quality">质量</option><option value="short">做空风险</option><option value="gulp">GULP 合理价成长</option></AppSelect></label>,
   ]
   if (!fields.length) return null
   return <div className="uzi-assumption-panel"><div><strong>显式方法假设</strong><small>以下参数全部由你提供；系统不会填默认值。</small></div><div className="uzi-inline-form">{fields}</div></div>

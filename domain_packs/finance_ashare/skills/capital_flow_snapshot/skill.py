@@ -3,11 +3,24 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from research_system.adapters.vendors.akshare_capital_flow_adapter import AkShareCapitalFlowAdapter
+from research_system.adapters.vendors.akshare_capital_flow_adapter import (
+    AkShareCapitalFlowAdapter,
+)
+from research_system.adapters.vendors.efinance_capital_flow_adapter import (
+    EFinanceCapitalFlowAdapter,
+)
 from research_system.adapters.vendors.market_router import MarketRouter
-from research_system.adapters.vendors.provider_registry import ProviderSpec, VendorProviderRegistry
-from research_system.adapters.vendors.provider_execution import execute_provider_chain, failure_facts
-from research_system.adapters.vendors.tushare_signal_adapter import TuShareCapitalFlowAdapter
+from research_system.adapters.vendors.provider_execution import (
+    execute_provider_chain,
+    failure_facts,
+)
+from research_system.adapters.vendors.provider_registry import (
+    ProviderSpec,
+    VendorProviderRegistry,
+)
+from research_system.adapters.vendors.tushare_signal_adapter import (
+    TuShareCapitalFlowAdapter,
+)
 from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
 
 
@@ -23,8 +36,12 @@ class CapitalFlowSnapshotSkill:
         self.market_router = market_router or MarketRouter()
         self.adapter = AkShareCapitalFlowAdapter()
         self.adapters: dict[str, Any] = {"akshare_capital_flow": self.adapter}
-        if provider_registry and provider_registry.settings.tushare_token:
-            self.adapters["tushare_capital_flow"] = TuShareCapitalFlowAdapter(provider_registry.settings.tushare_token)
+        if provider_registry:
+            provider_chain = provider_registry.get_provider_chain("capital_flow", "cn_equity")
+            if provider_registry.get("efinance_capital_flow") in provider_chain:
+                self.adapters["efinance_capital_flow"] = EFinanceCapitalFlowAdapter()
+            if provider_registry.settings.tushare_token:
+                self.adapters["tushare_capital_flow"] = TuShareCapitalFlowAdapter(provider_registry.settings.tushare_token)
 
     def run(self, *, query: str, symbol: str | None = None) -> dict[str, Any]:
         snapshot_date = date.today().isoformat()

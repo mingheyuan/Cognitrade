@@ -8,16 +8,17 @@ import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { CognitradeApiClient } from '../api-client'
 import { useCognitrade } from '../CognitradeContext'
 import { FundAnalysisDossier } from './FundAnalysisDossier'
-import type { BacktestTarget } from '../finance-contracts'
+import { AppSelect } from './AppSelect'
+import type { StrategyWorkspaceContext } from '../strategy-contracts'
 
 type FundsProps = {
   onOpenRun: (runId: string) => void
-  onOpenBacktest?: (target: BacktestTarget) => void
+  onOpenStrategy?: (context: StrategyWorkspaceContext) => void
 }
 
 type FundSelectionMode = 'category' | 'codes'
 
-export function Funds({ onOpenRun, onOpenBacktest = () => undefined }: FundsProps) {
+export function Funds({ onOpenRun, onOpenStrategy = () => undefined }: FundsProps) {
   const {
     createRun,
     settings,
@@ -123,11 +124,11 @@ export function Funds({ onOpenRun, onOpenBacktest = () => undefined }: FundsProp
           {selectionMode === 'category' ? (
             <label>
               <span>基金类别</span>
-              <select aria-label="基金类别" value={category} onChange={(event) => setCategory(event.target.value)}>
+              <AppSelect aria-label="基金类别" value={category} onChange={(event) => setCategory(event.target.value)}>
                 <option>股票型</option><option>混合型</option><option>债券型</option>
                 <option>指数型</option><option>ETF</option><option>LOF</option>
                 <option>QDII</option><option>FOF</option>
-              </select>
+              </AppSelect>
               <small className="fund-field-help">按所选类别建立真实候选池，不会混排其他大类基金。</small>
             </label>
           ) : (
@@ -140,12 +141,12 @@ export function Funds({ onOpenRun, onOpenBacktest = () => undefined }: FundsProp
           <div className="fund-form-grid">
             <label>
               <span>研究周期</span>
-              <select value={cycle} onChange={(event) => setCycle(event.target.value)}>
+              <AppSelect value={cycle} onChange={(event) => setCycle(event.target.value)}>
                 <option value="">请选择研究周期</option>
                 <option value="short_term">短期</option>
                 <option value="mid_term">中期</option>
                 <option value="long_term">长期</option>
-              </select>
+              </AppSelect>
             </label>
             {selectionMode === 'category' ? <label>
               <span>候选池规模</span>
@@ -175,7 +176,7 @@ export function Funds({ onOpenRun, onOpenBacktest = () => undefined }: FundsProp
               sourceRunId={sourceRunId || ''}
               client={client}
               onOpenRun={onOpenRun}
-              onOpenBacktest={onOpenBacktest}
+              onOpenStrategy={onOpenStrategy}
             />
           ) : (
             <div className="fund-empty">

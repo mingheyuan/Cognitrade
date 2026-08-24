@@ -482,6 +482,20 @@ validate_environment() {
     [[ ${#token} -ge 32 && "$token" != *[[:space:]]* ]] || fail "COGNITRADE_API_TOKEN must contain at least 32 non-whitespace characters"
     [[ -n "$web_host" ]] || fail "COGNITRADE_WEB_HOST is required"
     validate_port "$web_port"
+    local database_url=""
+    local object_store_root=""
+    database_url="$(read_env_value COGNITRADE_DATABASE_URL)"
+    object_store_root="$(read_env_value COGNITRADE_OBJECT_STORE_ROOT)"
+    if [[ -n "$database_url" ]]; then
+        case "$database_url" in
+            sqlite:*|postgresql:*|postgresql+psycopg:*) ;;
+            *) fail "COGNITRADE_DATABASE_URL must use sqlite or postgresql+psycopg" ;;
+        esac
+        [[ "$database_url" != *[[:space:]]* ]] || fail "COGNITRADE_DATABASE_URL must not contain whitespace"
+    fi
+    if [[ -n "$object_store_root" ]]; then
+        [[ "$object_store_root" == /* ]] || fail "COGNITRADE_OBJECT_STORE_ROOT must be an absolute container path"
+    fi
 
     local openai_key=""
     openai_key="$(read_env_value OPENAI_API_KEY)"
@@ -590,6 +604,18 @@ check_runtime_dependencies() {
         --workspace /app/workspace
 }
 
+run_strategy_migrations() {
+    log "backing up migration state, upgrading schema, indexing legacy objects, and canonicalizing Run filenames"
+    run_compose run --rm --no-deps api \
+        python -m research_system.strategies.migration_backup --workspace /app/workspace
+    run_compose run --rm --no-deps api \
+        python -m alembic -c /app/alembic.ini upgrade head
+    run_compose run --rm --no-deps api \
+        python -m research_system.strategies.legacy_index --workspace /app/workspace --force
+    run_compose run --rm --no-deps api \
+        python -m scripts.migrate_workspace --workspace /app/workspace
+}
+
 perform_check() {
     ensure_docker 0
     validate_environment
@@ -624,9 +650,7 @@ case "$COMMAND" in
         ensure_docker 0
         validate_environment
         check_compose_configuration
-        log "migrating the workspace volume to canonical Run filenames"
-        run_compose run --rm --no-deps api \
-            python -m scripts.migrate_workspace --workspace /app/workspace
+        run_strategy_migrations
         ;;
     start)
         ensure_docker "$((1 - SKIP_SYSTEM_INSTALL))"
@@ -712,6 +736,7 @@ case "$COMMAND" in
         if (( ! NO_BUILD )); then
             build_images
         fi
+        run_strategy_migrations
         log "starting API and frontend web containers"
         run_compose up -d --remove-orphans
         (( DRY_RUN )) || wait_for_ready

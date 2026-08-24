@@ -42,12 +42,23 @@ class TuShareLHBAdapter:
         pro = import_module("tushare").pro_api(self.token)
         frame = pro.top_list(
             ts_code=_ts_code(symbol),
-            start_date=(date.today() - timedelta(days=120)).strftime("%Y%m%d"),
+            start_date=(date.today() - timedelta(days=30)).strftime("%Y%m%d"),
             end_date=date.today().strftime("%Y%m%d"),
         )
         rows = _records(frame)
         if not rows:
-            raise ValueError(f"no lhb data returned for symbol {symbol}")
+            return {
+                "symbol": symbol,
+                "latest_lhb_date": None,
+                "buy_detail": [],
+                "sell_detail": [],
+                "lhb_statistics": [],
+                "lhb_count_30d": 0,
+                "buy_top_total": None,
+                "sell_top_total": None,
+                "observation_status": "verified_empty",
+                "observation_window_days": 30,
+            }
         latest_date = str(rows[0].get("trade_date") or "")
         institutions: list[dict[str, Any]] = []
         if latest_date:
@@ -61,8 +72,13 @@ class TuShareLHBAdapter:
             "buy_detail": institutions,
             "sell_detail": institutions,
             "lhb_statistics": rows[:10],
+            "lhb_count_30d": len(
+                {str(row.get("trade_date")) for row in rows if row.get("trade_date")}
+            ) or 1,
             "buy_top_total": rows[0].get("l_buy"),
             "sell_top_total": rows[0].get("l_sell"),
+            "observation_status": "verified_non_empty",
+            "observation_window_days": 30,
         }
 
 

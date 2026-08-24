@@ -14,7 +14,7 @@ from domain_packs.finance_ashare.tools.security_master import SecurityResolution
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
 from research_system.api.finance_market_data_service import FinanceMarketDataService
-from research_system.api.paper_trading_service import PaperTradingService
+from research_system.api.paper_trading_service import PaperTradingError, PaperTradingService
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 
 
@@ -115,6 +115,25 @@ def _collector(*, query, symbols, snapshot_types, **kwargs):
     ]
 
 
+class _StrategyPaperExecution:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, dict]] = []
+
+    def submit(self, scope, **payload):
+        self.calls.append((scope, dict(payload)))
+        return {
+            "id": "strategy-paper-order-1",
+            "binding_id": payload["binding_id"],
+            "signal_id": payload["signal_id"],
+            "client_order_id": payload["client_order_id"],
+            "status": "filled",
+        }
+
+    def list(self, scope, *, binding_id=None):
+        self.calls.append((scope, {"binding_id": binding_id}))
+        return {"orders": []}
+
+
 class ApiV2FinanceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
@@ -139,12 +158,19 @@ class ApiV2FinanceTests(unittest.TestCase):
             market_data=self.market,
             clock=lambda: datetime(2026, 7, 15, 2, 0, tzinfo=UTC),
         )
+        self.assertEqual(
+            self.paper.matcher.runtime_root,
+            (self.database_path.parent / "veighna_runtime").resolve(),
+        )
+        self.assertTrue((self.paper.matcher.runtime_root / ".vntrader").is_dir())
+        self.strategy_paper = _StrategyPaperExecution()
         self.app = create_app(
             settings=self.settings,
             api_config=ApiConfig(api_token=API_TOKEN),
             run_service_factory=FakeRunServiceFactory(FakeRunService()),
             finance_market_data_factory=lambda _settings: self.market,
             paper_trading_factory=lambda _settings, _market: self.paper,
+            strategy_paper_execution_factory=lambda _database, _paper: self.strategy_paper,
             repo_root=REPO_ROOT,
         )
         self.client_context = TestClient(self.app, raise_server_exceptions=False)
@@ -193,6 +219,60 @@ class ApiV2FinanceTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["error"]["code"], "authentication_required")
+
+    def test_strategy_paper_order_requires_and_forwards_one_idempotency_key(self) -> None:
+        payload = {
+            "signal_id": "signal-1",
+            "side": "buy",
+            "quantity": 100,
+            "technical_reason": "ma5_cross_above_ma20",
+            "trading_date": "2026-08-04",
+        }
+        missing = self.client.post(
+            "/api/v2/finance/paper-strategy-bindings/binding-1/orders",
+            headers=auth_headers(),
+            json=payload,
+        )
+        self.assertEqual(missing.status_code, 400, missing.text)
+        self.assertEqual(missing.json()["error"]["code"], "idempotency_key_required")
+
+        created = self.client.post(
+            "/api/v2/finance/paper-strategy-bindings/binding-1/orders",
+            headers={**auth_headers(), "Idempotency-Key": "strategy-order-1"},
+            json=payload,
+        )
+        self.assertEqual(created.status_code, 201, created.text)
+        self.assertEqual(created.json()["client_order_id"], "strategy-order-1")
+        scope, forwarded = self.strategy_paper.calls[-1]
+        self.assertEqual(scope.tenant_id, "api_token")
+        self.assertEqual(scope.user_id, "api_token")
+        self.assertEqual(forwarded["binding_id"], "binding-1")
+        self.assertEqual(forwarded["client_order_id"], "strategy-order-1")
+
+        replay = self.client.post(
+            "/api/v2/finance/paper-strategy-bindings/binding-1/orders",
+            headers={**auth_headers(), "Idempotency-Key": "strategy-order-1"},
+            json=payload,
+        )
+        self.assertEqual(replay.status_code, 201, replay.text)
+        self.assertEqual(replay.headers["Idempotent-Replay"], "true")
+        self.assertEqual(len(self.strategy_paper.calls), 1)
+
+        reused = self.client.post(
+            "/api/v2/finance/paper-strategy-bindings/binding-1/orders",
+            headers={**auth_headers(), "Idempotency-Key": "strategy-order-1"},
+            json={**payload, "quantity": 200},
+        )
+        self.assertEqual(reused.status_code, 409, reused.text)
+        self.assertEqual(reused.json()["error"]["code"], "idempotency_key_reused")
+
+        mismatch = self.client.post(
+            "/api/v2/finance/paper-strategy-bindings/binding-1/orders",
+            headers={**auth_headers(), "Idempotency-Key": "header-key"},
+            json={**payload, "client_order_id": "body-key"},
+        )
+        self.assertEqual(mismatch.status_code, 400, mismatch.text)
+        self.assertEqual(mismatch.json()["error"]["code"], "idempotency_key_mismatch")
 
     def test_paper_account_executes_idempotent_buy_and_t_plus_one_sell(self) -> None:
         buy_request = {
@@ -259,6 +339,40 @@ class ApiV2FinanceTests(unittest.TestCase):
         self.assertEqual(second_page["limit"], 1)
         self.assertEqual(second_page["offset"], 1)
         self.assertEqual(len(second_page["orders"]), 1)
+
+    def test_paper_service_uses_frozen_execution_profile_and_rejects_key_reuse(self) -> None:
+        profile = {
+            "model_id": "strategy-stock:test-version",
+            "asset_type": "stock",
+            "board_lot": 10,
+            "commission_rate": 0,
+            "minimum_commission": 0,
+            "transfer_fee_rate": 0,
+            "stamp_duty_rate": 0,
+            "settlement": "T+1",
+        }
+        order = self.paper.place_order(
+            tenant_id="api_token",
+            user_id="api_token",
+            symbol="600519",
+            side="buy",
+            quantity=10,
+            client_order_id="frozen-profile-order",
+            execution_profile=profile,
+        )
+        self.assertEqual(order["execution_profile"], profile)
+        self.assertEqual(order["fees"]["total"], 0)
+        with self.assertRaises(PaperTradingError) as reused:
+            self.paper.place_order(
+                tenant_id="api_token",
+                user_id="api_token",
+                symbol="600519",
+                side="buy",
+                quantity=20,
+                client_order_id="frozen-profile-order",
+                execution_profile=profile,
+            )
+        self.assertEqual(reused.exception.code, "idempotency_key_reused")
 
     def test_reset_archives_account_and_starts_a_new_generation(self) -> None:
         first = self.client.get("/api/v2/finance/paper/account", headers=auth_headers()).json()
@@ -426,6 +540,40 @@ class ApiV2FinanceTests(unittest.TestCase):
         self.assertEqual(payload["limit"], 1)
         self.assertEqual(payload["offset"], 1)
         self.assertEqual(len(payload["results"]), 1)
+
+    def test_openapi_and_cors_publish_the_complete_strategy_contract(self) -> None:
+        schema = self.client.get("/openapi.json").json()
+        paths = set(schema["paths"])
+        expected = {
+            "/api/v2/finance/strategies",
+            "/api/v2/finance/strategies/{strategy_id}/draft",
+            "/api/v2/finance/strategies/{strategy_id}/publish",
+            "/api/v2/finance/strategy-assignments",
+            "/api/v2/finance/report-jobs",
+            "/api/v2/finance/report-backfills",
+            "/api/v2/finance/daily-report-sets",
+            "/api/v2/finance/signal-previews",
+            "/api/v2/finance/trade-signals",
+            "/api/v2/finance/strategy-backtests",
+            "/api/v2/finance/strategy-verifications",
+            "/api/v2/finance/paper-strategy-bindings/{binding_id}/orders",
+            "/api/v2/finance/strategy-paper-orders",
+        }
+        self.assertFalse(expected - paths, expected - paths)
+
+        preflight = self.client.options(
+            "/api/v2/finance/strategies/example",
+            headers={
+                "Origin": "http://localhost:4173",
+                "Access-Control-Request-Method": "DELETE",
+                "Access-Control-Request-Headers": "Authorization,If-Match,Idempotency-Key",
+            },
+        )
+        self.assertEqual(preflight.status_code, 200, preflight.text)
+        allowed = str(preflight.headers.get("access-control-allow-headers") or "").lower()
+        for header in ("authorization", "if-match", "idempotency-key"):
+            self.assertIn(header, allowed)
+        self.assertIn("DELETE", str(preflight.headers.get("access-control-allow-methods")))
 
 
 if __name__ == "__main__":

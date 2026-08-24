@@ -229,11 +229,13 @@ class UziQualitativeDeepDiveTests(unittest.TestCase):
     def test_successful_groups_are_cached_and_only_failed_group_is_retried(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             provider = _FlakyCachedProvider(Path(temporary_directory))
+            progress: list[dict] = []
 
             first = apply_qualitative_deep_dive(
                 _deep_base(),
                 snapshot_rows=_rows(),
                 llm_provider=provider,
+                progress_callback=progress.append,
             )
             second = apply_qualitative_deep_dive(
                 _deep_base(),
@@ -243,6 +245,12 @@ class UziQualitativeDeepDiveTests(unittest.TestCase):
 
         self.assertEqual(first["qualitative_agent_execution"]["status"], "incomplete")
         self.assertEqual(first["qualitative_agent_execution"]["completed_group_count"], 2)
+        self.assertTrue(
+            any(
+                "C · Cost-Transmission 未通过执行或证据校验" in row["current_action"]
+                for row in progress
+            )
+        )
         self.assertEqual(second["qualitative_agent_execution"]["status"], "completed")
         self.assertEqual(
             provider.calls,

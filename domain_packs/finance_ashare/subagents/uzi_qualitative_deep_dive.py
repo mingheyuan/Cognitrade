@@ -191,7 +191,21 @@ def apply_qualitative_deep_dive(
                     cache_hit=False,
                 )
             except Exception as exc:
-                errors.append(f"{label}:{exc.__class__.__name__}:{str(exc)[:300]}")
+                error = f"{label}:{exc.__class__.__name__}:{str(exc)[:300]}"
+                errors.append(error)
+                _LOGGER.warning(
+                    "UZI qualitative group rejected: group=%s completed_groups=%d error=%s:%s",
+                    label,
+                    len(completed),
+                    exc.__class__.__name__,
+                    str(exc)[:300],
+                )
+                _notify_qualitative_rejection(
+                    progress_callback,
+                    analysis_cycle=analysis_cycle,
+                    completed=len(completed),
+                    group_label=label,
+                )
 
     dimensions = {
         dimension.dimension_id: dimension.model_dump(mode="json")
@@ -426,6 +440,31 @@ def _notify_qualitative_progress(
         "stage_total": 3,
         "cycle": cycle,
         "cache_hit": cache_hit,
+    })
+
+
+def _notify_qualitative_rejection(
+    progress_callback,
+    *,
+    analysis_cycle: int | None,
+    completed: int,
+    group_label: str,
+) -> None:
+    if not callable(progress_callback):
+        return
+    cycle = int(analysis_cycle or 1)
+    progress_callback({
+        "current_action": (
+            f"UZI 第 {cycle} 轮：{group_label} 未通过执行或证据校验，"
+            f"已保留 {completed}/3 个通过组"
+        ),
+        "next_action": "按 UZI suggested_fix 仅重试失败组",
+        "progress_percent": min(89, 82 + completed * 2),
+        "stage": "qualitative_deep_dive_repair",
+        "stage_index": completed,
+        "stage_total": 3,
+        "cycle": cycle,
+        "cache_hit": False,
     })
 
 

@@ -9,8 +9,8 @@ describe('ResearchComposer', () => {
     const onSubmit = vi.fn()
     render(<ResearchComposer onSubmit={onSubmit} running={false} />)
 
-    fireEvent.click(screen.getByRole('button', { name: '选择研究意图，当前为自动识别' }))
-    fireEvent.click(screen.getByRole('menuitemradio', { name: '个股体检' }))
+    fireEvent.click(screen.getByRole('combobox', { name: '选择研究意图，当前为自动识别' }))
+    fireEvent.click(screen.getByRole('option', { name: '个股体检' }))
     fireEvent.change(screen.getByRole('textbox', { name: '研究问题' }), {
       target: { value: '分析贵州茅台' },
     })
@@ -32,8 +32,8 @@ describe('ResearchComposer', () => {
     const onSubmit = vi.fn()
     render(<ResearchComposer onSubmit={onSubmit} running={false} />)
 
-    fireEvent.click(screen.getByRole('button', { name: '选择研究意图，当前为自动识别' }))
-    fireEvent.click(screen.getByRole('menuitemradio', { name: 'UZI 股票速判' }))
+    fireEvent.click(screen.getByRole('combobox', { name: '选择研究意图，当前为自动识别' }))
+    fireEvent.click(screen.getByRole('option', { name: 'UZI 股票速判' }))
     fireEvent.change(screen.getByRole('textbox', { name: '研究问题' }), {
       target: { value: '速判贵州茅台' },
     })
